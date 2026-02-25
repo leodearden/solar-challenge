@@ -955,6 +955,41 @@ def _parse_battery_distribution_config(
     )
 
 
+def _parse_heat_pump_distribution_config(
+    data: Optional[dict[str, Any]],
+) -> Optional[HeatPumpDistributionConfig]:
+    """Parse heat pump distribution configuration from config data."""
+    if data is None:
+        return None
+
+    # Parse heat_pump_type - can be string, distribution, or None
+    heat_pump_type_raw = data.get("heat_pump_type")
+    if heat_pump_type_raw is None:
+        heat_pump_type = None
+    elif isinstance(heat_pump_type_raw, str):
+        # Direct string value (e.g., "ASHP" or "GSHP")
+        heat_pump_type = heat_pump_type_raw
+    elif isinstance(heat_pump_type_raw, dict):
+        # Distribution spec
+        heat_pump_type = _parse_distribution_spec(
+            heat_pump_type_raw, "heat_pump.heat_pump_type"
+        )
+    else:
+        raise ConfigurationError(
+            f"Invalid heat_pump_type: expected string, dict, or null, got {type(heat_pump_type_raw).__name__}"
+        )
+
+    return HeatPumpDistributionConfig(
+        heat_pump_type=heat_pump_type,
+        thermal_capacity_kw=_parse_distribution_spec(
+            data.get("thermal_capacity_kw", 8.0), "heat_pump.thermal_capacity_kw"
+        ),
+        annual_heat_demand_kwh=_parse_distribution_spec(
+            data.get("annual_heat_demand_kwh", 8000.0), "heat_pump.annual_heat_demand_kwh"
+        ),
+    )
+
+
 def _parse_load_distribution_config(data: dict[str, Any]) -> LoadDistributionConfig:
     """Parse load distribution configuration from config data."""
     return LoadDistributionConfig(
@@ -980,6 +1015,7 @@ def _parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionC
         pv=_parse_pv_distribution_config(data["pv"]),
         load=_parse_load_distribution_config(data.get("load", {})),
         battery=_parse_battery_distribution_config(data.get("battery")),
+        heat_pump=_parse_heat_pump_distribution_config(data.get("heat_pump")),
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
     )
