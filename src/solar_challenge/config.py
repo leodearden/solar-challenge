@@ -22,6 +22,7 @@ except ImportError:
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -1105,6 +1106,11 @@ def generate_homes_from_distribution(
             config.battery.max_charge_kw,
             config.battery.max_discharge_kw,
         ])
+    if config.heat_pump is not None:
+        all_specs.extend([
+            config.heat_pump.thermal_capacity_kw,
+            config.heat_pump.annual_heat_demand_kwh,
+        ])
 
     if config.random_order == "bristol_legacy":
         # Bristol legacy order: pre-sample all normal distributions first,
@@ -1115,6 +1121,8 @@ def generate_homes_from_distribution(
         sampler.prepare(config.pv.capacity_kw)
         if config.battery is not None:
             sampler.prepare(config.battery.capacity_kwh)
+        if config.heat_pump is not None:
+            sampler.prepare(config.heat_pump.heat_pump_type)
         # Other specs don't need special handling (fixed values)
     else:
         # Default order: prepare all shuffled pools upfront
@@ -1178,11 +1186,29 @@ def generate_homes_from_distribution(
             seed=home_seed,
         )
 
+        # Sample heat pump parameters (may be None)
+        heat_pump_config: Optional[HeatPumpConfig] = None
+        if config.heat_pump is not None:
+            heat_pump_type = sampler.sample(config.heat_pump.heat_pump_type)
+            if heat_pump_type is not None:
+                thermal_capacity = sampler.sample_with_context(
+                    config.heat_pump.thermal_capacity_kw, context
+                )
+                annual_heat_demand = sampler.sample_with_context(
+                    config.heat_pump.annual_heat_demand_kwh, context
+                )
+                heat_pump_config = HeatPumpConfig(
+                    heat_pump_type=heat_pump_type,
+                    thermal_capacity_kw=thermal_capacity if thermal_capacity is not None else 8.0,
+                    annual_heat_demand_kwh=annual_heat_demand if annual_heat_demand is not None else 8000.0,
+                )
+
         homes.append(
             HomeConfig(
                 pv_config=pv_config,
                 battery_config=battery_config,
                 load_config=load_config,
+                heat_pump_config=heat_pump_config,
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=None,
