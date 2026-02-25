@@ -167,3 +167,87 @@ class HeatPumpConfig:
             annual_heat_demand_kwh=8000.0,
             name="8 kW GSHP"
         )
+
+
+def generate_heat_pump_load(
+    config: HeatPumpConfig,
+    temperature_c: pd.Series,
+) -> pd.Series:
+    """Generate electrical load profile for a heat pump from temperature data.
+
+    This function converts outdoor temperature into heat pump electrical demand by:
+    1. Calculating heating degree minutes (thermal demand indicator)
+    2. Scaling to match annual heat demand
+    3. Applying COP curve to convert thermal demand to electrical demand
+    4. Capping at thermal capacity limit
+
+    The resulting profile has higher load in winter (cold weather) and lower/zero
+    load in summer, with electrical demand inversely correlated to COP (lower COP
+    in cold weather means higher electrical input for same thermal output).
+
+    Args:
+        config: Heat pump configuration (type, capacity, annual demand)
+        temperature_c: Time series of outdoor temperature in degrees Celsius.
+            Must have a DatetimeIndex with timezone info.
+
+    Returns:
+        Series of electrical power demand in kW, with same index as temperature_c.
+        Values are non-negative and capped at thermal_capacity_kw / COP.
+
+    Raises:
+        ValueError: If temperature_c doesn't have a DatetimeIndex
+        ValueError: If temperature_c index is not timezone-aware
+
+    Example:
+        >>> config = HeatPumpConfig(heat_pump_type="ASHP", thermal_capacity_kw=8.0)
+        >>> temps = pd.Series(
+        ...     [10.0] * 1440,
+        ...     index=pd.date_range('2024-01-01', periods=1440, freq='1min', tz='UTC')
+        ... )
+        >>> load = generate_heat_pump_load(config, temps)
+        >>> assert len(load) == 1440
+        >>> assert load.min() >= 0.0
+    """
+    # Validate input
+    if not isinstance(temperature_c.index, pd.DatetimeIndex):
+        raise ValueError("Temperature series must have a DatetimeIndex")
+    if temperature_c.index.tz is None:
+        raise ValueError("Temperature series index must be timezone-aware")
+
+    # Calculate heating degree minutes (thermal demand indicator)
+    degree_minutes = calculate_heating_degree_minutes(temperature_c)
+
+    # Scale degree-minutes to match annual thermal demand
+    # Annual degree minutes = sum of all degree minutes over the year
+    # We need to estimate what fraction of annual heating this period represents
+    # For now, scale by total degree minutes in this period vs expected annual
+    total_degree_minutes = degree_minutes.sum()
+
+    if total_degree_minutes == 0:
+        # No heating needed (all temperatures above base temperature)
+        return pd.Series(0.0, index=temperature_c.index)
+
+    # Calculate thermal demand in kW from degree minutes
+    # Scale so that total thermal energy delivered equals annual_heat_demand_kwh
+    # Total thermal energy (kWh) = sum(thermal_power_kw * 1/60 hour per minute)
+    # We want: sum(thermal_power_kw) / 60 = annual_heat_demand_kwh
+    # So: thermal_power_kw = degree_minutes * scale_factor
+    # where scale_factor * sum(degree_minutes) / 60 = annual_heat_demand_kwh
+    # Therefore: scale_factor = annual_heat_demand_kwh * 60 / sum(degree_minutes)
+
+    scale_factor = config.annual_heat_demand_kwh * 60.0 / total_degree_minutes
+    thermal_demand_kw = degree_minutes * scale_factor
+
+    # Cap thermal demand at heat pump capacity
+    thermal_demand_kw = thermal_demand_kw.clip(upper=config.thermal_capacity_kw)
+
+    # Calculate COP for each timestep
+    cop_series = temperature_c.apply(
+        lambda temp: calculate_cop(config.heat_pump_type, temp)
+    )
+
+    # Calculate electrical load (thermal output / COP)
+    # Avoid division by zero (though COP should never be zero with our bounds)
+    electrical_load_kw = thermal_demand_kw / cop_series
+
+    return electrical_load_kw
