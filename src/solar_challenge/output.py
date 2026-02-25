@@ -181,7 +181,20 @@ def generate_summary_report(
 |--------|-------|
 | Total Charged | {summary.total_battery_charge_kwh:.1f} |
 | Total Discharged | {summary.total_battery_discharge_kwh:.1f} |
+"""
 
+    # Add heat pump section if heat pump metrics are present
+    if summary.total_heat_pump_load_kwh is not None:
+        report += f"""
+## Heat Pump
+| Metric | Value |
+|--------|-------|
+| Total Heat Pump Load | {summary.total_heat_pump_load_kwh:.1f} kWh |
+| Peak Heat Pump Load | {summary.peak_heat_pump_load_kw:.2f} kW |
+| Heat Pump Load Ratio | {summary.heat_pump_load_ratio:.1%} |
+"""
+
+    report += f"""
 ## Peak Values (kW)
 | Metric | Value |
 |--------|-------|
@@ -444,5 +457,13 @@ def aggregate_annual(
 
     if summary.seg_revenue_gbp is not None:
         annual["seg_revenue_gbp"] = summary.seg_revenue_gbp
+
+    # Include heat pump metrics if present
+    if summary.total_heat_pump_load_kwh is not None:
+        annual["heat_pump_load_kwh"] = summary.total_heat_pump_load_kwh
+    if summary.peak_heat_pump_load_kw is not None:
+        annual["peak_heat_pump_load_kw"] = summary.peak_heat_pump_load_kw
+    if summary.heat_pump_load_ratio is not None:
+        annual["heat_pump_load_ratio"] = summary.heat_pump_load_ratio
 
     return annual

@@ -134,6 +134,9 @@ class SummaryStatistics:
     net_cost_gbp: float  # net cost (import - export) in £
     strategy_name: str = "self_consumption"
     seg_revenue_gbp: Optional[float] = None
+    total_heat_pump_load_kwh: Optional[float] = None  # total heat pump consumption
+    peak_heat_pump_load_kw: Optional[float] = None  # peak heat pump load
+    heat_pump_load_ratio: Optional[float] = None  # heat_pump_load / total_demand
 
 
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
@@ -445,6 +448,15 @@ def calculate_summary(
     if seg_tariff_pence_per_kwh is not None:
         seg_revenue_gbp = total_export * seg_tariff_pence_per_kwh / 100.0
 
+    # Calculate heat pump metrics if heat pump load is present
+    total_heat_pump_kwh: Optional[float] = None
+    peak_heat_pump_kw: Optional[float] = None
+    heat_pump_ratio: Optional[float] = None
+    if results.heat_pump_load is not None:
+        total_heat_pump_kwh = float(results.heat_pump_load.sum() * minutes_to_hours)
+        peak_heat_pump_kw = float(results.heat_pump_load.max())
+        heat_pump_ratio = total_heat_pump_kwh / total_demand if total_demand > 0 else 0.0
+
     return SummaryStatistics(
         total_generation_kwh=total_gen,
         total_demand_kwh=total_demand,
@@ -464,4 +476,7 @@ def calculate_summary(
         net_cost_gbp=net_cost,
         strategy_name=results.strategy_name,
         seg_revenue_gbp=seg_revenue_gbp,
+        total_heat_pump_load_kwh=total_heat_pump_kwh,
+        peak_heat_pump_load_kw=peak_heat_pump_kw,
+        heat_pump_load_ratio=heat_pump_ratio,
     )
