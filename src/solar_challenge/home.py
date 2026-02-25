@@ -12,6 +12,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
 )
+from solar_challenge.ev import EVConfig
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
@@ -28,6 +29,7 @@ class HomeConfig:
         pv_config: PV system configuration
         load_config: Load profile configuration
         battery_config: Battery configuration (None for PV-only)
+        ev_config: EV configuration (None for no EV)
         location: Geographic location for weather data
         name: Optional identifier for the home
         tariff_config: Tariff configuration (None for no cost tracking)
@@ -37,6 +39,7 @@ class HomeConfig:
     pv_config: PVConfig
     load_config: LoadConfig
     battery_config: Optional[BatteryConfig] = None
+    ev_config: Optional[EVConfig] = None
     location: Location = Location.bristol()
     name: str = ""
     tariff_config: Optional[TariffConfig] = None
