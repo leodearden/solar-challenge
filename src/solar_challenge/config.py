@@ -271,6 +271,23 @@ class LoadDistributionConfig:
 
 
 @dataclass
+class HeatPumpDistributionConfig:
+    """Distribution configuration for heat pump parameters.
+
+    Values can include None to represent homes without heat pumps.
+
+    Attributes:
+        heat_pump_type: Heat pump type ('ASHP' or 'GSHP', or None for no heat pump)
+        thermal_capacity_kw: Distribution for thermal capacity (default: 8.0)
+        annual_heat_demand_kwh: Distribution for annual heating demand (default: 8000.0)
+    """
+
+    heat_pump_type: Optional[str] = None
+    thermal_capacity_kw: DistributionSpec = 8.0
+    annual_heat_demand_kwh: DistributionSpec = 8000.0
+
+
+@dataclass
 class DispatchStrategyConfig:
     """Configuration for battery dispatch strategy.
 
