@@ -972,6 +972,31 @@ def _parse_load_distribution_config(data: dict[str, Any]) -> LoadDistributionCon
     )
 
 
+def _parse_ev_distribution_config(
+    data: Optional[dict[str, Any]],
+) -> Optional[EVDistributionConfig]:
+    """Parse EV distribution configuration from config data."""
+    if data is None:
+        return None
+
+    if "charger_type" not in data:
+        raise ConfigurationError("EV distribution config requires 'charger_type'")
+
+    return EVDistributionConfig(
+        charger_type=_parse_distribution_spec(data["charger_type"], "ev.charger_type"),
+        arrival_hour=_parse_distribution_spec(
+            data.get("arrival_hour", 18.0), "ev.arrival_hour"
+        ),
+        departure_hour=_parse_distribution_spec(
+            data.get("departure_hour", 7.0), "ev.departure_hour"
+        ),
+        required_charge_kwh=_parse_distribution_spec(
+            data.get("required_charge_kwh", 35.0), "ev.required_charge_kwh"
+        ),
+        smart_charging_mode=data.get("smart_charging_mode", "none"),
+    )
+
+
 def _parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionConfig:
     """Parse fleet distribution configuration from config data."""
     if "n_homes" not in data:
@@ -984,6 +1009,7 @@ def _parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionC
         pv=_parse_pv_distribution_config(data["pv"]),
         load=_parse_load_distribution_config(data.get("load", {})),
         battery=_parse_battery_distribution_config(data.get("battery")),
+        ev=_parse_ev_distribution_config(data.get("ev")),
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
     )
