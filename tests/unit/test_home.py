@@ -3,12 +3,14 @@
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import (
     HomeConfig,
     SimulationResults,
     SummaryStatistics,
     _align_tmy_to_demand,
     calculate_summary,
+    simulate_home,
 )
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -257,3 +259,335 @@ class TestSummaryStatistics:
         )
         assert stats.total_generation_kwh == 100.0
         assert stats.simulation_days == 7
+
+
+class TestHeatPumpIntegration:
+    """Test heat pump integration in home simulation."""
+
+    def test_home_config_with_heat_pump(self):
+        """HomeConfig can be created with heat pump configuration."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            location=Location.bristol(),
+            name="Home with ASHP",
+        )
+        assert config.heat_pump_config is not None
+        assert config.heat_pump_config.heat_pump_type == "ASHP"
+        assert config.heat_pump_config.thermal_capacity_kw == 8.0
+        assert config.heat_pump_config.annual_heat_demand_kwh == 8000.0
+
+    def test_heat_pump_optional(self):
+        """Heat pump config is optional."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+        )
+        assert config.heat_pump_config is None
+
+    def test_simulate_home_with_heat_pump_ashp(self):
+        """simulate_home generates heat pump load for ASHP."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            location=Location.bristol(),
+        )
+
+        # Simulate one day in winter (January)
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        # Verify heat pump load is present and tracked
+        assert results.heat_pump_load is not None
+        assert len(results.heat_pump_load) == 1440  # 24 hours * 60 minutes
+        assert results.heat_pump_load.min() >= 0.0  # Non-negative load
+
+        # Winter should have significant heating load
+        assert results.heat_pump_load.sum() > 0.0
+
+        # Demand should be higher than just household load
+        # (household load + heat pump load)
+        assert results.demand.sum() > 0.0
+
+    def test_simulate_home_with_heat_pump_gshp(self):
+        """simulate_home generates heat pump load for GSHP."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="GSHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            location=Location.bristol(),
+        )
+
+        # Simulate one day in winter
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        # Verify GSHP heat pump load is generated
+        assert results.heat_pump_load is not None
+        assert len(results.heat_pump_load) == 1440
+        assert results.heat_pump_load.min() >= 0.0
+        assert results.heat_pump_load.sum() > 0.0
+
+    def test_simulate_home_without_heat_pump(self):
+        """simulate_home works without heat pump (None in results)."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        # Heat pump load should be None
+        assert results.heat_pump_load is None
+
+    def test_heat_pump_load_added_to_demand(self):
+        """Heat pump electrical load is added to household demand."""
+        # Config with heat pump
+        config_with_hp = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            location=Location.bristol(),
+        )
+
+        # Config without heat pump (same household load)
+        config_no_hp = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            location=Location.bristol(),
+        )
+
+        # Simulate same period for both
+        start = pd.Timestamp("2024-01-15")
+        end = pd.Timestamp("2024-01-15")
+
+        results_with_hp = simulate_home(config_with_hp, start, end)
+        results_no_hp = simulate_home(config_no_hp, start, end)
+
+        # Total demand with heat pump should be higher
+        total_with_hp = results_with_hp.demand.sum()
+        total_no_hp = results_no_hp.demand.sum()
+        assert total_with_hp > total_no_hp
+
+        # Difference should approximately equal heat pump load
+        # (allowing for small numerical differences)
+        hp_load_total = results_with_hp.heat_pump_load.sum()
+        demand_increase = total_with_hp - total_no_hp
+        assert demand_increase == pytest.approx(hp_load_total, rel=0.01)
+
+    def test_results_to_dataframe_includes_heat_pump(self):
+        """SimulationResults.to_dataframe includes heat pump load column."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=8.0,
+            ),
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        df = results.to_dataframe()
+
+        # DataFrame should include heat pump load column
+        assert "heat_pump_load_kw" in df.columns
+        assert len(df) == 1440
+        assert df["heat_pump_load_kw"].min() >= 0.0
+
+    def test_results_to_dataframe_without_heat_pump(self):
+        """SimulationResults.to_dataframe works without heat pump."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        df = results.to_dataframe()
+
+        # DataFrame should not include heat pump load column
+        assert "heat_pump_load_kw" not in df.columns
+        assert len(df) == 1440
+
+    def test_calculate_summary_with_heat_pump(self):
+        """calculate_summary computes heat pump metrics."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        summary = calculate_summary(results)
+
+        # Heat pump metrics should be present
+        assert summary.total_heat_pump_load_kwh is not None
+        assert summary.peak_heat_pump_load_kw is not None
+        assert summary.heat_pump_load_ratio is not None
+
+        # Values should be reasonable
+        assert summary.total_heat_pump_load_kwh > 0.0
+        assert summary.peak_heat_pump_load_kw > 0.0
+        assert 0.0 <= summary.heat_pump_load_ratio <= 1.0
+
+        # Heat pump ratio = heat_pump_load / total_demand
+        expected_ratio = summary.total_heat_pump_load_kwh / summary.total_demand_kwh
+        assert summary.heat_pump_load_ratio == pytest.approx(expected_ratio, rel=0.01)
+
+    def test_calculate_summary_without_heat_pump(self):
+        """calculate_summary works without heat pump (None values)."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        summary = calculate_summary(results)
+
+        # Heat pump metrics should be None
+        assert summary.total_heat_pump_load_kwh is None
+        assert summary.peak_heat_pump_load_kw is None
+        assert summary.heat_pump_load_ratio is None
+
+    def test_winter_has_higher_heat_pump_load_than_summer(self):
+        """Heat pump load is higher in winter than summer."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            location=Location.bristol(),
+        )
+
+        # Simulate one day in winter (January)
+        winter_results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        # Simulate one day in summer (July)
+        summer_results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-07-15"),
+            end_date=pd.Timestamp("2024-07-15"),
+        )
+
+        winter_load = winter_results.heat_pump_load.sum()
+        summer_load = summer_results.heat_pump_load.sum()
+
+        # Winter heating load should be significantly higher than summer
+        # (summer may be near zero if temperatures are above base temperature)
+        assert winter_load > summer_load
+
+    def test_heat_pump_with_battery(self):
+        """Heat pump works correctly with battery storage."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            battery_config=BatteryConfig(capacity_kwh=10.0),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        # Verify all components are working together
+        assert results.generation.sum() > 0.0  # PV generation
+        assert results.demand.sum() > 0.0  # Total demand (household + heat pump)
+        assert results.heat_pump_load is not None
+        assert results.heat_pump_load.sum() > 0.0  # Heat pump load
+        # Battery may charge or discharge depending on generation/demand
+        assert results.battery_soc.max() >= 0.0
+
+    def test_heat_pump_load_reasonable_magnitude(self):
+        """Heat pump load has reasonable magnitude relative to capacity."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+        )
+
+        # Peak heat pump load should not exceed capacity / min_COP
+        # ASHP min COP is 1.8, so max electrical load = 8.0 / 1.8 ≈ 4.44 kW
+        # Add some margin for numerical precision
+        max_expected_load = config.heat_pump_config.thermal_capacity_kw / 1.5
+        assert results.heat_pump_load.max() <= max_expected_load

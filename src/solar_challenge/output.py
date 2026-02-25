@@ -181,7 +181,66 @@ def generate_summary_report(
 |--------|-------|
 | Total Charged | {summary.total_battery_charge_kwh:.1f} |
 | Total Discharged | {summary.total_battery_discharge_kwh:.1f} |
+"""
 
+    # Add heat pump section if heat pump metrics are present
+    if summary.total_heat_pump_load_kwh is not None:
+        report += f"""
+## Heat Pump Impact
+| Metric | Value |
+|--------|-------|
+| Total Heat Pump Load | {summary.total_heat_pump_load_kwh:.1f} kWh |
+| Peak Heat Pump Load | {summary.peak_heat_pump_load_kw:.2f} kW |
+| Heat Pump % of Total Demand | {summary.heat_pump_load_ratio:.1%} |
+"""
+
+        # Add seasonal breakdown if we have heat pump load data
+        if results.heat_pump_load is not None:
+            # Calculate seasonal heat pump metrics
+            months = results.heat_pump_load.index.month
+            winter_mask = months.isin([12, 1, 2])
+            summer_mask = months.isin([6, 7, 8])
+
+            winter_hp_load = results.heat_pump_load[winter_mask]
+            summer_hp_load = results.heat_pump_load[summer_mask]
+            winter_demand = results.demand[winter_mask]
+            summer_demand = results.demand[summer_mask]
+
+            # Convert kW to kWh (1-minute resolution: divide by 60)
+            winter_hp_kwh = float(winter_hp_load.sum() / 60) if len(winter_hp_load) > 0 else 0.0
+            summer_hp_kwh = float(summer_hp_load.sum() / 60) if len(summer_hp_load) > 0 else 0.0
+            winter_demand_kwh = float(winter_demand.sum() / 60) if len(winter_demand) > 0 else 0.0
+            summer_demand_kwh = float(summer_demand.sum() / 60) if len(summer_demand) > 0 else 0.0
+
+            winter_peak_hp_kw = float(winter_hp_load.max()) if len(winter_hp_load) > 0 else 0.0
+            summer_peak_hp_kw = float(summer_hp_load.max()) if len(summer_hp_load) > 0 else 0.0
+
+            winter_hp_ratio = winter_hp_kwh / winter_demand_kwh if winter_demand_kwh > 0 else 0.0
+            summer_hp_ratio = summer_hp_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
+
+            # Calculate average daily values
+            winter_days = len(winter_hp_load) / (60 * 24) if len(winter_hp_load) > 0 else 1
+            summer_days = len(summer_hp_load) / (60 * 24) if len(summer_hp_load) > 0 else 1
+            winter_daily_avg = winter_hp_kwh / winter_days if winter_days > 0 else 0.0
+            summer_daily_avg = summer_hp_kwh / summer_days if summer_days > 0 else 0.0
+
+            report += f"""
+### Seasonal Heat Pump Analysis
+**Winter (Dec-Feb) vs Summer (Jun-Aug)**
+
+| Metric | Winter | Summer | Winter/Summer Ratio |
+|--------|--------|--------|---------------------|
+| Total Heat Pump Load | {winter_hp_kwh:.1f} kWh | {summer_hp_kwh:.1f} kWh | {(winter_hp_kwh / summer_hp_kwh if summer_hp_kwh > 0 else 0):.1f}x |
+| Peak Heat Pump Load | {winter_peak_hp_kw:.2f} kW | {summer_peak_hp_kw:.2f} kW | {(winter_peak_hp_kw / summer_peak_hp_kw if summer_peak_hp_kw > 0 else 0):.1f}x |
+| HP % of Demand | {winter_hp_ratio:.1%} | {summer_hp_ratio:.1%} | - |
+| Daily Average | {winter_daily_avg:.1f} kWh/day | {summer_daily_avg:.1f} kWh/day | {(winter_daily_avg / summer_daily_avg if summer_daily_avg > 0 else 0):.1f}x |
+
+**Key Insights:**
+- Heat pump demand is **{(winter_hp_kwh / summer_hp_kwh if summer_hp_kwh > 0 else 0):.1f}x higher** in winter than summer
+- Heat pump accounts for **{winter_hp_ratio:.1%}** of winter demand vs **{summer_hp_ratio:.1%}** in summer
+"""
+
+    report += f"""
 ## Peak Values (kW)
 | Metric | Value |
 |--------|-------|
@@ -272,6 +331,97 @@ def calculate_export_ratio(results: SimulationResults) -> float:
     return summary.export_ratio
 
 
+def calculate_seasonal_metrics(
+    demand: pd.Series,
+    generation: pd.Series,
+) -> dict[str, float]:
+    """Calculate seasonal breakdown of energy metrics (winter vs summer).
+
+    Winter is defined as December, January, February.
+    Summer is defined as June, July, August.
+
+    Args:
+        demand: Demand time series with datetime index (kW)
+        generation: Generation time series with datetime index (kW)
+
+    Returns:
+        Dictionary containing seasonal metrics including:
+        - winter_generation_kwh: Total winter generation
+        - winter_demand_kwh: Total winter demand
+        - winter_self_consumption_kwh: Winter self-consumption
+        - winter_self_consumption_ratio: Winter self-consumption / generation
+        - winter_grid_dependency_ratio: Winter grid dependency
+        - summer_generation_kwh: Total summer generation
+        - summer_demand_kwh: Total summer demand
+        - summer_self_consumption_kwh: Summer self-consumption
+        - summer_self_consumption_ratio: Summer self-consumption / generation
+        - summer_grid_dependency_ratio: Summer grid dependency
+    """
+    # Extract month from index
+    months = demand.index.month
+
+    # Define seasons (Northern Hemisphere)
+    winter_mask = months.isin([12, 1, 2])
+    summer_mask = months.isin([6, 7, 8])
+
+    # Filter data by season
+    winter_demand = demand[winter_mask]
+    winter_generation = generation[winter_mask]
+    summer_demand = demand[summer_mask]
+    summer_generation = generation[summer_mask]
+
+    # Calculate self-consumption (minimum of generation and demand at each timestep)
+    winter_self_consumption = pd.Series(
+        [min(g, d) for g, d in zip(winter_generation, winter_demand)],
+        index=winter_generation.index,
+    )
+    summer_self_consumption = pd.Series(
+        [min(g, d) for g, d in zip(summer_generation, summer_demand)],
+        index=summer_generation.index,
+    )
+
+    # Convert kW to kWh (1-minute resolution: divide by 60)
+    winter_generation_kwh = float(winter_generation.sum() / 60)
+    winter_demand_kwh = float(winter_demand.sum() / 60)
+    winter_self_consumption_kwh = float(winter_self_consumption.sum() / 60)
+
+    summer_generation_kwh = float(summer_generation.sum() / 60)
+    summer_demand_kwh = float(summer_demand.sum() / 60)
+    summer_self_consumption_kwh = float(summer_self_consumption.sum() / 60)
+
+    # Calculate ratios with safety checks
+    winter_self_consumption_ratio = (
+        winter_self_consumption_kwh / winter_generation_kwh if winter_generation_kwh > 0 else 0.0
+    )
+    summer_self_consumption_ratio = (
+        summer_self_consumption_kwh / summer_generation_kwh if summer_generation_kwh > 0 else 0.0
+    )
+
+    # Grid dependency = (demand - self_consumption) / demand
+    winter_grid_import_kwh = max(0.0, winter_demand_kwh - winter_self_consumption_kwh)
+    winter_grid_dependency_ratio = (
+        winter_grid_import_kwh / winter_demand_kwh if winter_demand_kwh > 0 else 0.0
+    )
+
+    summer_grid_import_kwh = max(0.0, summer_demand_kwh - summer_self_consumption_kwh)
+    summer_grid_dependency_ratio = (
+        summer_grid_import_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
+    )
+
+    return {
+        "winter_generation_kwh": winter_generation_kwh,
+        "winter_demand_kwh": winter_demand_kwh,
+        "winter_self_consumption_kwh": winter_self_consumption_kwh,
+        "winter_self_consumption_ratio": winter_self_consumption_ratio,
+        "winter_grid_dependency_ratio": winter_grid_dependency_ratio,
+        "summer_generation_kwh": summer_generation_kwh,
+        "summer_demand_kwh": summer_demand_kwh,
+        "summer_self_consumption_kwh": summer_self_consumption_kwh,
+        "summer_self_consumption_ratio": summer_self_consumption_ratio,
+        "summer_grid_dependency_ratio": summer_grid_dependency_ratio,
+    }
+
+
 def aggregate_daily(results: SimulationResults) -> pd.DataFrame:
     """Aggregate 1-minute results to daily totals.
 
@@ -353,5 +503,13 @@ def aggregate_annual(
 
     if summary.seg_revenue_gbp is not None:
         annual["seg_revenue_gbp"] = summary.seg_revenue_gbp
+
+    # Include heat pump metrics if present
+    if summary.total_heat_pump_load_kwh is not None:
+        annual["heat_pump_load_kwh"] = summary.total_heat_pump_load_kwh
+    if summary.peak_heat_pump_load_kw is not None:
+        annual["peak_heat_pump_load_kw"] = summary.peak_heat_pump_load_kw
+    if summary.heat_pump_load_ratio is not None:
+        annual["heat_pump_load_ratio"] = summary.heat_pump_load_ratio
 
     return annual

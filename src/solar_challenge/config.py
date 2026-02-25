@@ -8,7 +8,7 @@ import json
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Optional, Union
+from typing import Any, Iterator, Literal, Optional, Union, cast
 
 import pandas as pd
 
@@ -22,6 +22,7 @@ except ImportError:
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -271,6 +272,23 @@ class LoadDistributionConfig:
 
 
 @dataclass
+class HeatPumpDistributionConfig:
+    """Distribution configuration for heat pump parameters.
+
+    Values can include None to represent homes without heat pumps.
+
+    Attributes:
+        heat_pump_type: Heat pump type ('ASHP' or 'GSHP'), distribution spec, or None for no heat pump
+        thermal_capacity_kw: Distribution for thermal capacity (default: 8.0)
+        annual_heat_demand_kwh: Distribution for annual heating demand (default: 8000.0)
+    """
+
+    heat_pump_type: Union[str, DistributionSpec, None] = None
+    thermal_capacity_kw: DistributionSpec = 8.0
+    annual_heat_demand_kwh: DistributionSpec = 8000.0
+
+
+@dataclass
 class DispatchStrategyConfig:
     """Configuration for battery dispatch strategy.
 
@@ -332,6 +350,7 @@ class FleetDistributionConfig:
         pv: PV distribution configuration
         load: Load distribution configuration
         battery: Battery distribution configuration (optional)
+        heat_pump: Heat pump distribution configuration (optional)
         seed: Random seed for reproducibility (optional)
         random_order: Order of random operations ("default" or "bristol_legacy")
             - "default": Shuffle pools first, then sample normal distributions per home
@@ -343,6 +362,7 @@ class FleetDistributionConfig:
     pv: PVDistributionConfig
     load: LoadDistributionConfig
     battery: Optional[BatteryDistributionConfig] = None
+    heat_pump: Optional[HeatPumpDistributionConfig] = None
     seed: Optional[int] = None
     random_order: str = "default"
 
@@ -935,6 +955,42 @@ def _parse_battery_distribution_config(
     )
 
 
+def _parse_heat_pump_distribution_config(
+    data: Optional[dict[str, Any]],
+) -> Optional[HeatPumpDistributionConfig]:
+    """Parse heat pump distribution configuration from config data."""
+    if data is None:
+        return None
+
+    # Parse heat_pump_type - can be string, distribution, or None
+    heat_pump_type_raw = data.get("heat_pump_type")
+    heat_pump_type: Union[str, DistributionSpec, None]
+    if heat_pump_type_raw is None:
+        heat_pump_type = None
+    elif isinstance(heat_pump_type_raw, str):
+        # Direct string value (e.g., "ASHP" or "GSHP")
+        heat_pump_type = heat_pump_type_raw
+    elif isinstance(heat_pump_type_raw, dict):
+        # Distribution spec
+        heat_pump_type = _parse_distribution_spec(
+            heat_pump_type_raw, "heat_pump.heat_pump_type"
+        )
+    else:
+        raise ConfigurationError(
+            f"Invalid heat_pump_type: expected string, dict, or null, got {type(heat_pump_type_raw).__name__}"
+        )
+
+    return HeatPumpDistributionConfig(
+        heat_pump_type=heat_pump_type,
+        thermal_capacity_kw=_parse_distribution_spec(
+            data.get("thermal_capacity_kw", 8.0), "heat_pump.thermal_capacity_kw"
+        ),
+        annual_heat_demand_kwh=_parse_distribution_spec(
+            data.get("annual_heat_demand_kwh", 8000.0), "heat_pump.annual_heat_demand_kwh"
+        ),
+    )
+
+
 def _parse_load_distribution_config(data: dict[str, Any]) -> LoadDistributionConfig:
     """Parse load distribution configuration from config data."""
     return LoadDistributionConfig(
@@ -960,6 +1016,7 @@ def _parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionC
         pv=_parse_pv_distribution_config(data["pv"]),
         load=_parse_load_distribution_config(data.get("load", {})),
         battery=_parse_battery_distribution_config(data.get("battery")),
+        heat_pump=_parse_heat_pump_distribution_config(data.get("heat_pump")),
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
     )
@@ -1086,6 +1143,11 @@ def generate_homes_from_distribution(
             config.battery.max_charge_kw,
             config.battery.max_discharge_kw,
         ])
+    if config.heat_pump is not None:
+        all_specs.extend([
+            config.heat_pump.thermal_capacity_kw,
+            config.heat_pump.annual_heat_demand_kwh,
+        ])
 
     if config.random_order == "bristol_legacy":
         # Bristol legacy order: pre-sample all normal distributions first,
@@ -1096,6 +1158,9 @@ def generate_homes_from_distribution(
         sampler.prepare(config.pv.capacity_kw)
         if config.battery is not None:
             sampler.prepare(config.battery.capacity_kwh)
+        if config.heat_pump is not None and not isinstance(config.heat_pump.heat_pump_type, str):
+            # Only prepare if heat_pump_type is a distribution (not a direct string value)
+            sampler.prepare(config.heat_pump.heat_pump_type)
         # Other specs don't need special handling (fixed values)
     else:
         # Default order: prepare all shuffled pools upfront
@@ -1159,11 +1224,49 @@ def generate_homes_from_distribution(
             seed=home_seed,
         )
 
+        # Sample heat pump parameters (may be None)
+        heat_pump_config: Optional[HeatPumpConfig] = None
+        if config.heat_pump is not None:
+            # Handle heat_pump_type: can be string, distribution, or None
+            heat_pump_type: Optional[str]
+            if isinstance(config.heat_pump.heat_pump_type, str):
+                heat_pump_type = config.heat_pump.heat_pump_type
+            elif isinstance(config.heat_pump.heat_pump_type, WeightedDiscreteDistribution):
+                # Sample from distribution (values can include None)
+                # Note: WeightedDiscreteDistribution is typed for floats but used with strings here
+                heat_pump_type = sampler.sample(config.heat_pump.heat_pump_type)  # type: ignore[assignment]
+            else:
+                heat_pump_type = None
+
+            if heat_pump_type is not None:
+                # Runtime validation - ensure heat_pump_type is valid
+                if heat_pump_type not in ('ASHP', 'GSHP'):
+                    raise ConfigurationError(
+                        f"Invalid heat pump type sampled: '{heat_pump_type}'. "
+                        f"Must be 'ASHP' or 'GSHP'"
+                    )
+
+                # Type narrowing - mypy now knows it's Literal['ASHP', 'GSHP']
+                heat_pump_type_literal = cast(Literal['ASHP', 'GSHP'], heat_pump_type)
+
+                thermal_capacity = sampler.sample_with_context(
+                    config.heat_pump.thermal_capacity_kw, context
+                )
+                annual_heat_demand = sampler.sample_with_context(
+                    config.heat_pump.annual_heat_demand_kwh, context
+                )
+                heat_pump_config = HeatPumpConfig(
+                    heat_pump_type=heat_pump_type_literal,
+                    thermal_capacity_kw=thermal_capacity if thermal_capacity is not None else 8.0,
+                    annual_heat_demand_kwh=annual_heat_demand if annual_heat_demand is not None else 8000.0,
+                )
+
         homes.append(
             HomeConfig(
                 pv_config=pv_config,
                 battery_config=battery_config,
                 load_config=load_config,
+                heat_pump_config=heat_pump_config,
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=None,

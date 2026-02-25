@@ -13,6 +13,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategy,
 )
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
+from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
@@ -28,6 +29,7 @@ class HomeConfig:
         pv_config: PV system configuration
         load_config: Load profile configuration
         battery_config: Battery configuration (None for PV-only)
+        heat_pump_config: Heat pump configuration (None for no heat pump)
         location: Geographic location for weather data
         name: Optional identifier for the home
         tariff_config: Tariff configuration (None for no cost tracking)
@@ -37,6 +39,7 @@ class HomeConfig:
     pv_config: PVConfig
     load_config: LoadConfig
     battery_config: Optional[BatteryConfig] = None
+    heat_pump_config: Optional[HeatPumpConfig] = None
     location: Location = Location.bristol()
     name: str = ""
     tariff_config: Optional[TariffConfig] = None
@@ -62,6 +65,7 @@ class SimulationResults:
         export_revenue: Revenue from grid export in £
         tariff_rate: Tariff rate in £/kWh
         strategy_name: Name of the dispatch strategy used
+        heat_pump_load: Optional heat pump electrical load in kW (None if no heat pump)
     """
 
     generation: pd.Series
@@ -76,6 +80,7 @@ class SimulationResults:
     export_revenue: pd.Series
     tariff_rate: pd.Series
     strategy_name: str = "self_consumption"
+    heat_pump_load: Optional[pd.Series] = None
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to DataFrame.
@@ -83,7 +88,7 @@ class SimulationResults:
         Returns:
             DataFrame with all time series as columns
         """
-        return pd.DataFrame({
+        data = {
             "generation_kw": self.generation,
             "demand_kw": self.demand,
             "self_consumption_kw": self.self_consumption,
@@ -95,7 +100,13 @@ class SimulationResults:
             "import_cost_gbp": self.import_cost,
             "export_revenue_gbp": self.export_revenue,
             "tariff_rate_per_kwh": self.tariff_rate,
-        })
+        }
+
+        # Include heat pump load if present
+        if self.heat_pump_load is not None:
+            data["heat_pump_load_kw"] = self.heat_pump_load
+
+        return pd.DataFrame(data)
 
 
 @dataclass
@@ -123,6 +134,9 @@ class SummaryStatistics:
     net_cost_gbp: float  # net cost (import - export) in £
     strategy_name: str = "self_consumption"
     seg_revenue_gbp: Optional[float] = None
+    total_heat_pump_load_kwh: Optional[float] = None  # total heat pump consumption
+    peak_heat_pump_load_kw: Optional[float] = None  # peak heat pump load
+    heat_pump_load_ratio: Optional[float] = None  # heat_pump_load / total_demand
 
 
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
@@ -195,6 +209,33 @@ def simulate_home(
         end_date,
         timezone=config.location.timezone,
     )
+
+    # Generate and add heat pump load if configured
+    heat_pump_load_series: Optional[pd.Series] = None
+    if config.heat_pump_config is not None:
+        # Extract temperature from weather data
+        hourly_temperature = weather_data["temp_air"]
+
+        # Interpolate to 1-minute resolution
+        minute_temperature = interpolate_to_minute_resolution(hourly_temperature)
+
+        # Align temperature to demand index (same as generation alignment)
+        aligned_temperature = _align_tmy_to_demand(minute_temperature, minute_demand)
+
+        # Ensure temperature has timezone info matching demand
+        if aligned_temperature.index.tz is None and minute_demand.index.tz is not None:
+            aligned_temperature.index = aligned_temperature.index.tz_localize(minute_demand.index.tz)
+        elif aligned_temperature.index.tz != minute_demand.index.tz:
+            aligned_temperature.index = aligned_temperature.index.tz_convert(minute_demand.index.tz)
+
+        # Generate heat pump electrical load
+        heat_pump_load_series = generate_heat_pump_load(
+            config.heat_pump_config,
+            aligned_temperature,
+        )
+
+        # Add heat pump load to household demand
+        minute_demand = minute_demand + heat_pump_load_series
 
     # Align generation to demand index (TMY data may have different dates)
     # TMY data uses a synthetic year, so we map by time-of-year
@@ -329,6 +370,7 @@ def simulate_home(
             index=index,
             name="tariff_rate_per_kwh",
         ),
+        heat_pump_load=heat_pump_load_series,
     )
 
 
@@ -406,6 +448,15 @@ def calculate_summary(
     if seg_tariff_pence_per_kwh is not None:
         seg_revenue_gbp = total_export * seg_tariff_pence_per_kwh / 100.0
 
+    # Calculate heat pump metrics if heat pump load is present
+    total_heat_pump_kwh: Optional[float] = None
+    peak_heat_pump_kw: Optional[float] = None
+    heat_pump_ratio: Optional[float] = None
+    if results.heat_pump_load is not None:
+        total_heat_pump_kwh = float(results.heat_pump_load.sum() * minutes_to_hours)
+        peak_heat_pump_kw = float(results.heat_pump_load.max())
+        heat_pump_ratio = total_heat_pump_kwh / total_demand if total_demand > 0 else 0.0
+
     return SummaryStatistics(
         total_generation_kwh=total_gen,
         total_demand_kwh=total_demand,
@@ -425,4 +476,7 @@ def calculate_summary(
         net_cost_gbp=net_cost,
         strategy_name=results.strategy_name,
         seg_revenue_gbp=seg_revenue_gbp,
+        total_heat_pump_load_kwh=total_heat_pump_kwh,
+        peak_heat_pump_load_kw=peak_heat_pump_kw,
+        heat_pump_load_ratio=heat_pump_ratio,
     )

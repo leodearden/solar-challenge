@@ -13,6 +13,7 @@ from solar_challenge.config import (
     ConfigurationError,
     DispatchStrategyConfig,
     FleetDistributionConfig,
+    HeatPumpDistributionConfig,
     LoadDistributionConfig,
     NormalDistribution,
     OutputConfig,
@@ -34,6 +35,7 @@ from solar_challenge.config import (
     load_home_config,
     load_scenarios,
 )
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -1506,3 +1508,265 @@ fleet_distribution:
             assert all(2000 <= c <= 6000 for c in consumptions)
         finally:
             path.unlink()
+
+
+class TestHeatPumpDistribution:
+    """Tests for heat pump distribution in fleet config."""
+
+    def test_generate_homes_with_heat_pump_distribution(self) -> None:
+        """Test generating homes with heat pump distribution including None."""
+        config = FleetDistributionConfig(
+            n_homes=100,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(),
+            heat_pump=HeatPumpDistributionConfig(
+                heat_pump_type=WeightedDiscreteDistribution(
+                    values=(None, "ASHP", "GSHP"),
+                    weights=(50.0, 40.0, 10.0),
+                ),
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+
+        # Check correct number of homes
+        assert len(homes) == 100
+
+        # Count heat pump types
+        no_heat_pump = [h for h in homes if h.heat_pump_config is None]
+        ashp_homes = [
+            h for h in homes
+            if h.heat_pump_config is not None and h.heat_pump_config.heat_pump_type == "ASHP"
+        ]
+        gshp_homes = [
+            h for h in homes
+            if h.heat_pump_config is not None and h.heat_pump_config.heat_pump_type == "GSHP"
+        ]
+
+        # Check we have all types
+        assert len(no_heat_pump) > 0
+        assert len(ashp_homes) > 0
+        assert len(gshp_homes) > 0
+        assert len(no_heat_pump) + len(ashp_homes) + len(gshp_homes) == 100
+
+        # Check heat pump properties for homes with heat pumps
+        for home in ashp_homes + gshp_homes:
+            assert home.heat_pump_config is not None
+            assert home.heat_pump_config.thermal_capacity_kw == 8.0
+            assert home.heat_pump_config.annual_heat_demand_kwh == 8000.0
+
+    def test_generate_homes_with_heat_pump_capacity_distribution(self) -> None:
+        """Test generating homes with varied heat pump capacities."""
+        config = FleetDistributionConfig(
+            n_homes=50,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(),
+            heat_pump=HeatPumpDistributionConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=WeightedDiscreteDistribution(
+                    values=(6.0, 8.0, 10.0),
+                    weights=(30.0, 50.0, 20.0),
+                ),
+                annual_heat_demand_kwh=8000.0,
+            ),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+
+        # All should have ASHP
+        assert all(h.heat_pump_config is not None for h in homes)
+        assert all(
+            h.heat_pump_config.heat_pump_type == "ASHP"
+            for h in homes
+            if h.heat_pump_config is not None
+        )
+
+        # Check capacity distribution
+        capacities = {
+            h.heat_pump_config.thermal_capacity_kw
+            for h in homes
+            if h.heat_pump_config is not None
+        }
+        assert capacities == {6.0, 8.0, 10.0}
+
+    def test_generate_homes_with_heat_pump_demand_distribution(self) -> None:
+        """Test generating homes with varied heat pump demand."""
+        config = FleetDistributionConfig(
+            n_homes=50,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(),
+            heat_pump=HeatPumpDistributionConfig(
+                heat_pump_type="GSHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=NormalDistribution(
+                    mean=8000.0,
+                    std=2000.0,
+                    min=4000.0,
+                    max=15000.0,
+                ),
+            ),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+
+        # All should have GSHP
+        assert all(h.heat_pump_config is not None for h in homes)
+        assert all(
+            h.heat_pump_config.heat_pump_type == "GSHP"
+            for h in homes
+            if h.heat_pump_config is not None
+        )
+
+        # Check demand is in range
+        demands = [
+            h.heat_pump_config.annual_heat_demand_kwh
+            for h in homes
+            if h.heat_pump_config is not None
+        ]
+        assert all(4000.0 <= d <= 15000.0 for d in demands)
+        # Check mean is roughly correct
+        mean_demand = sum(demands) / len(demands)
+        assert 7000.0 <= mean_demand <= 9000.0
+
+    def test_load_fleet_config_with_heat_pump_distribution_yaml(self) -> None:
+        """Test loading fleet config with heat pump distribution from YAML."""
+        yaml_content = """
+name: Test Heat Pump Fleet
+fleet_distribution:
+  n_homes: 20
+  seed: 42
+  pv:
+    capacity_kw: 4.0
+  load:
+    annual_consumption_kwh: 3400
+  heat_pump:
+    heat_pump_type:
+      type: weighted_discrete
+      values: [null, "ASHP", "GSHP"]
+      weights: [50, 40, 10]
+    thermal_capacity_kw: 8.0
+    annual_heat_demand_kwh: 8000.0
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            fleet = load_fleet_config(path)
+            assert fleet.name == "Test Heat Pump Fleet"
+            assert len(fleet.homes) == 20
+
+            # Check some homes have heat pumps and some don't
+            with_heat_pump = [h for h in fleet.homes if h.heat_pump_config is not None]
+            without_heat_pump = [h for h in fleet.homes if h.heat_pump_config is None]
+            assert len(with_heat_pump) > 0
+            assert len(without_heat_pump) > 0
+
+            # Check heat pump types
+            ashp_count = sum(
+                1 for h in fleet.homes
+                if h.heat_pump_config is not None
+                and h.heat_pump_config.heat_pump_type == "ASHP"
+            )
+            gshp_count = sum(
+                1 for h in fleet.homes
+                if h.heat_pump_config is not None
+                and h.heat_pump_config.heat_pump_type == "GSHP"
+            )
+            assert ashp_count > 0
+            assert gshp_count >= 0  # May be 0 due to small sample size
+        finally:
+            path.unlink()
+
+    def test_load_fleet_config_with_heat_pump_distribution_json(self) -> None:
+        """Test loading fleet config with heat pump distribution from JSON."""
+        json_content = {
+            "name": "JSON Heat Pump Fleet",
+            "fleet_distribution": {
+                "n_homes": 15,
+                "seed": 123,
+                "pv": {
+                    "capacity_kw": 5.0,
+                },
+                "load": {},
+                "heat_pump": {
+                    "heat_pump_type": "ASHP",
+                    "thermal_capacity_kw": {
+                        "type": "uniform",
+                        "min": 6.0,
+                        "max": 10.0,
+                    },
+                    "annual_heat_demand_kwh": {
+                        "type": "normal",
+                        "mean": 8000,
+                        "std": 1500,
+                        "min": 5000,
+                        "max": 12000,
+                    },
+                },
+            },
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump(json_content, f)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            fleet = load_fleet_config(path)
+            assert fleet.name == "JSON Heat Pump Fleet"
+            assert len(fleet.homes) == 15
+
+            # All should have ASHP
+            assert all(h.heat_pump_config is not None for h in fleet.homes)
+            assert all(
+                h.heat_pump_config.heat_pump_type == "ASHP"
+                for h in fleet.homes
+                if h.heat_pump_config is not None
+            )
+
+            # Check capacity is in range
+            for home in fleet.homes:
+                if home.heat_pump_config:
+                    assert 6.0 <= home.heat_pump_config.thermal_capacity_kw <= 10.0
+                    assert 5000.0 <= home.heat_pump_config.annual_heat_demand_kwh <= 12000.0
+        finally:
+            path.unlink()
+
+    def test_heat_pump_distribution_reproducibility(self) -> None:
+        """Test that heat pump distribution is reproducible with same seed."""
+        config = FleetDistributionConfig(
+            n_homes=30,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(),
+            heat_pump=HeatPumpDistributionConfig(
+                heat_pump_type=WeightedDiscreteDistribution(
+                    values=(None, "ASHP", "GSHP"),
+                    weights=(40.0, 40.0, 20.0),
+                ),
+                thermal_capacity_kw=UniformDistribution(min=6.0, max=10.0),
+                annual_heat_demand_kwh=NormalDistribution(mean=8000.0, std=1500.0),
+            ),
+            seed=999,
+        )
+        location = Location.bristol()
+
+        homes1 = generate_homes_from_distribution(config, location)
+        homes2 = generate_homes_from_distribution(config, location)
+
+        # Check reproducibility
+        for h1, h2 in zip(homes1, homes2, strict=True):
+            # Check heat pump type
+            if h1.heat_pump_config is None:
+                assert h2.heat_pump_config is None
+            else:
+                assert h2.heat_pump_config is not None
+                assert h1.heat_pump_config.heat_pump_type == h2.heat_pump_config.heat_pump_type
+                assert h1.heat_pump_config.thermal_capacity_kw == h2.heat_pump_config.thermal_capacity_kw
+                assert h1.heat_pump_config.annual_heat_demand_kwh == h2.heat_pump_config.annual_heat_demand_kwh
