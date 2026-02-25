@@ -21,6 +21,7 @@ except ImportError:
     YAML_AVAILABLE = False
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.ev import EVConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
@@ -278,9 +279,17 @@ class EVDistributionConfig:
 
     Attributes:
         charger_type: Distribution for EV charger type (can include None)
+        arrival_hour: Distribution for EV arrival hour (0-23), or fixed value
+        departure_hour: Distribution for EV departure hour (0-23), default 7am
+        required_charge_kwh: Distribution for daily charging requirement, default 35kWh
+        smart_charging_mode: Smart charging mode (none, solar, off_peak), default "none"
     """
 
     charger_type: DistributionSpec
+    arrival_hour: DistributionSpec = 18.0
+    departure_hour: DistributionSpec = 7.0
+    required_charge_kwh: DistributionSpec = 35.0
+    smart_charging_mode: str = "none"
 
 
 @dataclass
@@ -1101,16 +1110,25 @@ def generate_homes_from_distribution(
             config.battery.max_charge_kw,
             config.battery.max_discharge_kw,
         ])
+    if config.ev is not None:
+        all_specs.extend([
+            config.ev.charger_type,
+            config.ev.arrival_hour,
+            config.ev.departure_hour,
+            config.ev.required_charge_kwh,
+        ])
 
     if config.random_order == "bristol_legacy":
         # Bristol legacy order: pre-sample all normal distributions first,
         # then shuffle pools. This matches the exact random call order of
         # create_bristol_phase1_scenario().
-        # Order: consumption (normal) -> pv shuffle -> battery shuffle
+        # Order: consumption (normal) -> pv shuffle -> battery shuffle -> ev shuffle
         sampler.pre_sample(config.load.annual_consumption_kwh, config.n_homes)
         sampler.prepare(config.pv.capacity_kw)
         if config.battery is not None:
             sampler.prepare(config.battery.capacity_kwh)
+        if config.ev is not None:
+            sampler.prepare(config.ev.charger_type)
         # Other specs don't need special handling (fixed values)
     else:
         # Default order: prepare all shuffled pools upfront
@@ -1174,11 +1192,29 @@ def generate_homes_from_distribution(
             seed=home_seed,
         )
 
+        # Sample EV parameters (may be None)
+        ev_config: Optional[EVConfig] = None
+        if config.ev is not None:
+            charger_type = sampler.sample(config.ev.charger_type)
+            if charger_type is not None:
+                arrival_hour_val = sampler.sample(config.ev.arrival_hour)
+                departure_hour_val = sampler.sample(config.ev.departure_hour)
+                required_charge_val = sampler.sample(config.ev.required_charge_kwh)
+
+                ev_config = EVConfig(
+                    charger_type=str(charger_type),
+                    arrival_hour=int(arrival_hour_val) if arrival_hour_val is not None else 18,
+                    departure_hour=int(departure_hour_val) if departure_hour_val is not None else 7,
+                    required_charge_kwh=required_charge_val if required_charge_val is not None else 35.0,
+                    smart_charging_mode=config.ev.smart_charging_mode,
+                )
+
         homes.append(
             HomeConfig(
                 pv_config=pv_config,
                 battery_config=battery_config,
                 load_config=load_config,
+                ev_config=ev_config,
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=None,
