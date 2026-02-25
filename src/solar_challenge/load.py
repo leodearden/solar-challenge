@@ -353,7 +353,7 @@ def generate_load_profile(
 
     # Add EV charging if configured
     if ev_config is not None:
-        from src.solar_challenge.ev import generate_ev_charging_profile
+        from solar_challenge.ev import generate_ev_charging_profile
 
         ev_load = generate_ev_charging_profile(
             ev_config, start_date, end_date, timezone
