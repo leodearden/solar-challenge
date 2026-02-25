@@ -65,6 +65,7 @@ class SimulationResults:
         export_revenue: Revenue from grid export in £
         tariff_rate: Tariff rate in £/kWh
         strategy_name: Name of the dispatch strategy used
+        heat_pump_load: Optional heat pump electrical load in kW (None if no heat pump)
     """
 
     generation: pd.Series
@@ -79,6 +80,7 @@ class SimulationResults:
     export_revenue: pd.Series
     tariff_rate: pd.Series
     strategy_name: str = "self_consumption"
+    heat_pump_load: Optional[pd.Series] = None
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to DataFrame.
@@ -86,7 +88,7 @@ class SimulationResults:
         Returns:
             DataFrame with all time series as columns
         """
-        return pd.DataFrame({
+        data = {
             "generation_kw": self.generation,
             "demand_kw": self.demand,
             "self_consumption_kw": self.self_consumption,
@@ -98,7 +100,13 @@ class SimulationResults:
             "import_cost_gbp": self.import_cost,
             "export_revenue_gbp": self.export_revenue,
             "tariff_rate_per_kwh": self.tariff_rate,
-        })
+        }
+
+        # Include heat pump load if present
+        if self.heat_pump_load is not None:
+            data["heat_pump_load_kw"] = self.heat_pump_load
+
+        return pd.DataFrame(data)
 
 
 @dataclass
@@ -200,6 +208,7 @@ def simulate_home(
     )
 
     # Generate and add heat pump load if configured
+    heat_pump_load_series: Optional[pd.Series] = None
     if config.heat_pump_config is not None:
         # Extract temperature from weather data
         hourly_temperature = weather_data["temp_air"]
@@ -217,13 +226,13 @@ def simulate_home(
             aligned_temperature.index = aligned_temperature.index.tz_convert(minute_demand.index.tz)
 
         # Generate heat pump electrical load
-        heat_pump_load = generate_heat_pump_load(
+        heat_pump_load_series = generate_heat_pump_load(
             config.heat_pump_config,
             aligned_temperature,
         )
 
         # Add heat pump load to household demand
-        minute_demand = minute_demand + heat_pump_load
+        minute_demand = minute_demand + heat_pump_load_series
 
     # Align generation to demand index (TMY data may have different dates)
     # TMY data uses a synthetic year, so we map by time-of-year
@@ -358,6 +367,7 @@ def simulate_home(
             index=index,
             name="tariff_rate_per_kwh",
         ),
+        heat_pump_load=heat_pump_load_series,
     )
 
 
