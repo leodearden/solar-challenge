@@ -186,12 +186,58 @@ def generate_summary_report(
     # Add heat pump section if heat pump metrics are present
     if summary.total_heat_pump_load_kwh is not None:
         report += f"""
-## Heat Pump
+## Heat Pump Impact
 | Metric | Value |
 |--------|-------|
 | Total Heat Pump Load | {summary.total_heat_pump_load_kwh:.1f} kWh |
 | Peak Heat Pump Load | {summary.peak_heat_pump_load_kw:.2f} kW |
-| Heat Pump Load Ratio | {summary.heat_pump_load_ratio:.1%} |
+| Heat Pump % of Total Demand | {summary.heat_pump_load_ratio:.1%} |
+"""
+
+        # Add seasonal breakdown if we have heat pump load data
+        if results.heat_pump_load is not None:
+            # Calculate seasonal heat pump metrics
+            months = results.heat_pump_load.index.month
+            winter_mask = months.isin([12, 1, 2])
+            summer_mask = months.isin([6, 7, 8])
+
+            winter_hp_load = results.heat_pump_load[winter_mask]
+            summer_hp_load = results.heat_pump_load[summer_mask]
+            winter_demand = results.demand[winter_mask]
+            summer_demand = results.demand[summer_mask]
+
+            # Convert kW to kWh (1-minute resolution: divide by 60)
+            winter_hp_kwh = float(winter_hp_load.sum() / 60) if len(winter_hp_load) > 0 else 0.0
+            summer_hp_kwh = float(summer_hp_load.sum() / 60) if len(summer_hp_load) > 0 else 0.0
+            winter_demand_kwh = float(winter_demand.sum() / 60) if len(winter_demand) > 0 else 0.0
+            summer_demand_kwh = float(summer_demand.sum() / 60) if len(summer_demand) > 0 else 0.0
+
+            winter_peak_hp_kw = float(winter_hp_load.max()) if len(winter_hp_load) > 0 else 0.0
+            summer_peak_hp_kw = float(summer_hp_load.max()) if len(summer_hp_load) > 0 else 0.0
+
+            winter_hp_ratio = winter_hp_kwh / winter_demand_kwh if winter_demand_kwh > 0 else 0.0
+            summer_hp_ratio = summer_hp_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
+
+            # Calculate average daily values
+            winter_days = len(winter_hp_load) / (60 * 24) if len(winter_hp_load) > 0 else 1
+            summer_days = len(summer_hp_load) / (60 * 24) if len(summer_hp_load) > 0 else 1
+            winter_daily_avg = winter_hp_kwh / winter_days if winter_days > 0 else 0.0
+            summer_daily_avg = summer_hp_kwh / summer_days if summer_days > 0 else 0.0
+
+            report += f"""
+### Seasonal Heat Pump Analysis
+**Winter (Dec-Feb) vs Summer (Jun-Aug)**
+
+| Metric | Winter | Summer | Winter/Summer Ratio |
+|--------|--------|--------|---------------------|
+| Total Heat Pump Load | {winter_hp_kwh:.1f} kWh | {summer_hp_kwh:.1f} kWh | {(winter_hp_kwh / summer_hp_kwh if summer_hp_kwh > 0 else 0):.1f}x |
+| Peak Heat Pump Load | {winter_peak_hp_kw:.2f} kW | {summer_peak_hp_kw:.2f} kW | {(winter_peak_hp_kw / summer_peak_hp_kw if summer_peak_hp_kw > 0 else 0):.1f}x |
+| HP % of Demand | {winter_hp_ratio:.1%} | {summer_hp_ratio:.1%} | - |
+| Daily Average | {winter_daily_avg:.1f} kWh/day | {summer_daily_avg:.1f} kWh/day | {(winter_daily_avg / summer_daily_avg if summer_daily_avg > 0 else 0):.1f}x |
+
+**Key Insights:**
+- Heat pump demand is **{(winter_hp_kwh / summer_hp_kwh if summer_hp_kwh > 0 else 0):.1f}x higher** in winter than summer
+- Heat pump accounts for **{winter_hp_ratio:.1%}** of winter demand vs **{summer_hp_ratio:.1%}** in summer
 """
 
     report += f"""
