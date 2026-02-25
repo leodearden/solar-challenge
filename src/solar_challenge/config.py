@@ -345,6 +345,7 @@ class FleetDistributionConfig:
         pv: PV distribution configuration
         load: Load distribution configuration
         battery: Battery distribution configuration (optional)
+        ev: EV distribution configuration (optional)
         seed: Random seed for reproducibility (optional)
         random_order: Order of random operations ("default" or "bristol_legacy")
             - "default": Shuffle pools first, then sample normal distributions per home
@@ -356,6 +357,7 @@ class FleetDistributionConfig:
     pv: PVDistributionConfig
     load: LoadDistributionConfig
     battery: Optional[BatteryDistributionConfig] = None
+    ev: Optional[EVDistributionConfig] = None
     seed: Optional[int] = None
     random_order: str = "default"
 
