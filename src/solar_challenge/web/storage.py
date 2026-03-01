@@ -23,6 +23,7 @@ import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import DispatchStrategyConfig
+from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -330,6 +331,190 @@ class RunStorage:
         )
 
         return config, results, summary
+
+    def save_fleet_run(
+        self,
+        run_id: str,
+        fleet_results: FleetResults,
+        fleet_summary: FleetSummary,
+        per_home_summaries: list[SummaryStatistics],
+        name: str | None = None,
+        status: str = "completed",
+        error_message: str | None = None,
+        duration_seconds: float | None = None,
+    ) -> None:
+        """Save a fleet simulation run to storage.
+
+        Creates directory structure with homes/ subdirectory, saves per-home
+        parquet files, fleet summary JSON, and fleet config JSON.
+
+        Args:
+            run_id: Unique run identifier
+            fleet_results: Fleet simulation results with per-home data
+            fleet_summary: Fleet-level summary statistics
+            per_home_summaries: List of SummaryStatistics for each home
+            name: Optional run name
+            status: Run status (completed, failed, running)
+            error_message: Optional error message for failed runs
+            duration_seconds: Optional simulation duration
+        """
+        # Create run directory and homes subdirectory
+        run_dir = self._get_run_dir(run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        homes_dir = run_dir / "homes"
+        homes_dir.mkdir(exist_ok=True)
+
+        # Save fleet config (list of HomeConfigs) to JSON
+        fleet_config_dict = {
+            "homes": [_serialize_dataclass(home) for home in fleet_results.home_configs],
+            "n_homes": len(fleet_results.home_configs),
+        }
+        config_path = run_dir / "config.json"
+        with config_path.open("w") as f:
+            json.dump(fleet_config_dict, f, indent=2)
+
+        # Save fleet summary to JSON
+        summary_dict = _serialize_dataclass(fleet_summary)
+        summary_path = run_dir / "summary.json"
+        with summary_path.open("w") as f:
+            json.dump(summary_dict, f, indent=2)
+
+        # Save per-home results to parquet files in homes/ subdirectory
+        for i, (home_result, home_summary) in enumerate(zip(fleet_results.per_home_results, per_home_summaries, strict=True)):
+            # Save time series data
+            df = home_result.to_dataframe()
+            parquet_path = homes_dir / f"home_{i}.parquet"
+            df.to_parquet(parquet_path, engine="pyarrow")
+
+            # Save per-home summary
+            home_summary_dict = _serialize_dataclass(home_summary)
+            home_summary_path = homes_dir / f"home_{i}_summary.json"
+            with home_summary_path.open("w") as f:
+                json.dump(home_summary_dict, f, indent=2)
+
+        # Insert run metadata into database
+        created_at = datetime.now(timezone.utc).isoformat()
+        run_name = name or "Unnamed Fleet Run"
+
+        with get_db(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO runs (
+                    id, name, type, config_json, summary_json,
+                    status, error_message, created_at, completed_at,
+                    duration_seconds, n_homes, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    run_name,
+                    "fleet",
+                    json.dumps(fleet_config_dict),
+                    json.dumps(summary_dict),
+                    status,
+                    error_message,
+                    created_at,
+                    created_at if status == "completed" else None,
+                    duration_seconds,
+                    len(fleet_results.home_configs),
+                    None,
+                ),
+            )
+
+    def load_fleet_run(
+        self,
+        run_id: str,
+    ) -> tuple[FleetResults, FleetSummary, list[SummaryStatistics]]:
+        """Load a fleet simulation run from storage.
+
+        Reconstructs FleetResults, FleetSummary, and per-home SummaryStatistics
+        from serialized JSON and parquet files.
+
+        Args:
+            run_id: Unique run identifier
+
+        Returns:
+            Tuple of (fleet_results, fleet_summary, per_home_summaries)
+
+        Raises:
+            FileNotFoundError: If run directory or required files don't exist
+            ValueError: If run data is corrupted or incomplete
+        """
+        run_dir = self._get_run_dir(run_id)
+        if not run_dir.exists():
+            raise FileNotFoundError(f"Run directory not found: {run_dir}")
+
+        homes_dir = run_dir / "homes"
+        if not homes_dir.exists():
+            raise FileNotFoundError(f"Homes directory not found: {homes_dir}")
+
+        # Load fleet config from JSON
+        config_path = run_dir / "config.json"
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        with config_path.open("r") as f:
+            fleet_config_dict = json.load(f)
+
+        # Deserialize home configs
+        home_configs = [
+            _deserialize_dataclass(HomeConfig, home_dict)
+            for home_dict in fleet_config_dict["homes"]
+        ]
+
+        # Load fleet summary from JSON
+        summary_path = run_dir / "summary.json"
+        if not summary_path.exists():
+            raise FileNotFoundError(f"Summary file not found: {summary_path}")
+        with summary_path.open("r") as f:
+            summary_dict = json.load(f)
+        fleet_summary = _deserialize_dataclass(FleetSummary, summary_dict)
+
+        # Load per-home results from homes/ subdirectory
+        n_homes = len(home_configs)
+        per_home_results: list[SimulationResults] = []
+        per_home_summaries: list[SummaryStatistics] = []
+
+        for i in range(n_homes):
+            # Load time series data
+            parquet_path = homes_dir / f"home_{i}.parquet"
+            if not parquet_path.exists():
+                raise FileNotFoundError(f"Home {i} data file not found: {parquet_path}")
+            df = pd.read_parquet(parquet_path, engine="pyarrow")
+
+            # Load per-home summary
+            home_summary_path = homes_dir / f"home_{i}_summary.json"
+            if not home_summary_path.exists():
+                raise FileNotFoundError(f"Home {i} summary not found: {home_summary_path}")
+            with home_summary_path.open("r") as f:
+                home_summary_dict = json.load(f)
+            home_summary = _deserialize_dataclass(SummaryStatistics, home_summary_dict)
+            per_home_summaries.append(home_summary)
+
+            # Reconstruct SimulationResults from DataFrame
+            result = SimulationResults(
+                generation=df["generation_kw"],
+                demand=df["demand_kw"],
+                self_consumption=df["self_consumption_kw"],
+                battery_charge=df["battery_charge_kw"],
+                battery_discharge=df["battery_discharge_kw"],
+                battery_soc=df["battery_soc_kwh"],
+                grid_import=df["grid_import_kw"],
+                grid_export=df["grid_export_kw"],
+                import_cost=df["import_cost_gbp"],
+                export_revenue=df["export_revenue_gbp"],
+                tariff_rate=df["tariff_rate_per_kwh"],
+                strategy_name=home_summary.strategy_name,
+            )
+            per_home_results.append(result)
+
+        # Construct FleetResults
+        fleet_results = FleetResults(
+            per_home_results=per_home_results,
+            home_configs=home_configs,
+        )
+
+        return fleet_results, fleet_summary, per_home_summaries
 
     def list_runs(
         self,
