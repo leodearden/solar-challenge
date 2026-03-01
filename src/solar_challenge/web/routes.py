@@ -4,12 +4,14 @@ import html
 import io
 import tempfile
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from flask import (
     Blueprint,
     Response,
+    current_app,
     flash,
     redirect,
     render_template,
@@ -24,12 +26,21 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.output import aggregate_daily, export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
+from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("main", __name__)
 
-# In-memory result cache keyed by session result_key.
-# Suitable for single-process deployment (dev/demo use).
-_result_cache: dict[str, Any] = {}
+
+def get_storage() -> RunStorage:
+    """Get RunStorage instance configured from Flask app config.
+
+    Returns:
+        RunStorage: Configured storage service instance.
+    """
+    db_path = current_app.config["DATABASE"]
+    data_dir = current_app.config["DATA_DIR"]
+    return RunStorage(db_path=db_path, data_dir=data_dir)
+
 
 # UK location presets available from the web form.
 _LOCATION_PRESETS: dict[str, Location] = {
@@ -256,15 +267,18 @@ def simulate() -> Any:
             "simulation_days": summary.simulation_days,
         }
 
-        # --- Cache raw results for CSV / report downloads ---
-        result_key = str(uuid.uuid4())
-        _result_cache[result_key] = {
-            "results": results,
-            "summary": summary,
-            "home_name": home_config.name,
-        }
+        # --- Persist results to storage ---
+        run_id = str(uuid.uuid4())
+        storage = get_storage()
+        storage.save_home_run(
+            run_id=run_id,
+            config=home_config,
+            results=results,
+            summary=summary,
+            name=home_config.name,
+        )
 
-        session["result_key"] = result_key
+        session["run_id"] = run_id
         session["summary"] = summary_dict
         session["has_battery"] = has_battery
 
@@ -293,7 +307,7 @@ def simulate() -> Any:
 @bp.route("/results", methods=["GET"])
 def results() -> Any:
     """Display simulation results page (fallback for non-HTMX access)."""
-    if "result_key" not in session:
+    if "run_id" not in session:
         flash("No simulation results found. Please run a simulation first.", "info")
         return redirect(url_for("main.index"))
 
@@ -304,13 +318,17 @@ def results() -> Any:
 @bp.route("/download/csv", methods=["GET"])
 def download_csv() -> Response:
     """Stream simulation results as a CSV file download."""
-    result_key = session.get("result_key")
-    if not result_key or result_key not in _result_cache:
+    run_id = session.get("run_id")
+    if not run_id:
         flash("No simulation results available. Please run a simulation first.", "error")
         return redirect(url_for("main.index"))  # type: ignore[return-value]
 
-    cached = _result_cache[result_key]
-    sim_results = cached["results"]
+    try:
+        storage = get_storage()
+        config, sim_results, summary = storage.load_home_run(run_id)
+    except FileNotFoundError:
+        flash("Simulation results not found. Please run a new simulation.", "error")
+        return redirect(url_for("main.index"))  # type: ignore[return-value]
 
     # Use export_to_csv() to write to a temp file, then load into BytesIO buffer.
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -327,15 +345,19 @@ def download_csv() -> Response:
 @bp.route("/download/report", methods=["GET"])
 def download_report() -> Response:
     """Return simulation report wrapped in a minimal HTML page for download."""
-    result_key = session.get("result_key")
-    if not result_key or result_key not in _result_cache:
+    run_id = session.get("run_id")
+    if not run_id:
         flash("No simulation results available. Please run a simulation first.", "error")
         return redirect(url_for("main.index"))  # type: ignore[return-value]
 
-    cached = _result_cache[result_key]
-    sim_results = cached["results"]
-    home_name = cached.get("home_name", "Home")
+    try:
+        storage = get_storage()
+        config, sim_results, summary = storage.load_home_run(run_id)
+    except FileNotFoundError:
+        flash("Simulation results not found. Please run a new simulation.", "error")
+        return redirect(url_for("main.index"))  # type: ignore[return-value]
 
+    home_name = config.name or "Home"
     report_markdown = generate_summary_report(sim_results, home_name)
 
     # Escape the markdown text and render inside a minimal HTML page so that
