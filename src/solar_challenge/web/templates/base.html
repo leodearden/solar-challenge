@@ -6,7 +6,7 @@
     <title>{% block title %}Solar Challenge Dashboard{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <!-- HTMX for dynamic form submissions without writing JavaScript -->
-    <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5ViYgSibmK" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <!-- Plotly.js for interactive energy charts -->
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
     {% block head %}{% endblock %}
