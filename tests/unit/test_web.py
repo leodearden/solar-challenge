@@ -544,3 +544,296 @@ class TestHomeResultsRoute:
         html_data = response.data.decode("utf-8")
         assert "Total Generation" in html_data or "Generation" in html_data
         assert "chart-sankey" in html_data or "chart-daily-balance" in html_data
+
+
+class TestFleetConfigRoute:
+    """Tests for the GET /simulate/fleet route."""
+
+    def test_fleet_page_returns_200(self, client: FlaskClient) -> None:
+        """Test GET /simulate/fleet returns HTTP 200."""
+        response = client.get("/simulate/fleet")
+        assert response.status_code == 200
+
+    def test_fleet_page_contains_distribution_editors(self, client: FlaskClient) -> None:
+        """Test GET /simulate/fleet response contains distribution editors."""
+        response = client.get("/simulate/fleet")
+        html_data = response.data.decode("utf-8").lower()
+        assert "distribution" in html_data
+        assert "n_homes" in html_data or "homes" in html_data
+
+    def test_fleet_page_contains_pv_battery_load_sections(self, client: FlaskClient) -> None:
+        """Test GET /simulate/fleet contains PV, Battery, and Load sections."""
+        response = client.get("/simulate/fleet")
+        html_data = response.data.decode("utf-8")
+        assert "PV Capacity" in html_data
+        assert "Battery Capacity" in html_data
+        assert "Annual Consumption" in html_data
+
+    def test_fleet_page_contains_action_buttons(self, client: FlaskClient) -> None:
+        """Test GET /simulate/fleet contains import/export/run buttons."""
+        response = client.get("/simulate/fleet")
+        html_data = response.data.decode("utf-8")
+        assert "Import YAML" in html_data
+        assert "Export YAML" in html_data
+        assert "Run Fleet Simulation" in html_data
+
+    def test_fleet_page_has_correct_page_identifier(self, client: FlaskClient) -> None:
+        """Test GET /simulate/fleet passes simulate-fleet page identifier."""
+        response = client.get("/simulate/fleet")
+        html_data = response.data.decode("utf-8")
+        assert "simulate-fleet" in html_data
+
+
+class TestFleetConfigHelpers:
+    """Tests for fleet_config.py helper functions."""
+
+    def test_sample_distribution_normal(self) -> None:
+        """Test normal distribution sampling produces correct count and bounds."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        samples = sample_distribution(
+            "normal", {"mean": 4.0, "std": 1.0, "min": 1.0, "max": 8.0}
+        )
+        assert len(samples) == 100
+        assert all(1.0 <= s <= 8.0 for s in samples)
+
+    def test_sample_distribution_normal_custom_count(self) -> None:
+        """Test normal distribution with custom n_samples."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        samples = sample_distribution(
+            "normal", {"mean": 4.0, "std": 1.0, "min": 1.0, "max": 8.0}, n_samples=50
+        )
+        assert len(samples) == 50
+
+    def test_sample_distribution_uniform(self) -> None:
+        """Test uniform distribution sampling produces correct count and bounds."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        samples = sample_distribution("uniform", {"min": 2.0, "max": 6.0})
+        assert len(samples) == 100
+        assert all(2.0 <= s <= 6.0 for s in samples)
+
+    def test_sample_distribution_weighted_discrete(self) -> None:
+        """Test weighted discrete distribution sampling."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        samples = sample_distribution(
+            "weighted_discrete",
+            {"values": [{"value": 3.0, "weight": 50}, {"value": 5.0, "weight": 50}]},
+        )
+        assert len(samples) == 100
+        assert all(s in (3.0, 5.0) for s in samples)
+
+    def test_sample_distribution_shuffled_pool(self) -> None:
+        """Test shuffled pool distribution sampling."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        samples = sample_distribution(
+            "shuffled_pool",
+            {"entries": [{"value": 3.0, "count": 30}, {"value": 5.0, "count": 70}]},
+        )
+        assert len(samples) == 100
+        assert all(s in (3.0, 5.0) for s in samples)
+
+    def test_sample_distribution_unknown_type_raises(self) -> None:
+        """Test that unknown distribution type raises ValueError."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        with pytest.raises(ValueError, match="Unknown distribution type"):
+            sample_distribution("bogus", {})
+
+    def test_form_to_fleet_distribution_config(self) -> None:
+        """Test converting form data to fleet distribution config."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        form_data = {
+            "n_homes": 50,
+            "pv": {
+                "capacity_kw": {
+                    "type": "normal",
+                    "mean": 4.0,
+                    "std": 1.0,
+                    "min": 2.0,
+                    "max": 8.0,
+                }
+            },
+            "load": {
+                "annual_consumption_kwh": {
+                    "type": "uniform",
+                    "min": 2000,
+                    "max": 5000,
+                }
+            },
+        }
+        config = form_to_fleet_distribution_config(form_data)
+        assert config["n_homes"] == 50
+        assert "pv" in config
+        assert "load" in config
+
+    def test_fleet_distribution_to_yaml(self) -> None:
+        """Test converting fleet config to YAML string."""
+        from solar_challenge.web.fleet_config import fleet_distribution_to_yaml
+
+        config = {
+            "n_homes": 100,
+            "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
+            "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2000, "max": 5000}},
+        }
+        yaml_str = fleet_distribution_to_yaml(config)
+        assert "n_homes: 100" in yaml_str
+        assert isinstance(yaml_str, str)
+
+    def test_yaml_to_fleet_distribution(self) -> None:
+        """Test parsing YAML string to fleet distribution config."""
+        from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
+
+        yaml_str = """
+fleet_distribution:
+  n_homes: 100
+  pv:
+    capacity_kw:
+      type: normal
+      mean: 4.0
+      std: 1.0
+  load:
+    annual_consumption_kwh:
+      type: uniform
+      min: 2000
+      max: 5000
+"""
+        config = yaml_to_fleet_distribution(yaml_str)
+        assert config["n_homes"] == 100
+        assert "pv" in config
+        assert "load" in config
+
+    def test_yaml_to_fleet_distribution_invalid_raises(self) -> None:
+        """Test that invalid YAML raises ValueError."""
+        from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
+
+        with pytest.raises(ValueError):
+            yaml_to_fleet_distribution("not: a: valid: fleet: config")
+
+    def test_yaml_roundtrip(self) -> None:
+        """Test that export/import YAML round-trips correctly."""
+        from solar_challenge.web.fleet_config import (
+            fleet_distribution_to_yaml,
+            yaml_to_fleet_distribution,
+        )
+
+        original = {
+            "n_homes": 50,
+            "seed": 42,
+            "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
+            "load": {"annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800}},
+        }
+        yaml_str = fleet_distribution_to_yaml(original)
+        restored = yaml_to_fleet_distribution(yaml_str)
+        assert restored["n_homes"] == 50
+        assert restored["pv"]["capacity_kw"]["type"] == "uniform"
+        assert restored["load"]["annual_consumption_kwh"]["type"] == "normal"
+
+
+class TestFleetApiEndpoints:
+    """Tests for fleet-related API endpoints."""
+
+    def test_preview_distribution_normal(self, client: FlaskClient) -> None:
+        """Test POST /api/fleet/preview-distribution with normal distribution."""
+        response = client.post(
+            "/api/fleet/preview-distribution",
+            json={
+                "type": "normal",
+                "params": {"mean": 4.0, "std": 1.0, "min": 1.0, "max": 8.0},
+                "n_samples": 50,
+            },
+        )
+        assert response.status_code == 200
+        data = response.get_json()
+        assert "samples" in data
+        assert len(data["samples"]) == 50
+
+    def test_preview_distribution_invalid_type(self, client: FlaskClient) -> None:
+        """Test POST /api/fleet/preview-distribution with invalid type returns 400."""
+        response = client.post(
+            "/api/fleet/preview-distribution",
+            json={"type": "invalid_type", "params": {}},
+        )
+        assert response.status_code == 400
+
+    def test_simulate_fleet_from_distribution(self, client: FlaskClient) -> None:
+        """Test POST /api/simulate/fleet-from-distribution accepts valid config."""
+        response = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                "n_homes": 10,
+                "pv": {
+                    "capacity_kw": {
+                        "type": "normal",
+                        "mean": 4.0,
+                        "std": 1.0,
+                        "min": 2.0,
+                        "max": 8.0,
+                    }
+                },
+                "load": {
+                    "annual_consumption_kwh": {
+                        "type": "uniform",
+                        "min": 2000,
+                        "max": 5000,
+                    }
+                },
+            },
+        )
+        assert response.status_code == 201
+        data = response.get_json()
+        assert data["n_homes"] == 10
+
+    def test_simulate_fleet_from_distribution_empty_body(self, client: FlaskClient) -> None:
+        """Test POST /api/simulate/fleet-from-distribution with empty body returns 400."""
+        response = client.post(
+            "/api/simulate/fleet-from-distribution",
+            content_type="application/json",
+        )
+        assert response.status_code == 400
+
+    def test_export_fleet_yaml(self, client: FlaskClient) -> None:
+        """Test POST /api/fleet/export-yaml returns YAML content."""
+        response = client.post(
+            "/api/fleet/export-yaml",
+            json={
+                "n_homes": 100,
+                "pv": {"capacity_kw": {"type": "uniform", "min": 3, "max": 6}},
+            },
+        )
+        assert response.status_code == 200
+        assert "text/yaml" in response.content_type
+        assert b"n_homes" in response.data
+
+    def test_import_fleet_yaml(self, client: FlaskClient) -> None:
+        """Test POST /api/fleet/import-yaml parses YAML correctly."""
+        yaml_content = """
+fleet_distribution:
+  n_homes: 50
+  pv:
+    capacity_kw:
+      type: normal
+      mean: 4.0
+      std: 1.0
+"""
+        response = client.post(
+            "/api/fleet/import-yaml",
+            data=yaml_content,
+            content_type="text/yaml",
+        )
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["n_homes"] == 50
+
+    def test_import_fleet_yaml_invalid(self, client: FlaskClient) -> None:
+        """Test POST /api/fleet/import-yaml with invalid YAML returns 400."""
+        response = client.post(
+            "/api/fleet/import-yaml",
+            data="just: some: random: yaml",
+            content_type="text/yaml",
+        )
+        assert response.status_code == 400

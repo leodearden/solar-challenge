@@ -617,3 +617,193 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
         "load_share_chart": pie_fig.to_json(),
         "cop_chart": load_fig.to_json(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Comparison charts (for run comparison page)
+# ---------------------------------------------------------------------------
+
+# Extended palette for comparison overlays — up to 4 runs
+_COMPARISON_COLOURS = ["#f5a623", "#4a90e2", "#7ed321", "#9013fe"]
+
+
+def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str]) -> str:
+    """Overlaid line chart of power flows from multiple runs.
+
+    Each run gets a different colour from the comparison palette.
+    Shows generation and demand lines for each run, downsampled
+    for performance.
+
+    Args:
+        results_list: List of SimulationResults from different runs.
+        labels: Display labels for each run.
+
+    Returns:
+        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    traces: list[Any] = []
+    for i, (results, label) in enumerate(zip(results_list, labels)):
+        colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
+
+        gen = _adaptive_downsample_series(results.generation)
+        dem = _adaptive_downsample_series(results.demand)
+
+        gen_dates = [d.isoformat() for d in gen.index]
+        dem_dates = [d.isoformat() for d in dem.index]
+
+        traces.append(go.Scatter(
+            name=f"{label} - Generation",
+            x=gen_dates,
+            y=gen.round(4).tolist(),
+            mode="lines",
+            line=dict(color=colour, width=1.5),
+            legendgroup=label,
+        ))
+        traces.append(go.Scatter(
+            name=f"{label} - Demand",
+            x=dem_dates,
+            y=dem.round(4).tolist(),
+            mode="lines",
+            line=dict(color=colour, width=1.5, dash="dash"),
+            legendgroup=label,
+        ))
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        title="Overlaid Power Flows",
+        xaxis=dict(title="Time"),
+        yaxis=dict(title="Power (kW)"),
+        height=500,
+    )
+    return fig.to_json()
+
+
+def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> str:
+    """Grouped bar chart comparing energy totals across runs.
+
+    Categories: Generation, Demand, Self-Consumption, Grid Import,
+    Grid Export.  One group per run, labelled.
+
+    Args:
+        summaries: List of summary dictionaries from different runs.
+        labels: Display labels for each run.
+
+    Returns:
+        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    categories = ["Generation", "Demand", "Self-Consumption", "Grid Import", "Grid Export"]
+    keys = [
+        "total_generation_kwh",
+        "total_demand_kwh",
+        "total_self_consumption_kwh",
+        "total_grid_import_kwh",
+        "total_grid_export_kwh",
+    ]
+
+    traces: list[Any] = []
+    for i, (summary, label) in enumerate(zip(summaries, labels)):
+        colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
+        values = [round(summary.get(k, 0), 2) for k in keys]
+        traces.append(go.Bar(
+            name=label,
+            x=categories,
+            y=values,
+            marker_color=colour,
+        ))
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        title="Energy Totals Comparison",
+        barmode="group",
+        xaxis=dict(title="Metric"),
+        yaxis=dict(title="Energy (kWh)"),
+        height=450,
+    )
+    return fig.to_json()
+
+
+def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
+    """Radar chart comparing efficiency ratios across runs.
+
+    Axes: Self-Consumption %, Grid Dependency %, Export %,
+    Battery Utilization %.
+
+    Args:
+        summaries: List of summary dictionaries from different runs.
+        labels: Display labels for each run.
+
+    Returns:
+        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    theta = [
+        "Self-Consumption %",
+        "Grid Dependency %",
+        "Export %",
+        "Battery Utilization %",
+    ]
+
+    traces: list[Any] = []
+    for i, (summary, label) in enumerate(zip(summaries, labels)):
+        colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
+
+        sc_ratio = summary.get("self_consumption_ratio", 0) * 100
+        grid_dep = summary.get("grid_dependency_ratio", 0) * 100
+        export_ratio = summary.get("export_ratio", 0) * 100
+
+        # Battery utilization: charge / generation (if available)
+        total_charge = summary.get("total_battery_charge_kwh", 0)
+        total_gen = summary.get("total_generation_kwh", 0)
+        battery_util = (total_charge / total_gen * 100) if total_gen > 0 else 0
+
+        r_values = [
+            round(sc_ratio, 1),
+            round(grid_dep, 1),
+            round(export_ratio, 1),
+            round(battery_util, 1),
+        ]
+
+        # Convert hex colour to rgba for semi-transparent fill
+        if colour.startswith("#") and len(colour) == 7:
+            r = int(colour[1:3], 16)
+            g = int(colour[3:5], 16)
+            b = int(colour[5:7], 16)
+            fill_colour = f"rgba({r},{g},{b},0.1)"
+        else:
+            fill_colour = colour
+
+        traces.append(go.Scatterpolar(
+            name=label,
+            r=r_values + [r_values[0]],  # close the polygon
+            theta=theta + [theta[0]],
+            fill="toself",
+            fillcolor=fill_colour,
+            line=dict(color=colour, width=2),
+        ))
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        title="Efficiency Ratios",
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, 100]),
+        ),
+        height=450,
+    )
+    return fig.to_json()

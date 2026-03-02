@@ -1,0 +1,467 @@
+{% extends "base.html" %}
+{% from "partials/page-header.html" import page_header %}
+{% from "components/macros.html" import card %}
+
+{% block title %}Run History - Solar Challenge{% endblock %}
+
+{% block content %}
+{{ page_header("Run History", subtitle="Browse, filter, and compare past simulation runs", breadcrumbs=[{"label": "History", "url": "/history/runs"}, {"label": "Runs"}]) }}
+
+<div x-data="runBrowser()" x-init="fetchRuns()">
+    {# Filter bar #}
+    <div class="mb-6 flex flex-wrap gap-3 items-end">
+        {# Type filter #}
+        <div class="space-y-1">
+            <label for="filter-type" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Type</label>
+            <select
+                id="filter-type"
+                x-model="filters.type"
+                @change="resetPage(); fetchRuns()"
+                class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+            >
+                <option value="">All</option>
+                <option value="home">Home</option>
+                <option value="fleet">Fleet</option>
+                <option value="sweep">Sweep</option>
+            </select>
+        </div>
+
+        {# Search input #}
+        <div class="space-y-1 flex-1 min-w-[200px]">
+            <label for="filter-search" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Search</label>
+            <input
+                type="text"
+                id="filter-search"
+                x-model="filters.q"
+                @input.debounce.300ms="resetPage(); fetchRuns()"
+                placeholder="Search by name or notes..."
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+            >
+        </div>
+
+        {# Date range #}
+        <div class="space-y-1">
+            <label for="filter-date-from" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">From</label>
+            <input
+                type="date"
+                id="filter-date-from"
+                x-model="filters.date_from"
+                @change="resetPage(); fetchRuns()"
+                class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+            >
+        </div>
+        <div class="space-y-1">
+            <label for="filter-date-to" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">To</label>
+            <input
+                type="date"
+                id="filter-date-to"
+                x-model="filters.date_to"
+                @change="resetPage(); fetchRuns()"
+                class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+            >
+        </div>
+    </div>
+
+    {# Compare selected button #}
+    <div class="mb-4 flex items-center gap-3" x-show="selectedIds.length >= 2">
+        <a
+            :href="'/history/compare?ids=' + selectedIds.join(',')"
+            class="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-lg transition-colors shadow-sm"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M5 4a1 1 0 00-2 0v7.268a2 2 0 000 3.464V16a1 1 0 102 0v-1.268a2 2 0 000-3.464V4zM11 4a1 1 0 10-2 0v1.268a2 2 0 000 3.464V16a1 1 0 102 0V8.732a2 2 0 000-3.464V4zM16 3a1 1 0 011 1v7.268a2 2 0 010 3.464V16a1 1 0 11-2 0v-1.268a2 2 0 010-3.464V4a1 1 0 011-1z" />
+            </svg>
+            Compare Selected (<span x-text="selectedIds.length"></span>)
+        </a>
+        <span class="text-xs text-slate-500 dark:text-slate-400">Select 2-4 runs to compare</span>
+    </div>
+
+    {# Runs table #}
+    <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-700/50">
+                <tr>
+                    <th class="px-3 py-3 w-10">
+                        <span class="sr-only">Select</span>
+                    </th>
+                    <th
+                        class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-700 dark:hover:text-slate-200"
+                        @click="toggleSort('name')"
+                    >
+                        Name
+                        <span x-show="sort === 'name'" x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
+                    </th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Type</th>
+                    <th
+                        class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-700 dark:hover:text-slate-200"
+                        @click="toggleSort('created_at')"
+                    >
+                        Date
+                        <span x-show="sort === 'created_at'" x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
+                    </th>
+                    <th
+                        class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-700 dark:hover:text-slate-200"
+                        @click="toggleSort('duration_seconds')"
+                    >
+                        Duration
+                        <span x-show="sort === 'duration_seconds'" x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
+                    </th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Generation</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Self-Cons.</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                <template x-if="loading">
+                    <tr>
+                        <td colspan="9" class="px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                            <svg class="animate-spin h-6 w-6 mx-auto mb-2 text-amber-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Loading runs...
+                        </td>
+                    </tr>
+                </template>
+                <template x-if="!loading && runs.length === 0">
+                    <tr>
+                        <td colspan="9" class="px-4 py-12 text-center">
+                            <div class="text-slate-400 dark:text-slate-500 mb-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                            </div>
+                            <p class="text-sm text-slate-500 dark:text-slate-400 font-medium">No simulation runs found</p>
+                            <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Run a simulation to see results here.</p>
+                        </td>
+                    </tr>
+                </template>
+                <template x-for="run in runs" :key="run.id">
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                        {# Checkbox #}
+                        <td class="px-3 py-3">
+                            <input
+                                type="checkbox"
+                                :value="run.id"
+                                :checked="selectedIds.includes(run.id)"
+                                @change="toggleSelect(run.id)"
+                                :disabled="!selectedIds.includes(run.id) && selectedIds.length >= 4"
+                                class="h-4 w-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+                            >
+                        </td>
+                        {# Name (inline editable) #}
+                        <td class="px-4 py-3">
+                            <template x-if="editingId !== run.id">
+                                <div>
+                                    <span
+                                        class="text-sm font-medium text-slate-900 dark:text-white cursor-pointer hover:text-amber-600 dark:hover:text-amber-400"
+                                        @dblclick="startEdit(run)"
+                                        x-text="run.name || 'Unnamed Run'"
+                                    ></span>
+                                </div>
+                            </template>
+                            <template x-if="editingId === run.id">
+                                <input
+                                    type="text"
+                                    x-model="editName"
+                                    @keydown.enter="saveEdit(run.id)"
+                                    @keydown.escape="cancelEdit()"
+                                    @blur="saveEdit(run.id)"
+                                    x-ref="editInput"
+                                    class="text-sm px-2 py-1 rounded border border-amber-400 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 w-full"
+                                >
+                            </template>
+                        </td>
+                        {# Type badge #}
+                        <td class="px-4 py-3">
+                            <span
+                                class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                                :class="{
+                                    'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400': run.type === 'home',
+                                    'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400': run.type === 'fleet',
+                                    'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400': run.type === 'sweep'
+                                }"
+                                x-text="run.type"
+                            ></span>
+                        </td>
+                        {# Date #}
+                        <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap" x-text="formatDate(run.created_at)"></td>
+                        {# Duration #}
+                        <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap" x-text="formatDuration(run.duration_seconds)"></td>
+                        {# Generation #}
+                        <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                            <span x-text="run.total_generation_kwh != null ? run.total_generation_kwh.toFixed(1) + ' kWh' : '-'"></span>
+                        </td>
+                        {# Self-consumption ratio #}
+                        <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                            <span x-text="run.self_consumption_ratio != null ? (run.self_consumption_ratio * 100).toFixed(1) + '%' : '-'"></span>
+                        </td>
+                        {# Status badge #}
+                        <td class="px-4 py-3">
+                            <span
+                                class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+                                :class="{
+                                    'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400': run.status === 'completed',
+                                    'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400': run.status === 'running',
+                                    'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400': run.status === 'failed'
+                                }"
+                                x-text="run.status"
+                            ></span>
+                        </td>
+                        {# Actions #}
+                        <td class="px-4 py-3 text-right whitespace-nowrap">
+                            <div class="flex items-center justify-end gap-1">
+                                {# View results #}
+                                <a
+                                    :href="'/results/' + run.type + '/' + run.id"
+                                    class="p-1.5 rounded text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    title="View results"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                                        <path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" />
+                                    </svg>
+                                </a>
+                                {# Rename #}
+                                <button
+                                    @click="startEdit(run)"
+                                    class="p-1.5 rounded text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    title="Rename"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                                    </svg>
+                                </button>
+                                {# Export CSV #}
+                                <a
+                                    :href="'/history/api/runs/' + run.id + '/export/csv'"
+                                    class="p-1.5 rounded text-slate-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    title="Export CSV"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                    </svg>
+                                </a>
+                                {# Export YAML #}
+                                <a
+                                    :href="'/history/api/runs/' + run.id + '/export/yaml'"
+                                    class="p-1.5 rounded text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    title="Export Config YAML"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd" />
+                                    </svg>
+                                </a>
+                                {# Delete #}
+                                <button
+                                    @click="confirmDelete(run)"
+                                    class="p-1.5 rounded text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    title="Delete"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </div>
+
+    {# Pagination #}
+    <div class="mt-4 flex items-center justify-between" x-show="pagination.total_pages > 1">
+        <div class="text-sm text-slate-500 dark:text-slate-400">
+            Showing <span x-text="((pagination.page - 1) * pagination.per_page) + 1"></span>-<span x-text="Math.min(pagination.page * pagination.per_page, pagination.total)"></span> of <span x-text="pagination.total"></span> runs
+        </div>
+        <div class="flex items-center gap-1">
+            <button
+                @click="prevPage()"
+                :disabled="!pagination.has_prev"
+                class="px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            >Prev</button>
+            <template x-for="p in pageNumbers()" :key="p">
+                <button
+                    @click="goToPage(p)"
+                    class="px-3 py-1.5 text-sm rounded-lg border transition-colors"
+                    :class="p === pagination.page
+                        ? 'bg-amber-500 border-amber-500 text-white'
+                        : 'border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300'"
+                    x-text="p"
+                ></button>
+            </template>
+            <button
+                @click="nextPage()"
+                :disabled="!pagination.has_next"
+                class="px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            >Next</button>
+        </div>
+    </div>
+
+    {# Delete confirmation modal #}
+    <div
+        x-show="showDeleteModal"
+        x-transition
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        @click.self="showDeleteModal = false"
+    >
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl p-6 max-w-sm mx-4 border border-slate-200 dark:border-slate-700">
+            <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">Delete Run</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                Are you sure you want to delete "<span x-text="deleteTarget?.name" class="font-medium"></span>"? This action cannot be undone.
+            </p>
+            <div class="flex justify-end gap-3">
+                <button
+                    @click="showDeleteModal = false"
+                    class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                >Cancel</button>
+                <button
+                    @click="executeDelete()"
+                    class="px-4 py-2 text-sm font-medium rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors"
+                >Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function runBrowser() {
+    return {
+        runs: [],
+        loading: true,
+        pagination: { page: 1, per_page: 20, total: 0, total_pages: 1, has_next: false, has_prev: false },
+        sort: 'created_at',
+        order: 'desc',
+        filters: { type: '', q: '', date_from: '', date_to: '' },
+        selectedIds: [],
+        editingId: null,
+        editName: '',
+        showDeleteModal: false,
+        deleteTarget: null,
+
+        async fetchRuns() {
+            this.loading = true;
+            const params = new URLSearchParams({
+                page: this.pagination.page,
+                per_page: this.pagination.per_page,
+                sort: this.sort,
+                order: this.order,
+            });
+            if (this.filters.type) params.set('type', this.filters.type);
+            if (this.filters.q) params.set('q', this.filters.q);
+            if (this.filters.date_from) params.set('date_from', this.filters.date_from);
+            if (this.filters.date_to) params.set('date_to', this.filters.date_to);
+
+            try {
+                const resp = await fetch('/history/api/runs?' + params.toString());
+                const data = await resp.json();
+                this.runs = data.runs || [];
+                this.pagination = data.pagination || this.pagination;
+            } catch (e) {
+                console.error('Failed to fetch runs:', e);
+                this.runs = [];
+            }
+            this.loading = false;
+        },
+
+        toggleSort(col) {
+            if (this.sort === col) {
+                this.order = this.order === 'asc' ? 'desc' : 'asc';
+            } else {
+                this.sort = col;
+                this.order = 'desc';
+            }
+            this.fetchRuns();
+        },
+
+        resetPage() { this.pagination.page = 1; },
+        prevPage() { if (this.pagination.has_prev) { this.pagination.page--; this.fetchRuns(); } },
+        nextPage() { if (this.pagination.has_next) { this.pagination.page++; this.fetchRuns(); } },
+        goToPage(p) { this.pagination.page = p; this.fetchRuns(); },
+
+        pageNumbers() {
+            const total = this.pagination.total_pages;
+            const current = this.pagination.page;
+            const pages = [];
+            const start = Math.max(1, current - 2);
+            const end = Math.min(total, current + 2);
+            for (let i = start; i <= end; i++) pages.push(i);
+            return pages;
+        },
+
+        toggleSelect(id) {
+            const idx = this.selectedIds.indexOf(id);
+            if (idx >= 0) {
+                this.selectedIds.splice(idx, 1);
+            } else if (this.selectedIds.length < 4) {
+                this.selectedIds.push(id);
+            }
+        },
+
+        startEdit(run) {
+            this.editingId = run.id;
+            this.editName = run.name || '';
+            this.$nextTick(() => {
+                const el = this.$refs.editInput;
+                if (el) el.focus();
+            });
+        },
+
+        cancelEdit() { this.editingId = null; this.editName = ''; },
+
+        async saveEdit(runId) {
+            if (!this.editName.trim()) { this.cancelEdit(); return; }
+            try {
+                await fetch('/history/api/runs/' + runId, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: this.editName.trim() }),
+                });
+                const run = this.runs.find(r => r.id === runId);
+                if (run) run.name = this.editName.trim();
+            } catch (e) {
+                console.error('Failed to rename run:', e);
+            }
+            this.cancelEdit();
+        },
+
+        confirmDelete(run) {
+            this.deleteTarget = run;
+            this.showDeleteModal = true;
+        },
+
+        async executeDelete() {
+            if (!this.deleteTarget) return;
+            try {
+                await fetch('/history/api/runs/' + this.deleteTarget.id, { method: 'DELETE' });
+                this.selectedIds = this.selectedIds.filter(id => id !== this.deleteTarget.id);
+                this.fetchRuns();
+            } catch (e) {
+                console.error('Failed to delete run:', e);
+            }
+            this.showDeleteModal = false;
+            this.deleteTarget = null;
+        },
+
+        formatDate(iso) {
+            if (!iso) return '-';
+            try {
+                const d = new Date(iso);
+                return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            } catch { return iso; }
+        },
+
+        formatDuration(secs) {
+            if (secs == null) return '-';
+            if (secs < 1) return '<1s';
+            if (secs < 60) return secs.toFixed(1) + 's';
+            const m = Math.floor(secs / 60);
+            const s = Math.round(secs % 60);
+            return m + 'm ' + s + 's';
+        },
+    };
+}
+</script>
+{% endblock %}

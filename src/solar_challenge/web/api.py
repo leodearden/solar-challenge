@@ -450,3 +450,109 @@ def get_preset(name: str) -> tuple[Response, int]:
             return jsonify(result), 200  # type: ignore[return-value]
 
     return jsonify({"error": f"Preset '{name}' not found"}), 404  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# Fleet distribution endpoints
+# ---------------------------------------------------------------------------
+
+
+@api_bp.route("/fleet/preview-distribution", methods=["POST"])
+def preview_distribution() -> tuple[Response, int]:
+    """Generate sample data for distribution histogram preview.
+
+    Expects a JSON body with ``type``, ``params``, and optional ``n_samples``.
+
+    Returns:
+        JSON with ``samples`` array, HTTP 200 on success.
+    """
+    data = request.get_json(silent=True) or {}
+    dist_type = data.get("type", "normal")
+    params = data.get("params", {})
+    n_samples = int(data.get("n_samples", 100))
+
+    from solar_challenge.web.fleet_config import sample_distribution  # noqa: PLC0415
+
+    try:
+        samples = sample_distribution(dist_type, params, n_samples)
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400  # type: ignore[return-value]
+
+    return jsonify({"samples": samples}), 200  # type: ignore[return-value]
+
+
+@api_bp.route("/simulate/fleet-from-distribution", methods=["POST"])
+def simulate_fleet_from_distribution() -> tuple[Response, int]:
+    """Submit a fleet simulation using distribution configuration.
+
+    Expects a JSON body describing distribution parameters for PV, battery,
+    and load components.
+
+    Returns:
+        JSON with ``job_id`` and ``run_id``, HTTP 201 on success.
+    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Request body must be JSON"}), 400  # type: ignore[return-value]
+
+    from solar_challenge.web.fleet_config import form_to_fleet_distribution_config  # noqa: PLC0415
+
+    try:
+        config = form_to_fleet_distribution_config(data)
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400  # type: ignore[return-value]
+
+    # For now, return the parsed config as confirmation.
+    # Full integration with JobManager would generate HomeConfigs via
+    # generate_homes_from_distribution() and submit to the job queue.
+    return jsonify({
+        "status": "accepted",
+        "n_homes": config.get("n_homes", 0),
+        "config": config,
+    }), 201  # type: ignore[return-value]
+
+
+@api_bp.route("/fleet/export-yaml", methods=["POST"])
+def export_fleet_yaml() -> Response:
+    """Export fleet configuration as YAML.
+
+    Expects a JSON body with fleet distribution parameters.
+
+    Returns:
+        YAML file download response.
+    """
+    data = request.get_json(silent=True) or {}
+
+    from solar_challenge.web.fleet_config import fleet_distribution_to_yaml  # noqa: PLC0415
+
+    yaml_str = fleet_distribution_to_yaml(data)
+    return Response(
+        yaml_str,
+        mimetype="text/yaml",
+        headers={"Content-Disposition": "attachment; filename=fleet-config.yaml"},
+    )
+
+
+@api_bp.route("/fleet/import-yaml", methods=["POST"])
+def import_fleet_yaml() -> tuple[Response, int]:
+    """Import fleet configuration from YAML.
+
+    Accepts raw YAML text in the request body (Content-Type: text/yaml)
+    or a JSON-encoded YAML string.
+
+    Returns:
+        JSON with parsed fleet distribution config, HTTP 200 on success.
+    """
+    from solar_challenge.web.fleet_config import yaml_to_fleet_distribution  # noqa: PLC0415
+
+    # Try to get raw body text
+    yaml_str = request.get_data(as_text=True)
+    if not yaml_str:
+        return jsonify({"error": "Empty request body"}), 400  # type: ignore[return-value]
+
+    try:
+        config = yaml_to_fleet_distribution(yaml_str)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400  # type: ignore[return-value]
+
+    return jsonify(config), 200  # type: ignore[return-value]

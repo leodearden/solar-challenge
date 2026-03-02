@@ -580,3 +580,38 @@ def home_results(run_id: str) -> Any:
         run_name=config.name or "Home Simulation",
         page="results",
     )
+
+
+def _load_scenario_presets() -> list[str]:
+    """Scan the scenarios/ directory for YAML files and return preset names.
+
+    Searches in the project root ``scenarios/`` directory for files
+    ending in ``.yaml`` or ``.yml``.
+
+    Returns:
+        Sorted list of scenario file names (without extension).
+    """
+    import importlib.resources  # noqa: PLC0415
+
+    presets: list[str] = []
+
+    # Try the project-level scenarios/ directory
+    project_root = Path(__file__).resolve().parents[3]
+    scenarios_dir = project_root / "scenarios"
+    if scenarios_dir.is_dir():
+        for path in sorted(scenarios_dir.iterdir()):
+            if path.suffix in (".yaml", ".yml") and path.is_file():
+                presets.append(path.stem)
+
+    return presets
+
+
+@bp.route("/simulate/fleet", methods=["GET"])
+def simulate_fleet_page() -> str:
+    """Render the fleet simulation configuration page."""
+    presets = _load_scenario_presets()
+    return render_template(
+        "simulate/fleet.html",
+        presets=presets,
+        page="simulate-fleet",
+    )
