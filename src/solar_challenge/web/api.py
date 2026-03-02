@@ -111,7 +111,7 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     return home_config, start_date, end_date, name
 
 
-@api_bp.route("/simulate/home", methods=["POST"])
+@api_bp.route("/simulate/home", methods=["POST"])  # type: ignore[untyped-decorator]
 def simulate_home_api() -> tuple[Response, int]:
     """Submit a home simulation job for background execution.
 
@@ -122,13 +122,11 @@ def simulate_home_api() -> tuple[Response, int]:
     """
     data = request.get_json(silent=True)
     if data is None:
-        return jsonify({"error": "Request body must be JSON"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Request body must be JSON"}), 400
     try:
         home_config, start_date, end_date, name = _parse_home_config(data)
     except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": str(exc)}), 400
     job_manager = _get_job_manager()
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
@@ -142,10 +140,9 @@ def simulate_home_api() -> tuple[Response, int]:
         name=name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201  # type: ignore[return-value]
+    return jsonify({"job_id": job_id, "run_id": run_id}), 201
 
-
-@api_bp.route("/simulate/fleet", methods=["POST"])
+@api_bp.route("/simulate/fleet", methods=["POST"])  # type: ignore[untyped-decorator]
 def simulate_fleet_api() -> tuple[Response, int]:
     """Submit a fleet simulation job for background execution.
 
@@ -156,12 +153,10 @@ def simulate_fleet_api() -> tuple[Response, int]:
     """
     data = request.get_json(silent=True)
     if data is None:
-        return jsonify({"error": "Request body must be JSON"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Request body must be JSON"}), 400
     homes_data = data.get("homes", [])
     if not homes_data:
-        return jsonify({"error": "Fleet requires at least one home config in 'homes' array"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Fleet requires at least one home config in 'homes' array"}), 400
     try:
         configs = []
         # Use first home's date config for the fleet
@@ -172,8 +167,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
             config, _, _, _ = _parse_home_config(home_data)
             configs.append(config)
     except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": str(exc)}), 400
     fleet_name = data.get("name", "Fleet Simulation")
 
     job_manager = _get_job_manager()
@@ -189,10 +183,9 @@ def simulate_fleet_api() -> tuple[Response, int]:
         name=fleet_name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201  # type: ignore[return-value]
+    return jsonify({"job_id": job_id, "run_id": run_id}), 201
 
-
-@api_bp.route("/jobs/<job_id>", methods=["GET"])
+@api_bp.route("/jobs/<job_id>", methods=["GET"])  # type: ignore[untyped-decorator]
 def get_job_status(job_id: str) -> tuple[Response, int]:
     """Return current job status as JSON.
 
@@ -206,12 +199,10 @@ def get_job_status(job_id: str) -> tuple[Response, int]:
     status = job_manager.get_job_status(job_id)
 
     if status is None:
-        return jsonify({"error": "Job not found"}), 404  # type: ignore[return-value]
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(status), 200
 
-    return jsonify(status), 200  # type: ignore[return-value]
-
-
-@api_bp.route("/jobs/<job_id>/progress", methods=["GET"])
+@api_bp.route("/jobs/<job_id>/progress", methods=["GET"])  # type: ignore[untyped-decorator]
 def get_job_progress(job_id: str) -> Response:
     """SSE endpoint for streaming job progress events.
 
@@ -273,7 +264,7 @@ def get_job_progress(job_id: str) -> Response:
     )
 
 
-@api_bp.route("/jobs/<job_id>/results", methods=["GET"])
+@api_bp.route("/jobs/<job_id>/results", methods=["GET"])  # type: ignore[untyped-decorator]
 def get_job_results(job_id: str) -> tuple[Response, int]:
     """Return completed job results as JSON.
 
@@ -287,15 +278,13 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
     status = job_manager.get_job_status(job_id)
 
     if status is None:
-        return jsonify({"error": "Job not found"}), 404  # type: ignore[return-value]
-
+        return jsonify({"error": "Job not found"}), 404
     if status.get("status") != "completed":
         return jsonify({
             "error": "Job not yet completed",
             "status": status.get("status"),
             "progress_pct": status.get("progress_pct", 0),
-        }), 409  # type: ignore[return-value]
-
+        }), 409
     # Load run summary from database
     run_id = status.get("run_id", "")
     db_path = current_app.config["DATABASE"]
@@ -308,8 +297,7 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         row = cursor.fetchone()
 
     if row is None:
-        return jsonify({"error": "Run not found"}), 404  # type: ignore[return-value]
-
+        return jsonify({"error": "Run not found"}), 404
     summary_json = row["summary_json"]
     summary = json.loads(summary_json) if summary_json else {}
 
@@ -319,14 +307,13 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         "type": row["type"],
         "created_at": row["created_at"],
         "summary": summary,
-    }), 200  # type: ignore[return-value]
-
+    }), 200
 
 # ---------------------------------------------------------------------------
 # Config preset endpoints
 # ---------------------------------------------------------------------------
 
-@api_bp.route("/presets", methods=["GET"])
+@api_bp.route("/presets", methods=["GET"])  # type: ignore[untyped-decorator]
 def list_presets() -> tuple[Response, int]:
     """List all configuration presets (built-in + saved).
 
@@ -358,10 +345,9 @@ def list_presets() -> tuple[Response, int]:
     # Tag built-in presets
     builtin = [{**p, "source": "builtin"} for p in BUILTIN_PRESETS]
 
-    return jsonify(builtin + saved), 200  # type: ignore[return-value]
+    return jsonify(builtin + saved), 200
 
-
-@api_bp.route("/presets", methods=["POST"])
+@api_bp.route("/presets", methods=["POST"])  # type: ignore[untyped-decorator]
 def save_preset() -> tuple[Response, int]:
     """Save a configuration preset to the database.
 
@@ -375,12 +361,10 @@ def save_preset() -> tuple[Response, int]:
 
     data = request.get_json(silent=True)
     if data is None:
-        return jsonify({"error": "Request body must be JSON"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Request body must be JSON"}), 400
     name = data.get("name", "").strip()
     if not name:
-        return jsonify({"error": "Preset name is required"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Preset name is required"}), 400
     preset_type = data.get("type", "home")
     config_payload = {
         k: v for k, v in data.items() if k not in ("name", "type")
@@ -401,12 +385,10 @@ def save_preset() -> tuple[Response, int]:
                 (preset_id, name, preset_type, json.dumps(config_payload), now),
             )
     except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": str(exc)}), 500  # type: ignore[return-value]
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"name": name, "id": preset_id}), 201
 
-    return jsonify({"name": name, "id": preset_id}), 201  # type: ignore[return-value]
-
-
-@api_bp.route("/presets/<name>", methods=["GET"])
+@api_bp.route("/presets/<name>", methods=["GET"])  # type: ignore[untyped-decorator]
 def get_preset(name: str) -> tuple[Response, int]:
     """Get a specific configuration preset by name.
 
@@ -439,7 +421,7 @@ def get_preset(name: str) -> tuple[Response, int]:
             cfg["name"] = row["name"]
             cfg["created_at"] = row["created_at"]
             cfg["source"] = "saved"
-            return jsonify(cfg), 200  # type: ignore[return-value]
+            return jsonify(cfg), 200
     except Exception:  # noqa: BLE001
         pass
 
@@ -447,17 +429,15 @@ def get_preset(name: str) -> tuple[Response, int]:
     for preset in BUILTIN_PRESETS:
         if preset["name"] == name:
             result = {**preset, "source": "builtin"}
-            return jsonify(result), 200  # type: ignore[return-value]
-
-    return jsonify({"error": f"Preset '{name}' not found"}), 404  # type: ignore[return-value]
-
+            return jsonify(result), 200
+    return jsonify({"error": f"Preset '{name}' not found"}), 404
 
 # ---------------------------------------------------------------------------
 # Fleet distribution endpoints
 # ---------------------------------------------------------------------------
 
 
-@api_bp.route("/fleet/preview-distribution", methods=["POST"])
+@api_bp.route("/fleet/preview-distribution", methods=["POST"])  # type: ignore[untyped-decorator]
 def preview_distribution() -> tuple[Response, int]:
     """Generate sample data for distribution histogram preview.
 
@@ -476,12 +456,10 @@ def preview_distribution() -> tuple[Response, int]:
     try:
         samples = sample_distribution(dist_type, params, n_samples)
     except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400  # type: ignore[return-value]
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"samples": samples}), 200
 
-    return jsonify({"samples": samples}), 200  # type: ignore[return-value]
-
-
-@api_bp.route("/simulate/fleet-from-distribution", methods=["POST"])
+@api_bp.route("/simulate/fleet-from-distribution", methods=["POST"])  # type: ignore[untyped-decorator]
 def simulate_fleet_from_distribution() -> tuple[Response, int]:
     """Submit a fleet simulation using distribution configuration.
 
@@ -493,15 +471,13 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     """
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"error": "Request body must be JSON"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Request body must be JSON"}), 400
     from solar_challenge.web.fleet_config import form_to_fleet_distribution_config  # noqa: PLC0415
 
     try:
         config = form_to_fleet_distribution_config(data)
     except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": str(exc)}), 400
     # For now, return the parsed config as confirmation.
     # Full integration with JobManager would generate HomeConfigs via
     # generate_homes_from_distribution() and submit to the job queue.
@@ -509,10 +485,9 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
         "status": "accepted",
         "n_homes": config.get("n_homes", 0),
         "config": config,
-    }), 201  # type: ignore[return-value]
+    }), 201
 
-
-@api_bp.route("/fleet/export-yaml", methods=["POST"])
+@api_bp.route("/fleet/export-yaml", methods=["POST"])  # type: ignore[untyped-decorator]
 def export_fleet_yaml() -> Response:
     """Export fleet configuration as YAML.
 
@@ -533,7 +508,7 @@ def export_fleet_yaml() -> Response:
     )
 
 
-@api_bp.route("/fleet/import-yaml", methods=["POST"])
+@api_bp.route("/fleet/import-yaml", methods=["POST"])  # type: ignore[untyped-decorator]
 def import_fleet_yaml() -> tuple[Response, int]:
     """Import fleet configuration from YAML.
 
@@ -548,22 +523,19 @@ def import_fleet_yaml() -> tuple[Response, int]:
     # Try to get raw body text
     yaml_str = request.get_data(as_text=True)
     if not yaml_str:
-        return jsonify({"error": "Empty request body"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Empty request body"}), 400
     try:
         config = yaml_to_fleet_distribution(yaml_str)
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400  # type: ignore[return-value]
-
-    return jsonify(config), 200  # type: ignore[return-value]
-
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(config), 200
 
 # ---------------------------------------------------------------------------
 # Parameter sweep endpoint
 # ---------------------------------------------------------------------------
 
 
-@api_bp.route("/simulate/sweep", methods=["POST"])
+@api_bp.route("/simulate/sweep", methods=["POST"])  # type: ignore[untyped-decorator]
 def simulate_sweep() -> tuple[Response, int]:
     """Submit a parameter sweep for background execution.
 
@@ -586,21 +558,18 @@ def simulate_sweep() -> tuple[Response, int]:
 
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"error": "Request body must be JSON"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Request body must be JSON"}), 400
     parameter = str(data.get("parameter", "pv_capacity_kw"))
     try:
         min_val = float(data.get("min", 1.0))
         max_val = float(data.get("max", 10.0))
         steps = int(data.get("steps", 5))
     except (ValueError, TypeError) as exc:
-        return jsonify({"error": f"Invalid numeric parameter: {exc}"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": f"Invalid numeric parameter: {exc}"}), 400
     if steps < 2:
-        return jsonify({"error": "Steps must be at least 2"}), 400  # type: ignore[return-value]
+        return jsonify({"error": "Steps must be at least 2"}), 400
     if min_val >= max_val:
-        return jsonify({"error": "Min must be less than max"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Min must be less than max"}), 400
     mode = str(data.get("mode", "linear"))
     base_config = data.get("base_config", {})
 
@@ -609,7 +578,7 @@ def simulate_sweep() -> tuple[Response, int]:
         import math  # noqa: PLC0415
 
         if min_val <= 0:
-            return jsonify({"error": "Min must be positive for geometric sweep"}), 400  # type: ignore[return-value]
+            return jsonify({"error": "Min must be positive for geometric sweep"}), 400
         log_min = math.log(min_val)
         log_max = math.log(max_val)
         values = [math.exp(log_min + (log_max - log_min) * i / (steps - 1)) for i in range(steps)]
@@ -628,4 +597,4 @@ def simulate_sweep() -> tuple[Response, int]:
         "parameter": parameter,
         "values": [round(v, 3) for v in values],
         "job_ids": job_ids,
-    }), 201  # type: ignore[return-value]
+    }), 201

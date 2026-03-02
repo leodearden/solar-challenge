@@ -155,7 +155,7 @@ def power_flow_timeline(results: SimulationResults) -> str:
         yaxis=dict(title="Power (kW)"),
         height=500,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -> str:
@@ -217,7 +217,7 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
         yaxis=dict(title="State of Charge (kWh)"),
         height=400,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def sankey_diagram(summary: dict[str, Any]) -> str:
@@ -318,7 +318,7 @@ def sankey_diagram(summary: dict[str, Any]) -> str:
         title="Energy Flow",
         height=450,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def daily_energy_balance(results: SimulationResults) -> str:
@@ -369,7 +369,7 @@ def daily_energy_balance(results: SimulationResults) -> str:
         yaxis=dict(title="Energy (kWh)"),
         height=420,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def monthly_summary(results: SimulationResults) -> str | None:
@@ -423,7 +423,7 @@ def monthly_summary(results: SimulationResults) -> str | None:
         yaxis=dict(title="Energy (kWh)"),
         height=420,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def financial_breakdown(results: SimulationResults, tariff_config: Any | None = None) -> str:
@@ -500,7 +500,7 @@ def financial_breakdown(results: SimulationResults, tariff_config: Any | None = 
     fig.update_yaxes(title_text="Daily (GBP)", secondary_y=False)
     fig.update_yaxes(title_text="Cumulative Net Savings (GBP)", secondary_y=True)
 
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def seasonal_comparison(results: SimulationResults) -> str | None:
@@ -553,7 +553,7 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
         yaxis=dict(title="Energy (kWh)"),
         height=420,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
@@ -614,8 +614,8 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
     )
 
     return {
-        "load_share_chart": pie_fig.to_json(),
-        "cop_chart": load_fig.to_json(),
+        "load_share_chart": str(pie_fig.to_json()),
+        "cop_chart": str(load_fig.to_json()),
     }
 
 
@@ -681,7 +681,7 @@ def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str
         yaxis=dict(title="Power (kW)"),
         height=500,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> str:
@@ -731,7 +731,7 @@ def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> 
         yaxis=dict(title="Energy (kWh)"),
         height=450,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
@@ -806,7 +806,7 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
         ),
         height=450,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 # ---------------------------------------------------------------------------
@@ -877,7 +877,7 @@ def fleet_aggregate_timeline(aggregate_results: SimulationResults) -> str:
         yaxis=dict(title="Power (kW)"),
         height=500,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def fleet_grid_impact(aggregate_results: SimulationResults) -> str:
@@ -936,7 +936,7 @@ def fleet_grid_impact(aggregate_results: SimulationResults) -> str:
         yaxis=dict(title="Power (kW) — Import (+) / Export (-)"),
         height=450,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def fleet_heatmap(home_summaries: list[dict[str, Any]]) -> str:
@@ -990,7 +990,7 @@ def fleet_heatmap(home_summaries: list[dict[str, Any]]) -> str:
         yaxis=dict(title="Home", autorange="reversed"),
         height=max(350, len(summaries) * 25 + 100),
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def fleet_box_plots(home_summaries: list[dict[str, Any]]) -> str:
@@ -1035,7 +1035,7 @@ def fleet_box_plots(home_summaries: list[dict[str, Any]]) -> str:
         yaxis=dict(title="Energy (kWh)"),
         height=450,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def fleet_distribution_histograms(home_summaries: list[dict[str, Any]]) -> str:
@@ -1097,7 +1097,7 @@ def fleet_distribution_histograms(home_summaries: list[dict[str, Any]]) -> str:
         showlegend=False,
         height=400,
     )
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def fleet_summary_cards_data(fleet_summary: Any) -> list[dict[str, Any]]:
@@ -1214,4 +1214,4 @@ def sweep_parameter_chart(
         yaxis=dict(title=metric_name),
         height=450,
     )
-    return fig.to_json()
+    return str(fig.to_json())

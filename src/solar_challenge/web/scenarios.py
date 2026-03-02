@@ -156,24 +156,24 @@ def _form_to_yaml_dict(data: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@bp.route("/builder")
+@bp.route("/builder")  # type: ignore[untyped-decorator]
 def builder() -> str:
     """Render the scenario builder page with dual-pane editor.
 
     Returns:
         Rendered builder.html template.
     """
-    return render_template("scenarios/builder.html", page="scenarios-builder")
+    return str(render_template("scenarios/builder.html", page="scenarios-builder"))
 
 
-@bp.route("/sweep")
+@bp.route("/sweep")  # type: ignore[untyped-decorator]
 def sweep() -> str:
     """Render the parameter sweep configuration page.
 
     Returns:
         Rendered sweep.html template.
     """
-    return render_template("scenarios/sweep.html", page="scenarios-sweep")
+    return str(render_template("scenarios/sweep.html", page="scenarios-sweep"))
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ def sweep() -> str:
 # ---------------------------------------------------------------------------
 
 
-@bp.route("/api/preview-yaml", methods=["POST"])
+@bp.route("/api/preview-yaml", methods=["POST"])  # type: ignore[untyped-decorator]
 def preview_yaml() -> tuple[Response, int]:
     """Convert form data to a YAML string preview.
 
@@ -193,10 +193,9 @@ def preview_yaml() -> tuple[Response, int]:
     data = request.get_json(silent=True) or {}
     scenario_dict = _form_to_yaml_dict(data)
     yaml_str = yaml.dump(scenario_dict, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    return jsonify({"yaml": yaml_str}), 200  # type: ignore[return-value]
+    return jsonify({"yaml": yaml_str}), 200
 
-
-@bp.route("/api/validate", methods=["POST"])
+@bp.route("/api/validate", methods=["POST"])  # type: ignore[untyped-decorator]
 def validate_scenario() -> tuple[Response, int]:
     """Validate scenario data against basic rules.
 
@@ -232,12 +231,10 @@ def validate_scenario() -> tuple[Response, int]:
             errors.append("PV capacity must be a number.")
 
     if errors:
-        return jsonify({"valid": False, "errors": errors}), 200  # type: ignore[return-value]
+        return jsonify({"valid": False, "errors": errors}), 200
+    return jsonify({"valid": True, "errors": []}), 200
 
-    return jsonify({"valid": True, "errors": []}), 200  # type: ignore[return-value]
-
-
-@bp.route("/api/save", methods=["POST"])
+@bp.route("/api/save", methods=["POST"])  # type: ignore[untyped-decorator]
 def save_scenario() -> tuple[Response, int]:
     """Save a scenario configuration to the config_presets table.
 
@@ -248,12 +245,10 @@ def save_scenario() -> tuple[Response, int]:
     """
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"error": "Request body must be JSON"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Request body must be JSON"}), 400
     name = str(data.get("name", "")).strip()
     if not name:
-        return jsonify({"error": "Scenario name is required"}), 400  # type: ignore[return-value]
-
+        return jsonify({"error": "Scenario name is required"}), 400
     config_payload = data.get("config", {})
     if not config_payload:
         # Accept flat form data as config
@@ -273,12 +268,10 @@ def save_scenario() -> tuple[Response, int]:
                 (preset_id, name, "fleet", json.dumps(config_payload), now),
             )
     except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": str(exc)}), 500  # type: ignore[return-value]
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"name": name, "id": preset_id}), 201
 
-    return jsonify({"name": name, "id": preset_id}), 201  # type: ignore[return-value]
-
-
-@bp.route("/api/presets", methods=["GET"])
+@bp.route("/api/presets", methods=["GET"])  # type: ignore[untyped-decorator]
 def list_presets() -> tuple[Response, int]:
     """List built-in (from scenarios/ dir) and saved scenario presets.
 
@@ -317,10 +310,9 @@ def list_presets() -> tuple[Response, int]:
     except Exception:  # noqa: BLE001
         pass
 
-    return jsonify({"presets": presets}), 200  # type: ignore[return-value]
+    return jsonify({"presets": presets}), 200
 
-
-@bp.route("/api/presets/<name>", methods=["GET"])
+@bp.route("/api/presets/<name>", methods=["GET"])  # type: ignore[untyped-decorator]
 def get_preset(name: str) -> tuple[Response, int]:
     """Load a specific preset by name (from file or DB).
 
@@ -344,10 +336,9 @@ def get_preset(name: str) -> tuple[Response, int]:
                     "name": name,
                     "source": "builtin",
                     "config": content,
-                }), 200  # type: ignore[return-value]
+                }), 200
             except Exception as exc:  # noqa: BLE001
-                return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500  # type: ignore[return-value]
-
+                return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
     # Try database
     db_path = current_app.config["DATABASE"]
     try:
@@ -368,8 +359,8 @@ def get_preset(name: str) -> tuple[Response, int]:
                 "source": "saved",
                 "config": cfg,
                 "created_at": row["created_at"],
-            }), 200  # type: ignore[return-value]
+            }), 200
     except Exception:  # noqa: BLE001
         pass
 
-    return jsonify({"error": f"Preset '{name}' not found"}), 404  # type: ignore[return-value]
+    return jsonify({"error": f"Preset '{name}' not found"}), 404

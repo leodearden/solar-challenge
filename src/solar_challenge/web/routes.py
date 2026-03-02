@@ -177,7 +177,7 @@ def _build_energy_chart_json(daily: pd.DataFrame) -> str:
     )
 
     fig = go.Figure(data=traces, layout=layout)
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def _build_battery_chart_json(results: Any) -> str:
@@ -210,7 +210,7 @@ def _build_battery_chart_json(results: Any) -> str:
     )
 
     fig = go.Figure(data=[trace], layout=layout)
-    return fig.to_json()
+    return str(fig.to_json())
 
 
 def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
@@ -246,7 +246,7 @@ def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
     }
 
 
-@bp.route("/", methods=["GET"])
+@bp.route("/", methods=["GET"])  # type: ignore[untyped-decorator]
 def index() -> str:
     """Render the dashboard page with recent runs and aggregate stats."""
     storage = get_storage()
@@ -269,26 +269,26 @@ def index() -> str:
             ],
         })
 
-    return render_template(
+    return str(render_template(
         "dashboard.html",
         runs=runs,
         stats=stats,
         page="dashboard",
-    )
+    ))
 
 
-@bp.route("/simulate/home", methods=["GET"])
+@bp.route("/simulate/home", methods=["GET"])  # type: ignore[untyped-decorator]
 def simulate_home_page() -> str:
     """Render the enhanced home simulation configuration page."""
     presets = _load_config_presets("home")
-    return render_template(
+    return str(render_template(
         "simulate/home.html",
         presets=presets,
         page="simulate-home",
-    )
+    ))
 
 
-@bp.route("/simulate", methods=["POST"])
+@bp.route("/simulate", methods=["POST"])  # type: ignore[untyped-decorator]
 def simulate() -> Any:
     """Run simulation and return the results HTML partial (for HTMX injection)."""
     try:
@@ -419,7 +419,7 @@ def simulate() -> Any:
         return redirect(url_for("main.index"))
 
 
-@bp.route("/results", methods=["GET"])
+@bp.route("/results", methods=["GET"])  # type: ignore[untyped-decorator]
 def results() -> Any:
     """Display simulation results page (fallback for non-HTMX access)."""
     if "run_id" not in session:
@@ -430,21 +430,19 @@ def results() -> Any:
     return render_template("results.html", summary=summary)
 
 
-@bp.route("/download/csv", methods=["GET"])
+@bp.route("/download/csv", methods=["GET"])  # type: ignore[untyped-decorator]
 def download_csv() -> Response:
     """Stream simulation results as a CSV file download."""
     run_id = session.get("run_id")
     if not run_id:
         flash("No simulation results available. Please run a simulation first.", "error")
-        return redirect(url_for("main.index"))  # type: ignore[return-value]
-
+        return redirect(url_for("main.index"))
     try:
         storage = get_storage()
         config, sim_results, summary = storage.load_home_run(run_id)
     except FileNotFoundError:
         flash("Simulation results not found. Please run a new simulation.", "error")
-        return redirect(url_for("main.index"))  # type: ignore[return-value]
-
+        return redirect(url_for("main.index"))
     # Use export_to_csv() to write to a temp file, then load into BytesIO buffer.
     with tempfile.TemporaryDirectory() as tmpdir:
         csv_path = export_to_csv(sim_results, f"{tmpdir}/simulation_results.csv")
@@ -457,21 +455,19 @@ def download_csv() -> Response:
     )
 
 
-@bp.route("/download/report", methods=["GET"])
+@bp.route("/download/report", methods=["GET"])  # type: ignore[untyped-decorator]
 def download_report() -> Response:
     """Return simulation report wrapped in a minimal HTML page for download."""
     run_id = session.get("run_id")
     if not run_id:
         flash("No simulation results available. Please run a simulation first.", "error")
-        return redirect(url_for("main.index"))  # type: ignore[return-value]
-
+        return redirect(url_for("main.index"))
     try:
         storage = get_storage()
         config, sim_results, summary = storage.load_home_run(run_id)
     except FileNotFoundError:
         flash("Simulation results not found. Please run a new simulation.", "error")
-        return redirect(url_for("main.index"))  # type: ignore[return-value]
-
+        return redirect(url_for("main.index"))
     home_name = config.name or "Home"
     report_markdown = generate_summary_report(sim_results, home_name)
 
@@ -502,7 +498,7 @@ def download_report() -> Response:
     )
 
 
-@bp.route("/results/home/<run_id>", methods=["GET"])
+@bp.route("/results/home/<run_id>", methods=["GET"])  # type: ignore[untyped-decorator]
 def home_results(run_id: str) -> Any:
     """Display results for a completed home simulation.
 
@@ -606,18 +602,18 @@ def _load_scenario_presets() -> list[str]:
     return presets
 
 
-@bp.route("/simulate/fleet", methods=["GET"])
+@bp.route("/simulate/fleet", methods=["GET"])  # type: ignore[untyped-decorator]
 def simulate_fleet_page() -> str:
     """Render the fleet simulation configuration page."""
     presets = _load_scenario_presets()
-    return render_template(
+    return str(render_template(
         "simulate/fleet.html",
         presets=presets,
         page="simulate-fleet",
-    )
+    ))
 
 
-@bp.route("/results/fleet/<run_id>", methods=["GET"])
+@bp.route("/results/fleet/<run_id>", methods=["GET"])  # type: ignore[untyped-decorator]
 def fleet_results(run_id: str) -> Any:
     """Display results for a completed fleet simulation.
 

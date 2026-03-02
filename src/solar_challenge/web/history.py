@@ -40,17 +40,17 @@ def _get_storage() -> RunStorage:
 # ---------------------------------------------------------------------------
 
 
-@bp.route("/runs")
+@bp.route("/runs")  # type: ignore[untyped-decorator]
 def runs_page() -> str:
     """Render the run history browser page.
 
     Returns:
         Rendered HTML for the runs list page.
     """
-    return render_template("history/runs.html", page="history-runs")
+    return str(render_template("history/runs.html", page="history-runs"))
 
 
-@bp.route("/compare")
+@bp.route("/compare")  # type: ignore[untyped-decorator]
 def compare_page() -> str | tuple[str, int]:
     """Render the run comparison page.
 
@@ -112,12 +112,12 @@ def compare_page() -> str | tuple[str, int]:
     except Exception:
         pass
 
-    return render_template(
+    return str(render_template(
         "history/compare.html",
         page="history-compare",
         runs=runs,
         charts=charts,
-    )
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ def compare_page() -> str | tuple[str, int]:
 # ---------------------------------------------------------------------------
 
 
-@bp.route("/api/runs")
+@bp.route("/api/runs")  # type: ignore[untyped-decorator]
 def api_list_runs() -> Response:
     """Paginated, filterable run list API.
 
@@ -239,7 +239,7 @@ def api_list_runs() -> Response:
     })
 
 
-@bp.route("/api/runs/<run_id>")
+@bp.route("/api/runs/<run_id>")  # type: ignore[untyped-decorator]
 def api_get_run(run_id: str) -> Response | tuple[Response, int]:
     """Get full run detail including summary and config.
 
@@ -273,7 +273,7 @@ def api_get_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify(run_dict)
 
 
-@bp.route("/api/runs/<run_id>", methods=["DELETE"])
+@bp.route("/api/runs/<run_id>", methods=["DELETE"])  # type: ignore[untyped-decorator]
 def api_delete_run(run_id: str) -> Response | tuple[Response, int]:
     """Delete a run and its associated files.
 
@@ -299,7 +299,7 @@ def api_delete_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify({"success": True, "message": f"Run {run_id} deleted"})
 
 
-@bp.route("/api/runs/<run_id>", methods=["PATCH"])
+@bp.route("/api/runs/<run_id>", methods=["PATCH"])  # type: ignore[untyped-decorator]
 def api_patch_run(run_id: str) -> Response | tuple[Response, int]:
     """Update a run's name and/or notes.
 
@@ -347,7 +347,7 @@ def api_patch_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify(dict(updated_row))
 
 
-@bp.route("/api/runs/<run_id>/export/csv")
+@bp.route("/api/runs/<run_id>/export/csv")  # type: ignore[untyped-decorator]
 def api_export_csv(run_id: str) -> Response | tuple[Response, int]:
     """Export run results as CSV download.
 
@@ -398,7 +398,7 @@ def api_export_csv(run_id: str) -> Response | tuple[Response, int]:
     )
 
 
-@bp.route("/api/runs/<run_id>/export/yaml")
+@bp.route("/api/runs/<run_id>/export/yaml")  # type: ignore[untyped-decorator]
 def api_export_yaml(run_id: str) -> Response | tuple[Response, int]:
     """Export run config as YAML download.
 
