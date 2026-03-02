@@ -370,7 +370,7 @@ class TestHeatPumpIntegration:
         # Config with heat pump
         config_with_hp = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
             heat_pump_config=HeatPumpConfig(
                 heat_pump_type="ASHP",
                 thermal_capacity_kw=8.0,
@@ -382,7 +382,7 @@ class TestHeatPumpIntegration:
         # Config without heat pump (same household load)
         config_no_hp = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
             location=Location.bristol(),
         )
 

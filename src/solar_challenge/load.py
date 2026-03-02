@@ -2,10 +2,13 @@
 
 import random
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from solar_challenge.ev import EVConfig
 
 
 # Try to import richardsonpy for stochastic load profiles
@@ -313,6 +316,7 @@ def generate_load_profile(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     timezone: str = "Europe/London",
+    ev_config: "Optional[EVConfig]" = None,
 ) -> pd.Series:
     """Generate domestic load profile.
 
@@ -322,11 +326,15 @@ def generate_load_profile(
     Creates a 1-minute resolution load profile for the specified date range,
     scaled to match the configured annual consumption.
 
+    If an EV configuration is provided, EV charging load is added to the
+    household base load.
+
     Args:
         config: Load configuration with consumption and household parameters
         start_date: Start of simulation period
         end_date: End of simulation period (inclusive)
         timezone: IANA timezone string for output index
+        ev_config: Optional EV configuration for charging load
 
     Returns:
         Series with 1-minute DatetimeIndex and power values in kW
@@ -335,10 +343,29 @@ def generate_load_profile(
     if config.use_stochastic:
         result = _try_richardsonpy_profile(config, start_date, end_date, timezone)
         if result is not None:
-            return result
+            base_load = result
+        else:
+            # Fall back to Elexon Profile Class 1
+            base_load = _generate_elexon_profile(config, start_date, end_date, timezone)
+    else:
+        # Fall back to Elexon Profile Class 1
+        base_load = _generate_elexon_profile(config, start_date, end_date, timezone)
 
-    # Fall back to Elexon Profile Class 1
-    return _generate_elexon_profile(config, start_date, end_date, timezone)
+    # Add EV charging if configured
+    if ev_config is not None:
+        from solar_challenge.ev import generate_ev_charging_profile
+
+        ev_load = generate_ev_charging_profile(
+            ev_config, start_date, end_date, timezone
+        )
+
+        # Combine household and EV load
+        # Align the profiles in case of any index mismatch
+        combined_load = base_load.add(ev_load, fill_value=0.0)
+        combined_load.name = "demand_kw"
+        return combined_load
+
+    return base_load
 
 
 def _generate_elexon_profile(

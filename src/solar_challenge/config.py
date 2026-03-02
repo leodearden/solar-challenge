@@ -21,6 +21,7 @@ except ImportError:
     YAML_AVAILABLE = False
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.ev import EVConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
@@ -289,6 +290,27 @@ class HeatPumpDistributionConfig:
 
 
 @dataclass
+class EVDistributionConfig:
+    """Distribution configuration for EV charging parameters.
+
+    Values can include None to represent homes without EVs.
+
+    Attributes:
+        charger_type: Distribution for EV charger type (can include None)
+        arrival_hour: Distribution for EV arrival hour (0-23), or fixed value
+        departure_hour: Distribution for EV departure hour (0-23), default 7am
+        required_charge_kwh: Distribution for daily charging requirement, default 35kWh
+        smart_charging_mode: Smart charging mode (none, solar, off_peak), default "none"
+    """
+
+    charger_type: DistributionSpec
+    arrival_hour: DistributionSpec = 18.0
+    departure_hour: DistributionSpec = 7.0
+    required_charge_kwh: DistributionSpec = 35.0
+    smart_charging_mode: str = "none"
+
+
+@dataclass
 class DispatchStrategyConfig:
     """Configuration for battery dispatch strategy.
 
@@ -351,6 +373,7 @@ class FleetDistributionConfig:
         load: Load distribution configuration
         battery: Battery distribution configuration (optional)
         heat_pump: Heat pump distribution configuration (optional)
+        ev: EV distribution configuration (optional)
         seed: Random seed for reproducibility (optional)
         random_order: Order of random operations ("default" or "bristol_legacy")
             - "default": Shuffle pools first, then sample normal distributions per home
@@ -363,6 +386,7 @@ class FleetDistributionConfig:
     load: LoadDistributionConfig
     battery: Optional[BatteryDistributionConfig] = None
     heat_pump: Optional[HeatPumpDistributionConfig] = None
+    ev: Optional[EVDistributionConfig] = None
     seed: Optional[int] = None
     random_order: str = "default"
 
@@ -1004,6 +1028,31 @@ def _parse_load_distribution_config(data: dict[str, Any]) -> LoadDistributionCon
     )
 
 
+def _parse_ev_distribution_config(
+    data: Optional[dict[str, Any]],
+) -> Optional[EVDistributionConfig]:
+    """Parse EV distribution configuration from config data."""
+    if data is None:
+        return None
+
+    if "charger_type" not in data:
+        raise ConfigurationError("EV distribution config requires 'charger_type'")
+
+    return EVDistributionConfig(
+        charger_type=_parse_distribution_spec(data["charger_type"], "ev.charger_type"),
+        arrival_hour=_parse_distribution_spec(
+            data.get("arrival_hour", 18.0), "ev.arrival_hour"
+        ),
+        departure_hour=_parse_distribution_spec(
+            data.get("departure_hour", 7.0), "ev.departure_hour"
+        ),
+        required_charge_kwh=_parse_distribution_spec(
+            data.get("required_charge_kwh", 35.0), "ev.required_charge_kwh"
+        ),
+        smart_charging_mode=data.get("smart_charging_mode", "none"),
+    )
+
+
 def _parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionConfig:
     """Parse fleet distribution configuration from config data."""
     if "n_homes" not in data:
@@ -1017,6 +1066,7 @@ def _parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionC
         load=_parse_load_distribution_config(data.get("load", {})),
         battery=_parse_battery_distribution_config(data.get("battery")),
         heat_pump=_parse_heat_pump_distribution_config(data.get("heat_pump")),
+        ev=_parse_ev_distribution_config(data.get("ev")),
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
     )
@@ -1148,12 +1198,19 @@ def generate_homes_from_distribution(
             config.heat_pump.thermal_capacity_kw,
             config.heat_pump.annual_heat_demand_kwh,
         ])
+    if config.ev is not None:
+        all_specs.extend([
+            config.ev.charger_type,
+            config.ev.arrival_hour,
+            config.ev.departure_hour,
+            config.ev.required_charge_kwh,
+        ])
 
     if config.random_order == "bristol_legacy":
         # Bristol legacy order: pre-sample all normal distributions first,
         # then shuffle pools. This matches the exact random call order of
         # create_bristol_phase1_scenario().
-        # Order: consumption (normal) -> pv shuffle -> battery shuffle
+        # Order: consumption (normal) -> pv shuffle -> battery shuffle -> ev shuffle
         sampler.pre_sample(config.load.annual_consumption_kwh, config.n_homes)
         sampler.prepare(config.pv.capacity_kw)
         if config.battery is not None:
@@ -1161,6 +1218,8 @@ def generate_homes_from_distribution(
         if config.heat_pump is not None and not isinstance(config.heat_pump.heat_pump_type, str):
             # Only prepare if heat_pump_type is a distribution (not a direct string value)
             sampler.prepare(config.heat_pump.heat_pump_type)
+        if config.ev is not None:
+            sampler.prepare(config.ev.charger_type)
         # Other specs don't need special handling (fixed values)
     else:
         # Default order: prepare all shuffled pools upfront
@@ -1261,12 +1320,30 @@ def generate_homes_from_distribution(
                     annual_heat_demand_kwh=annual_heat_demand if annual_heat_demand is not None else 8000.0,
                 )
 
+        # Sample EV parameters (may be None)
+        ev_config: Optional[EVConfig] = None
+        if config.ev is not None:
+            charger_type = sampler.sample(config.ev.charger_type)
+            if charger_type is not None:
+                arrival_hour_val = sampler.sample(config.ev.arrival_hour)
+                departure_hour_val = sampler.sample(config.ev.departure_hour)
+                required_charge_val = sampler.sample(config.ev.required_charge_kwh)
+
+                ev_config = EVConfig(
+                    charger_type=str(charger_type),
+                    arrival_hour=int(arrival_hour_val) if arrival_hour_val is not None else 18,
+                    departure_hour=int(departure_hour_val) if departure_hour_val is not None else 7,
+                    required_charge_kwh=required_charge_val if required_charge_val is not None else 35.0,
+                    smart_charging_mode=config.ev.smart_charging_mode,
+                )
+
         homes.append(
             HomeConfig(
                 pv_config=pv_config,
                 battery_config=battery_config,
                 load_config=load_config,
                 heat_pump_config=heat_pump_config,
+                ev_config=ev_config,
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=None,
@@ -1439,6 +1516,8 @@ def _replace_sweep_with_value(
         pv=config.pv,
         load=config.load,
         battery=new_battery,
+        heat_pump=config.heat_pump,
+        ev=config.ev,
         seed=config.seed,
         random_order=config.random_order,
     )

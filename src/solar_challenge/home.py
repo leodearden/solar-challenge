@@ -12,6 +12,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
 )
+from solar_challenge.ev import EVConfig
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
 from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load
 from solar_challenge.load import LoadConfig, generate_load_profile
@@ -30,6 +31,7 @@ class HomeConfig:
         load_config: Load profile configuration
         battery_config: Battery configuration (None for PV-only)
         heat_pump_config: Heat pump configuration (None for no heat pump)
+        ev_config: EV configuration (None for no EV)
         location: Geographic location for weather data
         name: Optional identifier for the home
         tariff_config: Tariff configuration (None for no cost tracking)
@@ -40,6 +42,7 @@ class HomeConfig:
     load_config: LoadConfig
     battery_config: Optional[BatteryConfig] = None
     heat_pump_config: Optional[HeatPumpConfig] = None
+    ev_config: Optional[EVConfig] = None
     location: Location = Location.bristol()
     name: str = ""
     tariff_config: Optional[TariffConfig] = None
@@ -208,6 +211,7 @@ def simulate_home(
         start_date,
         end_date,
         timezone=config.location.timezone,
+        ev_config=config.ev_config,
     )
 
     # Generate and add heat pump load if configured
