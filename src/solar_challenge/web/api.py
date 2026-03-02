@@ -320,3 +320,133 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         "created_at": row["created_at"],
         "summary": summary,
     }), 200  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# Config preset endpoints
+# ---------------------------------------------------------------------------
+
+@api_bp.route("/presets", methods=["GET"])
+def list_presets() -> tuple[Response, int]:
+    """List all configuration presets (built-in + saved).
+
+    Returns:
+        JSON array of preset objects, HTTP 200.
+    """
+    from solar_challenge.web.routes import BUILTIN_PRESETS  # noqa: PLC0415
+
+    db_path = current_app.config["DATABASE"]
+    saved: list[dict[str, Any]] = []
+
+    try:
+        from solar_challenge.web.database import get_db  # noqa: PLC0415
+
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, config_json, created_at FROM config_presets WHERE type = 'home' ORDER BY name"
+            )
+            for row in cursor.fetchall():
+                cfg = json.loads(row["config_json"]) if row["config_json"] else {}
+                cfg["name"] = row["name"]
+                cfg["created_at"] = row["created_at"]
+                cfg["source"] = "saved"
+                saved.append(cfg)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Tag built-in presets
+    builtin = [{**p, "source": "builtin"} for p in BUILTIN_PRESETS]
+
+    return jsonify(builtin + saved), 200  # type: ignore[return-value]
+
+
+@api_bp.route("/presets", methods=["POST"])
+def save_preset() -> tuple[Response, int]:
+    """Save a configuration preset to the database.
+
+    Expects a JSON body with at least ``name`` and configuration fields.
+
+    Returns:
+        JSON confirmation with the preset name, HTTP 201 on success.
+    """
+    import uuid as _uuid  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return jsonify({"error": "Request body must be JSON"}), 400  # type: ignore[return-value]
+
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Preset name is required"}), 400  # type: ignore[return-value]
+
+    preset_type = data.get("type", "home")
+    config_payload = {
+        k: v for k, v in data.items() if k not in ("name", "type")
+    }
+
+    db_path = current_app.config["DATABASE"]
+
+    from solar_challenge.web.database import get_db  # noqa: PLC0415
+
+    preset_id = str(_uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (preset_id, name, preset_type, json.dumps(config_payload), now),
+            )
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500  # type: ignore[return-value]
+
+    return jsonify({"name": name, "id": preset_id}), 201  # type: ignore[return-value]
+
+
+@api_bp.route("/presets/<name>", methods=["GET"])
+def get_preset(name: str) -> tuple[Response, int]:
+    """Get a specific configuration preset by name.
+
+    Checks saved presets first, then falls back to built-in presets.
+
+    Args:
+        name: The preset name to look up.
+
+    Returns:
+        JSON preset object, or 404 if not found.
+    """
+    from solar_challenge.web.routes import BUILTIN_PRESETS  # noqa: PLC0415
+
+    db_path = current_app.config["DATABASE"]
+
+    # Try database first
+    try:
+        from solar_challenge.web.database import get_db  # noqa: PLC0415
+
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, config_json, created_at FROM config_presets WHERE name = ?",
+                (name,),
+            )
+            row = cursor.fetchone()
+
+        if row:
+            cfg = json.loads(row["config_json"]) if row["config_json"] else {}
+            cfg["name"] = row["name"]
+            cfg["created_at"] = row["created_at"]
+            cfg["source"] = "saved"
+            return jsonify(cfg), 200  # type: ignore[return-value]
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Fall back to built-in presets
+    for preset in BUILTIN_PRESETS:
+        if preset["name"] == name:
+            result = {**preset, "source": "builtin"}
+            return jsonify(result), 200  # type: ignore[return-value]
+
+    return jsonify({"error": f"Preset '{name}' not found"}), 404  # type: ignore[return-value]

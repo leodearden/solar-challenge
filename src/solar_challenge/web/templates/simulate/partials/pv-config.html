@@ -1,0 +1,75 @@
+{# PV configuration partial for the home simulation form.
+   Uses Alpine.js for reactive slider value display.
+   Expected parent x-data must include formData object. #}
+{% from "components/macros.html" import form_group %}
+
+<div class="space-y-6">
+    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Solar PV Configuration</h3>
+    <p class="text-sm text-slate-500 dark:text-slate-400">Configure the photovoltaic panel array for this home.</p>
+
+    <!-- Capacity slider -->
+    <div class="space-y-1.5">
+        <div class="flex items-center justify-between">
+            <label for="pv_kw" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Capacity</label>
+            <span class="text-sm font-medium text-amber-600 dark:text-amber-400">
+                <span x-text="formData.pv_kw"></span> kW
+            </span>
+        </div>
+        <input
+            type="range"
+            id="pv_kw"
+            name="pv_kw"
+            min="0.5"
+            max="20"
+            step="0.5"
+            x-model="formData.pv_kw"
+            class="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
+        >
+        <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
+            <span>0.5 kW</span>
+            <span>20 kW</span>
+        </div>
+    </div>
+
+    <!-- Azimuth input -->
+    <div class="space-y-1.5">
+        <div class="flex items-center justify-between">
+            <label for="azimuth" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Azimuth</label>
+            <span class="text-sm font-medium text-amber-600 dark:text-amber-400">
+                <span x-text="formData.azimuth"></span>&deg;
+            </span>
+        </div>
+        <input
+            type="number"
+            id="azimuth"
+            name="azimuth"
+            min="0"
+            max="360"
+            step="1"
+            x-model.number="formData.azimuth"
+            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+        >
+        <p class="text-xs text-slate-500 dark:text-slate-400">0&deg; = North, 90&deg; = East, 180&deg; = South, 270&deg; = West</p>
+    </div>
+
+    <!-- Tilt input -->
+    <div class="space-y-1.5">
+        <div class="flex items-center justify-between">
+            <label for="tilt" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Tilt</label>
+            <span class="text-sm font-medium text-amber-600 dark:text-amber-400">
+                <span x-text="formData.tilt"></span>&deg;
+            </span>
+        </div>
+        <input
+            type="number"
+            id="tilt"
+            name="tilt"
+            min="0"
+            max="90"
+            step="1"
+            x-model.number="formData.tilt"
+            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+        >
+        <p class="text-xs text-slate-500 dark:text-slate-400">Angle from horizontal (35&deg; is typical for UK roofs)</p>
+    </div>
+</div>

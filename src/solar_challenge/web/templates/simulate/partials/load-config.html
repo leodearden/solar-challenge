@@ -1,0 +1,60 @@
+{# Load (consumption) configuration partial for the home simulation form.
+   Expected parent x-data must include formData object with load fields. #}
+
+<div class="space-y-6">
+    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Household Load Profile</h3>
+    <p class="text-sm text-slate-500 dark:text-slate-400">Configure the household energy consumption pattern.</p>
+
+    <!-- Annual consumption -->
+    <div class="space-y-1.5">
+        <label for="consumption_kwh" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Annual Consumption</label>
+        <div class="relative">
+            <input
+                type="number"
+                id="consumption_kwh"
+                name="consumption_kwh"
+                min="500"
+                max="20000"
+                step="100"
+                x-model.number="formData.consumption_kwh"
+                class="w-full px-3 py-2 pr-14 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+            >
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400 dark:text-slate-500">kWh</span>
+        </div>
+        <p class="text-xs text-slate-500 dark:text-slate-400">UK average is approximately 3,500 kWh/year (Ofgem TDCV medium)</p>
+    </div>
+
+    <!-- Occupants selector -->
+    <div class="space-y-1.5">
+        <label for="occupants" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Household Occupants</label>
+        <select
+            id="occupants"
+            name="occupants"
+            x-model.number="formData.occupants"
+            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+        >
+            <option value="1">1 person</option>
+            <option value="2">2 people</option>
+            <option value="3">3 people</option>
+            <option value="4">4 people</option>
+            <option value="5">5 people</option>
+            <option value="6">6 people</option>
+        </select>
+        <p class="text-xs text-slate-500 dark:text-slate-400">Number of occupants affects the load profile shape</p>
+    </div>
+
+    <!-- Stochastic mode toggle -->
+    <div class="flex items-center gap-3">
+        <input
+            type="checkbox"
+            id="stochastic"
+            name="stochastic"
+            x-model="formData.stochastic"
+            class="h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-amber-500 focus:ring-amber-500 cursor-pointer"
+        >
+        <div>
+            <label for="stochastic" class="text-sm font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">Stochastic Load Profile</label>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Use the Richardson/CREST model for realistic random variation (requires richardsonpy)</p>
+        </div>
+    </div>
+</div>

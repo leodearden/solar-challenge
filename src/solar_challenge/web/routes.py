@@ -31,6 +31,13 @@ from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("main", __name__)
 
+# Built-in configuration presets for home simulations.
+BUILTIN_PRESETS: list[dict[str, Any]] = [
+    {"name": "Small Urban", "pv_kw": 3.0, "battery_kwh": 0, "consumption_kwh": 2900},
+    {"name": "Medium Suburban", "pv_kw": 4.0, "battery_kwh": 5.0, "consumption_kwh": 3500},
+    {"name": "Large with Battery", "pv_kw": 6.0, "battery_kwh": 10.0, "consumption_kwh": 4500},
+]
+
 
 def get_storage() -> RunStorage:
     """Get RunStorage instance configured from Flask app config.
@@ -41,6 +48,44 @@ def get_storage() -> RunStorage:
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
     return RunStorage(db_path=db_path, data_dir=data_dir)
+
+
+def _load_config_presets(preset_type: str) -> list[dict[str, Any]]:
+    """Load configuration presets from the database, falling back to built-ins.
+
+    Queries the ``config_presets`` table for saved presets of the given type.
+    If no saved presets are found, returns the built-in defaults.
+
+    Args:
+        preset_type: Preset category, e.g. ``"home"`` or ``"fleet"``.
+
+    Returns:
+        List of preset dicts with at least ``name``, ``pv_kw``,
+        ``battery_kwh``, and ``consumption_kwh`` keys.
+    """
+    try:
+        from solar_challenge.web.database import get_db  # noqa: PLC0415
+
+        db_path = current_app.config["DATABASE"]
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, config_json FROM config_presets WHERE type = ? ORDER BY name",
+                (preset_type,),
+            )
+            rows = cursor.fetchall()
+
+        if rows:
+            presets: list[dict[str, Any]] = []
+            for row in rows:
+                cfg = json.loads(row["config_json"]) if row["config_json"] else {}
+                cfg["name"] = row["name"]
+                presets.append(cfg)
+            return presets
+    except Exception:  # noqa: BLE001
+        pass
+
+    return list(BUILTIN_PRESETS)
 
 
 # UK location presets available from the web form.
@@ -229,6 +274,17 @@ def index() -> str:
         runs=runs,
         stats=stats,
         page="dashboard",
+    )
+
+
+@bp.route("/simulate/home", methods=["GET"])
+def simulate_home_page() -> str:
+    """Render the enhanced home simulation configuration page."""
+    presets = _load_config_presets("home")
+    return render_template(
+        "simulate/home.html",
+        presets=presets,
+        page="simulate-home",
     )
 
 
@@ -443,4 +499,84 @@ def download_report() -> Response:
         html_content,
         mimetype="text/html",
         headers={"Content-Disposition": "attachment; filename=simulation_report.html"},
+    )
+
+
+@bp.route("/results/home/<run_id>", methods=["GET"])
+def home_results(run_id: str) -> Any:
+    """Display results for a completed home simulation.
+
+    Loads persisted results from storage, builds chart JSON using the
+    centralized charts module, and renders the full results page.
+
+    Args:
+        run_id: Unique identifier for the simulation run.
+
+    Returns:
+        Rendered results/home.html template.
+    """
+    storage = get_storage()
+    try:
+        config, sim_results, summary = storage.load_home_run(run_id)
+    except FileNotFoundError:
+        flash("Run not found.", "error")
+        return redirect(url_for("main.index"))
+
+    from solar_challenge.web.charts import (  # noqa: PLC0415
+        battery_soc_chart,
+        daily_energy_balance,
+        financial_breakdown,
+        heat_pump_analysis,
+        monthly_summary,
+        power_flow_timeline,
+        sankey_diagram,
+        seasonal_comparison,
+    )
+
+    summary_dict: dict[str, Any] = {
+        "total_generation_kwh": round(summary.total_generation_kwh, 2),
+        "total_demand_kwh": round(summary.total_demand_kwh, 2),
+        "total_self_consumption_kwh": round(summary.total_self_consumption_kwh, 2),
+        "total_grid_import_kwh": round(summary.total_grid_import_kwh, 2),
+        "total_grid_export_kwh": round(summary.total_grid_export_kwh, 2),
+        "total_battery_charge_kwh": round(summary.total_battery_charge_kwh, 2),
+        "total_battery_discharge_kwh": round(summary.total_battery_discharge_kwh, 2),
+        "peak_generation_kw": round(summary.peak_generation_kw, 2),
+        "peak_demand_kw": round(summary.peak_demand_kw, 2),
+        "self_consumption_ratio": round(summary.self_consumption_ratio, 4),
+        "grid_dependency_ratio": round(summary.grid_dependency_ratio, 4),
+        "export_ratio": round(summary.export_ratio, 4),
+        "simulation_days": summary.simulation_days,
+    }
+
+    has_battery = config.battery_config is not None
+
+    charts: dict[str, Any] = {
+        "sankey": sankey_diagram(summary_dict),
+        "daily_balance": daily_energy_balance(sim_results),
+        "power_flow": power_flow_timeline(sim_results),
+        "battery_soc": (
+            battery_soc_chart(sim_results, config.battery_config.capacity_kwh)
+            if has_battery and config.battery_config is not None
+            else None
+        ),
+        "financial": financial_breakdown(sim_results),
+        "monthly": monthly_summary(sim_results),
+        "seasonal": seasonal_comparison(sim_results),
+        "heat_pump": heat_pump_analysis(sim_results),
+    }
+
+    # Store run_id in session so download routes can find the data
+    session["run_id"] = run_id
+    session["summary"] = summary_dict
+    session["has_battery"] = has_battery
+
+    return render_template(
+        "results/home.html",
+        summary=summary_dict,
+        charts=charts,
+        has_battery=has_battery,
+        run_id=run_id,
+        run_name=config.name or "Home Simulation",
+        page="results",
     )

@@ -1,0 +1,122 @@
+{# Battery configuration partial for the home simulation form.
+   Uses Alpine.js for enable/disable toggle and reactive slider values.
+   Expected parent x-data must include formData object with battery fields. #}
+
+<div class="space-y-6">
+    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Battery Storage Configuration</h3>
+    <p class="text-sm text-slate-500 dark:text-slate-400">Configure an optional home battery system.</p>
+
+    <!-- Enable/disable toggle -->
+    <div class="flex items-center gap-3">
+        <button
+            type="button"
+            role="switch"
+            :aria-checked="formData.battery_enabled"
+            @click="formData.battery_enabled = !formData.battery_enabled"
+            class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
+            :class="formData.battery_enabled ? 'bg-amber-500' : 'bg-slate-300 dark:bg-slate-600'"
+        >
+            <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                :class="formData.battery_enabled ? 'translate-x-5' : 'translate-x-0'"
+            ></span>
+        </button>
+        <label class="text-sm font-semibold text-slate-700 dark:text-slate-300">Enable Battery</label>
+    </div>
+
+    <!-- Battery settings (shown when enabled) -->
+    <div x-show="formData.battery_enabled" x-transition class="space-y-6">
+        <!-- Capacity slider -->
+        <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+                <label for="battery_kwh" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Capacity</label>
+                <span class="text-sm font-medium text-amber-600 dark:text-amber-400">
+                    <span x-text="formData.battery_kwh"></span> kWh
+                </span>
+            </div>
+            <input
+                type="range"
+                id="battery_kwh"
+                name="battery_kwh"
+                min="1"
+                max="20"
+                step="0.5"
+                x-model="formData.battery_kwh"
+                class="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
+            >
+            <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
+                <span>1 kWh</span>
+                <span>20 kWh</span>
+            </div>
+        </div>
+
+        <!-- Max charge rate slider -->
+        <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+                <label for="max_charge_kw" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Max Charge Rate</label>
+                <span class="text-sm font-medium text-amber-600 dark:text-amber-400">
+                    <span x-text="formData.max_charge_kw"></span> kW
+                </span>
+            </div>
+            <input
+                type="range"
+                id="max_charge_kw"
+                name="max_charge_kw"
+                min="0.5"
+                max="10"
+                step="0.1"
+                x-model="formData.max_charge_kw"
+                class="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
+            >
+            <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
+                <span>0.5 kW</span>
+                <span>10 kW</span>
+            </div>
+        </div>
+
+        <!-- Max discharge rate slider -->
+        <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+                <label for="max_discharge_kw" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Max Discharge Rate</label>
+                <span class="text-sm font-medium text-amber-600 dark:text-amber-400">
+                    <span x-text="formData.max_discharge_kw"></span> kW
+                </span>
+            </div>
+            <input
+                type="range"
+                id="max_discharge_kw"
+                name="max_discharge_kw"
+                min="0.5"
+                max="10"
+                step="0.1"
+                x-model="formData.max_discharge_kw"
+                class="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
+            >
+            <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
+                <span>0.5 kW</span>
+                <span>10 kW</span>
+            </div>
+        </div>
+
+        <!-- Round-trip efficiency -->
+        <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+                <label for="efficiency_pct" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Round-trip Efficiency</label>
+                <span class="text-sm font-medium text-amber-600 dark:text-amber-400">
+                    <span x-text="formData.efficiency_pct"></span>%
+                </span>
+            </div>
+            <input
+                type="number"
+                id="efficiency_pct"
+                name="efficiency_pct"
+                min="80"
+                max="100"
+                step="1"
+                x-model.number="formData.efficiency_pct"
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+            >
+            <p class="text-xs text-slate-500 dark:text-slate-400">Percentage of energy retained through a full charge-discharge cycle</p>
+        </div>
+    </div>
+</div>

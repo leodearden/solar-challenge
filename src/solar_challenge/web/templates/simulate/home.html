@@ -1,0 +1,393 @@
+{% extends "base.html" %}
+{% from "partials/page-header.html" import page_header %}
+
+{% block title %}Simulate Home{% endblock %}
+
+{% block content %}
+
+{{ page_header(
+    "Single Home Simulation",
+    subtitle="Configure and run a solar PV + battery simulation for a single household",
+    breadcrumbs=[{"label": "Simulate", "url": "#"}, {"label": "Single Home"}]
+) }}
+
+<div
+    x-data="{
+        activeTab: 'pv',
+        submitting: false,
+        jobId: null,
+        runId: null,
+        errorMsg: '',
+        formData: {
+            pv_kw: 4.0,
+            azimuth: 180,
+            tilt: 35,
+            battery_enabled: false,
+            battery_kwh: 5,
+            max_charge_kw: 3.6,
+            max_discharge_kw: 3.6,
+            efficiency_pct: 90,
+            consumption_kwh: 3500,
+            occupants: 3,
+            stochastic: false,
+            location: 'bristol',
+            custom_lat: 51.45,
+            custom_lon: -2.58,
+            period_mode: 'preset',
+            period_days: 30,
+            start_date: '2024-06-01',
+            end_date: '2024-06-30',
+            name: '',
+            preset: ''
+        },
+        tabs: [
+            { id: 'pv', label: 'PV' },
+            { id: 'battery', label: 'Battery' },
+            { id: 'load', label: 'Load' },
+            { id: 'location', label: 'Location' },
+            { id: 'period', label: 'Period' }
+        ],
+        applyPreset(presetName) {
+            const presets = {{ presets | tojson }};
+            const p = presets.find(pr => pr.name === presetName);
+            if (p) {
+                this.formData.pv_kw = p.pv_kw || 4.0;
+                this.formData.battery_kwh = p.battery_kwh || 0;
+                this.formData.battery_enabled = (p.battery_kwh || 0) > 0;
+                this.formData.consumption_kwh = p.consumption_kwh || 3500;
+            }
+        },
+        buildPayload() {
+            const payload = {
+                pv_kw: parseFloat(this.formData.pv_kw),
+                battery_kwh: this.formData.battery_enabled ? parseFloat(this.formData.battery_kwh) : 0,
+                consumption_kwh: parseFloat(this.formData.consumption_kwh),
+                occupants: parseInt(this.formData.occupants),
+                location: this.formData.location === 'custom'
+                    ? this.formData.custom_lat + ',' + this.formData.custom_lon
+                    : this.formData.location,
+                name: this.formData.name || 'Web Simulation'
+            };
+            if (this.formData.period_mode === 'preset') {
+                payload.days = parseInt(this.formData.period_days);
+            } else {
+                payload.start = this.formData.start_date;
+                payload.end = this.formData.end_date;
+            }
+            return payload;
+        },
+        async submitSimulation() {
+            this.submitting = true;
+            this.errorMsg = '';
+            this.jobId = null;
+            this.runId = null;
+            try {
+                const resp = await fetch('/api/simulate/home', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.buildPayload())
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    this.jobId = data.job_id;
+                    this.runId = data.run_id;
+                } else {
+                    this.errorMsg = data.error || 'Submission failed';
+                }
+            } catch (e) {
+                this.errorMsg = 'Network error: ' + e.message;
+            } finally {
+                this.submitting = false;
+            }
+        }
+    }"
+>
+    <!-- Tab navigation -->
+    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg">
+        <nav class="flex border-b border-slate-200 dark:border-slate-700 overflow-x-auto" aria-label="Configuration tabs">
+            <template x-for="tab in tabs" :key="tab.id">
+                <button
+                    type="button"
+                    @click="activeTab = tab.id"
+                    class="px-6 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap"
+                    :class="activeTab === tab.id
+                        ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                        : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600'"
+                    :aria-selected="activeTab === tab.id"
+                    role="tab"
+                    x-text="tab.label"
+                ></button>
+            </template>
+        </nav>
+
+        <!-- Tab content panels -->
+        <div class="p-6">
+            <!-- PV tab -->
+            <div x-show="activeTab === 'pv'" role="tabpanel">
+                {% include "simulate/partials/pv-config.html" %}
+            </div>
+
+            <!-- Battery tab -->
+            <div x-show="activeTab === 'battery'" role="tabpanel">
+                {% include "simulate/partials/battery-config.html" %}
+            </div>
+
+            <!-- Load tab -->
+            <div x-show="activeTab === 'load'" role="tabpanel">
+                {% include "simulate/partials/load-config.html" %}
+            </div>
+
+            <!-- Location tab -->
+            <div x-show="activeTab === 'location'" role="tabpanel">
+                <div class="space-y-6">
+                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Location</h3>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">Select a UK city preset or enter custom coordinates.</p>
+
+                    <div class="space-y-1.5">
+                        <label for="location" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Location Preset</label>
+                        <select
+                            id="location"
+                            name="location"
+                            x-model="formData.location"
+                            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                        >
+                            <option value="bristol">Bristol (51.45&deg;N, 2.58&deg;W)</option>
+                            <option value="london">London (51.51&deg;N, 0.13&deg;W)</option>
+                            <option value="edinburgh">Edinburgh (55.95&deg;N, 3.19&deg;W)</option>
+                            <option value="manchester">Manchester (53.48&deg;N, 2.24&deg;W)</option>
+                            <option value="custom">Custom coordinates...</option>
+                        </select>
+                    </div>
+
+                    <!-- Custom lat/lon fields -->
+                    <div x-show="formData.location === 'custom'" x-transition class="grid grid-cols-2 gap-4">
+                        <div class="space-y-1.5">
+                            <label for="custom_lat" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Latitude</label>
+                            <input
+                                type="number"
+                                id="custom_lat"
+                                name="custom_lat"
+                                min="-90"
+                                max="90"
+                                step="0.01"
+                                x-model.number="formData.custom_lat"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                            >
+                        </div>
+                        <div class="space-y-1.5">
+                            <label for="custom_lon" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Longitude</label>
+                            <input
+                                type="number"
+                                id="custom_lon"
+                                name="custom_lon"
+                                min="-180"
+                                max="180"
+                                step="0.01"
+                                x-model.number="formData.custom_lon"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                            >
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Period tab -->
+            <div x-show="activeTab === 'period'" role="tabpanel">
+                <div class="space-y-6">
+                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Simulation Period</h3>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">Choose a quick preset duration or specify a custom date range.</p>
+
+                    <!-- Period mode selector -->
+                    <div class="flex gap-4">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" name="period_mode" value="preset" x-model="formData.period_mode"
+                                   class="text-amber-500 focus:ring-amber-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Quick preset</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" name="period_mode" value="custom" x-model="formData.period_mode"
+                                   class="text-amber-500 focus:ring-amber-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Custom range</span>
+                        </label>
+                    </div>
+
+                    <!-- Preset duration buttons -->
+                    <div x-show="formData.period_mode === 'preset'" x-transition>
+                        <div class="flex flex-wrap gap-2">
+                            <template x-for="d in [7, 14, 30, 90, 365]" :key="d">
+                                <button
+                                    type="button"
+                                    @click="formData.period_days = d"
+                                    class="px-4 py-2 rounded-lg text-sm font-medium border transition-colors"
+                                    :class="formData.period_days == d
+                                        ? 'bg-amber-500 text-white border-amber-500'
+                                        : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-amber-400 dark:hover:border-amber-500'"
+                                    x-text="d === 365 ? '1 year' : d + ' days'"
+                                ></button>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Custom date range -->
+                    <div x-show="formData.period_mode === 'custom'" x-transition class="grid grid-cols-2 gap-4">
+                        <div class="space-y-1.5">
+                            <label for="start_date" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Start Date</label>
+                            <input
+                                type="date"
+                                id="start_date"
+                                name="start_date"
+                                x-model="formData.start_date"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                            >
+                        </div>
+                        <div class="space-y-1.5">
+                            <label for="end_date" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">End Date</label>
+                            <input
+                                type="date"
+                                id="end_date"
+                                name="end_date"
+                                x-model="formData.end_date"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                            >
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom section: name, preset, submit -->
+    <div class="bg-white dark:bg-slate-800 border border-t-0 border-slate-200 dark:border-slate-700 rounded-b-lg p-6">
+        <form @submit.prevent="submitSimulation()" class="flex flex-col sm:flex-row items-end gap-4">
+            <!-- Name field -->
+            <div class="flex-1 w-full sm:w-auto space-y-1.5">
+                <label for="sim_name" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Simulation Name</label>
+                <input
+                    type="text"
+                    id="sim_name"
+                    name="name"
+                    x-model="formData.name"
+                    placeholder="My Simulation"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                >
+            </div>
+
+            <!-- Preset selector -->
+            <div class="flex-1 w-full sm:w-auto space-y-1.5">
+                <label for="preset_select" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Preset</label>
+                <select
+                    id="preset_select"
+                    name="preset"
+                    x-model="formData.preset"
+                    @change="if (formData.preset) applyPreset(formData.preset)"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                >
+                    <option value="">-- No preset --</option>
+                    {% for p in presets %}
+                    <option value="{{ p.name }}">{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Submit button -->
+            <button
+                type="submit"
+                :disabled="submitting"
+                class="px-6 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-sm transition-colors flex items-center gap-2 whitespace-nowrap"
+            >
+                <svg x-show="submitting" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <span x-text="submitting ? 'Submitting...' : 'Run Simulation'"></span>
+            </button>
+        </form>
+    </div>
+
+    <!-- Error display -->
+    <template x-if="errorMsg">
+        <div class="mt-4 px-4 py-3 rounded-lg text-sm font-medium border-l-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-500">
+            <span x-text="errorMsg"></span>
+        </div>
+    </template>
+
+    <!-- Results section: progress tracker appears after submission -->
+    <div id="results-section" class="mt-6">
+        <template x-if="jobId">
+            <div
+                hx-ext="sse"
+                :sse-connect="'/api/jobs/' + jobId + '/progress'"
+                x-data="{
+                    progress: 0,
+                    step: 'Queued',
+                    message: 'Waiting to start...',
+                    status: 'queued',
+                    elapsed: 0,
+                    startTime: Date.now(),
+                    timer: null,
+                    error: '',
+                    completedRunId: '',
+                    init() {
+                        this.timer = setInterval(() => {
+                            this.elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+                        }, 1000);
+                    },
+                    destroy() {
+                        if (this.timer) clearInterval(this.timer);
+                    },
+                    formatTime(seconds) {
+                        const m = Math.floor(seconds / 60);
+                        const s = seconds % 60;
+                        return m > 0 ? m + 'm ' + s + 's' : s + 's';
+                    }
+                }"
+                x-init="init()"
+            >
+                <div class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Simulation Progress</h3>
+                        <span class="text-sm font-mono text-slate-500 dark:text-slate-400" x-text="formatTime(elapsed)"></span>
+                    </div>
+
+                    <!-- Progress bar -->
+                    <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-4 mb-3 overflow-hidden">
+                        <div
+                            class="h-full rounded-full transition-all duration-500 ease-out"
+                            :class="status === 'completed' ? 'bg-green-500' : 'bg-amber-500'"
+                            :style="'width: ' + Math.min(progress, 100) + '%'"
+                        ></div>
+                    </div>
+
+                    <div class="flex items-center justify-between text-sm">
+                        <span class="text-slate-600 dark:text-slate-300" x-text="step"></span>
+                        <span class="font-mono text-slate-500 dark:text-slate-400" x-text="Math.round(progress) + '%'"></span>
+                    </div>
+                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400" x-text="message"></p>
+
+                    <!-- Completed state -->
+                    <template x-if="status === 'completed'">
+                        <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                            <p class="text-green-600 dark:text-green-400 font-medium mb-3">Simulation completed successfully!</p>
+                            <a
+                                :href="'/results?run_id=' + completedRunId"
+                                class="inline-flex items-center px-4 py-2 rounded-lg bg-amber-500 text-white font-medium hover:bg-amber-600 transition-colors"
+                            >View Results</a>
+                        </div>
+                    </template>
+
+                    <!-- Failed state -->
+                    <template x-if="status === 'failed'">
+                        <div class="mt-4">
+                            <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                                <p class="text-red-700 dark:text-red-400 font-medium mb-1">Simulation Failed</p>
+                                <p class="text-red-600 dark:text-red-300 text-sm" x-text="error"></p>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </template>
+    </div>
+</div>
+
+{% endblock %}

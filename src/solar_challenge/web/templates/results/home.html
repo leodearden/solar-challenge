@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import stat_card, card, chart_container %}
+
+{% block title %}Results: {{ run_name }} - Solar Challenge{% endblock %}
+
+{% block content %}
+{# ===== Page Header ===== #}
+<div class="mb-8">
+    <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ run_name }}</h1>
+    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+        {{ summary.simulation_days }}-day simulation &mdash; Run ID: {{ run_id[:8] }}&hellip;
+    </p>
+</div>
+
+{# ===== Summary Statistics Cards ===== #}
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4 mb-8">
+    {{ stat_card("Total Generation", "%.1f"|format(summary.total_generation_kwh), unit="kWh") }}
+    {{ stat_card("Total Demand", "%.1f"|format(summary.total_demand_kwh), unit="kWh") }}
+    {{ stat_card("Self-Consumption", "%.1f"|format(summary.total_self_consumption_kwh), unit="kWh") }}
+    {{ stat_card("Grid Import", "%.1f"|format(summary.total_grid_import_kwh), unit="kWh") }}
+    {{ stat_card("Grid Export", "%.1f"|format(summary.total_grid_export_kwh), unit="kWh") }}
+    {% if has_battery %}
+    {{ stat_card("Battery Charged", "%.1f"|format(summary.total_battery_charge_kwh), unit="kWh") }}
+    {{ stat_card("Battery Discharged", "%.1f"|format(summary.total_battery_discharge_kwh), unit="kWh") }}
+    {% endif %}
+    {{ stat_card("Peak Generation", "%.2f"|format(summary.peak_generation_kw), unit="kW") }}
+    {{ stat_card("Peak Demand", "%.2f"|format(summary.peak_demand_kw), unit="kW") }}
+    {{ stat_card("Self-Consumption Ratio", "%.0f"|format(summary.self_consumption_ratio * 100), unit="%") }}
+    {{ stat_card("Grid Dependency", "%.0f"|format(summary.grid_dependency_ratio * 100), unit="%") }}
+    {{ stat_card("Export Ratio", "%.0f"|format(summary.export_ratio * 100), unit="%") }}
+</div>
+
+{# ===== Tabbed Chart Display ===== #}
+<div x-data="{ activeTab: 'overview' }" class="mb-8">
+    {# Tab Navigation #}
+    <div class="border-b border-slate-200 dark:border-slate-700 mb-6">
+        <nav class="-mb-px flex space-x-6" aria-label="Chart tabs">
+            <button
+                @click="activeTab = 'overview'"
+                :class="activeTab === 'overview'
+                    ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300'"
+                class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors"
+            >Overview</button>
+            <button
+                @click="activeTab = 'power_flow'"
+                :class="activeTab === 'power_flow'
+                    ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300'"
+                class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors"
+            >Power Flow</button>
+            <button
+                @click="activeTab = 'battery_finance'"
+                :class="activeTab === 'battery_finance'
+                    ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300'"
+                class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors"
+            >Battery &amp; Finance</button>
+            <button
+                @click="activeTab = 'analysis'"
+                :class="activeTab === 'analysis'
+                    ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300'"
+                class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors"
+            >Analysis</button>
+        </nav>
+    </div>
+
+    {# ===== Tab 1: Overview ===== #}
+    <div x-show="activeTab === 'overview'" x-cloak>
+        {# Sankey Diagram #}
+        {% if charts.sankey and charts.sankey != '{}' %}
+        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden mb-6">
+            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Energy Flow</h3>
+            </div>
+            <div id="chart-sankey" class="w-full" style="min-height: 450px;"></div>
+        </div>
+        {% endif %}
+
+        {# Daily Energy Balance #}
+        {% if charts.daily_balance and charts.daily_balance != '{}' %}
+        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
+            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Daily Energy Balance</h3>
+            </div>
+            <div id="chart-daily-balance" class="w-full" style="min-height: 420px;"></div>
+        </div>
+        {% endif %}
+    </div>
+
+    {# ===== Tab 2: Power Flow ===== #}
+    <div x-show="activeTab === 'power_flow'" x-cloak>
+        {% if charts.power_flow and charts.power_flow != '{}' %}
+        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
+            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Power Flow Timeline</h3>
+            </div>
+            <div id="chart-power-flow" class="w-full" style="min-height: 500px;"></div>
+        </div>
+        {% endif %}
+    </div>
+
+    {# ===== Tab 3: Battery & Finance ===== #}
+    <div x-show="activeTab === 'battery_finance'" x-cloak>
+        {# Battery SOC #}
+        {% if has_battery and charts.battery_soc and charts.battery_soc != '{}' %}
+        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden mb-6">
+            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Battery State of Charge</h3>
+            </div>
+            <div id="chart-battery-soc" class="w-full" style="min-height: 400px;"></div>
+        </div>
+        {% endif %}
+
+        {# Financial Breakdown #}
+        {% if charts.financial and charts.financial != '{}' %}
+        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden mb-6">
+            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Financial Breakdown</h3>
+            </div>
+            <div id="chart-financial" class="w-full" style="min-height: 420px;"></div>
+        </div>
+        {% endif %}
+
+        {# Monthly Summary #}
+        {% if charts.monthly and charts.monthly != '{}' %}
+        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
+            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Monthly Summary</h3>
+            </div>
+            <div id="chart-monthly" class="w-full" style="min-height: 420px;"></div>
+        </div>
+        {% endif %}
+    </div>
+
+    {# ===== Tab 4: Analysis ===== #}
+    <div x-show="activeTab === 'analysis'" x-cloak>
+        {# Seasonal Comparison #}
+        {% if charts.seasonal and charts.seasonal != '{}' %}
+        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden mb-6">
+            <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Seasonal Comparison</h3>
+            </div>
+            <div id="chart-seasonal" class="w-full" style="min-height: 420px;"></div>
+        </div>
+        {% else %}
+        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 mb-6">
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                Seasonal comparison requires at least 180 days of simulation data.
+            </p>
+        </div>
+        {% endif %}
+
+        {# Heat Pump Analysis #}
+        {% if charts.heat_pump %}
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
+                <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Heat Pump Load Share</h3>
+                </div>
+                <div id="chart-hp-load-share" class="w-full" style="min-height: 400px;"></div>
+            </div>
+            <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
+                <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Heat Pump Load Profile</h3>
+                </div>
+                <div id="chart-hp-cop" class="w-full" style="min-height: 400px;"></div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{# ===== Action Buttons ===== #}
+<div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6">
+    <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Actions</h3>
+    <div class="flex flex-wrap gap-3">
+        <a href="{{ url_for('main.download_csv') }}"
+           class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white transition-colors">
+            Download CSV
+        </a>
+        <a href="{{ url_for('main.download_report') }}"
+           class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+            Download Report
+        </a>
+        <a href="{{ url_for('main.index') }}"
+           class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+            New Simulation
+        </a>
+    </div>
+</div>
+
+{# ===== Chart Initialisation Scripts ===== #}
+<script>
+(function () {
+    "use strict";
+
+    var plotlyConfig = { responsive: true, displayModeBar: true, scrollZoom: false };
+
+    function renderChart(elementId, jsonStr) {
+        if (!jsonStr || jsonStr === '{}') return;
+        var el = document.getElementById(elementId);
+        if (!el) return;
+        try {
+            var fig = JSON.parse(jsonStr);
+            Plotly.newPlot(elementId, fig.data, fig.layout, plotlyConfig);
+        } catch (e) {
+            console.error('Failed to render chart ' + elementId, e);
+        }
+    }
+
+    // Overview tab
+    renderChart('chart-sankey', {{ charts.sankey | tojson }});
+    renderChart('chart-daily-balance', {{ charts.daily_balance | tojson }});
+
+    // Power Flow tab
+    renderChart('chart-power-flow', {{ charts.power_flow | tojson }});
+
+    // Battery & Finance tab
+    {% if has_battery and charts.battery_soc %}
+    renderChart('chart-battery-soc', {{ charts.battery_soc | tojson }});
+    {% endif %}
+    renderChart('chart-financial', {{ charts.financial | tojson }});
+    {% if charts.monthly %}
+    renderChart('chart-monthly', {{ charts.monthly | tojson }});
+    {% endif %}
+
+    // Analysis tab
+    {% if charts.seasonal %}
+    renderChart('chart-seasonal', {{ charts.seasonal | tojson }});
+    {% endif %}
+
+    {% if charts.heat_pump %}
+    renderChart('chart-hp-load-share', {{ charts.heat_pump.load_share_chart | tojson }});
+    renderChart('chart-hp-cop', {{ charts.heat_pump.cop_chart | tojson }});
+    {% endif %}
+}());
+</script>
+{% endblock %}
