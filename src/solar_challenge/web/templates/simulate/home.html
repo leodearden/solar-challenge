@@ -3,21 +3,16 @@
 
 {% block title %}Simulate Home{% endblock %}
 
-{% block content %}
-
-{{ page_header(
-    "Single Home Simulation",
-    subtitle="Configure and run a solar PV + battery simulation for a single household",
-    breadcrumbs=[{"label": "Simulate", "url": "#"}, {"label": "Single Home"}]
-) }}
-
-<div
-    x-data="{
+{% block head %}
+<script>
+document.addEventListener('alpine:init', () => {
+    Alpine.data('homeSimulator', () => ({
         activeTab: 'pv',
         submitting: false,
         jobId: null,
         runId: null,
         errorMsg: '',
+        presets: [],
         formData: {
             pv_kw: 4.0,
             azimuth: 180,
@@ -47,9 +42,30 @@
             { id: 'location', label: 'Location' },
             { id: 'period', label: 'Period' }
         ],
+        progress: 0,
+        step: 'Queued',
+        message: 'Waiting to start...',
+        status: 'idle',
+        elapsed: 0,
+        startTime: null,
+        timer: null,
+        error: '',
+        completedRunId: '',
+        init() {
+            this.fetchPresets();
+        },
+        async fetchPresets() {
+            try {
+                const resp = await fetch('/api/presets');
+                if (resp.ok) {
+                    this.presets = await resp.json();
+                }
+            } catch (e) {
+                // Fallback: presets just won't be populated
+            }
+        },
         applyPreset(presetName) {
-            const presets = {{ presets | tojson }};
-            const p = presets.find(pr => pr.name === presetName);
+            const p = this.presets.find(pr => pr.name === presetName);
             if (p) {
                 this.formData.pv_kw = p.pv_kw || 4.0;
                 this.formData.battery_kwh = p.battery_kwh || 0;
@@ -81,6 +97,10 @@
             this.errorMsg = '';
             this.jobId = null;
             this.runId = null;
+            this.status = 'idle';
+            this.progress = 0;
+            this.error = '';
+            this.completedRunId = '';
             try {
                 const resp = await fetch('/api/simulate/home', {
                     method: 'POST',
@@ -91,6 +111,7 @@
                 if (resp.ok) {
                     this.jobId = data.job_id;
                     this.runId = data.run_id;
+                    this.startProgressTracking();
                 } else {
                     this.errorMsg = data.error || 'Submission failed';
                 }
@@ -99,9 +120,74 @@
             } finally {
                 this.submitting = false;
             }
+        },
+        startProgressTracking() {
+            this.status = 'queued';
+            this.startTime = Date.now();
+            this.timer = setInterval(() => {
+                this.elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+            }, 1000);
+
+            const evtSource = new EventSource('/api/jobs/' + this.jobId + '/progress');
+
+            evtSource.addEventListener('progress', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data.progress_pct !== undefined) this.progress = data.progress_pct;
+                    if (data.current_step) this.step = data.current_step;
+                    if (data.message) this.message = data.message;
+                    if (data.status) this.status = data.status;
+                } catch(err) {}
+            });
+
+            evtSource.addEventListener('complete', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    this.status = 'completed';
+                    this.progress = 100;
+                    this.step = 'Done';
+                    this.message = 'Simulation completed successfully';
+                    if (data.run_id) this.completedRunId = data.run_id;
+                } catch(err) {}
+                evtSource.close();
+                if (this.timer) clearInterval(this.timer);
+            });
+
+            evtSource.addEventListener('error', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    this.status = 'failed';
+                    this.error = data.message || 'An unexpected error occurred';
+                } catch(err) {
+                    // SSE connection error (not a simulation error)
+                    if (this.status !== 'completed') {
+                        this.status = 'failed';
+                        this.error = 'Lost connection to server';
+                    }
+                }
+                evtSource.close();
+                if (this.timer) clearInterval(this.timer);
+            });
+        },
+        formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = seconds % 60;
+            return m > 0 ? m + 'm ' + s + 's' : s + 's';
         }
-    }"
->
+    }));
+});
+</script>
+{% endblock %}
+
+{% block content %}
+
+{{ page_header(
+    "Single Home Simulation",
+    subtitle="Configure and run a solar PV + battery simulation for a single household",
+    breadcrumbs=[{"label": "Simulate", "url": "#"}, {"label": "Single Home"}]
+) }}
+
+<div x-data="homeSimulator()">
     <!-- Tab navigation -->
     <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg">
         <nav class="flex border-b border-slate-200 dark:border-slate-700 overflow-x-auto" aria-label="Configuration tabs">
@@ -283,9 +369,9 @@
                     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
                 >
                     <option value="">-- No preset --</option>
-                    {% for p in presets %}
-                    <option value="{{ p.name }}">{{ p.name }}</option>
-                    {% endfor %}
+                    <template x-for="p in presets" :key="p.name">
+                        <option :value="p.name" x-text="p.name"></option>
+                    </template>
                 </select>
             </div>
 
@@ -314,77 +400,47 @@
     <!-- Results section: progress tracker appears after submission -->
     <div id="results-section" class="mt-6">
         <template x-if="jobId">
-            <div
-                hx-ext="sse"
-                :sse-connect="'/api/jobs/' + jobId + '/progress'"
-                x-data="{
-                    progress: 0,
-                    step: 'Queued',
-                    message: 'Waiting to start...',
-                    status: 'queued',
-                    elapsed: 0,
-                    startTime: Date.now(),
-                    timer: null,
-                    error: '',
-                    completedRunId: '',
-                    init() {
-                        this.timer = setInterval(() => {
-                            this.elapsed = Math.floor((Date.now() - this.startTime) / 1000);
-                        }, 1000);
-                    },
-                    destroy() {
-                        if (this.timer) clearInterval(this.timer);
-                    },
-                    formatTime(seconds) {
-                        const m = Math.floor(seconds / 60);
-                        const s = seconds % 60;
-                        return m > 0 ? m + 'm ' + s + 's' : s + 's';
-                    }
-                }"
-                x-init="init()"
-            >
-                <div class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
-                    <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Simulation Progress</h3>
-                        <span class="text-sm font-mono text-slate-500 dark:text-slate-400" x-text="formatTime(elapsed)"></span>
-                    </div>
-
-                    <!-- Progress bar -->
-                    <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-4 mb-3 overflow-hidden">
-                        <div
-                            class="h-full rounded-full transition-all duration-500 ease-out"
-                            :class="status === 'completed' ? 'bg-green-500' : 'bg-amber-500'"
-                            :style="'width: ' + Math.min(progress, 100) + '%'"
-                        ></div>
-                    </div>
-
-                    <div class="flex items-center justify-between text-sm">
-                        <span class="text-slate-600 dark:text-slate-300" x-text="step"></span>
-                        <span class="font-mono text-slate-500 dark:text-slate-400" x-text="Math.round(progress) + '%'"></span>
-                    </div>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400" x-text="message"></p>
-
-                    <!-- Completed state -->
-                    <template x-if="status === 'completed'">
-                        <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
-                            <p class="text-green-600 dark:text-green-400 font-medium mb-3">Simulation completed successfully!</p>
-                            <a
-                                :href="'/results?run_id=' + completedRunId"
-                                class="inline-flex items-center px-4 py-2 rounded-lg bg-amber-500 text-white font-medium hover:bg-amber-600 transition-colors"
-                            >View Results</a>
-                        </div>
-                    </template>
-
-                    <!-- Failed state -->
-                    <template x-if="status === 'failed'">
-                        <div class="mt-4">
-                            <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-                                <p class="text-red-700 dark:text-red-400 font-medium mb-1">Simulation Failed</p>
-                                <p class="text-red-600 dark:text-red-300 text-sm" x-text="error"></p>
-                            </div>
-                        </div>
-                    </template>
+            <div class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Simulation Progress</h3>
+                    <span class="text-sm font-mono text-slate-500 dark:text-slate-400" x-text="formatTime(elapsed)"></span>
                 </div>
+
+                <!-- Progress bar -->
+                <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-4 mb-3 overflow-hidden">
+                    <div
+                        class="h-full rounded-full transition-all duration-500 ease-out"
+                        :class="status === 'completed' ? 'bg-green-500' : 'bg-amber-500'"
+                        :style="'width: ' + Math.min(progress, 100) + '%'"
+                    ></div>
+                </div>
+
+                <div class="flex items-center justify-between text-sm">
+                    <span class="text-slate-600 dark:text-slate-300" x-text="step"></span>
+                    <span class="font-mono text-slate-500 dark:text-slate-400" x-text="Math.round(progress) + '%'"></span>
+                </div>
+                <p class="mt-2 text-sm text-slate-500 dark:text-slate-400" x-text="message"></p>
+
+                <!-- Completed state -->
+                <template x-if="status === 'completed'">
+                    <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                        <p class="text-green-600 dark:text-green-400 font-medium mb-3">Simulation completed successfully!</p>
+                        <a
+                            :href="'/results/home/' + completedRunId"
+                            class="inline-flex items-center px-4 py-2 rounded-lg bg-amber-500 text-white font-medium hover:bg-amber-600 transition-colors"
+                        >View Results</a>
+                    </div>
+                </template>
+
+                <!-- Failed state -->
+                <template x-if="status === 'failed'">
+                    <div class="mt-4">
+                        <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                            <p class="text-red-700 dark:text-red-400 font-medium mb-1">Simulation Failed</p>
+                            <p class="text-red-600 dark:text-red-300 text-sm" x-text="error"></p>
+                        </div>
+                    </div>
+                </template>
             </div>
         </template>
     </div>

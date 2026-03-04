@@ -150,6 +150,7 @@ class JobManager:
             db_path,
             data_dir,
             name,
+            created_at,
         )
 
         return job_id, run_id
@@ -255,6 +256,7 @@ class JobManager:
             db_path,
             data_dir,
             name,
+            created_at,
         )
 
         return job_id, run_id
@@ -361,6 +363,7 @@ class JobManager:
         db_path: str,
         data_dir: str,
         name: str | None = None,
+        created_at: str | None = None,
     ) -> None:
         """Worker function that runs a home simulation in a background thread.
 
@@ -368,8 +371,8 @@ class JobManager:
         1. Update job status to 'running'
         2. Call simulate_home()
         3. Call calculate_summary()
-        4. Save via RunStorage.save_home_run()
-        5. Update job and run status to 'completed'
+        4. Save via RunStorage.save_home_run() (upserts the placeholder row)
+        5. Update job status to 'completed'
 
         On exception: update status to 'failed' and capture traceback.
 
@@ -382,6 +385,7 @@ class JobManager:
             db_path: Path to the SQLite database file.
             data_dir: Root directory for storing run data.
             name: Optional name for the simulation run.
+            created_at: Original creation timestamp from job submission.
         """
         start_time = time.monotonic()
         try:
@@ -403,14 +407,9 @@ class JobManager:
             self._update_progress(job_id, 80.0, "Summarizing", "Calculating summary statistics...", db_path)
             summary = calculate_summary(results)
 
-            # Step 4: Save results
+            # Step 4: Save results (upserts the placeholder run row)
             self._update_progress(job_id, 90.0, "Saving", "Persisting results to storage...", db_path)
             storage = RunStorage(db_path=db_path, data_dir=data_dir)
-
-            # Delete the placeholder run row before save_home_run creates it
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
             duration = time.monotonic() - start_time
             storage.save_home_run(
@@ -421,6 +420,7 @@ class JobManager:
                 name=name or config.name or "Web Simulation",
                 status="completed",
                 duration_seconds=duration,
+                created_at=created_at,
             )
 
             # Step 5: Update job to completed
@@ -512,6 +512,7 @@ class JobManager:
         db_path: str,
         data_dir: str,
         name: str | None = None,
+        created_at: str | None = None,
     ) -> None:
         """Worker function that runs a fleet simulation in a background thread.
 
@@ -527,6 +528,7 @@ class JobManager:
             db_path: Path to the SQLite database file.
             data_dir: Root directory for storing run data.
             name: Optional name for the fleet simulation run.
+            created_at: Original creation timestamp from job submission.
         """
         from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 
@@ -572,14 +574,9 @@ class JobManager:
             # Calculate fleet summary using the proper function
             fleet_summary = calculate_fleet_summary(fleet_results)
 
-            # Save results
+            # Save results (upserts the placeholder run row)
             self._update_progress(job_id, 97.0, "Saving", "Persisting fleet results...", db_path)
             storage = RunStorage(db_path=db_path, data_dir=data_dir)
-
-            # Delete the placeholder run row before save_fleet_run creates it
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
             duration = time.monotonic() - start_time
             storage.save_fleet_run(
@@ -590,6 +587,7 @@ class JobManager:
                 name=name or "Fleet Simulation",
                 status="completed",
                 duration_seconds=duration,
+                created_at=created_at,
             )
 
             # Update job to completed

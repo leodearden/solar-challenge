@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from flask import Flask
+from flask import Flask, render_template
 
 from solar_challenge.web.database import close_db, init_db
 
@@ -38,7 +38,7 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     # Default configuration
     app.config.from_mapping(
-        SECRET_KEY=os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production"),
+        SECRET_KEY=os.environ.get("SECRET_KEY", os.urandom(24).hex()),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         DATA_DIR=str(default_data_dir),
@@ -77,6 +77,15 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     # Register blueprints (deferred to allow routes to exist independently)
     _register_blueprints(app)
+
+    # Register custom error handlers
+    @app.errorhandler(404)
+    def page_not_found(e: Exception) -> tuple[str, int]:
+        return render_template("errors/404.html"), 404
+
+    @app.errorhandler(500)
+    def internal_server_error(e: Exception) -> tuple[str, int]:
+        return render_template("errors/500.html"), 500
 
     return app
 

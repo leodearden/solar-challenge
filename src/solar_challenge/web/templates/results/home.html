@@ -176,13 +176,13 @@
 <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6">
     <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Actions</h3>
     <div class="flex flex-wrap gap-3">
-        <a href="{{ url_for('main.download_csv') }}"
+        <a href="{{ url_for('history.api_export_csv', run_id=run_id) }}"
            class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white transition-colors">
             Download CSV
         </a>
-        <a href="{{ url_for('main.download_report') }}"
+        <a href="{{ url_for('history.api_export_yaml', run_id=run_id) }}"
            class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
-            Download Report
+            Download Config (YAML)
         </a>
         <a href="{{ url_for('main.index') }}"
            class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">

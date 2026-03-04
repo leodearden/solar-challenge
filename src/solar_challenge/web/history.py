@@ -11,11 +11,13 @@ from typing import Any
 from flask import (
     Blueprint,
     Response,
-    abort,
     current_app,
+    flash,
     jsonify,
+    redirect,
     render_template,
     request,
+    url_for,
 )
 
 from solar_challenge.web.database import get_db
@@ -40,6 +42,12 @@ def _get_storage() -> RunStorage:
 # ---------------------------------------------------------------------------
 
 
+@bp.route("/")
+def history_index() -> Response:
+    """Redirect /history to /history/runs."""
+    return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+
+
 @bp.route("/runs")  # type: ignore[untyped-decorator]
 def runs_page() -> str:
     """Render the run history browser page.
@@ -51,22 +59,24 @@ def runs_page() -> str:
 
 
 @bp.route("/compare")  # type: ignore[untyped-decorator]
-def compare_page() -> str | tuple[str, int]:
+def compare_page() -> str | Response:
     """Render the run comparison page.
 
     Expects query parameter ``ids`` as comma-separated run IDs.
-    Returns 400 if no IDs are provided or if fewer than 2 are given.
+    Redirects to runs page with a flash message if IDs are missing or insufficient.
 
     Returns:
-        Rendered HTML for the comparison page, or 400 error.
+        Rendered HTML for the comparison page, or redirect.
     """
     ids_param = request.args.get("ids", "")
     if not ids_param:
-        abort(400, description="No run IDs provided. Select 2-4 runs to compare.")
+        flash("No run IDs provided. Select 2-4 runs to compare.", "error")
+        return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
 
     run_ids = [rid.strip() for rid in ids_param.split(",") if rid.strip()]
     if len(run_ids) < 2:
-        abort(400, description="At least 2 runs are required for comparison.")
+        flash("At least 2 runs are required for comparison.", "error")
+        return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
     if len(run_ids) > 4:
         run_ids = run_ids[:4]
 
@@ -98,7 +108,8 @@ def compare_page() -> str | tuple[str, int]:
                 runs.append(run_dict)
 
     if len(runs) < 2:
-        abort(400, description="Could not find at least 2 valid runs to compare.")
+        flash("Could not find at least 2 valid runs to compare.", "error")
+        return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
 
     # Build comparison charts
     charts: dict[str, str] = {}

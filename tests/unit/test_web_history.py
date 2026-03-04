@@ -336,15 +336,15 @@ class TestExportAPI:
 class TestComparisonRoute:
     """Tests for the comparison page route."""
 
-    def test_compare_no_ids_returns_400(self, client: FlaskClient) -> None:
-        """Test GET /history/compare with no IDs returns 400."""
+    def test_compare_no_ids_redirects(self, client: FlaskClient) -> None:
+        """Test GET /history/compare with no IDs redirects to runs page."""
         response = client.get("/history/compare")
-        assert response.status_code == 400
+        assert response.status_code == 302
 
-    def test_compare_single_id_returns_400(self, client: FlaskClient) -> None:
-        """Test GET /history/compare with only 1 ID returns 400."""
+    def test_compare_single_id_redirects(self, client: FlaskClient) -> None:
+        """Test GET /history/compare with only 1 ID redirects to runs page."""
         response = client.get("/history/compare?ids=run-1")
-        assert response.status_code == 400
+        assert response.status_code == 302
 
     def test_compare_two_valid_runs(self, app: Flask, client: FlaskClient) -> None:
         """Test GET /history/compare with 2 valid run IDs returns 200."""
@@ -358,10 +358,10 @@ class TestComparisonRoute:
         assert "Compare A" in html
         assert "Compare B" in html
 
-    def test_compare_nonexistent_ids_returns_400(self, client: FlaskClient) -> None:
-        """Test GET /history/compare with all invalid IDs returns 400."""
+    def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
+        """Test GET /history/compare with all invalid IDs redirects to runs page."""
         response = client.get("/history/compare?ids=fake-1,fake-2")
-        assert response.status_code == 400
+        assert response.status_code == 302
 
 
 # ---------------------------------------------------------------------------

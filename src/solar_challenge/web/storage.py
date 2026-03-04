@@ -201,11 +201,12 @@ class RunStorage:
         status: str = "completed",
         error_message: str | None = None,
         duration_seconds: float | None = None,
+        created_at: str | None = None,
     ) -> None:
         """Save a home simulation run to storage.
 
         Creates directory structure, serializes config and summary to JSON,
-        saves time series to parquet, and inserts metadata into database.
+        saves time series to parquet, and upserts metadata into database.
 
         Args:
             run_id: Unique run identifier
@@ -216,6 +217,8 @@ class RunStorage:
             status: Run status (completed, failed, running)
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
+            created_at: Optional ISO timestamp; if provided, preserves the
+                original creation time from job submission.
         """
         # Create run directory
         run_dir = self._get_run_dir(run_id)
@@ -238,15 +241,16 @@ class RunStorage:
         parquet_path = run_dir / "data.parquet"
         df.to_parquet(parquet_path, engine="pyarrow")
 
-        # Insert run metadata into database
-        created_at = datetime.now(timezone.utc).isoformat()
+        # Upsert run metadata into database
+        if created_at is None:
+            created_at = datetime.now(timezone.utc).isoformat()
         run_name = name or config.name or "Unnamed Run"
 
         with get_db(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO runs (
+                INSERT OR REPLACE INTO runs (
                     id, name, type, config_json, summary_json,
                     status, error_message, created_at, completed_at,
                     duration_seconds, n_homes, notes
@@ -342,6 +346,7 @@ class RunStorage:
         status: str = "completed",
         error_message: str | None = None,
         duration_seconds: float | None = None,
+        created_at: str | None = None,
     ) -> None:
         """Save a fleet simulation run to storage.
 
@@ -357,6 +362,8 @@ class RunStorage:
             status: Run status (completed, failed, running)
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
+            created_at: Optional ISO timestamp; if provided, preserves the
+                original creation time from job submission.
         """
         # Create run directory and homes subdirectory
         run_dir = self._get_run_dir(run_id)
@@ -392,15 +399,16 @@ class RunStorage:
             with home_summary_path.open("w") as f:
                 json.dump(home_summary_dict, f, indent=2)
 
-        # Insert run metadata into database
-        created_at = datetime.now(timezone.utc).isoformat()
+        # Upsert run metadata into database
+        if created_at is None:
+            created_at = datetime.now(timezone.utc).isoformat()
         run_name = name or "Unnamed Fleet Run"
 
         with get_db(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO runs (
+                INSERT OR REPLACE INTO runs (
                     id, name, type, config_json, summary_json,
                     status, error_message, created_at, completed_at,
                     duration_seconds, n_homes, notes
