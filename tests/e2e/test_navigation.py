@@ -118,10 +118,6 @@ def test_sidebar_history_link(page: Page, live_server: str) -> None:
 # ── Breadcrumb dead-link detection ─────────────────────────────────────
 
 
-@pytest.mark.xfail(
-    reason="Bug: breadcrumb parent links use href='#' instead of real URLs (Fix 8)",
-    strict=True,
-)
 def test_breadcrumbs_no_dead_hash_links(page: Page, live_server: str) -> None:
     """Pages with breadcrumbs should not contain dead ``<a href="#">`` links.
 

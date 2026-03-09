@@ -28,11 +28,6 @@ def test_fleet_page_loads(page: Page, live_server: str) -> None:
 # ── Bug B1: Alpine race condition with external JS ───────────────────
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="Bug B1: block head after Alpine scripts causes race condition; "
-           "external JS may load after Alpine.js, producing console errors",
-)
 def test_fleet_page_no_js_errors(page: Page, live_server: str) -> None:
     """The fleet page should load without JavaScript console errors.
 
@@ -101,11 +96,6 @@ def test_fleet_distribution_cards(page: Page, live_server: str) -> None:
 # ── Bug B2: fleet results URL points to wrong path ───────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Bug B2: fleet results URL uses '/results?run_id=' instead of "
-           "'/results/fleet/<run_id>'",
-)
 def test_fleet_completed_results_url(page: Page, live_server: str) -> None:
     """The 'View Results' link template should point to /results/fleet/<id>,
     not /results?run_id=<id>.

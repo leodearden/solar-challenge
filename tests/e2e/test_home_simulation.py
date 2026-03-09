@@ -59,11 +59,6 @@ def test_preset_selector_loads(page: Page, live_server: str) -> None:
 # ── Bug B4: buildPayload missing form fields ─────────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Bug B4: buildPayload misses several form fields (azimuth, tilt, "
-           "max_charge_kw, max_discharge_kw, efficiency_pct, stochastic)",
-)
 def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
     """buildPayload() should include azimuth, tilt, battery charge/discharge
     rates, efficiency, and stochastic flag.  Currently these are omitted.
@@ -71,17 +66,12 @@ def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
     page.goto(live_server + "/simulate/home")
     page.wait_for_load_state("networkidle")
 
-    # Wait for Alpine.js to initialise the component
-    page.wait_for_function(
-        "() => !!document.querySelector('[x-data]').__x"
-        " || !!window.Alpine",
-        timeout=5000,
-    )
-    # Small extra pause for Alpine to fully hydrate the component
-    page.wait_for_timeout(500)
+    # Wait for Alpine.js to fully initialise the component
+    page.wait_for_load_state("networkidle")
+    page.wait_for_timeout(1500)
 
     payload = page.evaluate("""() => {
-        const el = document.querySelector('[x-data]');
+        const el = document.querySelector('[x-data="homeSimulator()"]');
         const data = Alpine.$data(el);
         return data.buildPayload();
     }""")

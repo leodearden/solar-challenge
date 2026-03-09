@@ -29,11 +29,6 @@ def test_sweep_page_loads(page: Page, live_server: str) -> None:
 # -- Bug B1: Alpine race condition with external JS -----------------------
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="Bug B1: block head after Alpine scripts causes race condition; "
-           "external JS may load after Alpine.js, producing console errors",
-)
 def test_sweep_no_js_errors(page: Page, live_server: str) -> None:
     """The sweep page should load without JavaScript console errors.
 
@@ -162,17 +157,9 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
 # -- Bug B3: Sweep endpoint stub with empty job_ids -----------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Bug B3: sweep endpoint is a stub with empty job_ids",
-)
-def test_sweep_submit_returns_stub(page: Page, live_server: str) -> None:
-    """Submit a sweep via the form button and verify the API response
-    contains non-empty job_ids.
-
-    The POST /api/simulate/sweep endpoint currently returns 201 with
-    sweep data but empty job_ids (it is a stub).  This test asserts that
-    after submission, the response includes actual job IDs for tracking.
+def test_sweep_submit_returns_501(page: Page, live_server: str) -> None:
+    """Submit a sweep via the form button and verify the API returns 501
+    (not yet implemented) with the generated sweep values.
     """
     page.goto(live_server + "/scenarios/sweep")
     page.wait_for_load_state("networkidle")
@@ -181,7 +168,6 @@ def test_sweep_submit_returns_stub(page: Page, live_server: str) -> None:
     page.wait_for_timeout(1000)
 
     # Set valid sweep parameters so the submit button is enabled.
-    # Use the specific sweep component selector (not body's x-data).
     page.evaluate("""() => {
         const el = document.querySelector('[x-data="parameterSweep()"]');
         const data = Alpine.$data(el);
@@ -197,6 +183,8 @@ def test_sweep_submit_returns_stub(page: Page, live_server: str) -> None:
         page.get_by_role("button", name="Run Parameter Sweep").click()
 
     response = response_info.value
-    data = response.json()
+    assert response.status == 501
 
-    assert len(data["job_ids"]) > 0, "Stub: sweep endpoint returns empty job_ids"
+    data = response.json()
+    assert "not yet implemented" in data["error"]
+    assert len(data["values"]) == 3

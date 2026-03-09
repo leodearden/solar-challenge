@@ -29,11 +29,6 @@ def test_builder_page_loads(page: Page, live_server: str) -> None:
 # ── Bug B1: Alpine race condition with external JS ───────────────────
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="Bug B1: block head after Alpine scripts causes race condition; "
-           "external JS may load after Alpine.js, producing console errors",
-)
 def test_builder_no_js_errors(page: Page, live_server: str) -> None:
     """The scenario builder page should load without JS console errors.
 
