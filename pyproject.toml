@@ -62,7 +62,10 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
-markers = ["e2e: end-to-end browser tests (require playwright)"]
+markers = [
+    "e2e: end-to-end browser tests (require playwright)",
+    "slow: tests that make real external API calls (e.g. PVGIS)",
+]
 
 [tool.mypy]
 python_version = "3.10"
