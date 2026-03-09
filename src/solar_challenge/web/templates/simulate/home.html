@@ -87,9 +87,15 @@ document.addEventListener('alpine:init', () => {
         buildPayload() {
             const payload = {
                 pv_kw: parseFloat(this.formData.pv_kw),
+                azimuth: parseFloat(this.formData.azimuth),
+                tilt: parseFloat(this.formData.tilt),
                 battery_kwh: this.formData.battery_enabled ? parseFloat(this.formData.battery_kwh) : 0,
+                max_charge_kw: this.formData.battery_enabled ? parseFloat(this.formData.max_charge_kw) : null,
+                max_discharge_kw: this.formData.battery_enabled ? parseFloat(this.formData.max_discharge_kw) : null,
+                efficiency_pct: this.formData.battery_enabled ? parseFloat(this.formData.efficiency_pct) : null,
                 consumption_kwh: parseFloat(this.formData.consumption_kwh),
                 occupants: parseInt(this.formData.occupants),
+                stochastic: this.formData.stochastic,
                 location: this.formData.location === 'custom'
                     ? this.formData.custom_lat + ',' + this.formData.custom_lon
                     : this.formData.location,

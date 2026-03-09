@@ -51,9 +51,15 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
         ValueError: If required fields are missing or invalid.
     """
     pv_kw = float(data.get("pv_kw", 4.0))
+    azimuth = float(data.get("azimuth", 180))
+    tilt = float(data.get("tilt", 35))
     battery_kwh_val = float(data.get("battery_kwh", 0.0))
+    max_charge_kw_raw = data.get("max_charge_kw")
+    max_discharge_kw_raw = data.get("max_discharge_kw")
+    efficiency_pct_raw = data.get("efficiency_pct")
     consumption_kwh_raw = data.get("consumption_kwh")
     occupants = int(data.get("occupants", 3))
+    stochastic = bool(data.get("stochastic", False))
     location_preset = str(data.get("location", "bristol"))
     name = data.get("name")
 
@@ -85,11 +91,16 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     loc = _resolve_location(location_preset)
 
     # Build component configs
-    pv_config = PVConfig(capacity_kw=pv_kw)
+    pv_config = PVConfig(capacity_kw=pv_kw, azimuth=azimuth, tilt=tilt)
 
     battery_config: BatteryConfig | None = None
     if battery_kwh_val > 0:
-        battery_config = BatteryConfig(capacity_kwh=battery_kwh_val)
+        battery_kwargs: dict[str, Any] = {"capacity_kwh": battery_kwh_val}
+        if max_charge_kw_raw is not None:
+            battery_kwargs["max_charge_kw"] = float(max_charge_kw_raw)
+        if max_discharge_kw_raw is not None:
+            battery_kwargs["max_discharge_kw"] = float(max_discharge_kw_raw)
+        battery_config = BatteryConfig(**battery_kwargs)
 
     annual_consumption: float | None = None
     if consumption_kwh_raw is not None:
@@ -98,6 +109,7 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     load_config = LoadConfig(
         annual_consumption_kwh=annual_consumption,
         household_occupants=occupants,
+        use_stochastic=stochastic,
     )
 
     home_config = HomeConfig(
