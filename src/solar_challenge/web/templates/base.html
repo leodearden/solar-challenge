@@ -24,6 +24,8 @@
     </script>
     -->
 
+    {% block head %}{% endblock %}
+
     <!-- Alpine.js plugins (must load before Alpine core) -->
     <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.14.8/dist/cdn.min.js"></script>
     <!-- Alpine.js -->
@@ -37,8 +39,6 @@
 
     <!-- Project stylesheet -->
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-
-    {% block head %}{% endblock %}
 
     <!-- Dark mode initialisation (before paint to prevent flash) -->
     <script>
