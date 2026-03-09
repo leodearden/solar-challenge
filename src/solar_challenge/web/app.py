@@ -11,6 +11,33 @@ from solar_challenge.web.database import init_db
 logger = logging.getLogger(__name__)
 
 
+def _get_secret_key(data_dir: Path) -> str:
+    """Return a stable SECRET_KEY, persisting it across restarts.
+
+    Priority: SECRET_KEY env var > persisted file > generate new key.
+    """
+    env_key = os.environ.get("SECRET_KEY")
+    if env_key:
+        return env_key
+
+    key_file = data_dir / ".secret_key"
+    try:
+        if key_file.exists():
+            return key_file.read_text().strip()
+    except OSError:
+        pass
+
+    # Generate and persist a new key
+    new_key = os.urandom(24).hex()
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        key_file.write_text(new_key)
+        key_file.chmod(0o600)
+    except OSError:
+        logger.warning("Could not persist SECRET_KEY to %s", key_file)
+    return new_key
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     """Create and configure the Flask web dashboard application.
 
@@ -41,7 +68,7 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     # Default configuration
     app.config.from_mapping(
-        SECRET_KEY=os.environ.get("SECRET_KEY", os.urandom(24).hex()),
+        SECRET_KEY=_get_secret_key(default_data_dir),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         DATA_DIR=str(default_data_dir),
