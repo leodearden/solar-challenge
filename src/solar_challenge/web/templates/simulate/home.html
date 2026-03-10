@@ -65,6 +65,34 @@ document.addEventListener('alpine:init', () => {
                 this.timer = null;
             }
         },
+        validationErrors: {},
+        validate() {
+            const errors = {};
+            const f = this.formData;
+            const pv = parseFloat(f.pv_kw);
+            if (isNaN(pv) || pv < 0.5 || pv > 20) errors.pv_kw = 'PV capacity must be 0.5–20 kW';
+            if (f.battery_enabled) {
+                const batt = parseFloat(f.battery_kwh);
+                if (isNaN(batt) || batt < 0) errors.battery_kwh = 'Battery capacity cannot be negative';
+                const eff = parseFloat(f.efficiency_pct);
+                if (isNaN(eff) || eff <= 0 || eff > 100) errors.efficiency_pct = 'Efficiency must be 1–100%';
+            }
+            const cons = parseFloat(f.consumption_kwh);
+            if (isNaN(cons) || cons <= 0) errors.consumption_kwh = 'Consumption must be greater than 0';
+            if (f.location === 'custom') {
+                const lat = parseFloat(f.custom_lat);
+                const lon = parseFloat(f.custom_lon);
+                if (isNaN(lat) || lat < -90 || lat > 90) errors.custom_lat = 'Latitude must be -90 to 90';
+                if (isNaN(lon) || lon < -180 || lon > 180) errors.custom_lon = 'Longitude must be -180 to 180';
+            }
+            if (f.period_mode === 'custom') {
+                if (f.start_date && f.end_date && f.end_date <= f.start_date) {
+                    errors.end_date = 'End date must be after start date';
+                }
+            }
+            this.validationErrors = errors;
+            return Object.keys(errors).length === 0;
+        },
         async fetchPresets() {
             try {
                 const resp = await fetch('/api/presets');
@@ -110,6 +138,7 @@ document.addEventListener('alpine:init', () => {
             return payload;
         },
         async submitSimulation() {
+            if (!this.validate()) return;
             this.submitting = true;
             this.errorMsg = '';
             this.jobId = null;
@@ -408,6 +437,18 @@ document.addEventListener('alpine:init', () => {
             </button>
         </form>
     </div>
+
+    <!-- Validation errors -->
+    <template x-if="Object.keys(validationErrors).length > 0">
+        <div class="mt-4 px-4 py-3 rounded-lg text-sm border-l-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-500">
+            <p class="font-medium mb-1">Please fix the following errors:</p>
+            <ul class="list-disc list-inside space-y-0.5">
+                <template x-for="err in Object.values(validationErrors)" :key="err">
+                    <li x-text="err"></li>
+                </template>
+            </ul>
+        </div>
+    </template>
 
     <!-- Error display -->
     <template x-if="errorMsg">

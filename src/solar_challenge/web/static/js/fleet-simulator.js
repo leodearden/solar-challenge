@@ -115,6 +115,24 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
+        /* ---- Form validation ---- */
+        validationErrors: {},
+        validate() {
+            const errors = {};
+            const n = parseInt(this.n_homes);
+            if (isNaN(n) || n < 1) errors.n_homes = 'Fleet size must be at least 1';
+            if (n > 1000) errors.n_homes = 'Fleet size must be at most 1000';
+            // Validate PV distribution
+            if (this.pvDist.type === 'normal') {
+                if (parseFloat(this.pvDist.std) <= 0) errors.pv_std = 'PV std deviation must be positive';
+            }
+            if (this.pvDist.type === 'uniform' || this.pvDist.type === 'normal') {
+                if (parseFloat(this.pvDist.min) >= parseFloat(this.pvDist.max)) errors.pv_range = 'PV min must be less than max';
+            }
+            this.validationErrors = errors;
+            return Object.keys(errors).length === 0;
+        },
+
         /* ---- Build payload from current state ---- */
         buildPayload() {
             const payload = {
@@ -149,6 +167,7 @@ document.addEventListener('alpine:init', () => {
 
         /* ---- Simulation submission ---- */
         async submitFleet() {
+            if (!this.validate()) return;
             this.submitting = true;
             this.errorMsg = '';
             this.jobId = null;

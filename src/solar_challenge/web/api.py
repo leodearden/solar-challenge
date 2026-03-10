@@ -100,6 +100,11 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
             battery_kwargs["max_charge_kw"] = float(max_charge_kw_raw)
         if max_discharge_kw_raw is not None:
             battery_kwargs["max_discharge_kw"] = float(max_discharge_kw_raw)
+        if efficiency_pct_raw is not None:
+            eff = float(efficiency_pct_raw)
+            if not (0 < eff <= 100):
+                raise ValueError(f"Efficiency must be between 0 and 100, got {eff}")
+            battery_kwargs["efficiency_pct"] = eff
         battery_config = BatteryConfig(**battery_kwargs)
 
     annual_consumption: float | None = None
@@ -601,8 +606,51 @@ def simulate_sweep() -> tuple[Response, int]:
     else:
         values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
 
+    # Submit individual home jobs for each sweep point
+    sweep_id = str(_uuid.uuid4())
+    job_manager = _get_job_manager()
+    db_path = current_app.config["DATABASE"]
+    data_dir = current_app.config["DATA_DIR"]
+
+    # Map parameter names to config keys
+    param_map = {
+        "pv_capacity_kw": "pv_kw",
+        "battery_capacity_kwh": "battery_kwh",
+        "annual_consumption_kwh": "consumption_kwh",
+    }
+    config_key = param_map.get(parameter, parameter)
+
+    job_ids: list[str] = []
+    rounded_values = [round(v, 3) for v in values]
+
+    for val in rounded_values:
+        point_config = dict(base_config)
+        point_config[config_key] = val
+        # Ensure defaults for required fields
+        point_config.setdefault("pv_kw", 4.0)
+        point_config.setdefault("battery_kwh", 0)
+        point_config.setdefault("occupants", 3)
+        point_config.setdefault("location", "bristol")
+        point_config.setdefault("days", 7)
+
+        try:
+            home_config, start_date, end_date, name = _parse_home_config(point_config)
+        except (ValueError, TypeError) as exc:
+            return jsonify({"error": f"Invalid config for {parameter}={val}: {exc}"}), 400
+
+        job_id, _ = job_manager.submit_home_job(
+            config=home_config,
+            start_date=start_date,
+            end_date=end_date,
+            db_path=db_path,
+            data_dir=data_dir,
+            name=f"Sweep {parameter}={val}",
+        )
+        job_ids.append(job_id)
+
     return jsonify({
-        "error": "Parameter sweep not yet implemented",
+        "sweep_id": sweep_id,
         "parameter": parameter,
-        "values": [round(v, 3) for v in values],
-    }), 501
+        "values": rounded_values,
+        "job_ids": job_ids,
+    }), 201
