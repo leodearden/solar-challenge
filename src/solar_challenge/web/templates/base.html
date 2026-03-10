@@ -31,12 +31,6 @@
     <!-- Alpine.js -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js" integrity="sha384-X9kJyAubVxnP0hcA+AMMs21U445qsnqhnUF8EBlEpP3a42Kh/JwWjlv2ZcvGfphb" crossorigin="anonymous"></script>
 
-    <!-- HTMX 2.x -->
-    <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
-
-    <!-- HTMX SSE extension for real-time progress tracking -->
-    <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js" integrity="sha384-fw+eTlCc7suMV/1w/7fr2/PmwElUIt5i82bi+qTiLXvjRXZ2/FkiTNA/w0MhXnGI" crossorigin="anonymous"></script>
-
     <!-- Project stylesheet -->
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 
@@ -90,7 +84,8 @@
             {% if messages %}
             <div class="px-4 sm:px-6 lg:px-8 pt-4 space-y-2">
                 {% for category, message in messages %}
-                <div class="px-4 py-3 rounded-lg text-sm font-medium border-l-4
+                <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 5000)" x-transition
+                     class="flex items-center justify-between px-4 py-3 rounded-lg text-sm font-medium border-l-4
                     {% if category == 'error' %}
                     bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-500
                     {% elif category == 'success' %}
@@ -98,7 +93,14 @@
                     {% else %}
                     bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-400 border-sky-500
                     {% endif %}
-                ">{{ message }}</div>
+                ">
+                    <span>{{ message }}</span>
+                    <button @click="show = false" class="ml-4 flex-shrink-0 text-current opacity-60 hover:opacity-100 transition-opacity" aria-label="Dismiss">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                </div>
                 {% endfor %}
             </div>
             {% endif %}

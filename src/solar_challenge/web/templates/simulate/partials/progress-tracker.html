@@ -1,0 +1,51 @@
+{# Shared progress tracker macro for simulation pages.
+   Parameters:
+   - result_type: 'home' or 'fleet' — used to build the results URL
+   - heading: Display heading text (e.g. "Simulation Progress" or "Fleet Simulation Progress")
+#}
+{% macro progress_tracker(result_type, heading="Simulation Progress") %}
+<template x-if="jobId">
+    <div class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100" x-text="'{{ heading }}'"></h3>
+            <span class="text-sm font-mono text-slate-500 dark:text-slate-400" x-text="formatTime(elapsed)"></span>
+        </div>
+
+        <!-- Progress bar -->
+        <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-4 mb-3 overflow-hidden">
+            <div
+                class="h-full rounded-full transition-all duration-500 ease-out"
+                :class="status === 'completed' ? 'bg-green-500' : 'bg-amber-500'"
+                :style="'width: ' + Math.min(progress, 100) + '%'"
+            ></div>
+        </div>
+
+        <div class="flex items-center justify-between text-sm">
+            <span class="text-slate-600 dark:text-slate-300" x-text="step"></span>
+            <span class="font-mono text-slate-500 dark:text-slate-400" x-text="Math.round(progress) + '%'"></span>
+        </div>
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400" x-text="message"></p>
+
+        <!-- Completed state -->
+        <template x-if="status === 'completed'">
+            <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                <p class="text-green-600 dark:text-green-400 font-medium mb-3">Simulation completed successfully!</p>
+                <a
+                    :href="'/results/{{ result_type }}/' + completedRunId"
+                    class="inline-flex items-center px-4 py-2 rounded-lg bg-amber-500 text-white font-medium hover:bg-amber-600 transition-colors"
+                >View Results</a>
+            </div>
+        </template>
+
+        <!-- Failed state -->
+        <template x-if="status === 'failed'">
+            <div class="mt-4">
+                <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                    <p class="text-red-700 dark:text-red-400 font-medium mb-1">Simulation Failed</p>
+                    <p class="text-red-600 dark:text-red-300 text-sm" x-text="error"></p>
+                </div>
+            </div>
+        </template>
+    </div>
+</template>
+{% endmacro %}

@@ -4,7 +4,7 @@
 
 /* ===== Solar Challenge Dashboard — Tailwind Companion CSS ===== */
 /* Only CSS variables, Tailwind overrides, energy colour palette,
-   HTMX integration classes, chart container sizing, and spinner animation.
+   chart container sizing, and spinner animation.
    All component-level styling is handled by Tailwind utility classes. */
 
 /* --- CSS Custom Properties (Light Mode) --- */
@@ -43,23 +43,6 @@ html.dark {
     --color-success: #4ade80;
     --color-error: #f87171;
     --color-info: #38bdf8;
-}
-
-/* --- HTMX Integration --- */
-.htmx-indicator {
-    display: none;
-}
-
-.htmx-request .htmx-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.htmx-request.btn,
-.htmx-request button {
-    opacity: 0.75;
-    cursor: wait;
 }
 
 /* --- Spinner Animation --- */
@@ -126,4 +109,14 @@ input[type="range"]::-moz-range-thumb {
 /* Smooth transitions for sidebar layout shifts */
 [x-cloak] {
     display: none !important;
+}
+
+/* --- Scrollbar Hide Utility --- */
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
 }
