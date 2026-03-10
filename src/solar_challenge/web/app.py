@@ -91,6 +91,11 @@ def create_app(test_config: dict | None = None) -> Flask:
     db_path = app.config["DATABASE"]
     init_db(db_path)
 
+    # Initialize RunStorage singleton
+    from solar_challenge.web.storage import RunStorage
+    storage = RunStorage(db_path=db_path, data_dir=app.config["DATA_DIR"])
+    app.extensions["storage"] = storage
+
     # Initialize JobManager for background simulation execution
     try:
         from solar_challenge.web.jobs import JobManager, recover_stale_jobs

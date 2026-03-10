@@ -11,10 +11,8 @@ from solar_challenge.web.storage import RunStorage
 
 
 def get_storage() -> RunStorage:
-    """Return a RunStorage instance from current Flask app config."""
-    db_path: str = current_app.config["DATABASE"]
-    data_dir: str = current_app.config["DATA_DIR"]
-    return RunStorage(db_path=db_path, data_dir=data_dir)
+    """Return the RunStorage singleton from current Flask app extensions."""
+    return current_app.extensions["storage"]
 
 
 LOCATION_PRESETS: dict[str, Location] = {
@@ -23,6 +21,30 @@ LOCATION_PRESETS: dict[str, Location] = {
     "edinburgh": Location(latitude=55.95, longitude=-3.19, altitude=47.0, name="Edinburgh, UK"),
     "manchester": Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester, UK"),
 }
+
+
+def resolve_location(preset_str: str) -> Location:
+    """Map a location string to a Location instance.
+
+    Accepts preset names (bristol, london, edinburgh, manchester) or
+    a 'lat,lon' string.  Falls back to Bristol on parse errors.
+    """
+    key = preset_str.strip().lower()
+    if key in LOCATION_PRESETS:
+        return LOCATION_PRESETS[key]
+    try:
+        lat, lon = map(float, key.split(","))
+        return Location(latitude=lat, longitude=lon)
+    except ValueError:
+        return Location.bristol()
+
+
+# Built-in configuration presets for home simulations.
+BUILTIN_PRESETS: list[dict[str, Any]] = [
+    {"name": "Small Urban", "pv_kw": 3.0, "battery_kwh": 0, "consumption_kwh": 2900},
+    {"name": "Medium Suburban", "pv_kw": 4.0, "battery_kwh": 5.0, "consumption_kwh": 3500},
+    {"name": "Large with Battery", "pv_kw": 6.0, "battery_kwh": 10.0, "consumption_kwh": 4500},
+]
 
 
 def location_presets_as_dicts() -> dict[str, dict[str, Any]]:

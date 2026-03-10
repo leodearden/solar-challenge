@@ -12,34 +12,10 @@ from flask import (
     url_for,
 )
 
-from solar_challenge.location import Location
-from solar_challenge.web.shared import LOCATION_PRESETS, get_storage
+from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("main", __name__)
-
-# Built-in configuration presets for home simulations.
-BUILTIN_PRESETS: list[dict[str, Any]] = [
-    {"name": "Small Urban", "pv_kw": 3.0, "battery_kwh": 0, "consumption_kwh": 2900},
-    {"name": "Medium Suburban", "pv_kw": 4.0, "battery_kwh": 5.0, "consumption_kwh": 3500},
-    {"name": "Large with Battery", "pv_kw": 6.0, "battery_kwh": 10.0, "consumption_kwh": 4500},
-]
-
-
-def _resolve_location(preset_str: str) -> Location:
-    """Map a location string to a Location instance.
-
-    Accepts preset names (bristol, london, edinburgh, manchester) or
-    a 'lat,lon' string.  Falls back to Bristol on parse errors.
-    """
-    key = preset_str.strip().lower()
-    if key in LOCATION_PRESETS:
-        return LOCATION_PRESETS[key]
-    try:
-        lat, lon = map(float, key.split(","))
-        return Location(latitude=lat, longitude=lon)
-    except ValueError:
-        return Location.bristol()
 
 
 def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:

@@ -18,7 +18,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.routes import _resolve_location
+from solar_challenge.web.shared import resolve_location
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -88,7 +88,7 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
         raise ValueError(f"Battery capacity cannot be negative, got {battery_kwh_val}")
 
     # Resolve location
-    loc = _resolve_location(location_preset)
+    loc = resolve_location(location_preset)
 
     # Build component configs
     pv_config = PVConfig(capacity_kw=pv_kw, azimuth=azimuth, tilt=tilt)
@@ -345,7 +345,7 @@ def list_presets() -> tuple[Response, int]:
     Returns:
         JSON array of preset objects, HTTP 200.
     """
-    from solar_challenge.web.routes import BUILTIN_PRESETS  # noqa: PLC0415
+    from solar_challenge.web.shared import BUILTIN_PRESETS  # noqa: PLC0415
 
     db_path = current_app.config["DATABASE"]
     saved: list[dict[str, Any]] = []
@@ -425,7 +425,7 @@ def get_preset(name: str) -> tuple[Response, int]:
     Returns:
         JSON preset object, or 404 if not found.
     """
-    from solar_challenge.web.routes import BUILTIN_PRESETS  # noqa: PLC0415
+    from solar_challenge.web.shared import BUILTIN_PRESETS  # noqa: PLC0415
 
     db_path = current_app.config["DATABASE"]
 
