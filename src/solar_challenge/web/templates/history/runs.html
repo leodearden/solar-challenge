@@ -236,7 +236,7 @@
                                 </button>
                                 {# Export CSV #}
                                 <a
-                                    :href="'/history/api/runs/' + run.id + '/export/csv'"
+                                    :href="'/api/history/runs/' + run.id + '/export/csv'"
                                     @click="Alpine.store('toast').info('Exporting CSV...')"
                                     class="p-1.5 rounded text-slate-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="Export CSV"
@@ -247,7 +247,7 @@
                                 </a>
                                 {# Export YAML #}
                                 <a
-                                    :href="'/history/api/runs/' + run.id + '/export/yaml'"
+                                    :href="'/api/history/runs/' + run.id + '/export/yaml'"
                                     @click="Alpine.store('toast').info('Exporting YAML config...')"
                                     class="p-1.5 rounded text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="Export Config YAML"
@@ -344,7 +344,7 @@ function runBrowser() {
             if (this.filters.date_to) params.set('date_to', this.filters.date_to);
 
             try {
-                const resp = await fetch('/history/api/runs?' + params.toString());
+                const resp = await fetch('/api/history/runs?' + params.toString());
                 const data = await resp.json();
                 this.runs = data.runs || [];
                 this.pagination = data.pagination || this.pagination;
@@ -403,7 +403,7 @@ function runBrowser() {
         async saveEdit(runId) {
             if (!this.editName.trim()) { this.cancelEdit(); return; }
             try {
-                const resp = await fetch('/history/api/runs/' + runId, {
+                const resp = await fetch('/api/history/runs/' + runId, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: this.editName.trim() }),
@@ -429,7 +429,7 @@ function runBrowser() {
         async executeDelete() {
             if (!this.deleteTarget) return;
             try {
-                const resp = await fetch('/history/api/runs/' + this.deleteTarget.id, { method: 'DELETE' });
+                const resp = await fetch('/api/history/runs/' + this.deleteTarget.id, { method: 'DELETE' });
                 if (!resp.ok) {
                     const data = await resp.json().catch(() => ({}));
                     throw new Error(data.error || resp.statusText);

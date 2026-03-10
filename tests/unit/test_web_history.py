@@ -141,8 +141,8 @@ class TestRunsAPI:
     """Tests for the runs list API endpoint."""
 
     def test_api_runs_returns_json(self, client: FlaskClient) -> None:
-        """Test GET /history/api/runs returns JSON with runs and pagination."""
-        response = client.get("/history/api/runs")
+        """Test GET /api/history/runs returns JSON with runs and pagination."""
+        response = client.get("/api/history/runs")
         assert response.status_code == 200
         data = response.get_json()
         assert "runs" in data
@@ -150,7 +150,7 @@ class TestRunsAPI:
 
     def test_api_runs_pagination_metadata(self, client: FlaskClient) -> None:
         """Test pagination metadata has expected fields."""
-        response = client.get("/history/api/runs?page=1&per_page=5")
+        response = client.get("/api/history/runs?page=1&per_page=5")
         assert response.status_code == 200
         data = response.get_json()
         pag = data["pagination"]
@@ -163,7 +163,7 @@ class TestRunsAPI:
 
     def test_api_runs_empty_database(self, client: FlaskClient) -> None:
         """Test API returns empty runs list for empty database."""
-        response = client.get("/history/api/runs")
+        response = client.get("/api/history/runs")
         data = response.get_json()
         assert data["runs"] == []
         assert data["pagination"]["total"] == 0
@@ -173,7 +173,7 @@ class TestRunsAPI:
         _insert_test_run(app, run_id="run-1", name="First Run")
         _insert_test_run(app, run_id="run-2", name="Second Run")
 
-        response = client.get("/history/api/runs")
+        response = client.get("/api/history/runs")
         data = response.get_json()
         assert len(data["runs"]) == 2
         assert data["pagination"]["total"] == 2
@@ -183,7 +183,7 @@ class TestRunsAPI:
         _insert_test_run(app, run_id="home-1", name="Home Run", run_type="home")
         _insert_test_run(app, run_id="fleet-1", name="Fleet Run", run_type="fleet")
 
-        response = client.get("/history/api/runs?type=home")
+        response = client.get("/api/history/runs?type=home")
         data = response.get_json()
         assert len(data["runs"]) == 1
         assert data["runs"][0]["type"] == "home"
@@ -193,7 +193,7 @@ class TestRunsAPI:
         _insert_test_run(app, run_id="run-a", name="Alpha Test")
         _insert_test_run(app, run_id="run-b", name="Beta Run")
 
-        response = client.get("/history/api/runs?q=Alpha")
+        response = client.get("/api/history/runs?q=Alpha")
         data = response.get_json()
         assert len(data["runs"]) == 1
         assert data["runs"][0]["name"] == "Alpha Test"
@@ -203,7 +203,7 @@ class TestRunsAPI:
         _insert_test_run(app, run_id="run-a", name="AAA Run")
         _insert_test_run(app, run_id="run-b", name="ZZZ Run")
 
-        response = client.get("/history/api/runs?sort=name&order=asc")
+        response = client.get("/api/history/runs?sort=name&order=asc")
         data = response.get_json()
         assert data["runs"][0]["name"] == "AAA Run"
 
@@ -211,7 +211,7 @@ class TestRunsAPI:
         """Test API response includes extracted summary metrics."""
         _insert_test_run(app, run_id="run-1", name="Metrics Run")
 
-        response = client.get("/history/api/runs")
+        response = client.get("/api/history/runs")
         data = response.get_json()
         run = data["runs"][0]
         assert run["total_generation_kwh"] == 100.0
@@ -222,17 +222,17 @@ class TestRunDetailAPI:
     """Tests for the single run detail API endpoint."""
 
     def test_api_get_run_returns_data(self, app: Flask, client: FlaskClient) -> None:
-        """Test GET /history/api/runs/<id> returns full run detail."""
+        """Test GET /api/history/runs/<id> returns full run detail."""
         _insert_test_run(app, run_id="detail-run")
 
-        response = client.get("/history/api/runs/detail-run")
+        response = client.get("/api/history/runs/detail-run")
         assert response.status_code == 200
         data = response.get_json()
         assert data["id"] == "detail-run"
 
     def test_api_get_run_nonexistent_returns_404(self, client: FlaskClient) -> None:
-        """Test GET /history/api/runs/<id> returns 404 for missing run."""
-        response = client.get("/history/api/runs/nonexistent-id")
+        """Test GET /api/history/runs/<id> returns 404 for missing run."""
+        response = client.get("/api/history/runs/nonexistent-id")
         assert response.status_code == 404
 
 
@@ -240,21 +240,21 @@ class TestDeleteAPI:
     """Tests for the run delete API endpoint."""
 
     def test_api_delete_nonexistent_run(self, client: FlaskClient) -> None:
-        """Test DELETE /history/api/runs/<id> returns 404 for missing run."""
-        response = client.delete("/history/api/runs/nonexistent-id")
+        """Test DELETE /api/history/runs/<id> returns 404 for missing run."""
+        response = client.delete("/api/history/runs/nonexistent-id")
         assert response.status_code == 404
 
     def test_api_delete_existing_run(self, app: Flask, client: FlaskClient) -> None:
-        """Test DELETE /history/api/runs/<id> deletes an existing run."""
+        """Test DELETE /api/history/runs/<id> deletes an existing run."""
         _insert_test_run(app, run_id="delete-me")
 
-        response = client.delete("/history/api/runs/delete-me")
+        response = client.delete("/api/history/runs/delete-me")
         assert response.status_code == 200
         data = response.get_json()
         assert data["success"] is True
 
         # Verify it is gone
-        verify = client.get("/history/api/runs/delete-me")
+        verify = client.get("/api/history/runs/delete-me")
         assert verify.status_code == 404
 
 
@@ -262,19 +262,19 @@ class TestPatchAPI:
     """Tests for the run update (PATCH) API endpoint."""
 
     def test_api_patch_nonexistent_run(self, client: FlaskClient) -> None:
-        """Test PATCH /history/api/runs/<id> returns 404 for missing run."""
+        """Test PATCH /api/history/runs/<id> returns 404 for missing run."""
         response = client.patch(
-            "/history/api/runs/nonexistent-id",
+            "/api/history/runs/nonexistent-id",
             json={"name": "test"},
         )
         assert response.status_code == 404
 
     def test_api_patch_rename_run(self, app: Flask, client: FlaskClient) -> None:
-        """Test PATCH /history/api/runs/<id> updates run name."""
+        """Test PATCH /api/history/runs/<id> updates run name."""
         _insert_test_run(app, run_id="rename-me", name="Old Name")
 
         response = client.patch(
-            "/history/api/runs/rename-me",
+            "/api/history/runs/rename-me",
             json={"name": "New Name"},
         )
         assert response.status_code == 200
@@ -282,11 +282,11 @@ class TestPatchAPI:
         assert data["name"] == "New Name"
 
     def test_api_patch_update_notes(self, app: Flask, client: FlaskClient) -> None:
-        """Test PATCH /history/api/runs/<id> updates run notes."""
+        """Test PATCH /api/history/runs/<id> updates run notes."""
         _insert_test_run(app, run_id="note-me")
 
         response = client.patch(
-            "/history/api/runs/note-me",
+            "/api/history/runs/note-me",
             json={"notes": "Some notes here"},
         )
         assert response.status_code == 200
@@ -298,7 +298,7 @@ class TestPatchAPI:
         _insert_test_run(app, run_id="empty-patch")
 
         response = client.patch(
-            "/history/api/runs/empty-patch",
+            "/api/history/runs/empty-patch",
             json={},
         )
         assert response.status_code == 400
@@ -309,12 +309,12 @@ class TestExportAPI:
 
     def test_api_export_csv_nonexistent_returns_404(self, client: FlaskClient) -> None:
         """Test CSV export for missing run returns 404."""
-        response = client.get("/history/api/runs/nonexistent/export/csv")
+        response = client.get("/api/history/runs/nonexistent/export/csv")
         assert response.status_code == 404
 
     def test_api_export_yaml_nonexistent_returns_404(self, client: FlaskClient) -> None:
         """Test YAML export for missing run returns 404."""
-        response = client.get("/history/api/runs/nonexistent/export/yaml")
+        response = client.get("/api/history/runs/nonexistent/export/yaml")
         assert response.status_code == 404
 
     def test_api_export_yaml_with_config(self, app: Flask, client: FlaskClient) -> None:
@@ -326,7 +326,7 @@ class TestExportAPI:
             config={"pv_config": {"capacity_kw": 4.0}},
         )
 
-        response = client.get("/history/api/runs/yaml-export/export/yaml")
+        response = client.get("/api/history/runs/yaml-export/export/yaml")
         assert response.status_code == 200
         assert "attachment" in response.headers.get("Content-Disposition", "")
 
@@ -589,7 +589,7 @@ class TestFleetCSVExport:
         run_id = str(uuid.uuid4())
         self._save_fleet_run(app, run_id, n_homes=3)
 
-        response = client.get(f"/history/api/runs/{run_id}/export/csv")
+        response = client.get(f"/api/history/runs/{run_id}/export/csv")
         assert response.status_code == 200
         assert "text/csv" in response.content_type
 
@@ -618,7 +618,7 @@ class TestFleetCSVExport:
         run_id = str(uuid.uuid4())
         self._save_fleet_run(app, run_id, n_homes=2)
 
-        response = client.get(f"/history/api/runs/{run_id}/export/csv")
+        response = client.get(f"/api/history/runs/{run_id}/export/csv")
         assert response.status_code == 200
 
         csv_text = response.data.decode("utf-8")
@@ -664,7 +664,7 @@ class TestContentDispositionHeader:
                 name="Quote Test",
             )
 
-        response = client.get(f"/history/api/runs/{run_id}/export/csv")
+        response = client.get(f"/api/history/runs/{run_id}/export/csv")
         assert response.status_code == 200
 
         cd = response.headers.get("Content-Disposition", "")
@@ -681,7 +681,7 @@ class TestContentDispositionHeader:
         run_id = str(uuid.uuid4())
         _insert_test_run(app, run_id=run_id, name="YAML Quote Test")
 
-        response = client.get(f"/history/api/runs/{run_id}/export/yaml")
+        response = client.get(f"/api/history/runs/{run_id}/export/yaml")
         assert response.status_code == 200
 
         cd = response.headers.get("Content-Disposition", "")

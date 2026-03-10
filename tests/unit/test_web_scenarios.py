@@ -100,12 +100,12 @@ class TestSweepRoute:
 
 
 class TestScenarioAPI:
-    """Tests for the /scenarios/api/* endpoints."""
+    """Tests for the /api/scenarios/* endpoints."""
 
     def test_preview_yaml_returns_yaml(self, client: FlaskClient) -> None:
-        """Test POST /scenarios/api/preview-yaml returns YAML string."""
+        """Test POST /api/scenarios/preview-yaml returns YAML string."""
         response = client.post(
-            "/scenarios/api/preview-yaml",
+            "/api/scenarios/preview-yaml",
             json={"name": "Test Scenario", "n_homes": 10},
         )
         assert response.status_code == 200
@@ -115,9 +115,9 @@ class TestScenarioAPI:
         assert "name" in data["yaml"]
 
     def test_preview_yaml_empty_body(self, client: FlaskClient) -> None:
-        """Test POST /scenarios/api/preview-yaml with empty body returns valid YAML."""
+        """Test POST /api/scenarios/preview-yaml with empty body returns valid YAML."""
         response = client.post(
-            "/scenarios/api/preview-yaml",
+            "/api/scenarios/preview-yaml",
             json={},
         )
         assert response.status_code == 200
@@ -125,9 +125,9 @@ class TestScenarioAPI:
         assert "yaml" in data
 
     def test_preview_yaml_with_location(self, client: FlaskClient) -> None:
-        """Test POST /scenarios/api/preview-yaml with location preset."""
+        """Test POST /api/scenarios/preview-yaml with location preset."""
         response = client.post(
-            "/scenarios/api/preview-yaml",
+            "/api/scenarios/preview-yaml",
             json={"name": "Bristol Test", "location_preset": "bristol", "n_homes": 50},
         )
         assert response.status_code == 200
@@ -135,9 +135,9 @@ class TestScenarioAPI:
         assert "location" in data["yaml"]
 
     def test_validate_valid_returns_ok(self, client: FlaskClient) -> None:
-        """Test POST /scenarios/api/validate with valid data returns ok."""
+        """Test POST /api/scenarios/validate with valid data returns ok."""
         response = client.post(
-            "/scenarios/api/validate",
+            "/api/scenarios/validate",
             json={"name": "Test Scenario"},
         )
         assert response.status_code == 200
@@ -145,9 +145,9 @@ class TestScenarioAPI:
         assert data["valid"] is True
 
     def test_validate_missing_name_returns_errors(self, client: FlaskClient) -> None:
-        """Test POST /scenarios/api/validate with missing name returns errors."""
+        """Test POST /api/scenarios/validate with missing name returns errors."""
         response = client.post(
-            "/scenarios/api/validate",
+            "/api/scenarios/validate",
             json={},
         )
         assert response.status_code == 200
@@ -156,9 +156,9 @@ class TestScenarioAPI:
         assert len(data["errors"]) > 0
 
     def test_validate_invalid_pv_returns_errors(self, client: FlaskClient) -> None:
-        """Test POST /scenarios/api/validate with invalid PV capacity."""
+        """Test POST /api/scenarios/validate with invalid PV capacity."""
         response = client.post(
-            "/scenarios/api/validate",
+            "/api/scenarios/validate",
             json={"name": "Test", "pv_capacity_kw": 999},
         )
         assert response.status_code == 200
@@ -166,8 +166,8 @@ class TestScenarioAPI:
         assert data["valid"] is False
 
     def test_list_presets(self, client: FlaskClient) -> None:
-        """Test GET /scenarios/api/presets returns a list."""
-        response = client.get("/scenarios/api/presets")
+        """Test GET /api/scenarios/presets returns a list."""
+        response = client.get("/api/scenarios/presets")
         assert response.status_code == 200
         data = response.get_json()
         assert isinstance(data, dict)
@@ -175,9 +175,9 @@ class TestScenarioAPI:
         assert isinstance(data["presets"], list)
 
     def test_save_preset(self, client: FlaskClient) -> None:
-        """Test POST /scenarios/api/save stores a preset."""
+        """Test POST /api/scenarios/save stores a preset."""
         response = client.post(
-            "/scenarios/api/save",
+            "/api/scenarios/save",
             json={"name": "test-preset", "config": {"n_homes": 10}},
         )
         assert response.status_code in (200, 201)
@@ -185,9 +185,9 @@ class TestScenarioAPI:
         assert data["name"] == "test-preset"
 
     def test_save_preset_no_name_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /scenarios/api/save with no name returns 400."""
+        """Test POST /api/scenarios/save with no name returns 400."""
         response = client.post(
-            "/scenarios/api/save",
+            "/api/scenarios/save",
             json={"config": {"n_homes": 10}},
         )
         assert response.status_code == 400
@@ -196,29 +196,29 @@ class TestScenarioAPI:
         """Test saving a preset and then finding it in the list."""
         # Save
         client.post(
-            "/scenarios/api/save",
+            "/api/scenarios/save",
             json={"name": "roundtrip-test", "config": {"n_homes": 25}},
         )
         # List
-        response = client.get("/scenarios/api/presets")
+        response = client.get("/api/scenarios/presets")
         data = response.get_json()
         names = [p["name"] for p in data["presets"]]
         assert "roundtrip-test" in names
 
     def test_get_preset_not_found(self, client: FlaskClient) -> None:
-        """Test GET /scenarios/api/presets/<name> returns 404 for unknown."""
-        response = client.get("/scenarios/api/presets/nonexistent-preset-xyz")
+        """Test GET /api/scenarios/presets/<name> returns 404 for unknown."""
+        response = client.get("/api/scenarios/presets/nonexistent-preset-xyz")
         assert response.status_code == 404
 
     def test_get_saved_preset(self, client: FlaskClient) -> None:
         """Test saving then loading a specific preset by name."""
         # Save first
         client.post(
-            "/scenarios/api/save",
+            "/api/scenarios/save",
             json={"name": "fetch-me", "config": {"n_homes": 30}},
         )
         # Fetch
-        response = client.get("/scenarios/api/presets/fetch-me")
+        response = client.get("/api/scenarios/presets/fetch-me")
         assert response.status_code == 200
         data = response.get_json()
         assert data["name"] == "fetch-me"

@@ -70,7 +70,7 @@ document.addEventListener('alpine:init', () => {
         async fetchPreview() {
             const formData = this.getFormData();
             try {
-                const resp = await fetch('/scenarios/api/preview-yaml', {
+                const resp = await fetch('/api/scenarios/preview-yaml', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
@@ -86,7 +86,7 @@ document.addEventListener('alpine:init', () => {
         async validateScenario() {
             const formData = this.getFormData();
             try {
-                const resp = await fetch('/scenarios/api/validate', {
+                const resp = await fetch('/api/scenarios/validate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(formData)
@@ -103,7 +103,7 @@ document.addEventListener('alpine:init', () => {
             if (!name) return;
             const formData = this.getFormData();
             try {
-                const resp = await fetch('/scenarios/api/save', {
+                const resp = await fetch('/api/scenarios/save', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: name, config: formData })
@@ -147,7 +147,7 @@ document.addEventListener('alpine:init', () => {
         // Load presets list
         async loadPresets() {
             try {
-                const resp = await fetch('/scenarios/api/presets');
+                const resp = await fetch('/api/scenarios/presets');
                 const data = await resp.json();
                 this.presets = data.presets || [];
             } catch (e) {
@@ -158,7 +158,7 @@ document.addEventListener('alpine:init', () => {
         // Load a specific preset
         async loadPreset(presetName) {
             try {
-                const resp = await fetch('/scenarios/api/presets/' + presetName);
+                const resp = await fetch('/api/scenarios/presets/' + presetName);
                 const data = await resp.json();
                 if (data.config) {
                     const cfg = data.config;
