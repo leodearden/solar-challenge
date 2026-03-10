@@ -727,3 +727,94 @@ class TestDeleteRun:
         """Test deleting nonexistent run doesn't raise error."""
         # Should not raise
         storage.delete_run("nonexistent-run-id")
+
+
+class TestDatabasePragmas:
+    """Tests for SQLite pragma settings."""
+
+    def test_wal_mode_enabled_after_init(self, db_path):
+        """Test that WAL journal mode is active after init_db."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA journal_mode")
+            mode = cursor.fetchone()[0]
+            assert mode == "wal"
+
+    def test_foreign_keys_enabled_in_connection(self, db_path):
+        """Test that foreign keys are enforced in get_db connections."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA foreign_keys")
+            fk_status = cursor.fetchone()[0]
+            assert fk_status == 1
+
+    def test_foreign_key_enforcement_rejects_invalid_reference(self, db_path):
+        """Test that FK enforcement actually rejects invalid references."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            # Try to insert a job referencing a non-existent run
+            import pytest
+            with pytest.raises(Exception):
+                cursor.execute(
+                    "INSERT INTO jobs (id, run_id, status) VALUES (?, ?, ?)",
+                    ("job-1", "nonexistent-run", "queued"),
+                )
+
+
+class TestRunIdValidation:
+    """Tests for run_id validation to prevent path traversal attacks."""
+
+    def test_traversal_parent_directory(self, storage):
+        """Test that ../ in run_id raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage._validate_run_id("../")
+
+    def test_traversal_deep_parent(self, storage):
+        """Test that ../../etc in run_id raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage._validate_run_id("../../etc")
+
+    def test_absolute_path(self, storage):
+        """Test that absolute path in run_id raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage._validate_run_id("/absolute/path")
+
+    def test_null_byte(self, storage):
+        """Test that null byte in run_id raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage._validate_run_id("run\x00id")
+
+    def test_empty_string(self, storage):
+        """Test that empty string raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage._validate_run_id("")
+
+    def test_valid_id_with_hyphens(self, storage):
+        """Test that valid run_id with hyphens passes validation."""
+        storage._validate_run_id("test-run-001")  # Should not raise
+
+    def test_valid_id_with_underscores(self, storage):
+        """Test that valid run_id with underscores passes validation."""
+        storage._validate_run_id("my_run_123")  # Should not raise
+
+    def test_valid_simple_id(self, storage):
+        """Test that simple alphanumeric run_id passes validation."""
+        storage._validate_run_id("abc")  # Should not raise
+
+    def test_dot_in_run_id(self, storage):
+        """Test that dots in run_id raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage._validate_run_id("run.id")
+
+    def test_space_in_run_id(self, storage):
+        """Test that spaces in run_id raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage._validate_run_id("run id")
+
+    def test_get_run_dir_calls_validation(self, storage):
+        """Test that _get_run_dir calls _validate_run_id and rejects traversal."""
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage._get_run_dir("../../etc")

@@ -24,6 +24,7 @@ def init_db(db_path: str | Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row  # Enable dict-like row access
 
     cursor = conn.cursor()
@@ -130,6 +131,7 @@ def get_db(db_path: str | Path) -> Generator[sqlite3.Connection, None, None]:
     db_path = Path(db_path)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
 
     try:
         yield conn
