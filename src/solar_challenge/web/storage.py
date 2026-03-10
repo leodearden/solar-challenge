@@ -13,6 +13,7 @@ Storage structure:
 """
 
 import json
+import re
 import shutil
 from dataclasses import asdict, fields, is_dataclass
 from datetime import datetime, timezone
@@ -169,6 +170,29 @@ class RunStorage:
         self.db_path = Path(db_path)
         self.data_dir = Path(data_dir)
 
+    def _validate_run_id(self, run_id: str) -> None:
+        """Validate run_id to prevent path traversal attacks.
+
+        Args:
+            run_id: Run identifier to validate
+
+        Raises:
+            ValueError: If run_id contains invalid characters or resolves
+                outside the runs directory
+        """
+        if not re.match(r"^[a-zA-Z0-9_-]+$", run_id):
+            raise ValueError(
+                f"Invalid run_id: {run_id!r}. "
+                "Only alphanumeric characters, hyphens, and underscores are allowed."
+            )
+        runs_dir = (self.data_dir / "runs").resolve()
+        resolved = (runs_dir / run_id).resolve()
+        if not resolved.parent == runs_dir:
+            raise ValueError(
+                f"Invalid run_id: {run_id!r}. "
+                "Resolved path is outside the runs directory."
+            )
+
     def _get_run_dir(self, run_id: str) -> Path:
         """Get the directory path for a run's data files.
 
@@ -177,7 +201,11 @@ class RunStorage:
 
         Returns:
             Path to run directory
+
+        Raises:
+            ValueError: If run_id is invalid or would escape the runs directory
         """
+        self._validate_run_id(run_id)
         return self.data_dir / "runs" / run_id
 
     def save_home_run(

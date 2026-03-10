@@ -566,3 +566,39 @@ class TestDeleteRun:
         assert not run_dir.exists()
         runs = storage.list_runs()
         assert len(runs) == 0
+
+
+class TestRunIdValidation:
+    """Validate that run_id inputs are sanitised to prevent path traversal."""
+
+    def test_path_traversal_dot_dot_slash_rejected(self, storage: RunStorage) -> None:
+        """run_id with ../../ should be rejected."""
+        with pytest.raises(ValueError):
+            storage._get_run_dir("../../etc")
+
+    def test_path_traversal_absolute_path_rejected(self, storage: RunStorage) -> None:
+        """run_id that is an absolute path should be rejected."""
+        with pytest.raises(ValueError):
+            storage._get_run_dir("/etc/passwd")
+
+    def test_null_byte_rejected(self, storage: RunStorage) -> None:
+        """run_id containing a null byte should be rejected."""
+        with pytest.raises(ValueError):
+            storage._get_run_dir("run\x00id")
+
+    def test_spaces_rejected(self, storage: RunStorage) -> None:
+        """run_id containing spaces should be rejected."""
+        with pytest.raises(ValueError):
+            storage._get_run_dir("run id")
+
+    def test_valid_run_id_accepted(self, storage: RunStorage) -> None:
+        """A valid run_id with alphanumeric, hyphens, underscores should pass."""
+        # Should not raise
+        result = storage._get_run_dir("valid-run_123")
+        assert result.name == "valid-run_123"
+
+    def test_uuid_run_id_accepted(self, storage: RunStorage) -> None:
+        """A UUID-style run_id should be accepted."""
+        # Should not raise
+        result = storage._get_run_dir("550e8400-e29b-41d4-a716-446655440000")
+        assert result.name == "550e8400-e29b-41d4-a716-446655440000"
