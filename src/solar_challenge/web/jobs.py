@@ -12,6 +12,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Generator
 
 from concurrent.futures import ThreadPoolExecutor
@@ -50,6 +51,10 @@ class JobManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._event_queues: dict[str, collections.deque[dict[str, Any]]] = {}
+
+    def shutdown(self) -> None:
+        """Shut down the thread pool executor."""
+        self._executor.shutdown(wait=False)
 
     def submit_home_job(
         self,
@@ -705,3 +710,44 @@ class JobManager:
                             "message": error_msg,
                         },
                     })
+
+
+def recover_stale_jobs(db_path: str | Path) -> int:
+    """Mark any jobs stuck in 'running' or 'queued' status as failed.
+
+    Called on startup to clean up jobs interrupted by a server restart.
+
+    Args:
+        db_path: Path to the SQLite database file.
+
+    Returns:
+        Number of jobs recovered.
+    """
+    from pathlib import Path
+
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            """
+            UPDATE jobs SET
+                status = 'failed',
+                message = 'Interrupted by server restart',
+                completed_at = ?
+            WHERE status IN ('running', 'queued')
+            """,
+            (now,),
+        )
+        recovered_jobs = cursor.rowcount
+        # Also mark corresponding runs as failed
+        cursor.execute(
+            """
+            UPDATE runs SET
+                status = 'failed',
+                error_message = 'Interrupted by server restart',
+                completed_at = ?
+            WHERE status = 'running'
+            """,
+            (now,),
+        )
+        return recovered_jobs

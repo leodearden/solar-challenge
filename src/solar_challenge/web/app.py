@@ -79,6 +79,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         # Override with test-specific configuration when provided
         app.config.from_mapping(test_config)
 
+    # Secure session cookie when not in debug mode
+    if "SESSION_COOKIE_SECURE" not in app.config:
+        app.config["SESSION_COOKIE_SECURE"] = not app.debug
+
     # Ensure template and static directories exist
     for folder in (template_folder, static_folder):
         os.makedirs(folder, exist_ok=True)
@@ -89,8 +93,18 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     # Initialize JobManager for background simulation execution
     try:
-        from solar_challenge.web.jobs import JobManager
-        app.extensions["job_manager"] = JobManager()
+        from solar_challenge.web.jobs import JobManager, recover_stale_jobs
+        job_manager = JobManager()
+        app.extensions["job_manager"] = job_manager
+
+        # Recover jobs stuck from previous server shutdown
+        recovered = recover_stale_jobs(db_path)
+        if recovered:
+            logger.info("Recovered %d stale jobs on startup", recovered)
+
+        # Register shutdown handler
+        import atexit
+        atexit.register(job_manager.shutdown)
     except ImportError as e:
         logger.warning("JobManager not available: %s", e)
 
