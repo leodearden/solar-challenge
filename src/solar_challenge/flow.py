@@ -8,7 +8,12 @@ from typing import Optional
 import pandas as pd
 
 from solar_challenge.battery import Battery
-from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategy
+from solar_challenge.dispatch import (
+    DispatchStrategy,
+    GridChargeContext,
+    SelfConsumptionStrategy,
+    compute_grid_charge_power_kw,
+)
 from solar_challenge.tariff import TariffConfig
 
 
@@ -132,6 +137,47 @@ class EnergyFlowResult:
     battery_soc: float  # SOC after this timestep
 
 
+def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:
+    """Return True if *current_rate* is at or below the average of all tariff period rates.
+
+    This is the single source of truth for cheap-period classification.  Both
+    :func:`simulate_timestep_tou` and :func:`_build_grid_charge_context` call
+    this helper so the two dispatch paths always classify cheap vs. expensive
+    periods identically (PRD §4).
+    """
+    avg_rate = sum(p.rate_per_kwh for p in tariff.periods) / len(tariff.periods)
+    return current_rate <= avg_rate
+
+
+def _build_grid_charge_context(
+    battery: "Battery",
+    tariff: TariffConfig,
+    timestamp: pd.Timestamp,
+) -> GridChargeContext:
+    """Build a GridChargeContext from a battery and tariff for the given timestamp.
+
+    Uses :func:`_is_cheap_period` for cheap-period classification so both
+    dispatch paths stay in sync (PRD §4).
+
+    Requires battery.config.grid_charging is not None.
+    """
+    assert battery.config.grid_charging is not None
+    gc = battery.config.grid_charging
+
+    all_rates = [p.rate_per_kwh for p in tariff.periods]
+    current_rate = tariff.get_rate(timestamp)
+
+    return GridChargeContext(
+        current_rate=current_rate,
+        peak_rate=max(all_rates),
+        is_cheap_period=_is_cheap_period(tariff, current_rate),
+        target_soc_fraction=gc.target_soc_fraction,
+        max_charge_kw=battery.config.max_charge_kw,
+        round_trip_efficiency=battery.charge_efficiency * battery.discharge_efficiency,
+        charge_efficiency=battery.charge_efficiency,
+    )
+
+
 def simulate_timestep(
     generation_kw: float,
     demand_kw: float,
@@ -139,6 +185,8 @@ def simulate_timestep(
     timestep_minutes: float = 1.0,
     timestamp: Optional[datetime] = None,
     strategy: Optional[DispatchStrategy] = None,
+    *,
+    tariff: Optional[TariffConfig] = None,
 ) -> EnergyFlowResult:
     """Simulate energy flow for a single timestep.
 
@@ -156,6 +204,12 @@ def simulate_timestep(
         timestep_minutes: Duration of timestep in minutes
         timestamp: Current simulation timestamp (defaults to epoch if None)
         strategy: Dispatch strategy to use (defaults to SelfConsumptionStrategy)
+        tariff: Optional tariff configuration.  When provided together with
+            ``battery.config.grid_charging``, a :class:`~solar_challenge.dispatch.GridChargeContext`
+            is built and forwarded to ``strategy.decide_action`` so strategies
+            can emit ``grid_charge_kw > 0``.  When ``None`` (default), the
+            grid-charge context is not built and results are bit-identical to
+            omitting the argument entirely.
 
     Returns:
         EnergyFlowResult with all energy flows in kWh
@@ -170,21 +224,26 @@ def simulate_timestep(
     excess_kwh = max(0.0, generation_kwh - demand_kwh)
     shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
 
-    # Initialize battery-related values
-    battery_charge_kwh = 0.0
+    # Initialize battery-related values (split-source tracking, PRD §3.1)
+    pv_charge_stored_kwh = 0.0
+    grid_charge_stored_kwh = 0.0
     battery_discharge_kwh = 0.0
     battery_soc = 0.0
 
     if battery is not None:
-        # Use strategy to decide battery action (default to self-consumption)
         if strategy is None:
             strategy = SelfConsumptionStrategy()
 
-        # Use default timestamp if not provided
         if timestamp is None:
-            timestamp = datetime(1970, 1, 1)  # Epoch
+            timestamp = datetime(1970, 1, 1)
 
-        # Get dispatch decision from strategy
+        # Build grid-charge context when both tariff and grid_charging are configured
+        grid_charge_ctx = (
+            _build_grid_charge_context(battery, tariff, pd.Timestamp(timestamp))
+            if tariff is not None and battery.config.grid_charging is not None
+            else None
+        )
+
         decision = strategy.decide_action(
             timestamp=timestamp,
             generation_kw=generation_kw,
@@ -192,28 +251,39 @@ def simulate_timestep(
             battery_soc_kwh=battery.soc_kwh,
             battery_capacity_kwh=battery.config.capacity_kwh,
             timestep_minutes=timestep_minutes,
+            grid_charge_ctx=grid_charge_ctx,
         )
 
-        # Execute battery charge/discharge based on strategy decision
-        if decision.charge_kw > 0:
-            battery_charge_kwh = battery.charge(decision.charge_kw, timestep_minutes)
-
-        if decision.discharge_kw > 0:
-            battery_discharge_kwh = battery.discharge(decision.discharge_kw, timestep_minutes)
-
+        # Split-source charge/discharge execution (PRD §3.1)
+        pv_charge_stored_kwh = (
+            battery.charge(decision.charge_kw, timestep_minutes)
+            if decision.charge_kw > 0 else 0.0
+        )
+        grid_charge_stored_kwh = (
+            battery.charge(decision.grid_charge_kw, timestep_minutes)
+            if decision.grid_charge_kw > 0 else 0.0
+        )
+        battery_discharge_kwh = (
+            battery.discharge(decision.discharge_kw, timestep_minutes)
+            if decision.discharge_kw > 0 else 0.0
+        )
         battery_soc = battery.soc_kwh
 
+    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
+
     # Self-consumption: direct PV consumption + battery discharge (capped at demand)
-    # Battery discharge represents PV energy stored earlier and consumed later
     direct_consumption_kwh = min(generation_kwh, demand_kwh)
     self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
 
-    # Calculate grid flows
-    # Export = excess - battery_charged
-    grid_export_kwh = max(0.0, excess_kwh - battery_charge_kwh)
-
-    # Import = shortfall - battery_discharged
-    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh)
+    # Split-source grid flows (PRD §3.1):
+    # Only PV charge reduces export; grid charge adds to import.
+    # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
+    # (post charge-efficiency loss), consistent with the PV-charging convention.
+    # validate_energy_balance closes on stored energy.  Callers computing the
+    # exact grid-side draw (e.g. for cost accounting) should divide
+    # grid_charge_stored_kwh by battery.charge_efficiency.
+    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
+    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
 
     return EnergyFlowResult(
         generation=generation_kwh,
@@ -269,58 +339,68 @@ def simulate_timestep_tou(
     # Get current tariff rate
     current_rate = tariff.get_rate(timestamp)
 
-    # Determine average rate across all periods (for peak/off-peak classification)
-    # Simple heuristic: if multiple rates exist, classify as cheap/expensive
-    all_rates = [period.rate_per_kwh for period in tariff.periods]
-    avg_rate = sum(all_rates) / len(all_rates)
-    is_cheap_period = current_rate <= avg_rate
+    # Determine if current period is cheap via the shared single-source heuristic (PRD §4)
+    is_cheap_period = _is_cheap_period(tariff, current_rate)
 
     # Calculate excess and shortfall
     excess_kwh = max(0.0, generation_kwh - demand_kwh)
     shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
 
-    # Initialize battery-related values
-    battery_charge_kwh = 0.0
+    # Initialize battery-related values (split-source tracking, PRD §3.1)
+    pv_charge_stored_kwh = 0.0
+    grid_charge_stored_kwh = 0.0
     battery_discharge_kwh = 0.0
     battery_soc = 0.0
 
     if battery is not None:
         if is_cheap_period:
-            # Off-peak strategy: charge battery from excess PV
-            # Save battery for expensive periods - import from cheap grid instead of discharging
+            # Off-peak: charge from excess PV, then optionally top-up from grid
             if excess_kwh > 0:
                 excess_power_kw = excess_kwh / duration_hours
-                battery_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
+                pv_charge_stored_kwh = battery.charge(excess_power_kw, timestep_minutes)
 
-            # During cheap periods, do NOT discharge battery
-            # Let grid meet shortfall at low cost, save battery for peak periods
-            # battery_discharge_kwh remains 0.0
+            if battery.config.grid_charging is not None:
+                pv_charge_power_kw = min(
+                    excess_kwh / duration_hours if excess_kwh > 0 else 0.0,
+                    battery.config.max_charge_kw,
+                )
+                ctx = _build_grid_charge_context(battery, tariff, timestamp)
+                grid_power = compute_grid_charge_power_kw(
+                    ctx,
+                    battery_soc_kwh=battery.soc_kwh,  # post-PV-charge SOC
+                    capacity_kwh=battery.config.capacity_kwh,
+                    pv_charge_power_kw=pv_charge_power_kw,
+                    timestep_minutes=timestep_minutes,
+                )
+                if grid_power > 0:
+                    grid_charge_stored_kwh = battery.charge(grid_power, timestep_minutes)
         else:
-            # Peak period strategy: prioritize battery discharge during shortfall
-            # Also charge battery from excess to save for next peak
+            # Peak: discharge to meet shortfall, then charge from excess PV
             if shortfall_kwh > 0:
-                # Discharge battery aggressively to avoid expensive grid import
                 shortfall_power_kw = shortfall_kwh / duration_hours
                 battery_discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
 
             if excess_kwh > 0:
-                # Charge battery from excess (save for next peak period)
                 excess_power_kw = excess_kwh / duration_hours
-                battery_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
+                pv_charge_stored_kwh = battery.charge(excess_power_kw, timestep_minutes)
 
         battery_soc = battery.soc_kwh
 
+    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
+
     # Self-consumption: direct PV consumption + battery discharge (capped at demand)
-    # Battery discharge represents PV energy stored earlier and consumed later
     direct_consumption_kwh = min(generation_kwh, demand_kwh)
     self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
 
-    # Calculate grid flows
-    # Export = excess - battery_charged
-    grid_export_kwh = max(0.0, excess_kwh - battery_charge_kwh)
-
-    # Import = shortfall - battery_discharged
-    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh)
+    # Split-source grid flows (PRD §3.1):
+    # Only PV charge reduces export; grid charge adds to import.
+    # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
+    # (post charge-efficiency loss), consistent with the PV-charging convention.
+    # validate_energy_balance closes on stored energy.  Callers computing the
+    # exact grid-side draw (e.g. for cost accounting) should divide
+    # grid_charge_stored_kwh by battery.charge_efficiency.
+    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
+    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
 
     return EnergyFlowResult(
         generation=generation_kwh,
