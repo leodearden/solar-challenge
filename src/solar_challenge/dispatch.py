@@ -94,6 +94,62 @@ class GridChargeContext:
     charge_efficiency: float
 
 
+def compute_grid_charge_power_kw(
+    ctx: GridChargeContext,
+    *,
+    battery_soc_kwh: float,
+    capacity_kwh: float,
+    pv_charge_power_kw: float,
+    timestep_minutes: float,
+) -> float:
+    """Compute the grid-to-battery charging power for the current timestep.
+
+    Implements the rate-aware dispatch controller described in PRD §3.2.
+    All inputs are floats/bool (no tariff symbols imported here).
+
+    Args:
+        ctx: Tariff and battery context for this timestep.
+        battery_soc_kwh: Current battery state of charge in kWh.
+        capacity_kwh: Total battery capacity in kWh.
+        pv_charge_power_kw: PV charging power already being consumed by the
+            battery in this timestep (kW). Reduces the residual charging
+            headroom available for grid charging.
+        timestep_minutes: Duration of the timestep in minutes.
+
+    Returns:
+        Recommended grid-to-battery charge power in kW (>= 0.0).
+        Returns 0.0 when:
+        - it is not a cheap period (ctx.is_cheap_period is False), or
+        - the spread gate fails (peak saving does not cover round-trip losses),
+        - the battery is already at or above the target SOC.
+    """
+    # Gate 1: only charge from grid during cheap periods
+    if not ctx.is_cheap_period:
+        return 0.0
+
+    # Gate 2: spread gate — only profitable if selling at peak_rate covers
+    # the round-trip energy loss when charging at current_rate.
+    # Break-even condition: peak_rate > current_rate / round_trip_efficiency
+    if ctx.peak_rate <= ctx.current_rate / ctx.round_trip_efficiency:
+        return 0.0
+
+    # Gate 3: how much energy is still needed to reach the target SOC?
+    target_kwh = ctx.target_soc_fraction * capacity_kwh
+    gap_kwh = max(0.0, target_kwh - battery_soc_kwh)
+    if gap_kwh <= 0.0:
+        return 0.0
+
+    # Convert SOC gap to a charge-power request for this timestep.
+    # gap_kwh accounts for charge efficiency (more grid power needed than stored).
+    dt_h = timestep_minutes / 60.0
+    gap_power_kw = gap_kwh / ctx.charge_efficiency / dt_h
+
+    # Residual charging headroom after PV is already occupying some capacity
+    residual_kw = max(0.0, ctx.max_charge_kw - pv_charge_power_kw)
+
+    return min(gap_power_kw, residual_kw)
+
+
 class DispatchStrategy(ABC):
     """Abstract base class for battery dispatch strategies.
 
