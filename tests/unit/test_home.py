@@ -261,6 +261,7 @@ class TestSummaryStatistics:
         assert stats.simulation_days == 7
 
 
+@pytest.mark.slow
 class TestHeatPumpIntegration:
     """Test heat pump integration in home simulation."""
 
