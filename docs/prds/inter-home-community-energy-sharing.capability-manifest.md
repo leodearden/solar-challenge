@@ -27,7 +27,7 @@ through its public aggregate API — no fleet producer task, by design.**
 | Signal = synthetic 2-home `FleetResults` → `cg_exp`/`cg_imp` reduced by `min(E,D)`; balance holds; `p2p`+battery raises | unit test on `simulate_community` (p2p) + `validate_community_balance` (own task, synthetic FleetResults, no real sim) | ✅ |
 | Premise: COMMUNITY-BALANCE closes (p2p) | floor: composition proof §3.1 (`(★)` per-home + `(◆)` reused flow); re-asserted every timestep | ✅ |
 
-## β — COMMUNITY-BATTERY (community_battery / both) — intermediate
+## β — COMMUNITY-BATTERY (community_battery mode) — intermediate
 
 | Capability asserted by signal | Evidence binding | Status |
 |---|---|---|
@@ -35,7 +35,7 @@ through its public aggregate API — no fleet producer task, by design.**
 | `battery.Battery`/`BatteryConfig` reusable as the community store (SOC/efficiency/limits) | grep:`battery.py:56-220`, `battery.py:10-26` wired | ✅ |
 | Same reused `flow.simulate_timestep` accepts a non-None `Battery` (no new dispatch) | grep:`flow.py:134-141` wired | ✅ |
 | Floor: community-battery charge/discharge ≤ configured `max_charge_kw`/`max_discharge_kw` | floor: reused `Battery.charge`/`discharge` caps grep:`battery.py:168`, `battery.py:199` (not re-implemented) | ✅ |
-| Signal = net surplus charges (SOC↑ bounded), net deficit discharges (`cg_imp`↓ vs p2p); balance holds incl. `(cb_ch−cb_dis)`; `both`≡`community_battery` | unit test (decision/flow-level, synthetic FleetResults) (own task) | ✅ |
+| Signal = net surplus charges (SOC↑ bounded), net deficit discharges (`cg_imp`↓ vs p2p); balance holds incl. `(cb_ch−cb_dis)` | unit test (decision/flow-level, synthetic FleetResults) (own task) | ✅ |
 | Premise: COMMUNITY-BALANCE closes with battery term | floor: composition proof §3.1 incl. `(cb_ch−cb_dis)`; re-asserted every timestep | ✅ |
 
 ## γ — COMMUNITY-CONFIG (parser + scenario surface) — intermediate
