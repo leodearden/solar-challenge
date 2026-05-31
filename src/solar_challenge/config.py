@@ -631,6 +631,10 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
     grid_charging = None
     if "grid_charging" in data and data["grid_charging"] is not None:
         gc = data["grid_charging"]
+        if not isinstance(gc, dict):
+            raise ConfigurationError(
+                f"grid_charging must be a mapping, got {type(gc).__name__}"
+            )
         grid_charging = GridChargeConfig(
             target_soc_fraction=gc.get("target_soc_fraction", 0.9)
         )

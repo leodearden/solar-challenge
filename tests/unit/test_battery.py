@@ -77,7 +77,7 @@ class TestBatteryConfigGridCharging:
         cfg = BatteryConfig(capacity_kwh=5.0)
         assert cfg.grid_charging is None
 
-    def test_grid_charging_round_trips(self) -> None:
+    def test_grid_charging_stored_value(self) -> None:
         """BatteryConfig.grid_charging stores the GridChargeConfig correctly."""
         gc = GridChargeConfig(target_soc_fraction=0.8)
         cfg = BatteryConfig(capacity_kwh=5.0, grid_charging=gc)

@@ -398,6 +398,11 @@ class TestBatteryGridChargeParsing:
                 {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 1.5}}
             )
 
+    def test_parse_grid_charging_non_mapping_raises(self) -> None:
+        """grid_charging supplied as a scalar raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping"):
+            _parse_battery_config({"capacity_kwh": 5.0, "grid_charging": 0.8})
+
     def test_yaml_round_trip_grid_charging(self) -> None:
         """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""
         yaml_content = """
