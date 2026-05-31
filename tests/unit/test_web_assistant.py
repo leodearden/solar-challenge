@@ -73,3 +73,14 @@ def test_assistant_page_renders_chat_shell(client: FlaskClient) -> None:
     assert 'id="chat-input"' in html, (
         "Expected message input id='chat-input' in page"
     )
+
+
+def test_sidebar_shows_assistant_link(client: FlaskClient) -> None:
+    """Every page's nav sidebar includes an 'AI Assistant' link to /assistant."""
+    resp = client.get("/")
+    assert resp.status_code == 200, f"Expected 200 from dashboard, got {resp.status_code}"
+    html = resp.data.decode()
+    assert "AI Assistant" in html, "Expected 'AI Assistant' nav label in sidebar"
+    assert 'href="/assistant"' in html, (
+        "Expected href='/assistant' link in sidebar (url_for('assistant.chat_page'))"
+    )
