@@ -218,6 +218,9 @@ def simulate_community(
                 timestamp=pd.Timestamp(t).to_pydatetime(),
                 strategy=strategy,
             )
+            # Per-step ◆ invariant (PRD §3.2) — mirrors home.simulate_home:299-300.
+            if validate_balance:
+                validate_energy_balance(r)
             # Scale kWh/step → kW (×60); SOC is energy state, kept in kWh.
             cg_imp_vals.append(r.grid_import * 60.0)
             cg_exp_vals.append(r.grid_export * 60.0)
