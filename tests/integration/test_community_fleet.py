@@ -539,3 +539,102 @@ community:
         assert "community" in result.output.lower() or "warning" in result.output.lower(), (
             f"Expected a warning mentioning community, got:\n{result.output}"
         )
+
+
+class TestCommunityPipelineAB:
+    """Integration-gate: A/B test over the real home→fleet→community pipeline.
+
+    Uses INJECTED synthetic weather (no PVGIS) to keep tests deterministic and
+    fast.  Verifies that community sharing strictly reduces both grid import
+    and export vs Σ per-home baseline.
+    """
+
+    @pytest.fixture
+    def synth_fleet(self) -> FleetResults:
+        """Build a FleetResults with injected weather (no PVGIS)."""
+        weather = _synth_weather()
+        start = pd.Timestamp("2024-06-21", tz="Europe/London")
+        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        return _build_injected_fleet(start, end, weather)
+
+    def test_p2p_netting_reduces_grid_import(self, synth_fleet: FleetResults) -> None:
+        """P2P community import < Σ per-home import."""
+        baseline_import = float(synth_fleet.total_grid_import.sum())
+        cr = simulate_community(synth_fleet, CommunityConfig(sharing_mode="p2p"))
+        assert float(cr.grid_import.sum()) < baseline_import, (
+            "P2P netting should reduce community grid import below Σ per-home import"
+        )
+
+    def test_p2p_netting_reduces_grid_export(self, synth_fleet: FleetResults) -> None:
+        """P2P community export < Σ per-home export."""
+        baseline_export = float(synth_fleet.total_grid_export.sum())
+        cr = simulate_community(synth_fleet, CommunityConfig(sharing_mode="p2p"))
+        assert float(cr.grid_export.sum()) < baseline_export, (
+            "P2P netting should reduce community grid export below Σ per-home export"
+        )
+
+    def test_p2p_balance_valid(self, synth_fleet: FleetResults) -> None:
+        """P2P community balance invariant holds."""
+        cr = simulate_community(synth_fleet, CommunityConfig(sharing_mode="p2p"))
+        assert validate_community_balance(synth_fleet, cr)
+
+    def test_battery_mode_import_not_worse_than_p2p(self, synth_fleet: FleetResults) -> None:
+        """community_battery import ≤ p2p import (battery is additive benefit)."""
+        cr_p2p = simulate_community(synth_fleet, CommunityConfig(sharing_mode="p2p"))
+        cr_batt = simulate_community(
+            synth_fleet,
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=BatteryConfig(
+                    capacity_kwh=20.0, max_charge_kw=10.0, max_discharge_kw=10.0
+                ),
+            ),
+        )
+        assert float(cr_batt.grid_import.sum()) <= float(cr_p2p.grid_import.sum()), (
+            "community_battery import should not exceed p2p import"
+        )
+
+    def test_battery_balance_valid(self, synth_fleet: FleetResults) -> None:
+        """community_battery balance invariant holds."""
+        cr_batt = simulate_community(
+            synth_fleet,
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=BatteryConfig(
+                    capacity_kwh=20.0, max_charge_kw=10.0, max_discharge_kw=10.0
+                ),
+            ),
+        )
+        assert validate_community_balance(synth_fleet, cr_batt)
+
+    def test_battery_report_has_battery_section(self, synth_fleet: FleetResults) -> None:
+        """generate_community_report includes a non-empty Community Battery section."""
+        cr_batt = simulate_community(
+            synth_fleet,
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=BatteryConfig(
+                    capacity_kwh=20.0, max_charge_kw=10.0, max_discharge_kw=10.0
+                ),
+            ),
+        )
+        report = generate_community_report(cr_batt)
+        assert "Community Battery" in report
+        assert "Charged" in report
+
+    @pytest.mark.slow
+    def test_real_pvgis_smoke(self, tmp_path: Path) -> None:
+        """Smoke test: fleet run with real PVGIS calls (marked slow, no monkeypatch)."""
+        tmp_report = tmp_path / "smoke_report.md"
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", str(SCENARIO),
+                "--sequential",
+                "--start", "2024-06-21",
+                "--end", "2024-06-21",
+                "--community-report", str(tmp_report),
+            ],
+        )
+        assert result.exit_code == 0, f"smoke test failed:\n{result.output}"
+        assert "Community" in result.output
