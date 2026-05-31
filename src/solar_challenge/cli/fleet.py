@@ -1,10 +1,13 @@
 """Fleet simulation commands."""
 
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 import pandas as pd
 import typer
+
+if TYPE_CHECKING:
+    from solar_challenge.community import CommunityResults
 
 from solar_challenge.cli.utils import (
     console,
@@ -16,12 +19,14 @@ from solar_challenge.cli.utils import (
     print_success,
     print_warning,
 )
+from solar_challenge.community import simulate_community
 from solar_challenge.config import (
     ConfigurationError,
     SweepSpec,
     detect_sweep_spec,
     expand_sweep_configs,
     generate_homes_from_distribution,
+    load_community_config,
     load_config,
     load_fleet_config,
     substitute_config_variables,
@@ -37,6 +42,7 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.home import SimulationResults
 from solar_challenge.location import Location
+from solar_challenge.output import compute_community_metrics, generate_community_report
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -45,6 +51,44 @@ def _export_fleet_results(results: FleetResults, output: Path) -> None:
     """Export fleet results to CSV."""
     df = results.to_aggregate_dataframe()
     df.to_csv(output)
+
+
+def _print_community_section(
+    fleet_results: FleetResults,
+    community_results: "CommunityResults",
+) -> None:
+    """Print a community sharing summary after the fleet summary table."""
+    from rich.table import Table
+
+    m = compute_community_metrics(community_results)
+
+    table = Table(title="Community Sharing Results")
+    table.add_column("Metric", style="bold")
+    table.add_column("Unshared (Σ per-home)", justify="right")
+    table.add_column("Community", justify="right")
+    table.add_column("Reduction", justify="right")
+
+    table.add_row(
+        "Grid Import (kWh)",
+        f"{m.unshared_import_kwh:.1f}",
+        f"{m.community_import_kwh:.1f}",
+        f"{m.import_reduction_kwh:.1f}",
+    )
+    table.add_row(
+        "Grid Export (kWh)",
+        f"{m.unshared_export_kwh:.1f}",
+        f"{m.community_export_kwh:.1f}",
+        f"{m.export_reduction_kwh:.1f}",
+    )
+    table.add_row("", "", "", "")  # separator
+    table.add_row(
+        "Community Self-Sufficiency",
+        "",
+        f"{m.self_sufficiency:.1%}",
+        "",
+    )
+
+    console.print(table)
 
 
 @app.command()
@@ -93,6 +137,14 @@ def run(
             help="Disable parallelization",
         ),
     ] = False,
+    community_report: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--community-report",
+            help="Output markdown path for the community sharing report "
+                 "(requires a community: block in the config)",
+        ),
+    ] = None,
 ) -> None:
     """Run a fleet simulation from config file.
 
@@ -163,6 +215,20 @@ def run(
     if output is not None:
         _export_fleet_results(results, output)
         print_success(f"Aggregate results saved to {output}")
+
+    # Community sharing layer — strictly additive; base path is byte-unchanged
+    community_config = load_community_config(config)
+    if community_config is not None:
+        community_results = simulate_community(results, community_config)
+        _print_community_section(results, community_results)
+        if community_report is not None:
+            community_report.write_text(generate_community_report(community_results))
+            print_success(f"Community report saved to {community_report}")
+    else:
+        if community_report is not None:
+            print_warning(
+                "--community-report ignored: config has no community: block"
+            )
 
 
 @app.command()

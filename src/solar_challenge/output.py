@@ -2,11 +2,14 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import pandas as pd
 
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
+
+if TYPE_CHECKING:
+    from solar_challenge.community import CommunityResults
 
 
 @dataclass(frozen=True)
@@ -513,3 +516,135 @@ def aggregate_annual(
         annual["heat_pump_load_ratio"] = summary.heat_pump_load_ratio
 
     return annual
+
+
+@dataclass
+class CommunityMetrics:
+    """Pre-computed kWh aggregates for a community simulation result.
+
+    Extracted from :class:`~solar_challenge.community.CommunityResults` so that
+    both the markdown report (:func:`generate_community_report`) and the Rich
+    CLI table (:func:`~solar_challenge.cli.fleet._print_community_section`) can
+    consume identical figures from a single derivation.
+    """
+
+    dt_h: float
+    community_import_kwh: float
+    community_export_kwh: float
+    unshared_import_kwh: float
+    unshared_export_kwh: float
+    total_demand_kwh: float
+    self_sufficiency: float
+    import_reduction_kwh: float
+    export_reduction_kwh: float
+    battery_charge_kwh: float
+    battery_discharge_kwh: float
+    #: Heuristic: 'community_battery' when battery was active, else 'p2p'.
+    #: TODO: read directly from CommunityResults.sharing_mode once that field
+    #: is added to community.py (requires editing a module outside this task's scope).
+    sharing_mode: str
+
+
+def compute_community_metrics(community_results: "CommunityResults") -> CommunityMetrics:
+    """Derive kWh aggregates from a :class:`~solar_challenge.community.CommunityResults`.
+
+    Infers the timestep duration from the series index so the conversion is
+    correct for any cadence (1-minute operational or hourly TMY), mirroring
+    :func:`~solar_challenge.community.simulate_community`'s own derivation.
+    """
+    cr = community_results
+    fleet = cr.fleet_results
+
+    # Derive timestep from index so kW→kWh conversion is cadence-agnostic
+    index = cr.grid_import.index
+    if len(index) >= 2:
+        dt_h = (index[1] - index[0]).total_seconds() / 3600.0
+    else:
+        dt_h = 1.0 / 60.0  # assume 1-minute for degenerate single-step index
+
+    community_import_kwh = float(cr.grid_import.sum()) * dt_h
+    community_export_kwh = float(cr.grid_export.sum()) * dt_h
+    unshared_import_kwh = float(fleet.total_grid_import.sum()) * dt_h
+    unshared_export_kwh = float(fleet.total_grid_export.sum()) * dt_h
+    total_demand_kwh = float(fleet.total_demand.sum()) * dt_h
+
+    if total_demand_kwh > 0:
+        self_sufficiency = max(0.0, 1.0 - community_import_kwh / total_demand_kwh)
+    else:
+        self_sufficiency = 0.0
+
+    # Sharing-mode heuristic: battery activity → community_battery, else p2p.
+    # CommunityResults carries no sharing_mode field yet; this is the best
+    # derivation possible without editing community.py (outside task scope).
+    sharing_mode = (
+        "community_battery" if cr.battery_charge.abs().sum() > 0 else "p2p"
+    )
+
+    return CommunityMetrics(
+        dt_h=dt_h,
+        community_import_kwh=community_import_kwh,
+        community_export_kwh=community_export_kwh,
+        unshared_import_kwh=unshared_import_kwh,
+        unshared_export_kwh=unshared_export_kwh,
+        total_demand_kwh=total_demand_kwh,
+        self_sufficiency=self_sufficiency,
+        import_reduction_kwh=unshared_import_kwh - community_import_kwh,
+        export_reduction_kwh=unshared_export_kwh - community_export_kwh,
+        battery_charge_kwh=float(cr.battery_charge.sum()) * dt_h,
+        battery_discharge_kwh=float(cr.battery_discharge.sum()) * dt_h,
+        sharing_mode=sharing_mode,
+    )
+
+
+def generate_community_report(
+    community_results: "CommunityResults",
+    community_summary: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Generate a markdown report for a community energy sharing simulation.
+
+    Mirrors :func:`generate_summary_report` in structure.  All kWh figures are
+    derived via :func:`compute_community_metrics` using an index-inferred
+    timestep so the report is correct for any series cadence.
+
+    Args:
+        community_results: Output of :func:`~solar_challenge.community.simulate_community`.
+        community_summary: Optional mapping of extra key/value metadata to
+            append as a separate section.
+
+    Returns:
+        Formatted markdown report string.
+    """
+    m = compute_community_metrics(community_results)
+
+    report = f"""# Community Energy Sharing Report
+
+## Sharing Mode
+{m.sharing_mode}
+
+## Community vs Unshared Grid Flows (kWh)
+| Metric | Unshared (Σ per-home) | Community | Reduction |
+|--------|-----------------------|-----------|-----------|
+| Grid Import | {m.unshared_import_kwh:.2f} | {m.community_import_kwh:.2f} | {m.import_reduction_kwh:.2f} |
+| Grid Export | {m.unshared_export_kwh:.2f} | {m.community_export_kwh:.2f} | {m.export_reduction_kwh:.2f} |
+
+## Community Self-Sufficiency
+{m.self_sufficiency:.1%}
+"""
+
+    # Community Battery section — only when battery was active
+    if m.battery_charge_kwh > 0 or m.battery_discharge_kwh > 0:
+        report += f"""
+## Community Battery (kWh)
+| Metric | Value |
+|--------|-------|
+| Charged | {m.battery_charge_kwh:.2f} |
+| Discharged | {m.battery_discharge_kwh:.2f} |
+"""
+
+    # Optional extra summary section
+    if community_summary is not None:
+        report += "\n## Additional Information\n"
+        for key, value in community_summary.items():
+            report += f"- {key}: {value}\n"
+
+    return report
