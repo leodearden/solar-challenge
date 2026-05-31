@@ -137,7 +137,7 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     return home_config, start_date, end_date, name
 
 
-@api_bp.route("/simulate/home", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/simulate/home", methods=["POST"])
 def simulate_home_api() -> tuple[Response, int]:
     """Submit a home simulation job for background execution.
 
@@ -168,7 +168,7 @@ def simulate_home_api() -> tuple[Response, int]:
 
     return jsonify({"job_id": job_id, "run_id": run_id}), 201
 
-@api_bp.route("/simulate/fleet", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/simulate/fleet", methods=["POST"])
 def simulate_fleet_api() -> tuple[Response, int]:
     """Submit a fleet simulation job for background execution.
 
@@ -211,7 +211,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
 
     return jsonify({"job_id": job_id, "run_id": run_id}), 201
 
-@api_bp.route("/jobs/<job_id>", methods=["GET"])  # type: ignore[untyped-decorator]
+@api_bp.route("/jobs/<job_id>", methods=["GET"])
 def get_job_status(job_id: str) -> tuple[Response, int]:
     """Return current job status as JSON.
 
@@ -228,7 +228,7 @@ def get_job_status(job_id: str) -> tuple[Response, int]:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(status), 200
 
-@api_bp.route("/jobs/<job_id>/progress", methods=["GET"])  # type: ignore[untyped-decorator]
+@api_bp.route("/jobs/<job_id>/progress", methods=["GET"])
 def get_job_progress(job_id: str) -> Response:
     """SSE endpoint for streaming job progress events.
 
@@ -295,7 +295,7 @@ def get_job_progress(job_id: str) -> Response:
     )
 
 
-@api_bp.route("/jobs/<job_id>/results", methods=["GET"])  # type: ignore[untyped-decorator]
+@api_bp.route("/jobs/<job_id>/results", methods=["GET"])
 def get_job_results(job_id: str) -> tuple[Response, int]:
     """Return completed job results as JSON.
 
@@ -342,7 +342,7 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
 # Config preset endpoints
 # ---------------------------------------------------------------------------
 
-@api_bp.route("/presets", methods=["GET"])  # type: ignore[untyped-decorator]
+@api_bp.route("/presets", methods=["GET"])
 def list_presets() -> tuple[Response, int]:
     """List all configuration presets (built-in + saved).
 
@@ -376,7 +376,7 @@ def list_presets() -> tuple[Response, int]:
 
     return jsonify(builtin + saved), 200
 
-@api_bp.route("/presets", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/presets", methods=["POST"])
 def save_preset() -> tuple[Response, int]:
     """Save a configuration preset to the database.
 
@@ -429,7 +429,7 @@ def save_preset() -> tuple[Response, int]:
         return jsonify({"error": str(exc)}), 500
     return jsonify({"name": name, "id": preset_id}), 201
 
-@api_bp.route("/presets/<name>", methods=["GET"])  # type: ignore[untyped-decorator]
+@api_bp.route("/presets/<name>", methods=["GET"])
 def get_preset(name: str) -> tuple[Response, int]:
     """Get a specific configuration preset by name.
 
@@ -478,7 +478,7 @@ def get_preset(name: str) -> tuple[Response, int]:
 # ---------------------------------------------------------------------------
 
 
-@api_bp.route("/fleet/preview-distribution", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/fleet/preview-distribution", methods=["POST"])
 def preview_distribution() -> tuple[Response, int]:
     """Generate sample data for distribution histogram preview.
 
@@ -500,7 +500,7 @@ def preview_distribution() -> tuple[Response, int]:
         return jsonify({"error": str(exc)}), 400
     return jsonify({"samples": samples}), 200
 
-@api_bp.route("/simulate/fleet-from-distribution", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/simulate/fleet-from-distribution", methods=["POST"])
 def simulate_fleet_from_distribution() -> tuple[Response, int]:
     """Submit a fleet simulation using distribution configuration.
 
@@ -524,7 +524,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
         "n_homes": config.get("n_homes", 0),
     }), 501
 
-@api_bp.route("/fleet/export-yaml", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/fleet/export-yaml", methods=["POST"])
 def export_fleet_yaml() -> Response:
     """Export fleet configuration as YAML.
 
@@ -545,7 +545,7 @@ def export_fleet_yaml() -> Response:
     )
 
 
-@api_bp.route("/fleet/import-yaml", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/fleet/import-yaml", methods=["POST"])
 def import_fleet_yaml() -> tuple[Response, int]:
     """Import fleet configuration from YAML.
 
@@ -572,7 +572,7 @@ def import_fleet_yaml() -> tuple[Response, int]:
 # ---------------------------------------------------------------------------
 
 
-@api_bp.route("/simulate/sweep", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/simulate/sweep", methods=["POST"])
 def simulate_sweep() -> tuple[Response, int]:
     """Submit a parameter sweep for background execution.
 
@@ -677,7 +677,7 @@ def simulate_sweep() -> tuple[Response, int]:
 # ---------------------------------------------------------------------------
 
 
-@api_bp.route("/history/runs")  # type: ignore[untyped-decorator]
+@api_bp.route("/history/runs")
 def history_list_runs() -> Response:
     """Paginated, filterable run list API.
 
@@ -791,7 +791,7 @@ def history_list_runs() -> Response:
     })
 
 
-@api_bp.route("/history/runs/<run_id>")  # type: ignore[untyped-decorator]
+@api_bp.route("/history/runs/<run_id>")
 def history_get_run(run_id: str) -> Response | tuple[Response, int]:
     """Get full run detail including summary and config.
 
@@ -825,7 +825,7 @@ def history_get_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify(run_dict)
 
 
-@api_bp.route("/history/runs/<run_id>", methods=["DELETE"])  # type: ignore[untyped-decorator]
+@api_bp.route("/history/runs/<run_id>", methods=["DELETE"])
 def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
     """Delete a run and its associated files.
 
@@ -851,7 +851,7 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify({"success": True, "message": f"Run {run_id} deleted"})
 
 
-@api_bp.route("/history/runs/<run_id>", methods=["PATCH"])  # type: ignore[untyped-decorator]
+@api_bp.route("/history/runs/<run_id>", methods=["PATCH"])
 def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     """Update a run's name and/or notes.
 
@@ -899,7 +899,7 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify(dict(updated_row))
 
 
-@api_bp.route("/history/runs/<run_id>/export/csv")  # type: ignore[untyped-decorator]
+@api_bp.route("/history/runs/<run_id>/export/csv")
 def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
     """Export run results as CSV download.
 
@@ -948,7 +948,7 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
     )
 
 
-@api_bp.route("/history/runs/<run_id>/export/yaml")  # type: ignore[untyped-decorator]
+@api_bp.route("/history/runs/<run_id>/export/yaml")
 def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
     """Export run config as YAML download.
 
@@ -1122,7 +1122,7 @@ def _form_to_yaml_dict(data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-@api_bp.route("/scenarios/preview-yaml", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/scenarios/preview-yaml", methods=["POST"])
 def scenarios_preview_yaml() -> tuple[Response, int]:
     """Convert form data to a YAML string preview.
 
@@ -1137,7 +1137,7 @@ def scenarios_preview_yaml() -> tuple[Response, int]:
     return jsonify({"yaml": yaml_str}), 200
 
 
-@api_bp.route("/scenarios/validate", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/scenarios/validate", methods=["POST"])
 def scenarios_validate_scenario() -> tuple[Response, int]:
     """Validate scenario data against basic rules.
 
@@ -1177,7 +1177,7 @@ def scenarios_validate_scenario() -> tuple[Response, int]:
     return jsonify({"valid": True, "errors": []}), 200
 
 
-@api_bp.route("/scenarios/save", methods=["POST"])  # type: ignore[untyped-decorator]
+@api_bp.route("/scenarios/save", methods=["POST"])
 def scenarios_save_scenario() -> tuple[Response, int]:
     """Save a scenario configuration to the config_presets table.
 
@@ -1228,7 +1228,7 @@ def scenarios_save_scenario() -> tuple[Response, int]:
     return jsonify({"name": name, "id": preset_id}), 201
 
 
-@api_bp.route("/scenarios/presets", methods=["GET"])  # type: ignore[untyped-decorator]
+@api_bp.route("/scenarios/presets", methods=["GET"])
 def scenarios_list_presets() -> tuple[Response, int]:
     """List built-in (from scenarios/ dir) and saved scenario presets.
 
@@ -1268,7 +1268,7 @@ def scenarios_list_presets() -> tuple[Response, int]:
     return jsonify({"presets": presets}), 200
 
 
-@api_bp.route("/scenarios/presets/<name>", methods=["GET"])  # type: ignore[untyped-decorator]
+@api_bp.route("/scenarios/presets/<name>", methods=["GET"])
 def scenarios_get_preset(name: str) -> tuple[Response, int]:
     """Load a specific preset by name (from file or DB).
 

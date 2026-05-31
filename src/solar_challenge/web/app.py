@@ -125,11 +125,11 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     _register_blueprints(app)
 
     # Register custom error handlers
-    @app.errorhandler(404)  # type: ignore[untyped-decorator]
+    @app.errorhandler(404)
     def page_not_found(e: Exception) -> tuple[str, int]:
         return render_template("errors/404.html", page="error"), 404
 
-    @app.errorhandler(500)  # type: ignore[untyped-decorator]
+    @app.errorhandler(500)
     def internal_server_error(e: Exception) -> tuple[str, int]:
         return render_template("errors/500.html", page="error"), 500
 

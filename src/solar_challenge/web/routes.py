@@ -61,8 +61,7 @@ def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
     }
 
 
-@bp.route("/", methods=["GET"])  # type: ignore[untyped-decorator]
-def index() -> str:
+@bp.route("/", methods=["GET"])def index() -> str:
     """Render the dashboard page with recent runs and aggregate stats."""
     storage = get_storage()
     runs_raw = storage.list_runs(limit=10)
@@ -87,8 +86,7 @@ def index() -> str:
     ))
 
 
-@bp.route("/simulate/home", methods=["GET"])  # type: ignore[untyped-decorator]
-def simulate_home_page() -> str:
+@bp.route("/simulate/home", methods=["GET"])def simulate_home_page() -> str:
     """Render the enhanced home simulation configuration page."""
     return str(render_template(
         "simulate/home.html",
@@ -96,8 +94,7 @@ def simulate_home_page() -> str:
     ))
 
 
-@bp.route("/results/home/<run_id>", methods=["GET"])  # type: ignore[untyped-decorator]
-def home_results(run_id: str) -> Any:
+@bp.route("/results/home/<run_id>", methods=["GET"])def home_results(run_id: str) -> Any:
     """Display results for a completed home simulation.
 
     Loads persisted results from storage, builds chart JSON using the
@@ -195,8 +192,7 @@ def _load_scenario_presets() -> list[str]:
     return presets
 
 
-@bp.route("/simulate/fleet", methods=["GET"])  # type: ignore[untyped-decorator]
-def simulate_fleet_page() -> str:
+@bp.route("/simulate/fleet", methods=["GET"])def simulate_fleet_page() -> str:
     """Render the fleet simulation configuration page."""
     presets = _load_scenario_presets()
     return str(render_template(
@@ -206,8 +202,7 @@ def simulate_fleet_page() -> str:
     ))
 
 
-@bp.route("/results/fleet/<run_id>", methods=["GET"])  # type: ignore[untyped-decorator]
-def fleet_results(run_id: str) -> Any:
+@bp.route("/results/fleet/<run_id>", methods=["GET"])def fleet_results(run_id: str) -> Any:
     """Display results for a completed fleet simulation.
 
     Loads persisted fleet results from storage, builds chart JSON
