@@ -1816,6 +1816,11 @@ class TestParseCommunityConfig:
         assert cfg.community_battery is not None
         assert cfg.community_battery.capacity_kwh == 50.0
 
+    def test_community_battery_mode_without_battery_raises(self) -> None:
+        """community_battery mode without a community_battery block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config({"sharing_mode": "community_battery"})
+
     def test_p2p_with_battery_raises(self) -> None:
         """p2p + community_battery block raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
@@ -1909,6 +1914,48 @@ class TestParseCommunityConfig:
                 }
             )
 
+    # ------------------------------------------------------------------
+    # Amendment: additional robustness tests (reviewer pass)
+    # ------------------------------------------------------------------
+
+    def test_billing_seg_non_dict_raises(self) -> None:
+        """A bare scalar for the seg key raises ConfigurationError, not TypeError."""
+        with pytest.raises(ConfigurationError, match="mapping"):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {"seg": 4.1},
+                }
+            )
+
+    def test_billing_seg_string_raises(self) -> None:
+        """A bare string for the seg key raises ConfigurationError, not TypeError."""
+        with pytest.raises(ConfigurationError, match="mapping"):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {"seg": "Octopus"},
+                }
+            )
+
+    def test_billing_seg_block_both_preset_and_rate_raises(self) -> None:
+        """A seg block with both preset and rate_pence_per_kwh raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {
+                        "seg": {"preset": "Octopus", "rate_pence_per_kwh": 5.5},
+                    },
+                }
+            )
+
+    def test_empty_billing_block_returns_none_billing(self) -> None:
+        """An empty billing: {} block normalises to billing=None (same as absent key)."""
+        cfg = _parse_community_config({"sharing_mode": "p2p", "billing": {}})
+        assert cfg is not None
+        assert cfg.billing is None
+
 
 class TestLoadCommunityConfig:
     """Tests for load_community_config."""
@@ -1959,6 +2006,23 @@ period:
             mode="w", suffix=".yaml", delete=False
         ) as f:
             f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            result = load_community_config(path)
+            assert result is None
+        finally:
+            path.unlink()
+
+    def test_load_non_dict_yaml_returns_none(self) -> None:
+        """A YAML file whose top-level value is a list (not a dict) returns None
+        instead of raising AttributeError on .get('community').
+        """
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write("- item1\n- item2\n")  # top-level list, no community key
             f.flush()
             path = Path(f.name)
 

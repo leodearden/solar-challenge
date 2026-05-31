@@ -1966,7 +1966,19 @@ def _parse_community_billing_config(
     if direct_rate is not None:
         seg_rate = direct_rate
     elif seg_block is not None:
+        # Guard: seg must be a mapping, not a bare scalar/string
+        if not isinstance(seg_block, dict):
+            raise ConfigurationError(
+                "community billing: 'seg' must be a mapping with 'preset' or "
+                "'rate_pence_per_kwh', not a bare scalar."
+            )
         if "preset" in seg_block:
+            # Reject ambiguous combination of preset + explicit rate
+            if "rate_pence_per_kwh" in seg_block:
+                raise ConfigurationError(
+                    "community billing: 'seg' block must specify either 'preset' "
+                    "or 'rate_pence_per_kwh' — not both."
+                )
             preset_name = seg_block["preset"]
             if preset_name not in SEG_PRESETS:
                 available = ", ".join(sorted(SEG_PRESETS))
@@ -1978,6 +1990,11 @@ def _parse_community_billing_config(
         else:
             seg_rate = _parse_seg_config(seg_block)
 
+    # Normalise an all-None result to None so callers can reliably test ``is None``
+    # for "no billing configured" without distinguishing an empty block from an
+    # absent key.
+    if tariff is None and seg_rate is None:
+        return None
     return CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
 
 
@@ -2037,5 +2054,9 @@ def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
         ConfigurationError: If the file cannot be read or the community block
             is invalid.
     """
-    data = load_config(path)
+    raw = load_config(path)
+    # yaml.safe_load returns None for an empty file; coerce to a dict so that
+    # .get("community") works cleanly and returns None rather than raising
+    # AttributeError.
+    data: dict[str, Any] = raw if isinstance(raw, dict) else {}
     return _parse_community_config(data.get("community"))
