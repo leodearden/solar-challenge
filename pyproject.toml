@@ -46,6 +46,7 @@ web = [
     "flask>=3.0.0",
     "plotly>=5.0.0",
     "pyarrow>=10.0.0",
+    "anthropic>=0.40.0",
 ]
 e2e = [
     "playwright>=1.40.0",
