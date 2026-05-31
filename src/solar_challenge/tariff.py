@@ -148,19 +148,26 @@ class TariffConfig:
     def flat_rate(cls, rate_per_kwh: float, name: str = "") -> "TariffConfig":
         """Create a flat-rate tariff (single rate all day).
 
+        Uses a midnight-crossing period with start_time=="00:00" and
+        end_time=="00:00".  When start==end, TariffPeriod.matches_time routes
+        to the midnight-crossing branch (``t >= start or t < end``), which
+        evaluates to True for every time-of-day including 23:59:00 — giving
+        exact, gap-free 24-hour coverage.
+
         Args:
             rate_per_kwh: Electricity rate in £/kWh
             name: Optional tariff name
 
         Returns:
-            TariffConfig with single 24-hour period
+            TariffConfig with a single full-24h midnight-crossing period
+            ("00:00"–"00:00") covering every minute of the day.
         """
         if not name:
             name = f"Flat rate {rate_per_kwh:.2f} £/kWh"
 
         period = TariffPeriod(
             start_time="00:00",
-            end_time="23:59",
+            end_time="00:00",
             rate_per_kwh=rate_per_kwh,
             name="All day"
         )
