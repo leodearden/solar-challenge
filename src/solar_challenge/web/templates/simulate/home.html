@@ -23,6 +23,10 @@ document.addEventListener('alpine:init', () => {
             max_charge_kw: 3.6,
             max_discharge_kw: 3.6,
             efficiency_pct: 90,
+            dispatch_strategy_type: 'self_consumption',
+            dispatch_peak_start: 16,
+            dispatch_peak_end: 21,
+            dispatch_import_limit_kw: 3.0,
             consumption_kwh: 3500,
             occupants: 3,
             stochastic: false,
@@ -34,12 +38,23 @@ document.addEventListener('alpine:init', () => {
             start_date: '2024-06-01',
             end_date: '2024-06-30',
             name: '',
-            preset: ''
+            preset: '',
+            heat_pump_enabled: false,
+            heat_pump_type: 'ASHP',
+            heat_pump_capacity_kw: 8,
+            heat_pump_demand_kwh: 8000,
+            tariff_enabled: false,
+            tariff_type: 'flat_rate',
+            tariff_rate_per_kwh: 0.28,
+            tariff_peak_rate: 0.35,
+            tariff_off_peak_rate: 0.13
         },
         tabs: [
             { id: 'pv', label: 'PV' },
             { id: 'battery', label: 'Battery' },
             { id: 'load', label: 'Load' },
+            { id: 'heat_pump', label: 'Heat Pump' },
+            { id: 'tariff', label: 'Tariff' },
             { id: 'location', label: 'Location' },
             { id: 'period', label: 'Period' }
         ],
@@ -114,27 +129,58 @@ document.addEventListener('alpine:init', () => {
             }
         },
         buildPayload() {
+            const f = this.formData;
             const payload = {
-                pv_kw: parseFloat(this.formData.pv_kw),
-                azimuth: parseFloat(this.formData.azimuth),
-                tilt: parseFloat(this.formData.tilt),
-                battery_kwh: this.formData.battery_enabled ? parseFloat(this.formData.battery_kwh) : 0,
-                max_charge_kw: this.formData.battery_enabled ? parseFloat(this.formData.max_charge_kw) : null,
-                max_discharge_kw: this.formData.battery_enabled ? parseFloat(this.formData.max_discharge_kw) : null,
-                efficiency_pct: this.formData.battery_enabled ? parseFloat(this.formData.efficiency_pct) : null,
-                consumption_kwh: parseFloat(this.formData.consumption_kwh),
-                occupants: parseInt(this.formData.occupants),
-                stochastic: this.formData.stochastic,
-                location: this.formData.location === 'custom'
-                    ? this.formData.custom_lat + ',' + this.formData.custom_lon
-                    : this.formData.location,
-                name: this.formData.name || 'Web Simulation'
+                pv_kw: parseFloat(f.pv_kw),
+                azimuth: parseFloat(f.azimuth),
+                tilt: parseFloat(f.tilt),
+                battery_kwh: f.battery_enabled ? parseFloat(f.battery_kwh) : 0,
+                max_charge_kw: f.battery_enabled ? parseFloat(f.max_charge_kw) : null,
+                max_discharge_kw: f.battery_enabled ? parseFloat(f.max_discharge_kw) : null,
+                efficiency_pct: f.battery_enabled ? parseFloat(f.efficiency_pct) : null,
+                consumption_kwh: parseFloat(f.consumption_kwh),
+                occupants: parseInt(f.occupants),
+                stochastic: f.stochastic,
+                location: f.location === 'custom'
+                    ? f.custom_lat + ',' + f.custom_lon
+                    : f.location,
+                name: f.name || 'Web Simulation'
             };
-            if (this.formData.period_mode === 'preset') {
-                payload.days = parseInt(this.formData.period_days);
+            if (f.period_mode === 'preset') {
+                payload.days = parseInt(f.period_days);
             } else {
-                payload.start = this.formData.start_date;
-                payload.end = this.formData.end_date;
+                payload.start = f.start_date;
+                payload.end = f.end_date;
+            }
+            // Optional: heat pump
+            if (f.heat_pump_enabled) {
+                payload.heat_pump = {
+                    type: f.heat_pump_type,
+                    thermal_capacity_kw: parseFloat(f.heat_pump_capacity_kw),
+                    annual_heat_demand_kwh: parseFloat(f.heat_pump_demand_kwh)
+                };
+            }
+            // Optional: tariff
+            if (f.tariff_enabled) {
+                const tariff = { type: f.tariff_type };
+                if (f.tariff_type === 'flat_rate') {
+                    tariff.rate_per_kwh = parseFloat(f.tariff_rate_per_kwh);
+                } else {
+                    tariff.peak_rate = parseFloat(f.tariff_peak_rate);
+                    tariff.off_peak_rate = parseFloat(f.tariff_off_peak_rate);
+                }
+                payload.tariff = tariff;
+            }
+            // Optional: dispatch strategy (only meaningful when battery is enabled)
+            if (f.battery_enabled && f.dispatch_strategy_type !== 'self_consumption') {
+                const ds = { strategy_type: f.dispatch_strategy_type };
+                if (f.dispatch_strategy_type === 'tou_optimized') {
+                    ds.peak_hours = [[parseInt(f.dispatch_peak_start), parseInt(f.dispatch_peak_end)]];
+                }
+                if (f.dispatch_strategy_type === 'peak_shaving') {
+                    ds.import_limit_kw = parseFloat(f.dispatch_import_limit_kw);
+                }
+                payload.dispatch_strategy = ds;
             }
             return payload;
         },
@@ -270,6 +316,16 @@ document.addEventListener('alpine:init', () => {
             <!-- Load tab -->
             <div x-show="activeTab === 'load'" x-cloak role="tabpanel">
                 {% include "simulate/partials/load-config.html" %}
+            </div>
+
+            <!-- Heat Pump tab -->
+            <div x-show="activeTab === 'heat_pump'" x-cloak role="tabpanel">
+                {% include "simulate/partials/heat-pump-config.html" %}
+            </div>
+
+            <!-- Tariff tab -->
+            <div x-show="activeTab === 'tariff'" x-cloak role="tabpanel">
+                {% include "simulate/partials/tariff-config.html" %}
             </div>
 
             <!-- Location tab -->

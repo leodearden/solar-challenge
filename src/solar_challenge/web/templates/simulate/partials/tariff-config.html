@@ -1,0 +1,89 @@
+{# Tariff configuration partial for the home simulation form.
+   Mirrors battery-config.html's enable-toggle / x-show pattern.
+   Parent x-data must expose formData with tariff_* fields. #}
+
+<div class="space-y-6">
+    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Import Tariff</h3>
+    <p class="text-sm text-slate-500 dark:text-slate-400">Optionally specify an electricity import tariff to model bill savings.</p>
+
+    <!-- Enable/disable toggle -->
+    <div class="flex items-center gap-3">
+        <button
+            type="button"
+            role="switch"
+            :aria-checked="formData.tariff_enabled"
+            @click="formData.tariff_enabled = !formData.tariff_enabled"
+            class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
+            :class="formData.tariff_enabled ? 'bg-amber-500' : 'bg-slate-300 dark:bg-slate-600'"
+        >
+            <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                :class="formData.tariff_enabled ? 'translate-x-5' : 'translate-x-0'"
+            ></span>
+        </button>
+        <label class="text-sm font-semibold text-slate-700 dark:text-slate-300">Enable Tariff</label>
+    </div>
+
+    <!-- Tariff settings (shown when enabled) -->
+    <div x-show="formData.tariff_enabled" x-cloak x-transition class="space-y-6">
+        <!-- Tariff type selector -->
+        <div class="space-y-1.5">
+            <label for="tariff_type" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Tariff Type</label>
+            <select
+                id="tariff_type"
+                name="tariff_type"
+                x-model="formData.tariff_type"
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+            >
+                <option value="flat_rate">Flat Rate</option>
+                <option value="economy_7">Economy 7</option>
+                <option value="economy_10">Economy 10</option>
+            </select>
+        </div>
+
+        <!-- Flat rate fields -->
+        <div x-show="formData.tariff_type === 'flat_rate'" x-cloak x-transition class="space-y-1.5">
+            <label for="tariff_rate_per_kwh" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Rate (£/kWh)</label>
+            <input
+                type="number"
+                id="tariff_rate_per_kwh"
+                name="tariff_rate_per_kwh"
+                min="0"
+                max="2"
+                step="0.01"
+                x-model.number="formData.tariff_rate_per_kwh"
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+            >
+        </div>
+
+        <!-- Economy 7 / Economy 10 fields -->
+        <div x-show="formData.tariff_type === 'economy_7' || formData.tariff_type === 'economy_10'" x-cloak x-transition class="grid grid-cols-2 gap-4">
+            <div class="space-y-1.5">
+                <label for="tariff_peak_rate" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Peak Rate (£/kWh)</label>
+                <input
+                    type="number"
+                    id="tariff_peak_rate"
+                    name="tariff_peak_rate"
+                    min="0"
+                    max="2"
+                    step="0.01"
+                    x-model.number="formData.tariff_peak_rate"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                >
+            </div>
+            <div class="space-y-1.5">
+                <label for="tariff_off_peak_rate" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Off-peak Rate (£/kWh)</label>
+                <input
+                    type="number"
+                    id="tariff_off_peak_rate"
+                    name="tariff_off_peak_rate"
+                    min="0"
+                    max="2"
+                    step="0.01"
+                    x-model.number="formData.tariff_off_peak_rate"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                >
+            </div>
+        </div>
+    </div>
+</div>
