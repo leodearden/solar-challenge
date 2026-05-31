@@ -1,7 +1,11 @@
 """Tests for Battery configuration and state."""
 
+import dataclasses
+import pickle
+
 import pytest
 from solar_challenge.battery import BatteryConfig, Battery
+from solar_challenge.config import GridChargeConfig
 
 
 class TestBatteryConfigBasics:
@@ -63,6 +67,43 @@ class TestBatteryConfigValidation:
             BatteryConfig(capacity_kwh=5.0, max_discharge_kw=0)
         with pytest.raises(ValueError, match="discharge"):
             BatteryConfig(capacity_kwh=5.0, max_discharge_kw=-1.0)
+
+
+class TestBatteryConfigGridCharging:
+    """Contract guard: grid_charging field on BatteryConfig is frozen and picklable."""
+
+    def test_grid_charging_default_is_none(self) -> None:
+        """BatteryConfig without grid_charging has grid_charging == None."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.grid_charging is None
+
+    def test_grid_charging_round_trips(self) -> None:
+        """BatteryConfig.grid_charging stores the GridChargeConfig correctly."""
+        gc = GridChargeConfig(target_soc_fraction=0.8)
+        cfg = BatteryConfig(capacity_kwh=5.0, grid_charging=gc)
+        assert cfg.grid_charging is not None
+        assert cfg.grid_charging.target_soc_fraction == 0.8
+
+    def test_battery_config_frozen_grid_charging(self) -> None:
+        """Assigning to BatteryConfig.grid_charging raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.grid_charging = None  # type: ignore[misc]
+
+    def test_grid_charge_config_frozen(self) -> None:
+        """Assigning to GridChargeConfig.target_soc_fraction raises FrozenInstanceError."""
+        gc = GridChargeConfig(target_soc_fraction=0.8)
+        cfg = BatteryConfig(capacity_kwh=5.0, grid_charging=gc)
+        assert cfg.grid_charging is not None
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.grid_charging.target_soc_fraction = 0.5  # type: ignore[misc]
+
+    def test_picklable_with_grid_charging(self) -> None:
+        """BatteryConfig with GridChargeConfig round-trips through pickle."""
+        gc = GridChargeConfig(target_soc_fraction=0.8)
+        cfg = BatteryConfig(capacity_kwh=5.0, grid_charging=gc)
+        restored = pickle.loads(pickle.dumps(cfg))
+        assert restored == cfg
 
 
 @pytest.fixture
