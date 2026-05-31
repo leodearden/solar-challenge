@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
     BatteryDistributionConfig,
     ConfigurationError,
@@ -23,7 +24,9 @@ from solar_challenge.config import (
     SimulationPeriod,
     UniformDistribution,
     WeightedDiscreteDistribution,
+    _parse_community_config,
     _parse_dispatch_strategy_config,
+    load_community_config,
     _parse_distribution_spec,
     _parse_fleet_distribution_config,
     _sample_from_distribution,
@@ -1770,3 +1773,319 @@ fleet_distribution:
                 assert h1.heat_pump_config.heat_pump_type == h2.heat_pump_config.heat_pump_type
                 assert h1.heat_pump_config.thermal_capacity_kw == h2.heat_pump_config.thermal_capacity_kw
                 assert h1.heat_pump_config.annual_heat_demand_kwh == h2.heat_pump_config.annual_heat_demand_kwh
+
+
+# ---------------------------------------------------------------------------
+# Community config parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseCommunityConfig:
+    """Tests for _parse_community_config."""
+
+    def test_none_returns_none(self) -> None:
+        """_parse_community_config(None) returns None (mirrors _parse_battery_config)."""
+        assert _parse_community_config(None) is None
+
+    def test_minimal_p2p(self) -> None:
+        """A minimal dict with sharing_mode='p2p' returns a valid CommunityConfig."""
+        cfg = _parse_community_config({"sharing_mode": "p2p"})
+        assert isinstance(cfg, CommunityConfig)
+        assert cfg.sharing_mode == "p2p"
+        assert cfg.community_battery is None
+        assert cfg.billing is None
+
+    # ------------------------------------------------------------------
+    # community_battery mode + invalid combinations (step-3)
+    # ------------------------------------------------------------------
+
+    def test_community_battery_mode_parses_battery(self) -> None:
+        """community_battery mode with battery block returns BatteryConfig."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "community_battery",
+                "community_battery": {
+                    "capacity_kwh": 50.0,
+                    "max_charge_kw": 20.0,
+                    "max_discharge_kw": 20.0,
+                },
+            }
+        )
+        assert isinstance(cfg, CommunityConfig)
+        assert cfg.sharing_mode == "community_battery"
+        assert cfg.community_battery is not None
+        assert cfg.community_battery.capacity_kwh == 50.0
+
+    def test_community_battery_mode_without_battery_raises(self) -> None:
+        """community_battery mode without a community_battery block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config({"sharing_mode": "community_battery"})
+
+    def test_p2p_with_battery_raises(self) -> None:
+        """p2p + community_battery block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "community_battery": {"capacity_kwh": 50.0},
+                }
+            )
+
+    def test_bogus_mode_raises(self) -> None:
+        """An unrecognised sharing_mode raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config({"sharing_mode": "bogus"})
+
+    # ------------------------------------------------------------------
+    # billing block: tariff + direct SEG scalar (step-5)
+    # ------------------------------------------------------------------
+
+    def test_billing_with_tariff_and_direct_seg(self) -> None:
+        """billing block with tariff + direct seg_rate_pence_per_kwh is parsed."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "p2p",
+                "billing": {
+                    "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
+                    "seg_rate_pence_per_kwh": 4.1,
+                },
+            }
+        )
+        assert isinstance(cfg, CommunityConfig)
+        assert cfg.billing is not None
+        assert isinstance(cfg.billing, CommunityBillingConfig)
+        assert cfg.billing.tariff is not None
+        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(4.1)
+
+    def test_no_billing_key_gives_none(self) -> None:
+        """Absence of the billing key leaves billing=None."""
+        cfg = _parse_community_config({"sharing_mode": "p2p"})
+        assert cfg is not None
+        assert cfg.billing is None
+
+    # ------------------------------------------------------------------
+    # billing: nested SEG forms (step-7)
+    # ------------------------------------------------------------------
+
+    def test_billing_seg_preset(self) -> None:
+        """billing.seg.preset resolves to the SEG_PRESETS rate."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "p2p",
+                "billing": {"seg": {"preset": "Octopus"}},
+            }
+        )
+        assert cfg is not None
+        assert cfg.billing is not None
+        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(4.1)
+
+    def test_billing_seg_rate(self) -> None:
+        """billing.seg.rate_pence_per_kwh stores the explicit float."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "p2p",
+                "billing": {"seg": {"rate_pence_per_kwh": 5.5}},
+            }
+        )
+        assert cfg is not None
+        assert cfg.billing is not None
+        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(5.5)
+
+    def test_billing_seg_unknown_preset_raises(self) -> None:
+        """billing.seg with unknown preset name raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Unknown SEG preset"):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {"seg": {"preset": "Nonexistent"}},
+                }
+            )
+
+    def test_billing_both_scalar_and_seg_block_raises(self) -> None:
+        """Supplying both seg_rate_pence_per_kwh and seg block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {
+                        "seg_rate_pence_per_kwh": 4.1,
+                        "seg": {"preset": "Octopus"},
+                    },
+                }
+            )
+
+    # ------------------------------------------------------------------
+    # Amendment: additional robustness tests (reviewer pass)
+    # ------------------------------------------------------------------
+
+    def test_billing_seg_non_dict_raises(self) -> None:
+        """A bare scalar for the seg key raises ConfigurationError, not TypeError."""
+        with pytest.raises(ConfigurationError, match="mapping"):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {"seg": 4.1},
+                }
+            )
+
+    def test_billing_seg_string_raises(self) -> None:
+        """A bare string for the seg key raises ConfigurationError, not TypeError."""
+        with pytest.raises(ConfigurationError, match="mapping"):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {"seg": "Octopus"},
+                }
+            )
+
+    def test_billing_seg_block_both_preset_and_rate_raises(self) -> None:
+        """A seg block with both preset and rate_pence_per_kwh raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {
+                        "seg": {"preset": "Octopus", "rate_pence_per_kwh": 5.5},
+                    },
+                }
+            )
+
+    def test_empty_billing_block_returns_none_billing(self) -> None:
+        """An empty billing: {} block normalises to billing=None (same as absent key)."""
+        cfg = _parse_community_config({"sharing_mode": "p2p", "billing": {}})
+        assert cfg is not None
+        assert cfg.billing is None
+
+
+class TestLoadCommunityConfig:
+    """Tests for load_community_config."""
+
+    def test_load_yaml_with_community_block(self) -> None:
+        """YAML file with community: block returns a populated CommunityConfig."""
+        yaml_content = """\
+community:
+  sharing_mode: community_battery
+  community_battery:
+    capacity_kwh: 50.0
+    max_charge_kw: 20.0
+    max_discharge_kw: 20.0
+  billing:
+    tariff:
+      type: flat_rate
+      rate_per_kwh: 0.30
+    seg_rate_pence_per_kwh: 4.1
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            cfg = load_community_config(path)
+            assert isinstance(cfg, CommunityConfig)
+            assert cfg.sharing_mode == "community_battery"
+            assert cfg.community_battery is not None
+            assert cfg.community_battery.capacity_kwh == pytest.approx(50.0)
+            assert cfg.billing is not None
+            assert cfg.billing.tariff is not None
+            assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(4.1)
+        finally:
+            path.unlink()
+
+    def test_load_yaml_without_community_block_returns_none(self) -> None:
+        """YAML file with no community: key returns None."""
+        yaml_content = """\
+name: Bristol Phase 1
+period:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            result = load_community_config(path)
+            assert result is None
+        finally:
+            path.unlink()
+
+    def test_load_non_dict_yaml_returns_none(self) -> None:
+        """A YAML file whose top-level value is a list (not a dict) returns None
+        instead of raising AttributeError on .get('community').
+        """
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write("- item1\n- item2\n")  # top-level list, no community key
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            result = load_community_config(path)
+            assert result is None
+        finally:
+            path.unlink()
+
+
+class TestCommunityConfigFrozenPicklable:
+    """Contract guard: full CommunityConfig object graph is frozen and picklable (step-11)."""
+
+    def _full_community_config(self) -> "CommunityConfig":
+        """Return a CommunityConfig that exercises every nested dataclass."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "community_battery",
+                "community_battery": {
+                    "capacity_kwh": 50.0,
+                    "max_charge_kw": 20.0,
+                    "max_discharge_kw": 20.0,
+                },
+                "billing": {
+                    "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
+                    "seg_rate_pence_per_kwh": 4.1,
+                },
+            }
+        )
+        assert cfg is not None
+        return cfg
+
+    def test_picklable_round_trip(self) -> None:
+        """CommunityConfig (with nested BatteryConfig + CommunityBillingConfig + TariffConfig)
+        round-trips through pickle with structural equality."""
+        import pickle
+
+        cfg = self._full_community_config()
+        restored = pickle.loads(pickle.dumps(cfg))
+        assert restored == cfg
+
+    def test_frozen_top_level(self) -> None:
+        """Assigning a new attribute on CommunityConfig raises FrozenInstanceError."""
+        import dataclasses
+
+        cfg = self._full_community_config()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.sharing_mode = "p2p"  # type: ignore[misc]
+
+    def test_frozen_nested_battery(self) -> None:
+        """BatteryConfig inside CommunityConfig is also frozen."""
+        import dataclasses
+
+        cfg = self._full_community_config()
+        assert cfg.community_battery is not None
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.community_battery.capacity_kwh = 99.0  # type: ignore[misc]
+
+    def test_frozen_nested_billing(self) -> None:
+        """CommunityBillingConfig inside CommunityConfig is also frozen."""
+        import dataclasses
+
+        cfg = self._full_community_config()
+        assert cfg.billing is not None
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.billing.seg_rate_pence_per_kwh = 0.0  # type: ignore[misc]

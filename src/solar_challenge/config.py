@@ -21,6 +21,7 @@ except ImportError:
     YAML_AVAILABLE = False
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.ev import EVConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.heat_pump import HeatPumpConfig
@@ -28,6 +29,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 
@@ -1912,3 +1914,149 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
             seed=config.seed,
         )
     return config
+
+
+# ---------------------------------------------------------------------------
+# Community config parsing  (task γ / task #32)
+# ---------------------------------------------------------------------------
+
+
+def _parse_community_billing_config(
+    data: Optional[dict[str, Any]]
+) -> Optional[CommunityBillingConfig]:
+    """Parse a ``billing:`` sub-block into a :class:`CommunityBillingConfig`.
+
+    Resolves the SEG rate from one of three forms:
+
+    * Direct scalar: ``seg_rate_pence_per_kwh: 4.1``
+    * Preset lookup: ``seg: { preset: Octopus }``
+    * Explicit rate:  ``seg: { rate_pence_per_kwh: 5.5 }``
+
+    Supplying both the direct scalar and a nested ``seg`` block is ambiguous and
+    raises :exc:`ConfigurationError`.
+
+    Args:
+        data: Billing configuration dictionary, or None.
+
+    Returns:
+        ``CommunityBillingConfig`` when *data* is a dict; ``None`` otherwise.
+
+    Raises:
+        ConfigurationError: For ambiguous SEG specification or unknown preset.
+    """
+    if data is None:
+        return None
+
+    tariff = _parse_tariff_config(data.get("tariff"))
+
+    # Resolve SEG rate (three mutually-exclusive forms)
+    direct_rate: Optional[float] = None
+    if "seg_rate_pence_per_kwh" in data:
+        direct_rate = float(data["seg_rate_pence_per_kwh"])
+
+    seg_block = data.get("seg")
+
+    if direct_rate is not None and seg_block is not None:
+        raise ConfigurationError(
+            "community billing: specify either 'seg_rate_pence_per_kwh' (scalar) "
+            "or 'seg' block — not both."
+        )
+
+    seg_rate: Optional[float] = None
+    if direct_rate is not None:
+        seg_rate = direct_rate
+    elif seg_block is not None:
+        # Guard: seg must be a mapping, not a bare scalar/string
+        if not isinstance(seg_block, dict):
+            raise ConfigurationError(
+                "community billing: 'seg' must be a mapping with 'preset' or "
+                "'rate_pence_per_kwh', not a bare scalar."
+            )
+        if "preset" in seg_block:
+            # Reject ambiguous combination of preset + explicit rate
+            if "rate_pence_per_kwh" in seg_block:
+                raise ConfigurationError(
+                    "community billing: 'seg' block must specify either 'preset' "
+                    "or 'rate_pence_per_kwh' — not both."
+                )
+            preset_name = seg_block["preset"]
+            if preset_name not in SEG_PRESETS:
+                available = ", ".join(sorted(SEG_PRESETS))
+                raise ConfigurationError(
+                    f"Unknown SEG preset {preset_name!r}. "
+                    f"Available presets: {available}"
+                )
+            seg_rate = SEG_PRESETS[preset_name].rate_pence_per_kwh
+        else:
+            seg_rate = _parse_seg_config(seg_block)
+
+    # Normalise an all-None result to None so callers can reliably test ``is None``
+    # for "no billing configured" without distinguishing an empty block from an
+    # absent key.
+    if tariff is None and seg_rate is None:
+        return None
+    return CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
+
+
+def _parse_community_config(
+    data: Optional[dict[str, Any]]
+) -> Optional[CommunityConfig]:
+    """Parse a ``community:`` YAML block into a :class:`CommunityConfig`.
+
+    Args:
+        data: Community configuration dictionary, or None.
+
+    Returns:
+        ``CommunityConfig`` when *data* is a dict; ``None`` when *data* is ``None``.
+
+    Raises:
+        ConfigurationError: For missing/invalid ``sharing_mode``, p2p+battery,
+            community_battery-without-battery, or any nested config error.
+    """
+    if data is None:
+        return None
+
+    sharing_mode = data.get("sharing_mode")
+    if not sharing_mode:
+        raise ConfigurationError(
+            "community: block requires a 'sharing_mode' field "
+            "('p2p' or 'community_battery')"
+        )
+
+    community_battery = _parse_battery_config(data.get("community_battery"))
+    billing = _parse_community_billing_config(data.get("billing"))
+
+    try:
+        return CommunityConfig(
+            sharing_mode=sharing_mode,
+            community_battery=community_battery,
+            billing=billing,
+        )
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
+
+
+def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
+    """Load a community configuration from a YAML or JSON file.
+
+    Reads the file with :func:`load_config` and parses the top-level
+    ``community:`` block, if present.  Returns ``None`` when the file
+    contains no ``community:`` key (e.g. a plain fleet/scenario document).
+
+    Args:
+        path: Path to a ``.yaml``, ``.yml``, or ``.json`` configuration file.
+
+    Returns:
+        :class:`CommunityConfig` when a ``community:`` block is present;
+        ``None`` otherwise.
+
+    Raises:
+        ConfigurationError: If the file cannot be read or the community block
+            is invalid.
+    """
+    raw = load_config(path)
+    # yaml.safe_load returns None for an empty file; coerce to a dict so that
+    # .get("community") works cleanly and returns None rather than raising
+    # AttributeError.
+    data: dict[str, Any] = raw if isinstance(raw, dict) else {}
+    return _parse_community_config(data.get("community"))
