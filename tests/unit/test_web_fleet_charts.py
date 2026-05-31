@@ -302,17 +302,17 @@ class TestFinancialBreakdownPricing:
             expected_cost.sum(), abs=0.02
         ), "Daily Cost total must come from engine import_cost series"
 
-        # (2) Structural guard: confirm hardcoded rate literals are gone from the
-        # implementation.  This is independent of the test's chosen rate values
-        # and does not false-fail if a future engine rate happens to be close to
-        # an old constant.
-        import inspect
-        source = inspect.getsource(financial_breakdown)
-        assert "0.245" not in source, (
-            "Hardcoded import rate 0.245 must be removed from financial_breakdown"
-        )
-        assert " 0.15" not in source, (
-            "Hardcoded export rate 0.15 must be removed from financial_breakdown"
+        # (2) Behavioral guard: chart follows the engine's 0.05 export rate, NOT
+        # the old hardcoded 0.15.  With engine_export_revenue = grid_export/60*0.05,
+        # the chart total must be ~3x BELOW grid_export_kwh * 0.15.
+        total_grid_export_kwh = results.grid_export.sum() / 60
+        revenue_total = sum(traces["Daily Revenue"]["y"])
+        assert revenue_total != pytest.approx(
+            total_grid_export_kwh * 0.15, rel=0.1
+        ), "Daily Revenue must not match old hardcoded 0.15 export rate"
+        assert revenue_total < total_grid_export_kwh * 0.15 * 0.5, (
+            "Daily Revenue must be substantially below the old 0.15 rate "
+            "(engine uses 0.05 GBP/kWh, ~3x smaller)"
         )
 
 
