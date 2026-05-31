@@ -33,6 +33,15 @@ def _shutdown_job_managers() -> Generator[None, None, None]:
     endpoint tests.  This eliminates the ~48 s process-exit linger that
     occurred when abandoned workers were joined by the interpreter's own
     _python_exit handler at the end of the suite.
+
+    Scope note: all Flask-based fixtures in tests/unit/test_web_jobs.py
+    use the default function scope (no ``scope=`` argument), so each test
+    gets its own JobManager and the WeakSet contains only that test's
+    managers at teardown — no cross-test contamination.  The session-scoped
+    ``live_server`` fixture in tests/e2e/conftest.py creates a JobManager
+    that will be drained after the first e2e test; this is safe because e2e
+    tests browse pre-seeded data only and never submit new simulation jobs
+    mid-session.
     """
     yield
     jobs_mod: Any = sys.modules.get("solar_challenge.web.jobs")

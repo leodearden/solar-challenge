@@ -98,18 +98,29 @@ def test_python_version_within_requires_python(project_root: Path) -> None:
     specifier = _extract_requires_python(text)
     lower, upper = _parse_requires_python_bounds(specifier)
 
+    # Fail loudly if the specifier uses a form that _parse_requires_python_bounds
+    # does not recognise (e.g. >X.Y, <=X.Y, ==X.Y, ~=X.Y, patch-level versions).
+    # Silently returning None and skipping the bound check gives false confidence
+    # that the pin is within range when the parser is simply unaware of the form.
+    assert lower is not None, (
+        f"Could not parse a lower bound (>=X.Y) from requires-python={specifier!r}; "
+        "update _parse_requires_python_bounds to handle this specifier form"
+    )
+    assert upper is not None, (
+        f"Could not parse an upper bound (<X.Y) from requires-python={specifier!r}; "
+        "update _parse_requires_python_bounds to handle this specifier form"
+    )
+
     pv_file = project_root / ".python-version"
     assert pv_file.exists(), ".python-version missing (run test_python_version_file_exists first)"
     pin = _parse_version_pin(pv_file.read_text(encoding="utf-8"))
 
-    if lower is not None:
-        assert pin >= lower, (
-            f".python-version {pin} is below requires-python lower bound {lower}"
-        )
-    if upper is not None:
-        assert pin < upper, (
-            f".python-version {pin} is not below requires-python upper bound {upper}"
-        )
+    assert pin >= lower, (
+        f".python-version {pin} is below requires-python lower bound {lower}"
+    )
+    assert pin < upper, (
+        f".python-version {pin} is not below requires-python upper bound {upper}"
+    )
 
 
 def test_python_version_listed_in_classifiers(project_root: Path) -> None:
