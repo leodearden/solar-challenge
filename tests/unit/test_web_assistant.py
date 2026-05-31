@@ -56,3 +56,20 @@ def test_assistant_blueprint_registers_without_warning(
     assert "assistant" in fresh_app.blueprints, (
         f"Expected 'assistant' blueprint to be registered; got: {list(fresh_app.blueprints.keys())}"
     )
+
+
+def test_assistant_page_renders_chat_shell(client: FlaskClient) -> None:
+    """GET /assistant → 200 with chat shell markers (chat-messages + chat-input containers)."""
+    resp = client.get("/assistant")
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    assert "text/html" in resp.content_type, (
+        f"Expected text/html content type, got {resp.content_type!r}"
+    )
+    html = resp.data.decode()
+    assert "AI Assistant" in html, "Expected 'AI Assistant' heading in page"
+    assert 'id="chat-messages"' in html, (
+        "Expected scrollable message container id='chat-messages' in page"
+    )
+    assert 'id="chat-input"' in html, (
+        "Expected message input id='chat-input' in page"
+    )
