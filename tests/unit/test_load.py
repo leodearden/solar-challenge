@@ -375,3 +375,44 @@ class TestWindowedStochasticGeneration:
         assert call_count[0] == 1, (
             f"Expected 1 simulated day for a 1-day window, got {call_count[0]}"
         )
+
+    def test_window_3day_calls_run_simulation_exactly_three_times(self, monkeypatch):
+        """3-day stochastic request triggers exactly 3 run_application_simulation calls.
+
+        Ensures window scaling is proportional to the requested range, not pinned
+        to a constant (365 or otherwise).  Also checks structural invariants on
+        the returned Series.
+        """
+        import richardsonpy.classes.appliance as _app_mod
+
+        call_count = [0]
+        _original = _app_mod.run_application_simulation
+
+        def _counting_wrapper(*args, **kwargs):
+            call_count[0] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-23")  # 3 days, no DST transition
+
+        profile = generate_load_profile(config, start, end)
+
+        # Exactly THREE simulated days
+        assert call_count[0] == 3, (
+            f"Expected 3 simulated days for a 3-day window, got {call_count[0]}"
+        )
+
+        # Structural invariants
+        assert isinstance(profile, pd.Series)
+        assert len(profile) == 3 * 1440, (
+            f"Expected {3 * 1440} rows, got {len(profile)}"
+        )
+        assert isinstance(profile.index, pd.DatetimeIndex)
+        assert profile.index.tz is not None, "Index must be timezone-aware"
+        assert (profile >= 0).all(), "No negative power values expected"
+        assert profile.max() < 15.0, (
+            f"Peak power {profile.max():.2f} kW exceeds sane domestic bound of 15 kW"
+        )
