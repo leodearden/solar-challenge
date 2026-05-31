@@ -1,5 +1,8 @@
 """Tests for energy flow calculations."""
 
+from datetime import datetime
+from typing import Optional
+
 import pytest
 import pandas as pd
 import numpy as np
@@ -8,10 +11,18 @@ from solar_challenge.flow import (
     calculate_excess_pv,
     calculate_shortfall,
     simulate_timestep,
+    simulate_timestep_tou,
     validate_energy_balance,
     EnergyFlowResult,
 )
 from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.tariff import TariffConfig
+from solar_challenge.config import GridChargeConfig
+from solar_challenge.dispatch import (
+    DispatchDecision,
+    DispatchStrategy,
+    GridChargeContext,
+)
 
 
 @pytest.fixture
@@ -443,3 +454,75 @@ class TestEnergyBalanceValidation:
         # Should fail with very tight tolerance
         with pytest.raises(ValueError, match="balance violated"):
             validate_energy_balance(result, tolerance=0.00001)
+
+
+# ---------------------------------------------------------------------------
+# Shared scaffolding for grid-charge tests (pre-1)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def economy7_tariff() -> TariffConfig:
+    """Economy 7 tariff (off-peak 0.09 @ 00:30-07:30, peak 0.25)."""
+    return TariffConfig.economy_7()
+
+
+@pytest.fixture
+def off_peak_ts() -> pd.Timestamp:
+    """A timestamp in the off-peak period (03:00)."""
+    return pd.Timestamp("2024-01-01 03:00")
+
+
+@pytest.fixture
+def peak_ts() -> pd.Timestamp:
+    """A timestamp in the peak period (18:00)."""
+    return pd.Timestamp("2024-01-01 18:00")
+
+
+@pytest.fixture
+def grid_charge_battery() -> Battery:
+    """Battery with grid charging enabled; initial SOC below target so gap > 0."""
+    config = BatteryConfig(
+        capacity_kwh=5.0,
+        max_charge_kw=2.5,
+        max_discharge_kw=2.5,
+        grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+    )
+    # target_kwh = 0.9 * 5 = 4.5; initial = 2.0 → gap = 2.5 kWh
+    return Battery(config, initial_soc_kwh=2.0)
+
+
+class _RecordingStrategy(DispatchStrategy):
+    """Test double: records the grid_charge_ctx passed in and returns a fixed decision."""
+
+    def __init__(
+        self,
+        charge_kw: float = 0.0,
+        discharge_kw: float = 0.0,
+        grid_charge_kw: float = 0.0,
+    ) -> None:
+        self._decision = DispatchDecision(
+            charge_kw=charge_kw,
+            discharge_kw=discharge_kw,
+            grid_charge_kw=grid_charge_kw,
+        )
+        self.received_ctx: Optional[GridChargeContext] = None
+
+    @property
+    def name(self) -> str:
+        """Return strategy name."""
+        return "recording"
+
+    def decide_action(
+        self,
+        timestamp: datetime,
+        generation_kw: float,
+        demand_kw: float,
+        battery_soc_kwh: float,
+        battery_capacity_kwh: float,
+        timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
+    ) -> DispatchDecision:
+        """Record grid_charge_ctx and return the pre-configured decision."""
+        self.received_ctx = grid_charge_ctx
+        return self._decision
