@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Community energy sharing layer (post-hoc, read-only over FleetResults).
 
 This module implements the peer-to-peer (P2P) community netting layer described

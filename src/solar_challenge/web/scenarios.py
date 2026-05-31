@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint for scenario building and parameter sweep configuration.
 
 Provides page routes for the scenario builder and sweep configuration UI,

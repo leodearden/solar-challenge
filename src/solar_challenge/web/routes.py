@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
 from pathlib import Path

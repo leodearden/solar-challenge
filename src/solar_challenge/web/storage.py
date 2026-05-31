@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Storage service for persisting simulation runs to disk and database.
 
 Provides RunStorage class for saving and loading simulation results with:

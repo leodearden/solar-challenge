@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """SQLite database module for Solar Challenge web dashboard persistence.
 
 Provides schema initialization and connection management for storing

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint providing JSON API endpoints for background simulations.
 
 Provides REST endpoints for submitting simulation jobs, polling status,

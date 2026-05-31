@@ -116,7 +116,7 @@ See `long_running/solar-simulator/feature_list.json` for the complete list of fe
 
 ## License
 
-This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+This project is licensed under the **GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)**. See [LICENSE](LICENSE) for the full text.
 
 ## Contributing
 

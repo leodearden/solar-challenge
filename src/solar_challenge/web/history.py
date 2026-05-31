@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint for run history browsing and comparison.
 
 Provides routes for listing, filtering, searching, and comparing

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask application factory for the Solar Challenge web dashboard."""
 
 import logging

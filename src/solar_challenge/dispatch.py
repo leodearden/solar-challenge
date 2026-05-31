@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Battery dispatch strategy framework.
 
 This module provides an abstract framework for battery dispatch strategies,

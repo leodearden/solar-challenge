@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Energy flow calculations for PV and battery systems."""
 
 from dataclasses import dataclass

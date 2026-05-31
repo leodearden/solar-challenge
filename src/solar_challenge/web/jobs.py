@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Background job manager for running simulations asynchronously.
 
 Provides a JobManager class that uses a ThreadPoolExecutor to run

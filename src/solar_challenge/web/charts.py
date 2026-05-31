@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Centralized chart module for the Solar Challenge web dashboard.
 
 All functions return Plotly JSON strings via fig.to_json().
