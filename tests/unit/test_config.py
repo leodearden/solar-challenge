@@ -14,6 +14,7 @@ from solar_challenge.config import (
     ConfigurationError,
     DispatchStrategyConfig,
     FleetDistributionConfig,
+    GridChargeConfig,
     HeatPumpDistributionConfig,
     LoadDistributionConfig,
     NormalDistribution,
@@ -323,6 +324,45 @@ class TestDispatchStrategyConfig:
                 strategy_type="peak_shaving",
                 import_limit_kw=0.0,
             )
+
+
+class TestGridChargeConfig:
+    """Tests for GridChargeConfig class."""
+
+    def test_default_target_soc_fraction(self) -> None:
+        """GridChargeConfig() default target_soc_fraction is 0.9."""
+        config = GridChargeConfig()
+        assert config.target_soc_fraction == 0.9
+
+    def test_custom_target_soc_fraction(self) -> None:
+        """GridChargeConfig accepts custom target_soc_fraction."""
+        config = GridChargeConfig(target_soc_fraction=0.8)
+        assert config.target_soc_fraction == 0.8
+
+    def test_boundary_value_one_accepted(self) -> None:
+        """GridChargeConfig accepts target_soc_fraction == 1.0."""
+        config = GridChargeConfig(target_soc_fraction=1.0)
+        assert config.target_soc_fraction == 1.0
+
+    def test_small_positive_value_accepted(self) -> None:
+        """GridChargeConfig accepts small positive target_soc_fraction."""
+        config = GridChargeConfig(target_soc_fraction=0.01)
+        assert config.target_soc_fraction == 0.01
+
+    def test_zero_raises(self) -> None:
+        """target_soc_fraction == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
+            GridChargeConfig(target_soc_fraction=0.0)
+
+    def test_negative_raises(self) -> None:
+        """target_soc_fraction < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
+            GridChargeConfig(target_soc_fraction=-0.1)
+
+    def test_above_one_raises(self) -> None:
+        """target_soc_fraction > 1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
+            GridChargeConfig(target_soc_fraction=1.5)
 
 
 class TestDispatchStrategyParsing:
