@@ -4,6 +4,8 @@ TDD test suite for:
   - CommunityConfig / CommunityBillingConfig (step-1 / step-2)
   - simulate_community p2p netting (step-3 / step-4)
   - validate_community_balance (step-5 / step-6)
+  - _price_grid_flows (task-34 step-1 / step-2)
+  - CommunityResults billing fields via simulate_community (task-34 step-3 / step-4)
 """
 from __future__ import annotations
 
@@ -675,3 +677,232 @@ class TestSimulateCommunityBattery:
         assert len(result.grid_import) == len(index5)
         assert len(result.battery_soc) == len(index5)
         pd.testing.assert_index_equal(result.grid_import.index, index5)
+
+
+# ---------------------------------------------------------------------------
+# Task-34 step-1: TestPriceGridFlows (RED)
+# ---------------------------------------------------------------------------
+
+class TestPriceGridFlows:
+    """RED unit tests for community._price_grid_flows.
+
+    Tests the internal pricing helper _price_grid_flows before the function
+    exists (step-1); implementation lives in step-2.
+    """
+
+    def _hourly_idx(self, n: int = 2) -> pd.DatetimeIndex:
+        """Return an n-step hourly DatetimeIndex at midday."""
+        return pd.date_range("2024-06-21 12:00", periods=n, freq="h", tz="Europe/London")
+
+    def test_flat_import_cost_and_export_revenue(self) -> None:
+        """Flat 0.30 £/kWh + SEG 4.0 p/kWh, import=[2,2] kW, export=[1,1] kW (hourly).
+
+        import_energy = 4 kWh → cost = 4 * 0.30 = 1.20 £
+        export_energy = 2 kWh → revenue = 2 * 4.0 / 100 = 0.08 £
+        """
+        from solar_challenge.community import _price_grid_flows
+        from solar_challenge.seg import SEGTariff
+        from solar_challenge.tariff import FlatRateTariff
+
+        idx = self._hourly_idx()
+        tariff = FlatRateTariff(0.30)
+        seg = SEGTariff("x", 4.0)
+        import_kw = pd.Series([2.0, 2.0], index=idx, dtype=float)
+        export_kw = pd.Series([1.0, 1.0], index=idx, dtype=float)
+        import_cost, export_revenue = _price_grid_flows(import_kw, export_kw, tariff, seg)
+        assert import_cost == pytest.approx(1.20)
+        assert export_revenue == pytest.approx(0.08)
+
+    def test_tou_import_cost_matches_calculate_bill(self) -> None:
+        """Economy 7 TOU tariff: import_cost matches calculate_bill on same energy series.
+
+        Index: 06:00 (off-peak 0.09 £/kWh) and 08:00 (peak 0.25 £/kWh), freq=2h → dt_h=2.0.
+        import_kw=[2.0, 3.0] → energy=[4.0, 6.0] kWh.
+        Expected via calculate_bill: 4.0*0.09 + 6.0*0.25 = 0.36 + 1.50 = 1.86 £.
+        """
+        from solar_challenge.community import _price_grid_flows
+        from solar_challenge.seg import SEGTariff
+        from solar_challenge.tariff import TariffConfig, calculate_bill
+
+        # 06:00 → Economy 7 off-peak (00:30–07:30); 08:00 → peak
+        idx = pd.date_range("2024-06-21 06:00", periods=2, freq="2h", tz="Europe/London")
+        tariff = TariffConfig.economy_7()  # off_peak=0.09, peak=0.25
+        seg = SEGTariff("test", 4.0)
+        import_kw = pd.Series([2.0, 3.0], index=idx, dtype=float)
+        export_kw = pd.Series([0.5, 0.5], index=idx, dtype=float)
+        import_cost, _ = _price_grid_flows(import_kw, export_kw, tariff, seg)
+        # dt_h inferred as 2.0 from the index
+        expected = calculate_bill(import_kw * 2.0, tariff)
+        assert import_cost == pytest.approx(expected)
+        assert import_cost == pytest.approx(1.86)
+
+    def test_zero_export_gives_zero_revenue(self) -> None:
+        """All-zero export series → export_revenue == 0.0."""
+        from solar_challenge.community import _price_grid_flows
+        from solar_challenge.seg import SEGTariff
+        from solar_challenge.tariff import FlatRateTariff
+
+        idx = self._hourly_idx()
+        tariff = FlatRateTariff(0.30)
+        seg = SEGTariff("test", 4.1)
+        import_kw = pd.Series([3.0, 3.0], index=idx, dtype=float)
+        export_kw = pd.Series([0.0, 0.0], index=idx, dtype=float)
+        _, export_revenue = _price_grid_flows(import_kw, export_kw, tariff, seg)
+        assert export_revenue == 0.0
+
+    def test_zero_import_gives_zero_cost(self) -> None:
+        """All-zero import series → import_cost == 0.0."""
+        from solar_challenge.community import _price_grid_flows
+        from solar_challenge.seg import SEGTariff
+        from solar_challenge.tariff import FlatRateTariff
+
+        idx = self._hourly_idx()
+        tariff = FlatRateTariff(0.30)
+        seg = SEGTariff("test", 4.1)
+        import_kw = pd.Series([0.0, 0.0], index=idx, dtype=float)
+        export_kw = pd.Series([1.0, 2.0], index=idx, dtype=float)
+        import_cost, _ = _price_grid_flows(import_kw, export_kw, tariff, seg)
+        assert import_cost == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Task-34 step-3: TestCommunityBillingSavings (RED)
+# ---------------------------------------------------------------------------
+
+class TestCommunityBillingSavings:
+    """RED unit tests for billing fields on CommunityResults via simulate_community.
+
+    Uses a deterministic 2-step hourly fleet:
+      exporter: gen=[4,4], dem=[1,1] → export=[3,3], import=[0,0]
+      importer: gen=[0,0], dem=[2,2] → export=[0,0], import=[2,2]
+
+    Fleet totals: total_export=[3,3], total_import=[2,2]
+    P2P netting: surplus=3 > deficit=2 → cg_exp=[1,1], cg_imp=[0,0]
+
+    Baseline (no netting): import=2kWh/step × 2steps=4kWh, export=3kWh/step × 2=6kWh
+      baseline_import_cost = 4 * 0.30 = 1.20
+      baseline_export_rev  = 6 * 4.1/100 = 0.246
+      baseline_net = 1.20 - 0.246 = 0.954 ✓
+
+    Community (after netting): import=0, export=2kWh total (1*2)
+      community_import_cost = 0
+      community_export_rev  = 2 * 4.1/100 = 0.082
+      community_net = 0 - 0.082 = -0.082 ✓
+
+    savings = 0.954 - (-0.082) = 1.036 ✓
+    Also: savings == 4kWh * (0.30 - 0.041) = 4 * 0.259 = 1.036 ✓
+    """
+
+    @pytest.fixture
+    def billing_idx(self) -> pd.DatetimeIndex:
+        return pd.date_range("2024-06-21 12:00", periods=2, freq="h", tz="Europe/London")
+
+    @pytest.fixture
+    def billing_fleet(self, billing_idx: pd.DatetimeIndex) -> FleetResults:
+        """Exporter (gen=[4,4], dem=[1,1]) + importer (gen=[0,0], dem=[2,2])."""
+        return _make_fleet(
+            billing_idx,
+            [
+                ([4.0, 4.0], [1.0, 1.0]),  # exporter
+                ([0.0, 0.0], [2.0, 2.0]),  # importer
+            ],
+        )
+
+    @pytest.fixture
+    def billing_cfg(self) -> "CommunityConfig":
+        from solar_challenge.community import CommunityBillingConfig
+        from solar_challenge.tariff import FlatRateTariff
+
+        billing = CommunityBillingConfig(
+            tariff=FlatRateTariff(0.30),
+            seg_rate_pence_per_kwh=4.1,
+        )
+        return CommunityConfig(sharing_mode="p2p", billing=billing)
+
+    def test_baseline_net_cost(
+        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+    ) -> None:
+        """baseline_net_cost_gbp matches formula: import_cost - export_revenue."""
+        from solar_challenge.community import simulate_community
+
+        cr = simulate_community(billing_fleet, billing_cfg)
+        assert cr.baseline_net_cost_gbp == pytest.approx(0.954, abs=1e-6)
+
+    def test_community_net_cost(
+        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+    ) -> None:
+        """community_net_cost_gbp matches formula: p2p import 0 - export 0.082."""
+        from solar_challenge.community import simulate_community
+
+        cr = simulate_community(billing_fleet, billing_cfg)
+        assert cr.community_net_cost_gbp == pytest.approx(-0.082, abs=1e-6)
+
+    def test_community_savings(
+        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+    ) -> None:
+        """community_savings_gbp == approx(1.036) == baseline - community."""
+        from solar_challenge.community import simulate_community
+
+        cr = simulate_community(billing_fleet, billing_cfg)
+        assert cr.community_savings_gbp == pytest.approx(1.036, abs=1e-6)
+
+    def test_savings_equals_baseline_minus_community(
+        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+    ) -> None:
+        """community_savings_gbp == baseline_net - community_net exactly."""
+        from solar_challenge.community import simulate_community
+
+        cr = simulate_community(billing_fleet, billing_cfg)
+        assert cr.community_savings_gbp == pytest.approx(
+            cr.baseline_net_cost_gbp - cr.community_net_cost_gbp, abs=1e-12  # type: ignore[operator]
+        )
+
+    def test_savings_non_negative(
+        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+    ) -> None:
+        """community_savings_gbp >= 0 (p2p netting strictly benefits when R >> SEG)."""
+        from solar_challenge.community import simulate_community
+
+        cr = simulate_community(billing_fleet, billing_cfg)
+        assert cr.community_savings_gbp is not None
+        assert cr.community_savings_gbp >= 0
+        assert cr.community_net_cost_gbp < cr.baseline_net_cost_gbp  # type: ignore[operator]
+
+    def test_no_billing_fields_are_none_when_billing_absent(
+        self, billing_fleet: FleetResults
+    ) -> None:
+        """All three billing fields are None when no billing config is given."""
+        from solar_challenge.community import simulate_community
+
+        cfg_no_billing = CommunityConfig(sharing_mode="p2p")
+        cr = simulate_community(billing_fleet, cfg_no_billing)
+        assert cr.baseline_net_cost_gbp is None
+        assert cr.community_net_cost_gbp is None
+        assert cr.community_savings_gbp is None
+
+    def test_partial_billing_tariff_only_fields_are_none(
+        self, billing_fleet: FleetResults
+    ) -> None:
+        """All three fields stay None when billing has tariff but no seg_rate."""
+        from solar_challenge.community import CommunityBillingConfig, simulate_community
+        from solar_challenge.tariff import FlatRateTariff
+
+        partial_billing = CommunityBillingConfig(tariff=FlatRateTariff(0.30))
+        cfg = CommunityConfig(sharing_mode="p2p", billing=partial_billing)
+        cr = simulate_community(billing_fleet, cfg)
+        assert cr.baseline_net_cost_gbp is None
+        assert cr.community_net_cost_gbp is None
+        assert cr.community_savings_gbp is None
+
+    def test_partial_billing_seg_only_fields_are_none(
+        self, billing_fleet: FleetResults
+    ) -> None:
+        """All three fields stay None when billing has seg_rate but no tariff."""
+        from solar_challenge.community import CommunityBillingConfig, simulate_community
+
+        partial_billing = CommunityBillingConfig(seg_rate_pence_per_kwh=4.1)
+        cfg = CommunityConfig(sharing_mode="p2p", billing=partial_billing)
+        cr = simulate_community(billing_fleet, cfg)
+        assert cr.baseline_net_cost_gbp is None
+        assert cr.community_net_cost_gbp is None
+        assert cr.community_savings_gbp is None
