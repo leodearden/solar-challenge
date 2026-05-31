@@ -1088,3 +1088,43 @@ class TestParseHomeConfigCapabilities:
         }
         home_config, _start, _end, _name = _parse_home_config(payload)
         assert home_config.battery_config is None  # no battery => no dispatch either
+
+
+# ===================================================================
+# Endpoint error-path tests (400 for bad tariff / dispatch)
+# ===================================================================
+
+
+class TestParseHomeConfigErrorPaths:
+    """Endpoint 400 error-path tests for new optional config fields."""
+
+    def test_invalid_tariff_returns_400(
+        self, client: FlaskClient
+    ) -> None:
+        """POST with an unrecognised tariff type returns 400."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "tariff": {"type": "nonsense"}},
+        )
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "error" in data
+
+    def test_invalid_dispatch_returns_400(
+        self, client: FlaskClient
+    ) -> None:
+        """POST with tou_optimized dispatch but missing peak_hours returns 400."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={
+                **VALID_HOME_PAYLOAD,
+                "battery_kwh": 5.0,
+                "dispatch_strategy": {
+                    "strategy_type": "tou_optimized",
+                    # peak_hours intentionally omitted — required for tou_optimized
+                },
+            },
+        )
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "error" in data
