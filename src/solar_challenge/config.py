@@ -1921,6 +1921,66 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
 # ---------------------------------------------------------------------------
 
 
+def _parse_community_billing_config(
+    data: Optional[dict[str, Any]]
+) -> Optional[CommunityBillingConfig]:
+    """Parse a ``billing:`` sub-block into a :class:`CommunityBillingConfig`.
+
+    Resolves the SEG rate from one of three forms:
+
+    * Direct scalar: ``seg_rate_pence_per_kwh: 4.1``
+    * Preset lookup: ``seg: { preset: Octopus }``
+    * Explicit rate:  ``seg: { rate_pence_per_kwh: 5.5 }``
+
+    Supplying both the direct scalar and a nested ``seg`` block is ambiguous and
+    raises :exc:`ConfigurationError`.
+
+    Args:
+        data: Billing configuration dictionary, or None.
+
+    Returns:
+        ``CommunityBillingConfig`` when *data* is a dict; ``None`` otherwise.
+
+    Raises:
+        ConfigurationError: For ambiguous SEG specification or unknown preset.
+    """
+    if data is None:
+        return None
+
+    tariff = _parse_tariff_config(data.get("tariff"))
+
+    # Resolve SEG rate (three mutually-exclusive forms)
+    direct_rate: Optional[float] = None
+    if "seg_rate_pence_per_kwh" in data:
+        direct_rate = float(data["seg_rate_pence_per_kwh"])
+
+    seg_block = data.get("seg")
+
+    if direct_rate is not None and seg_block is not None:
+        raise ConfigurationError(
+            "community billing: specify either 'seg_rate_pence_per_kwh' (scalar) "
+            "or 'seg' block — not both."
+        )
+
+    seg_rate: Optional[float] = None
+    if direct_rate is not None:
+        seg_rate = direct_rate
+    elif seg_block is not None:
+        if "preset" in seg_block:
+            preset_name = seg_block["preset"]
+            if preset_name not in SEG_PRESETS:
+                available = ", ".join(sorted(SEG_PRESETS))
+                raise ConfigurationError(
+                    f"Unknown SEG preset {preset_name!r}. "
+                    f"Available presets: {available}"
+                )
+            seg_rate = SEG_PRESETS[preset_name].rate_pence_per_kwh
+        else:
+            seg_rate = _parse_seg_config(seg_block)
+
+    return CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
+
+
 def _parse_community_config(
     data: Optional[dict[str, Any]]
 ) -> Optional[CommunityConfig]:
@@ -1947,12 +2007,13 @@ def _parse_community_config(
         )
 
     community_battery = _parse_battery_config(data.get("community_battery"))
+    billing = _parse_community_billing_config(data.get("billing"))
 
     try:
         return CommunityConfig(
             sharing_mode=sharing_mode,
             community_battery=community_battery,
-            billing=None,
+            billing=billing,
         )
     except ValueError as exc:
         raise ConfigurationError(str(exc)) from exc
