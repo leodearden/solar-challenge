@@ -1,6 +1,7 @@
 """Tests for the Flask web dashboard module."""
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
@@ -31,6 +32,22 @@ def app(tmp_path: Path) -> Flask:
 def client(app: Flask) -> FlaskClient:
     """Create a Flask test client."""
     return app.test_client()
+
+
+@pytest.fixture
+def mock_job_manager(app: Flask) -> MagicMock:
+    """Replace the real JobManager on the app with a MagicMock (opt-in per-test).
+
+    This fixture is NOT wired into the module-level ``client`` fixture so that
+    tests exercising real DB/JobManager-backed paths (dashboard, history, jobs)
+    are unaffected.  Request it alongside ``client`` only in tests that want to
+    avoid spawning real background simulations.
+    """
+    jm = MagicMock()
+    jm.submit_home_job.return_value = ("job-home-001", "run-home-001")
+    jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
+    app.extensions["job_manager"] = jm
+    return jm
 
 
 class TestIndexRoute:
@@ -565,8 +582,14 @@ class TestFleetApiEndpoints:
         )
         assert response.status_code == 400
 
-    def test_simulate_fleet_from_distribution(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/fleet-from-distribution returns 201 with job_id/run_id."""
+    def test_simulate_fleet_from_distribution(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """Test POST /api/simulate/fleet-from-distribution returns 201 with job_id/run_id.
+
+        Uses mock_job_manager to avoid spawning a real 10-home background simulation
+        (PVGIS network I/O, DB writes) that would race with tmp_path teardown.
+        """
         response = client.post(
             "/api/simulate/fleet-from-distribution",
             json={
@@ -591,8 +614,9 @@ class TestFleetApiEndpoints:
         )
         assert response.status_code == 201
         data = response.get_json()
-        assert "job_id" in data
-        assert "run_id" in data
+        assert data["job_id"] == "job-fleet-001"
+        assert data["run_id"] == "run-fleet-001"
+        mock_job_manager.submit_fleet_job.assert_called_once()
 
     def test_simulate_fleet_from_distribution_empty_body(self, client: FlaskClient) -> None:
         """Test POST /api/simulate/fleet-from-distribution with empty body returns 400."""
