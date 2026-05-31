@@ -2158,6 +2158,7 @@ dependencies = [
     { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pvlib" },
     { name = "pyyaml" },
+    { name = "richardsonpy" },
     { name = "typer" },
 ]
 
@@ -2170,9 +2171,6 @@ dev = [
 e2e = [
     { name = "playwright" },
     { name = "pytest-playwright" },
-]
-stochastic = [
-    { name = "richardsonpy" },
 ]
 web = [
     { name = "flask" },
@@ -2194,7 +2192,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pytest-playwright", marker = "extra == 'e2e'", specifier = ">=0.4.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
-    { name = "richardsonpy", marker = "extra == 'stochastic'", specifier = ">=0.2.0" },
+    { name = "richardsonpy", specifier = ">=0.2.0" },
     { name = "typer", extras = ["all"], specifier = ">=0.9.0" },
 ]
 provides-extras = ["dev", "stochastic", "web", "e2e"]
