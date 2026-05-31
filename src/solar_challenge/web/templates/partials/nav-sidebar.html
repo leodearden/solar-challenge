@@ -9,7 +9,7 @@
     Alpine.js x-data on the layout wrapper in base.html.
 #}
 
-{% from "components/icons.html" import dashboard, simulate, scenarios, history, chevron_right, close, sidebar_collapse, brand_sun %}
+{% from "components/icons.html" import dashboard, simulate, scenarios, history, chevron_right, close, sidebar_collapse, brand_sun, assistant %}
 
 {# ── Navigation item definitions ───────────────────────────────────── #}
 {% set nav_items = [
@@ -49,6 +49,13 @@
             {"label": "Runs", "url": url_for('history.runs_page'), "page": "history-runs"},
             {"label": "Compare", "url": url_for('history.compare_page'), "page": "history-compare"}
         ]
+    },
+    {
+        "id": "assistant",
+        "label": "AI Assistant",
+        "url": url_for('assistant.chat_page'),
+        "icon": "assistant",
+        "page": "assistant"
     }
 ] %}
 
@@ -58,6 +65,7 @@
 {% elif name == "simulate" %}{{ simulate(classes="h-5 w-5 flex-shrink-0" if not is_mobile else "h-5 w-5") }}
 {% elif name == "scenarios" %}{{ scenarios(classes="h-5 w-5 flex-shrink-0" if not is_mobile else "h-5 w-5") }}
 {% elif name == "history" %}{{ history(classes="h-5 w-5 flex-shrink-0" if not is_mobile else "h-5 w-5") }}
+{% elif name == "assistant" %}{{ assistant(classes="h-5 w-5 flex-shrink-0" if not is_mobile else "h-5 w-5") }}
 {% endif %}
 {% endmacro %}
 

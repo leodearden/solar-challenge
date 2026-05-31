@@ -81,6 +81,8 @@ def test_sidebar_shows_assistant_link(client: FlaskClient) -> None:
     assert resp.status_code == 200, f"Expected 200 from dashboard, got {resp.status_code}"
     html = resp.data.decode()
     assert "AI Assistant" in html, "Expected 'AI Assistant' nav label in sidebar"
-    assert 'href="/assistant"' in html, (
-        "Expected href='/assistant' link in sidebar (url_for('assistant.chat_page'))"
+    # url_for('assistant.chat_page') generates /assistant/ (canonical Flask URL with trailing slash);
+    # strict_slashes=False on the route makes both /assistant and /assistant/ return 200.
+    assert 'href="/assistant/"' in html, (
+        "Expected href='/assistant/' link in sidebar (url_for('assistant.chat_page'))"
     )
