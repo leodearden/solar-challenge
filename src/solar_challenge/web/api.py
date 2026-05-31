@@ -11,8 +11,6 @@ import time
 from pathlib import Path
 from typing import Any, Generator
 
-logger = logging.getLogger(__name__)
-
 import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
@@ -29,6 +27,8 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import get_storage, resolve_location
+
+logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 

@@ -7,7 +7,7 @@ calls return canned responses instantly.
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
