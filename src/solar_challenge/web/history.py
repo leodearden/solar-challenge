@@ -133,36 +133,36 @@ def compare_page() -> str | Response:
 
 
 @bp.route("/api/runs")
-def api_list_runs() -> Response:
+def api_list_runs() -> Any:
     """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.history_list_runs", **request.args), code=301)
+    return redirect(url_for("api.history_list_runs", **request.args.to_dict()), code=301)  # type: ignore[arg-type]
 
 
 @bp.route("/api/runs/<run_id>")
-def api_get_run(run_id: str) -> Response:
+def api_get_run(run_id: str) -> Any:
     """Redirect to consolidated API endpoint."""
     return redirect(url_for("api.history_get_run", run_id=run_id), code=301)
 
 
 @bp.route("/api/runs/<run_id>", methods=["DELETE"])
-def api_delete_run(run_id: str) -> Response:
+def api_delete_run(run_id: str) -> Any:
     """Redirect to consolidated API endpoint (preserves DELETE method)."""
     return redirect(url_for("api.history_delete_run", run_id=run_id), code=307)
 
 
 @bp.route("/api/runs/<run_id>", methods=["PATCH"])
-def api_patch_run(run_id: str) -> Response:
+def api_patch_run(run_id: str) -> Any:
     """Redirect to consolidated API endpoint (preserves PATCH method)."""
     return redirect(url_for("api.history_patch_run", run_id=run_id), code=307)
 
 
 @bp.route("/api/runs/<run_id>/export/csv")
-def api_export_csv(run_id: str) -> Response:
+def api_export_csv(run_id: str) -> Any:
     """Redirect to consolidated API endpoint."""
     return redirect(url_for("api.history_export_csv", run_id=run_id), code=301)
 
 
 @bp.route("/api/runs/<run_id>/export/yaml")
-def api_export_yaml(run_id: str) -> Response:
+def api_export_yaml(run_id: str) -> Any:
     """Redirect to consolidated API endpoint."""
     return redirect(url_for("api.history_export_yaml", run_id=run_id), code=301)
