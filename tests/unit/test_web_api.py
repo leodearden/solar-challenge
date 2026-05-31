@@ -816,21 +816,48 @@ class TestPreviewDistribution:
 class TestFleetFromDistribution:
     """Tests for POST /api/simulate/fleet-from-distribution."""
 
-    def test_valid_distribution_config_returns_501(self, client: FlaskClient) -> None:
-        """Valid fleet distribution config returns 501 (not yet implemented)."""
+    def test_valid_distribution_config_returns_201(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """Valid 3-home distribution POST returns 201 with job_id/run_id (B+H boundary test).
+
+        Asserts:
+        - status_code == 201 (not 501)
+        - body contains job_id and run_id from the mock
+        - submit_fleet_job called exactly once
+        - the configs argument is a list of exactly 3 HomeConfig instances
+        - the 3 homes have distinct PV capacities (they were sampled, not copied)
+        """
+        from solar_challenge.home import HomeConfig
+
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={
-                "n_homes": 10,
+                "n_homes": 3,
                 "seed": 42,
+                "location": "bristol",
+                "days": 1,
                 "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
+                "battery": {
+                    "enabled": True,
+                    "capacity_kwh": {"type": "uniform", "min": 3.0, "max": 10.0},
+                },
                 "load": {"annual_consumption_kwh": 3500.0},
             },
         )
-        assert resp.status_code == 501
-        data = resp.get_json()
-        assert "not yet implemented" in data["error"]
-        assert data["n_homes"] == 10
+        assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.get_data(as_text=True)}"
+        body = resp.get_json()
+        assert body["job_id"] == "job-fleet-001"
+        assert body["run_id"] == "run-fleet-001"
+
+        mock_job_manager.submit_fleet_job.assert_called_once()
+        call_kwargs = mock_job_manager.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert len(configs) == 3
+        assert all(isinstance(c, HomeConfig) for c in configs)
+        # Homes were sampled from distributions — not all identical
+        pv_caps = {round(c.pv_config.capacity_kw, 3) for c in configs}
+        assert len(pv_caps) > 1, f"Expected distinct PV capacities but got {pv_caps}"
 
     def test_no_json_body_returns_400(self, client: FlaskClient) -> None:
         """POST with no JSON returns 400."""
@@ -1148,3 +1175,60 @@ class TestParseHomeConfigErrorPaths:
         assert resp.status_code == 400
         data = resp.get_json()
         assert "error" in data
+
+
+# ===================================================================
+# _parse_date_range unit tests
+# ===================================================================
+
+
+class TestParseDateRange:
+    """Unit tests for the module-level _parse_date_range(data) helper."""
+
+    def test_days_seven_returns_june_window(self) -> None:
+        """days=7 returns a 7-day window starting 2024-06-01."""
+        from solar_challenge.web.api import _parse_date_range
+
+        start, end = _parse_date_range({"days": 7})
+        assert start == "2024-06-01"
+        assert end == "2024-06-07"
+
+    def test_days_365_returns_full_year(self) -> None:
+        """days=365 is the special case: returns the full 2024 calendar year."""
+        from solar_challenge.web.api import _parse_date_range
+
+        start, end = _parse_date_range({"days": 365})
+        assert start == "2024-01-01"
+        assert end == "2024-12-31"
+
+    def test_explicit_start_end_returned_verbatim(self) -> None:
+        """Explicit start/end strings are returned as-is."""
+        from solar_challenge.web.api import _parse_date_range
+
+        start, end = _parse_date_range({"start": "2024-03-01", "end": "2024-03-05"})
+        assert start == "2024-03-01"
+        assert end == "2024-03-05"
+
+    def test_empty_data_returns_full_year_defaults(self) -> None:
+        """Empty dict returns the default full-year window."""
+        from solar_challenge.web.api import _parse_date_range
+
+        start, end = _parse_date_range({})
+        assert start == "2024-01-01"
+        assert end == "2024-12-31"
+
+    def test_days_zero_raises_value_error(self) -> None:
+        """days=0 is not a valid window; must raise ValueError."""
+        import pytest
+        from solar_challenge.web.api import _parse_date_range
+
+        with pytest.raises(ValueError, match="positive"):
+            _parse_date_range({"days": 0})
+
+    def test_days_negative_raises_value_error(self) -> None:
+        """Negative days must raise ValueError."""
+        import pytest
+        from solar_challenge.web.api import _parse_date_range
+
+        with pytest.raises(ValueError, match="positive"):
+            _parse_date_range({"days": -7})

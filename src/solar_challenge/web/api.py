@@ -51,6 +51,50 @@ def _get_job_manager() -> Any:
     return jm
 
 
+def _parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
+    """Extract a (start, end) date-string pair from a JSON request body.
+
+    Three resolution modes (checked in order):
+
+    1. ``days == 365``  → **sentinel for a full calendar year**: returns the
+       complete 2024 calendar year ``("2024-01-01", "2024-12-31")``.  Because
+       2024 is a leap year this window spans 366 days; ``365`` is intentionally
+       a *named sentinel* (not a literal day count) so callers can request a
+       full-year run without specifying explicit dates.
+    2. ``days`` key present (any *positive* integer ≠ 365) → *days*-day window
+       anchored at 2024-06-01.  ``days <= 0`` raises ``ValueError``.
+    3. Otherwise → use ``start`` / ``end`` keys with defaults
+       ``"2024-01-01"`` / ``"2024-12-31"``.
+
+    Args:
+        data: Parsed JSON body from the request.
+
+    Returns:
+        Tuple of ``(start, end)`` as ``"YYYY-MM-DD"`` strings.
+
+    Raises:
+        ValueError: If ``days`` is present but not a positive integer.
+    """
+    days_raw = data.get("days")
+    start_raw = data.get("start", "")
+    end_raw = data.get("end", "")
+
+    if days_raw is not None:
+        days = int(days_raw)
+        if days <= 0:
+            raise ValueError(f"days must be a positive integer, got {days}")
+        if days == 365:
+            return "2024-01-01", "2024-12-31"
+        ref = pd.Timestamp("2024-06-01")
+        start = ref.strftime("%Y-%m-%d")
+        end = (ref + pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        return start, end
+
+    start = str(start_raw) if start_raw else "2024-01-01"
+    end = str(end_raw) if end_raw else "2024-12-31"
+    return start, end
+
+
 def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
     """Parse JSON request body into HomeConfig and date range.
 
@@ -76,23 +120,8 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     location_preset = str(data.get("location", "bristol"))
     name = data.get("name")
 
-    # Parse date range
-    days_raw = data.get("days")
-    start_raw = data.get("start", "")
-    end_raw = data.get("end", "")
-
-    if days_raw is not None:
-        days = int(days_raw)
-        if days == 365:
-            start = "2024-01-01"
-            end = "2024-12-31"
-        else:
-            ref = pd.Timestamp("2024-06-01")
-            start = ref.strftime("%Y-%m-%d")
-            end = (ref + pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
-    else:
-        start = str(start_raw) if start_raw else "2024-01-01"
-        end = str(end_raw) if end_raw else "2024-12-31"
+    # Parse date range using shared helper
+    start, end = _parse_date_range(data)
 
     # Validate inputs
     if not (0.5 <= pv_kw <= 20.0):
@@ -557,16 +586,41 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "Request body must be JSON"}), 400
+
+    # Validate service availability first — avoids wasted sampling on 503 path.
+    job_manager = _get_job_manager()
+
     from solar_challenge.web.fleet_config import form_to_fleet_distribution_config  # noqa: PLC0415
+    from solar_challenge.config import (  # noqa: PLC0415
+        _parse_fleet_distribution_config,
+        generate_homes_from_distribution,
+    )
 
     try:
-        config = form_to_fleet_distribution_config(data)
-    except (ValueError, TypeError) as exc:
+        cfg_dict = form_to_fleet_distribution_config(data)
+        fleet_cfg = _parse_fleet_distribution_config(cfg_dict)
+        loc = resolve_location(data.get("location", "bristol"))
+        configs = generate_homes_from_distribution(fleet_cfg, loc)
+        start_s, end_s = _parse_date_range(data)
+        start_date = pd.Timestamp(start_s, tz=loc.timezone)
+        end_date = pd.Timestamp(end_s, tz=loc.timezone)
+    except (ValueError, TypeError, ConfigurationError) as exc:
         return jsonify({"error": str(exc)}), 400
-    return jsonify({
-        "error": "Fleet distribution simulation not yet implemented",
-        "n_homes": config.get("n_homes", 0),
-    }), 501
+
+    fleet_name = data.get("name", "Fleet Distribution Simulation")
+    db_path = current_app.config["DATABASE"]
+    data_dir = current_app.config["DATA_DIR"]
+
+    job_id, run_id = job_manager.submit_fleet_job(
+        configs=configs,
+        start_date=start_date,
+        end_date=end_date,
+        db_path=db_path,
+        data_dir=data_dir,
+        name=fleet_name,
+    )
+
+    return jsonify({"job_id": job_id, "run_id": run_id}), 201
 
 @api_bp.route("/fleet/export-yaml", methods=["POST"])
 def export_fleet_yaml() -> Response:
