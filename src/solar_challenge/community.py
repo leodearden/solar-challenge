@@ -23,10 +23,11 @@ import pandas as pd
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
+from solar_challenge.seg import SEGTariff, calculate_seg_revenue
+from solar_challenge.tariff import TariffConfig, calculate_bill
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
-    from solar_challenge.tariff import TariffConfig
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +49,7 @@ class CommunityBillingConfig:
         Smart Export Guarantee rate in pence per kWh (optional; None = no SEG).
     """
 
-    tariff: Optional["TariffConfig"] = None
+    tariff: Optional[TariffConfig] = None
     seg_rate_pence_per_kwh: Optional[float] = None
 
 
@@ -129,6 +130,62 @@ class CommunityResults:
     battery_discharge: pd.Series
     battery_soc: pd.Series
     fleet_results: "FleetResults"
+    # Billing fields populated by simulate_community when config.billing is
+    # fully specified (both tariff and seg_rate_pence_per_kwh present).
+    baseline_net_cost_gbp: Optional[float] = None
+    community_net_cost_gbp: Optional[float] = None
+    community_savings_gbp: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# _price_grid_flows
+# ---------------------------------------------------------------------------
+
+def _price_grid_flows(
+    import_kw: pd.Series,
+    export_kw: pd.Series,
+    tariff: TariffConfig,
+    seg: SEGTariff,
+) -> tuple[float, float]:
+    """Price grid import and export flows using canonical billing primitives.
+
+    Derives the timestep duration (dt_h) from the series index so the function
+    is correct for any cadence (1-min, hourly, etc.).  This mirrors the
+    convention used in :func:`~solar_challenge.output.compute_community_metrics`.
+
+    Parameters
+    ----------
+    import_kw:
+        Community-level grid import series (kW) with a DatetimeIndex.
+    export_kw:
+        Community-level grid export series (kW) with the same DatetimeIndex.
+    tariff:
+        Import tariff; the import leg is priced per-timestep via
+        :func:`~solar_challenge.tariff.calculate_bill` (TOU-correct).
+    seg:
+        Smart Export Guarantee tariff; the export leg is priced flat via
+        :func:`~solar_challenge.seg.calculate_seg_revenue` (sum-first, exact).
+
+    Returns
+    -------
+    (import_cost_gbp, export_revenue_gbp)
+        Both values in GBP.
+    """
+    # Infer dt_h from the index spacing; fall back to 1/60 for degenerate
+    # single-element series (consistent with simulate_community's own fallback).
+    if len(import_kw) >= 2:
+        dt_h = (import_kw.index[1] - import_kw.index[0]).total_seconds() / 3600.0
+    else:
+        dt_h = 1.0 / 60.0
+
+    # Import cost: per-timestep TOU-aware pricing via the canonical loop.
+    import_cost_gbp: float = calculate_bill(import_kw * dt_h, tariff)
+
+    # Export revenue: flat SEG rate → sum kWh first, then price once (exact).
+    export_energy_kwh: float = float((export_kw * dt_h).sum())
+    export_revenue_gbp: float = calculate_seg_revenue(export_energy_kwh, seg)
+
+    return import_cost_gbp, export_revenue_gbp
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +328,37 @@ def simulate_community(
             battery_soc=pd.Series(soc_vals, index=index, dtype=float),
             fleet_results=fleet_results,
         )
+
+    # --- VNM billing: baseline vs community net cost (ε / task-34) ---
+    # Gated on BOTH tariff and seg_rate being present so _price_grid_flows
+    # always receives non-None arguments (keeps it total / no None branches).
+    billing = config.billing
+    if (
+        billing is not None
+        and billing.tariff is not None
+        and billing.seg_rate_pence_per_kwh is not None
+    ):
+        seg = SEGTariff(
+            name="community",
+            rate_pence_per_kwh=billing.seg_rate_pence_per_kwh,
+        )
+        # Baseline: what the fleet would pay/earn WITHOUT community sharing
+        base_imp, base_exp = _price_grid_flows(
+            fleet_results.total_grid_import,
+            fleet_results.total_grid_export,
+            billing.tariff,
+            seg,
+        )
+        # Community: what the fleet pays/earns AFTER sharing
+        comm_imp, comm_exp = _price_grid_flows(
+            result.grid_import,
+            result.grid_export,
+            billing.tariff,
+            seg,
+        )
+        result.baseline_net_cost_gbp = base_imp - base_exp
+        result.community_net_cost_gbp = comm_imp - comm_exp
+        result.community_savings_gbp = result.baseline_net_cost_gbp - result.community_net_cost_gbp
 
     if validate_balance:
         validate_community_balance(fleet_results, result)
