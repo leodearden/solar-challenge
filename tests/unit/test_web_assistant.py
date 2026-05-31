@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the AI assistant web blueprint (slice ①: foundation wiring)."""
 
-import logging
 from pathlib import Path
 
 import pytest
@@ -35,26 +34,20 @@ def client(app: Flask) -> FlaskClient:
     return app.test_client()
 
 
-def test_assistant_blueprint_registers_without_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Blueprint imports and registers cleanly — no 'Assistant blueprint not available' log."""
-    db_path = tmp_path / "test.db"
-    with caplog.at_level(logging.WARNING, logger="solar_challenge.web.app"):
-        fresh_app = create_app(
-            test_config={
-                "TESTING": True,
-                "SECRET_KEY": "test-secret-key",
-                "DATABASE": str(db_path),
-                "DATA_DIR": str(tmp_path),
-            }
-        )
+def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
+    """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
 
-    assert "Assistant blueprint not available" not in caplog.text, (
-        f"Expected no assistant import warning, got: {caplog.text!r}"
-    )
-    assert "assistant" in fresh_app.blueprints, (
-        f"Expected 'assistant' blueprint to be registered; got: {list(fresh_app.blueprints.keys())}"
+    The app.py try/except either registers the blueprint (success) or logs a warning and skips
+    registration (ImportError). Checking 'assistant' in app.blueprints is therefore sufficient;
+    the warning-free path is the only way the blueprint ends up registered.
+
+    TODO (slice ②): when the chat handler gains a deferred ``import anthropic``, add a test that
+    patches ``sys.modules['anthropic']`` to ``None`` at the point of blueprint registration and
+    verifies the blueprint still registers — covering the robustness claim in assistant.py's
+    docstring.
+    """
+    assert "assistant" in app.blueprints, (
+        f"Expected 'assistant' blueprint to be registered; got: {list(app.blueprints.keys())}"
     )
 
 
