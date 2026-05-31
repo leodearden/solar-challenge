@@ -19,6 +19,49 @@ from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, r
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 
+@pytest.fixture
+def june21_weather_data() -> pd.DataFrame:
+    """Synthetic June 21 hourly weather data for Bristol.
+
+    Covers all 24 hours so _align_tmy_to_demand maps every simulation
+    minute to a valid weather value.  Using synthetic data avoids a
+    PVGIS network call / disk cache in SEG pricing tests whose assertions
+    concern revenue arithmetic rather than PV output magnitude.
+
+    Irradiance profile is a realistic sunny summer day; GHI peaks ~870 W/m²
+    around solar noon, which is enough to drive meaningful grid export from
+    a 4-5 kW south-facing array with a 5 kWh battery.
+    """
+    index = pd.date_range(
+        "2024-06-21 00:00", periods=24, freq="1h", tz="Europe/London"
+    )
+    return pd.DataFrame(
+        {
+            "ghi": [
+                0, 0, 0, 0, 0, 50, 150, 300, 500, 650, 780, 850,
+                870, 850, 780, 650, 500, 300, 150, 50, 0, 0, 0, 0,
+            ],
+            "dni": [
+                0, 0, 0, 0, 0, 100, 250, 450, 650, 800, 900, 950,
+                970, 950, 900, 800, 650, 450, 250, 100, 0, 0, 0, 0,
+            ],
+            "dhi": [
+                0, 0, 0, 0, 0, 30, 70, 130, 180, 200, 200, 200,
+                200, 200, 200, 200, 180, 130, 70, 30, 0, 0, 0, 0,
+            ],
+            "temp_air": [
+                12, 11, 11, 11, 12, 13, 15, 17, 19, 21, 22, 23,
+                23, 23, 22, 21, 19, 17, 16, 14, 13, 12, 12, 12,
+            ],
+            "wind_speed": [
+                2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3,
+                3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2,
+            ],
+        },
+        index=index,
+    )
+
+
 class TestHomeConfigBasics:
     """Test HOME-001: HomeConfig dataclass."""
 
@@ -157,21 +200,23 @@ class TestSimulateHomeSEGPricing:
             location=Location.bristol(),
         )
 
-    def test_grid_export_is_positive(self, seg_home_config):
+    def test_grid_export_is_positive(self, seg_home_config, june21_weather_data):
         """Sunny summer day with PV produces grid export > 0."""
         results = simulate_home(
             seg_home_config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
         )
         assert results.grid_export.sum() > 0, "Expected grid export > 0 on sunny summer day"
 
-    def test_export_revenue_priced_at_seg_rate(self, seg_home_config):
+    def test_export_revenue_priced_at_seg_rate(self, seg_home_config, june21_weather_data):
         """total_export_revenue_gbp equals SEG-rate calculation (not import rate)."""
         results = simulate_home(
             seg_home_config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
         )
         summary = calculate_summary(results)
 
@@ -180,12 +225,13 @@ class TestSimulateHomeSEGPricing:
 
         assert summary.total_export_revenue_gbp == pytest.approx(expected_seg_revenue, rel=1e-3)
 
-    def test_export_revenue_less_than_import_rate_value(self, seg_home_config):
+    def test_export_revenue_less_than_import_rate_value(self, seg_home_config, june21_weather_data):
         """SEG-priced export revenue is strictly less than at the import tariff rate."""
         results = simulate_home(
             seg_home_config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
         )
         summary = calculate_summary(results)
 
@@ -195,12 +241,13 @@ class TestSimulateHomeSEGPricing:
         # SEG rate (4.1 p/kWh) is much less than import rate (25 p/kWh)
         assert summary.total_export_revenue_gbp < import_rate_revenue
 
-    def test_net_cost_equals_import_minus_export(self, seg_home_config):
+    def test_net_cost_equals_import_minus_export(self, seg_home_config, june21_weather_data):
         """net_cost_gbp == total_import_cost_gbp - total_export_revenue_gbp."""
         results = simulate_home(
             seg_home_config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
         )
         summary = calculate_summary(results)
 
@@ -228,12 +275,13 @@ class TestSimulateHomeSEGNonRegression:
             location=Location.bristol(),
         )
 
-    def test_legacy_export_priced_at_import_rate(self, no_seg_config):
+    def test_legacy_export_priced_at_import_rate(self, no_seg_config, june21_weather_data):
         """Without seg_tariff, export_revenue == grid_export * tariff_rate / 60 (element-wise)."""
         results = simulate_home(
             no_seg_config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
         )
         # export_revenue (£/min) == grid_export (kW) * tariff_rate (£/kWh) / 60 (min/h)
         expected = results.grid_export * results.tariff_rate / 60.0
@@ -241,7 +289,7 @@ class TestSimulateHomeSEGNonRegression:
             results.export_revenue, expected, check_names=False, rtol=1e-6
         )
 
-    def test_named_preset_end_to_end(self):
+    def test_named_preset_end_to_end(self, june21_weather_data):
         """resolve_seg_tariff('Octopus') wired into HomeConfig prices export at 4.1 p/kWh."""
         flat_period = TariffPeriod(
             start_time="00:00",
@@ -261,6 +309,7 @@ class TestSimulateHomeSEGNonRegression:
             config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
         )
         summary = calculate_summary(results)
         total_export_kwh = results.grid_export.sum() / 60.0
