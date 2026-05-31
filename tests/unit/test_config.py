@@ -1829,3 +1829,30 @@ class TestParseCommunityConfig:
         """An unrecognised sharing_mode raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
             _parse_community_config({"sharing_mode": "bogus"})
+
+    # ------------------------------------------------------------------
+    # billing block: tariff + direct SEG scalar (step-5)
+    # ------------------------------------------------------------------
+
+    def test_billing_with_tariff_and_direct_seg(self) -> None:
+        """billing block with tariff + direct seg_rate_pence_per_kwh is parsed."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "p2p",
+                "billing": {
+                    "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
+                    "seg_rate_pence_per_kwh": 4.1,
+                },
+            }
+        )
+        assert isinstance(cfg, CommunityConfig)
+        assert cfg.billing is not None
+        assert isinstance(cfg.billing, CommunityBillingConfig)
+        assert cfg.billing.tariff is not None
+        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(4.1)
+
+    def test_no_billing_key_gives_none(self) -> None:
+        """Absence of the billing key leaves billing=None."""
+        cfg = _parse_community_config({"sharing_mode": "p2p"})
+        assert cfg is not None
+        assert cfg.billing is None
