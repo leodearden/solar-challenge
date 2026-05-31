@@ -282,3 +282,110 @@ class TestDemoScenario:
         assert cfg is not None
         assert cfg.community_battery is not None
         assert cfg.community_battery.capacity_kwh > 0
+
+
+class TestFleetRunCommunityCLI:
+    """CLI integration tests for `fleet run` with community wiring.
+
+    get_tmy_data is monkeypatched in BOTH solar_challenge.home and
+    solar_challenge.fleet so the in-process sequential path is deterministic
+    (no PVGIS calls).  Must use --sequential so ProcessPoolExecutor is skipped
+    (monkeypatches don't propagate across processes).
+    """
+
+    def test_community_run_exits_zero(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """fleet run with community block: exit code 0."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        tmp_report = tmp_path / "community_report.md"
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", str(SCENARIO),
+                "--sequential",
+                "--start", "2024-06-21",
+                "--end", "2024-06-21",
+                "--community-report", str(tmp_report),
+            ],
+        )
+        assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}:\n{result.output}"
+
+    def test_community_run_stdout_contains_community_section(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """fleet run output includes a community section."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        tmp_report = tmp_path / "community_report.md"
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", str(SCENARIO),
+                "--sequential",
+                "--start", "2024-06-21",
+                "--end", "2024-06-21",
+                "--community-report", str(tmp_report),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Community" in result.output
+
+    def test_community_report_file_written(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """fleet run writes --community-report file with correct headings."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        tmp_report = tmp_path / "community_report.md"
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", str(SCENARIO),
+                "--sequential",
+                "--start", "2024-06-21",
+                "--end", "2024-06-21",
+                "--community-report", str(tmp_report),
+            ],
+        )
+        assert result.exit_code == 0
+        assert tmp_report.exists(), "Community report file was not written"
+        report_text = tmp_report.read_text()
+        assert "# Community" in report_text
+        assert "Grid Import" in report_text
+        assert "Grid Export" in report_text
+        assert "Self-Sufficiency" in report_text
+
+    def test_community_report_netting_reduces_import(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Community Grid Import < Unshared Grid Import (netting reduces import)."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        tmp_report = tmp_path / "community_report.md"
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", str(SCENARIO),
+                "--sequential",
+                "--start", "2024-06-21",
+                "--end", "2024-06-21",
+                "--community-report", str(tmp_report),
+            ],
+        )
+        assert result.exit_code == 0
+        report_text = tmp_report.read_text()
+        # Parse the Grid Import row from the markdown table
+        # | Grid Import | <unshared> | <community> | <reduction> |
+        import re
+        import_match = re.search(
+            r"\|\s*Grid Import\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|", report_text
+        )
+        assert import_match is not None, (
+            f"Could not find Grid Import table row in report:\n{report_text}"
+        )
+        unshared_import = float(import_match.group(1))
+        community_import = float(import_match.group(2))
+        assert community_import < unshared_import, (
+            f"Expected community import ({community_import:.2f}) < "
+            f"unshared import ({unshared_import:.2f})"
+        )
