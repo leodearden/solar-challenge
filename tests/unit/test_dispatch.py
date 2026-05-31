@@ -1917,3 +1917,158 @@ class TestPeakShavingStrategyEdgeCases:
         # Discharge = 1.0 - 0.1 = 0.9 kW
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == pytest.approx(0.9)
+
+
+class TestTOUOptimizedStrategyGridCharging:
+    """Test grid-charging via GridChargeContext in TOUOptimizedStrategy.decide_action.
+
+    All cases reuse the standard_tou_strategy fixture (peak_hours=[(17, 20)]).
+    Favourable context: current_rate=0.10, peak_rate=0.35 — spread gate passes
+    because 0.35 > 0.10/0.9 ≈ 0.111.
+    """
+
+    _FAVOURABLE_CTX = GridChargeContext(
+        current_rate=0.10,
+        peak_rate=0.35,
+        is_cheap_period=True,
+        target_soc_fraction=0.9,
+        max_charge_kw=3.0,
+        round_trip_efficiency=0.9,
+        charge_efficiency=0.95,
+    )
+
+    def test_offpeak_shortfall_grid_charges(self, standard_tou_strategy):
+        """(1) Off-peak shortfall: no PV, grid charges at full controller rate."""
+        ctx = self._FAVOURABLE_CTX
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 3, 0, 0),
+            generation_kw=0.0,
+            demand_kw=1.0,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        expected_grid = compute_grid_charge_power_kw(
+            ctx,
+            battery_soc_kwh=1.0,
+            capacity_kwh=5.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=60.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+        assert decision.grid_charge_kw > 0.0
+        assert decision.grid_charge_kw == pytest.approx(expected_grid)
+
+    def test_offpeak_excess_pv_grid_charges_residual(self, standard_tou_strategy):
+        """(2) Off-peak excess PV: grid fills remaining headroom after PV charge."""
+        ctx = self._FAVOURABLE_CTX
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 3, 0, 0),
+            generation_kw=3.0,
+            demand_kw=1.0,  # excess_kw = 2.0
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        expected_grid = compute_grid_charge_power_kw(
+            ctx,
+            battery_soc_kwh=1.0,
+            capacity_kwh=5.0,
+            pv_charge_power_kw=2.0,  # PV charge_kw passed as pv_charge_power_kw
+            timestep_minutes=60.0,
+        )
+        assert decision.charge_kw == pytest.approx(2.0)
+        assert decision.discharge_kw == 0.0
+        assert decision.grid_charge_kw > 0.0
+        assert decision.grid_charge_kw == pytest.approx(expected_grid)
+
+    def test_no_ctx_no_grid_charge(self, standard_tou_strategy):
+        """(3) Guard: grid_charge_ctx=None → grid_charge_kw stays 0.0."""
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 3, 0, 0),
+            generation_kw=0.0,
+            demand_kw=1.0,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=None,
+        )
+        assert decision.grid_charge_kw == 0.0
+
+    def test_spread_gate_failure_no_grid_charge(self, standard_tou_strategy):
+        """(4) Guard: spread gate fails → grid_charge_kw==0.0.
+
+        peak_rate=0.31, current_rate=0.30, rt_eff=0.9:
+        0.31 <= 0.30/0.9 ≈ 0.333 → Gate 2 blocks.
+        """
+        ctx = GridChargeContext(
+            current_rate=0.30,
+            peak_rate=0.31,
+            is_cheap_period=True,
+            target_soc_fraction=0.9,
+            max_charge_kw=3.0,
+            round_trip_efficiency=0.9,
+            charge_efficiency=0.95,
+        )
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 3, 0, 0),
+            generation_kw=0.0,
+            demand_kw=1.0,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.grid_charge_kw == 0.0
+
+    def test_peak_period_no_grid_charge(self, standard_tou_strategy):
+        """(5) Guard: peak period (is_cheap_period=False) → discharge preserved, no grid charge."""
+        ctx = GridChargeContext(
+            current_rate=0.35,
+            peak_rate=0.35,
+            is_cheap_period=False,  # peak, not cheap
+            target_soc_fraction=0.9,
+            max_charge_kw=3.0,
+            round_trip_efficiency=0.9,
+            charge_efficiency=0.95,
+        )
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 18, 0, 0),  # peak hour
+            generation_kw=1.0,
+            demand_kw=3.0,  # shortfall = 2.0
+            battery_soc_kwh=3.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.discharge_kw == pytest.approx(2.0)
+        assert decision.grid_charge_kw == 0.0
+
+    def test_regression_no_ctx_offpeak_excess(self, standard_tou_strategy):
+        """(6a) Regression: ctx=None, off-peak excess PV → same as before (charge only)."""
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 12, 0, 0),
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == pytest.approx(2.0)
+        assert decision.discharge_kw == 0.0
+        assert decision.grid_charge_kw == 0.0
+
+    def test_regression_no_ctx_peak_shortfall(self, standard_tou_strategy):
+        """(6b) Regression: ctx=None, peak shortfall → same as before (discharge only)."""
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 18, 0, 0),
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == pytest.approx(2.0)
+        assert decision.grid_charge_kw == 0.0
