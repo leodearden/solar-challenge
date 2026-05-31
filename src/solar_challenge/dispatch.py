@@ -175,6 +175,8 @@ class DispatchStrategy(ABC):
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
         timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
         """Decide battery charge/discharge action for current timestep.
 
@@ -185,6 +187,10 @@ class DispatchStrategy(ABC):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
+            grid_charge_ctx: Optional rate-aware grid-charging context.
+                When provided, downstream strategies (α2/α3) may use this
+                to compute grid_charge_kw.  In the base substrate (this
+                task) it is accepted and ignored.
 
         Returns:
             DispatchDecision specifying charge_kw or discharge_kw
@@ -219,6 +225,8 @@ class SelfConsumptionStrategy(DispatchStrategy):
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
         timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
         """Decide battery action to maximize self-consumption.
 
@@ -229,6 +237,8 @@ class SelfConsumptionStrategy(DispatchStrategy):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
+            grid_charge_ctx: Optional rate-aware grid-charging context
+                (accepted but not used in this strategy).
 
         Returns:
             DispatchDecision with charge_kw if excess PV available,
@@ -383,6 +393,8 @@ class TOUOptimizedStrategy(DispatchStrategy):
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
         timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
         """Decide battery action based on time-of-use tariff optimization.
 
@@ -393,6 +405,8 @@ class TOUOptimizedStrategy(DispatchStrategy):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
+            grid_charge_ctx: Optional rate-aware grid-charging context
+                (accepted but not used in the base substrate; consumed in α2).
 
         Returns:
             DispatchDecision optimized for TOU tariffs:
@@ -494,6 +508,8 @@ class PeakShavingStrategy(DispatchStrategy):
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
         timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
         """Decide battery action to limit grid import below threshold.
 
@@ -504,6 +520,8 @@ class PeakShavingStrategy(DispatchStrategy):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
+            grid_charge_ctx: Optional rate-aware grid-charging context
+                (accepted but not used in the base substrate; consumed in α3).
 
         Returns:
             DispatchDecision with:
