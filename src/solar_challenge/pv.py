@@ -84,6 +84,11 @@ class PVConfig:
             raise ValueError(
                 f"Inverter capacity must be positive, got {self.inverter_capacity_kw} kW"
             )
+        # NOTE: The error messages below intentionally mirror the guards in
+        # calculate_degradation_factor (see pv.py). Both use the same substrings
+        # ("non-negative", "0-1") so that any callers matching on those strings
+        # work regardless of which layer raised. If you change the wording here,
+        # update calculate_degradation_factor (and vice versa).
         if self.system_age_years < 0:
             raise ValueError(
                 f"System age must be non-negative, got {self.system_age_years}"
@@ -393,7 +398,11 @@ def simulate_pv_output(
     ac_power = ac_power.clip(lower=0.0)
 
     # Apply panel degradation based on system age
-    ac_power = apply_degradation(ac_power, config.system_age_years, config.degradation_rate_per_year)
+    ac_power = apply_degradation(
+        ac_power,
+        config.system_age_years,
+        config.degradation_rate_per_year,
+    )
 
     return ac_power
 

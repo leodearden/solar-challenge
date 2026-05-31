@@ -256,6 +256,32 @@ class TestSimulatePVOutput:
         assert age20.sum() == pytest.approx(0.90 * age0.sum(), rel=1e-6)
         assert np.allclose(age20.values, (age0 * 0.90).values)
 
+    def test_fully_degraded_system_yields_zero(self, sample_weather_data):
+        """A fully degraded system (age*rate > 1) yields all-zero generation, not negative.
+
+        calculate_degradation_factor clamps the factor to max(0.0, factor). With
+        system_age_years=300 and degradation_rate_per_year=0.01 the raw factor would
+        be 1 - 300*0.01 = -2.0, which is clamped to 0.0. This exercises that branch
+        via the live simulate_pv_output path so negative output is never returned.
+        """
+        location = Location.bristol()
+        # Confirm there is meaningful pre-degradation generation (non-trivial fixture)
+        age0_config = PVConfig(capacity_kw=4.0)
+        age0 = simulate_pv_output(age0_config, location, sample_weather_data)
+        assert age0.sum() > 0, "fixture must produce non-zero generation for this test to be meaningful"
+
+        # 300 years * 0.01/yr = raw factor -2.0 → clamped to 0.0 → all-zero output
+        fully_degraded_config = PVConfig(
+            capacity_kw=4.0,
+            system_age_years=300,
+            degradation_rate_per_year=0.01,
+        )
+        output = simulate_pv_output(fully_degraded_config, location, sample_weather_data)
+        # Factor == 0.0 is exact (clamped integer multiplication), so == 0.0 is safe
+        assert (output == 0.0).all(), (
+            "Fully degraded system must produce zero output, not negative values"
+        )
+
 
 class TestInterpolateToMinuteResolution:
     """Test PV-007: 1-minute resolution interpolation."""
