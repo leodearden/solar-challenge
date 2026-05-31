@@ -15,6 +15,51 @@ from solar_challenge.home import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
+from solar_challenge.tariff import TariffConfig, TariffPeriod
+
+
+@pytest.fixture
+def june21_weather_data() -> pd.DataFrame:
+    """Synthetic June 21 hourly weather data for Bristol.
+
+    Covers all 24 hours so _align_tmy_to_demand maps every simulation
+    minute to a valid weather value.  Using synthetic data avoids a
+    PVGIS network call / disk cache in SEG pricing tests whose assertions
+    concern revenue arithmetic rather than PV output magnitude.
+
+    Irradiance profile is a realistic sunny summer day; GHI peaks ~870 W/m²
+    around solar noon, which is enough to drive meaningful grid export from
+    a 4-5 kW south-facing array with a 5 kWh battery.
+    """
+    index = pd.date_range(
+        "2024-06-21 00:00", periods=24, freq="1h", tz="Europe/London"
+    )
+    return pd.DataFrame(
+        {
+            "ghi": [
+                0, 0, 0, 0, 0, 50, 150, 300, 500, 650, 780, 850,
+                870, 850, 780, 650, 500, 300, 150, 50, 0, 0, 0, 0,
+            ],
+            "dni": [
+                0, 0, 0, 0, 0, 100, 250, 450, 650, 800, 900, 950,
+                970, 950, 900, 800, 650, 450, 250, 100, 0, 0, 0, 0,
+            ],
+            "dhi": [
+                0, 0, 0, 0, 0, 30, 70, 130, 180, 200, 200, 200,
+                200, 200, 200, 200, 180, 130, 70, 30, 0, 0, 0, 0,
+            ],
+            "temp_air": [
+                12, 11, 11, 11, 12, 13, 15, 17, 19, 21, 22, 23,
+                23, 23, 22, 21, 19, 17, 16, 14, 13, 12, 12, 12,
+            ],
+            "wind_speed": [
+                2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3,
+                3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2,
+            ],
+        },
+        index=index,
+    )
 
 
 class TestHomeConfigBasics:
@@ -52,6 +97,52 @@ class TestHomeConfigBasics:
         assert config.location.latitude == pytest.approx(51.45, rel=0.01)
 
 
+class TestHomeConfigSEGField:
+    """Test that HomeConfig carries the optional SEG seam field."""
+
+    def test_default_seg_tariff_is_none(self):
+        """HomeConfig built without seg_tariff has seg_tariff is None."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+        )
+        assert config.seg_tariff is None
+
+    def test_seg_tariff_stored_from_direct_instance(self):
+        """HomeConfig accepts and stores a SEGTariff instance."""
+        tariff = SEGTariff("X", 4.1)
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+            seg_tariff=tariff,
+        )
+        assert config.seg_tariff is not None
+        assert config.seg_tariff.rate_pence_per_kwh == pytest.approx(4.1)
+
+    def test_seg_tariff_stored_from_resolve(self):
+        """HomeConfig accepts and stores a SEGTariff from resolve_seg_tariff."""
+        tariff = resolve_seg_tariff("Octopus")
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+            seg_tariff=tariff,
+        )
+        assert config.seg_tariff is not None
+        assert config.seg_tariff.rate_pence_per_kwh == pytest.approx(4.1)
+        assert config.seg_tariff == SEG_PRESETS["Octopus"]
+
+    def test_existing_configs_unaffected(self):
+        """Existing HomeConfig construction without seg_tariff continues to work."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400.0),
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+            location=Location.bristol(),
+            name="Test home",
+        )
+        assert config.seg_tariff is None
+
+
 class TestSimulationResults:
     """Test SimulationResults functionality."""
 
@@ -81,6 +172,149 @@ class TestSimulationResults:
         assert "generation_kw" in df.columns
         assert "demand_kw" in df.columns
         assert "battery_soc_kwh" in df.columns
+
+
+class TestSimulateHomeSEGPricing:
+    """Test that simulate_home prices export at SEG rate when seg_tariff is set."""
+
+    @pytest.fixture
+    def seg_home_config(self):
+        """HomeConfig with flat import tariff + Octopus SEG tariff.
+
+        Uses start_time==end_time=="00:00" to create a period that crosses
+        midnight and covers all 1440 minutes of the day (matches_time returns
+        True for time_of_day >= 00:00 OR time_of_day < 00:00 == always True).
+        """
+        flat_period = TariffPeriod(
+            start_time="00:00",
+            end_time="00:00",  # Crosses midnight — covers the full day
+            rate_per_kwh=0.25,
+            name="All day",
+        )
+        return HomeConfig(
+            pv_config=PVConfig(capacity_kw=5.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+            tariff_config=TariffConfig(periods=(flat_period,), name="Flat 25p"),
+            seg_tariff=SEGTariff("Octopus", 4.1),
+            location=Location.bristol(),
+        )
+
+    def test_grid_export_is_positive(self, seg_home_config, june21_weather_data):
+        """Sunny summer day with PV produces grid export > 0."""
+        results = simulate_home(
+            seg_home_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
+        )
+        assert results.grid_export.sum() > 0, "Expected grid export > 0 on sunny summer day"
+
+    def test_export_revenue_priced_at_seg_rate(self, seg_home_config, june21_weather_data):
+        """total_export_revenue_gbp equals SEG-rate calculation (not import rate)."""
+        results = simulate_home(
+            seg_home_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
+        )
+        summary = calculate_summary(results)
+
+        total_export_kwh = results.grid_export.sum() / 60.0  # kW -> kWh for 1-min timesteps
+        expected_seg_revenue = calculate_seg_revenue(total_export_kwh, SEGTariff("", 4.1))
+
+        assert summary.total_export_revenue_gbp == pytest.approx(expected_seg_revenue, rel=1e-3)
+
+    def test_export_revenue_less_than_import_rate_value(self, seg_home_config, june21_weather_data):
+        """SEG-priced export revenue is strictly less than at the import tariff rate."""
+        results = simulate_home(
+            seg_home_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
+        )
+        summary = calculate_summary(results)
+
+        total_export_kwh = results.grid_export.sum() / 60.0
+        import_rate_revenue = total_export_kwh * 0.25  # 25 p/kWh = £0.25/kWh
+
+        # SEG rate (4.1 p/kWh) is much less than import rate (25 p/kWh)
+        assert summary.total_export_revenue_gbp < import_rate_revenue
+
+    def test_net_cost_equals_import_minus_export(self, seg_home_config, june21_weather_data):
+        """net_cost_gbp == total_import_cost_gbp - total_export_revenue_gbp."""
+        results = simulate_home(
+            seg_home_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
+        )
+        summary = calculate_summary(results)
+
+        expected_net_cost = summary.total_import_cost_gbp - summary.total_export_revenue_gbp
+        assert summary.net_cost_gbp == pytest.approx(expected_net_cost, rel=1e-6)
+
+
+class TestSimulateHomeSEGNonRegression:
+    """Non-regression + preset-wiring guards for simulate_home SEG changes."""
+
+    @pytest.fixture
+    def no_seg_config(self):
+        """HomeConfig with flat import tariff and NO seg_tariff (legacy mode)."""
+        flat_period = TariffPeriod(
+            start_time="00:00",
+            end_time="00:00",  # Crosses midnight — covers the full day
+            rate_per_kwh=0.20,
+            name="All day",
+        )
+        return HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+            tariff_config=TariffConfig(periods=(flat_period,), name="Flat 20p"),
+            location=Location.bristol(),
+        )
+
+    def test_legacy_export_priced_at_import_rate(self, no_seg_config, june21_weather_data):
+        """Without seg_tariff, export_revenue == grid_export * tariff_rate / 60 (element-wise)."""
+        results = simulate_home(
+            no_seg_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
+        )
+        # export_revenue (£/min) == grid_export (kW) * tariff_rate (£/kWh) / 60 (min/h)
+        expected = results.grid_export * results.tariff_rate / 60.0
+        pd.testing.assert_series_equal(
+            results.export_revenue, expected, check_names=False, rtol=1e-6
+        )
+
+    def test_named_preset_end_to_end(self, june21_weather_data):
+        """resolve_seg_tariff('Octopus') wired into HomeConfig prices export at 4.1 p/kWh."""
+        flat_period = TariffPeriod(
+            start_time="00:00",
+            end_time="00:00",
+            rate_per_kwh=0.25,
+            name="All day",
+        )
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=5.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+            tariff_config=TariffConfig(periods=(flat_period,), name="Flat 25p"),
+            seg_tariff=resolve_seg_tariff("Octopus"),
+            location=Location.bristol(),
+        )
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather_data=june21_weather_data,
+        )
+        summary = calculate_summary(results)
+        total_export_kwh = results.grid_export.sum() / 60.0
+        expected_revenue = calculate_seg_revenue(total_export_kwh, SEG_PRESETS["Octopus"])
+        assert summary.total_export_revenue_gbp == pytest.approx(expected_revenue, rel=1e-3)
 
 
 class TestAlignTMYToDemand:
@@ -232,6 +466,72 @@ class TestCalculateSummary:
 
         # Net cost = £72.00 - £43.20 = £28.80
         assert summary.net_cost_gbp == pytest.approx(28.8, rel=0.01)
+
+
+class TestCalculateSummaryUnification:
+    """Test that calculate_summary uses calculate_seg_revenue (unified SEG math)."""
+
+    @pytest.fixture
+    def export_results(self) -> SimulationResults:
+        """Hand-built results with 12 kWh daily export (0.5 kW * 24 h)."""
+        index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
+        return SimulationResults(
+            generation=pd.Series([3.0] * 1440, index=index),
+            demand=pd.Series([2.0] * 1440, index=index),
+            self_consumption=pd.Series([2.0] * 1440, index=index),
+            battery_charge=pd.Series([0.5] * 1440, index=index),
+            battery_discharge=pd.Series([0.0] * 1440, index=index),
+            battery_soc=pd.Series([2.5] * 1440, index=index),
+            grid_import=pd.Series([0.0] * 1440, index=index),
+            grid_export=pd.Series([0.5] * 1440, index=index),  # 0.5 kW * 24h = 12 kWh
+            import_cost=pd.Series([0.0] * 1440, index=index),
+            export_revenue=pd.Series([0.0] * 1440, index=index),  # will be validated separately
+            tariff_rate=pd.Series([0.10] * 1440, index=index),
+        )
+
+    def test_seg_revenue_preserved(self, export_results):
+        """seg_revenue_gbp with 12 kWh export at 15 p/kWh == £1.80 (existing behaviour)."""
+        # total_export = 0.5 kW * 1440 min / 60 = 12 kWh
+        # seg_revenue = 12 * 15 / 100 = £1.80
+        summary = calculate_summary(export_results, seg_tariff_pence_per_kwh=15.0)
+        assert summary.seg_revenue_gbp is not None
+        assert summary.seg_revenue_gbp == pytest.approx(1.80, rel=0.01)
+
+    def test_negative_seg_rate_raises_value_error(self, export_results):
+        """seg_tariff_pence_per_kwh < 0 now raises ValueError (via SEGTariff validation)."""
+        with pytest.raises(ValueError):
+            calculate_summary(export_results, seg_tariff_pence_per_kwh=-1.0)
+
+    def test_unification_identity(self):
+        """total_export_revenue_gbp == seg_revenue_gbp when export was SEG-priced at rate r."""
+        rate_pence = 5.0  # p/kWh
+        rate_pounds = rate_pence / 100.0
+        index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
+        # Export-priced results: export_revenue per minute = grid_export_kwh * rate_pounds
+        # grid_export_kwh per minute = 0.6 kW / 60 = 0.01 kWh
+        grid_export_kw = 0.6
+        export_kwh_per_min = grid_export_kw / 60.0
+        export_rev_per_min = export_kwh_per_min * rate_pounds
+
+        results = SimulationResults(
+            generation=pd.Series([3.0] * 1440, index=index),
+            demand=pd.Series([2.0] * 1440, index=index),
+            self_consumption=pd.Series([2.0] * 1440, index=index),
+            battery_charge=pd.Series([0.0] * 1440, index=index),
+            battery_discharge=pd.Series([0.0] * 1440, index=index),
+            battery_soc=pd.Series([0.0] * 1440, index=index),
+            grid_import=pd.Series([0.0] * 1440, index=index),
+            grid_export=pd.Series([grid_export_kw] * 1440, index=index),
+            import_cost=pd.Series([0.0] * 1440, index=index),
+            export_revenue=pd.Series([export_rev_per_min] * 1440, index=index),
+            tariff_rate=pd.Series([rate_pounds] * 1440, index=index),
+        )
+        summary = calculate_summary(results, seg_tariff_pence_per_kwh=rate_pence)
+
+        # total_export_revenue_gbp (from series) == seg_revenue_gbp (from unified calc)
+        assert summary.total_export_revenue_gbp == pytest.approx(
+            summary.seg_revenue_gbp, rel=1e-6
+        )
 
 
 class TestSummaryStatistics:

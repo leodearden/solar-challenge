@@ -37,6 +37,33 @@ SEG_PRESETS: dict[str, SEGTariff] = {
 }
 
 
+def resolve_seg_tariff(name: str) -> SEGTariff:
+    """Look up a named SEG tariff from the preset catalogue.
+
+    Provides the named-preset resolver intended for production/web/CLI SEG
+    selectors.  Wiring into those selectors (web UI, CLI ``--seg-preset``
+    flag) is owned by subsequent tasks; this function establishes the
+    in-scope seam so callers can use ``HomeConfig(seg_tariff=resolve_seg_tariff("Octopus"))``
+    today without further infrastructure.
+
+    Args:
+        name: Preset key to look up (e.g. ``"Octopus"``)
+
+    Returns:
+        The corresponding :class:`SEGTariff` from :data:`SEG_PRESETS`.
+
+    Raises:
+        ValueError: If *name* is not found in the preset catalogue.
+            The error message lists all available preset names.
+    """
+    if name in SEG_PRESETS:
+        return SEG_PRESETS[name]
+    available = ", ".join(sorted(SEG_PRESETS.keys()))
+    raise ValueError(
+        f"Unknown SEG preset '{name}'. Available presets: {available}"
+    )
+
+
 def calculate_seg_revenue(export_kwh: float, tariff: SEGTariff) -> float:
     """Calculate SEG revenue from grid-exported electricity.
 

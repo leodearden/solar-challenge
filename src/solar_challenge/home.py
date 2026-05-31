@@ -18,6 +18,7 @@ from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
+from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.weather import get_tmy_data
 
@@ -47,6 +48,14 @@ class HomeConfig:
     name: str = ""
     tariff_config: Optional[TariffConfig] = None
     dispatch_strategy: str = "greedy"
+    seg_tariff: Optional[SEGTariff] = None
+    """Smart Export Guarantee tariff for pricing grid exports.
+
+    When set, simulate_home prices export_revenue using calculate_seg_revenue()
+    at this SEG rate (pence/kWh) rather than the import tariff rate.  This is
+    the cross-PRD seam field: the web UI (P2) sets it via HomeConfig so the
+    simulation automatically uses SEG pricing with no further wiring required.
+    """
 
 
 @dataclass
@@ -310,11 +319,26 @@ def simulate_home(
     if config.tariff_config is not None:
         tariff_rates = [config.tariff_config.get_rate(ts) for ts in index]
         import_costs = [r.grid_import * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
-        # Export revenue: use same rate as import for now (can be enhanced with separate export tariff)
-        export_revenues = [r.grid_export * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
     else:
         tariff_rates = [0.0 for _ in results_list]
         import_costs = [0.0 for _ in results_list]
+
+    # Calculate export revenue.
+    # Priority: SEG tariff > import-rate fallback > zero.
+    # When seg_tariff is set, export is priced at the SEG rate (pence/kWh converted to £).
+    # When only a tariff_config is set (no SEG), fall back to the import rate so that
+    # existing non-SEG behaviour and out-of-scope integration tests are preserved.
+    if config.seg_tariff is not None:
+        export_revenues = [
+            calculate_seg_revenue(r.grid_export, config.seg_tariff)
+            for r in results_list
+        ]
+    elif config.tariff_config is not None:
+        export_revenues = [
+            r.grid_export * rate
+            for r, rate in zip(results_list, tariff_rates, strict=True)
+        ]
+    else:
         export_revenues = [0.0 for _ in results_list]
 
     return SimulationResults(
@@ -415,10 +439,37 @@ def calculate_summary(
     Args:
         results: Simulation results with time series
         seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, seg_revenue_gbp is computed from total grid export.
+            If provided, ``seg_revenue_gbp`` is computed from total grid export
+            via ``calculate_seg_revenue``.  Must be >= 0; negative values raise
+            ``ValueError`` (enforced by ``SEGTariff`` validation — a behaviour
+            change from the previous inline formula that silently returned a
+            negative number).
 
     Returns:
         SummaryStatistics with totals and ratios
+
+    Notes:
+        **Two-path SEG design** — ``total_export_revenue_gbp`` and
+        ``seg_revenue_gbp`` are independent figures that can legitimately differ:
+
+        * ``total_export_revenue_gbp`` is always ``results.export_revenue.sum()``.
+          When ``simulate_home`` was called with ``HomeConfig.seg_tariff`` set,
+          every export timestep was already priced at that SEG rate, so
+          ``total_export_revenue_gbp`` already reflects SEG pricing and is the
+          authoritative revenue figure for that simulation.
+
+        * ``seg_revenue_gbp`` is an *additional*, independent recalculation
+          driven by ``seg_tariff_pence_per_kwh``.  This path exists for callers
+          (``fleet.py``, ``output.py``) that build ``SimulationResults`` by hand
+          and need a standalone SEG revenue figure without access to a
+          ``HomeConfig``.
+
+        **Recommended usage when** ``HomeConfig.seg_tariff`` **was set:**
+        read ``total_export_revenue_gbp`` for the authoritative revenue and do
+        *not* pass ``seg_tariff_pence_per_kwh`` — or pass the same rate as a
+        consistency cross-check.  Passing a *different* rate will produce
+        ``seg_revenue_gbp != total_export_revenue_gbp``, which is not an error
+        but may mislead callers that compare the two.
     """
     # Convert power (kW) to energy (kWh) - 1 minute = 1/60 hour
     minutes_to_hours = 1 / 60
@@ -447,10 +498,15 @@ def calculate_summary(
     # Calculate simulation duration
     sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
 
-    # Calculate SEG revenue if tariff is provided
+    # Calculate SEG revenue if tariff is provided.
+    # Routed through SEGTariff + calculate_seg_revenue — single source of SEG math.
+    # SEGTariff validates rate >= 0; negative values raise ValueError here.
     seg_revenue_gbp: Optional[float] = None
     if seg_tariff_pence_per_kwh is not None:
-        seg_revenue_gbp = total_export * seg_tariff_pence_per_kwh / 100.0
+        seg_revenue_gbp = calculate_seg_revenue(
+            total_export,
+            SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh),
+        )
 
     # Calculate heat pump metrics if heat pump load is present
     total_heat_pump_kwh: Optional[float] = None
