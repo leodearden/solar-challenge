@@ -18,6 +18,11 @@ import pandas as pd
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import (
+    ConfigurationError,
+    _parse_dispatch_strategy_config,
+    _parse_tariff_config,
+)
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
@@ -134,11 +139,15 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
             annual_heat_demand_kwh=float(hp_data.get("annual_heat_demand_kwh", 8000.0)),
         )
 
+    # Build optional tariff config
+    tariff_config = _parse_tariff_config(data.get("tariff"))
+
     home_config = HomeConfig(
         pv_config=pv_config,
         load_config=load_config,
         battery_config=battery_config,
         heat_pump_config=heat_pump_config,
+        tariff_config=tariff_config,
         location=loc,
         name=name or "Web Simulation",
     )
