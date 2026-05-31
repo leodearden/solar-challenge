@@ -548,3 +548,130 @@ class TestSimulateCommunityBattery:
         pd.testing.assert_index_equal(result.battery_charge.index, index5)
         pd.testing.assert_index_equal(result.battery_discharge.index, index5)
         pd.testing.assert_index_equal(result.battery_soc.index, index5)
+
+    # --- boundary tests (step-3 RED/boundary) ---
+
+    def test_community_balance_holds_with_cb(
+        self, fleet5: FleetResults, cb_cfg: CommunityConfig
+    ) -> None:
+        """validate_community_balance returns True with a non-None community battery.
+
+        This exercises the (cb_ch − cb_dis) term in COMMUNITY-BALANCE and confirms
+        the balance closes at every step including the battery contribution.
+        """
+        from solar_challenge.community import simulate_community, validate_community_balance
+
+        result = simulate_community(fleet5, cb_cfg)
+        assert validate_community_balance(fleet5, result) is True
+
+    def test_soc_within_battery_capacity(
+        self, fleet5: FleetResults, cb_cfg: CommunityConfig
+    ) -> None:
+        """battery_soc stays in [0, capacity_kwh] at every step."""
+        from solar_challenge.community import simulate_community
+
+        result = simulate_community(fleet5, cb_cfg)
+        capacity = cb_cfg.community_battery.capacity_kwh  # type: ignore[union-attr]
+        assert (result.battery_soc >= 0).all(), (
+            f"battery_soc has negative values: {result.battery_soc.values}"
+        )
+        assert (result.battery_soc <= capacity + 1e-9).all(), (
+            f"battery_soc exceeds capacity {capacity}: {result.battery_soc.values}"
+        )
+
+    # --- power-limit saturation fixture ---
+
+    @pytest.fixture
+    def sat_cfg(self) -> CommunityConfig:
+        """Community battery config with tight power limits to force saturation."""
+        return CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=BatteryConfig(
+                capacity_kwh=50.0,
+                max_charge_kw=20.0,
+                max_discharge_kw=20.0,
+            ),
+        )
+
+    @pytest.fixture
+    def sat_fleet(self) -> FleetResults:
+        """2-step fleet: step 0 net_surplus=100 (charge-saturates), step 1 net_deficit=100.
+
+        Home A: gen=[100, 0], dem=[0,   0]
+        Home B: gen=[0,   0], dem=[0, 100]
+
+        net_surplus=[100, 0], net_deficit=[0, 100]
+        With max_charge_kw=20 → battery can only absorb 20kW at step 0;
+        residual 80kW spills to cg_exp. At step 1, battery can only supply
+        20kW → residual 80kW must be imported.
+        """
+        index2 = pd.date_range("2024-06-21 12:00", periods=2, freq="1min")
+        home_a = ([100.0, 0.0], [0.0, 0.0])
+        home_b = ([0.0, 0.0], [0.0, 100.0])
+        return _make_fleet(index2, [home_a, home_b])
+
+    def test_charge_capped_at_max_charge_kw(
+        self, sat_fleet: FleetResults, sat_cfg: CommunityConfig
+    ) -> None:
+        """battery_charge never exceeds max_charge_kw when net_surplus is large."""
+        from solar_challenge.community import simulate_community
+
+        result = simulate_community(sat_fleet, sat_cfg)
+        max_kw = sat_cfg.community_battery.max_charge_kw  # type: ignore[union-attr]
+        assert (result.battery_charge <= max_kw + 1e-9).all(), (
+            f"battery_charge exceeds max_charge_kw={max_kw}: {result.battery_charge.values}"
+        )
+
+    def test_discharge_capped_at_max_discharge_kw(
+        self, sat_fleet: FleetResults, sat_cfg: CommunityConfig
+    ) -> None:
+        """battery_discharge never exceeds max_discharge_kw when net_deficit is large."""
+        from solar_challenge.community import simulate_community
+
+        result = simulate_community(sat_fleet, sat_cfg)
+        max_kw = sat_cfg.community_battery.max_discharge_kw  # type: ignore[union-attr]
+        assert (result.battery_discharge <= max_kw + 1e-9).all(), (
+            f"battery_discharge exceeds max_discharge_kw={max_kw}: {result.battery_discharge.values}"
+        )
+
+    def test_surplus_residual_spills_to_grid_export(
+        self, sat_fleet: FleetResults, sat_cfg: CommunityConfig
+    ) -> None:
+        """Excess surplus beyond charge cap spills to grid_export at step 0."""
+        from solar_challenge.community import simulate_community
+
+        result = simulate_community(sat_fleet, sat_cfg)
+        assert result.grid_export.iloc[0] > 0, (
+            f"Expected grid_export > 0 (charge capped), got {result.grid_export.iloc[0]}"
+        )
+
+    def test_deficit_residual_imported_from_grid(
+        self, sat_fleet: FleetResults, sat_cfg: CommunityConfig
+    ) -> None:
+        """Unmet deficit beyond discharge cap is still imported at step 1."""
+        from solar_challenge.community import simulate_community
+
+        result = simulate_community(sat_fleet, sat_cfg)
+        assert result.grid_import.iloc[1] > 0, (
+            f"Expected grid_import > 0 (discharge capped), got {result.grid_import.iloc[1]}"
+        )
+
+    def test_saturation_balance_holds(
+        self, sat_fleet: FleetResults, sat_cfg: CommunityConfig
+    ) -> None:
+        """COMMUNITY-BALANCE holds even under power-limit saturation."""
+        from solar_challenge.community import simulate_community, validate_community_balance
+
+        result = simulate_community(sat_fleet, sat_cfg)
+        assert validate_community_balance(sat_fleet, result) is True
+
+    def test_validate_balance_false_returns_same_shape(
+        self, fleet5: FleetResults, cb_cfg: CommunityConfig, index5: pd.DatetimeIndex
+    ) -> None:
+        """validate_balance=False returns result with same shape and index (no side-effects)."""
+        from solar_challenge.community import simulate_community
+
+        result = simulate_community(fleet5, cb_cfg, validate_balance=False)
+        assert len(result.grid_import) == len(index5)
+        assert len(result.battery_soc) == len(index5)
+        pd.testing.assert_index_equal(result.grid_import.index, index5)
