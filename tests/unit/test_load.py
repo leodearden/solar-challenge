@@ -459,6 +459,44 @@ class TestWindowedStochasticGeneration:
             f"from Elexon ({elexon_kwh:.2f} kWh)"
         )
 
+    def test_window_crossing_spring_dst_counts_calendar_days(self, monkeypatch):
+        """3-calendar-day window spanning the spring DST change calls run_application_simulation 3 times.
+
+        UK spring forward: 2024-03-31 01:00 GMT → 02:00 BST.
+        The absolute timedelta from 2024-03-30 00:00 GMT to 2024-04-01 00:00 BST
+        is only 47 h (not 48 h), so int(timedelta.days) == 1 → window_days = 2
+        (the off-by-one bug).  Calendar-date arithmetic gives
+        (Apr 1 − Mar 30).days + 1 = 3, which is correct.
+        """
+        import richardsonpy.classes.appliance as _app_mod
+
+        call_count = [0]
+        _original = _app_mod.run_application_simulation
+
+        def _counting_wrapper(*args, **kwargs):
+            call_count[0] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        # 3-calendar-day window that crosses the UK spring-forward on 2024-03-31
+        start = pd.Timestamp("2024-03-30")
+        end = pd.Timestamp("2024-04-01")
+
+        profile = generate_load_profile(config, start, end, timezone="Europe/London")
+
+        # Must simulate exactly 3 calendar days, not 2 (the timedelta-based bug)
+        assert call_count[0] == 3, (
+            f"Expected 3 simulated days for a DST-crossing 3-calendar-day window, "
+            f"got {call_count[0]}"
+        )
+
+        # Profile must be structurally valid
+        assert isinstance(profile, pd.Series)
+        assert profile.index.tz is not None, "Index must be tz-aware"
+        assert (profile >= 0).all(), "No negative power values"
+
     def test_richardsonpy_runtime_error_falls_back_to_elexon(self, monkeypatch):
         """A runtime exception inside _simulate_stochastic_day falls back to Elexon.
 

@@ -281,7 +281,12 @@ def _try_richardsonpy_profile(
         if end_norm.tz is None:
             end_norm = end_norm.tz_localize(timezone)
 
-        window_days = int((end_norm - start_norm).days) + 1
+        # Use calendar-date arithmetic, not timedelta.days, so that a DST
+        # transition (spring-forward: only 23 h in the day → timedelta.days==0
+        # for that span) does not cause an off-by-one.  E.g. Mar 30–Apr 1
+        # across the UK spring-forward: abs delta = 47 h → timedelta.days=1
+        # → int+1=2 (wrong); date subtraction gives 2 + 1 = 3 (correct).
+        window_days = (end_norm.date() - start_norm.date()).days + 1
 
         # richardsonpy initial_day:  1=Monday … 5=Friday, 6=Saturday, 7=Sunday
         # pandas dayofweek:           0=Monday … 4=Friday, 5=Saturday, 6=Sunday
