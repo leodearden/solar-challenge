@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 

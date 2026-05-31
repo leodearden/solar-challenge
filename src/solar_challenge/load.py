@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 # Use Any type since module may not be available
 _richardsonpy_module: Any = None
 try:
-    import richardsonpy as _rpy  # type: ignore[import-untyped]
+    import richardsonpy as _rpy
     _richardsonpy_module = _rpy
 except ImportError:
     pass
@@ -211,8 +211,8 @@ def _try_richardsonpy_profile(
         return None
 
     try:
-        from richardsonpy.classes.occupancy import Occupancy  # type: ignore[import-untyped]
-        from richardsonpy.classes.electric_load import ElectricLoad  # type: ignore[import-untyped]
+        from richardsonpy.classes.occupancy import Occupancy
+        from richardsonpy.classes.electric_load import ElectricLoad
 
         # Set random seed for reproducibility if provided
         # richardsonpy uses both numpy and Python's random module

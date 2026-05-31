@@ -1,7 +1,7 @@
 """Fleet simulation commands."""
 
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import pandas as pd
 import typer
@@ -333,7 +333,7 @@ def sweep(
         dist_config = _parse_fleet_distribution_config(
             raw_config["fleet_distribution"]
         )
-        sweep_spec = detect_sweep_spec(dist_config)
+        sweep_spec = detect_sweep_spec(dist_config)  # type: ignore[assignment]
         if sweep_spec is None:
             raise ConfigurationError(
                 "No sweep spec found in config. "
@@ -358,7 +358,7 @@ def sweep(
     print_info(f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
 
     # Run multi-sweep simulation with cross-sweep parallelism
-    results_summary: list[dict] = []
+    results_summary: list[dict[str, Any]] = []
 
     def on_sweep_complete(sweep_idx: int, sweep_val: float, fleet_results: FleetResults) -> None:
         """Handle completed sweep: save results and update summary."""
@@ -393,7 +393,7 @@ def sweep(
         )
 
         # Wrap iterator to update progress
-        def progress_iter():
+        def progress_iter() -> Any:
             for item in result_iter:
                 progress.update(task, advance=1)
                 yield item
@@ -418,7 +418,7 @@ def sweep(
         print_success(f"Sweep summary saved to {summary_file}")
 
 
-def _print_sweep_summary(results: list[dict]) -> None:
+def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
     """Print sweep summary table."""
     from rich.table import Table
 

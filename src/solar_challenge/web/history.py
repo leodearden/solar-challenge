@@ -34,10 +34,10 @@ bp = Blueprint("history", __name__)
 # ---------------------------------------------------------------------------
 
 
-@bp.route("/")
+@bp.route("/")  # type: ignore[untyped-decorator]
 def history_index() -> Response:
     """Redirect /history to /history/runs."""
-    return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+    return redirect(url_for("history.runs_page"))
 
 
 @bp.route("/runs")  # type: ignore[untyped-decorator]
@@ -72,7 +72,7 @@ def compare_page() -> str | Response:
     run_ids = [rid.strip() for rid in ids_param.split(",") if rid.strip()]
     if len(run_ids) < 2:
         flash("At least 2 runs are required for comparison.", "error")
-        return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+        return redirect(url_for("history.runs_page"))
     if len(run_ids) > 4:
         run_ids = run_ids[:4]
 
@@ -105,7 +105,7 @@ def compare_page() -> str | Response:
 
     if len(runs) < 2:
         flash("Could not find at least 2 valid runs to compare.", "error")
-        return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+        return redirect(url_for("history.runs_page"))
 
     # Build comparison charts
     charts: dict[str, str] = {}
@@ -135,34 +135,34 @@ def compare_page() -> str | Response:
 @bp.route("/api/runs")  # type: ignore[untyped-decorator]
 def api_list_runs() -> Response:
     """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.history_list_runs", **request.args), code=301)  # type: ignore[return-value]
+    return redirect(url_for("api.history_list_runs", **request.args), code=301)
 
 
 @bp.route("/api/runs/<run_id>")  # type: ignore[untyped-decorator]
 def api_get_run(run_id: str) -> Response:
     """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.history_get_run", run_id=run_id), code=301)  # type: ignore[return-value]
+    return redirect(url_for("api.history_get_run", run_id=run_id), code=301)
 
 
 @bp.route("/api/runs/<run_id>", methods=["DELETE"])  # type: ignore[untyped-decorator]
 def api_delete_run(run_id: str) -> Response:
     """Redirect to consolidated API endpoint (preserves DELETE method)."""
-    return redirect(url_for("api.history_delete_run", run_id=run_id), code=307)  # type: ignore[return-value]
+    return redirect(url_for("api.history_delete_run", run_id=run_id), code=307)
 
 
 @bp.route("/api/runs/<run_id>", methods=["PATCH"])  # type: ignore[untyped-decorator]
 def api_patch_run(run_id: str) -> Response:
     """Redirect to consolidated API endpoint (preserves PATCH method)."""
-    return redirect(url_for("api.history_patch_run", run_id=run_id), code=307)  # type: ignore[return-value]
+    return redirect(url_for("api.history_patch_run", run_id=run_id), code=307)
 
 
 @bp.route("/api/runs/<run_id>/export/csv")  # type: ignore[untyped-decorator]
 def api_export_csv(run_id: str) -> Response:
     """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.history_export_csv", run_id=run_id), code=301)  # type: ignore[return-value]
+    return redirect(url_for("api.history_export_csv", run_id=run_id), code=301)
 
 
 @bp.route("/api/runs/<run_id>/export/yaml")  # type: ignore[untyped-decorator]
 def api_export_yaml(run_id: str) -> Response:
     """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.history_export_yaml", run_id=run_id), code=301)  # type: ignore[return-value]
+    return redirect(url_for("api.history_export_yaml", run_id=run_id), code=301)

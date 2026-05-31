@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 

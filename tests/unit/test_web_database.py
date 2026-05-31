@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+pytest.importorskip("pyarrow")
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, FleetSummary

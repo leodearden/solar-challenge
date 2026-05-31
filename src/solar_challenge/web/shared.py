@@ -12,7 +12,7 @@ from solar_challenge.web.storage import RunStorage
 
 def get_storage() -> RunStorage:
     """Return the RunStorage singleton from current Flask app extensions."""
-    return current_app.extensions["storage"]
+    return current_app.extensions["storage"]  # type: ignore[no-any-return]
 
 
 LOCATION_PRESETS: dict[str, Location] = {
