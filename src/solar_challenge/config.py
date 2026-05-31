@@ -1946,10 +1946,12 @@ def _parse_community_config(
             "('p2p' or 'community_battery')"
         )
 
+    community_battery = _parse_battery_config(data.get("community_battery"))
+
     try:
         return CommunityConfig(
             sharing_mode=sharing_mode,
-            community_battery=None,
+            community_battery=community_battery,
             billing=None,
         )
     except ValueError as exc:
