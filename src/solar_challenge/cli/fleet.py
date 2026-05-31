@@ -16,12 +16,14 @@ from solar_challenge.cli.utils import (
     print_success,
     print_warning,
 )
+from solar_challenge.community import simulate_community
 from solar_challenge.config import (
     ConfigurationError,
     SweepSpec,
     detect_sweep_spec,
     expand_sweep_configs,
     generate_homes_from_distribution,
+    load_community_config,
     load_config,
     load_fleet_config,
     substitute_config_variables,
@@ -37,6 +39,7 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.home import SimulationResults
 from solar_challenge.location import Location
+from solar_challenge.output import generate_community_report
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -45,6 +48,62 @@ def _export_fleet_results(results: FleetResults, output: Path) -> None:
     """Export fleet results to CSV."""
     df = results.to_aggregate_dataframe()
     df.to_csv(output)
+
+
+def _print_community_section(
+    fleet_results: FleetResults,
+    community_results: Any,
+) -> None:
+    """Print a community sharing summary after the fleet summary table."""
+    from rich.table import Table
+
+    index = community_results.grid_import.index
+    if len(index) >= 2:
+        dt_h = (index[1] - index[0]).total_seconds() / 3600.0
+    else:
+        dt_h = 1.0 / 60.0
+
+    comm_import_kwh = float(community_results.grid_import.sum()) * dt_h
+    comm_export_kwh = float(community_results.grid_export.sum()) * dt_h
+    unshared_import_kwh = float(fleet_results.total_grid_import.sum()) * dt_h
+    unshared_export_kwh = float(fleet_results.total_grid_export.sum()) * dt_h
+    total_demand_kwh = float(fleet_results.total_demand.sum()) * dt_h
+
+    if total_demand_kwh > 0:
+        self_sufficiency = max(0.0, 1.0 - comm_import_kwh / total_demand_kwh)
+    else:
+        self_sufficiency = 0.0
+
+    table = Table(title="Community Sharing Results")
+    table.add_column("Metric", style="bold")
+    table.add_column("Unshared (Σ per-home)", justify="right")
+    table.add_column("Community", justify="right")
+    table.add_column("Reduction", justify="right")
+
+    import_reduction = unshared_import_kwh - comm_import_kwh
+    export_reduction = unshared_export_kwh - comm_export_kwh
+
+    table.add_row(
+        "Grid Import (kWh)",
+        f"{unshared_import_kwh:.1f}",
+        f"{comm_import_kwh:.1f}",
+        f"{import_reduction:.1f}",
+    )
+    table.add_row(
+        "Grid Export (kWh)",
+        f"{unshared_export_kwh:.1f}",
+        f"{comm_export_kwh:.1f}",
+        f"{export_reduction:.1f}",
+    )
+    table.add_row("", "", "", "")  # separator
+    table.add_row(
+        "Community Self-Sufficiency",
+        "",
+        f"{self_sufficiency:.1%}",
+        "",
+    )
+
+    console.print(table)
 
 
 @app.command()
@@ -93,6 +152,14 @@ def run(
             help="Disable parallelization",
         ),
     ] = False,
+    community_report: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--community-report",
+            help="Output markdown path for the community sharing report "
+                 "(requires a community: block in the config)",
+        ),
+    ] = None,
 ) -> None:
     """Run a fleet simulation from config file.
 
@@ -163,6 +230,20 @@ def run(
     if output is not None:
         _export_fleet_results(results, output)
         print_success(f"Aggregate results saved to {output}")
+
+    # Community sharing layer — strictly additive; base path is byte-unchanged
+    community_config = load_community_config(config)
+    if community_config is not None:
+        community_results = simulate_community(results, community_config)
+        _print_community_section(results, community_results)
+        if community_report is not None:
+            community_report.write_text(generate_community_report(community_results))
+            print_success(f"Community report saved to {community_report}")
+    else:
+        if community_report is not None:
+            print_warning(
+                "--community-report ignored: config has no community: block"
+            )
 
 
 @app.command()
