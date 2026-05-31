@@ -1,5 +1,6 @@
 """Load profile generation for domestic energy consumption."""
 
+import logging
 import random
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
@@ -10,6 +11,7 @@ import pandas as pd
 if TYPE_CHECKING:
     from solar_challenge.ev import EVConfig
 
+logger = logging.getLogger(__name__)
 
 # richardsonpy is a hard (non-optional) dependency since task #13.
 # RICHARDSONPY_AVAILABLE is kept for backward compatibility but is always True
@@ -375,6 +377,10 @@ def _try_richardsonpy_profile(
             )
             for j in range(window_days)
         )
+        # calculate_annual_consumption integrates whatever Series is passed
+        # (profile.sum() / 60.0); here it measures the raw *window* energy in
+        # kWh — not a full-year figure — to compute the scale factor to the
+        # seasonal target.
         raw_kwh = calculate_annual_consumption(profile)
         if raw_kwh > 0.0:
             profile = profile * (target_window_kwh / raw_kwh)
@@ -382,8 +388,17 @@ def _try_richardsonpy_profile(
         profile.name = "demand_kw"
         return profile
 
-    except Exception:
-        # Defensive fallback: any richardsonpy runtime error → Elexon profile
+    except Exception as exc:  # noqa: BLE001
+        # Defensive fallback: any richardsonpy runtime error → Elexon profile.
+        # Log a warning so the fallback is observable; a silent fallback would
+        # hide API-mismatch regressions in production (only unit tests, via the
+        # call-count assertions, would catch the silent degradation).
+        logger.warning(
+            "richardsonpy stochastic generation failed; falling back to Elexon "
+            "deterministic profile: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
         return None
 
 
@@ -510,13 +525,18 @@ def _generate_elexon_profile(
 
 
 def calculate_annual_consumption(profile: pd.Series) -> float:
-    """Calculate total annual consumption from a load profile.
+    """Integrate a 1-minute power Series to total energy in kWh.
+
+    Despite the name (kept for backward compatibility), this function simply
+    integrates whatever Series is passed — it is NOT limited to full-year
+    profiles.  For a window shorter than a year the result is the window's
+    total energy, not an annualised figure.
 
     Args:
         profile: Power series in kW with 1-minute resolution
 
     Returns:
-        Total consumption in kWh
+        Total energy in kWh (profile.sum() / 60.0)
     """
     # Power (kW) * time (1 minute = 1/60 hour) = Energy (kWh)
     return float(profile.sum() / 60.0)
