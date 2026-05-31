@@ -1455,6 +1455,42 @@ class TestGridChargeContext:
         with pytest.raises(Exception):  # FrozenInstanceError
             ctx.current_rate = 0.20  # type: ignore[misc]
 
+    def test_zero_round_trip_efficiency_raises(self):
+        """round_trip_efficiency=0 raises ValueError (would cause ZeroDivisionError)."""
+        with pytest.raises(ValueError, match="round_trip_efficiency"):
+            self._make_ctx(round_trip_efficiency=0.0)
+
+    def test_negative_round_trip_efficiency_raises(self):
+        """Negative round_trip_efficiency raises ValueError."""
+        with pytest.raises(ValueError, match="round_trip_efficiency"):
+            self._make_ctx(round_trip_efficiency=-0.1)
+
+    def test_round_trip_efficiency_above_one_raises(self):
+        """round_trip_efficiency > 1.0 raises ValueError."""
+        with pytest.raises(ValueError, match="round_trip_efficiency"):
+            self._make_ctx(round_trip_efficiency=1.01)
+
+    def test_zero_charge_efficiency_raises(self):
+        """charge_efficiency=0 raises ValueError (would cause ZeroDivisionError)."""
+        with pytest.raises(ValueError, match="charge_efficiency"):
+            self._make_ctx(charge_efficiency=0.0)
+
+    def test_negative_charge_efficiency_raises(self):
+        """Negative charge_efficiency raises ValueError."""
+        with pytest.raises(ValueError, match="charge_efficiency"):
+            self._make_ctx(charge_efficiency=-0.5)
+
+    def test_charge_efficiency_above_one_raises(self):
+        """charge_efficiency > 1.0 raises ValueError."""
+        with pytest.raises(ValueError, match="charge_efficiency"):
+            self._make_ctx(charge_efficiency=1.1)
+
+    def test_efficiency_exactly_one_is_valid(self):
+        """Efficiency values of exactly 1.0 are at the boundary and are valid."""
+        ctx = self._make_ctx(round_trip_efficiency=1.0, charge_efficiency=1.0)
+        assert ctx.round_trip_efficiency == pytest.approx(1.0)
+        assert ctx.charge_efficiency == pytest.approx(1.0)
+
 
 class TestComputeGridChargePowerKw:
     """Tests for compute_grid_charge_power_kw — all branches of PRD §3.2."""
@@ -1628,6 +1664,64 @@ class TestComputeGridChargePowerKw:
         )
         # Halved timestep → doubled gap_power (residual non-binding in both cases)
         assert result_30 == pytest.approx(result_60 * 2.0)
+
+    def test_zero_timestep_raises(self):
+        """timestep_minutes=0 raises ValueError (would cause ZeroDivisionError)."""
+        with pytest.raises(ValueError, match="positive"):
+            compute_grid_charge_power_kw(
+                self._CTX_FAVOURABLE,
+                battery_soc_kwh=2.0,
+                capacity_kwh=10.0,
+                pv_charge_power_kw=0.0,
+                timestep_minutes=0.0,
+            )
+
+    def test_negative_timestep_raises(self):
+        """Negative timestep_minutes raises ValueError."""
+        with pytest.raises(ValueError, match="positive"):
+            compute_grid_charge_power_kw(
+                self._CTX_FAVOURABLE,
+                battery_soc_kwh=2.0,
+                capacity_kwh=10.0,
+                pv_charge_power_kw=0.0,
+                timestep_minutes=-1.0,
+            )
+
+    def test_residual_clamp_is_battery_side(self):
+        """Residual clamp uses battery-side headroom (conservative, per PRD §3.2).
+
+        When charge_efficiency < 1 and residual limits the result, the function
+        returns ``residual_kw`` (battery-side headroom) directly, NOT
+        ``residual_kw / charge_efficiency`` (which would be the grid-side
+        power needed to fully occupy that headroom). This is intentional: the
+        controller conservatively caps grid draw at the battery's acceptance
+        capacity in raw kW terms, avoiding over-committing grid import.
+
+        Setup: charge_efficiency=0.8, max_charge_kw=5, pv_charge=1 →
+            residual_battery = 4.0 kW (battery-side)
+            gap_power        = 7.0/0.8/1.0 = 8.75 kW (grid-side, non-binding)
+            result           = min(8.75, 4.0) = 4.0  (battery-side residual)
+        True grid draw for full headroom would be 4.0/0.8 = 5.0 kW — NOT returned.
+        """
+        ctx = GridChargeContext(
+            current_rate=0.10,
+            peak_rate=0.40,
+            is_cheap_period=True,
+            target_soc_fraction=0.9,
+            max_charge_kw=5.0,
+            round_trip_efficiency=0.81,
+            charge_efficiency=0.8,  # deliberately different from 0.9 to surface frame
+        )
+        result = compute_grid_charge_power_kw(
+            ctx,
+            battery_soc_kwh=2.0,
+            capacity_kwh=10.0,
+            pv_charge_power_kw=1.0,  # residual = 5.0 - 1.0 = 4.0 kW battery-side
+            timestep_minutes=60.0,
+        )
+        # Returns battery-side residual (4.0), not grid-side equivalent (4.0/0.8=5.0)
+        assert result == pytest.approx(4.0)
+        assert result != pytest.approx(4.0 / 0.8)  # not 5.0
 
 
 class TestDecideActionAcceptsGridChargeCtx:

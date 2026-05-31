@@ -64,9 +64,11 @@ class GridChargeContext:
 
     A plain, immutable container of floats and a bool that describes the
     current tariff environment and battery configuration needed to decide
-    how much power to draw from the grid for battery charging.  Inputs are
-    pre-validated upstream (battery config / efficiency bounds), so this
-    dataclass intentionally has no __post_init__ validation.
+    how much power to draw from the grid for battery charging.
+
+    Efficiency fields (round_trip_efficiency, charge_efficiency) are
+    validated in __post_init__ to be in the half-open interval (0, 1] so
+    that compute_grid_charge_power_kw can divide by them safely.
 
     Attributes:
         current_rate: Current grid import rate in £/kWh
@@ -77,10 +79,12 @@ class GridChargeContext:
             cheap enough to warrant grid charging
         target_soc_fraction: Target state-of-charge as a fraction of
             capacity (0.0–1.0) to fill up to during cheap periods
-        max_charge_kw: Maximum battery charge power in kW (hardware limit)
-        round_trip_efficiency: Round-trip charge/discharge efficiency
-            (0.0–1.0), used in the spread gate calculation
-        charge_efficiency: One-way charge efficiency (0.0–1.0), used to
+        max_charge_kw: Maximum battery-side charge power in kW (hardware
+            C-rate limit of the battery/inverter). This is a battery-side
+            value; the controller uses it to bound grid draw conservatively.
+        round_trip_efficiency: Round-trip charge/discharge efficiency in
+            (0, 1], used in the spread gate calculation
+        charge_efficiency: One-way charge efficiency in (0, 1], used to
             account for losses when computing how much grid power is needed
             to reach the target SOC
     """
@@ -92,6 +96,19 @@ class GridChargeContext:
     max_charge_kw: float
     round_trip_efficiency: float
     charge_efficiency: float
+
+    def __post_init__(self) -> None:
+        """Validate efficiency fields to prevent ZeroDivisionError at runtime."""
+        if not (0.0 < self.round_trip_efficiency <= 1.0):
+            raise ValueError(
+                f"round_trip_efficiency must be in (0, 1], "
+                f"got {self.round_trip_efficiency}"
+            )
+        if not (0.0 < self.charge_efficiency <= 1.0):
+            raise ValueError(
+                f"charge_efficiency must be in (0, 1], "
+                f"got {self.charge_efficiency}"
+            )
 
 
 def compute_grid_charge_power_kw(
@@ -107,14 +124,29 @@ def compute_grid_charge_power_kw(
     Implements the rate-aware dispatch controller described in PRD §3.2.
     All inputs are floats/bool (no tariff symbols imported here).
 
+    **Frame note (PRD §3.2):** ``gap_power_kw`` is a *grid-side* quantity
+    (battery gap divided by charge efficiency, so it exceeds the energy
+    actually stored).  ``residual_kw`` is a *battery-side* quantity
+    (max battery charge rate minus PV already absorbed by the battery).
+    The final ``min()`` conservatively clamps the returned grid draw to the
+    battery-side residual headroom: when residual limits, the function
+    returns ``residual_kw`` directly rather than ``residual_kw /
+    charge_efficiency``.  This is intentional per PRD §3.2 — it avoids
+    over-committing grid import above the battery's acceptance capacity.
+    The existing ``test_residual_clamp_wins`` and
+    ``test_residual_clamp_is_battery_side`` tests pin this behaviour.
+
     Args:
         ctx: Tariff and battery context for this timestep.
+            ``ctx.round_trip_efficiency`` and ``ctx.charge_efficiency`` must
+            be in (0, 1] (enforced by ``GridChargeContext.__post_init__``).
         battery_soc_kwh: Current battery state of charge in kWh.
         capacity_kwh: Total battery capacity in kWh.
         pv_charge_power_kw: PV charging power already being consumed by the
-            battery in this timestep (kW). Reduces the residual charging
-            headroom available for grid charging.
-        timestep_minutes: Duration of the timestep in minutes.
+            battery in this timestep (kW, battery-side). Reduces the
+            residual charging headroom available for grid charging.
+        timestep_minutes: Duration of the timestep in minutes. Must be
+            positive (raises ``ValueError`` if not).
 
     Returns:
         Recommended grid-to-battery charge power in kW (>= 0.0).
@@ -122,7 +154,15 @@ def compute_grid_charge_power_kw(
         - it is not a cheap period (ctx.is_cheap_period is False), or
         - the spread gate fails (peak saving does not cover round-trip losses),
         - the battery is already at or above the target SOC.
+
+    Raises:
+        ValueError: If ``timestep_minutes`` is not positive.
     """
+    if timestep_minutes <= 0.0:
+        raise ValueError(
+            f"timestep_minutes must be positive, got {timestep_minutes}"
+        )
+
     # Gate 1: only charge from grid during cheap periods
     if not ctx.is_cheap_period:
         return 0.0
@@ -139,12 +179,14 @@ def compute_grid_charge_power_kw(
     if gap_kwh <= 0.0:
         return 0.0
 
-    # Convert SOC gap to a charge-power request for this timestep.
-    # gap_kwh accounts for charge efficiency (more grid power needed than stored).
+    # Convert SOC gap to a grid-side charge-power request for this timestep.
+    # gap_kwh / charge_efficiency: more grid energy needed than actually stored.
     dt_h = timestep_minutes / 60.0
     gap_power_kw = gap_kwh / ctx.charge_efficiency / dt_h
 
-    # Residual charging headroom after PV is already occupying some capacity
+    # Residual battery-side charging headroom after PV already occupies some.
+    # Conservative clamp: grid draw is bounded by battery residual directly
+    # (see frame note in the docstring).
     residual_kw = max(0.0, ctx.max_charge_kw - pv_charge_power_kw)
 
     return min(gap_power_kw, residual_kw)
