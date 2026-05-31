@@ -366,6 +366,25 @@ class DispatchStrategyConfig:
                 )
 
 
+@dataclass(frozen=True)
+class GridChargeConfig:
+    """Configuration for grid-charging (battery arbitrage) mode.
+
+    Attributes:
+        target_soc_fraction: Target state-of-charge to reach via grid charging,
+            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
+    """
+
+    target_soc_fraction: float = 0.9
+
+    def __post_init__(self) -> None:
+        """Validate grid-charge configuration."""
+        if not (0 < self.target_soc_fraction <= 1):
+            raise ConfigurationError(
+                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
+            )
+
+
 @dataclass
 class FleetDistributionConfig:
     """Configuration for generating a fleet from distributions.
