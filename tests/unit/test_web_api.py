@@ -1031,3 +1031,19 @@ class TestParseHomeConfigCapabilities:
         assert home_config.heat_pump_config is not None
         assert home_config.heat_pump_config.heat_pump_type == "ASHP"
         assert home_config.heat_pump_config.thermal_capacity_kw == 8.0
+
+    def test_tariff_fields_populate_home_config(self) -> None:
+        """tariff dict in payload populates HomeConfig.tariff_config."""
+        from solar_challenge.web.api import _parse_home_config
+
+        payload = {
+            **VALID_HOME_PAYLOAD,
+            "tariff": {
+                "type": "flat_rate",
+                "rate_per_kwh": 0.30,
+            },
+        }
+        home_config, _start, _end, _name = _parse_home_config(payload)
+        assert home_config.tariff_config is not None
+        # flat_rate TariffConfig has at least one period
+        assert len(home_config.tariff_config.periods) > 0
