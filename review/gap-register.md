@@ -67,11 +67,12 @@ Author sequentially in the order below (P1→P5) so seam ownership is claimed be
 - **Decided:** field location/name/type/units resolved → see §D. Approach: bare **B** + the §D announcement as the cross-PRD contract (a web/CLI two-way boundary test belongs to P2/#14, whose files P3 must not touch).
 - **PRD file:** `docs/prds/pv-degradation-live-sim.md` (committed `f79cc61`) · **Subtasks queued:** **#16** (α — engine wiring, `pv.py`) → **#17** (β — config threading + `fleet run` signal, `config.py`/`scenarios/`; depends on #16). Placeholder **task #7 cancelled** (superseded).
 
-### P4 — TOU grid-charging / battery arbitrage (subsumes task #8)  ·  Status: **TODO**
+### P4 — TOU grid-charging / battery arbitrage (subsumes task #8)  ·  Status: **QUEUED**
 - **Gap:** `flow.py:245` — charging the battery from the grid during cheap TOU periods is a comment-only "future enhancement"; the TOU path only charges from excess PV. Limits arbitrage realism.
-- **Owns:** `flow.simulate_timestep_tou`, dispatch logic in `dispatch.py` (rate-aware path). Must preserve the energy-balance invariant (`validate_energy_balance`).
-- **Consumes (don't modify):** SEG/import pricing from **#2** (arbitrage economics depend on correct TOU pricing — do not re-touch home.py financial accounting). Beware the two unrelated `TariffPeriod` symbols (enum in dispatch vs dataclass in tariff) — see briefing key_decision.
-- **PRD file:** _(record path)_ · **Subtasks queued:** _(ids)_
+- **Owns:** `flow.simulate_timestep_tou` + `flow.simulate_timestep`, the rate-aware grid-charge controller in `dispatch.py` (`compute_grid_charge_power_kw` + `GridChargeContext` + `DispatchDecision.grid_charge_kw`), and the **new `GridChargeConfig` schema on `BatteryConfig`** (battery.py) + its `config.py` parser. Must preserve the energy-balance invariant (`validate_energy_balance`) — done via source-split charge accounting (PRD §3.1).
+- **Consumes (don't modify):** SEG/import pricing from **#2** (arbitrage economics depend on correct TOU pricing — do not re-touch home.py financial accounting). The two unrelated `TariffPeriod` symbols are avoided structurally: the dispatch.py controller is float-only and imports neither.
+- **Decided (user-confirmed):** config = nested `GridChargeConfig` on `BatteryConfig` (rides `battery.config` into the function path, zero new args); trigger = round-trip **spread test** + **target SOC**; **both** dispatch paths covered; Strategy path uses **explicit per-strategy** `DispatchDecision.grid_charge_kw` with per-strategy serialized tasks (TOUOptimized, PeakShaving) chained on `dispatch.py` for collision safety. Approach **B + H** (split-accounting contract + two-way balance/economics boundary tests).
+- **PRD file:** `docs/prds/tou-grid-charging-battery-arbitrage.md` (committed `d11f963`) · manifest `docs/prds/tou-grid-charging-battery-arbitrage.capability-manifest.md` (`d11f963`) · **Subtasks queued:** **#23** (α — dispatch core: controller + `DispatchDecision.grid_charge_kw`) → **#25** (α2 — TOUOptimized grid-charge; dep #23) → **#26** (α3 — PeakShaving grid-charge; dep #25, serialises dispatch.py) ; **#24** (β — `GridChargeConfig`/`BatteryConfig` schema + parser) ; **#27** (γ — flow split-accounting both call sites; dep #23+#24) ; **#28** (ε — home.py strategy-path tariff threading; dep #27+**#2**) ; **#29** (δ — arbitrage economics + demo scenario; dep #27+**#2**). Placeholder **task #8 cancelled** (superseded).
 
 ### P5 — Inter-home / community energy sharing (subsumes task #6)  ·  Status: **TODO**
 - **Gap:** homes are simulated independently; no inter-home power-sharing / community battery / virtual net metering. README frames it as a "future phase" but the user treats it as real work.
@@ -91,13 +92,28 @@ Author sequentially in the order below (P1→P5) so seam ownership is claimed be
 | `web/fleet_config.py` | **P2** | — · runner **#19** + overlay **#22** |
 | `web/app.py` blueprint registration | shared pattern; **P1** adds assistant bp | P2 (existing bps unchanged) |
 | `web/database.py` `chat_messages` | **P1** | — |
-| `flow.py` / `dispatch.py` TOU dispatch | **P4** | — |
+| `flow.py` / `dispatch.py` TOU dispatch | **P4** | — · queued **#23**(α dispatch core)→**#25**(α2 TOU)→**#26**(α3 PeakShaving), **#24**(β config), **#27**(γ flow), **#28**(ε home wiring), **#29**(δ economics) · PRD `docs/prds/tou-grid-charging-battery-arbitrage.md` |
+| `battery.py` `BatteryConfig` schema (new `grid_charging: GridChargeConfig`) + `config.py` `_parse_battery_config` | **P4** (queued **#24**) | P2 consumes existing `BatteryConfig.dispatch_strategy` only — new optional `grid_charging` field is additive, no conflict |
 | `home.py` financial accounting / `seg.py` pricing | **task #2** (not a PRD) | P2, P4 depend on it; do NOT re-fix |
 | `fleet.py` simulation/aggregation | **P5** | P2 (calls `simulate_fleet`) |
 | test markers (`slow`/`integration`), mypy strict | **tasks #11/#12** | all PRDs: mark new real-PVGIS tests `slow`; keep mypy green |
 
 ## D. Notes / open seam questions
 - _(spawned sessions append here)_
+
+### 📢 P4 announcement — `GridChargeConfig` on `BatteryConfig` (additive; web/CLI may later expose)
+
+P4 (PRD `docs/prds/tou-grid-charging-battery-arbitrage.md`, task **#24**) adds an optional nested config object to `solar_challenge.battery.BatteryConfig` (frozen dataclass). **Additive and backward-compatible — `None` = disabled = today's behaviour. Consume as-is; do not redefine:**
+
+| Field (on `BatteryConfig`) | Type | Default | Meaning |
+|---|---|---|---|
+| `grid_charging` | `Optional[GridChargeConfig]` | `None` | Presence enables TOU grid-charging; `None` disables. |
+
+`GridChargeConfig` (frozen, in `config.py` beside `DispatchStrategyConfig`): `target_soc_fraction: float = 0.9` (fill ceiling as a fraction of capacity; `0 < x <= 1`).
+
+- **YAML surface (under the `battery:` block):** `battery.grid_charging.target_soc_fraction`. Parsed by `_parse_battery_config` (#24).
+- **Effect:** only on the rate-aware TOU paths (function `simulate_timestep_tou` and the Strategy-pattern path with a tariff). Inert without a tariff; the round-trip spread gate makes it a no-op on flat tariffs.
+- **For P2/#14 (NOT required by P4):** a future web/CLI toggle for `battery.grid_charging` is a candidate follow-up, **out of scope for P4** — P4 ships the engine + YAML surface only.
 
 ### 📢 P2 → task #2 seam requirement — SEG must land on `HomeConfig`
 
