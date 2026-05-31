@@ -447,13 +447,20 @@ class TOUOptimizedStrategy(DispatchStrategy):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
-            grid_charge_ctx: Optional rate-aware grid-charging context
-                (accepted but not used in the base substrate; consumed in α2).
+            grid_charge_ctx: Optional rate-aware grid-charging context.  When
+                supplied and ``grid_charge_ctx.is_cheap_period`` is ``True``,
+                the strategy will grid-charge the battery (via
+                ``compute_grid_charge_power_kw``) provided the battery is not
+                already being discharged.  The context's own Gate 1/Gate 2/
+                Gate 3 checks give defence-in-depth.  Pass ``None`` (default)
+                to disable grid-charging and preserve prior behaviour exactly.
 
         Returns:
             DispatchDecision optimized for TOU tariffs:
-            - Off-peak: charge from excess PV
-            - Peak: discharge to meet demand, still charge from excess PV
+            - Off-peak: charge from excess PV; also grid-charges when a
+              favourable GridChargeContext is provided.
+            - Peak: discharge to meet demand, still charge from excess PV;
+              grid-charging is suppressed when discharging.
 
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)
@@ -485,28 +492,65 @@ class TOUOptimizedStrategy(DispatchStrategy):
         excess_kw = max(0.0, generation_kw - demand_kw)
         shortfall_kw = max(0.0, demand_kw - generation_kw)
 
-        # Decision logic based on tariff period
+        # Compute (charge_kw, discharge_kw) using the existing branch logic.
+        # Off-peak: shortfall/balanced both yield excess_kw=0 → both collapse
+        # to charge_kw=0, discharge_kw=0 without needing explicit branches.
         if tariff_period == TariffPeriod.OFF_PEAK:
-            # Off-peak: charge from excess PV (like self-consumption)
-            if excess_kw > 0:
-                return DispatchDecision(charge_kw=excess_kw, discharge_kw=0.0)
-            elif shortfall_kw > 0:
-                # Off-peak: preserve battery for expensive peak periods
-                # Let cheap off-peak grid power handle the shortfall
-                return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
-            else:
-                return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+            # Off-peak: charge from excess PV; preserve battery on shortfall
+            # (let cheap off-peak grid handle demand directly).
+            charge_kw = excess_kw  # 0.0 on shortfall/balanced
+            discharge_kw = 0.0
         else:
             # Peak period: discharge to offset demand, charge from excess PV
             if excess_kw > 0:
-                # Free PV energy available - charge even during peak
-                return DispatchDecision(charge_kw=excess_kw, discharge_kw=0.0)
+                # Free PV energy available — charge even during peak
+                charge_kw = excess_kw
+                discharge_kw = 0.0
             elif shortfall_kw > 0:
-                # Demand exceeds generation - discharge to reduce grid import
-                return DispatchDecision(charge_kw=0.0, discharge_kw=shortfall_kw)
+                # Demand exceeds generation — discharge to reduce grid import
+                charge_kw = 0.0
+                discharge_kw = shortfall_kw
             else:
                 # Generation equals demand
-                return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+                charge_kw = 0.0
+                discharge_kw = 0.0
+
+        # Grid-charge gate: delegate to the shared controller when a cheap
+        # context is supplied and the battery is not already discharging.
+        # The "discharge_kw == 0.0" guard ensures we never return
+        # grid_charge_kw > 0 alongside discharge_kw > 0, which
+        # DispatchDecision forbids.  Passing charge_kw (the PV charge already
+        # computed above) as pv_charge_power_kw lets the controller's residual
+        # clamp share the max_charge_kw inverter budget between PV and grid.
+        #
+        # Seam note: ctx.is_cheap_period (caller-computed) is the SOLE authority
+        # on whether grid-charging is cheap.  The strategy's own peak_hours /
+        # _get_tariff_period() governs only battery charge_kw / discharge_kw
+        # above; it does NOT gate grid charging.  If the caller supplies
+        # is_cheap_period=True even during a configured peak hour (e.g. because
+        # a TOU schedule varies by season), grid charging proceeds.  This is
+        # intentional — the context is the single source of truth for grid-import
+        # economics, keeping the two dispatch paths (γ function path + strategy
+        # path) consistent without re-deriving cheapness from hour windows.
+        grid_charge_kw = 0.0
+        if (
+            grid_charge_ctx is not None
+            and grid_charge_ctx.is_cheap_period
+            and discharge_kw == 0.0
+        ):
+            grid_charge_kw = compute_grid_charge_power_kw(
+                grid_charge_ctx,
+                battery_soc_kwh=battery_soc_kwh,
+                capacity_kwh=battery_capacity_kwh,
+                pv_charge_power_kw=charge_kw,
+                timestep_minutes=timestep_minutes,
+            )
+
+        return DispatchDecision(
+            charge_kw=charge_kw,
+            discharge_kw=discharge_kw,
+            grid_charge_kw=grid_charge_kw,
+        )
 
 
 class PeakShavingStrategy(DispatchStrategy):
