@@ -204,6 +204,12 @@ def simulate_timestep(
         timestep_minutes: Duration of timestep in minutes
         timestamp: Current simulation timestamp (defaults to epoch if None)
         strategy: Dispatch strategy to use (defaults to SelfConsumptionStrategy)
+        tariff: Optional tariff configuration.  When provided together with
+            ``battery.config.grid_charging``, a :class:`~solar_challenge.dispatch.GridChargeContext`
+            is built and forwarded to ``strategy.decide_action`` so strategies
+            can emit ``grid_charge_kw > 0``.  When ``None`` (default), the
+            grid-charge context is not built and results are bit-identical to
+            omitting the argument entirely.
 
     Returns:
         EnergyFlowResult with all energy flows in kWh
@@ -270,7 +276,12 @@ def simulate_timestep(
     self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
 
     # Split-source grid flows (PRD §3.1):
-    # Only PV charge reduces export; grid charge adds to import
+    # Only PV charge reduces export; grid charge adds to import.
+    # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
+    # (post charge-efficiency loss), consistent with the PV-charging convention.
+    # validate_energy_balance closes on stored energy.  Callers computing the
+    # exact grid-side draw (e.g. for cost accounting) should divide
+    # grid_charge_stored_kwh by battery.charge_efficiency.
     grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
     grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
 
@@ -382,7 +393,12 @@ def simulate_timestep_tou(
     self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
 
     # Split-source grid flows (PRD §3.1):
-    # Only PV charge reduces export; grid charge adds to import
+    # Only PV charge reduces export; grid charge adds to import.
+    # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
+    # (post charge-efficiency loss), consistent with the PV-charging convention.
+    # validate_energy_balance closes on stored energy.  Callers computing the
+    # exact grid-side draw (e.g. for cost accounting) should divide
+    # grid_charge_stored_kwh by battery.charge_efficiency.
     grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
     grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
 
