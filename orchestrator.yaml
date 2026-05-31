@@ -25,11 +25,17 @@ escalation:
 #
 # Tests exclude the `slow` marker (real PVGIS network calls) and `e2e`
 # (playwright browser tests) — neither belongs in a per-task verify loop.
-test_command: "uv run --extra dev pytest -m 'not slow and not e2e'"
+# The `web` extra is required: web/* unit tests import flask at module level,
+# so without it pytest fails *collection* (ModuleNotFoundError) before the
+# marker filter applies. `--ignore=tests/e2e` skips the playwright suite at
+# collection time too (the `not e2e` marker only deselects post-collection,
+# which still trips the playwright import).
+test_command: "uv run --extra dev --extra web pytest -m 'not slow and not e2e' --ignore=tests/e2e"
 # No standalone linter configured; mypy strict (type_check_command) is the
 # static-analysis gate. Use a no-op rather than a command that always fails.
+# `--extra web` so web/* modules type-check against their real deps (flask).
 lint_command: "true"
-type_check_command: "uv run --extra dev mypy src/solar_challenge"
+type_check_command: "uv run --extra dev --extra web mypy src/solar_challenge"
 
 git:
   main_branch: "main"
