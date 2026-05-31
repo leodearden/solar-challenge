@@ -1,14 +1,52 @@
 """Tests for the CLI module."""
 
+import io
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
+import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
 
 runner = CliRunner()
+
+
+def _make_june21_weather() -> pd.DataFrame:
+    """Synthetic June-21 24h weather DataFrame (mirrors test_home.py fixture).
+
+    Avoids any PVGIS network call / disk cache.
+    """
+    index = pd.date_range(
+        "2024-06-21 00:00", periods=24, freq="1h", tz="Europe/London"
+    )
+    return pd.DataFrame(
+        {
+            "ghi": [
+                0, 0, 0, 0, 0, 50, 150, 300, 500, 650, 780, 850,
+                870, 850, 780, 650, 500, 300, 150, 50, 0, 0, 0, 0,
+            ],
+            "dni": [
+                0, 0, 0, 0, 0, 100, 250, 450, 650, 800, 900, 950,
+                970, 950, 900, 800, 650, 450, 250, 100, 0, 0, 0, 0,
+            ],
+            "dhi": [
+                0, 0, 0, 0, 0, 30, 70, 130, 180, 200, 200, 200,
+                200, 200, 200, 200, 180, 130, 70, 30, 0, 0, 0, 0,
+            ],
+            "temp_air": [
+                12, 11, 11, 11, 12, 13, 15, 17, 19, 21, 22, 23,
+                23, 23, 22, 21, 19, 17, 16, 14, 13, 12, 12, 12,
+            ],
+            "wind_speed": [
+                2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3,
+                3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2,
+            ],
+        },
+        index=index,
+    )
 
 
 class TestMainCLI:
@@ -362,3 +400,79 @@ class TestLocationParsing:
 
         with pytest.raises(ValueError, match="Invalid coordinates"):
             parse_location("abc,def")
+
+
+class TestHomeRunFullConfigParity:
+    """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
+
+    def _write_home_config(self, tmpdir: str) -> Path:
+        """Write a temp YAML config with tariff and top-level SEG block."""
+        cfg_path = Path(tmpdir) / "home_seg.yaml"
+        cfg_path.write_text(
+            """
+home:
+  pv:
+    capacity_kw: 4.0
+  load:
+    annual_consumption_kwh: 3400
+    use_stochastic: false
+  tariff:
+    type: flat_rate
+    rate_per_kwh: 0.28
+
+seg:
+  rate_pence_per_kwh: 15.0
+"""
+        )
+        return cfg_path
+
+    def test_home_run_threads_tariff_and_seg(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """home run passes tariff + seg to simulate_home and reports SEG Revenue."""
+        import solar_challenge.home as _home_module
+        import solar_challenge.cli.home as _cli_home_module
+
+        # Capture the home_config passed to simulate_home by wrapping the real function
+        captured: dict = {}
+        real_simulate_home = _home_module.simulate_home
+
+        def spy_simulate_home(home_config, start_date, end_date, progress_callback=None):  # type: ignore[no-untyped-def]
+            captured["home_config"] = home_config
+            return real_simulate_home(home_config, start_date, end_date, progress_callback)
+
+        # Patch get_tmy_data to avoid PVGIS network call
+        monkeypatch.setattr(_home_module, "get_tmy_data", lambda loc: _make_june21_weather())
+        # Patch simulate_home in the CLI module (local binding)
+        monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = self._write_home_config(tmpdir)
+            result = runner.invoke(
+                app,
+                [
+                    "home", "run", str(cfg_path),
+                    "--start", "2024-06-21",
+                    "--end", "2024-06-21",
+                    "--report",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, f"CLI failed: {result.stdout}"
+
+        # Tariff must be honoured by the canonical parser
+        home_cfg = captured.get("home_config")
+        assert home_cfg is not None, "spy was not called"
+        assert home_cfg.tariff_config is not None, (
+            "tariff_config should not be None — canonical parser must pick it up"
+        )
+
+        # SEG must be threaded onto the HomeConfig
+        assert home_cfg.seg_tariff is not None, (
+            "seg_tariff should not be None — SEG must be threaded from top-level seg block"
+        )
+        assert home_cfg.seg_tariff.rate_pence_per_kwh == 15.0
+
+        # SEG Revenue section must appear in the --report output
+        assert "SEG Revenue" in result.stdout, (
+            "generate_summary_report must include a SEG Revenue section"
+        )
