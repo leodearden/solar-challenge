@@ -1,7 +1,7 @@
 """Tests for Smart Export Guarantee (SEG) tariff and revenue calculation."""
 
 import pytest
-from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue
+from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
 
 
 class TestSEGTariffBasics:
@@ -238,3 +238,39 @@ class TestCalculateSEGRevenue:
         revenue = calculate_seg_revenue(1200.0, tariff)
         # At 4.1 p/kWh: 1200 * 4.1 / 100 = £49.20
         assert revenue == pytest.approx(49.20)
+
+
+class TestResolveSEGTariff:
+    """Test resolve_seg_tariff() resolver for named SEG presets."""
+
+    def test_octopus_returns_correct_tariff(self):
+        """resolve_seg_tariff('Octopus') returns SEGTariff with 4.1 p/kWh."""
+        tariff = resolve_seg_tariff("Octopus")
+        assert isinstance(tariff, SEGTariff)
+        assert tariff.rate_pence_per_kwh == pytest.approx(4.1)
+
+    def test_octopus_equals_preset(self):
+        """resolve_seg_tariff('Octopus') returns same object as SEG_PRESETS['Octopus']."""
+        tariff = resolve_seg_tariff("Octopus")
+        assert tariff == SEG_PRESETS["Octopus"]
+
+    def test_all_preset_keys_resolve(self):
+        """Every key in SEG_PRESETS resolves to its corresponding SEGTariff."""
+        for name, expected in SEG_PRESETS.items():
+            resolved = resolve_seg_tariff(name)
+            assert resolved == expected, f"Resolved tariff for '{name}' does not match preset"
+
+    def test_unknown_name_raises_value_error(self):
+        """An unknown supplier name raises ValueError."""
+        with pytest.raises(ValueError):
+            resolve_seg_tariff("NoSuchSupplier")
+
+    def test_unknown_name_error_message_mentions_name(self):
+        """ValueError message mentions the unknown name."""
+        with pytest.raises(ValueError, match="NoSuchSupplier"):
+            resolve_seg_tariff("NoSuchSupplier")
+
+    def test_unknown_name_error_message_lists_available(self):
+        """ValueError message lists at least one available preset name."""
+        with pytest.raises(ValueError, match="Octopus"):
+            resolve_seg_tariff("UnknownSupplier")
