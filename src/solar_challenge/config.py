@@ -754,6 +754,47 @@ def _parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfi
         )
 
 
+def _parse_heat_pump_config(data: Optional[dict[str, Any]]) -> Optional[HeatPumpConfig]:
+    """Parse heat pump configuration from config data.
+
+    Args:
+        data: Dict with heat_pump_type, thermal_capacity_kw, and optional fields,
+              or None.
+
+    Returns:
+        HeatPumpConfig or None if data is None.
+    """
+    if data is None:
+        return None
+    return HeatPumpConfig(
+        heat_pump_type=data["heat_pump_type"],
+        thermal_capacity_kw=float(data["thermal_capacity_kw"]),
+        annual_heat_demand_kwh=float(data.get("annual_heat_demand_kwh", 8000.0)),
+        name=data.get("name", ""),
+    )
+
+
+def _parse_ev_config(data: Optional[dict[str, Any]]) -> Optional[EVConfig]:
+    """Parse EV configuration from config data.
+
+    Args:
+        data: Dict with charger_type, arrival_hour, and optional fields, or None.
+
+    Returns:
+        EVConfig or None if data is None.
+    """
+    if data is None:
+        return None
+    return EVConfig(
+        charger_type=str(data["charger_type"]),
+        arrival_hour=int(data["arrival_hour"]),
+        departure_hour=int(data.get("departure_hour", 7)),
+        required_charge_kwh=float(data.get("required_charge_kwh", 35.0)),
+        smart_charging_mode=str(data.get("smart_charging_mode", "none")),
+        name=str(data.get("name", "")),
+    )
+
+
 def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
     """Parse home configuration from config data."""
     pv_data = data.get("pv", {})
@@ -770,6 +811,8 @@ def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
         name=data.get("name", ""),
         tariff_config=_parse_tariff_config(tariff_data),
         dispatch_strategy=dispatch_strategy,
+        heat_pump_config=_parse_heat_pump_config(data.get("heat_pump")),
+        ev_config=_parse_ev_config(data.get("ev")),
     )
 
 
