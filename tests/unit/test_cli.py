@@ -402,6 +402,105 @@ class TestLocationParsing:
             parse_location("abc,def")
 
 
+class TestCreateSummaryTableFinancials:
+    """Tests that create_summary_table renders financial/SEG rows (step-5/step-6)."""
+
+    def _make_summary_with_financials(self) -> "SummaryStatistics":  # type: ignore[name-defined]
+        """Construct a SummaryStatistics with all financial fields populated."""
+        from solar_challenge.home import SummaryStatistics
+
+        return SummaryStatistics(
+            total_generation_kwh=10.0,
+            total_demand_kwh=8.0,
+            total_self_consumption_kwh=6.0,
+            total_grid_import_kwh=2.0,
+            total_grid_export_kwh=4.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=3.5,
+            peak_demand_kw=2.5,
+            self_consumption_ratio=0.6,
+            grid_dependency_ratio=0.25,
+            export_ratio=0.4,
+            simulation_days=1,
+            total_import_cost_gbp=0.56,
+            total_export_revenue_gbp=0.24,
+            net_cost_gbp=0.32,
+            seg_revenue_gbp=1.23,
+        )
+
+    def _render_table(self, summary: object) -> str:
+        """Render create_summary_table to a string via Rich Console."""
+        import io
+        from rich.console import Console
+        from solar_challenge.cli.utils import create_summary_table
+
+        buf = io.StringIO()
+        console_obj = Console(file=buf, width=200, highlight=False)
+        table = create_summary_table(summary)
+        console_obj.print(table)
+        return buf.getvalue()
+
+    def test_financial_and_seg_rows_present(self) -> None:
+        """create_summary_table renders Grid Import Cost, Export Revenue, Net Cost, SEG Revenue."""
+        summary = self._make_summary_with_financials()
+        output = self._render_table(summary)
+
+        assert "SEG Revenue" in output, "SEG Revenue row must be present"
+        assert "Net Cost" in output, "Net Cost row must be present"
+        assert "Export Revenue" in output or "Grid Export Revenue" in output, (
+            "Export Revenue row must be present"
+        )
+        assert "Grid Import Cost" in output, "Grid Import Cost row must be present"
+        # Check the SEG value appears
+        assert "1.23" in output, "SEG revenue value 1.23 must appear in output"
+
+    def test_no_seg_row_when_seg_revenue_is_none(self) -> None:
+        """No SEG Revenue row when seg_revenue_gbp is None."""
+        from solar_challenge.home import SummaryStatistics
+
+        summary = SummaryStatistics(
+            total_generation_kwh=10.0,
+            total_demand_kwh=8.0,
+            total_self_consumption_kwh=6.0,
+            total_grid_import_kwh=2.0,
+            total_grid_export_kwh=4.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=3.5,
+            peak_demand_kw=2.5,
+            self_consumption_ratio=0.6,
+            grid_dependency_ratio=0.25,
+            export_ratio=0.4,
+            simulation_days=1,
+            total_import_cost_gbp=0.56,
+            total_export_revenue_gbp=0.24,
+            net_cost_gbp=0.32,
+            seg_revenue_gbp=None,  # no SEG
+        )
+        output = self._render_table(summary)
+        assert "SEG Revenue" not in output, "SEG Revenue must not appear when seg_revenue_gbp is None"
+
+    def test_no_financial_rows_for_fleet_summary_like_object(self) -> None:
+        """Objects without financial fields (e.g. FleetSummary) render without SEG row, no error."""
+        import types
+        # Minimal FleetSummary-like namespace with n_homes but no financial fields
+        fleet_like = types.SimpleNamespace(
+            total_generation_kwh=100.0,
+            total_demand_kwh=80.0,
+            total_self_consumption_kwh=60.0,
+            total_grid_import_kwh=20.0,
+            total_grid_export_kwh=40.0,
+            self_consumption_ratio=0.6,
+            grid_dependency_ratio=0.25,
+            n_homes=5,
+            simulation_days=365,
+        )
+        output = self._render_table(fleet_like)
+        assert "SEG Revenue" not in output, "SEG Revenue must not appear for fleet-like summary"
+        assert "Number of Homes" in output, "n_homes should render"
+
+
 class TestHomeRunFullConfigParity:
     """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
 
