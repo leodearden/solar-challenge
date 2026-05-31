@@ -392,6 +392,9 @@ def simulate_pv_output(
     # Ensure no negative values (numerical noise)
     ac_power = ac_power.clip(lower=0.0)
 
+    # Apply panel degradation based on system age
+    ac_power = apply_degradation(ac_power, config.system_age_years, config.degradation_rate_per_year)
+
     return ac_power
 
 
