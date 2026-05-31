@@ -10,6 +10,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategy,
     PeakShavingStrategy,
     TariffPeriod,
+    compute_grid_charge_power_kw,
 )
 
 
@@ -1453,6 +1454,180 @@ class TestGridChargeContext:
         ctx = self._make_ctx()
         with pytest.raises(Exception):  # FrozenInstanceError
             ctx.current_rate = 0.20  # type: ignore[misc]
+
+
+class TestComputeGridChargePowerKw:
+    """Tests for compute_grid_charge_power_kw — all branches of PRD §3.2."""
+
+    # Helper: build a "favourable" context that would yield non-zero charge power.
+    # is_cheap=True, spread is profitable (peak >> current/rt_eff),
+    # target not yet reached.
+    _CTX_FAVOURABLE = GridChargeContext(
+        current_rate=0.10,
+        peak_rate=0.40,
+        is_cheap_period=True,
+        target_soc_fraction=0.9,
+        max_charge_kw=20.0,
+        round_trip_efficiency=0.81,
+        charge_efficiency=0.9,
+    )
+
+    def test_not_cheap_returns_zero(self):
+        """When is_cheap_period=False, returns 0.0 regardless of other fields."""
+        ctx = GridChargeContext(
+            current_rate=0.05,
+            peak_rate=0.40,
+            is_cheap_period=False,   # not cheap
+            target_soc_fraction=0.9,
+            max_charge_kw=20.0,
+            round_trip_efficiency=0.81,
+            charge_efficiency=0.9,
+        )
+        result = compute_grid_charge_power_kw(
+            ctx,
+            battery_soc_kwh=2.0,
+            capacity_kwh=10.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=60.0,
+        )
+        assert result == 0.0
+
+    def test_spread_gate_fails_returns_zero(self):
+        """When peak_rate <= current_rate/round_trip_efficiency, returns 0.0."""
+        # peak_rate=0.10, current_rate=0.10, rt_eff=0.81
+        # threshold = 0.10 / 0.81 ≈ 0.1235; peak_rate=0.10 <= 0.1235 → gate fails
+        ctx = GridChargeContext(
+            current_rate=0.10,
+            peak_rate=0.10,
+            is_cheap_period=True,
+            target_soc_fraction=0.9,
+            max_charge_kw=20.0,
+            round_trip_efficiency=0.81,
+            charge_efficiency=0.9,
+        )
+        result = compute_grid_charge_power_kw(
+            ctx,
+            battery_soc_kwh=2.0,
+            capacity_kwh=10.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=60.0,
+        )
+        assert result == 0.0
+
+    def test_flat_tariff_spread_gate_fails(self):
+        """flat tariff (peak_rate == current_rate) → spread gate fails → 0.0."""
+        ctx = GridChargeContext(
+            current_rate=0.25,
+            peak_rate=0.25,
+            is_cheap_period=True,
+            target_soc_fraction=0.9,
+            max_charge_kw=20.0,
+            round_trip_efficiency=0.90,
+            charge_efficiency=0.9,
+        )
+        result = compute_grid_charge_power_kw(
+            ctx,
+            battery_soc_kwh=0.0,
+            capacity_kwh=10.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=60.0,
+        )
+        assert result == 0.0
+
+    def test_soc_at_target_returns_zero(self):
+        """When battery_soc_kwh >= target_soc_fraction * capacity_kwh, returns 0.0."""
+        # target = 0.9 * 10 = 9.0 kWh; soc = 9.0 kWh → gap = 0
+        result = compute_grid_charge_power_kw(
+            self._CTX_FAVOURABLE,
+            battery_soc_kwh=9.0,
+            capacity_kwh=10.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=60.0,
+        )
+        assert result == 0.0
+
+    def test_soc_above_target_returns_zero(self):
+        """When SOC already above target, returns 0.0."""
+        result = compute_grid_charge_power_kw(
+            self._CTX_FAVOURABLE,
+            battery_soc_kwh=9.5,  # above 9.0 target
+            capacity_kwh=10.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=60.0,
+        )
+        assert result == 0.0
+
+    def test_gap_power_wins(self):
+        """When residual budget is large, min picks gap_power.
+
+        Params: is_cheap=True, peak=0.40, current=0.10, rt_eff=0.81,
+        charge_eff=0.9, target=0.9, capacity=10, soc=2.0,
+        max_charge_kw=20, pv_charge_kw=0, timestep=60.
+
+        gap_kwh = 0.9*10 - 2.0 = 7.0
+        gap_power = 7.0 / 0.9 / 1.0 = 7.7778 kW
+        residual  = 20.0 - 0.0 = 20.0 kW
+        result    = min(7.7778, 20.0) = 7.7778 kW
+        """
+        result = compute_grid_charge_power_kw(
+            self._CTX_FAVOURABLE,
+            battery_soc_kwh=2.0,
+            capacity_kwh=10.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=60.0,
+        )
+        # gap_power = 7.0 / 0.9 / 1.0
+        expected = 7.0 / 0.9 / 1.0
+        assert result == pytest.approx(expected)
+
+    def test_residual_clamp_wins(self):
+        """When max_charge_kw is tight, min picks residual.
+
+        Same as above but max_charge_kw=5.0, pv_charge_kw=1.0.
+        residual = 5.0 - 1.0 = 4.0 kW < gap_power ≈ 7.78 kW
+        result = 4.0 kW
+        """
+        ctx = GridChargeContext(
+            current_rate=0.10,
+            peak_rate=0.40,
+            is_cheap_period=True,
+            target_soc_fraction=0.9,
+            max_charge_kw=5.0,
+            round_trip_efficiency=0.81,
+            charge_efficiency=0.9,
+        )
+        result = compute_grid_charge_power_kw(
+            ctx,
+            battery_soc_kwh=2.0,
+            capacity_kwh=10.0,
+            pv_charge_power_kw=1.0,
+            timestep_minutes=60.0,
+        )
+        assert result == pytest.approx(4.0)
+
+    def test_timestep_scaling(self):
+        """Halving timestep_minutes doubles gap_power when residual is non-binding.
+
+        At timestep=30 min, dt_h=0.5, gap_power = 7.0/0.9/0.5 = 15.556 kW.
+        With max_charge_kw=20, residual=20, min picks gap_power ≈ 15.556.
+        Compare to 60-min case ≈ 7.778; ratio should be ~2.
+        """
+        result_30 = compute_grid_charge_power_kw(
+            self._CTX_FAVOURABLE,
+            battery_soc_kwh=2.0,
+            capacity_kwh=10.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=30.0,
+        )
+        result_60 = compute_grid_charge_power_kw(
+            self._CTX_FAVOURABLE,
+            battery_soc_kwh=2.0,
+            capacity_kwh=10.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=60.0,
+        )
+        # Halved timestep → doubled gap_power (residual non-binding in both cases)
+        assert result_30 == pytest.approx(result_60 * 2.0)
 
 
 class TestPeakShavingStrategyEdgeCases:
