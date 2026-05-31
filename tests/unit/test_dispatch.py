@@ -1370,6 +1370,36 @@ class TestPeakShavingStrategyTimestampIndependence:
         assert decision_morning.discharge_kw == decision_evening.discharge_kw
 
 
+class TestDispatchDecisionGridCharge:
+    """Test grid_charge_kw field on DispatchDecision."""
+
+    def test_default_grid_charge_kw_is_zero(self):
+        """Existing 2-keyword construction still valid; grid_charge_kw defaults to 0.0."""
+        decision = DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+        assert decision.grid_charge_kw == 0.0
+
+    def test_grid_charge_kw_stored(self):
+        """grid_charge_kw field stores the supplied value."""
+        decision = DispatchDecision(charge_kw=0.0, discharge_kw=0.0, grid_charge_kw=2.0)
+        assert decision.grid_charge_kw == 2.0
+
+    def test_negative_grid_charge_kw_raises(self):
+        """Negative grid_charge_kw raises ValueError with 'non-negative' message."""
+        with pytest.raises(ValueError, match="non-negative"):
+            DispatchDecision(charge_kw=0.0, discharge_kw=0.0, grid_charge_kw=-0.5)
+
+    def test_grid_charge_and_discharge_simultaneously_raises(self):
+        """grid_charge_kw > 0 and discharge_kw > 0 is physically impossible."""
+        with pytest.raises(ValueError, match="grid.charge|discharge"):
+            DispatchDecision(charge_kw=0.0, discharge_kw=1.0, grid_charge_kw=2.0)
+
+    def test_grid_charge_with_pv_charge_is_allowed(self):
+        """grid_charge_kw > 0 alongside charge_kw > 0 is permitted (both charging)."""
+        decision = DispatchDecision(charge_kw=1.5, discharge_kw=0.0, grid_charge_kw=2.0)
+        assert decision.charge_kw == 1.5
+        assert decision.grid_charge_kw == 2.0
+
+
 class TestPeakShavingStrategyEdgeCases:
     """Test peak shaving edge cases."""
 
