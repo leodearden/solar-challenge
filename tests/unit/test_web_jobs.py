@@ -418,7 +418,7 @@ class TestJobManagerDirect:
 
         def worker(thread_id: int) -> None:
             try:
-                barrier.wait(timeout=30)
+                barrier.wait()
                 for i in range(10):
                     jid = f"job-{i}"
                     # Read job status
@@ -434,7 +434,13 @@ class TestJobManagerDirect:
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=10)
+            # Use a bounded timeout so a deadlocked thread surfaces as a clear
+            # test failure rather than hanging the suite indefinitely.  60 s is
+            # generous enough for any normal CI environment.  The barrier itself
+            # has no timeout (barrier.wait()) so we can't get a BrokenBarrierError
+            # from CPU contention; the only way join() times out is a real deadlock.
+            t.join(timeout=60)
+            assert not t.is_alive(), f"Thread did not finish within 60 s: {t}"
 
         assert len(errors) == 0, f"Thread safety errors: {errors}"
 
@@ -554,6 +560,38 @@ class TestJobManagerShutdown:
         # (ThreadPoolExecutor raises RuntimeError after shutdown)
         # Just verify it doesn't crash
         assert True
+
+    def test_shutdown_all_managers_shuts_down_executors(self) -> None:
+        """Test that shutdown_all_managers() shuts down all live executors."""
+        import solar_challenge.web.jobs as jobs_mod
+
+        jm1 = JobManager(max_workers=1)
+        jm2 = JobManager(max_workers=1)
+
+        jobs_mod.shutdown_all_managers()
+
+        # After shutdown, submitting a callable to either executor should raise.
+        with pytest.raises(RuntimeError):
+            jm1._executor.submit(lambda: None)
+        with pytest.raises(RuntimeError):
+            jm2._executor.submit(lambda: None)
+
+    def test_shutdown_all_managers_is_idempotent(self) -> None:
+        """Test that calling shutdown_all_managers() twice does not raise."""
+        import solar_challenge.web.jobs as jobs_mod
+
+        # Bind to a local variable so the manager has a strong reference and
+        # is not garbage-collected from the WeakSet before the first shutdown
+        # call — without this the WeakSet could be empty and the test would
+        # pass trivially without exercising the double-shutdown path.
+        jm = JobManager(max_workers=1)
+
+        jobs_mod.shutdown_all_managers()
+        jobs_mod.shutdown_all_managers()  # must not raise
+
+        # Suppress "local variable 'jm' assigned but never used" lint; the
+        # strong reference is the point — it keeps jm alive through both calls.
+        del jm
 
 
 class TestRecoverStaleJobs:
