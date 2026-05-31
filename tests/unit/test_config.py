@@ -1856,3 +1856,54 @@ class TestParseCommunityConfig:
         cfg = _parse_community_config({"sharing_mode": "p2p"})
         assert cfg is not None
         assert cfg.billing is None
+
+    # ------------------------------------------------------------------
+    # billing: nested SEG forms (step-7)
+    # ------------------------------------------------------------------
+
+    def test_billing_seg_preset(self) -> None:
+        """billing.seg.preset resolves to the SEG_PRESETS rate."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "p2p",
+                "billing": {"seg": {"preset": "Octopus"}},
+            }
+        )
+        assert cfg is not None
+        assert cfg.billing is not None
+        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(4.1)
+
+    def test_billing_seg_rate(self) -> None:
+        """billing.seg.rate_pence_per_kwh stores the explicit float."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "p2p",
+                "billing": {"seg": {"rate_pence_per_kwh": 5.5}},
+            }
+        )
+        assert cfg is not None
+        assert cfg.billing is not None
+        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(5.5)
+
+    def test_billing_seg_unknown_preset_raises(self) -> None:
+        """billing.seg with unknown preset name raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Unknown SEG preset"):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {"seg": {"preset": "Nonexistent"}},
+                }
+            )
+
+    def test_billing_both_scalar_and_seg_block_raises(self) -> None:
+        """Supplying both seg_rate_pence_per_kwh and seg block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "billing": {
+                        "seg_rate_pence_per_kwh": 4.1,
+                        "seg": {"preset": "Octopus"},
+                    },
+                }
+            )
