@@ -5,6 +5,7 @@ from datetime import datetime
 from solar_challenge.dispatch import (
     DispatchDecision,
     DispatchStrategy,
+    GridChargeContext,
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
     PeakShavingStrategy,
@@ -1398,6 +1399,60 @@ class TestDispatchDecisionGridCharge:
         decision = DispatchDecision(charge_kw=1.5, discharge_kw=0.0, grid_charge_kw=2.0)
         assert decision.charge_kw == 1.5
         assert decision.grid_charge_kw == 2.0
+
+
+class TestGridChargeContext:
+    """Test GridChargeContext frozen dataclass."""
+
+    def _make_ctx(self, **overrides):  # type: ignore[no-untyped-def]
+        """Build a default GridChargeContext, applying keyword overrides."""
+        defaults = dict(
+            current_rate=0.10,
+            peak_rate=0.40,
+            is_cheap_period=True,
+            target_soc_fraction=0.9,
+            max_charge_kw=5.0,
+            round_trip_efficiency=0.81,
+            charge_efficiency=0.9,
+        )
+        defaults.update(overrides)
+        return GridChargeContext(**defaults)
+
+    def test_can_construct_with_all_fields(self):
+        """GridChargeContext can be created with all seven keyword fields."""
+        ctx = self._make_ctx()
+        assert ctx.current_rate == pytest.approx(0.10)
+        assert ctx.peak_rate == pytest.approx(0.40)
+        assert ctx.is_cheap_period is True
+        assert ctx.target_soc_fraction == pytest.approx(0.9)
+        assert ctx.max_charge_kw == pytest.approx(5.0)
+        assert ctx.round_trip_efficiency == pytest.approx(0.81)
+        assert ctx.charge_efficiency == pytest.approx(0.9)
+
+    def test_fields_round_trip(self):
+        """All field values round-trip correctly."""
+        ctx = GridChargeContext(
+            current_rate=0.07,
+            peak_rate=0.32,
+            is_cheap_period=False,
+            target_soc_fraction=0.8,
+            max_charge_kw=3.3,
+            round_trip_efficiency=0.85,
+            charge_efficiency=0.95,
+        )
+        assert ctx.current_rate == pytest.approx(0.07)
+        assert ctx.peak_rate == pytest.approx(0.32)
+        assert ctx.is_cheap_period is False
+        assert ctx.target_soc_fraction == pytest.approx(0.8)
+        assert ctx.max_charge_kw == pytest.approx(3.3)
+        assert ctx.round_trip_efficiency == pytest.approx(0.85)
+        assert ctx.charge_efficiency == pytest.approx(0.95)
+
+    def test_is_frozen(self):
+        """GridChargeContext is immutable (frozen dataclass)."""
+        ctx = self._make_ctx()
+        with pytest.raises(Exception):  # FrozenInstanceError
+            ctx.current_rate = 0.20  # type: ignore[misc]
 
 
 class TestPeakShavingStrategyEdgeCases:
