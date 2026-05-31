@@ -1047,3 +1047,44 @@ class TestParseHomeConfigCapabilities:
         assert home_config.tariff_config is not None
         # flat_rate TariffConfig has at least one period
         assert len(home_config.tariff_config.periods) > 0
+
+    def test_combined_heat_pump_tariff_dispatch_populate_home_config(self) -> None:
+        """heat_pump + tariff + dispatch_strategy all populate when battery is enabled."""
+        from solar_challenge.web.api import _parse_home_config
+
+        payload = {
+            **VALID_HOME_PAYLOAD,
+            "battery_kwh": 5.0,
+            "heat_pump": {
+                "type": "ASHP",
+                "thermal_capacity_kw": 8.0,
+                "annual_heat_demand_kwh": 8000,
+            },
+            "tariff": {
+                "type": "flat_rate",
+                "rate_per_kwh": 0.30,
+            },
+            "dispatch_strategy": {
+                "strategy_type": "self_consumption",
+            },
+        }
+        home_config, _start, _end, _name = _parse_home_config(payload)
+        assert home_config.heat_pump_config is not None
+        assert home_config.tariff_config is not None
+        assert home_config.battery_config is not None
+        assert home_config.battery_config.dispatch_strategy is not None
+        assert home_config.battery_config.dispatch_strategy.strategy_type == "self_consumption"
+
+    def test_dispatch_strategy_ignored_without_battery(self) -> None:
+        """dispatch_strategy is silently ignored when no battery is enabled."""
+        from solar_challenge.web.api import _parse_home_config
+
+        payload = {
+            **VALID_HOME_PAYLOAD,
+            "battery_kwh": 0,
+            "dispatch_strategy": {
+                "strategy_type": "self_consumption",
+            },
+        }
+        home_config, _start, _end, _name = _parse_home_config(payload)
+        assert home_config.battery_config is None  # no battery => no dispatch either
