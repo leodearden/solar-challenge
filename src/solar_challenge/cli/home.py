@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Home simulation commands."""
 
+import dataclasses
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -18,12 +19,13 @@ from solar_challenge.cli.utils import (
     print_info,
     print_success,
 )
-from solar_challenge.config import load_home_config
+from solar_challenge.config import _parse_home_config, _parse_seg_config
 from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.output import export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff
 
 app = typer.Typer(help="Single home simulation commands")
 
@@ -100,7 +102,7 @@ def run(
 
     If no config file is provided, uses default values with any CLI overrides.
     """
-    # Build config with overrides
+    # Build config dict with CLI overrides merged in
     config_dict = load_config_with_overrides(
         config,
         pv_kw=pv_kw,
@@ -122,46 +124,25 @@ def run(
     else:
         loc = Location.bristol()
 
-    # Build home config
-    home_data = config_dict.get("home", {})
-    pv_data = home_data.get("pv", {})
-    battery_data = home_data.get("battery")
-    load_data = home_data.get("load", {})
+    # Build home config via canonical parser (honours tariff, dispatch_strategy,
+    # heat_pump, ev, pv-age, etc. — previously silently dropped by hand-built path)
+    home_config = _parse_home_config(config_dict.get("home", {}), loc)
 
-    pv_config = PVConfig(
-        capacity_kw=pv_data.get("capacity_kw", 4.0),
-        azimuth=pv_data.get("azimuth", 180.0),
-        tilt=pv_data.get("tilt", 35.0),
-    )
-
-    battery_config = None
-    if battery_data is not None:
-        battery_config = BatteryConfig(
-            capacity_kwh=battery_data.get("capacity_kwh", 5.0),
-            max_charge_kw=battery_data.get("max_charge_kw", 2.5),
-            max_discharge_kw=battery_data.get("max_discharge_kw", 2.5),
+    # Parse top-level SEG block (sibling of `home:`) and thread onto config + summaries
+    seg_rate = _parse_seg_config(config_dict.get("seg"))
+    if seg_rate is not None:
+        home_config = dataclasses.replace(
+            home_config,
+            seg_tariff=SEGTariff(name="", rate_pence_per_kwh=seg_rate),
         )
-
-    load_config = LoadConfig(
-        annual_consumption_kwh=load_data.get("annual_consumption_kwh"),
-        household_occupants=load_data.get("household_occupants", 3),
-    )
-
-    home_config = HomeConfig(
-        pv_config=pv_config,
-        load_config=load_config,
-        battery_config=battery_config,
-        location=loc,
-        name=home_data.get("name", "Home"),
-    )
 
     # Parse dates
     start_date = pd.Timestamp(start, tz=loc.timezone)
     end_date = pd.Timestamp(end, tz=loc.timezone)
 
     # Calculate simulation duration for progress display
-    days = (end_date - start_date).days + 1
-    print_info(f"Simulating {days} days from {start} to {end}")
+    days_count = (end_date - start_date).days + 1
+    print_info(f"Simulating {days_count} days from {start} to {end}")
 
     # Run simulation with progress
     with create_progress() as progress:
@@ -169,8 +150,8 @@ def run(
         results = simulate_home(home_config, start_date, end_date)
         progress.update(task, completed=True)
 
-    # Calculate summary
-    summary = calculate_summary(results)
+    # Calculate summary (thread SEG rate so seg_revenue_gbp is computed)
+    summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_rate)
 
     # Display summary table
     table = create_summary_table(summary, title=f"Simulation Results: {home_config.name}")
@@ -184,7 +165,9 @@ def run(
     # Print report if requested
     if report:
         console.print()
-        report_text = generate_summary_report(results, home_config.name)
+        report_text = generate_summary_report(
+            results, home_config.name, seg_tariff_pence_per_kwh=seg_rate
+        )
         console.print(report_text)
 
 

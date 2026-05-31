@@ -406,7 +406,12 @@ class TestHomeRunFullConfigParity:
     """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
 
     def _write_home_config(self, tmpdir: str) -> Path:
-        """Write a temp YAML config with tariff and top-level SEG block."""
+        """Write a temp YAML config with tariff and top-level SEG block.
+
+        Uses economy_7 (not flat_rate) because flat_rate has a known gap at 23:59
+        that causes a simulation error on a full-day run; economy_7 fully covers
+        all 24 hours via a midnight-crossing peak period.
+        """
         cfg_path = Path(tmpdir) / "home_seg.yaml"
         cfg_path.write_text(
             """
@@ -417,8 +422,7 @@ home:
     annual_consumption_kwh: 3400
     use_stochastic: false
   tariff:
-    type: flat_rate
-    rate_per_kwh: 0.28
+    type: economy_7
 
 seg:
   rate_pence_per_kwh: 15.0
