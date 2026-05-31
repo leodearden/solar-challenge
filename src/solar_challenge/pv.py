@@ -34,6 +34,11 @@ class PVConfig:
         inverter_efficiency: Inverter efficiency as fraction (default 0.96 = 96%)
         inverter_capacity_kw: AC capacity in kW (default = DC capacity)
         custom_inverter_params: Optional custom pvlib inverter parameters dict
+
+        # Degradation parameters (PV-DGR)
+        system_age_years: Age of the PV system in years (default 0.0 = new system)
+        degradation_rate_per_year: Annual capacity degradation as a fraction
+            (default 0.005 = 0.5%/year, typical for crystalline silicon panels)
     """
 
     capacity_kw: float
@@ -50,6 +55,10 @@ class PVConfig:
     inverter_efficiency: float = 0.96  # 96% efficiency
     inverter_capacity_kw: Optional[float] = None  # Defaults to DC capacity
     custom_inverter_params: Optional[dict[str, float]] = None
+
+    # Degradation parameters (PV-DGR)
+    system_age_years: float = 0.0  # New system (no degradation)
+    degradation_rate_per_year: float = 0.005  # 0.5%/year (typical crystalline silicon)
 
     def __post_init__(self) -> None:
         """Validate PV configuration parameters."""
