@@ -18,6 +18,7 @@ import pandas as pd
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
@@ -123,10 +124,21 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
         use_stochastic=stochastic,
     )
 
+    # Build optional heat pump config
+    heat_pump_config: HeatPumpConfig | None = None
+    hp_data = data.get("heat_pump")
+    if hp_data:
+        heat_pump_config = HeatPumpConfig(
+            heat_pump_type=hp_data.get("type", "ASHP"),
+            thermal_capacity_kw=float(hp_data.get("thermal_capacity_kw", 8.0)),
+            annual_heat_demand_kwh=float(hp_data.get("annual_heat_demand_kwh", 8000.0)),
+        )
+
     home_config = HomeConfig(
         pv_config=pv_config,
         load_config=load_config,
         battery_config=battery_config,
+        heat_pump_config=heat_pump_config,
         location=loc,
         name=name or "Web Simulation",
     )
