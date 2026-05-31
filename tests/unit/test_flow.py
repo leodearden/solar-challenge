@@ -526,3 +526,133 @@ class _RecordingStrategy(DispatchStrategy):
         """Record grid_charge_ctx and return the pre-configured decision."""
         self.received_ctx = grid_charge_ctx
         return self._decision
+
+
+# ---------------------------------------------------------------------------
+# step-1: RED tests for simulate_timestep_tou grid-charge split accounting
+# ---------------------------------------------------------------------------
+
+class TestSimulateTimestepTouGridCharge:
+    """Function-path grid-charge tests using real Economy 7 + GridChargeConfig.
+
+    Tests (a) and (b) fail on current code (which ignores grid_charging).
+    Tests (c)-(e) are forward-/backward-compat guards.
+    """
+
+    def test_grid_only_charge_step(
+        self, economy7_tariff: TariffConfig, off_peak_ts: pd.Timestamp, grid_charge_battery: Battery
+    ) -> None:
+        """(a) Cheap period, gen=demand=0: battery must charge from grid."""
+        result = simulate_timestep_tou(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestamp=off_peak_ts,
+            tariff=economy7_tariff,
+            timestep_minutes=60,
+        )
+        assert result.battery_charge > 0, "Battery should charge from grid during cheap period"
+        assert result.grid_export == pytest.approx(0.0)
+        # shortfall=0, discharge=0 → grid_import == grid_charge_stored == battery_charge
+        assert result.grid_import == pytest.approx(result.battery_charge)
+        assert validate_energy_balance(result)
+
+    def test_pv_and_grid_split(
+        self, economy7_tariff: TariffConfig, off_peak_ts: pd.Timestamp
+    ) -> None:
+        """(b) Modest PV excess + grid top-up: split accounting is applied."""
+        # Reference run: same conditions but grid_charging disabled
+        config_no_gc = BatteryConfig(
+            capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5, grid_charging=None
+        )
+        bat_ref = Battery(config_no_gc, initial_soc_kwh=2.0)
+        ref = simulate_timestep_tou(
+            generation_kw=1.0, demand_kw=0.5, battery=bat_ref,
+            timestamp=off_peak_ts, tariff=economy7_tariff, timestep_minutes=60,
+        )
+        pv_charge_stored = ref.battery_charge  # ≈ 0.4875 kWh (excess * 0.975)
+
+        # Main run: grid charging enabled
+        config_gc = BatteryConfig(
+            capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5,
+            grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+        )
+        bat_gc = Battery(config_gc, initial_soc_kwh=2.0)
+        result = simulate_timestep_tou(
+            generation_kw=1.0, demand_kw=0.5, battery=bat_gc,
+            timestamp=off_peak_ts, tariff=economy7_tariff, timestep_minutes=60,
+        )
+        # Grid also topped up → total charge > pv-only
+        assert result.battery_charge > pv_charge_stored, \
+            "With grid charging, battery_charge should exceed pv-only charge"
+        # Export: only the PV portion reduces export (split formula)
+        excess_kwh = (1.0 - 0.5) * (60 / 60)
+        assert result.grid_export == pytest.approx(max(0.0, excess_kwh - pv_charge_stored))
+        assert validate_energy_balance(result)
+
+    def test_max_charge_kw_not_exceeded(
+        self, economy7_tariff: TariffConfig, off_peak_ts: pd.Timestamp
+    ) -> None:
+        """(c) Large PV excess (> max_charge_kw): residual=0, grid_charge≈0, rate <= max_kw."""
+        config = BatteryConfig(
+            capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5,
+            grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+        )
+        battery = Battery(config, initial_soc_kwh=2.0)
+        result = simulate_timestep_tou(
+            generation_kw=5.0,   # well above max_charge_kw=2.5
+            demand_kw=0.0,
+            battery=battery,
+            timestamp=off_peak_ts,
+            tariff=economy7_tariff,
+            timestep_minutes=60,
+        )
+        duration_hours = 60.0 / 60.0
+        # Total stored energy / dt must not exceed the hardware charge-rate limit
+        assert result.battery_charge / duration_hours <= 2.5 + 1e-9
+        assert validate_energy_balance(result)
+
+    def test_every_timestep_balance(self, economy7_tariff: TariffConfig) -> None:
+        """(d) Energy balance holds at every step in a 24-hour off-peak→peak sweep."""
+        config = BatteryConfig(
+            capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5,
+            grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+        )
+        battery = Battery(config, initial_soc_kwh=2.0)
+        timestamps = pd.date_range("2024-01-01 00:00", periods=24, freq="h")
+        gen_kw = [
+            0.0, 0.0, 0.0, 0.0, 0.2, 0.5, 1.5, 2.5,
+            3.0, 3.5, 4.0, 3.8, 3.0, 2.0, 1.5, 1.0,
+            0.5, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ]
+        dem_kw = [
+            0.3, 0.3, 0.3, 0.3, 0.4, 0.5, 0.6, 0.7,
+            0.8, 1.0, 1.0, 1.0, 0.9, 0.8, 0.7, 0.8,
+            1.2, 1.5, 2.0, 1.8, 1.5, 1.0, 0.6, 0.4,
+        ]
+        for ts, gen, dem in zip(timestamps, gen_kw, dem_kw):
+            result = simulate_timestep_tou(
+                generation_kw=gen, demand_kw=dem, battery=battery,
+                timestamp=ts, tariff=economy7_tariff, timestep_minutes=60,
+            )
+            assert validate_energy_balance(result), \
+                f"Energy balance violated at {ts} (gen={gen}, dem={dem})"
+
+    def test_backward_compat_bit_identical(self, off_peak_ts: pd.Timestamp) -> None:
+        """(e) grid_charging=None: exact backward-compatible values are preserved."""
+        config = BatteryConfig.default_5kwh()   # no grid_charging field
+        battery = Battery(config)               # initial SOC = midpoint = 2.5 kWh
+        result = simulate_timestep_tou(
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery=battery,
+            timestamp=off_peak_ts,
+            tariff=TariffConfig.economy_7(),
+            timestep_minutes=60,
+        )
+        # excess = 2 kWh; battery.charge(2.0, 60) = 2.0 * 0.975 = 1.95 kWh
+        # grid_export = max(0, 2.0 - 1.95) = 0.05 kWh; shortfall=0 → grid_import=0
+        assert result.battery_charge == pytest.approx(1.95)
+        assert result.grid_export == pytest.approx(0.05)
+        assert result.grid_import == pytest.approx(0.0)
+        assert result.self_consumption == pytest.approx(1.0)
