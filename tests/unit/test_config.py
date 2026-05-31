@@ -1793,3 +1793,39 @@ class TestParseCommunityConfig:
         assert cfg.sharing_mode == "p2p"
         assert cfg.community_battery is None
         assert cfg.billing is None
+
+    # ------------------------------------------------------------------
+    # community_battery mode + invalid combinations (step-3)
+    # ------------------------------------------------------------------
+
+    def test_community_battery_mode_parses_battery(self) -> None:
+        """community_battery mode with battery block returns BatteryConfig."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "community_battery",
+                "community_battery": {
+                    "capacity_kwh": 50.0,
+                    "max_charge_kw": 20.0,
+                    "max_discharge_kw": 20.0,
+                },
+            }
+        )
+        assert isinstance(cfg, CommunityConfig)
+        assert cfg.sharing_mode == "community_battery"
+        assert cfg.community_battery is not None
+        assert cfg.community_battery.capacity_kwh == 50.0
+
+    def test_p2p_with_battery_raises(self) -> None:
+        """p2p + community_battery block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config(
+                {
+                    "sharing_mode": "p2p",
+                    "community_battery": {"capacity_kwh": 50.0},
+                }
+            )
+
+    def test_bogus_mode_raises(self) -> None:
+        """An unrecognised sharing_mode raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_community_config({"sharing_mode": "bogus"})
