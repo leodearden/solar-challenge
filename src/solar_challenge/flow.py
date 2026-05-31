@@ -137,6 +137,18 @@ class EnergyFlowResult:
     battery_soc: float  # SOC after this timestep
 
 
+def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:
+    """Return True if *current_rate* is at or below the average of all tariff period rates.
+
+    This is the single source of truth for cheap-period classification.  Both
+    :func:`simulate_timestep_tou` and :func:`_build_grid_charge_context` call
+    this helper so the two dispatch paths always classify cheap vs. expensive
+    periods identically (PRD §4).
+    """
+    avg_rate = sum(p.rate_per_kwh for p in tariff.periods) / len(tariff.periods)
+    return current_rate <= avg_rate
+
+
 def _build_grid_charge_context(
     battery: "Battery",
     tariff: TariffConfig,
@@ -144,8 +156,8 @@ def _build_grid_charge_context(
 ) -> GridChargeContext:
     """Build a GridChargeContext from a battery and tariff for the given timestamp.
 
-    Uses the same avg-rate cheap-period heuristic as simulate_timestep_tou so
-    both dispatch paths classify cheap periods identically (PRD §4).
+    Uses :func:`_is_cheap_period` for cheap-period classification so both
+    dispatch paths stay in sync (PRD §4).
 
     Requires battery.config.grid_charging is not None.
     """
@@ -154,12 +166,11 @@ def _build_grid_charge_context(
 
     all_rates = [p.rate_per_kwh for p in tariff.periods]
     current_rate = tariff.get_rate(timestamp)
-    avg_rate = sum(all_rates) / len(all_rates)
 
     return GridChargeContext(
         current_rate=current_rate,
         peak_rate=max(all_rates),
-        is_cheap_period=current_rate <= avg_rate,
+        is_cheap_period=_is_cheap_period(tariff, current_rate),
         target_soc_fraction=gc.target_soc_fraction,
         max_charge_kw=battery.config.max_charge_kw,
         round_trip_efficiency=battery.charge_efficiency * battery.discharge_efficiency,
@@ -317,11 +328,8 @@ def simulate_timestep_tou(
     # Get current tariff rate
     current_rate = tariff.get_rate(timestamp)
 
-    # Determine average rate across all periods (for peak/off-peak classification)
-    # Simple heuristic: if multiple rates exist, classify as cheap/expensive
-    all_rates = [period.rate_per_kwh for period in tariff.periods]
-    avg_rate = sum(all_rates) / len(all_rates)
-    is_cheap_period = current_rate <= avg_rate
+    # Determine if current period is cheap via the shared single-source heuristic (PRD §4)
+    is_cheap_period = _is_cheap_period(tariff, current_rate)
 
     # Calculate excess and shortfall
     excess_kwh = max(0.0, generation_kwh - demand_kwh)
