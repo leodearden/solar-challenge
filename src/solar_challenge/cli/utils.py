@@ -197,6 +197,17 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
     if hasattr(summary, "simulation_days"):
         table.add_row("Simulation Days", str(summary.simulation_days))
 
+    # Financial rows — present on SummaryStatistics; guarded so FleetSummary is unaffected
+    if hasattr(summary, "total_import_cost_gbp") and summary.total_import_cost_gbp is not None:
+        table.add_row("Grid Import Cost", f"£{summary.total_import_cost_gbp:.2f}")
+    if hasattr(summary, "total_export_revenue_gbp") and summary.total_export_revenue_gbp is not None:
+        table.add_row("Grid Export Revenue", f"£{summary.total_export_revenue_gbp:.2f}")
+    if hasattr(summary, "net_cost_gbp") and summary.net_cost_gbp is not None:
+        table.add_row("Net Cost", f"£{summary.net_cost_gbp:.2f}")
+    seg_rev = getattr(summary, "seg_revenue_gbp", None)
+    if seg_rev is not None:
+        table.add_row("SEG Revenue", f"£{seg_rev:.2f}")
+
     return table
 
 
