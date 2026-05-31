@@ -74,12 +74,12 @@ Author sequentially in the order below (P1→P5) so seam ownership is claimed be
 - **Decided (user-confirmed):** config = nested `GridChargeConfig` on `BatteryConfig` (rides `battery.config` into the function path, zero new args); trigger = round-trip **spread test** + **target SOC**; **both** dispatch paths covered; Strategy path uses **explicit per-strategy** `DispatchDecision.grid_charge_kw` with per-strategy serialized tasks (TOUOptimized, PeakShaving) chained on `dispatch.py` for collision safety. Approach **B + H** (split-accounting contract + two-way balance/economics boundary tests).
 - **PRD file:** `docs/prds/tou-grid-charging-battery-arbitrage.md` (committed `d11f963`) · manifest `docs/prds/tou-grid-charging-battery-arbitrage.capability-manifest.md` (`d11f963`) · **Subtasks queued:** **#23** (α — dispatch core: controller + `DispatchDecision.grid_charge_kw`) → **#25** (α2 — TOUOptimized grid-charge; dep #23) → **#26** (α3 — PeakShaving grid-charge; dep #25, serialises dispatch.py) ; **#24** (β — `GridChargeConfig`/`BatteryConfig` schema + parser) ; **#27** (γ — flow split-accounting both call sites; dep #23+#24) ; **#28** (ε — home.py strategy-path tariff threading; dep #27+**#2**) ; **#29** (δ — arbitrage economics + demo scenario; dep #27+**#2**). Placeholder **task #8 cancelled** (superseded).
 
-### P5 — Inter-home / community energy sharing (subsumes task #6)  ·  Status: **TODO**
+### P5 — Inter-home / community energy sharing (subsumes task #6)  ·  Status: **QUEUED**
 - **Gap:** homes are simulated independently; no inter-home power-sharing / community battery / virtual net metering. README frames it as a "future phase" but the user treats it as real work.
-- **Owns:** a new sharing/aggregation layer; `fleet.py` aggregation (`FleetResults`, `simulate_fleet`). Largest/most-design-heavy — expect multiple subtasks.
-- **Consumes (don't modify):** per-home `simulate_home` outputs (consume `SimulationResults`); `fleet.simulate_fleet_iter` parallelism model. If P2's fleet-from-distribution runner needs the sharing path, P5 announces the interface here.
-- **Seam:** P5 owns `fleet.py` simulation/aggregation changes. P2 only *calls* `simulate_fleet`; if P5 changes its signature, record it here for P2.
-- **PRD file:** _(record path)_ · **Subtasks queued:** _(ids)_
+- **Owns (new):** a new sharing/aggregation layer `src/solar_challenge/community.py` (`CommunityConfig`, `CommunityResults`, `simulate_community`, `validate_community_balance`, VNM billing). **Decision: `fleet.py`'s public API is left UNCHANGED** — the layer *consumes* `FleetResults` through its existing aggregate properties (no fleet-encapsulation violation, no logic duplication — per user directive). Also owns new `config.py` functions (`_parse_community_config`, `load_community_config`), the `cli/fleet.py run` community branch, and `output.generate_community_report`.
+- **Consumes (don't modify / don't duplicate):** per-home `simulate_home` outputs (`SimulationResults`); `fleet.FleetResults` aggregate API (`total_grid_export`/`total_grid_import`); `flow.simulate_timestep` + `dispatch.SelfConsumptionStrategy` + `battery.Battery` + `flow.validate_energy_balance` (reused verbatim for community-battery dispatch + per-timestep balance); `tariff.TariffConfig`/`seg.py` pricing primitives from **#2** (VNM billing leaf only).
+- **Seam:** P5 owns the sharing layer end-to-end. **`simulate_fleet` / `FleetResults` / `FleetConfig` / `simulate_fleet_iter` signatures are UNCHANGED — P2 #19/#22 need NO adaptation** (see §D announcement). Energy-balance invariant extended to the community level as a *composition theorem* (proven in PRD §3.1); per-home seed model untouched (community layer is deterministic post-hoc).
+- **PRD file:** `docs/prds/inter-home-community-energy-sharing.md` (committed `5803492`) · manifest `docs/prds/inter-home-community-energy-sharing.capability-manifest.md` (`5803492`) · **Subtasks queued:** **#30** (α — community.py core: P2P netting + `validate_community_balance` + result types) → **#31** (β — community battery layer; dep #30, serialises community.py) ; **#32** (γ — `config.py` parser + `load_community_config`; dep #30) ; **#33** (δ — `fleet run` community branch + `generate_community_report` + demo scenario; **integration-gate leaf**, dep #30+#31+#32) ; **#34** (ε — VNM £ billing slice; dep #31+#33+**#2**). Placeholder **task #6 cancelled** (superseded). Approach **B + H** (composition-theorem contract + two-way balance/economics boundary tests).
 
 ---
 
@@ -95,7 +95,10 @@ Author sequentially in the order below (P1→P5) so seam ownership is claimed be
 | `flow.py` / `dispatch.py` TOU dispatch | **P4** | — · queued **#23**(α dispatch core)→**#25**(α2 TOU)→**#26**(α3 PeakShaving), **#24**(β config), **#27**(γ flow), **#28**(ε home wiring), **#29**(δ economics) · PRD `docs/prds/tou-grid-charging-battery-arbitrage.md` |
 | `battery.py` `BatteryConfig` schema (new `grid_charging: GridChargeConfig`) + `config.py` `_parse_battery_config` | **P4** (queued **#24**) | P2 consumes existing `BatteryConfig.dispatch_strategy` only — new optional `grid_charging` field is additive, no conflict |
 | `home.py` financial accounting / `seg.py` pricing | **task #2** (not a PRD) | P2, P4 depend on it; do NOT re-fix |
-| `fleet.py` simulation/aggregation | **P5** | P2 (calls `simulate_fleet`) |
+| `fleet.py` simulation/aggregation | **P5** (owns; **left UNCHANGED** — see §D) | P2 (calls `simulate_fleet` — no adaptation needed) |
+| **`community.py`** (new sharing/aggregation layer) | **P5** (queued **#30**→**#31**, **#33**, **#34**) | — · PRD `docs/prds/inter-home-community-energy-sharing.md` |
+| `config.py` `_parse_community_config` / `load_community_config` (new fns) | **P5** (queued **#32**) | — · **disjoint** from P3 `#17` (`_parse_pv_config`) + P4 `#24` (`_parse_battery_config`) regions; file-lock serialises |
+| `cli/fleet.py` `run` community branch + `output.generate_community_report` | **P5** (queued **#33**) | — · P5-only among PRDs (P2 owns `web/`; #14 owns `cli/home.py`) |
 | test markers (`slow`/`integration`), mypy strict | **tasks #11/#12** | all PRDs: mark new real-PVGIS tests `slow`; keep mypy green |
 
 ## D. Notes / open seam questions
@@ -136,3 +139,20 @@ P3 (PRD `docs/prds/pv-degradation-live-sim.md`, tasks #16/#17) adds **two fields
 - **YAML surface (under the `pv:` block):** `pv.system_age_years`, `pv.degradation_rate_per_year`. Both also available as distribution params on `PVDistributionConfig` for fleets (added by #17).
 - **How P2/#14 expose it:** add the two fields to the `pv` sub-form / PV parsing alongside `capacity_kw`/`azimuth`/`tilt`. The canonical `_parse_pv_config` (config.py) reads them after #17 lands, so #14's canonical-parser fix picks them up for free; P2 surfaces them in the web home form. Backward-compatible — omitting them = age 0, no behaviour change.
 - **Wired (P3) vs your job:** P3 wires the engine + canonical parser + fleet sampler and proves it via `fleet run`. P2 owns the web-form widgets; #14 owns the CLI `home run` exposure (P3 deliberately does **not** route its signal through the under-exposing `cli/home.py` path).
+
+### 📢 P5 announcement — `fleet.py` public API UNCHANGED; community sharing is a new `community.py` layer (P2 needs NO adaptation)
+
+P5 (PRD `docs/prds/inter-home-community-energy-sharing.md`, tasks **#30–#34**) implements inter-home / community energy sharing as a **post-hoc aggregation layer that consumes `FleetResults`** — it does **not** modify `fleet.py`. **For P2 (#19 fleet-from-distribution runner, #22 fleet overlay): the seam you call is unchanged — consume as-is, no adaptation required:**
+
+| Symbol (in `fleet.py`) | Change | Note |
+|---|---|---|
+| `simulate_fleet(config, start, end, validate_balance=True, parallel=True, max_workers=None) -> FleetResults` | **NONE** | Same signature, same return type. |
+| `FleetResults` (`per_home_results`, `home_configs`, `total_grid_*`, …) | **NONE** | Community layer reads its public aggregate properties read-only. |
+| `FleetConfig` | **NONE** | Community config is a **separate** `community:` YAML block parsed by `config.load_community_config` (#32) — **not** a `FleetConfig` field. P2's `FleetConfig(homes=...)` is unaffected. |
+| `simulate_fleet_iter` | **NONE** | Parallelism model untouched. |
+
+- **Where community sharing lives:** new module `src/solar_challenge/community.py` — `simulate_community(fleet_results: FleetResults, config: CommunityConfig) -> CommunityResults`. The CLI (`fleet run`, #33) calls `simulate_community` *after* `simulate_fleet` when a `community:` block is present. Higher layer (community) depends on lower (fleet); fleet has no knowledge of community.
+- **Energy-balance invariant:** extended to the community level as a **composition theorem** over the per-home balances + the reused `flow.validate_energy_balance` (PRD §3.1) — `validate_community_balance`. No change to `flow.validate_energy_balance` itself.
+- **`config.py` file-lock (for P3/P4 awareness):** P5 #32 adds only **new** functions (`_parse_community_config`, `load_community_config`) — disjoint from P3 #17 (`_parse_pv_config`/`PVDistributionConfig`) and P4 #24 (`_parse_battery_config`). No logical conflict; the orchestrator's narrow file-lock serialises concurrent `config.py` edits.
+- **For P2/web (NOT required by P5):** a future web surface for community sharing is a candidate **P2 follow-up**, out of scope for P5 (engine + CLI + YAML only).
+- **VNM billing → task #2:** the P5 billing leaf (#34) reuses #2's canonical `seg.py`/`TariffConfig` pricing (dep #34→#2 wired) — it does **not** add a third pricing path; do not re-fix pricing in P5.
