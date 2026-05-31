@@ -439,10 +439,37 @@ def calculate_summary(
     Args:
         results: Simulation results with time series
         seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, seg_revenue_gbp is computed from total grid export.
+            If provided, ``seg_revenue_gbp`` is computed from total grid export
+            via ``calculate_seg_revenue``.  Must be >= 0; negative values raise
+            ``ValueError`` (enforced by ``SEGTariff`` validation — a behaviour
+            change from the previous inline formula that silently returned a
+            negative number).
 
     Returns:
         SummaryStatistics with totals and ratios
+
+    Notes:
+        **Two-path SEG design** — ``total_export_revenue_gbp`` and
+        ``seg_revenue_gbp`` are independent figures that can legitimately differ:
+
+        * ``total_export_revenue_gbp`` is always ``results.export_revenue.sum()``.
+          When ``simulate_home`` was called with ``HomeConfig.seg_tariff`` set,
+          every export timestep was already priced at that SEG rate, so
+          ``total_export_revenue_gbp`` already reflects SEG pricing and is the
+          authoritative revenue figure for that simulation.
+
+        * ``seg_revenue_gbp`` is an *additional*, independent recalculation
+          driven by ``seg_tariff_pence_per_kwh``.  This path exists for callers
+          (``fleet.py``, ``output.py``) that build ``SimulationResults`` by hand
+          and need a standalone SEG revenue figure without access to a
+          ``HomeConfig``.
+
+        **Recommended usage when** ``HomeConfig.seg_tariff`` **was set:**
+        read ``total_export_revenue_gbp`` for the authoritative revenue and do
+        *not* pass ``seg_tariff_pence_per_kwh`` — or pass the same rate as a
+        consistency cross-check.  Passing a *different* rate will produce
+        ``seg_revenue_gbp != total_export_revenue_gbp``, which is not an error
+        but may mislead callers that compare the two.
     """
     # Convert power (kW) to energy (kWh) - 1 minute = 1/60 hour
     minutes_to_hours = 1 / 60
