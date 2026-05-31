@@ -763,9 +763,20 @@ def _parse_heat_pump_config(data: Optional[dict[str, Any]]) -> Optional[HeatPump
 
     Returns:
         HeatPumpConfig or None if data is None.
+
+    Raises:
+        ConfigurationError: If a required field is missing.
     """
     if data is None:
         return None
+    if "heat_pump_type" not in data:
+        raise ConfigurationError(
+            "heat_pump configuration requires 'heat_pump_type' field"
+        )
+    if "thermal_capacity_kw" not in data:
+        raise ConfigurationError(
+            "heat_pump configuration requires 'thermal_capacity_kw' field"
+        )
     return HeatPumpConfig(
         heat_pump_type=data["heat_pump_type"],
         thermal_capacity_kw=float(data["thermal_capacity_kw"]),
@@ -782,9 +793,20 @@ def _parse_ev_config(data: Optional[dict[str, Any]]) -> Optional[EVConfig]:
 
     Returns:
         EVConfig or None if data is None.
+
+    Raises:
+        ConfigurationError: If a required field is missing.
     """
     if data is None:
         return None
+    if "charger_type" not in data:
+        raise ConfigurationError(
+            "ev configuration requires 'charger_type' field"
+        )
+    if "arrival_hour" not in data:
+        raise ConfigurationError(
+            "ev configuration requires 'arrival_hour' field"
+        )
     return EVConfig(
         charger_type=str(data["charger_type"]),
         arrival_hour=int(data["arrival_hour"]),

@@ -150,8 +150,14 @@ def run(
         results = simulate_home(home_config, start_date, end_date)
         progress.update(task, completed=True)
 
-    # Calculate summary (thread SEG rate so seg_revenue_gbp is computed)
-    summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_rate)
+    # Calculate summary for the default table.  When seg_tariff is already set on
+    # HomeConfig, the engine prices every export timestep at the SEG rate, so
+    # total_export_revenue_gbp is the authoritative figure.  Omitting
+    # seg_tariff_pence_per_kwh here prevents a duplicate "SEG Revenue" row in the
+    # table that would equal "Grid Export Revenue" and mislead users into thinking
+    # the revenue is counted twice.  The --report path below still passes seg_rate to
+    # generate_summary_report so the detailed "## SEG Revenue" section appears there.
+    summary = calculate_summary(results)
 
     # Display summary table
     table = create_summary_table(summary, title=f"Simulation Results: {home_config.name}")
