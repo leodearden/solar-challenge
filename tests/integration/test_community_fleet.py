@@ -233,3 +233,52 @@ class TestGenerateCommunityReport:
         report_dict = generate_community_report(cr_p2p, {"note": "test"})
         assert isinstance(report_dict, str)
         assert "note" in report_dict
+
+
+class TestDemoScenario:
+    """Contract tests for scenarios/bristol-community.yaml.
+
+    Validates that the YAML file exists, loads correctly, and satisfies the
+    exporter/importer heterogeneity and community_battery requirements.
+    """
+
+    def test_scenario_file_exists(self) -> None:
+        assert SCENARIO.exists(), f"Scenario file not found: {SCENARIO}"
+
+    def test_fleet_config_small(self) -> None:
+        fleet = load_fleet_config(SCENARIO)
+        assert 4 <= len(fleet.homes) <= 12, (
+            f"Expected 4-12 homes, got {len(fleet.homes)}"
+        )
+
+    def test_fleet_is_heterogeneous(self) -> None:
+        """At least one high-PV (exporter) and one low-PV (importer) home."""
+        fleet = load_fleet_config(SCENARIO)
+        pv_caps = [h.pv_config.capacity_kw for h in fleet.homes]
+        loads = [h.load_config.annual_consumption_kwh for h in fleet.homes]
+        # Max PV home should NOT be the same as max load home
+        max_pv_idx = pv_caps.index(max(pv_caps))
+        max_load_idx = loads.index(max(loads))
+        assert max_pv_idx != max_load_idx, (
+            "Expected heterogeneous fleet: highest-PV and highest-load homes "
+            f"are the same ({max_pv_idx})"
+        )
+        # Sanity: a clearly high-PV exporter exists
+        assert max(pv_caps) >= 6.0, f"Expected exporter with PV ≥ 6 kW, max={max(pv_caps)}"
+        # Sanity: a clearly high-load importer exists
+        assert max(loads) >= 4000.0, f"Expected importer with load ≥ 4000 kWh/yr, max={max(loads)}"
+
+    def test_community_config_present(self) -> None:
+        cfg = load_community_config(SCENARIO)
+        assert cfg is not None, "Expected a community: block in scenario YAML"
+
+    def test_community_sharing_mode_is_community_battery(self) -> None:
+        cfg = load_community_config(SCENARIO)
+        assert cfg is not None
+        assert cfg.sharing_mode == "community_battery"
+
+    def test_community_battery_spec_present(self) -> None:
+        cfg = load_community_config(SCENARIO)
+        assert cfg is not None
+        assert cfg.community_battery is not None
+        assert cfg.community_battery.capacity_kwh > 0
