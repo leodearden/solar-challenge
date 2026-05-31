@@ -641,6 +641,17 @@ def generate_community_report(
 | Discharged | {m.battery_discharge_kwh:.2f} |
 """
 
+    # Community Billing section — only when VNM billing was computed (task ε / #34)
+    if community_results.community_savings_gbp is not None:
+        report += f"""
+## Community Billing (£)
+| Metric | Value (£) |
+|--------|-----------|
+| Baseline Net Cost | {community_results.baseline_net_cost_gbp:.2f} |
+| Community Net Cost | {community_results.community_net_cost_gbp:.2f} |
+| Community Savings | {community_results.community_savings_gbp:.2f} |
+"""
+
     # Optional extra summary section
     if community_summary is not None:
         report += "\n## Additional Information\n"

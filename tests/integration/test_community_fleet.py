@@ -9,6 +9,7 @@ Tests the full stack:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -18,6 +19,7 @@ from typer.testing import CliRunner
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.main import app
 from solar_challenge.community import (
+    CommunityBillingConfig,
     CommunityConfig,
     simulate_community,
     validate_community_balance,
@@ -28,6 +30,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.output import generate_community_report
 from solar_challenge.pv import PVConfig
+from solar_challenge.tariff import FlatRateTariff
 
 pytestmark = pytest.mark.integration
 
@@ -640,3 +643,253 @@ class TestCommunityPipelineAB:
         )
         assert result.exit_code == 0, f"smoke test failed:\n{result.output}"
         assert "Community" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Task-34 step-5: TestCommunityBillingReport (RED)
+# ---------------------------------------------------------------------------
+
+class TestCommunityBillingReport:
+    """RED tests for the markdown billing section in generate_community_report.
+
+    Implementation arrives in step-6 (output.py).
+    """
+
+    @pytest.fixture
+    def billing_idx(self) -> pd.DatetimeIndex:
+        return pd.date_range("2024-06-21 12:00", periods=2, freq="h", tz="Europe/London")
+
+    @pytest.fixture
+    def billing_fleet(self, billing_idx: pd.DatetimeIndex) -> FleetResults:
+        """Exporter + importer fleet for deterministic billing values."""
+        return _make_fleet(
+            billing_idx,
+            [
+                ([4.0, 4.0], [1.0, 1.0]),  # exporter
+                ([0.0, 0.0], [2.0, 2.0]),  # importer
+            ],
+        )
+
+    @pytest.fixture
+    def cr_with_billing(self, billing_fleet: FleetResults) -> "object":
+        """CommunityResults with billing fields set (p2p, flat 0.30, SEG 4.1)."""
+        cfg = CommunityConfig(
+            sharing_mode="p2p",
+            billing=CommunityBillingConfig(
+                tariff=FlatRateTariff(0.30),
+                seg_rate_pence_per_kwh=4.1,
+            ),
+        )
+        return simulate_community(billing_fleet, cfg)
+
+    @pytest.fixture
+    def cr_no_billing(self, billing_fleet: FleetResults) -> "object":
+        """CommunityResults with no billing config (fields are None)."""
+        cfg = CommunityConfig(sharing_mode="p2p")
+        return simulate_community(billing_fleet, cfg)
+
+    def test_report_contains_billing_section_header(self, cr_with_billing: object) -> None:
+        """Report contains a billing section heading when savings are populated."""
+        from solar_challenge.community import CommunityResults
+        assert isinstance(cr_with_billing, CommunityResults)
+        report = generate_community_report(cr_with_billing)
+        assert "Community Billing" in report
+
+    def test_report_contains_baseline_line(self, cr_with_billing: object) -> None:
+        """Report contains a 'Baseline' net cost line."""
+        from solar_challenge.community import CommunityResults
+        assert isinstance(cr_with_billing, CommunityResults)
+        report = generate_community_report(cr_with_billing)
+        assert "Baseline" in report
+
+    def test_report_contains_community_net_line(self, cr_with_billing: object) -> None:
+        """Report contains a 'Community Net Cost' row in the billing table."""
+        from solar_challenge.community import CommunityResults
+        assert isinstance(cr_with_billing, CommunityResults)
+        report = generate_community_report(cr_with_billing)
+        assert "Community Net Cost" in report
+
+    def test_report_contains_savings_line(self, cr_with_billing: object) -> None:
+        """Report contains a 'Community Savings' row with the exact formatted value."""
+        from solar_challenge.community import CommunityResults
+        assert isinstance(cr_with_billing, CommunityResults)
+        report = generate_community_report(cr_with_billing)
+        assert "Savings" in report
+        # Assert exact formatted value on the Community Savings row; derive the
+        # expected string directly from the CommunityResults scalar so the test
+        # does not embed a hardcoded literal that could drift from the code.
+        expected_fmt = f"{cr_with_billing.community_savings_gbp:.2f}"
+        savings_match = re.search(
+            r"\|\s*Community Savings\s*\|\s*([-\d.]+)\s*\|", report
+        )
+        assert savings_match is not None, (
+            f"Expected '| Community Savings | ... |' row in report:\n{report}"
+        )
+        assert savings_match.group(1) == expected_fmt, (
+            f"Expected savings={expected_fmt}, got {savings_match.group(1)} "
+            f"in report:\n{report}"
+        )
+
+    def test_no_billing_section_when_fields_none(self, cr_no_billing: object) -> None:
+        """Report does NOT contain billing section when savings fields are None."""
+        from solar_challenge.community import CommunityResults
+        assert isinstance(cr_no_billing, CommunityResults)
+        assert cr_no_billing.community_savings_gbp is None  # type: ignore[attr-defined]
+        report = generate_community_report(cr_no_billing)
+        assert "Community Billing" not in report
+        assert "Savings" not in report
+
+
+# ---------------------------------------------------------------------------
+# Task-34 step-7: TestCommunityBillingAB + TestFleetRunCommunityBillingCLI (RED)
+# ---------------------------------------------------------------------------
+
+class TestCommunityBillingAB:
+    """A/B integration gate: savings >= 0 and community_net < baseline_net for both modes.
+
+    Uses the injected synth_fleet fixture (no PVGIS).
+    """
+
+    @pytest.fixture
+    def synth_fleet(self) -> FleetResults:
+        weather = _synth_weather()
+        start = pd.Timestamp("2024-06-21", tz="Europe/London")
+        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        return _build_injected_fleet(start, end, weather)
+
+    def _billing_cfg(self, mode: str, batt: BatteryConfig | None = None) -> CommunityConfig:
+        return CommunityConfig(
+            sharing_mode=mode,  # type: ignore[arg-type]
+            community_battery=batt,
+            billing=CommunityBillingConfig(
+                tariff=FlatRateTariff(0.30),
+                seg_rate_pence_per_kwh=4.1,
+            ),
+        )
+
+    def test_p2p_savings_not_none(self, synth_fleet: FleetResults) -> None:
+        """P2P: community_savings_gbp is populated (not None)."""
+        cr = simulate_community(synth_fleet, self._billing_cfg("p2p"))
+        assert cr.community_savings_gbp is not None
+
+    def test_p2p_savings_non_negative(self, synth_fleet: FleetResults) -> None:
+        """P2P: community_savings_gbp >= 0."""
+        cr = simulate_community(synth_fleet, self._billing_cfg("p2p"))
+        assert cr.community_savings_gbp >= 0  # type: ignore[operator]
+
+    def test_p2p_community_net_less_than_baseline(self, synth_fleet: FleetResults) -> None:
+        """P2P: community_net_cost < baseline_net_cost."""
+        cr = simulate_community(synth_fleet, self._billing_cfg("p2p"))
+        assert cr.community_net_cost_gbp < cr.baseline_net_cost_gbp  # type: ignore[operator]
+
+    def test_p2p_savings_equals_baseline_minus_community(self, synth_fleet: FleetResults) -> None:
+        """P2P: savings == baseline_net - community_net exactly."""
+        cr = simulate_community(synth_fleet, self._billing_cfg("p2p"))
+        assert cr.community_savings_gbp == pytest.approx(  # type: ignore[operator]
+            cr.baseline_net_cost_gbp - cr.community_net_cost_gbp, abs=1e-10  # type: ignore[operator]
+        )
+
+    def test_battery_mode_savings_not_none(self, synth_fleet: FleetResults) -> None:
+        """community_battery: community_savings_gbp is populated."""
+        batt = BatteryConfig(capacity_kwh=20.0, max_charge_kw=10.0, max_discharge_kw=10.0)
+        cr = simulate_community(synth_fleet, self._billing_cfg("community_battery", batt))
+        assert cr.community_savings_gbp is not None
+
+    def test_battery_mode_savings_non_negative(self, synth_fleet: FleetResults) -> None:
+        """community_battery: savings >= 0."""
+        batt = BatteryConfig(capacity_kwh=20.0, max_charge_kw=10.0, max_discharge_kw=10.0)
+        cr = simulate_community(synth_fleet, self._billing_cfg("community_battery", batt))
+        assert cr.community_savings_gbp >= 0  # type: ignore[operator]
+
+    def test_battery_mode_community_net_less_than_baseline(self, synth_fleet: FleetResults) -> None:
+        """community_battery: community_net < baseline_net."""
+        batt = BatteryConfig(capacity_kwh=20.0, max_charge_kw=10.0, max_discharge_kw=10.0)
+        cr = simulate_community(synth_fleet, self._billing_cfg("community_battery", batt))
+        assert cr.community_net_cost_gbp < cr.baseline_net_cost_gbp  # type: ignore[operator]
+
+
+class TestFleetRunCommunityBillingCLI:
+    """CLI integration test: fleet run on bristol-community.yaml produces billing section.
+
+    Uses monkeypatched weather to avoid PVGIS calls.  Step-7 RED for the
+    _print_community_section billing rows (implemented in step-8) and the
+    --community-report billing section (implemented in step-6).
+    """
+
+    def test_community_report_has_billing_section(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Written --community-report contains 'Community Billing' and 'Savings'."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        report_path = tmp_path / "billing_report.md"
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", str(SCENARIO), "--sequential",
+                "--start", "2024-06-21", "--end", "2024-06-21",
+                "--community-report", str(report_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert report_path.exists()
+        report_text = report_path.read_text()
+        assert "Community Billing" in report_text, (
+            f"Expected 'Community Billing' section in report:\n{report_text[:500]}"
+        )
+        assert "Savings" in report_text
+
+    def test_community_report_savings_non_negative(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Parsed savings figure from the report is >= 0."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        report_path = tmp_path / "billing_report2.md"
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", str(SCENARIO), "--sequential",
+                "--start", "2024-06-21", "--end", "2024-06-21",
+                "--community-report", str(report_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        report_text = report_path.read_text()
+        # Extract baseline and community net cost figures and verify savings ≥ 0.
+        # Assert the rows were found so a format change causes an explicit failure
+        # rather than a vacuous pass.
+        baseline_match = re.search(r"Baseline[^|]*\|\s*([-\d.]+)", report_text)
+        community_match = re.search(r"Community Net[^|]*\|\s*([-\d.]+)", report_text)
+        assert baseline_match and community_match, (
+            f"Could not find Baseline/Community Net Cost rows in billing section:\n{report_text}"
+        )
+        baseline = float(baseline_match.group(1))
+        community = float(community_match.group(1))
+        assert community <= baseline, (
+            f"Expected community_net ({community:.4f}) <= baseline ({baseline:.4f})"
+        )
+
+    def test_cli_stdout_has_billing_rows(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """CLI stdout community table includes billing rows (step-8 drives this)."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", str(SCENARIO), "--sequential",
+                "--start", "2024-06-21", "--end", "2024-06-21",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        # Billing rows in the Rich table — implemented in step-8
+        assert "Baseline Net Cost" in result.output or "Savings" in result.output, (
+            f"Expected billing rows in community table stdout:\n{result.output[-500:]}"
+        )

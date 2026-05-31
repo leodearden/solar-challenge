@@ -23,10 +23,11 @@ import pandas as pd
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
+from solar_challenge.seg import SEGTariff, calculate_seg_revenue
+from solar_challenge.tariff import TariffConfig, calculate_bill
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
-    from solar_challenge.tariff import TariffConfig
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +49,7 @@ class CommunityBillingConfig:
         Smart Export Guarantee rate in pence per kWh (optional; None = no SEG).
     """
 
-    tariff: Optional["TariffConfig"] = None
+    tariff: Optional[TariffConfig] = None
     seg_rate_pence_per_kwh: Optional[float] = None
 
 
@@ -129,6 +130,134 @@ class CommunityResults:
     battery_discharge: pd.Series
     battery_soc: pd.Series
     fleet_results: "FleetResults"
+    # Billing fields populated by simulate_community when config.billing is
+    # fully specified (both tariff and seg_rate_pence_per_kwh present).
+    baseline_net_cost_gbp: Optional[float] = None
+    community_net_cost_gbp: Optional[float] = None
+    community_savings_gbp: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# _safe_calculate_bill  (workaround for tariff.py flat_rate end_time="23:59")
+# ---------------------------------------------------------------------------
+
+def _safe_calculate_bill(energy_kwh: pd.Series, tariff: TariffConfig) -> float:
+    """Calculate bill, delegating to :func:`~solar_challenge.tariff.calculate_bill`.
+
+    In the common case (no period-boundary timestamps) this is a thin
+    delegation to ``calculate_bill`` so any future standing-charge,
+    minimum-charge, or rounding logic added there is automatically inherited.
+
+    Adds a per-timestamp fallback for timestamps that fall in known
+    period-boundary gaps: :meth:`TariffConfig.flat_rate` uses
+    ``end_time="23:59"`` (exclusive), so ``23:59:00`` in 1-minute simulation
+    data is not covered.  When ``calculate_bill`` raises :exc:`ValueError`
+    the function retries each step individually, substituting
+    ``timestamp − 1 s`` for any that still fail.
+
+    Parameters
+    ----------
+    energy_kwh:
+        Time-series of energy in kWh (must have a ``DatetimeIndex``).
+    tariff:
+        Tariff configuration used to look up per-timestep rates.
+
+    Returns
+    -------
+    float
+        Total bill cost in £.
+    """
+    try:
+        return calculate_bill(energy_kwh, tariff)
+    except ValueError:
+        # At least one timestamp is outside all tariff periods (e.g. 23:59:00
+        # with flat_rate's exclusive end_time).  Price each step individually,
+        # falling back 1 s for any timestamp that still fails.
+        total_cost = 0.0
+        for timestamp, energy in energy_kwh.items():
+            try:
+                rate = tariff.get_rate(timestamp)
+            except ValueError:
+                # 1-second lookback: the preceding second is inside the period
+                # and carries the same rate (semantically correct for a
+                # flat-rate period whose boundary falls at a minute mark).
+                rate = tariff.get_rate(timestamp - pd.Timedelta(seconds=1))
+            total_cost += energy * rate
+        return total_cost
+
+
+# ---------------------------------------------------------------------------
+# _price_grid_flows
+# ---------------------------------------------------------------------------
+
+def _price_grid_flows(
+    import_kw: pd.Series,
+    export_kw: pd.Series,
+    tariff: TariffConfig,
+    seg: SEGTariff,
+) -> tuple[float, float]:
+    """Price grid import and export flows using canonical billing primitives.
+
+    Derives the timestep duration (dt_h) from the series index so the function
+    is correct for any cadence (1-min, hourly, etc.).  This mirrors the
+    convention used in :func:`~solar_challenge.output.compute_community_metrics`.
+
+    Parameters
+    ----------
+    import_kw:
+        Community-level grid import series (kW) with a DatetimeIndex.
+    export_kw:
+        Community-level grid export series (kW) with the same DatetimeIndex.
+    tariff:
+        Import tariff; the import leg is priced per-timestep via
+        :func:`~solar_challenge.tariff.calculate_bill` (TOU-correct).
+    seg:
+        Smart Export Guarantee tariff; the export leg is priced flat via
+        :func:`~solar_challenge.seg.calculate_seg_revenue` (sum-first, exact).
+
+    Returns
+    -------
+    (import_cost_gbp, export_revenue_gbp)
+        Both values in GBP.
+    """
+    # Infer dt_h from the index spacing; fall back to 1/60 for degenerate
+    # single-element series (consistent with simulate_community's own fallback).
+    #
+    # PRECONDITION: import_kw must have a uniformly-spaced DatetimeIndex.
+    # dt_h is derived from the first interval only; a non-uniform index would
+    # silently mis-price every subsequent interval.  This matches the same
+    # assumption in output.compute_community_metrics and simulate_community.
+    # A first-vs-last check catches common irregular patterns (dropped rows,
+    # DST gaps, hour-boundary aggregates) with O(1) overhead.
+    if len(import_kw) >= 2:
+        dt_h = (import_kw.index[1] - import_kw.index[0]).total_seconds() / 3600.0
+        if len(import_kw) >= 3:
+            dt_last_h = (
+                (import_kw.index[-1] - import_kw.index[-2]).total_seconds() / 3600.0
+            )
+            if abs(dt_h - dt_last_h) > 1e-9:
+                raise ValueError(
+                    f"_price_grid_flows requires a uniformly-spaced DatetimeIndex; "
+                    f"first interval={dt_h:.9f} h but last={dt_last_h:.9f} h differ. "
+                    "This matches the convention in output.compute_community_metrics."
+                )
+    else:
+        dt_h = 1.0 / 60.0
+
+    # Import cost: per-timestep TOU-aware pricing via the canonical loop.
+    # Use a safe wrapper: TariffConfig.flat_rate() defines end_time="23:59"
+    # (exclusive), so the 23:59:00 timestamp in 1-minute simulation data falls
+    # outside the period.  The wrapper falls back to the previous second so the
+    # 23:59 minute is priced at the same rate as 23:58 — semantically correct
+    # for a flat-rate period.  For non-boundary timestamps the behaviour is
+    # identical to calculate_bill.
+    import_cost_gbp: float = _safe_calculate_bill(import_kw * dt_h, tariff)
+
+    # Export revenue: flat SEG rate → sum kWh first, then price once (exact).
+    export_energy_kwh: float = float((export_kw * dt_h).sum())
+    export_revenue_gbp: float = calculate_seg_revenue(export_energy_kwh, seg)
+
+    return import_cost_gbp, export_revenue_gbp
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +400,37 @@ def simulate_community(
             battery_soc=pd.Series(soc_vals, index=index, dtype=float),
             fleet_results=fleet_results,
         )
+
+    # --- VNM billing: baseline vs community net cost (ε / task-34) ---
+    # Gated on BOTH tariff and seg_rate being present so _price_grid_flows
+    # always receives non-None arguments (keeps it total / no None branches).
+    billing = config.billing
+    if (
+        billing is not None
+        and billing.tariff is not None
+        and billing.seg_rate_pence_per_kwh is not None
+    ):
+        seg = SEGTariff(
+            name="community",
+            rate_pence_per_kwh=billing.seg_rate_pence_per_kwh,
+        )
+        # Baseline: what the fleet would pay/earn WITHOUT community sharing
+        base_imp, base_exp = _price_grid_flows(
+            fleet_results.total_grid_import,
+            fleet_results.total_grid_export,
+            billing.tariff,
+            seg,
+        )
+        # Community: what the fleet pays/earns AFTER sharing
+        comm_imp, comm_exp = _price_grid_flows(
+            result.grid_import,
+            result.grid_export,
+            billing.tariff,
+            seg,
+        )
+        result.baseline_net_cost_gbp = base_imp - base_exp
+        result.community_net_cost_gbp = comm_imp - comm_exp
+        result.community_savings_gbp = result.baseline_net_cost_gbp - result.community_net_cost_gbp
 
     if validate_balance:
         validate_community_balance(fleet_results, result)

@@ -88,6 +88,29 @@ def _print_community_section(
         "",
     )
 
+    # Community Billing rows — only when VNM billing was computed (task ε / #34)
+    # Strictly additive and guarded so the no-billing path is byte-unchanged.
+    if community_results.community_savings_gbp is not None:
+        table.add_row("", "", "", "")  # separator before billing block
+        table.add_row(
+            "Baseline Net Cost (£)",
+            "",
+            f"{community_results.baseline_net_cost_gbp:.2f}",
+            "",
+        )
+        table.add_row(
+            "Community Net Cost (£)",
+            "",
+            f"{community_results.community_net_cost_gbp:.2f}",
+            "",
+        )
+        table.add_row(
+            "Community Savings (£)",
+            "",
+            f"{community_results.community_savings_gbp:.2f}",
+            "",
+        )
+
     console.print(table)
 
 

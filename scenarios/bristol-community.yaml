@@ -90,3 +90,8 @@ community:
     capacity_kwh: 20.0
     max_charge_kw: 10.0
     max_discharge_kw: 10.0
+  billing:
+    tariff:
+      type: flat_rate
+      rate_per_kwh: 0.30
+    seg_rate_pence_per_kwh: 4.1
