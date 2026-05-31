@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from solar_challenge.config import DispatchStrategyConfig
+    from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class BatteryConfig:
         max_discharge_kw: Maximum discharging power in kilowatts
         name: Optional identifier for the battery
         dispatch_strategy: Optional dispatch strategy configuration
+        grid_charging: Optional grid-charge (arbitrage) configuration; None means disabled
     """
 
     capacity_kwh: float
@@ -25,6 +26,7 @@ class BatteryConfig:
     max_discharge_kw: float = 2.5
     name: str = ""
     dispatch_strategy: Optional["DispatchStrategyConfig"] = None
+    grid_charging: Optional["GridChargeConfig"] = None
 
     def __post_init__(self) -> None:
         """Validate battery configuration parameters."""
