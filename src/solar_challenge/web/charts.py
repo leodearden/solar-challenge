@@ -426,16 +426,15 @@ def monthly_summary(results: SimulationResults) -> str | None:
     return str(fig.to_json())
 
 
-def financial_breakdown(results: SimulationResults, tariff_config: Any | None = None) -> str:
+def financial_breakdown(results: SimulationResults) -> str:
     """Dual-axis chart with daily cost bars and a cumulative savings line.
 
-    If no tariff_config is supplied, defaults to an import rate of
-    0.245 GBP/kWh and an export rate of 0.15 GBP/kWh.
+    Daily cost and revenue are derived directly from the engine-priced series
+    ``results.import_cost`` and ``results.export_revenue``, which already
+    reflect the configured tariff and SEG rate set at simulation time.
 
     Args:
         results: SimulationResults instance.
-        tariff_config: Optional tariff configuration (unused for now;
-            reserved for future expansion).
 
     Returns:
         Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
@@ -446,18 +445,13 @@ def financial_breakdown(results: SimulationResults, tariff_config: Any | None = 
     except ImportError:
         return "{}"
 
-    import_rate = 0.245
-    export_rate = 0.15
-
-    from solar_challenge.output import aggregate_daily  # noqa: PLC0415
-
-    daily = aggregate_daily(results)
-    dates = [d.strftime("%Y-%m-%d") for d in daily.index]
-
-    daily_cost = (daily.get("grid_import_kwh", 0) * import_rate).round(2)
-    daily_revenue = (daily.get("grid_export_kwh", 0) * export_rate).round(2)
+    # import_cost and export_revenue are per-minute GBP amounts
+    # (energy_kWh × rate), NOT power — resample without /60.
+    daily_cost = results.import_cost.resample("D").sum().round(2)
+    daily_revenue = results.export_revenue.resample("D").sum().round(2)
     daily_net = (daily_cost - daily_revenue).round(2)
     cumulative_savings = (-daily_net).cumsum().round(2)
+    dates = [d.strftime("%Y-%m-%d") for d in daily_cost.index]
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
