@@ -21,6 +21,7 @@ except ImportError:
     YAML_AVAILABLE = False
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.ev import EVConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.heat_pump import HeatPumpConfig
@@ -28,6 +29,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 
@@ -1912,3 +1914,43 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
             seed=config.seed,
         )
     return config
+
+
+# ---------------------------------------------------------------------------
+# Community config parsing  (task γ / task #32)
+# ---------------------------------------------------------------------------
+
+
+def _parse_community_config(
+    data: Optional[dict[str, Any]]
+) -> Optional[CommunityConfig]:
+    """Parse a ``community:`` YAML block into a :class:`CommunityConfig`.
+
+    Args:
+        data: Community configuration dictionary, or None.
+
+    Returns:
+        ``CommunityConfig`` when *data* is a dict; ``None`` when *data* is ``None``.
+
+    Raises:
+        ConfigurationError: For missing/invalid ``sharing_mode``, p2p+battery,
+            community_battery-without-battery, or any nested config error.
+    """
+    if data is None:
+        return None
+
+    sharing_mode = data.get("sharing_mode")
+    if not sharing_mode:
+        raise ConfigurationError(
+            "community: block requires a 'sharing_mode' field "
+            "('p2p' or 'community_battery')"
+        )
+
+    try:
+        return CommunityConfig(
+            sharing_mode=sharing_mode,
+            community_battery=None,
+            billing=None,
+        )
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
