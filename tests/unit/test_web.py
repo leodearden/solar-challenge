@@ -566,7 +566,7 @@ class TestFleetApiEndpoints:
         assert response.status_code == 400
 
     def test_simulate_fleet_from_distribution(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/fleet-from-distribution accepts valid config."""
+        """Test POST /api/simulate/fleet-from-distribution returns 201 with job_id/run_id."""
         response = client.post(
             "/api/simulate/fleet-from-distribution",
             json={
@@ -589,9 +589,10 @@ class TestFleetApiEndpoints:
                 },
             },
         )
-        assert response.status_code == 501
+        assert response.status_code == 201
         data = response.get_json()
-        assert data["n_homes"] == 10
+        assert "job_id" in data
+        assert "run_id" in data
 
     def test_simulate_fleet_from_distribution_empty_body(self, client: FlaskClient) -> None:
         """Test POST /api/simulate/fleet-from-distribution with empty body returns 400."""
