@@ -99,6 +99,32 @@ class TestPVConfigValidation:
         with pytest.raises(ValueError, match="Tilt"):
             PVConfig(capacity_kw=1.0, tilt=91.0)
 
+    def test_system_age_must_be_non_negative(self):
+        """system_age_years < 0 raises ValueError with 'non-negative' message."""
+        with pytest.raises(ValueError, match="non-negative"):
+            PVConfig(capacity_kw=4.0, system_age_years=-1.0)
+        with pytest.raises(ValueError, match="non-negative"):
+            PVConfig(capacity_kw=4.0, system_age_years=-0.001)
+
+    def test_degradation_rate_must_be_zero_to_one(self):
+        """degradation_rate_per_year outside [0, 1] raises ValueError with '0-1' message."""
+        with pytest.raises(ValueError, match="0-1"):
+            PVConfig(capacity_kw=4.0, degradation_rate_per_year=1.5)
+        with pytest.raises(ValueError, match="0-1"):
+            PVConfig(capacity_kw=4.0, degradation_rate_per_year=-0.1)
+
+    def test_system_age_valid_boundaries(self):
+        """Valid boundary values for system_age_years are accepted without error."""
+        PVConfig(capacity_kw=4.0, system_age_years=0.0)  # new system
+        PVConfig(capacity_kw=4.0, system_age_years=5.5)  # fractional years
+        PVConfig(capacity_kw=4.0, system_age_years=25.0)  # old system
+
+    def test_degradation_rate_valid_boundaries(self):
+        """Valid boundary values for degradation_rate_per_year are accepted without error."""
+        PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.0)   # no degradation
+        PVConfig(capacity_kw=4.0, degradation_rate_per_year=1.0)   # max rate
+        PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.005) # default rate
+
 
 class TestCreatePVSystem:
     """Test PV-002: pvlib PVSystem creation from config."""
