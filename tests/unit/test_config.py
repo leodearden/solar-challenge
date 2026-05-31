@@ -1967,3 +1967,61 @@ period:
             assert result is None
         finally:
             path.unlink()
+
+
+class TestCommunityConfigFrozenPicklable:
+    """Contract guard: full CommunityConfig object graph is frozen and picklable (step-11)."""
+
+    def _full_community_config(self) -> "CommunityConfig":
+        """Return a CommunityConfig that exercises every nested dataclass."""
+        cfg = _parse_community_config(
+            {
+                "sharing_mode": "community_battery",
+                "community_battery": {
+                    "capacity_kwh": 50.0,
+                    "max_charge_kw": 20.0,
+                    "max_discharge_kw": 20.0,
+                },
+                "billing": {
+                    "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
+                    "seg_rate_pence_per_kwh": 4.1,
+                },
+            }
+        )
+        assert cfg is not None
+        return cfg
+
+    def test_picklable_round_trip(self) -> None:
+        """CommunityConfig (with nested BatteryConfig + CommunityBillingConfig + TariffConfig)
+        round-trips through pickle with structural equality."""
+        import pickle
+
+        cfg = self._full_community_config()
+        restored = pickle.loads(pickle.dumps(cfg))
+        assert restored == cfg
+
+    def test_frozen_top_level(self) -> None:
+        """Assigning a new attribute on CommunityConfig raises FrozenInstanceError."""
+        import dataclasses
+
+        cfg = self._full_community_config()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.sharing_mode = "p2p"  # type: ignore[misc]
+
+    def test_frozen_nested_battery(self) -> None:
+        """BatteryConfig inside CommunityConfig is also frozen."""
+        import dataclasses
+
+        cfg = self._full_community_config()
+        assert cfg.community_battery is not None
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.community_battery.capacity_kwh = 99.0  # type: ignore[misc]
+
+    def test_frozen_nested_billing(self) -> None:
+        """CommunityBillingConfig inside CommunityConfig is also frozen."""
+        import dataclasses
+
+        cfg = self._full_community_config()
+        assert cfg.billing is not None
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.billing.seg_rate_pence_per_kwh = 0.0  # type: ignore[misc]
