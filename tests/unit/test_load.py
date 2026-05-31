@@ -322,12 +322,8 @@ class TestRichardsonpyIntegration:
         assert isinstance(profile, pd.Series)
         assert len(profile) == 1440
 
-    @pytest.mark.skipif(
-        not RICHARDSONPY_AVAILABLE,
-        reason="richardsonpy not installed"
-    )
     def test_richardsonpy_generates_valid_profile(self):
-        """When available, richardsonpy generates valid profile."""
+        """richardsonpy (now a hard dep) generates a valid profile."""
         config = LoadConfig(
             annual_consumption_kwh=3400.0,
             household_occupants=3,
@@ -342,3 +338,40 @@ class TestRichardsonpyIntegration:
         assert len(profile) == 1440
         assert (profile >= 0).all()
         assert profile.index.tz is not None
+
+
+class TestWindowedStochasticGeneration:
+    """Test windowed stochastic generation (task #13 FIX windowing)."""
+
+    def test_window_1day_calls_run_simulation_exactly_once(self, monkeypatch):
+        """1-day stochastic request triggers exactly 1 run_application_simulation call.
+
+        The original ElectricLoad-based code calls run_application_simulation
+        365 times regardless of the requested window. The windowed implementation
+        must call it exactly window_days times.
+        """
+        import richardsonpy.classes.appliance as _app_mod
+
+        call_count = [0]
+        _original = _app_mod.run_application_simulation
+
+        def _counting_wrapper(*args, **kwargs):
+            call_count[0] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
+
+        assert RICHARDSONPY_AVAILABLE is True, (
+            "richardsonpy must be a hard dependency so this path is always exercised"
+        )
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        generate_load_profile(config, start, end)
+
+        # Exactly ONE day simulated — not 365 (the full-year bug)
+        assert call_count[0] == 1, (
+            f"Expected 1 simulated day for a 1-day window, got {call_count[0]}"
+        )
