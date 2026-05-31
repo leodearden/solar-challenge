@@ -70,3 +70,31 @@ def test_readme_declares_agpl(project_root: Path) -> None:
     assert "(LICENSE)" in content, (
         "README.md ## License section must link to [LICENSE](LICENSE)"
     )
+
+
+def test_all_source_files_have_spdx_header(project_root: Path) -> None:
+    """Every *.py under src/solar_challenge/ must carry the SPDX identifier.
+
+    The token 'SPDX-License-Identifier: AGPL-3.0-or-later' must appear within
+    the first 3 lines of each file. This enforces a top-of-file header and
+    auto-covers any future module added to the package.
+    """
+    src_root = project_root / "src" / "solar_challenge"
+    source_files = sorted(src_root.rglob("*.py"))
+
+    # Sanity check: the package must have source files
+    assert source_files, f"No *.py files found under {src_root}"
+
+    SPDX_TOKEN = "SPDX-License-Identifier: AGPL-3.0-or-later"
+
+    missing: list[str] = []
+    for py_file in source_files:
+        lines = py_file.read_text(encoding="utf-8").splitlines()
+        first_three = "\n".join(lines[:3])
+        if SPDX_TOKEN not in first_three:
+            missing.append(str(py_file.relative_to(project_root)))
+
+    assert not missing, (
+        f"These source files are missing '{SPDX_TOKEN}' in their first 3 lines "
+        f"({len(missing)} file(s)):\n" + "\n".join(f"  {f}" for f in missing)
+    )
