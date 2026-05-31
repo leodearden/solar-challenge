@@ -294,12 +294,13 @@ def _try_richardsonpy_profile(
         lights = load_lighting_profile(filename=_path_light, index=0)
         wrapper = ElectricityProfile(appliances, lights)
 
-        # Simulate each day in the requested window — one call per day
+        # Simulate each day in the requested window — exactly one power_sim call
+        # per window day.  Loop count == window_days (the key windowing invariant).
         _timesteps_per_day = 144  # occupancy at 10-min resolution: 86400/600
 
         all_days_power: list[np.ndarray] = []
 
-        for i in range(window_days):
+        for i in range(window_days):  # exactly window_days iterations
             current_date = start_norm + pd.Timedelta(days=i)
             is_weekend = int(current_date.dayofweek) >= 5
             day_of_year = int(current_date.dayofyear)
