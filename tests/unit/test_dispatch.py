@@ -1821,7 +1821,13 @@ class TestDecideActionAcceptsGridChargeCtx:
     # --- TOUOptimizedStrategy ---
 
     def test_tou_with_ctx_same_as_without(self):
-        """TOUOptimized: decision identical with/without grid_charge_ctx."""
+        """TOUOptimized: charge_kw/discharge_kw unchanged; grid_charge_kw uses controller (α2).
+
+        In α the param was accept-and-ignore.  In α2 TOUOptimizedStrategy wires
+        the controller, so grid_charge_kw is now > 0 when a favourable ctx is
+        supplied.  charge_kw and discharge_kw remain byte-identical to the
+        no-ctx baseline.
+        """
         s = TOUOptimizedStrategy(peak_hours=[(17, 20)])
         with_ctx = s.decide_action(
             timestamp=self._TS,
@@ -1834,7 +1840,8 @@ class TestDecideActionAcceptsGridChargeCtx:
         without = self._baseline_tou()
         assert with_ctx.charge_kw == without.charge_kw
         assert with_ctx.discharge_kw == without.discharge_kw
-        assert with_ctx.grid_charge_kw == 0.0
+        # α2: TOU now grid-charges when a favourable ctx is supplied
+        assert with_ctx.grid_charge_kw > 0.0
 
     def test_tou_ctx_is_keyword_only(self):
         """TOUOptimized: passing grid_charge_ctx positionally raises TypeError."""
