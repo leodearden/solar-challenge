@@ -322,12 +322,8 @@ class TestRichardsonpyIntegration:
         assert isinstance(profile, pd.Series)
         assert len(profile) == 1440
 
-    @pytest.mark.skipif(
-        not RICHARDSONPY_AVAILABLE,
-        reason="richardsonpy not installed"
-    )
     def test_richardsonpy_generates_valid_profile(self):
-        """When available, richardsonpy generates valid profile."""
+        """richardsonpy (now a hard dep) generates a valid profile."""
         config = LoadConfig(
             annual_consumption_kwh=3400.0,
             household_occupants=3,
@@ -342,3 +338,190 @@ class TestRichardsonpyIntegration:
         assert len(profile) == 1440
         assert (profile >= 0).all()
         assert profile.index.tz is not None
+
+
+class TestWindowedStochasticGeneration:
+    """Test windowed stochastic generation (task #13 FIX windowing)."""
+
+    def test_window_1day_calls_run_simulation_exactly_once(self, monkeypatch):
+        """1-day stochastic request triggers exactly 1 run_application_simulation call.
+
+        The original ElectricLoad-based code calls run_application_simulation
+        365 times regardless of the requested window. The windowed implementation
+        must call it exactly window_days times.
+        """
+        import richardsonpy.classes.appliance as _app_mod
+
+        call_count = [0]
+        _original = _app_mod.run_application_simulation
+
+        def _counting_wrapper(*args, **kwargs):
+            call_count[0] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
+
+        assert RICHARDSONPY_AVAILABLE is True, (
+            "richardsonpy must be a hard dependency so this path is always exercised"
+        )
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        generate_load_profile(config, start, end)
+
+        # Exactly ONE day simulated — not 365 (the full-year bug)
+        assert call_count[0] == 1, (
+            f"Expected 1 simulated day for a 1-day window, got {call_count[0]}"
+        )
+
+    def test_window_3day_calls_run_simulation_exactly_three_times(self, monkeypatch):
+        """3-day stochastic request triggers exactly 3 run_application_simulation calls.
+
+        Ensures window scaling is proportional to the requested range, not pinned
+        to a constant (365 or otherwise).  Also checks structural invariants on
+        the returned Series.
+        """
+        import richardsonpy.classes.appliance as _app_mod
+
+        call_count = [0]
+        _original = _app_mod.run_application_simulation
+
+        def _counting_wrapper(*args, **kwargs):
+            call_count[0] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-23")  # 3 days, no DST transition
+
+        profile = generate_load_profile(config, start, end)
+
+        # Exactly THREE simulated days
+        assert call_count[0] == 3, (
+            f"Expected 3 simulated days for a 3-day window, got {call_count[0]}"
+        )
+
+        # Structural invariants
+        assert isinstance(profile, pd.Series)
+        assert len(profile) == 3 * 1440, (
+            f"Expected {3 * 1440} rows, got {len(profile)}"
+        )
+        assert isinstance(profile.index, pd.DatetimeIndex)
+        assert profile.index.tz is not None, "Index must be timezone-aware"
+        assert (profile >= 0).all(), "No negative power values expected"
+        assert profile.max() < 15.0, (
+            f"Peak power {profile.max():.2f} kW exceeds sane domestic bound of 15 kW"
+        )
+
+    def test_normalization_does_not_force_annual_demand_into_single_day(self):
+        """Stochastic 1-day energy must be close to Elexon 1-day energy.
+
+        Guards against the do_normalization landmine: if we accidentally passed
+        do_normalization=True to ElectricLoad on a 1-day window, it would scale
+        the output so its total equals the annual demand (~3400 kWh/day instead
+        of ~7-8 kWh/day).
+
+        Both stochastic and Elexon paths target the same seasonal daily energy:
+          annual/365 × SEASONAL_FACTORS[June=0.80] ≈ 7.45 kWh
+        so they should be within 35% of each other, and both within [2, 30] kWh.
+        """
+        config_stochastic = LoadConfig(
+            annual_consumption_kwh=3400.0, use_stochastic=True, seed=42
+        )
+        config_elexon = LoadConfig(
+            annual_consumption_kwh=3400.0, use_stochastic=False
+        )
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        profile_stochastic = generate_load_profile(config_stochastic, start, end)
+        profile_elexon = generate_load_profile(config_elexon, start, end)
+
+        stochastic_kwh = calculate_annual_consumption(profile_stochastic)
+        elexon_kwh = calculate_annual_consumption(profile_elexon)
+
+        # Both should be in a sane daily band
+        assert 2.0 <= stochastic_kwh <= 30.0, (
+            f"Stochastic daily energy {stochastic_kwh:.2f} kWh is outside "
+            f"sane [2, 30] kWh band — possible do_normalization mis-use"
+        )
+        assert 2.0 <= elexon_kwh <= 30.0, (
+            f"Elexon daily energy {elexon_kwh:.2f} kWh is outside [2, 30] kWh band"
+        )
+
+        # Stochastic energy should be within 35% of Elexon (both target same seasonal daily)
+        assert stochastic_kwh == pytest.approx(elexon_kwh, rel=0.35), (
+            f"Stochastic ({stochastic_kwh:.2f} kWh) deviates more than 35% "
+            f"from Elexon ({elexon_kwh:.2f} kWh)"
+        )
+
+    def test_window_crossing_spring_dst_counts_calendar_days(self, monkeypatch):
+        """3-calendar-day window spanning the spring DST change calls run_application_simulation 3 times.
+
+        UK spring forward: 2024-03-31 01:00 GMT → 02:00 BST.
+        The absolute timedelta from 2024-03-30 00:00 GMT to 2024-04-01 00:00 BST
+        is only 47 h (not 48 h), so int(timedelta.days) == 1 → window_days = 2
+        (the off-by-one bug).  Calendar-date arithmetic gives
+        (Apr 1 − Mar 30).days + 1 = 3, which is correct.
+        """
+        import richardsonpy.classes.appliance as _app_mod
+
+        call_count = [0]
+        _original = _app_mod.run_application_simulation
+
+        def _counting_wrapper(*args, **kwargs):
+            call_count[0] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        # 3-calendar-day window that crosses the UK spring-forward on 2024-03-31
+        start = pd.Timestamp("2024-03-30")
+        end = pd.Timestamp("2024-04-01")
+
+        profile = generate_load_profile(config, start, end, timezone="Europe/London")
+
+        # Must simulate exactly 3 calendar days, not 2 (the timedelta-based bug)
+        assert call_count[0] == 3, (
+            f"Expected 3 simulated days for a DST-crossing 3-calendar-day window, "
+            f"got {call_count[0]}"
+        )
+
+        # Profile must be structurally valid
+        assert isinstance(profile, pd.Series)
+        assert profile.index.tz is not None, "Index must be tz-aware"
+        assert (profile >= 0).all(), "No negative power values"
+
+    def test_richardsonpy_runtime_error_falls_back_to_elexon(self, monkeypatch):
+        """A runtime exception inside _simulate_stochastic_day falls back to Elexon.
+
+        With richardsonpy as a hard dependency the Elexon path is a *defensive*
+        fallback, not a missing-extra gate.  Any richardsonpy runtime error must
+        degrade gracefully to the deterministic profile instead of crashing the
+        simulation.
+
+        The returned profile must still be a valid 1-minute Series (Elexon shape).
+        """
+        import solar_challenge.load as load_module
+
+        def _always_raise(*args, **kwargs):
+            raise RuntimeError("Simulated richardsonpy internal failure")
+
+        monkeypatch.setattr(load_module, "_simulate_stochastic_day", _always_raise)
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        # Must NOT raise — must degrade to Elexon fallback
+        profile = generate_load_profile(config, start, end)
+
+        assert isinstance(profile, pd.Series), "Fallback must return a Series"
+        assert len(profile) == 1440, "Fallback must return a full 1-day profile"
+        assert (profile >= 0).all(), "Fallback profile must have no negative values"
+        assert profile.index.tz is not None, "Fallback profile index must be tz-aware"

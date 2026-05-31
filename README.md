@@ -22,7 +22,7 @@ More sophisticated power-sharing schemes are planned for future phases.
 
 - **pvlib-python**: PV generation modelling (BSD licensed)
 - **pandas**: Time series handling
-- **richardsonpy**: UK CREST-based stochastic load profiles (when implemented)
+- **richardsonpy**: UK CREST-based stochastic load profiles (windowed per-day simulation)
 - **PVGIS**: Solar irradiance data for Bristol (51.45°N, 2.58°W)
 
 ## Setup
@@ -58,11 +58,14 @@ More sophisticated power-sharing schemes are planned for future phases.
    python -c "import pvlib; import pandas; print('Setup OK')"
    ```
 
-4. (Optional) Install stochastic load profile support:
+4. (Optional) The `[stochastic]` extra is retained as a backward-compatibility alias
+   but is now empty — `richardsonpy` is installed automatically as a core dependency:
    ```bash
-   pip install "solar-challenge[stochastic]"
+   pip install "solar-challenge"          # includes richardsonpy
+   pip install "solar-challenge[stochastic]"  # same result; alias kept for compatibility
    ```
-   This installs `richardsonpy` for UK CREST-based stochastic household load profiles.
+   Stochastic UK CREST-based household load profiles are enabled by default.
+   Pass `use_stochastic=False` in `LoadConfig` to use the deterministic Elexon fallback.
 
 ## Running Tests
 
