@@ -11,13 +11,17 @@ if TYPE_CHECKING:
     from solar_challenge.ev import EVConfig
 
 
-# Try to import richardsonpy for stochastic load profiles
-# Use Any type since module may not be available
+# richardsonpy is a hard (non-optional) dependency since task #13.
+# RICHARDSONPY_AVAILABLE is kept for backward compatibility but is always True
+# after richardsonpy was promoted from the optional [stochastic] extra to
+# [project].dependencies.  The Elexon profile remains as a *defensive* fallback
+# for any richardsonpy runtime error — it is no longer the silent default when
+# the extra is absent.
 _richardsonpy_module: Any = None
 try:
     import richardsonpy as _rpy
     _richardsonpy_module = _rpy
-except ImportError:
+except ImportError:  # pragma: no cover — only hit in broken install environments
     pass
 RICHARDSONPY_AVAILABLE: bool = _richardsonpy_module is not None
 
@@ -43,14 +47,18 @@ class LoadConfig:
         household_occupants: Number of household occupants (1-5+).
             Affects consumption and profile shape.
         name: Optional identifier for the load profile
-        use_stochastic: Use richardsonpy stochastic model if available
+        use_stochastic: Use the windowed richardsonpy stochastic model (default True).
+            richardsonpy is a hard dependency so this path is always available.
+            Set False to force the deterministic Elexon Profile Class 1 shape.
         seed: Random seed for stochastic load generation (for reproducibility)
     """
 
     annual_consumption_kwh: Optional[float] = None
     household_occupants: int = 3  # Default UK average household size
     name: str = ""
-    use_stochastic: bool = True  # Prefer stochastic model if available
+    # use_stochastic: richardsonpy is a hard dep so True uses the windowed
+    # stochastic path by default; False forces the deterministic Elexon path.
+    use_stochastic: bool = True
     seed: Optional[int] = None  # Seed for reproducible stochastic profiles
 
     def __post_init__(self) -> None:
@@ -383,11 +391,14 @@ def generate_load_profile(
 ) -> pd.Series:
     """Generate domestic load profile.
 
-    Attempts to use richardsonpy for stochastic profiles if available and
-    configured. Falls back to Elexon Profile Class 1 shape otherwise.
+    Uses the windowed richardsonpy stochastic model when config.use_stochastic
+    is True (the default).  richardsonpy is a hard dependency so this path is
+    always available.  Falls back to the deterministic Elexon Profile Class 1
+    shape only when use_stochastic=False, or defensively if richardsonpy raises
+    a runtime error.
 
     Creates a 1-minute resolution load profile for the specified date range,
-    scaled to match the configured annual consumption.
+    scaled to match the configured annual consumption using seasonal factors.
 
     If an EV configuration is provided, EV charging load is added to the
     household base load.
