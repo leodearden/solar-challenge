@@ -31,20 +31,6 @@ INTEGRATION_FILES = [
     "tests/integration/test_ev_fleet.py",
 ]
 
-INTEGRATION_CLASS_NAMES = [
-    "TestPVGISTMY",
-    "TestSingleHomeSimulation",
-    "TestFleetSimulation",
-    "TestSelfConsumptionStrategy",
-    "TestTOUOptimizedStrategy",
-    "TestPeakShavingStrategy",
-    "TestStrategyComparison",
-    "TestDefaultStrategyBackwardCompatibility",
-    "TestTOUDispatchComparison",
-    "TestEconomy7TariffIntegration",
-    "TestFleetWithEVs",
-]
-
 
 class TestMarkerRegistration:
     """Verify that required pytest markers are registered."""
@@ -56,6 +42,7 @@ class TestMarkerRegistration:
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
+            timeout=120,
         )
         # ``pytest --markers`` always exits 0; just read the output.
         output = result.stdout
@@ -72,6 +59,7 @@ class TestMarkerRegistration:
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
+            timeout=120,
         )
         output = result.stdout
         assert "@pytest.mark.slow" in output, (
@@ -84,8 +72,46 @@ class TestIntegrationSuiteExcludedUnderNotSlow:
     """Verify that all integration test classes are deselected by ``-m 'not slow'``."""
 
     def test_integration_suite_excluded_under_not_slow(self):
-        """No integration test class should be collected under ``-m 'not slow'``."""
-        result = subprocess.run(
+        """No integration test should be collected under ``-m 'not slow'``.
+
+        This check is intentionally dynamic — it does not enumerate class names.
+        Instead it verifies that the unfiltered collection finds *something*
+        (positive control that imports work and tests exist), then asserts that
+        the ``not slow`` filtered collection finds nothing (exit code 5).
+        This prevents a vacuous pass when a collection error silently empties
+        the output, and avoids a hand-maintained allowlist that would miss a
+        newly added network-touching class.
+        """
+        # Positive control: collect WITHOUT filter — must succeed and find tests.
+        baseline = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                *INTEGRATION_FILES,
+            ],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert baseline.returncode == 0, (
+            "Unfiltered collection of integration files failed — check for "
+            f"import errors.\nstdout:\n{baseline.stdout}\nstderr:\n{baseline.stderr}"
+        )
+        # The baseline must actually find some tests; if it found none, the
+        # positive control is vacuous and something is wrong with the file list.
+        assert "no tests ran" not in baseline.stdout.lower(), (
+            "Unfiltered collection found no tests in integration files — "
+            "check that INTEGRATION_FILES is correct."
+        )
+
+        # Filtered run: collect WITH ``-m 'not slow'`` — should find nothing.
+        # pytest exit code 5 means "no tests collected", which is the expected
+        # outcome once every integration class is marked slow.
+        filtered = subprocess.run(
             [
                 sys.executable,
                 "-m",
@@ -99,19 +125,28 @@ class TestIntegrationSuiteExcludedUnderNotSlow:
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
+            timeout=120,
         )
-        # pytest exits 5 ("no tests collected") when everything is filtered out.
-        # That is the *expected* outcome — do NOT assert on returncode.
-        output = result.stdout
-        for class_name in INTEGRATION_CLASS_NAMES:
-            assert class_name not in output, (
-                f"Integration class {class_name!r} was still collected under "
-                "``-m 'not slow'`` — add ``@pytest.mark.slow`` to that class."
-            )
+        assert filtered.returncode == 5, (
+            "Expected exit code 5 (no tests collected) under ``-m 'not slow'`` "
+            f"but got {filtered.returncode}. One or more integration test "
+            "classes is missing the ``@pytest.mark.slow`` decorator.\n"
+            f"stdout:\n{filtered.stdout}\nstderr:\n{filtered.stderr}"
+        )
 
 
 class TestNetworkedUnitClassesExcludedButPureKept:
-    """Verify selective ``slow`` marking in test_home.py and test_fleet.py."""
+    """Verify selective ``slow`` marking in test_home.py and test_fleet.py.
+
+    NOTE — hand-maintained allowlists: NETWORKED_UNIT_CLASSES and PURE_UNIT_CLASSES
+    are enumerated here rather than derived dynamically because test_home.py and
+    test_fleet.py mix slow and fast classes in the same file, so a whole-file
+    "count must be zero" assertion is not possible.  The trade-off is that a newly
+    added network-touching class that lacks ``@pytest.mark.slow`` will NOT be
+    detected unless someone also adds it to NETWORKED_UNIT_CLASSES.  Reviewers
+    adding new simulation-driven test classes to these files should update the
+    list below to keep the guard effective.
+    """
 
     # Network-touching classes in the unit suite — must be deselected.
     NETWORKED_UNIT_CLASSES = [
@@ -126,7 +161,8 @@ class TestNetworkedUnitClassesExcludedButPureKept:
     # Pure-logic classes — must remain selected (guard against over-marking).
     PURE_UNIT_CLASSES = [
         "TestCalculateSummary",  # test_home.py
-        "TestFleetSummary",  # test_fleet.py
+        "TestHeatPumpConfig",    # test_home.py — pure config construction, no network
+        "TestFleetSummary",      # test_fleet.py
     ]
 
     def test_networked_unit_classes_excluded_but_pure_kept(self):
@@ -146,6 +182,7 @@ class TestNetworkedUnitClassesExcludedButPureKept:
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
+            timeout=120,
         )
         output = result.stdout
 
