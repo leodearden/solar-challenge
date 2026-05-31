@@ -2017,3 +2017,25 @@ def _parse_community_config(
         )
     except ValueError as exc:
         raise ConfigurationError(str(exc)) from exc
+
+
+def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
+    """Load a community configuration from a YAML or JSON file.
+
+    Reads the file with :func:`load_config` and parses the top-level
+    ``community:`` block, if present.  Returns ``None`` when the file
+    contains no ``community:`` key (e.g. a plain fleet/scenario document).
+
+    Args:
+        path: Path to a ``.yaml``, ``.yml``, or ``.json`` configuration file.
+
+    Returns:
+        :class:`CommunityConfig` when a ``community:`` block is present;
+        ``None`` otherwise.
+
+    Raises:
+        ConfigurationError: If the file cannot be read or the community block
+            is invalid.
+    """
+    data = load_config(path)
+    return _parse_community_config(data.get("community"))
