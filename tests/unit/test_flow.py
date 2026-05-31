@@ -656,3 +656,191 @@ class TestSimulateTimestepTouGridCharge:
         assert result.grid_export == pytest.approx(0.05)
         assert result.grid_import == pytest.approx(0.0)
         assert result.self_consumption == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# step-3: RED tests for simulate_timestep grid-charge strategy path
+# ---------------------------------------------------------------------------
+
+class TestSimulateTimestepGridCharge:
+    """Strategy-path grid-charge tests using _RecordingStrategy stub.
+
+    Tests (a)-(f) all fail on current code because simulate_timestep lacks
+    the tariff keyword argument.  Test (c-i) is the exception — it passes on
+    current code (no tariff given, ctx stays None).
+    """
+
+    def test_accepts_tariff_kwarg(
+        self,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+        grid_charge_battery: Battery,
+    ) -> None:
+        """(a) simulate_timestep accepts a tariff kwarg without raising."""
+        stub = _RecordingStrategy()
+        simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestep_minutes=60,
+            timestamp=off_peak_ts.to_pydatetime(),
+            strategy=stub,
+            tariff=economy7_tariff,
+        )
+
+    def test_context_built_and_passed(
+        self,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+        grid_charge_battery: Battery,
+    ) -> None:
+        """(b) GridChargeContext is built and forwarded to decide_action."""
+        stub = _RecordingStrategy()
+        simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestep_minutes=60,
+            timestamp=off_peak_ts.to_pydatetime(),
+            strategy=stub,
+            tariff=economy7_tariff,
+        )
+        ctx = stub.received_ctx
+        assert ctx is not None, "grid_charge_ctx should have been forwarded to strategy"
+        assert ctx.current_rate == pytest.approx(0.09)
+        assert ctx.peak_rate == pytest.approx(0.25)
+        assert ctx.is_cheap_period is True
+        assert ctx.target_soc_fraction == pytest.approx(0.9)
+        assert ctx.max_charge_kw == pytest.approx(2.5)
+        assert ctx.charge_efficiency == pytest.approx(0.975)
+        assert ctx.round_trip_efficiency == pytest.approx(0.975 * 0.975)
+
+    def test_ctx_none_when_tariff_omitted(
+        self, grid_charge_battery: Battery, off_peak_ts: pd.Timestamp
+    ) -> None:
+        """(c-i) tariff not provided → grid_charge_ctx is None."""
+        stub = _RecordingStrategy()
+        simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestep_minutes=60,
+            timestamp=off_peak_ts.to_pydatetime(),
+            strategy=stub,
+        )
+        assert stub.received_ctx is None
+
+    def test_ctx_none_when_grid_charging_disabled(
+        self, economy7_tariff: TariffConfig, off_peak_ts: pd.Timestamp
+    ) -> None:
+        """(c-ii) grid_charging=None on battery → grid_charge_ctx is None."""
+        stub = _RecordingStrategy()
+        battery = Battery(BatteryConfig.default_5kwh())  # grid_charging=None
+        simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=battery,
+            timestep_minutes=60,
+            timestamp=off_peak_ts.to_pydatetime(),
+            strategy=stub,
+            tariff=economy7_tariff,
+        )
+        assert stub.received_ctx is None
+
+    def test_grid_charge_kw_executed_with_split_accounting(
+        self,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+        grid_charge_battery: Battery,
+    ) -> None:
+        """(d) Stub returns grid_charge_kw=1.0; gen=demand=0: split formulas apply."""
+        stub = _RecordingStrategy(grid_charge_kw=1.0)
+        result = simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestep_minutes=60,
+            timestamp=off_peak_ts.to_pydatetime(),
+            strategy=stub,
+            tariff=economy7_tariff,
+        )
+        # grid_charge_stored = battery.charge(1.0, 60) = 1.0 * 0.975 = 0.975 kWh
+        assert result.battery_charge > 0
+        # pv_charge_stored=0 → battery_charge == grid_charge_stored == grid_import
+        assert result.battery_charge == pytest.approx(result.grid_import)
+        assert result.grid_export == pytest.approx(0.0)
+        assert validate_energy_balance(result)
+
+    def test_split_formula_discharge_and_grid_charge(
+        self, economy7_tariff: TariffConfig, off_peak_ts: pd.Timestamp
+    ) -> None:
+        """(e) Discharge step + grid-charge step; split formula + balance verified."""
+        config = BatteryConfig(
+            capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5,
+            grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+        )
+        battery = Battery(config, initial_soc_kwh=3.0)
+
+        # Step 1: stub discharges 1.0 kW to cover a shortfall
+        stub_dis = _RecordingStrategy(discharge_kw=1.0)
+        result_dis = simulate_timestep(
+            generation_kw=0.0, demand_kw=2.0, battery=battery,
+            timestep_minutes=60,
+            timestamp=off_peak_ts.to_pydatetime(),
+            strategy=stub_dis, tariff=economy7_tariff,
+        )
+        shortfall = 2.0 * (60 / 60)   # demand_kwh when gen=0
+        discharge = result_dis.battery_discharge
+        assert result_dis.grid_import == pytest.approx(
+            max(0.0, shortfall - discharge) + 0.0  # no grid charging in this step
+        )
+        assert validate_energy_balance(result_dis)
+
+        # Step 2: stub charges 1.0 kW from grid, no gen/demand
+        stub_gc = _RecordingStrategy(grid_charge_kw=1.0)
+        result_gc = simulate_timestep(
+            generation_kw=0.0, demand_kw=0.0, battery=battery,
+            timestep_minutes=60,
+            timestamp=off_peak_ts.to_pydatetime(),
+            strategy=stub_gc, tariff=economy7_tariff,
+        )
+        grid_charge_stored = result_gc.battery_charge  # pv_charge=0
+        assert result_gc.grid_import == pytest.approx(
+            max(0.0, 0.0 - 0.0) + grid_charge_stored
+        )
+        assert validate_energy_balance(result_gc)
+
+        # Multi-step balance sweep
+        for decision_args, gen, dem in [
+            ({"charge_kw": 1.0}, 2.0, 1.0),
+            ({"discharge_kw": 0.5}, 0.0, 1.5),
+            ({"grid_charge_kw": 0.8}, 0.0, 0.0),
+            ({}, 1.0, 1.0),
+        ]:
+            stub_i = _RecordingStrategy(**decision_args)
+            r = simulate_timestep(
+                generation_kw=gen, demand_kw=dem, battery=battery,
+                timestep_minutes=60,
+                timestamp=off_peak_ts.to_pydatetime(),
+                strategy=stub_i, tariff=economy7_tariff,
+            )
+            assert validate_energy_balance(r), \
+                f"Balance failed for decision={decision_args}, gen={gen}, dem={dem}"
+
+    def test_backward_compat_bit_identical(self) -> None:
+        """(f) tariff=None / omitted / grid_charging=None all produce identical results."""
+        config = BatteryConfig.default_5kwh()
+        bat1 = Battery(config)
+        bat2 = Battery(config)
+
+        result_omit = simulate_timestep(
+            generation_kw=3.0, demand_kw=1.0, battery=bat1, timestep_minutes=60
+        )
+        result_none = simulate_timestep(
+            generation_kw=3.0, demand_kw=1.0, battery=bat2, timestep_minutes=60,
+            tariff=None,
+        )
+        assert result_none.battery_charge == pytest.approx(result_omit.battery_charge)
+        assert result_none.grid_export == pytest.approx(result_omit.grid_export)
+        assert result_none.grid_import == pytest.approx(result_omit.grid_import)
+        assert result_none.self_consumption == pytest.approx(result_omit.self_consumption)
