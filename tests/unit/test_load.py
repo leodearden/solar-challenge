@@ -416,3 +416,45 @@ class TestWindowedStochasticGeneration:
         assert profile.max() < 15.0, (
             f"Peak power {profile.max():.2f} kW exceeds sane domestic bound of 15 kW"
         )
+
+    def test_normalization_does_not_force_annual_demand_into_single_day(self):
+        """Stochastic 1-day energy must be close to Elexon 1-day energy.
+
+        Guards against the do_normalization landmine: if we accidentally passed
+        do_normalization=True to ElectricLoad on a 1-day window, it would scale
+        the output so its total equals the annual demand (~3400 kWh/day instead
+        of ~7-8 kWh/day).
+
+        Both stochastic and Elexon paths target the same seasonal daily energy:
+          annual/365 × SEASONAL_FACTORS[June=0.80] ≈ 7.45 kWh
+        so they should be within 35% of each other, and both within [2, 30] kWh.
+        """
+        config_stochastic = LoadConfig(
+            annual_consumption_kwh=3400.0, use_stochastic=True, seed=42
+        )
+        config_elexon = LoadConfig(
+            annual_consumption_kwh=3400.0, use_stochastic=False
+        )
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        profile_stochastic = generate_load_profile(config_stochastic, start, end)
+        profile_elexon = generate_load_profile(config_elexon, start, end)
+
+        stochastic_kwh = calculate_annual_consumption(profile_stochastic)
+        elexon_kwh = calculate_annual_consumption(profile_elexon)
+
+        # Both should be in a sane daily band
+        assert 2.0 <= stochastic_kwh <= 30.0, (
+            f"Stochastic daily energy {stochastic_kwh:.2f} kWh is outside "
+            f"sane [2, 30] kWh band — possible do_normalization mis-use"
+        )
+        assert 2.0 <= elexon_kwh <= 30.0, (
+            f"Elexon daily energy {elexon_kwh:.2f} kWh is outside [2, 30] kWh band"
+        )
+
+        # Stochastic energy should be within 35% of Elexon (both target same seasonal daily)
+        assert stochastic_kwh == pytest.approx(elexon_kwh, rel=0.35), (
+            f"Stochastic ({stochastic_kwh:.2f} kWh) deviates more than 35% "
+            f"from Elexon ({elexon_kwh:.2f} kWh)"
+        )
