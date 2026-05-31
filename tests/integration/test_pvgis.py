@@ -10,6 +10,7 @@ from solar_challenge.location import Location
 from solar_challenge.weather import get_tmy_data, validate_irradiance_data
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 class TestPVGISTMY:
     """Test PVGIS TMY data retrieval."""

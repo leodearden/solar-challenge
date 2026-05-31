@@ -19,6 +19,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 class TestTOUDispatchComparison:
     """Test TOU-optimized dispatch vs default greedy dispatch."""

@@ -20,6 +20,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 class TestFleetSimulation:
     """Test VAL-006: Integration test for fleet simulation."""
