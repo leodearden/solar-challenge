@@ -389,3 +389,153 @@ class TestFleetRunCommunityCLI:
             f"Expected community import ({community_import:.2f}) < "
             f"unshared import ({unshared_import:.2f})"
         )
+
+
+class TestFleetRunNoCommunityPath:
+    """Tests for the community-LESS path and guard against report-without-block.
+
+    Verifies the gate: community section is absent, fleet summary is
+    byte-stable, and --community-report warns + writes nothing when no
+    community: block is present.
+    """
+
+    @pytest.fixture
+    def plain_scenario(self, tmp_path: Path) -> Path:
+        """Write a minimal fleet YAML with NO community: block."""
+        content = """
+name: Plain Fleet (no community)
+
+location:
+  latitude: 51.45
+  longitude: -2.58
+  timezone: Europe/London
+  altitude: 11.0
+
+homes:
+  - name: "Home-1"
+    pv:
+      capacity_kw: 4.0
+    load:
+      annual_consumption_kwh: 3000.0
+      use_stochastic: false
+
+  - name: "Home-2"
+    pv:
+      capacity_kw: 3.0
+    load:
+      annual_consumption_kwh: 3500.0
+      use_stochastic: false
+"""
+        path = tmp_path / "plain_fleet.yaml"
+        path.write_text(content)
+        return path
+
+    def test_no_community_block_exits_zero(
+        self, monkeypatch: pytest.MonkeyPatch, plain_scenario: Path
+    ) -> None:
+        """fleet run on plain config: exit code 0."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        result = runner.invoke(
+            app,
+            ["fleet", "run", str(plain_scenario), "--sequential",
+             "--start", "2024-06-21", "--end", "2024-06-21"],
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_no_community_section_in_stdout(
+        self, monkeypatch: pytest.MonkeyPatch, plain_scenario: Path
+    ) -> None:
+        """fleet run on plain config does NOT print a community section."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        result = runner.invoke(
+            app,
+            ["fleet", "run", str(plain_scenario), "--sequential",
+             "--start", "2024-06-21", "--end", "2024-06-21"],
+        )
+        assert result.exit_code == 0
+        # "Community Sharing" is the rich Table title; should be absent
+        assert "Community Sharing" not in result.output
+
+    def test_fleet_summary_additive_only(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Fleet summary lines are the same with and without a community block."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+
+        # Build a minimal homes list (same for both runs)
+        homes_yaml = """
+homes:
+  - name: "Home-1"
+    pv:
+      capacity_kw: 4.0
+    load:
+      annual_consumption_kwh: 3000.0
+      use_stochastic: false
+  - name: "Home-2"
+    pv:
+      capacity_kw: 0.5
+    load:
+      annual_consumption_kwh: 5000.0
+      use_stochastic: false
+
+location:
+  latitude: 51.45
+  longitude: -2.58
+  timezone: Europe/London
+"""
+        plain_path = tmp_path / "fleet_plain.yaml"
+        plain_path.write_text(homes_yaml)
+
+        community_yaml = homes_yaml + """
+community:
+  sharing_mode: p2p
+"""
+        community_path = tmp_path / "fleet_community.yaml"
+        community_path.write_text(community_yaml)
+
+        plain_result = runner.invoke(
+            app,
+            ["fleet", "run", str(plain_path), "--sequential",
+             "--start", "2024-06-21", "--end", "2024-06-21"],
+        )
+        community_result = runner.invoke(
+            app,
+            ["fleet", "run", str(community_path), "--sequential",
+             "--start", "2024-06-21", "--end", "2024-06-21"],
+        )
+        assert plain_result.exit_code == 0
+        assert community_result.exit_code == 0
+
+        # The community run's stdout should START with the same fleet table
+        # (community section is only appended, never interleaved)
+        assert plain_result.output in community_result.output, (
+            "Fleet summary was modified by community wiring — "
+            "expected it to appear unchanged at the start of the community run output.\n"
+            f"Plain output:\n{plain_result.output}\n\n"
+            f"Community output:\n{community_result.output}"
+        )
+
+    def test_report_without_block_warns_and_skips(
+        self, monkeypatch: pytest.MonkeyPatch, plain_scenario: Path, tmp_path: Path
+    ) -> None:
+        """--community-report with no community: block warns and does NOT write file."""
+        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
+        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
+        report_path = tmp_path / "should_not_exist.md"
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", str(plain_scenario), "--sequential",
+                "--start", "2024-06-21", "--end", "2024-06-21",
+                "--community-report", str(report_path),
+            ],
+        )
+        assert result.exit_code == 0
+        assert not report_path.exists(), "Report file should NOT be written without community block"
+        # A warning must appear in stdout
+        assert "community" in result.output.lower() or "warning" in result.output.lower(), (
+            f"Expected a warning mentioning community, got:\n{result.output}"
+        )
