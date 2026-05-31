@@ -556,6 +556,30 @@ class TestJobManagerShutdown:
         # Just verify it doesn't crash
         assert True
 
+    def test_shutdown_all_managers_shuts_down_executors(self) -> None:
+        """Test that shutdown_all_managers() shuts down all live executors."""
+        import solar_challenge.web.jobs as jobs_mod
+
+        jm1 = JobManager(max_workers=1)
+        jm2 = JobManager(max_workers=1)
+
+        jobs_mod.shutdown_all_managers()
+
+        # After shutdown, submitting a callable to either executor should raise.
+        with pytest.raises(RuntimeError):
+            jm1._executor.submit(lambda: None)
+        with pytest.raises(RuntimeError):
+            jm2._executor.submit(lambda: None)
+
+    def test_shutdown_all_managers_is_idempotent(self) -> None:
+        """Test that calling shutdown_all_managers() twice does not raise."""
+        import solar_challenge.web.jobs as jobs_mod
+
+        JobManager(max_workers=1)
+
+        jobs_mod.shutdown_all_managers()
+        jobs_mod.shutdown_all_managers()  # must not raise
+
 
 class TestRecoverStaleJobs:
     """Tests for recover_stale_jobs on startup."""
