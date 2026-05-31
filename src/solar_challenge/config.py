@@ -366,6 +366,25 @@ class DispatchStrategyConfig:
                 )
 
 
+@dataclass(frozen=True)
+class GridChargeConfig:
+    """Configuration for grid-charging (battery arbitrage) mode.
+
+    Attributes:
+        target_soc_fraction: Target state-of-charge to reach via grid charging,
+            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
+    """
+
+    target_soc_fraction: float = 0.9
+
+    def __post_init__(self) -> None:
+        """Validate grid-charge configuration."""
+        if not (0 < self.target_soc_fraction <= 1):
+            raise ConfigurationError(
+                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
+            )
+
+
 @dataclass
 class FleetDistributionConfig:
     """Configuration for generating a fleet from distributions.
@@ -608,12 +627,25 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
     if "dispatch_strategy" in data:
         dispatch_strategy = _parse_dispatch_strategy_config(data["dispatch_strategy"])
 
+    # Parse grid-charging config if present
+    grid_charging = None
+    if "grid_charging" in data and data["grid_charging"] is not None:
+        gc = data["grid_charging"]
+        if not isinstance(gc, dict):
+            raise ConfigurationError(
+                f"grid_charging must be a mapping, got {type(gc).__name__}"
+            )
+        grid_charging = GridChargeConfig(
+            target_soc_fraction=gc.get("target_soc_fraction", 0.9)
+        )
+
     return BatteryConfig(
         capacity_kwh=data.get("capacity_kwh", 5.0),
         max_charge_kw=data.get("max_charge_kw", 2.5),
         max_discharge_kw=data.get("max_discharge_kw", 2.5),
         name=data.get("name", ""),
         dispatch_strategy=dispatch_strategy,
+        grid_charging=grid_charging,
     )
 
 
