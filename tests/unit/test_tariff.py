@@ -261,6 +261,21 @@ class TestTariffPeriodMidnightCrossing:
         # Just before end
         assert period.matches_time(pd.Timestamp("2024-01-15 07:29:00")) is True
 
+    def test_full_day_00_00_matches_all_times(self):
+        """TariffPeriod("00:00","00:00") is a full-24h period covering every minute.
+
+        Characterisation test: when start==end=="00:00", matches_time routes to
+        the midnight-crossing else-branch (`t >= start or t < end`), which is
+        `t >= 00:00 or t < 00:00` == True for all t.  This is the mechanism
+        flat_rate() relies on after the fix (end_time changed from "23:59" to
+        "00:00").  The test passes before and after the fix — it documents an
+        already-correct invariant of matches_time.
+        """
+        period = TariffPeriod(start_time="00:00", end_time="00:00", rate_per_kwh=0.20)
+        assert period.matches_time(pd.Timestamp("2024-01-15 00:00:00")) is True
+        assert period.matches_time(pd.Timestamp("2024-01-15 12:00:00")) is True
+        assert period.matches_time(pd.Timestamp("2024-01-15 23:59:00")) is True
+
 
 class TestTariffConfigBasics:
     """Test basic TariffConfig functionality."""
@@ -380,6 +395,33 @@ class TestTariffConfigFlatRate:
         tariff = TariffConfig.flat_rate(0.20)
         assert "0.20" in tariff.name
         assert "Flat rate" in tariff.name
+
+    def test_flat_rate_covers_2359_boundary(self):
+        """flat_rate tariff covers 23:59:00 (last minute of the day).
+
+        RED driver: TariffConfig.flat_rate() used end_time="23:59" (exclusive),
+        so get_rate(23:59:00) raised ValueError because 23:59:00 < 23:59:00 is
+        False.  The fix changes end_time to "00:00" (midnight-crossing period
+        with start==end, covering every minute including 23:59:00).
+        """
+        tariff = TariffConfig.flat_rate(0.20)
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 23:59:00")) == 0.20
+
+    def test_flat_rate_full_day_1min_no_gap(self):
+        """calculate_bill over a full-day 1-min series raises no ValueError.
+
+        RED driver: the 23:59:00 step is outside the period when end_time="23:59",
+        so calculate_bill raises on a 1440-step 00:00-23:59 series.
+        After the fix the series prices cleanly and the total equals
+        1440 * 1.0 kWh * £0.20/kWh.
+        """
+        idx = pd.date_range("2024-01-15 00:00", "2024-01-15 23:59", freq="min")
+        assert len(idx) == 1440
+        energy = pd.Series(1.0, index=idx)
+        tariff = TariffConfig.flat_rate(0.20)
+        # Must not raise ValueError; total = 1440 * 0.20 = 288.00
+        result = calculate_bill(energy, tariff)
+        assert result == pytest.approx(1440 * 0.20)
 
 
 class TestTariffConfigEconomy7:

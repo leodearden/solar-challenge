@@ -139,55 +139,6 @@ class CommunityResults:
 
 
 # ---------------------------------------------------------------------------
-# _safe_calculate_bill  (workaround for tariff.py flat_rate end_time="23:59")
-# ---------------------------------------------------------------------------
-
-def _safe_calculate_bill(energy_kwh: pd.Series, tariff: TariffConfig) -> float:
-    """Calculate bill, delegating to :func:`~solar_challenge.tariff.calculate_bill`.
-
-    In the common case (no period-boundary timestamps) this is a thin
-    delegation to ``calculate_bill`` so any future standing-charge,
-    minimum-charge, or rounding logic added there is automatically inherited.
-
-    Adds a per-timestamp fallback for timestamps that fall in known
-    period-boundary gaps: :meth:`TariffConfig.flat_rate` uses
-    ``end_time="23:59"`` (exclusive), so ``23:59:00`` in 1-minute simulation
-    data is not covered.  When ``calculate_bill`` raises :exc:`ValueError`
-    the function retries each step individually, substituting
-    ``timestamp − 1 s`` for any that still fail.
-
-    Parameters
-    ----------
-    energy_kwh:
-        Time-series of energy in kWh (must have a ``DatetimeIndex``).
-    tariff:
-        Tariff configuration used to look up per-timestep rates.
-
-    Returns
-    -------
-    float
-        Total bill cost in £.
-    """
-    try:
-        return calculate_bill(energy_kwh, tariff)
-    except ValueError:
-        # At least one timestamp is outside all tariff periods (e.g. 23:59:00
-        # with flat_rate's exclusive end_time).  Price each step individually,
-        # falling back 1 s for any timestamp that still fails.
-        total_cost = 0.0
-        for timestamp, energy in energy_kwh.items():
-            try:
-                rate = tariff.get_rate(timestamp)
-            except ValueError:
-                # 1-second lookback: the preceding second is inside the period
-                # and carries the same rate (semantically correct for a
-                # flat-rate period whose boundary falls at a minute mark).
-                rate = tariff.get_rate(timestamp - pd.Timedelta(seconds=1))
-            total_cost += energy * rate
-        return total_cost
-
-
-# ---------------------------------------------------------------------------
 # _price_grid_flows
 # ---------------------------------------------------------------------------
 
@@ -246,13 +197,7 @@ def _price_grid_flows(
         dt_h = 1.0 / 60.0
 
     # Import cost: per-timestep TOU-aware pricing via the canonical loop.
-    # Use a safe wrapper: TariffConfig.flat_rate() defines end_time="23:59"
-    # (exclusive), so the 23:59:00 timestamp in 1-minute simulation data falls
-    # outside the period.  The wrapper falls back to the previous second so the
-    # 23:59 minute is priced at the same rate as 23:58 — semantically correct
-    # for a flat-rate period.  For non-boundary timestamps the behaviour is
-    # identical to calculate_bill.
-    import_cost_gbp: float = _safe_calculate_bill(import_kw * dt_h, tariff)
+    import_cost_gbp: float = calculate_bill(import_kw * dt_h, tariff)
 
     # Export revenue: flat SEG rate → sum kWh first, then price once (exact).
     export_energy_kwh: float = float((export_kw * dt_h).sum())
