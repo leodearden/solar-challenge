@@ -174,6 +174,8 @@ def simulate_timestep(
     timestep_minutes: float = 1.0,
     timestamp: Optional[datetime] = None,
     strategy: Optional[DispatchStrategy] = None,
+    *,
+    tariff: Optional[TariffConfig] = None,
 ) -> EnergyFlowResult:
     """Simulate energy flow for a single timestep.
 
@@ -205,21 +207,26 @@ def simulate_timestep(
     excess_kwh = max(0.0, generation_kwh - demand_kwh)
     shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
 
-    # Initialize battery-related values
-    battery_charge_kwh = 0.0
+    # Initialize battery-related values (split-source tracking, PRD §3.1)
+    pv_charge_stored_kwh = 0.0
+    grid_charge_stored_kwh = 0.0
     battery_discharge_kwh = 0.0
     battery_soc = 0.0
 
     if battery is not None:
-        # Use strategy to decide battery action (default to self-consumption)
         if strategy is None:
             strategy = SelfConsumptionStrategy()
 
-        # Use default timestamp if not provided
         if timestamp is None:
-            timestamp = datetime(1970, 1, 1)  # Epoch
+            timestamp = datetime(1970, 1, 1)
 
-        # Get dispatch decision from strategy
+        # Build grid-charge context when both tariff and grid_charging are configured
+        grid_charge_ctx = (
+            _build_grid_charge_context(battery, tariff, pd.Timestamp(timestamp))
+            if tariff is not None and battery.config.grid_charging is not None
+            else None
+        )
+
         decision = strategy.decide_action(
             timestamp=timestamp,
             generation_kw=generation_kw,
@@ -227,28 +234,34 @@ def simulate_timestep(
             battery_soc_kwh=battery.soc_kwh,
             battery_capacity_kwh=battery.config.capacity_kwh,
             timestep_minutes=timestep_minutes,
+            grid_charge_ctx=grid_charge_ctx,
         )
 
-        # Execute battery charge/discharge based on strategy decision
-        if decision.charge_kw > 0:
-            battery_charge_kwh = battery.charge(decision.charge_kw, timestep_minutes)
-
-        if decision.discharge_kw > 0:
-            battery_discharge_kwh = battery.discharge(decision.discharge_kw, timestep_minutes)
-
+        # Split-source charge/discharge execution (PRD §3.1)
+        pv_charge_stored_kwh = (
+            battery.charge(decision.charge_kw, timestep_minutes)
+            if decision.charge_kw > 0 else 0.0
+        )
+        grid_charge_stored_kwh = (
+            battery.charge(decision.grid_charge_kw, timestep_minutes)
+            if decision.grid_charge_kw > 0 else 0.0
+        )
+        battery_discharge_kwh = (
+            battery.discharge(decision.discharge_kw, timestep_minutes)
+            if decision.discharge_kw > 0 else 0.0
+        )
         battery_soc = battery.soc_kwh
 
+    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
+
     # Self-consumption: direct PV consumption + battery discharge (capped at demand)
-    # Battery discharge represents PV energy stored earlier and consumed later
     direct_consumption_kwh = min(generation_kwh, demand_kwh)
     self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
 
-    # Calculate grid flows
-    # Export = excess - battery_charged
-    grid_export_kwh = max(0.0, excess_kwh - battery_charge_kwh)
-
-    # Import = shortfall - battery_discharged
-    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh)
+    # Split-source grid flows (PRD §3.1):
+    # Only PV charge reduces export; grid charge adds to import
+    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
+    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
 
     return EnergyFlowResult(
         generation=generation_kwh,
