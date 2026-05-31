@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Validation and sanity checks for simulation results.
 
 Provides validation functions for PV generation values, consumption patterns,

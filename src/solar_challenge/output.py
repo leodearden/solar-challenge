@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Output and reporting functions for simulation results."""
 
 from dataclasses import dataclass

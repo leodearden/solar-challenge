@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Battery storage configuration and modelling."""
 
 from dataclasses import dataclass

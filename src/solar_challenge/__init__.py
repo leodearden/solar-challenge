@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Solar Challenge Energy Flow Simulator.
 
 A simulation toolkit for modelling domestic PV and battery systems

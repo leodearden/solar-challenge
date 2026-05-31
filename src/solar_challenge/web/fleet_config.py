@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Helper module for fleet configuration in the web dashboard.
 
 Provides utilities for sampling distributions, converting form data to

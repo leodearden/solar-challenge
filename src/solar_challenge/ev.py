@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Electric vehicle charging configuration and load profile generation."""
 
 from dataclasses import dataclass

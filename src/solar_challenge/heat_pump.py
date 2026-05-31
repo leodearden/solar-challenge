@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Heat pump configuration and modelling."""
 
 from dataclasses import dataclass

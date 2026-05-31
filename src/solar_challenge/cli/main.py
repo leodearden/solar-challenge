@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Main CLI application for Solar Challenge."""
 
 from typing import Annotated, Optional

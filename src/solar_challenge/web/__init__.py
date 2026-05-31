@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Solar Challenge Web Dashboard.
 
 A web-based dashboard for visualising solar PV and battery simulation results,

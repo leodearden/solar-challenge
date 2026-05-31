@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Single home simulation combining PV, battery, and load."""
 
 from dataclasses import dataclass

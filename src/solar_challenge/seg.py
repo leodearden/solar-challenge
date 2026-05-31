@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Smart Export Guarantee (SEG) tariff configuration and revenue calculation."""
 
 from dataclasses import dataclass
