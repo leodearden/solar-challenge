@@ -16,7 +16,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 
 class TestHomeConfigBasics:
@@ -129,6 +129,83 @@ class TestSimulationResults:
         assert "generation_kw" in df.columns
         assert "demand_kw" in df.columns
         assert "battery_soc_kwh" in df.columns
+
+
+class TestSimulateHomeSEGPricing:
+    """Test that simulate_home prices export at SEG rate when seg_tariff is set."""
+
+    @pytest.fixture
+    def seg_home_config(self):
+        """HomeConfig with flat import tariff + Octopus SEG tariff.
+
+        Uses start_time==end_time=="00:00" to create a period that crosses
+        midnight and covers all 1440 minutes of the day (matches_time returns
+        True for time_of_day >= 00:00 OR time_of_day < 00:00 == always True).
+        """
+        flat_period = TariffPeriod(
+            start_time="00:00",
+            end_time="00:00",  # Crosses midnight — covers the full day
+            rate_per_kwh=0.25,
+            name="All day",
+        )
+        return HomeConfig(
+            pv_config=PVConfig(capacity_kw=5.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+            tariff_config=TariffConfig(periods=(flat_period,), name="Flat 25p"),
+            seg_tariff=SEGTariff("Octopus", 4.1),
+            location=Location.bristol(),
+        )
+
+    def test_grid_export_is_positive(self, seg_home_config):
+        """Sunny summer day with PV produces grid export > 0."""
+        results = simulate_home(
+            seg_home_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+        )
+        assert results.grid_export.sum() > 0, "Expected grid export > 0 on sunny summer day"
+
+    def test_export_revenue_priced_at_seg_rate(self, seg_home_config):
+        """total_export_revenue_gbp equals SEG-rate calculation (not import rate)."""
+        results = simulate_home(
+            seg_home_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+        )
+        summary = calculate_summary(results)
+
+        total_export_kwh = results.grid_export.sum() / 60.0  # kW -> kWh for 1-min timesteps
+        expected_seg_revenue = calculate_seg_revenue(total_export_kwh, SEGTariff("", 4.1))
+
+        assert summary.total_export_revenue_gbp == pytest.approx(expected_seg_revenue, rel=1e-3)
+
+    def test_export_revenue_less_than_import_rate_value(self, seg_home_config):
+        """SEG-priced export revenue is strictly less than at the import tariff rate."""
+        results = simulate_home(
+            seg_home_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+        )
+        summary = calculate_summary(results)
+
+        total_export_kwh = results.grid_export.sum() / 60.0
+        import_rate_revenue = total_export_kwh * 0.25  # 25 p/kWh = £0.25/kWh
+
+        # SEG rate (4.1 p/kWh) is much less than import rate (25 p/kWh)
+        assert summary.total_export_revenue_gbp < import_rate_revenue
+
+    def test_net_cost_equals_import_minus_export(self, seg_home_config):
+        """net_cost_gbp == total_import_cost_gbp - total_export_revenue_gbp."""
+        results = simulate_home(
+            seg_home_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+        )
+        summary = calculate_summary(results)
+
+        expected_net_cost = summary.total_import_cost_gbp - summary.total_export_revenue_gbp
+        assert summary.net_cost_gbp == pytest.approx(expected_net_cost, rel=1e-6)
 
 
 class TestAlignTMYToDemand:
