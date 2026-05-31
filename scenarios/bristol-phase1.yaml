@@ -26,7 +26,7 @@ seg:
 fleet_distribution:
   n_homes: 100
   seed: 42
-  random_order: default
+  random_order: bristol_legacy  # Match exact behavior of create_bristol_phase1_scenario()
 
   pv:
     capacity_kw:
