@@ -25,6 +25,7 @@ from solar_challenge.config import (
     SimulationPeriod,
     UniformDistribution,
     WeightedDiscreteDistribution,
+    _parse_battery_config,
     _parse_community_config,
     _parse_dispatch_strategy_config,
     _parse_ev_config,
@@ -363,6 +364,67 @@ class TestGridChargeConfig:
         """target_soc_fraction > 1 raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="target_soc_fraction"):
             GridChargeConfig(target_soc_fraction=1.5)
+
+
+class TestBatteryGridChargeParsing:
+    """Tests for _parse_battery_config grid_charging support."""
+
+    def test_parse_grid_charging_sets_target_soc(self) -> None:
+        """_parse_battery_config parses nested grid_charging dict."""
+        result = _parse_battery_config(
+            {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 0.8}}
+        )
+        assert result is not None
+        assert result.grid_charging is not None
+        assert result.grid_charging.target_soc_fraction == 0.8
+
+    def test_parse_absent_grid_charging_is_none(self) -> None:
+        """Absent grid_charging block -> grid_charging is None."""
+        result = _parse_battery_config({"capacity_kwh": 5.0})
+        assert result is not None
+        assert result.grid_charging is None
+
+    def test_parse_empty_grid_charging_uses_default(self) -> None:
+        """Empty grid_charging dict -> default target_soc_fraction == 0.9."""
+        result = _parse_battery_config({"capacity_kwh": 5.0, "grid_charging": {}})
+        assert result is not None
+        assert result.grid_charging is not None
+        assert result.grid_charging.target_soc_fraction == 0.9
+
+    def test_parse_out_of_range_raises(self) -> None:
+        """Out-of-range target_soc_fraction propagates ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
+            _parse_battery_config(
+                {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 1.5}}
+            )
+
+    def test_yaml_round_trip_grid_charging(self) -> None:
+        """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""
+        yaml_content = """
+home:
+  pv:
+    capacity_kw: 4.0
+  load:
+    annual_consumption_kwh: 3400
+  battery:
+    capacity_kwh: 5.0
+    grid_charging:
+      target_soc_fraction: 0.8
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            home = load_home_config(path)
+            assert home.battery_config is not None
+            assert home.battery_config.grid_charging is not None
+            assert home.battery_config.grid_charging.target_soc_fraction == 0.8
+        finally:
+            path.unlink()
 
 
 class TestDispatchStrategyParsing:
