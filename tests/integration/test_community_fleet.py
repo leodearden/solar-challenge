@@ -703,22 +703,31 @@ class TestCommunityBillingReport:
         assert "Baseline" in report
 
     def test_report_contains_community_net_line(self, cr_with_billing: object) -> None:
-        """Report contains a 'Community' net cost line."""
+        """Report contains a 'Community Net Cost' row in the billing table."""
         from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
-        # "Community Billing" heading contains "Community"; check for net cost line
-        assert "Community Net" in report or ("Community" in report and "Net" in report)
+        assert "Community Net Cost" in report
 
     def test_report_contains_savings_line(self, cr_with_billing: object) -> None:
-        """Report contains a 'Savings' line with the value formatted to 2 dp."""
+        """Report contains a 'Community Savings' row with the exact formatted value."""
         from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
         assert "Savings" in report
-        # Value should appear formatted to 2 dp: 1.04 for our test case
-        assert re.search(r"1\.0[23456]", report), (
-            f"Expected savings ~1.036 formatted to 2 dp in report:\n{report}"
+        # Assert exact formatted value on the Community Savings row; derive the
+        # expected string directly from the CommunityResults scalar so the test
+        # does not embed a hardcoded literal that could drift from the code.
+        expected_fmt = f"{cr_with_billing.community_savings_gbp:.2f}"
+        savings_match = re.search(
+            r"\|\s*Community Savings\s*\|\s*([-\d.]+)\s*\|", report
+        )
+        assert savings_match is not None, (
+            f"Expected '| Community Savings | ... |' row in report:\n{report}"
+        )
+        assert savings_match.group(1) == expected_fmt, (
+            f"Expected savings={expected_fmt}, got {savings_match.group(1)} "
+            f"in report:\n{report}"
         )
 
     def test_no_billing_section_when_fields_none(self, cr_no_billing: object) -> None:
@@ -851,15 +860,19 @@ class TestFleetRunCommunityBillingCLI:
         )
         assert result.exit_code == 0, result.output
         report_text = report_path.read_text()
-        # Extract baseline and community net cost figures and verify savings ≥ 0
+        # Extract baseline and community net cost figures and verify savings ≥ 0.
+        # Assert the rows were found so a format change causes an explicit failure
+        # rather than a vacuous pass.
         baseline_match = re.search(r"Baseline[^|]*\|\s*([-\d.]+)", report_text)
         community_match = re.search(r"Community Net[^|]*\|\s*([-\d.]+)", report_text)
-        if baseline_match and community_match:
-            baseline = float(baseline_match.group(1))
-            community = float(community_match.group(1))
-            assert community <= baseline, (
-                f"Expected community_net ({community:.4f}) <= baseline ({baseline:.4f})"
-            )
+        assert baseline_match and community_match, (
+            f"Could not find Baseline/Community Net Cost rows in billing section:\n{report_text}"
+        )
+        baseline = float(baseline_match.group(1))
+        community = float(community_match.group(1))
+        assert community <= baseline, (
+            f"Expected community_net ({community:.4f}) <= baseline ({baseline:.4f})"
+        )
 
     def test_cli_stdout_has_billing_rows(
         self,

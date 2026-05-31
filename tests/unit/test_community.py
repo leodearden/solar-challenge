@@ -906,3 +906,83 @@ class TestCommunityBillingSavings:
         assert cr.baseline_net_cost_gbp is None
         assert cr.community_net_cost_gbp is None
         assert cr.community_savings_gbp is None
+
+
+# ---------------------------------------------------------------------------
+# TestSafeCalculateBill — pins the _safe_calculate_bill fallback path
+# ---------------------------------------------------------------------------
+
+class TestSafeCalculateBill:
+    """Unit tests for community._safe_calculate_bill.
+
+    Pins the 23:59 boundary-fallback behaviour: the riskiest code path in
+    _price_grid_flows is the workaround for FlatRateTariff's exclusive
+    end_time="23:59" that causes get_rate to raise for 23:59:00 timestamps.
+    These tests verify both the common (no-boundary) delegation path and the
+    fallback path with an exact expected value, so a regression is caught
+    immediately rather than silently producing a wrong result.
+    """
+
+    def test_delegates_to_calculate_bill_for_non_boundary_timestamps(self) -> None:
+        """For timestamps without boundary issues result matches calculate_bill exactly.
+
+        This confirms the delegation path: _safe_calculate_bill calls
+        calculate_bill directly when no ValueError is raised, so any future
+        enhancements to calculate_bill (standing charges, rounding, etc.) are
+        automatically inherited.
+        """
+        from solar_challenge.community import _safe_calculate_bill
+        from solar_challenge.tariff import FlatRateTariff, calculate_bill
+
+        idx = pd.date_range("2024-06-21 12:00", periods=4, freq="h", tz="Europe/London")
+        tariff = FlatRateTariff(0.30)
+        energy = pd.Series([1.0, 2.0, 3.0, 4.0], index=idx, dtype=float)
+
+        expected = calculate_bill(energy, tariff)
+        assert _safe_calculate_bill(energy, tariff) == pytest.approx(expected)
+
+    def test_fallback_at_2359_boundary(self) -> None:
+        """_safe_calculate_bill handles 23:59:00 boundary via 1-second lookback.
+
+        FlatRateTariff(0.30) has end_time="23:59" (exclusive), so the 23:59:00
+        timestamp falls outside all periods and get_rate raises ValueError.
+        The fallback retries at 23:58:59 (inside the period) → rate = 0.30.
+
+        Series: steps at 23:58 and 23:59 (1-min), energy=[2.0, 3.0] kWh.
+        Expected: 2.0*0.30 + 3.0*0.30 = 1.50 £.
+
+        Also confirms calculate_bill raises for the same series — this is the
+        invariant that justifies _safe_calculate_bill's existence and ensures
+        the fallback path is actually exercised.
+        """
+        from solar_challenge.community import _safe_calculate_bill
+        from solar_challenge.tariff import FlatRateTariff, calculate_bill
+
+        idx = pd.date_range("2024-06-21 23:58", periods=2, freq="min", tz="Europe/London")
+        tariff = FlatRateTariff(0.30)
+        energy = pd.Series([2.0, 3.0], index=idx, dtype=float)
+
+        # calculate_bill raises on the 23:59:00 boundary timestamp
+        with pytest.raises(ValueError):
+            calculate_bill(energy, tariff)
+
+        # _safe_calculate_bill prices both steps at 0.30 £/kWh via fallback
+        result = _safe_calculate_bill(energy, tariff)
+        assert result == pytest.approx(1.50)
+
+    def test_fallback_does_not_affect_non_boundary_step_in_same_series(self) -> None:
+        """When a series mixes normal and boundary timestamps, only the boundary
+        step uses the fallback; the normal step uses get_rate directly.
+
+        23:57 is a normal step; 23:59 triggers the fallback.  Both are priced at
+        0.30 £/kWh, so the total is (1.0 + 2.0) * 0.30 = 0.90 £.
+        """
+        from solar_challenge.community import _safe_calculate_bill
+        from solar_challenge.tariff import FlatRateTariff
+
+        idx = pd.date_range("2024-06-21 23:57", periods=3, freq="min", tz="Europe/London")
+        tariff = FlatRateTariff(0.30)
+        energy = pd.Series([1.0, 0.0, 2.0], index=idx, dtype=float)
+        # Steps: 23:57 (normal), 23:58 (normal), 23:59 (boundary)
+        result = _safe_calculate_bill(energy, tariff)
+        assert result == pytest.approx((1.0 + 0.0 + 2.0) * 0.30)

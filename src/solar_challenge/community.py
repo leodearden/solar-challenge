@@ -142,14 +142,18 @@ class CommunityResults:
 # ---------------------------------------------------------------------------
 
 def _safe_calculate_bill(energy_kwh: pd.Series, tariff: TariffConfig) -> float:
-    """Calculate bill like :func:`~solar_challenge.tariff.calculate_bill`.
+    """Calculate bill, delegating to :func:`~solar_challenge.tariff.calculate_bill`.
 
-    Adds a fallback for timestamps that fall in known period-boundary gaps:
-    :meth:`TariffConfig.flat_rate` uses ``end_time="23:59"`` (exclusive), so
-    ``23:59:00`` in 1-minute simulation data is not covered.  For any such
-    gap, this function retries with ``timestamp − 1 s``, which falls within
-    the period and carries the same rate.  For all other timestamps the
-    behaviour is bit-identical to ``calculate_bill``.
+    In the common case (no period-boundary timestamps) this is a thin
+    delegation to ``calculate_bill`` so any future standing-charge,
+    minimum-charge, or rounding logic added there is automatically inherited.
+
+    Adds a per-timestamp fallback for timestamps that fall in known
+    period-boundary gaps: :meth:`TariffConfig.flat_rate` uses
+    ``end_time="23:59"`` (exclusive), so ``23:59:00`` in 1-minute simulation
+    data is not covered.  When ``calculate_bill`` raises :exc:`ValueError`
+    the function retries each step individually, substituting
+    ``timestamp − 1 s`` for any that still fail.
 
     Parameters
     ----------
@@ -163,17 +167,23 @@ def _safe_calculate_bill(energy_kwh: pd.Series, tariff: TariffConfig) -> float:
     float
         Total bill cost in £.
     """
-    total_cost = 0.0
-    for timestamp, energy in energy_kwh.items():
-        try:
-            rate = tariff.get_rate(timestamp)
-        except ValueError:
-            # Fallback: rate at 1 second before the failing timestamp.
-            # This handles flat_rate's "23:59" exclusive boundary — the
-            # previous second (23:58:59) is inside the period.
-            rate = tariff.get_rate(timestamp - pd.Timedelta(seconds=1))
-        total_cost += energy * rate
-    return total_cost
+    try:
+        return calculate_bill(energy_kwh, tariff)
+    except ValueError:
+        # At least one timestamp is outside all tariff periods (e.g. 23:59:00
+        # with flat_rate's exclusive end_time).  Price each step individually,
+        # falling back 1 s for any timestamp that still fails.
+        total_cost = 0.0
+        for timestamp, energy in energy_kwh.items():
+            try:
+                rate = tariff.get_rate(timestamp)
+            except ValueError:
+                # 1-second lookback: the preceding second is inside the period
+                # and carries the same rate (semantically correct for a
+                # flat-rate period whose boundary falls at a minute mark).
+                rate = tariff.get_rate(timestamp - pd.Timedelta(seconds=1))
+            total_cost += energy * rate
+        return total_cost
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +222,25 @@ def _price_grid_flows(
     """
     # Infer dt_h from the index spacing; fall back to 1/60 for degenerate
     # single-element series (consistent with simulate_community's own fallback).
+    #
+    # PRECONDITION: import_kw must have a uniformly-spaced DatetimeIndex.
+    # dt_h is derived from the first interval only; a non-uniform index would
+    # silently mis-price every subsequent interval.  This matches the same
+    # assumption in output.compute_community_metrics and simulate_community.
+    # A first-vs-last check catches common irregular patterns (dropped rows,
+    # DST gaps, hour-boundary aggregates) with O(1) overhead.
     if len(import_kw) >= 2:
         dt_h = (import_kw.index[1] - import_kw.index[0]).total_seconds() / 3600.0
+        if len(import_kw) >= 3:
+            dt_last_h = (
+                (import_kw.index[-1] - import_kw.index[-2]).total_seconds() / 3600.0
+            )
+            if abs(dt_h - dt_last_h) > 1e-9:
+                raise ValueError(
+                    f"_price_grid_flows requires a uniformly-spaced DatetimeIndex; "
+                    f"first interval={dt_h:.9f} h but last={dt_last_h:.9f} h differ. "
+                    "This matches the convention in output.compute_community_metrics."
+                )
     else:
         dt_h = 1.0 / 60.0
 
