@@ -1,10 +1,13 @@
 """Fleet simulation commands."""
 
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 import pandas as pd
 import typer
+
+if TYPE_CHECKING:
+    from solar_challenge.community import CommunityResults
 
 from solar_challenge.cli.utils import (
     console,
@@ -39,7 +42,7 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.home import SimulationResults
 from solar_challenge.location import Location
-from solar_challenge.output import generate_community_report
+from solar_challenge.output import compute_community_metrics, generate_community_report
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -52,27 +55,12 @@ def _export_fleet_results(results: FleetResults, output: Path) -> None:
 
 def _print_community_section(
     fleet_results: FleetResults,
-    community_results: Any,
+    community_results: "CommunityResults",
 ) -> None:
     """Print a community sharing summary after the fleet summary table."""
     from rich.table import Table
 
-    index = community_results.grid_import.index
-    if len(index) >= 2:
-        dt_h = (index[1] - index[0]).total_seconds() / 3600.0
-    else:
-        dt_h = 1.0 / 60.0
-
-    comm_import_kwh = float(community_results.grid_import.sum()) * dt_h
-    comm_export_kwh = float(community_results.grid_export.sum()) * dt_h
-    unshared_import_kwh = float(fleet_results.total_grid_import.sum()) * dt_h
-    unshared_export_kwh = float(fleet_results.total_grid_export.sum()) * dt_h
-    total_demand_kwh = float(fleet_results.total_demand.sum()) * dt_h
-
-    if total_demand_kwh > 0:
-        self_sufficiency = max(0.0, 1.0 - comm_import_kwh / total_demand_kwh)
-    else:
-        self_sufficiency = 0.0
+    m = compute_community_metrics(community_results)
 
     table = Table(title="Community Sharing Results")
     table.add_column("Metric", style="bold")
@@ -80,26 +68,23 @@ def _print_community_section(
     table.add_column("Community", justify="right")
     table.add_column("Reduction", justify="right")
 
-    import_reduction = unshared_import_kwh - comm_import_kwh
-    export_reduction = unshared_export_kwh - comm_export_kwh
-
     table.add_row(
         "Grid Import (kWh)",
-        f"{unshared_import_kwh:.1f}",
-        f"{comm_import_kwh:.1f}",
-        f"{import_reduction:.1f}",
+        f"{m.unshared_import_kwh:.1f}",
+        f"{m.community_import_kwh:.1f}",
+        f"{m.import_reduction_kwh:.1f}",
     )
     table.add_row(
         "Grid Export (kWh)",
-        f"{unshared_export_kwh:.1f}",
-        f"{comm_export_kwh:.1f}",
-        f"{export_reduction:.1f}",
+        f"{m.unshared_export_kwh:.1f}",
+        f"{m.community_export_kwh:.1f}",
+        f"{m.export_reduction_kwh:.1f}",
     )
     table.add_row("", "", "", "")  # separator
     table.add_row(
         "Community Self-Sufficiency",
         "",
-        f"{self_sufficiency:.1%}",
+        f"{m.self_sufficiency:.1%}",
         "",
     )
 

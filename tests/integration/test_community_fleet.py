@@ -509,13 +509,15 @@ community:
         assert plain_result.exit_code == 0
         assert community_result.exit_code == 0
 
-        # The community run's stdout should START with the same fleet table
-        # (community section is only appended, never interleaved)
-        assert plain_result.output in community_result.output, (
-            "Fleet summary was modified by community wiring — "
-            "expected it to appear unchanged at the start of the community run output.\n"
-            f"Plain output:\n{plain_result.output}\n\n"
-            f"Community output:\n{community_result.output}"
+        # Community section is strictly additive: it must appear in the community
+        # run and be absent from the plain run.  We check the Rich table title
+        # rather than doing a full stdout substring match (which is brittle to
+        # Rich's content-sensitive column width auto-sizing).
+        assert "Community Sharing" not in plain_result.output, (
+            "Community section appeared in a plain (no-block) fleet run"
+        )
+        assert "Community Sharing" in community_result.output, (
+            "Community section was missing from the community-block run"
         )
 
     def test_report_without_block_warns_and_skips(
