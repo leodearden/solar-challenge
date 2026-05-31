@@ -15,6 +15,8 @@ from solar_challenge.home import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
+from solar_challenge.tariff import TariffConfig
 
 
 class TestHomeConfigBasics:
@@ -50,6 +52,52 @@ class TestHomeConfigBasics:
             load_config=LoadConfig(),
         )
         assert config.location.latitude == pytest.approx(51.45, rel=0.01)
+
+
+class TestHomeConfigSEGField:
+    """Test that HomeConfig carries the optional SEG seam field."""
+
+    def test_default_seg_tariff_is_none(self):
+        """HomeConfig built without seg_tariff has seg_tariff is None."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+        )
+        assert config.seg_tariff is None
+
+    def test_seg_tariff_stored_from_direct_instance(self):
+        """HomeConfig accepts and stores a SEGTariff instance."""
+        tariff = SEGTariff("X", 4.1)
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+            seg_tariff=tariff,
+        )
+        assert config.seg_tariff is not None
+        assert config.seg_tariff.rate_pence_per_kwh == pytest.approx(4.1)
+
+    def test_seg_tariff_stored_from_resolve(self):
+        """HomeConfig accepts and stores a SEGTariff from resolve_seg_tariff."""
+        tariff = resolve_seg_tariff("Octopus")
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+            seg_tariff=tariff,
+        )
+        assert config.seg_tariff is not None
+        assert config.seg_tariff.rate_pence_per_kwh == pytest.approx(4.1)
+        assert config.seg_tariff == SEG_PRESETS["Octopus"]
+
+    def test_existing_configs_unaffected(self):
+        """Existing HomeConfig construction without seg_tariff continues to work."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400.0),
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+            location=Location.bristol(),
+            name="Test home",
+        )
+        assert config.seg_tariff is None
 
 
 class TestSimulationResults:
