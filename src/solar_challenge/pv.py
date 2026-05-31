@@ -84,6 +84,14 @@ class PVConfig:
             raise ValueError(
                 f"Inverter capacity must be positive, got {self.inverter_capacity_kw} kW"
             )
+        if self.system_age_years < 0:
+            raise ValueError(
+                f"System age must be non-negative, got {self.system_age_years}"
+            )
+        if not 0 <= self.degradation_rate_per_year <= 1:
+            raise ValueError(
+                f"Degradation rate must be 0-1, got {self.degradation_rate_per_year}"
+            )
 
     @property
     def effective_inverter_capacity_kw(self) -> float:
