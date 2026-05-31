@@ -18,12 +18,19 @@ class DispatchDecision:
     """Decision from a dispatch strategy for a single timestep.
 
     Attributes:
-        charge_kw: Requested battery charging power in kW (non-negative)
+        charge_kw: Requested battery charging power in kW (non-negative).
+            Represents PV or other on-site charge power.
         discharge_kw: Requested battery discharge power in kW (non-negative)
+        grid_charge_kw: Requested grid-to-battery charging power in kW
+            (non-negative, default 0.0). Represents deliberate charging from
+            the grid (e.g. during cheap-rate periods). May co-exist with
+            charge_kw > 0 (both are charging), but is mutually exclusive with
+            discharge_kw > 0.
     """
 
     charge_kw: float
     discharge_kw: float
+    grid_charge_kw: float = 0.0
 
     def __post_init__(self) -> None:
         """Validate dispatch decision parameters."""
@@ -35,10 +42,19 @@ class DispatchDecision:
             raise ValueError(
                 f"Discharge power must be non-negative, got {self.discharge_kw} kW"
             )
+        if self.grid_charge_kw < 0:
+            raise ValueError(
+                f"Grid-charge power must be non-negative, got {self.grid_charge_kw} kW"
+            )
         if self.charge_kw > 0 and self.discharge_kw > 0:
             raise ValueError(
                 "Cannot charge and discharge simultaneously: "
                 f"charge={self.charge_kw} kW, discharge={self.discharge_kw} kW"
+            )
+        if self.grid_charge_kw > 0 and self.discharge_kw > 0:
+            raise ValueError(
+                "Cannot grid-charge and discharge simultaneously: "
+                f"grid_charge={self.grid_charge_kw} kW, discharge={self.discharge_kw} kW"
             )
 
 
