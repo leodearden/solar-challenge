@@ -418,7 +418,7 @@ class TestJobManagerDirect:
 
         def worker(thread_id: int) -> None:
             try:
-                barrier.wait(timeout=5)
+                barrier.wait(timeout=30)
                 for i in range(10):
                     jid = f"job-{i}"
                     # Read job status

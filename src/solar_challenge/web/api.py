@@ -11,18 +11,24 @@ import time
 from pathlib import Path
 from typing import Any, Generator
 
-logger = logging.getLogger(__name__)
-
 import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import (
+    ConfigurationError,
+    _parse_dispatch_strategy_config,
+    _parse_tariff_config,
+)
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import get_storage, resolve_location
+
+logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -111,6 +117,12 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
             if not (0 < eff <= 100):
                 raise ValueError(f"Efficiency must be between 0 and 100, got {eff}")
             battery_kwargs["efficiency_pct"] = eff
+        try:
+            dispatch_data = data.get("dispatch_strategy")
+            if dispatch_data:
+                battery_kwargs["dispatch_strategy"] = _parse_dispatch_strategy_config(dispatch_data)
+        except ConfigurationError as exc:
+            raise ValueError(str(exc)) from exc
         battery_config = BatteryConfig(**battery_kwargs)
 
     annual_consumption: float | None = None
@@ -123,10 +135,41 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
         use_stochastic=stochastic,
     )
 
+    # Build optional heat pump config.
+    #
+    # Note on key naming: the web JSON contract uses "type" (a shorter, idiomatic
+    # form-field name) whereas the YAML/config.py contract uses "heat_pump_type".
+    # The mapping is intentional and happens here on the single `hp_data.get("type")`
+    # call.  This is the only place that translation is needed.
+    #
+    # Note on implementation pattern: tariff and dispatch configs are built via
+    # shared config._parse_tariff_config / _parse_dispatch_strategy_config helpers
+    # because those helpers exist in config.py.  No equivalent
+    # config._parse_heat_pump_config helper exists, and config.py is outside this
+    # task's scope (consume-only).  HeatPumpConfig.__post_init__ already raises
+    # ValueError on invalid inputs, which the endpoint's (ValueError, TypeError)
+    # handler converts to HTTP 400 — no extra wrapping is needed here.
+    heat_pump_config: HeatPumpConfig | None = None
+    hp_data = data.get("heat_pump")
+    if hp_data:
+        heat_pump_config = HeatPumpConfig(
+            heat_pump_type=hp_data.get("type", "ASHP"),
+            thermal_capacity_kw=float(hp_data.get("thermal_capacity_kw", 8.0)),
+            annual_heat_demand_kwh=float(hp_data.get("annual_heat_demand_kwh", 8000.0)),
+        )
+
+    # Build optional tariff config
+    try:
+        tariff_config = _parse_tariff_config(data.get("tariff"))
+    except ConfigurationError as exc:
+        raise ValueError(str(exc)) from exc
+
     home_config = HomeConfig(
         pv_config=pv_config,
         load_config=load_config,
         battery_config=battery_config,
+        heat_pump_config=heat_pump_config,
+        tariff_config=tariff_config,
         location=loc,
         name=name or "Web Simulation",
     )

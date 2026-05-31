@@ -1,5 +1,6 @@
 """PV system configuration and modelling."""
 
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -356,7 +357,16 @@ def simulate_pv_output(
     model_chain = create_model_chain(config, location)
 
     # Run the simulation
-    model_chain.run_model(weather_data)
+    # Suppress scipy warnings from pvlib's single-diode model solver
+    # (edge cases at night/low irradiance trigger harmless divide-by-zero warnings)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="invalid value encountered",
+            category=RuntimeWarning,
+            module=r"scipy\.optimize\._chandrupatla",
+        )
+        model_chain.run_model(weather_data)
 
     # Get AC power and convert from W to kW
     ac_power = model_chain.results.ac / 1000.0

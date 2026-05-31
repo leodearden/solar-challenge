@@ -7,7 +7,7 @@ calls return canned responses instantly.
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
@@ -1005,3 +1005,146 @@ class TestErrorPaths:
         """DELETE on job status endpoint returns 405."""
         resp = client.delete("/api/jobs/some-id")
         assert resp.status_code == 405
+
+
+# ===================================================================
+# UI render smoke test
+# ===================================================================
+
+
+class TestHomeFormRender:
+    """Smoke test: GET /simulate/home renders the new tabs and controls."""
+
+    def test_home_form_shows_heat_pump_tariff_and_dispatch(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/home returns 200 with Heat Pump, Tariff tabs and dispatch control."""
+        resp = client.get("/simulate/home")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "Heat Pump" in html
+        assert "Tariff" in html
+        assert "Dispatch Strategy" in html
+
+
+# ===================================================================
+# _parse_home_config boundary tests (call the function directly)
+# ===================================================================
+
+
+class TestParseHomeConfigCapabilities:
+    """Boundary tests calling _parse_home_config directly."""
+
+    def test_heat_pump_fields_populate_home_config(self) -> None:
+        """heat_pump dict in payload populates HomeConfig.heat_pump_config."""
+        from solar_challenge.web.api import _parse_home_config
+
+        payload = {
+            **VALID_HOME_PAYLOAD,
+            "heat_pump": {
+                "type": "ASHP",
+                "thermal_capacity_kw": 8.0,
+                "annual_heat_demand_kwh": 8000,
+            },
+        }
+        home_config, _start, _end, _name = _parse_home_config(payload)
+        assert home_config.heat_pump_config is not None
+        assert home_config.heat_pump_config.heat_pump_type == "ASHP"
+        assert home_config.heat_pump_config.thermal_capacity_kw == 8.0
+
+    def test_tariff_fields_populate_home_config(self) -> None:
+        """tariff dict in payload populates HomeConfig.tariff_config."""
+        from solar_challenge.web.api import _parse_home_config
+
+        payload = {
+            **VALID_HOME_PAYLOAD,
+            "tariff": {
+                "type": "flat_rate",
+                "rate_per_kwh": 0.30,
+            },
+        }
+        home_config, _start, _end, _name = _parse_home_config(payload)
+        assert home_config.tariff_config is not None
+        # flat_rate TariffConfig has at least one period
+        assert len(home_config.tariff_config.periods) > 0
+
+    def test_combined_heat_pump_tariff_dispatch_populate_home_config(self) -> None:
+        """heat_pump + tariff + dispatch_strategy all populate when battery is enabled."""
+        from solar_challenge.web.api import _parse_home_config
+
+        payload = {
+            **VALID_HOME_PAYLOAD,
+            "battery_kwh": 5.0,
+            "heat_pump": {
+                "type": "ASHP",
+                "thermal_capacity_kw": 8.0,
+                "annual_heat_demand_kwh": 8000,
+            },
+            "tariff": {
+                "type": "flat_rate",
+                "rate_per_kwh": 0.30,
+            },
+            "dispatch_strategy": {
+                "strategy_type": "self_consumption",
+            },
+        }
+        home_config, _start, _end, _name = _parse_home_config(payload)
+        assert home_config.heat_pump_config is not None
+        assert home_config.tariff_config is not None
+        assert home_config.battery_config is not None
+        assert home_config.battery_config.dispatch_strategy is not None
+        assert home_config.battery_config.dispatch_strategy.strategy_type == "self_consumption"
+
+    def test_dispatch_strategy_ignored_without_battery(self) -> None:
+        """dispatch_strategy is silently ignored when no battery is enabled."""
+        from solar_challenge.web.api import _parse_home_config
+
+        payload = {
+            **VALID_HOME_PAYLOAD,
+            "battery_kwh": 0,
+            "dispatch_strategy": {
+                "strategy_type": "self_consumption",
+            },
+        }
+        home_config, _start, _end, _name = _parse_home_config(payload)
+        assert home_config.battery_config is None  # no battery => no dispatch either
+
+
+# ===================================================================
+# Endpoint error-path tests (400 for bad tariff / dispatch)
+# ===================================================================
+
+
+class TestParseHomeConfigErrorPaths:
+    """Endpoint 400 error-path tests for new optional config fields."""
+
+    def test_invalid_tariff_returns_400(
+        self, client: FlaskClient
+    ) -> None:
+        """POST with an unrecognised tariff type returns 400."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "tariff": {"type": "nonsense"}},
+        )
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "error" in data
+
+    def test_invalid_dispatch_returns_400(
+        self, client: FlaskClient
+    ) -> None:
+        """POST with tou_optimized dispatch but missing peak_hours returns 400."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={
+                **VALID_HOME_PAYLOAD,
+                "battery_kwh": 5.0,
+                "dispatch_strategy": {
+                    "strategy_type": "tou_optimized",
+                    # peak_hours intentionally omitted — required for tou_optimized
+                },
+            },
+        )
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "error" in data
