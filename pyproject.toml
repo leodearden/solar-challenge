@@ -64,6 +64,7 @@ addopts = "-v --tb=short --ignore=tests/e2e"
 markers = [
     "e2e: end-to-end browser tests (require playwright)",
     "slow: tests that make real external API calls (e.g. PVGIS)",
+    "integration: marks tests that exercise multiple modules together (full simulation; may hit real PVGIS)",
 ]
 
 [tool.mypy]

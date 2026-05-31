@@ -18,6 +18,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 class TestSingleHomeSimulation:
     """Test VAL-005: Integration test for single home simulation."""

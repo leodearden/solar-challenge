@@ -261,8 +261,8 @@ class TestSummaryStatistics:
         assert stats.simulation_days == 7
 
 
-class TestHeatPumpIntegration:
-    """Test heat pump integration in home simulation."""
+class TestHeatPumpConfig:
+    """Test HeatPumpConfig construction — pure config, no simulation."""
 
     def test_home_config_with_heat_pump(self):
         """HomeConfig can be created with heat pump configuration."""
@@ -289,6 +289,11 @@ class TestHeatPumpIntegration:
             load_config=LoadConfig(),
         )
         assert config.heat_pump_config is None
+
+
+@pytest.mark.slow
+class TestHeatPumpIntegration:
+    """Test heat pump integration in home simulation (calls simulate_home — network)."""
 
     def test_simulate_home_with_heat_pump_ashp(self):
         """simulate_home generates heat pump load for ASHP."""
