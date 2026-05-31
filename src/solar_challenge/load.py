@@ -221,7 +221,7 @@ def _simulate_stochastic_day(
         day=day_of_year,
         occupancy=occupancy_day,
     )
-    return total_power  # type: ignore[return-value]
+    return total_power  # type: ignore[no-any-return]
 
 
 def _try_richardsonpy_profile(

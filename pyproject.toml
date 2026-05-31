@@ -78,3 +78,10 @@ mypy_path = "src"
 [[tool.mypy.overrides]]
 module = ["pvlib.*", "pandas.*", "numpy.*", "yaml", "richardsonpy.*", "flask.*", "plotly.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Flask's Blueprint/app decorators are untyped; suppress untyped-decorator noise
+# and related unused-ignore warnings across the entire web sub-package.
+module = ["solar_challenge.web.*"]
+disallow_untyped_decorators = false
+warn_unused_ignores = false
