@@ -26,6 +26,7 @@ from solar_challenge.config import load_community_config, load_fleet_config
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
+from solar_challenge.output import generate_community_report
 from solar_challenge.pv import PVConfig
 
 pytestmark = pytest.mark.integration
@@ -152,3 +153,83 @@ def _build_injected_fleet(
     all_configs = exporter_configs + importer_configs
     results = [simulate_home(h, start, end, weather_data=weather) for h in all_configs]
     return FleetResults(per_home_results=results, home_configs=all_configs)
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+class TestGenerateCommunityReport:
+    """RED/GREEN tests for output.generate_community_report.
+
+    Uses a hand-built synthetic FleetResults to avoid any PVGIS calls.
+    """
+
+    @pytest.fixture
+    def small_fleet(self) -> FleetResults:
+        """2-home fleet: exporter + importer — guaranteed simultaneous surplus & deficit."""
+        # 4 timesteps at 1-minute intervals (tiny for speed)
+        index = pd.date_range("2024-06-21 12:00", periods=4, freq="min", tz="Europe/London")
+        # Exporter: large PV (gen > dem) → exports surplus
+        # Importer: no PV (gen = 0) → imports everything
+        return _make_fleet(
+            index,
+            [
+                ([3.0, 5.0, 5.0, 1.0], [1.0, 1.0, 1.0, 1.0]),  # exporter
+                ([0.0, 0.0, 0.0, 0.0], [2.0, 2.0, 2.0, 2.0]),  # importer
+            ],
+        )
+
+    @pytest.fixture
+    def cr_p2p(self, small_fleet: FleetResults) -> "CommunityResults":  # type: ignore[name-defined]
+        from solar_challenge.community import CommunityResults
+        return simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
+
+    @pytest.fixture
+    def cr_batt(self, small_fleet: FleetResults) -> "CommunityResults":  # type: ignore[name-defined]
+        from solar_challenge.community import CommunityResults
+        return simulate_community(
+            small_fleet,
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=BatteryConfig(
+                    capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0
+                ),
+            ),
+        )
+
+    def test_p2p_report_contains_title(self, cr_p2p: object) -> None:
+        report = generate_community_report(cr_p2p)
+        assert isinstance(report, str)
+        assert "# Community" in report
+
+    def test_p2p_report_contains_sharing_mode(self, cr_p2p: object) -> None:
+        report = generate_community_report(cr_p2p)
+        assert "p2p" in report
+
+    def test_p2p_report_contains_grid_flow_table(self, cr_p2p: object) -> None:
+        report = generate_community_report(cr_p2p)
+        # Must mention both Grid Import and Grid Export with community vs unshared
+        assert "Grid Import" in report
+        assert "Grid Export" in report
+
+    def test_p2p_report_contains_self_sufficiency(self, cr_p2p: object) -> None:
+        report = generate_community_report(cr_p2p)
+        assert "Self-Sufficiency" in report
+
+    def test_batt_report_contains_mode_and_battery_section(self, cr_batt: object) -> None:
+        report = generate_community_report(cr_batt)
+        assert "community_battery" in report
+        # Community Battery section with Charged/Discharged
+        assert "Community Battery" in report
+        assert "Charged" in report
+        assert "Discharged" in report
+
+    def test_optional_summary_arg(self, cr_p2p: object) -> None:
+        # None works
+        report_none = generate_community_report(cr_p2p, None)
+        assert isinstance(report_none, str)
+        # Dict works and does not raise
+        report_dict = generate_community_report(cr_p2p, {"note": "test"})
+        assert isinstance(report_dict, str)
+        assert "note" in report_dict
