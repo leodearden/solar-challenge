@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 import pandas as pd
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 
@@ -144,59 +144,133 @@ def simulate_community(
     """Run community energy sharing over an already-simulated fleet.
 
     The community layer does NOT re-simulate individual homes.  Instead it
-    performs post-hoc P2P netting:
+    performs post-hoc netting over the fleet's aggregate grid flows:
 
-    For each timestep *t*:
+    * ``net_surplus = max(0, total_grid_export[t] - total_grid_import[t])``
+    * ``net_deficit = max(0, total_grid_import[t] - total_grid_export[t])``
 
-    * ``net_surplus  = max(0, total_grid_export[t] - total_grid_import[t])``
-    * ``net_deficit  = max(0, total_grid_import[t] - total_grid_export[t])``
+    Two dispatch branches are selected by *config.sharing_mode*:
 
-    These are fed into :func:`~solar_challenge.flow.simulate_timestep` with
-    ``battery=None`` (p2p mode), reusing the self-consumption dispatch path to
-    model instantaneous netting at the community connection point.  The output is
-    then scaled from kWh-per-step back to kW (×60) in line with the
-    ``conversion_factor=60.0`` convention in ``home.py``.
+    **p2p** (vectorised):
+        Instantaneous netting at the community connection point with no battery.
+        Grid flows are derived directly from ``(surplus − deficit)`` clips.
+        All battery series in the result are zero.
+
+    **community_battery** (sequential):
+        A shared :class:`~solar_challenge.battery.Battery` is instantiated once
+        and each net surplus/deficit step is dispatched in order via
+        :func:`~solar_challenge.flow.simulate_timestep` with
+        :class:`~solar_challenge.dispatch.SelfConsumptionStrategy`.  The
+        sequential loop is required because SOC is stateful and cannot be
+        vectorised.  Per-step outputs (kWh/step) are scaled back to kW using
+        ``60 / timestep_minutes`` derived from the fleet index, matching the
+        conversion convention in ``home.py``.  When *validate_balance* is
+        ``True``, a per-step :func:`~solar_challenge.flow.validate_energy_balance`
+        check (◆) is applied inside the loop before the tail
+        :func:`validate_community_balance` cross-check.
 
     Parameters
     ----------
     fleet_results:
         Aggregate results from :func:`~solar_challenge.fleet.simulate_fleet`.
     config:
-        Community configuration; only ``sharing_mode="p2p"`` is supported in α.
+        Community configuration specifying ``sharing_mode`` and, for
+        ``"community_battery"`` mode, the shared battery's
+        :class:`~solar_challenge.battery.BatteryConfig`.
     validate_balance:
-        When ``True`` (default), call
-        :func:`validate_community_balance` on the completed result to enforce
-        the COMMUNITY-BALANCE invariant (PRD §3.1) after netting.
+        When ``True`` (default), call :func:`validate_community_balance` on the
+        completed result to enforce the COMMUNITY-BALANCE invariant (PRD §3.1).
+        In ``community_battery`` mode a per-step ◆ check is also applied.
 
     Returns
     -------
     CommunityResults
     """
-    if config.sharing_mode != "p2p":
-        raise NotImplementedError(
-            f"sharing_mode={config.sharing_mode!r} is not yet implemented; "
-            "community_battery dispatch will be added in β (task #31)."
-        )
-
     surplus: pd.Series = fleet_results.total_grid_export
     deficit: pd.Series = fleet_results.total_grid_import
     index: pd.DatetimeIndex = surplus.index
 
-    # Vectorised P2P netting — exact for p2p because there is no SOC state to
-    # track sequentially.  (simulate_timestep/validate_energy_balance are kept
-    # for the future community_battery path in β where battery SOC is sequential.)
-    cg_exp: pd.Series = (surplus - deficit).clip(lower=0)
-    cg_imp: pd.Series = (deficit - surplus).clip(lower=0)
-    zeros: pd.Series = pd.Series(0.0, index=index, dtype=float)
+    # Derive the timestep from the index so the kWh→kW conversion factor and
+    # the simulate_timestep call are correct for any cadence (1-min operational,
+    # hourly TMY, downsampled, etc.) rather than silently assuming 1-minute.
+    # A single-element index is degenerate; the sequential loop won't execute.
+    if len(index) >= 2:
+        timestep_minutes = (index[1] - index[0]).total_seconds() / 60.0
+    else:
+        timestep_minutes = 1.0
 
-    result = CommunityResults(
-        grid_export=cg_exp,
-        grid_import=cg_imp,
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        fleet_results=fleet_results,
-    )
+    # Branch on the community battery config; using a local variable so mypy
+    # narrows Optional[BatteryConfig] → BatteryConfig for the Battery(...) call.
+    cb_config = config.community_battery
+
+    if cb_config is None:
+        # Vectorised P2P netting — exact for p2p because there is no SOC state
+        # to track sequentially.
+        cg_exp: pd.Series = (surplus - deficit).clip(lower=0)
+        cg_imp: pd.Series = (deficit - surplus).clip(lower=0)
+        zeros: pd.Series = pd.Series(0.0, index=index, dtype=float)
+
+        result = CommunityResults(
+            grid_export=cg_exp,
+            grid_import=cg_imp,
+            battery_charge=zeros.copy(),
+            battery_discharge=zeros.copy(),
+            battery_soc=zeros.copy(),
+            fleet_results=fleet_results,
+        )
+    else:
+        # Community battery dispatch — sequential because SOC is stateful.
+        # Reuses Battery + simulate_timestep + SelfConsumptionStrategy from α.
+        #
+        # Battery starts at the per-home default SOC envelope (initial_soc_kwh
+        # defaults to mid-range, usable window 10%–90%).  This is an intentional
+        # reuse of the per-home convention; callers that need a different starting
+        # state (e.g. start empty) should pass an adjusted BatteryConfig.
+        battery = Battery(cb_config)
+        strategy = SelfConsumptionStrategy()
+
+        # Pre-extract arrays to avoid repeated label-based .loc[t] hash lookups
+        # and redundant pd.Timestamp construction inside the hot loop
+        # (~525 k iterations for a full-year, 1-min, 100-home fleet run).
+        surplus_arr = surplus.to_numpy()
+        deficit_arr = deficit.to_numpy()
+        scale = 60.0 / timestep_minutes  # kWh/step → kW
+
+        cg_imp_vals: list[float] = []
+        cg_exp_vals: list[float] = []
+        cb_ch_vals: list[float] = []
+        cb_dis_vals: list[float] = []
+        soc_vals: list[float] = []
+
+        for t, s, d in zip(index, surplus_arr, deficit_arr):
+            net_surplus = max(0.0, float(s) - float(d))
+            net_deficit = max(0.0, float(d) - float(s))
+            r = simulate_timestep(
+                generation_kw=net_surplus,
+                demand_kw=net_deficit,
+                battery=battery,
+                timestep_minutes=timestep_minutes,
+                timestamp=t.to_pydatetime(),
+                strategy=strategy,
+            )
+            # Per-step ◆ invariant (PRD §3.2) — mirrors home.simulate_home:299-300.
+            if validate_balance:
+                validate_energy_balance(r)
+            # Scale kWh/step → kW; SOC is an energy state, kept in kWh.
+            cg_imp_vals.append(r.grid_import * scale)
+            cg_exp_vals.append(r.grid_export * scale)
+            cb_ch_vals.append(r.battery_charge * scale)
+            cb_dis_vals.append(r.battery_discharge * scale)
+            soc_vals.append(r.battery_soc)
+
+        result = CommunityResults(
+            grid_export=pd.Series(cg_exp_vals, index=index, dtype=float),
+            grid_import=pd.Series(cg_imp_vals, index=index, dtype=float),
+            battery_charge=pd.Series(cb_ch_vals, index=index, dtype=float),
+            battery_discharge=pd.Series(cb_dis_vals, index=index, dtype=float),
+            battery_soc=pd.Series(soc_vals, index=index, dtype=float),
+            fleet_results=fleet_results,
+        )
 
     if validate_balance:
         validate_community_balance(fleet_results, result)
