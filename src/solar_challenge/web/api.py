@@ -51,6 +51,40 @@ def _get_job_manager() -> Any:
     return jm
 
 
+def _parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
+    """Extract a (start, end) date-string pair from a JSON request body.
+
+    Three resolution modes (checked in order):
+    1. ``days`` key present and equal to 365  → full 2024 calendar year.
+    2. ``days`` key present (any other value)  → *days*-day window anchored
+       at 2024-06-01.
+    3. Otherwise                               → use ``start`` / ``end`` keys
+       with defaults of ``"2024-01-01"`` / ``"2024-12-31"``.
+
+    Args:
+        data: Parsed JSON body from the request.
+
+    Returns:
+        Tuple of ``(start, end)`` as ``"YYYY-MM-DD"`` strings.
+    """
+    days_raw = data.get("days")
+    start_raw = data.get("start", "")
+    end_raw = data.get("end", "")
+
+    if days_raw is not None:
+        days = int(days_raw)
+        if days == 365:
+            return "2024-01-01", "2024-12-31"
+        ref = pd.Timestamp("2024-06-01")
+        start = ref.strftime("%Y-%m-%d")
+        end = (ref + pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        return start, end
+
+    start = str(start_raw) if start_raw else "2024-01-01"
+    end = str(end_raw) if end_raw else "2024-12-31"
+    return start, end
+
+
 def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
     """Parse JSON request body into HomeConfig and date range.
 
@@ -76,23 +110,8 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     location_preset = str(data.get("location", "bristol"))
     name = data.get("name")
 
-    # Parse date range
-    days_raw = data.get("days")
-    start_raw = data.get("start", "")
-    end_raw = data.get("end", "")
-
-    if days_raw is not None:
-        days = int(days_raw)
-        if days == 365:
-            start = "2024-01-01"
-            end = "2024-12-31"
-        else:
-            ref = pd.Timestamp("2024-06-01")
-            start = ref.strftime("%Y-%m-%d")
-            end = (ref + pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
-    else:
-        start = str(start_raw) if start_raw else "2024-01-01"
-        end = str(end_raw) if end_raw else "2024-12-31"
+    # Parse date range using shared helper
+    start, end = _parse_date_range(data)
 
     # Validate inputs
     if not (0.5 <= pv_kw <= 20.0):
