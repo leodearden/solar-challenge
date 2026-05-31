@@ -1008,6 +1008,26 @@ class TestErrorPaths:
 
 
 # ===================================================================
+# UI render smoke test
+# ===================================================================
+
+
+class TestHomeFormRender:
+    """Smoke test: GET /simulate/home renders the new tabs and controls."""
+
+    def test_home_form_shows_heat_pump_tariff_and_dispatch(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/home returns 200 with Heat Pump, Tariff tabs and dispatch control."""
+        resp = client.get("/simulate/home")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "Heat Pump" in html
+        assert "Tariff" in html
+        assert "Dispatch Strategy" in html
+
+
+# ===================================================================
 # _parse_home_config boundary tests (call the function directly)
 # ===================================================================
 
