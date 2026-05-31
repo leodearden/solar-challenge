@@ -117,6 +117,9 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
             if not (0 < eff <= 100):
                 raise ValueError(f"Efficiency must be between 0 and 100, got {eff}")
             battery_kwargs["efficiency_pct"] = eff
+        dispatch_data = data.get("dispatch_strategy")
+        if dispatch_data:
+            battery_kwargs["dispatch_strategy"] = _parse_dispatch_strategy_config(dispatch_data)
         battery_config = BatteryConfig(**battery_kwargs)
 
     annual_consumption: float | None = None
