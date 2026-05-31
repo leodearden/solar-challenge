@@ -1148,3 +1148,44 @@ class TestParseHomeConfigErrorPaths:
         assert resp.status_code == 400
         data = resp.get_json()
         assert "error" in data
+
+
+# ===================================================================
+# _parse_date_range unit tests
+# ===================================================================
+
+
+class TestParseDateRange:
+    """Unit tests for the module-level _parse_date_range(data) helper."""
+
+    def test_days_seven_returns_june_window(self) -> None:
+        """days=7 returns a 7-day window starting 2024-06-01."""
+        from solar_challenge.web.api import _parse_date_range
+
+        start, end = _parse_date_range({"days": 7})
+        assert start == "2024-06-01"
+        assert end == "2024-06-07"
+
+    def test_days_365_returns_full_year(self) -> None:
+        """days=365 is the special case: returns the full 2024 calendar year."""
+        from solar_challenge.web.api import _parse_date_range
+
+        start, end = _parse_date_range({"days": 365})
+        assert start == "2024-01-01"
+        assert end == "2024-12-31"
+
+    def test_explicit_start_end_returned_verbatim(self) -> None:
+        """Explicit start/end strings are returned as-is."""
+        from solar_challenge.web.api import _parse_date_range
+
+        start, end = _parse_date_range({"start": "2024-03-01", "end": "2024-03-05"})
+        assert start == "2024-03-01"
+        assert end == "2024-03-05"
+
+    def test_empty_data_returns_full_year_defaults(self) -> None:
+        """Empty dict returns the default full-year window."""
+        from solar_challenge.web.api import _parse_date_range
+
+        start, end = _parse_date_range({})
+        assert start == "2024-01-01"
+        assert end == "2024-12-31"
