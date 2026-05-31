@@ -40,6 +40,18 @@ class TestPVConfigBasics:
         assert config.tilt == 35.0  # UK optimal
         assert config.name == ""
 
+    def test_degradation_fields_default_values(self):
+        """PVConfig exposes system_age_years and degradation_rate_per_year with correct defaults."""
+        config = PVConfig(capacity_kw=4.0)
+        assert config.system_age_years == 0.0
+        assert config.degradation_rate_per_year == 0.005
+
+    def test_degradation_fields_store_explicit_values(self):
+        """PVConfig stores explicitly provided system_age_years and degradation_rate_per_year."""
+        config = PVConfig(capacity_kw=4.0, system_age_years=20, degradation_rate_per_year=0.01)
+        assert config.system_age_years == 20.0
+        assert config.degradation_rate_per_year == 0.01
+
 
 class TestPVConfigDefaults:
     """Test default system configurations."""
@@ -86,6 +98,32 @@ class TestPVConfigValidation:
             PVConfig(capacity_kw=1.0, tilt=-1.0)
         with pytest.raises(ValueError, match="Tilt"):
             PVConfig(capacity_kw=1.0, tilt=91.0)
+
+    def test_system_age_must_be_non_negative(self):
+        """system_age_years < 0 raises ValueError with 'non-negative' message."""
+        with pytest.raises(ValueError, match="non-negative"):
+            PVConfig(capacity_kw=4.0, system_age_years=-1.0)
+        with pytest.raises(ValueError, match="non-negative"):
+            PVConfig(capacity_kw=4.0, system_age_years=-0.001)
+
+    def test_degradation_rate_must_be_zero_to_one(self):
+        """degradation_rate_per_year outside [0, 1] raises ValueError with '0-1' message."""
+        with pytest.raises(ValueError, match="0-1"):
+            PVConfig(capacity_kw=4.0, degradation_rate_per_year=1.5)
+        with pytest.raises(ValueError, match="0-1"):
+            PVConfig(capacity_kw=4.0, degradation_rate_per_year=-0.1)
+
+    def test_system_age_valid_boundaries(self):
+        """Valid boundary values for system_age_years are accepted without error."""
+        PVConfig(capacity_kw=4.0, system_age_years=0.0)  # new system
+        PVConfig(capacity_kw=4.0, system_age_years=5.5)  # fractional years
+        PVConfig(capacity_kw=4.0, system_age_years=25.0)  # old system
+
+    def test_degradation_rate_valid_boundaries(self):
+        """Valid boundary values for degradation_rate_per_year are accepted without error."""
+        PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.0)   # no degradation
+        PVConfig(capacity_kw=4.0, degradation_rate_per_year=1.0)   # max rate
+        PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.005) # default rate
 
 
 class TestCreatePVSystem:
@@ -195,6 +233,54 @@ class TestSimulatePVOutput:
         output = simulate_pv_output(config, location, sample_weather_data)
         # Last entry has zero irradiance
         assert output.iloc[-1] == pytest.approx(0.0, abs=0.01)
+
+    def test_degradation_applied_in_live_path(self, sample_weather_data):
+        """simulate_pv_output with system_age_years=20 returns 90% of the age-0 output.
+
+        This is the live-path signal test: it verifies that degradation is wired into
+        the production function, not just the standalone apply_degradation helper.
+        The pre-degradation ac_power is identical for age-0 and age-20 (the new fields
+        don't enter the pvlib model chain), so the ratio is exactly 0.90.
+        """
+        location = Location.bristol()
+        age0_config = PVConfig(capacity_kw=4.0)
+        age20_config = PVConfig(capacity_kw=4.0, system_age_years=20)
+
+        age0 = simulate_pv_output(age0_config, location, sample_weather_data)
+        age20 = simulate_pv_output(age20_config, location, sample_weather_data)
+
+        # Ensure there is meaningful generation (not all-zero)
+        assert age0.sum() > 0
+
+        # age-20 output must be exactly 90% of age-0 (factor = 1 - 20*0.005 = 0.90)
+        assert age20.sum() == pytest.approx(0.90 * age0.sum(), rel=1e-6)
+        assert np.allclose(age20.values, (age0 * 0.90).values)
+
+    def test_fully_degraded_system_yields_zero(self, sample_weather_data):
+        """A fully degraded system (age*rate > 1) yields all-zero generation, not negative.
+
+        calculate_degradation_factor clamps the factor to max(0.0, factor). With
+        system_age_years=300 and degradation_rate_per_year=0.01 the raw factor would
+        be 1 - 300*0.01 = -2.0, which is clamped to 0.0. This exercises that branch
+        via the live simulate_pv_output path so negative output is never returned.
+        """
+        location = Location.bristol()
+        # Confirm there is meaningful pre-degradation generation (non-trivial fixture)
+        age0_config = PVConfig(capacity_kw=4.0)
+        age0 = simulate_pv_output(age0_config, location, sample_weather_data)
+        assert age0.sum() > 0, "fixture must produce non-zero generation for this test to be meaningful"
+
+        # 300 years * 0.01/yr = raw factor -2.0 → clamped to 0.0 → all-zero output
+        fully_degraded_config = PVConfig(
+            capacity_kw=4.0,
+            system_age_years=300,
+            degradation_rate_per_year=0.01,
+        )
+        output = simulate_pv_output(fully_degraded_config, location, sample_weather_data)
+        # Factor == 0.0 is exact (clamped integer multiplication), so == 0.0 is safe
+        assert (output == 0.0).all(), (
+            "Fully degraded system must produce zero output, not negative values"
+        )
 
 
 class TestInterpolateToMinuteResolution:

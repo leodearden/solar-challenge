@@ -34,6 +34,11 @@ class PVConfig:
         inverter_efficiency: Inverter efficiency as fraction (default 0.96 = 96%)
         inverter_capacity_kw: AC capacity in kW (default = DC capacity)
         custom_inverter_params: Optional custom pvlib inverter parameters dict
+
+        # Degradation parameters (PV-DGR)
+        system_age_years: Age of the PV system in years (default 0.0 = new system)
+        degradation_rate_per_year: Annual capacity degradation as a fraction
+            (default 0.005 = 0.5%/year, typical for crystalline silicon panels)
     """
 
     capacity_kw: float
@@ -50,6 +55,10 @@ class PVConfig:
     inverter_efficiency: float = 0.96  # 96% efficiency
     inverter_capacity_kw: Optional[float] = None  # Defaults to DC capacity
     custom_inverter_params: Optional[dict[str, float]] = None
+
+    # Degradation parameters (PV-DGR)
+    system_age_years: float = 0.0  # New system (no degradation)
+    degradation_rate_per_year: float = 0.005  # 0.5%/year (typical crystalline silicon)
 
     def __post_init__(self) -> None:
         """Validate PV configuration parameters."""
@@ -74,6 +83,19 @@ class PVConfig:
         if self.inverter_capacity_kw is not None and self.inverter_capacity_kw <= 0:
             raise ValueError(
                 f"Inverter capacity must be positive, got {self.inverter_capacity_kw} kW"
+            )
+        # NOTE: The error messages below intentionally mirror the guards in
+        # calculate_degradation_factor (see pv.py). Both use the same substrings
+        # ("non-negative", "0-1") so that any callers matching on those strings
+        # work regardless of which layer raised. If you change the wording here,
+        # update calculate_degradation_factor (and vice versa).
+        if self.system_age_years < 0:
+            raise ValueError(
+                f"System age must be non-negative, got {self.system_age_years}"
+            )
+        if not 0 <= self.degradation_rate_per_year <= 1:
+            raise ValueError(
+                f"Degradation rate must be 0-1, got {self.degradation_rate_per_year}"
             )
 
     @property
@@ -374,6 +396,13 @@ def simulate_pv_output(
 
     # Ensure no negative values (numerical noise)
     ac_power = ac_power.clip(lower=0.0)
+
+    # Apply panel degradation based on system age
+    ac_power = apply_degradation(
+        ac_power,
+        config.system_age_years,
+        config.degradation_rate_per_year,
+    )
 
     return ac_power
 

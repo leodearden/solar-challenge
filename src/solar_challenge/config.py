@@ -614,6 +614,8 @@ def _parse_pv_config(data: dict[str, Any]) -> PVConfig:
         temperature_coefficient=data.get("temperature_coefficient", -0.004),
         inverter_efficiency=data.get("inverter_efficiency", 0.96),
         inverter_capacity_kw=data.get("inverter_capacity_kw"),
+        system_age_years=data.get("system_age_years", 0.0),
+        degradation_rate_per_year=data.get("degradation_rate_per_year", 0.005),
     )
 
 
