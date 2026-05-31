@@ -471,10 +471,15 @@ def calculate_summary(
     # Calculate simulation duration
     sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
 
-    # Calculate SEG revenue if tariff is provided
+    # Calculate SEG revenue if tariff is provided.
+    # Routed through SEGTariff + calculate_seg_revenue — single source of SEG math.
+    # SEGTariff validates rate >= 0; negative values raise ValueError here.
     seg_revenue_gbp: Optional[float] = None
     if seg_tariff_pence_per_kwh is not None:
-        seg_revenue_gbp = total_export * seg_tariff_pence_per_kwh / 100.0
+        seg_revenue_gbp = calculate_seg_revenue(
+            total_export,
+            SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh),
+        )
 
     # Calculate heat pump metrics if heat pump load is present
     total_heat_pump_kwh: Optional[float] = None
