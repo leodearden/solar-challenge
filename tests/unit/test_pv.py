@@ -234,6 +234,28 @@ class TestSimulatePVOutput:
         # Last entry has zero irradiance
         assert output.iloc[-1] == pytest.approx(0.0, abs=0.01)
 
+    def test_degradation_applied_in_live_path(self, sample_weather_data):
+        """simulate_pv_output with system_age_years=20 returns 90% of the age-0 output.
+
+        This is the live-path signal test: it verifies that degradation is wired into
+        the production function, not just the standalone apply_degradation helper.
+        The pre-degradation ac_power is identical for age-0 and age-20 (the new fields
+        don't enter the pvlib model chain), so the ratio is exactly 0.90.
+        """
+        location = Location.bristol()
+        age0_config = PVConfig(capacity_kw=4.0)
+        age20_config = PVConfig(capacity_kw=4.0, system_age_years=20)
+
+        age0 = simulate_pv_output(age0_config, location, sample_weather_data)
+        age20 = simulate_pv_output(age20_config, location, sample_weather_data)
+
+        # Ensure there is meaningful generation (not all-zero)
+        assert age0.sum() > 0
+
+        # age-20 output must be exactly 90% of age-0 (factor = 1 - 20*0.005 = 0.90)
+        assert age20.sum() == pytest.approx(0.90 * age0.sum(), rel=1e-6)
+        assert np.allclose(age20.values, (age0 * 0.90).values)
+
 
 class TestInterpolateToMinuteResolution:
     """Test PV-007: 1-minute resolution interpolation."""
