@@ -522,6 +522,16 @@ class TOUOptimizedStrategy(DispatchStrategy):
         # DispatchDecision forbids.  Passing charge_kw (the PV charge already
         # computed above) as pv_charge_power_kw lets the controller's residual
         # clamp share the max_charge_kw inverter budget between PV and grid.
+        #
+        # Seam note: ctx.is_cheap_period (caller-computed) is the SOLE authority
+        # on whether grid-charging is cheap.  The strategy's own peak_hours /
+        # _get_tariff_period() governs only battery charge_kw / discharge_kw
+        # above; it does NOT gate grid charging.  If the caller supplies
+        # is_cheap_period=True even during a configured peak hour (e.g. because
+        # a TOU schedule varies by season), grid charging proceeds.  This is
+        # intentional — the context is the single source of truth for grid-import
+        # economics, keeping the two dispatch paths (γ function path + strategy
+        # path) consistent without re-deriving cheapness from hour windows.
         grid_charge_kw = 0.0
         if (
             grid_charge_ctx is not None

@@ -1969,7 +1969,11 @@ class TestTOUOptimizedStrategyGridCharging:
         assert decision.grid_charge_kw == pytest.approx(expected_grid)
 
     def test_offpeak_excess_pv_grid_charges_residual(self, standard_tou_strategy):
-        """(2) Off-peak excess PV: grid fills remaining headroom after PV charge."""
+        """(2) Off-peak excess PV: grid fills remaining headroom after PV charge.
+
+        Hand-computed literal: residual_kw = max_charge_kw(3.0) - pv(2.0) = 1.0 kW.
+        gate3 gap_power_kw = (4.5-1.0)/0.95/1.0 ≈ 3.68 kW > residual → residual clamps.
+        """
         ctx = self._FAVOURABLE_CTX
         decision = standard_tou_strategy.decide_action(
             timestamp=datetime(2024, 1, 1, 3, 0, 0),
@@ -1980,17 +1984,10 @@ class TestTOUOptimizedStrategyGridCharging:
             timestep_minutes=60.0,
             grid_charge_ctx=ctx,
         )
-        expected_grid = compute_grid_charge_power_kw(
-            ctx,
-            battery_soc_kwh=1.0,
-            capacity_kwh=5.0,
-            pv_charge_power_kw=2.0,  # PV charge_kw passed as pv_charge_power_kw
-            timestep_minutes=60.0,
-        )
         assert decision.charge_kw == pytest.approx(2.0)
         assert decision.discharge_kw == 0.0
-        assert decision.grid_charge_kw > 0.0
-        assert decision.grid_charge_kw == pytest.approx(expected_grid)
+        # Residual clamp: max_charge_kw(3.0) - pv_charge_power_kw(2.0) = 1.0 kW
+        assert decision.grid_charge_kw == pytest.approx(1.0)
 
     def test_no_ctx_no_grid_charge(self, standard_tou_strategy):
         """(3) Guard: grid_charge_ctx=None → grid_charge_kw stays 0.0."""
@@ -2079,3 +2076,72 @@ class TestTOUOptimizedStrategyGridCharging:
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == pytest.approx(2.0)
         assert decision.grid_charge_kw == 0.0
+
+    def test_discharge_guard_prevents_grid_charge(self, standard_tou_strategy):
+        """Discharge guard: peak shortfall with is_cheap_period=True is blocked by strategy.
+
+        The strategy-level ``discharge_kw == 0.0`` guard is the active gate here,
+        NOT Gate1 (is_cheap_period) inside the controller — because is_cheap_period=True
+        would pass Gate1.  This test verifies that the guard cannot be regressed away
+        without raising a ValueError from DispatchDecision (grid_charge_kw>0 + discharge_kw>0).
+        """
+        # Favourable context that WOULD trigger grid charging if discharge_kw were 0
+        ctx = GridChargeContext(
+            current_rate=0.10,
+            peak_rate=0.35,
+            is_cheap_period=True,  # caller says cheap — Gate1 passes
+            target_soc_fraction=0.9,
+            max_charge_kw=3.0,
+            round_trip_efficiency=0.9,
+            charge_efficiency=0.95,
+        )
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 18, 0, 0),  # peak hour
+            generation_kw=0.5,
+            demand_kw=2.5,  # shortfall = 2.0 → discharge_kw = 2.0
+            battery_soc_kwh=2.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        # Discharge is preserved; strategy-level guard suppresses grid charge
+        assert decision.discharge_kw == pytest.approx(2.0)
+        assert decision.grid_charge_kw == 0.0
+
+    def test_soc_at_target_no_grid_charge(self, standard_tou_strategy):
+        """Gate 3: battery already at target SOC → controller returns 0.0."""
+        ctx = self._FAVOURABLE_CTX
+        # soc == target_soc_fraction * capacity → gap_kwh = 0.0
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 3, 0, 0),  # off-peak
+            generation_kw=0.0,
+            demand_kw=1.0,
+            battery_soc_kwh=4.5,   # = 0.9 * 5.0
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.grid_charge_kw == 0.0
+
+    def test_is_cheap_period_true_overrides_peak_hours(self, standard_tou_strategy):
+        """Seam test: ctx.is_cheap_period=True is the authority on grid-charging,
+        even when the timestamp falls inside the strategy's configured peak_hours.
+
+        The strategy's peak_hours govern charge_kw/discharge_kw decisions; they do
+        NOT suppress grid charging when the caller-supplied ctx says is_cheap_period=True.
+        This locks the dual-source-of-truth seam to an explicit contract: ctx wins.
+        """
+        ctx = self._FAVOURABLE_CTX  # is_cheap_period=True, spread passes
+        # Peak hour (18:00 in peak_hours=[(17,20)]), balanced load → no shortfall
+        decision = standard_tou_strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 18, 0, 0),  # peak per strategy
+            generation_kw=2.0,
+            demand_kw=2.0,  # balanced → discharge_kw=0.0, charge_kw=0.0
+            battery_soc_kwh=1.0,   # well below target (4.5 kWh) → gate3 passes
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        # ctx.is_cheap_period=True + discharge_kw=0.0 → grid charging fires
+        assert decision.discharge_kw == 0.0
+        assert decision.grid_charge_kw > 0.0
