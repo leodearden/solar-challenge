@@ -319,11 +319,26 @@ def simulate_home(
     if config.tariff_config is not None:
         tariff_rates = [config.tariff_config.get_rate(ts) for ts in index]
         import_costs = [r.grid_import * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
-        # Export revenue: use same rate as import for now (can be enhanced with separate export tariff)
-        export_revenues = [r.grid_export * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
     else:
         tariff_rates = [0.0 for _ in results_list]
         import_costs = [0.0 for _ in results_list]
+
+    # Calculate export revenue.
+    # Priority: SEG tariff > import-rate fallback > zero.
+    # When seg_tariff is set, export is priced at the SEG rate (pence/kWh converted to £).
+    # When only a tariff_config is set (no SEG), fall back to the import rate so that
+    # existing non-SEG behaviour and out-of-scope integration tests are preserved.
+    if config.seg_tariff is not None:
+        export_revenues = [
+            calculate_seg_revenue(r.grid_export, config.seg_tariff)
+            for r in results_list
+        ]
+    elif config.tariff_config is not None:
+        export_revenues = [
+            r.grid_export * rate
+            for r, rate in zip(results_list, tariff_rates, strict=True)
+        ]
+    else:
         export_revenues = [0.0 for _ in results_list]
 
     return SimulationResults(
