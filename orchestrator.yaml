@@ -1,0 +1,38 @@
+# my_solar_challenge — dark-factory orchestrator configuration.
+# Package defaults live in dark-factory/orchestrator/defaults.yaml; this file
+# overrides only what is project-specific.
+
+project_root: "/home/leo/src/my-solar-challenge"
+
+# Shared fused-memory HTTP server (one server, all projects). Only project_id
+# is per-project; the URL is always 8002.
+fused_memory:
+  url: "http://127.0.0.1:8002"
+  project_id: "my_solar_challenge"
+  server_command: []
+
+# Escalation MCP — unique port per project; MUST match .mcp.json so interactive
+# sessions and the orchestrator share one escalation server.
+escalation:
+  queue_dir: "data/escalations"
+  port: 8106
+
+# Verification commands — run inside a fresh git worktree, so they must work
+# without anything that isn't committed. This project is editable-installed into
+# a local venv/ (gitignored), which a worktree won't have — so we use `uv run`,
+# which resolves pyproject deps into an ephemeral per-worktree .venv. Validated
+# during factory-init: `uv run --extra dev` builds the package + imports cleanly.
+#
+# Tests exclude the `slow` marker (real PVGIS network calls) and `e2e`
+# (playwright browser tests) — neither belongs in a per-task verify loop.
+test_command: "uv run --extra dev pytest -m 'not slow and not e2e'"
+# No standalone linter configured; mypy strict (type_check_command) is the
+# static-analysis gate. Use a no-op rather than a command that always fails.
+lint_command: "true"
+type_check_command: "uv run --extra dev mypy src/solar_challenge"
+
+git:
+  main_branch: "main"
+  branch_prefix: "task/"
+  remote: "origin"
+  worktree_dir: ".worktrees"

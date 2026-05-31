@@ -70,3 +70,9 @@ logs/
 # Node.js (Tailwind CSS build)
 node_modules/
 package-lock.json
+
+# dark-factory orchestrator scratch — must never reach main
+# .task/ in particular: if committed, it contaminates every future worktree.
+.task/
+.taskmaster/
+data/escalations/
