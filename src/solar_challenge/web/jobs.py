@@ -6,6 +6,7 @@ home and fleet simulations in background threads, with progress
 tracking via SQLite and SSE event queues.
 """
 
+import atexit
 import collections
 import json
 import sqlite3
@@ -13,6 +14,7 @@ import threading
 import time
 import traceback
 import uuid
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
@@ -29,6 +31,29 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
+
+# Module-level weak registry of all live JobManager instances.
+# WeakSet avoids keeping managers alive past their natural lifetime.
+_active_managers: "weakref.WeakSet[JobManager]" = weakref.WeakSet()
+
+
+def shutdown_all_managers(wait: bool = False) -> None:
+    """Shut down every live JobManager registered in _active_managers.
+
+    Iterates a snapshot of the registry so that managers garbage-collected
+    between registration and this call are silently skipped.  Shutting down
+    an already-shut-down executor is a no-op, making this safe to call more
+    than once (idempotent).
+
+    Args:
+        wait: If True, block until all running workers finish.  Defaults to
+            False so the atexit hook does not stall interpreter shutdown.
+    """
+    for manager in list(_active_managers):
+        manager.shutdown(wait=wait)
+
+
+atexit.register(shutdown_all_managers)
 
 
 class JobManager:
@@ -54,10 +79,19 @@ class JobManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._event_queues: dict[str, collections.deque[dict[str, Any]]] = {}
+        _active_managers.add(self)
 
-    def shutdown(self) -> None:
-        """Shut down the thread pool executor."""
-        self._executor.shutdown(wait=False)
+    def shutdown(self, wait: bool = False) -> None:
+        """Shut down the thread pool executor.
+
+        Args:
+            wait: If True, block until all running workers finish before
+                returning.  Defaults to False so deployed-server teardown
+                (and the module-level atexit hook) exits promptly.
+                cancel_futures=True drops any queued-but-unstarted jobs so
+                they do not block process exit.
+        """
+        self._executor.shutdown(wait=wait, cancel_futures=True)
 
     def submit_home_job(
         self,
