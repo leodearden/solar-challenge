@@ -4,6 +4,7 @@ These tests encode machine-checkable repo invariants for the AGPL-3.0-or-later
 license declaration. They provide durable forward regression protection.
 """
 
+import re
 from pathlib import Path
 
 
@@ -19,12 +20,16 @@ def _get_project_docs(project_root: Path) -> list[Path]:
     return docs
 
 
+_MIT_LICENSE_RE = re.compile(r"\bMIT License\b", re.IGNORECASE)
+
+
 def test_no_project_doc_claims_mit_license(project_root: Path) -> None:
     """No project-owned doc should claim the MIT License.
 
     README.md and docs/**/*.md (excluding docs/research/) must not contain
-    the string 'mit license' (case-insensitive), since the authoritative license
-    is AGPL-3.0-or-later.
+    a whole-word 'MIT License' phrase, since the authoritative license is
+    AGPL-3.0-or-later.  A word-boundary regex avoids false positives from
+    innocent substrings such as 'permit license'.
     """
     docs = _get_project_docs(project_root)
     assert docs, "Expected at least README.md to be found"
@@ -33,7 +38,7 @@ def test_no_project_doc_claims_mit_license(project_root: Path) -> None:
     for doc in docs:
         if doc.exists():
             content = doc.read_text(encoding="utf-8")
-            if "mit license" in content.lower():
+            if _MIT_LICENSE_RE.search(content):
                 violators.append(str(doc.relative_to(project_root)))
 
     assert not violators, (
@@ -43,32 +48,41 @@ def test_no_project_doc_claims_mit_license(project_root: Path) -> None:
 
 
 def test_readme_declares_agpl(project_root: Path) -> None:
-    """README.md's License section must declare AGPL-3.0-or-later.
+    """README.md must name the AGPL-3.0-or-later license somewhere.
 
-    The '## License' section must:
-    - name the license (contain 'AGPL-3.0-or-later' or 'Affero General Public License')
-    - link to the LICENSE file (contain '(LICENSE)')
+    Checks the substantive invariant — README mentions the license name — without
+    coupling to cosmetic wording like the heading text or exact link syntax, which
+    would break on benign documentation rewrites.  Coverage of the LICENSE file
+    content itself is handled by test_license_file_is_agpl.
     """
     readme = project_root / "README.md"
     assert readme.exists(), "README.md must exist"
 
     content = readme.read_text(encoding="utf-8")
 
-    # Find the ## License section
-    assert "## License" in content, "README.md must have a '## License' section"
-
-    # Check that the license section names AGPL
     names_agpl = (
         "AGPL-3.0-or-later" in content or "Affero General Public License" in content
     )
     assert names_agpl, (
-        "README.md ## License section must name 'AGPL-3.0-or-later' or "
-        "'Affero General Public License'"
+        "README.md must name 'AGPL-3.0-or-later' or 'Affero General Public License'"
     )
 
-    # Check that it links to the LICENSE file
-    assert "(LICENSE)" in content, (
-        "README.md ## License section must link to [LICENSE](LICENSE)"
+
+def test_license_file_is_agpl(project_root: Path) -> None:
+    """The root LICENSE file must contain the GNU AGPL v3 text.
+
+    README.md and SPDX headers both point at this file; this test closes the
+    loop by verifying the file itself is AGPL rather than MIT or anything else.
+    """
+    license_file = project_root / "LICENSE"
+    assert license_file.exists(), "Root LICENSE file must exist"
+
+    content = license_file.read_text(encoding="utf-8")
+    assert "GNU AFFERO GENERAL PUBLIC LICENSE" in content, (
+        "LICENSE must contain 'GNU AFFERO GENERAL PUBLIC LICENSE'"
+    )
+    assert not _MIT_LICENSE_RE.search(content), (
+        "LICENSE must not contain 'MIT License'"
     )
 
 
