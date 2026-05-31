@@ -31,6 +31,7 @@ from solar_challenge.config import (
     _parse_ev_config,
     _parse_heat_pump_config,
     _parse_home_config,
+    _parse_pv_config,
     load_community_config,
     _parse_distribution_spec,
     _parse_fleet_distribution_config,
@@ -2279,3 +2280,25 @@ class TestParseHeatPumpEvConfigErrors:
         }
         with pytest.raises(ConfigurationError, match="heat_pump_type"):
             _parse_home_config(data, Location.bristol())
+
+
+class TestParsePVConfig:
+    """Tests that _parse_pv_config threads degradation keys through to PVConfig."""
+
+    def test_explicit_degradation_keys_are_passed_through(self) -> None:
+        """system_age_years and degradation_rate_per_year from data reach PVConfig."""
+        data = {
+            "capacity_kw": 4.0,
+            "system_age_years": 15.0,
+            "degradation_rate_per_year": 0.008,
+        }
+        pv = _parse_pv_config(data)
+        assert pv.system_age_years == 15.0
+        assert pv.degradation_rate_per_year == 0.008
+
+    def test_missing_keys_yield_dataclass_defaults(self) -> None:
+        """Omitting both keys gives PVConfig defaults (age 0.0, rate 0.005)."""
+        data = {"capacity_kw": 4.0}
+        pv = _parse_pv_config(data)
+        assert pv.system_age_years == 0.0
+        assert pv.degradation_rate_per_year == 0.005
