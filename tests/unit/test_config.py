@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
     BatteryDistributionConfig,
     ConfigurationError,
@@ -23,6 +24,7 @@ from solar_challenge.config import (
     SimulationPeriod,
     UniformDistribution,
     WeightedDiscreteDistribution,
+    _parse_community_config,
     _parse_dispatch_strategy_config,
     _parse_distribution_spec,
     _parse_fleet_distribution_config,
@@ -1770,3 +1772,24 @@ fleet_distribution:
                 assert h1.heat_pump_config.heat_pump_type == h2.heat_pump_config.heat_pump_type
                 assert h1.heat_pump_config.thermal_capacity_kw == h2.heat_pump_config.thermal_capacity_kw
                 assert h1.heat_pump_config.annual_heat_demand_kwh == h2.heat_pump_config.annual_heat_demand_kwh
+
+
+# ---------------------------------------------------------------------------
+# Community config parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseCommunityConfig:
+    """Tests for _parse_community_config."""
+
+    def test_none_returns_none(self) -> None:
+        """_parse_community_config(None) returns None (mirrors _parse_battery_config)."""
+        assert _parse_community_config(None) is None
+
+    def test_minimal_p2p(self) -> None:
+        """A minimal dict with sharing_mode='p2p' returns a valid CommunityConfig."""
+        cfg = _parse_community_config({"sharing_mode": "p2p"})
+        assert isinstance(cfg, CommunityConfig)
+        assert cfg.sharing_mode == "p2p"
+        assert cfg.community_battery is None
+        assert cfg.billing is None
