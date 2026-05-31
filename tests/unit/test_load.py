@@ -458,3 +458,32 @@ class TestWindowedStochasticGeneration:
             f"Stochastic ({stochastic_kwh:.2f} kWh) deviates more than 35% "
             f"from Elexon ({elexon_kwh:.2f} kWh)"
         )
+
+    def test_richardsonpy_runtime_error_falls_back_to_elexon(self, monkeypatch):
+        """A runtime exception inside _simulate_stochastic_day falls back to Elexon.
+
+        With richardsonpy as a hard dependency the Elexon path is a *defensive*
+        fallback, not a missing-extra gate.  Any richardsonpy runtime error must
+        degrade gracefully to the deterministic profile instead of crashing the
+        simulation.
+
+        The returned profile must still be a valid 1-minute Series (Elexon shape).
+        """
+        import solar_challenge.load as load_module
+
+        def _always_raise(*args, **kwargs):
+            raise RuntimeError("Simulated richardsonpy internal failure")
+
+        monkeypatch.setattr(load_module, "_simulate_stochastic_day", _always_raise)
+
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        # Must NOT raise — must degrade to Elexon fallback
+        profile = generate_load_profile(config, start, end)
+
+        assert isinstance(profile, pd.Series), "Fallback must return a Series"
+        assert len(profile) == 1440, "Fallback must return a full 1-day profile"
+        assert (profile >= 0).all(), "Fallback profile must have no negative values"
+        assert profile.index.tz is not None, "Fallback profile index must be tz-aware"
