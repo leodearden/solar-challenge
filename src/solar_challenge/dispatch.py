@@ -18,12 +18,19 @@ class DispatchDecision:
     """Decision from a dispatch strategy for a single timestep.
 
     Attributes:
-        charge_kw: Requested battery charging power in kW (non-negative)
+        charge_kw: Requested battery charging power in kW (non-negative).
+            Represents PV or other on-site charge power.
         discharge_kw: Requested battery discharge power in kW (non-negative)
+        grid_charge_kw: Requested grid-to-battery charging power in kW
+            (non-negative, default 0.0). Represents deliberate charging from
+            the grid (e.g. during cheap-rate periods). May co-exist with
+            charge_kw > 0 (both are charging), but is mutually exclusive with
+            discharge_kw > 0.
     """
 
     charge_kw: float
     discharge_kw: float
+    grid_charge_kw: float = 0.0
 
     def __post_init__(self) -> None:
         """Validate dispatch decision parameters."""
@@ -35,11 +42,154 @@ class DispatchDecision:
             raise ValueError(
                 f"Discharge power must be non-negative, got {self.discharge_kw} kW"
             )
+        if self.grid_charge_kw < 0:
+            raise ValueError(
+                f"Grid-charge power must be non-negative, got {self.grid_charge_kw} kW"
+            )
         if self.charge_kw > 0 and self.discharge_kw > 0:
             raise ValueError(
                 "Cannot charge and discharge simultaneously: "
                 f"charge={self.charge_kw} kW, discharge={self.discharge_kw} kW"
             )
+        if self.grid_charge_kw > 0 and self.discharge_kw > 0:
+            raise ValueError(
+                "Cannot grid-charge and discharge simultaneously: "
+                f"grid_charge={self.grid_charge_kw} kW, discharge={self.discharge_kw} kW"
+            )
+
+
+@dataclass(frozen=True)
+class GridChargeContext:
+    """Context bundle for rate-aware grid-to-battery charging.
+
+    A plain, immutable container of floats and a bool that describes the
+    current tariff environment and battery configuration needed to decide
+    how much power to draw from the grid for battery charging.
+
+    Efficiency fields (round_trip_efficiency, charge_efficiency) are
+    validated in __post_init__ to be in the half-open interval (0, 1] so
+    that compute_grid_charge_power_kw can divide by them safely.
+
+    Attributes:
+        current_rate: Current grid import rate in £/kWh
+        peak_rate: Reference peak rate in £/kWh used to evaluate the
+            economic spread gate (charging is only worthwhile when the
+            round-trip arbitrage profit is positive)
+        is_cheap_period: True when the current tariff period is considered
+            cheap enough to warrant grid charging
+        target_soc_fraction: Target state-of-charge as a fraction of
+            capacity (0.0–1.0) to fill up to during cheap periods
+        max_charge_kw: Maximum battery-side charge power in kW (hardware
+            C-rate limit of the battery/inverter). This is a battery-side
+            value; the controller uses it to bound grid draw conservatively.
+        round_trip_efficiency: Round-trip charge/discharge efficiency in
+            (0, 1], used in the spread gate calculation
+        charge_efficiency: One-way charge efficiency in (0, 1], used to
+            account for losses when computing how much grid power is needed
+            to reach the target SOC
+    """
+
+    current_rate: float
+    peak_rate: float
+    is_cheap_period: bool
+    target_soc_fraction: float
+    max_charge_kw: float
+    round_trip_efficiency: float
+    charge_efficiency: float
+
+    def __post_init__(self) -> None:
+        """Validate efficiency fields to prevent ZeroDivisionError at runtime."""
+        if not (0.0 < self.round_trip_efficiency <= 1.0):
+            raise ValueError(
+                f"round_trip_efficiency must be in (0, 1], "
+                f"got {self.round_trip_efficiency}"
+            )
+        if not (0.0 < self.charge_efficiency <= 1.0):
+            raise ValueError(
+                f"charge_efficiency must be in (0, 1], "
+                f"got {self.charge_efficiency}"
+            )
+
+
+def compute_grid_charge_power_kw(
+    ctx: GridChargeContext,
+    *,
+    battery_soc_kwh: float,
+    capacity_kwh: float,
+    pv_charge_power_kw: float,
+    timestep_minutes: float,
+) -> float:
+    """Compute the grid-to-battery charging power for the current timestep.
+
+    Implements the rate-aware dispatch controller described in PRD §3.2.
+    All inputs are floats/bool (no tariff symbols imported here).
+
+    **Frame note (PRD §3.2):** ``gap_power_kw`` is a *grid-side* quantity
+    (battery gap divided by charge efficiency, so it exceeds the energy
+    actually stored).  ``residual_kw`` is a *battery-side* quantity
+    (max battery charge rate minus PV already absorbed by the battery).
+    The final ``min()`` conservatively clamps the returned grid draw to the
+    battery-side residual headroom: when residual limits, the function
+    returns ``residual_kw`` directly rather than ``residual_kw /
+    charge_efficiency``.  This is intentional per PRD §3.2 — it avoids
+    over-committing grid import above the battery's acceptance capacity.
+    The existing ``test_residual_clamp_wins`` and
+    ``test_residual_clamp_is_battery_side`` tests pin this behaviour.
+
+    Args:
+        ctx: Tariff and battery context for this timestep.
+            ``ctx.round_trip_efficiency`` and ``ctx.charge_efficiency`` must
+            be in (0, 1] (enforced by ``GridChargeContext.__post_init__``).
+        battery_soc_kwh: Current battery state of charge in kWh.
+        capacity_kwh: Total battery capacity in kWh.
+        pv_charge_power_kw: PV charging power already being consumed by the
+            battery in this timestep (kW, battery-side). Reduces the
+            residual charging headroom available for grid charging.
+        timestep_minutes: Duration of the timestep in minutes. Must be
+            positive (raises ``ValueError`` if not).
+
+    Returns:
+        Recommended grid-to-battery charge power in kW (>= 0.0).
+        Returns 0.0 when:
+        - it is not a cheap period (ctx.is_cheap_period is False), or
+        - the spread gate fails (peak saving does not cover round-trip losses),
+        - the battery is already at or above the target SOC.
+
+    Raises:
+        ValueError: If ``timestep_minutes`` is not positive.
+    """
+    if timestep_minutes <= 0.0:
+        raise ValueError(
+            f"timestep_minutes must be positive, got {timestep_minutes}"
+        )
+
+    # Gate 1: only charge from grid during cheap periods
+    if not ctx.is_cheap_period:
+        return 0.0
+
+    # Gate 2: spread gate — only profitable if selling at peak_rate covers
+    # the round-trip energy loss when charging at current_rate.
+    # Break-even condition: peak_rate > current_rate / round_trip_efficiency
+    if ctx.peak_rate <= ctx.current_rate / ctx.round_trip_efficiency:
+        return 0.0
+
+    # Gate 3: how much energy is still needed to reach the target SOC?
+    target_kwh = ctx.target_soc_fraction * capacity_kwh
+    gap_kwh = max(0.0, target_kwh - battery_soc_kwh)
+    if gap_kwh <= 0.0:
+        return 0.0
+
+    # Convert SOC gap to a grid-side charge-power request for this timestep.
+    # gap_kwh / charge_efficiency: more grid energy needed than actually stored.
+    dt_h = timestep_minutes / 60.0
+    gap_power_kw = gap_kwh / ctx.charge_efficiency / dt_h
+
+    # Residual battery-side charging headroom after PV already occupies some.
+    # Conservative clamp: grid draw is bounded by battery residual directly
+    # (see frame note in the docstring).
+    residual_kw = max(0.0, ctx.max_charge_kw - pv_charge_power_kw)
+
+    return min(gap_power_kw, residual_kw)
 
 
 class DispatchStrategy(ABC):
@@ -67,6 +217,8 @@ class DispatchStrategy(ABC):
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
         timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
         """Decide battery charge/discharge action for current timestep.
 
@@ -77,6 +229,10 @@ class DispatchStrategy(ABC):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
+            grid_charge_ctx: Optional rate-aware grid-charging context.
+                When provided, downstream strategies (α2/α3) may use this
+                to compute grid_charge_kw.  In the base substrate (this
+                task) it is accepted and ignored.
 
         Returns:
             DispatchDecision specifying charge_kw or discharge_kw
@@ -111,6 +267,8 @@ class SelfConsumptionStrategy(DispatchStrategy):
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
         timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
         """Decide battery action to maximize self-consumption.
 
@@ -121,6 +279,8 @@ class SelfConsumptionStrategy(DispatchStrategy):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
+            grid_charge_ctx: Optional rate-aware grid-charging context
+                (accepted but not used in this strategy).
 
         Returns:
             DispatchDecision with charge_kw if excess PV available,
@@ -275,6 +435,8 @@ class TOUOptimizedStrategy(DispatchStrategy):
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
         timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
         """Decide battery action based on time-of-use tariff optimization.
 
@@ -285,6 +447,8 @@ class TOUOptimizedStrategy(DispatchStrategy):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
+            grid_charge_ctx: Optional rate-aware grid-charging context
+                (accepted but not used in the base substrate; consumed in α2).
 
         Returns:
             DispatchDecision optimized for TOU tariffs:
@@ -386,6 +550,8 @@ class PeakShavingStrategy(DispatchStrategy):
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
         timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
         """Decide battery action to limit grid import below threshold.
 
@@ -396,6 +562,8 @@ class PeakShavingStrategy(DispatchStrategy):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
+            grid_charge_ctx: Optional rate-aware grid-charging context
+                (accepted but not used in the base substrate; consumed in α3).
 
         Returns:
             DispatchDecision with:
