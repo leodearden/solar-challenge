@@ -2,11 +2,14 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import pandas as pd
 
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
+
+if TYPE_CHECKING:
+    from solar_challenge.community import CommunityResults
 
 
 @dataclass(frozen=True)
@@ -513,3 +516,100 @@ def aggregate_annual(
         annual["heat_pump_load_ratio"] = summary.heat_pump_load_ratio
 
     return annual
+
+
+def generate_community_report(
+    community_results: "CommunityResults",
+    community_summary: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Generate a markdown report for a community energy sharing simulation.
+
+    Mirrors :func:`generate_summary_report` in structure.  All kWh figures are
+    derived from the kW series using an index-inferred timestep (``dt_h``),
+    matching :func:`~solar_challenge.community.simulate_community`'s own
+    timestep derivation so the report is correct for any series cadence.
+
+    Args:
+        community_results: Output of :func:`~solar_challenge.community.simulate_community`.
+        community_summary: Optional mapping of extra key/value metadata to
+            append as a separate section.
+
+    Returns:
+        Formatted markdown report string.
+    """
+    from solar_challenge.community import CommunityResults  # runtime import (no circularity)
+
+    cr = community_results
+    fleet = cr.fleet_results
+
+    # Derive timestep from index so kW→kWh conversion is cadence-agnostic
+    index = cr.grid_import.index
+    if len(index) >= 2:
+        dt_h = (index[1] - index[0]).total_seconds() / 3600.0
+    else:
+        dt_h = 1.0 / 60.0  # assume 1-minute for degenerate single-step index
+
+    # Community grid flow totals (kWh)
+    community_import_kwh = float(cr.grid_import.sum()) * dt_h
+    community_export_kwh = float(cr.grid_export.sum()) * dt_h
+
+    # Unshared (Σ per-home) grid flow totals (kWh)
+    unshared_import_kwh = float(fleet.total_grid_import.sum()) * dt_h
+    unshared_export_kwh = float(fleet.total_grid_export.sum()) * dt_h
+
+    # Total fleet demand (kWh) — used for self-sufficiency
+    total_demand_kwh = float(fleet.total_demand.sum()) * dt_h
+
+    # Community self-sufficiency: fraction of demand met without grid import
+    if total_demand_kwh > 0:
+        self_sufficiency = max(0.0, 1.0 - community_import_kwh / total_demand_kwh)
+    else:
+        self_sufficiency = 0.0
+
+    # Determine sharing mode from the config stored in CommunityResults
+    # Fall back to battery-detection heuristic so this works with any CommunityResults
+    sharing_mode: str = getattr(
+        getattr(cr, "_config", None), "sharing_mode", ""
+    )
+    if not sharing_mode:
+        # Heuristic: if any battery charge occurred, it's community_battery mode
+        sharing_mode = "community_battery" if cr.battery_charge.abs().sum() > 0 else "p2p"
+
+    # Reduction columns
+    import_reduction_kwh = unshared_import_kwh - community_import_kwh
+    export_reduction_kwh = unshared_export_kwh - community_export_kwh
+
+    report = f"""# Community Energy Sharing Report
+
+## Sharing Mode
+{sharing_mode}
+
+## Community vs Unshared Grid Flows (kWh)
+| Metric | Unshared (Σ per-home) | Community | Reduction |
+|--------|-----------------------|-----------|-----------|
+| Grid Import | {unshared_import_kwh:.2f} | {community_import_kwh:.2f} | {import_reduction_kwh:.2f} |
+| Grid Export | {unshared_export_kwh:.2f} | {community_export_kwh:.2f} | {export_reduction_kwh:.2f} |
+
+## Community Self-Sufficiency
+{self_sufficiency:.1%}
+"""
+
+    # Community Battery section — only when battery was active
+    battery_charge_kwh = float(cr.battery_charge.sum()) * dt_h
+    battery_discharge_kwh = float(cr.battery_discharge.sum()) * dt_h
+    if battery_charge_kwh > 0 or battery_discharge_kwh > 0:
+        report += f"""
+## Community Battery (kWh)
+| Metric | Value |
+|--------|-------|
+| Charged | {battery_charge_kwh:.2f} |
+| Discharged | {battery_discharge_kwh:.2f} |
+"""
+
+    # Optional extra summary section
+    if community_summary is not None:
+        report += "\n## Additional Information\n"
+        for key, value in community_summary.items():
+            report += f"- {key}: {value}\n"
+
+    return report
