@@ -58,6 +58,42 @@ class DispatchDecision:
             )
 
 
+@dataclass(frozen=True)
+class GridChargeContext:
+    """Context bundle for rate-aware grid-to-battery charging.
+
+    A plain, immutable container of floats and a bool that describes the
+    current tariff environment and battery configuration needed to decide
+    how much power to draw from the grid for battery charging.  Inputs are
+    pre-validated upstream (battery config / efficiency bounds), so this
+    dataclass intentionally has no __post_init__ validation.
+
+    Attributes:
+        current_rate: Current grid import rate in £/kWh
+        peak_rate: Reference peak rate in £/kWh used to evaluate the
+            economic spread gate (charging is only worthwhile when the
+            round-trip arbitrage profit is positive)
+        is_cheap_period: True when the current tariff period is considered
+            cheap enough to warrant grid charging
+        target_soc_fraction: Target state-of-charge as a fraction of
+            capacity (0.0–1.0) to fill up to during cheap periods
+        max_charge_kw: Maximum battery charge power in kW (hardware limit)
+        round_trip_efficiency: Round-trip charge/discharge efficiency
+            (0.0–1.0), used in the spread gate calculation
+        charge_efficiency: One-way charge efficiency (0.0–1.0), used to
+            account for losses when computing how much grid power is needed
+            to reach the target SOC
+    """
+
+    current_rate: float
+    peak_rate: float
+    is_cheap_period: bool
+    target_soc_fraction: float
+    max_charge_kw: float
+    round_trip_efficiency: float
+    charge_efficiency: float
+
+
 class DispatchStrategy(ABC):
     """Abstract base class for battery dispatch strategies.
 
