@@ -165,8 +165,8 @@ def simulate_community(
         Community configuration; only ``sharing_mode="p2p"`` is supported in α.
     validate_balance:
         When ``True`` (default), call
-        :func:`~solar_challenge.flow.validate_energy_balance` on each timestep
-        result to enforce the (◆) per-step invariant.
+        :func:`validate_community_balance` on the completed result to enforce
+        the COMMUNITY-BALANCE invariant (PRD §3.1) after netting.
 
     Returns
     -------
@@ -182,45 +182,26 @@ def simulate_community(
     deficit: pd.Series = fleet_results.total_grid_import
     index: pd.DatetimeIndex = surplus.index
 
-    strategy = SelfConsumptionStrategy()
+    # Vectorised P2P netting — exact for p2p because there is no SOC state to
+    # track sequentially.  (simulate_timestep/validate_energy_balance are kept
+    # for the future community_battery path in β where battery SOC is sequential.)
+    cg_exp: pd.Series = (surplus - deficit).clip(lower=0)
+    cg_imp: pd.Series = (deficit - surplus).clip(lower=0)
+    zeros: pd.Series = pd.Series(0.0, index=index, dtype=float)
 
-    cg_exp_list: list[float] = []
-    cg_imp_list: list[float] = []
-    cb_ch_list: list[float] = []
-    cb_dis_list: list[float] = []
-    cb_soc_list: list[float] = []
-
-    for t in index:
-        ns = max(0.0, float(surplus[t]) - float(deficit[t]))
-        nd = max(0.0, float(deficit[t]) - float(surplus[t]))
-
-        r = simulate_timestep(
-            generation_kw=ns,
-            demand_kw=nd,
-            battery=None,
-            timestep_minutes=1.0,
-            timestamp=t.to_pydatetime(),
-            strategy=strategy,
-        )
-
-        if validate_balance:
-            validate_energy_balance(r)
-
-        # Convert kWh-per-1-min-step → kW  (×60, matching home.py convention)
-        cg_exp_list.append(r.grid_export * 60.0)
-        cg_imp_list.append(r.grid_import * 60.0)
-        cb_ch_list.append(r.battery_charge * 60.0)
-        cb_dis_list.append(r.battery_discharge * 60.0)
-        cb_soc_list.append(r.battery_soc)  # kWh, recorded as-is
-
-    return CommunityResults(
-        grid_export=pd.Series(cg_exp_list, index=index, dtype=float),
-        grid_import=pd.Series(cg_imp_list, index=index, dtype=float),
-        battery_charge=pd.Series(cb_ch_list, index=index, dtype=float),
-        battery_discharge=pd.Series(cb_dis_list, index=index, dtype=float),
-        battery_soc=pd.Series(cb_soc_list, index=index, dtype=float),
+    result = CommunityResults(
+        grid_export=cg_exp,
+        grid_import=cg_imp,
+        battery_charge=zeros.copy(),
+        battery_discharge=zeros.copy(),
+        battery_soc=zeros.copy(),
         fleet_results=fleet_results,
     )
+
+    if validate_balance:
+        validate_community_balance(fleet_results, result)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -267,22 +248,34 @@ def validate_community_balance(
     home_bch: pd.Series = fleet_results.get_aggregate_series("battery_charge")
     home_bdis: pd.Series = fleet_results.get_aggregate_series("battery_discharge")
 
-    index = total_gen.index
+    # Vectorised balance check — avoids O(n) Python loop over minute-resolution series.
+    imbalance: pd.Series = (
+        total_gen + community_results.grid_import
+    ) - (
+        total_dem
+        + community_results.grid_export
+        + (home_bch - home_bdis)
+        + (community_results.battery_charge - community_results.battery_discharge)
+    )
 
-    for t in index:
-        energy_in = float(total_gen[t]) + float(community_results.grid_import[t])
-        energy_out = (
-            float(total_dem[t])
-            + float(community_results.grid_export[t])
-            + (float(home_bch[t]) - float(home_bdis[t]))
-            + (float(community_results.battery_charge[t]) - float(community_results.battery_discharge[t]))
-        )
-        imbalance = abs(energy_in - energy_out)
-        if imbalance > tolerance:
-            raise ValueError(
-                f"Community energy balance violated at {t}: "
-                f"energy_in={energy_in:.6f} kW, energy_out={energy_out:.6f} kW, "
-                f"imbalance={imbalance:.6f} kW (tolerance={tolerance} kW)"
+    abs_imbalance: pd.Series = imbalance.abs()
+    if (abs_imbalance > tolerance).any():
+        worst_t = abs_imbalance.idxmax()
+        worst_val = float(abs_imbalance.loc[worst_t])
+        energy_in_w = float(total_gen.loc[worst_t] + community_results.grid_import.loc[worst_t])
+        energy_out_w = float(
+            total_dem.loc[worst_t]
+            + community_results.grid_export.loc[worst_t]
+            + (home_bch.loc[worst_t] - home_bdis.loc[worst_t])
+            + (
+                community_results.battery_charge.loc[worst_t]
+                - community_results.battery_discharge.loc[worst_t]
             )
+        )
+        raise ValueError(
+            f"Community energy balance violated at {worst_t}: "
+            f"energy_in={energy_in_w:.6f} kW, energy_out={energy_out_w:.6f} kW, "
+            f"imbalance={worst_val:.6f} kW (tolerance={tolerance} kW)"
+        )
 
     return True

@@ -68,6 +68,47 @@ def _make_fleet(
     return FleetResults(per_home_results=per_home, home_configs=configs)
 
 
+def _make_home_result_with_battery(
+    index: pd.DatetimeIndex,
+    gen: list[float],
+    dem: list[float],
+    bch: list[float],
+    bdis: list[float],
+) -> SimulationResults:
+    """Build a balanced SimulationResults with home battery series.
+
+    Grid flows are derived so that the per-home energy balance holds:
+    ``gen + imp + bdis == dem + exp + bch``.
+    """
+    n = len(index)
+    # net = gen - dem + bdis - bch; positive → export, negative → import
+    exp = [max(0.0, g - d + dis - ch) for g, d, ch, dis in zip(gen, dem, bch, bdis)]
+    imp = [max(0.0, d - g + ch - dis) for g, d, ch, dis in zip(gen, dem, bch, bdis)]
+    zeros = [0.0] * n
+    return SimulationResults(
+        generation=pd.Series(gen, index=index, dtype=float),
+        demand=pd.Series(dem, index=index, dtype=float),
+        self_consumption=pd.Series([min(g, d) for g, d in zip(gen, dem)], index=index, dtype=float),
+        battery_charge=pd.Series(bch, index=index, dtype=float),
+        battery_discharge=pd.Series(bdis, index=index, dtype=float),
+        battery_soc=pd.Series(zeros, index=index, dtype=float),
+        grid_import=pd.Series(imp, index=index, dtype=float),
+        grid_export=pd.Series(exp, index=index, dtype=float),
+        import_cost=pd.Series(zeros, index=index, dtype=float),
+        export_revenue=pd.Series(zeros, index=index, dtype=float),
+        tariff_rate=pd.Series(zeros, index=index, dtype=float),
+    )
+
+
+def _make_fleet_from_sim_results(per_home: list[SimulationResults]) -> FleetResults:
+    """Build a FleetResults directly from pre-built SimulationResults."""
+    configs = [
+        HomeConfig(pv_config=PVConfig(capacity_kw=1.0), load_config=LoadConfig())
+        for _ in per_home
+    ]
+    return FleetResults(per_home_results=per_home, home_configs=configs)
+
+
 # ---------------------------------------------------------------------------
 # Step-1: TestCommunityConfig
 # ---------------------------------------------------------------------------
@@ -287,3 +328,75 @@ class TestValidateCommunityBalance:
 
         result = simulate_community(fleet, CommunityConfig(sharing_mode="p2p"))
         assert validate_community_balance(fleet, result, tolerance=0.01) is True
+
+    @pytest.fixture
+    def battery_fleet(self, index: pd.DatetimeIndex) -> FleetResults:
+        """2-home fleet with asymmetric non-zero home battery series.
+
+        home_a: all generation is stored in a battery (gen=6, bch=4, exp=2, imp=0)
+        home_b: battery covers all demand     (dem=4, bdis=4, exp=0, imp=0)
+
+        Per-home balance:
+          A: 6+0+0 == 0+2+4  (6==6) ✓
+          B: 0+0+4 == 4+0+0  (4==4) ✓
+
+        Fleet aggregates (per step): gen=6, dem=4, bch=4, bdis=4, exp=2, imp=0
+        P2P netting: surplus=2, deficit=0 → cg_exp=2, cg_imp=0
+        Community balance: 6+0 == 4+2+(4-4)+0  (6==6) ✓
+        """
+        home_a = _make_home_result_with_battery(
+            index,
+            gen=[6.0] * 3,
+            dem=[0.0] * 3,
+            bch=[4.0] * 3,
+            bdis=[0.0] * 3,
+        )
+        home_b = _make_home_result_with_battery(
+            index,
+            gen=[0.0] * 3,
+            dem=[4.0] * 3,
+            bch=[0.0] * 3,
+            bdis=[4.0] * 3,
+        )
+        return _make_fleet_from_sim_results([home_a, home_b])
+
+    def test_balance_returns_true_with_home_batteries(
+        self, battery_fleet: FleetResults
+    ) -> None:
+        """validate_community_balance returns True when homes have non-zero battery series.
+
+        This locks in the Σ(bch_i − bdis_i) term: with bch=4, bdis=4 per step, the
+        home battery net is 0 and the balance equation closes correctly.  Any sign
+        error or omission of that term would break this fixture's equation.
+        """
+        from solar_challenge.community import (
+            simulate_community,
+            validate_community_balance,
+        )
+
+        result = simulate_community(battery_fleet, CommunityConfig(sharing_mode="p2p"))
+        assert validate_community_balance(battery_fleet, result) is True
+
+    def test_balance_raises_on_corrupt_community_battery_charge(
+        self, battery_fleet: FleetResults
+    ) -> None:
+        """validate_community_balance raises when community battery_charge is perturbed.
+
+        Setting cb_ch = +1.0 kW adds 1.0 to the RHS while LHS stays the same,
+        violating the (cb_ch − cb_dis) term in COMMUNITY-BALANCE.
+        """
+        import dataclasses as dc
+
+        from solar_challenge.community import (
+            CommunityResults,
+            simulate_community,
+            validate_community_balance,
+        )
+
+        result = simulate_community(battery_fleet, CommunityConfig(sharing_mode="p2p"))
+        # Inject a non-zero community battery charge; balance must break
+        bad_cb_ch = result.battery_charge.copy()
+        bad_cb_ch.iloc[0] = 1.0  # cb_ch was 0.0; adding 1.0 increases RHS by 1.0
+        corrupted = dc.replace(result, battery_charge=bad_cb_ch)
+        with pytest.raises(ValueError, match="balance"):
+            validate_community_balance(battery_fleet, corrupted)
