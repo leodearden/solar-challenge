@@ -235,6 +235,84 @@ class TestFleetChartFunctions:
         assert len(parsed["data"]) == 2
 
 
+class TestFinancialBreakdownPricing:
+    """Tests that financial_breakdown uses engine-priced series, not hardcoded rates."""
+
+    def test_uses_engine_priced_series(self) -> None:
+        """financial_breakdown must aggregate import_cost/export_revenue series directly."""
+        pytest.importorskip("plotly")
+        import numpy as np
+        import pandas as pd
+        from solar_challenge.home import SimulationResults
+        from solar_challenge.web.charts import financial_breakdown
+
+        # ~2 days at 1-min resolution
+        index = pd.date_range(
+            "2024-06-01", periods=2 * 24 * 60, freq="min", tz="Europe/London"
+        )
+        n = len(index)
+        hours = np.arange(n) / 60.0
+
+        # Sinusoidal generation (3 kW peak), flat 0.5 kW demand
+        generation = np.maximum(0, np.sin(hours * np.pi / 12) * 3.0)
+        demand = np.full(n, 0.5)
+        self_consumption = np.minimum(generation, demand)
+        grid_import = np.maximum(0, demand - generation)
+        grid_export = np.maximum(0, generation - demand)
+
+        # Engine-priced series: DELIBERATELY inconsistent with hardcoded 0.245/0.15
+        # import: 0.30 GBP/kWh  (kW / 60 * rate = per-minute GBP)
+        # export: 0.05 GBP/kWh  (realistic SEG, ~3x smaller than hardcoded 0.15)
+        engine_import_cost = grid_import / 60 * 0.30
+        engine_export_revenue = grid_export / 60 * 0.05
+
+        def _s(v: np.ndarray, name: str) -> pd.Series:
+            return pd.Series(v, index=index, name=name)
+
+        zeros = np.zeros(n)
+        results = SimulationResults(
+            generation=_s(generation, "generation_kw"),
+            demand=_s(demand, "demand_kw"),
+            self_consumption=_s(self_consumption, "self_consumption_kw"),
+            battery_charge=_s(zeros, "battery_charge_kw"),
+            battery_discharge=_s(zeros, "battery_discharge_kw"),
+            battery_soc=_s(zeros, "battery_soc_kwh"),
+            grid_import=_s(grid_import, "grid_import_kw"),
+            grid_export=_s(grid_export, "grid_export_kw"),
+            import_cost=_s(engine_import_cost, "import_cost_gbp"),
+            export_revenue=_s(engine_export_revenue, "export_revenue_gbp"),
+            tariff_rate=_s(zeros, "tariff_rate_per_kwh"),
+            strategy_name="self_consumption",
+        )
+
+        output = financial_breakdown(results)
+        assert output and output != "{}"
+        parsed = json.loads(output)
+        traces = {t["name"]: t for t in parsed["data"]}
+
+        # Expected daily totals from engine series (NO /60 division — already per-minute GBP)
+        expected_revenue = results.export_revenue.resample("D").sum().round(2)
+        expected_cost = results.import_cost.resample("D").sum().round(2)
+
+        # (1) Chart totals must match engine series daily sums
+        assert sum(traces["Daily Revenue"]["y"]) == pytest.approx(
+            expected_revenue.sum(), abs=0.02
+        ), "Daily Revenue total must come from engine export_revenue series"
+        assert sum(traces["Daily Cost"]["y"]) == pytest.approx(
+            expected_cost.sum(), abs=0.02
+        ), "Daily Cost total must come from engine import_cost series"
+
+        # (2) Revenue must NOT match the old hardcoded 0.15 recompute (proves it's gone)
+        total_grid_export_kwh = float(results.grid_export.sum() / 60)
+        old_hardcoded_revenue = total_grid_export_kwh * 0.15
+        revenue_from_chart = sum(traces["Daily Revenue"]["y"])
+        # Engine rate is 0.05, old hardcoded was 0.15 — chart total should be ~3x smaller
+        assert not pytest.approx(old_hardcoded_revenue, rel=0.1) == revenue_from_chart, (
+            "Daily Revenue must NOT equal the hardcoded 0.15 recompute — "
+            "hardcoded rates must be removed"
+        )
+
+
 class TestFleetResultsRoute:
     """Tests for the GET /results/fleet/<run_id> route."""
 
