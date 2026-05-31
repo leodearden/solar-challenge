@@ -208,6 +208,66 @@ class TestSimulateHomeSEGPricing:
         assert summary.net_cost_gbp == pytest.approx(expected_net_cost, rel=1e-6)
 
 
+class TestSimulateHomeSEGNonRegression:
+    """Non-regression + preset-wiring guards for simulate_home SEG changes."""
+
+    @pytest.fixture
+    def no_seg_config(self):
+        """HomeConfig with flat import tariff and NO seg_tariff (legacy mode)."""
+        flat_period = TariffPeriod(
+            start_time="00:00",
+            end_time="00:00",  # Crosses midnight — covers the full day
+            rate_per_kwh=0.20,
+            name="All day",
+        )
+        return HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+            tariff_config=TariffConfig(periods=(flat_period,), name="Flat 20p"),
+            location=Location.bristol(),
+        )
+
+    def test_legacy_export_priced_at_import_rate(self, no_seg_config):
+        """Without seg_tariff, export_revenue == grid_export * tariff_rate / 60 (element-wise)."""
+        results = simulate_home(
+            no_seg_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+        )
+        # export_revenue (£/min) == grid_export (kW) * tariff_rate (£/kWh) / 60 (min/h)
+        expected = results.grid_export * results.tariff_rate / 60.0
+        pd.testing.assert_series_equal(
+            results.export_revenue, expected, check_names=False, rtol=1e-6
+        )
+
+    def test_named_preset_end_to_end(self):
+        """resolve_seg_tariff('Octopus') wired into HomeConfig prices export at 4.1 p/kWh."""
+        flat_period = TariffPeriod(
+            start_time="00:00",
+            end_time="00:00",
+            rate_per_kwh=0.25,
+            name="All day",
+        )
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=5.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+            tariff_config=TariffConfig(periods=(flat_period,), name="Flat 25p"),
+            seg_tariff=resolve_seg_tariff("Octopus"),
+            location=Location.bristol(),
+        )
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+        )
+        summary = calculate_summary(results)
+        total_export_kwh = results.grid_export.sum() / 60.0
+        expected_revenue = calculate_seg_revenue(total_export_kwh, SEG_PRESETS["Octopus"])
+        assert summary.total_export_revenue_gbp == pytest.approx(expected_revenue, rel=1e-3)
+
+
 class TestAlignTMYToDemand:
     """Test TMY data alignment."""
 
