@@ -138,10 +138,15 @@ class TariffConfig:
             if period.matches_time(timestamp):
                 return period.rate_per_kwh
 
-        # If no period matches, raise error
+        # If no period matches, raise error — likely a gap in user-defined periods.
+        # Hint: to guarantee full-24 h coverage (including 23:59), end your last
+        # period with start_time=="00:00" and end_time=="00:00" so it midnight-
+        # crosses and matches every time-of-day.
         raise ValueError(
             f"No tariff period matches timestamp {timestamp}. "
-            "Tariff periods may have gaps in coverage."
+            "Tariff periods may have gaps in coverage. "
+            "For full-day coverage (including 23:59) use a midnight-crossing "
+            'period: TariffPeriod(start_time="00:00", end_time="00:00", ...).'
         )
 
     @classmethod
