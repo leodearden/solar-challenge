@@ -1630,6 +1630,153 @@ class TestComputeGridChargePowerKw:
         assert result_30 == pytest.approx(result_60 * 2.0)
 
 
+class TestDecideActionAcceptsGridChargeCtx:
+    """Test that decide_action accepts keyword-only grid_charge_ctx and ignores it.
+
+    In this task the param is accept-and-ignore; real logic lands in α2/α3.
+    """
+
+    # A "favourable" context that would normally trigger grid charging
+    _CHEAP_CTX = GridChargeContext(
+        current_rate=0.10,
+        peak_rate=0.40,
+        is_cheap_period=True,
+        target_soc_fraction=0.9,
+        max_charge_kw=5.0,
+        round_trip_efficiency=0.81,
+        charge_efficiency=0.9,
+    )
+
+    # Shared scenario: shortfall, so discharge decision without ctx
+    _TS = datetime(2024, 1, 1, 12, 0, 0)
+
+    def _baseline_sc(self):
+        """SelfConsumptionStrategy decision without grid_charge_ctx."""
+        s = SelfConsumptionStrategy()
+        return s.decide_action(
+            timestamp=self._TS,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+
+    def _baseline_tou(self):
+        """TOUOptimizedStrategy (off-peak) decision without grid_charge_ctx."""
+        s = TOUOptimizedStrategy(peak_hours=[(17, 20)])
+        return s.decide_action(
+            timestamp=self._TS,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+
+    def _baseline_ps(self):
+        """PeakShavingStrategy decision without grid_charge_ctx."""
+        s = PeakShavingStrategy(import_limit_kw=2.0)
+        return s.decide_action(
+            timestamp=self._TS,
+            generation_kw=0.0,
+            demand_kw=5.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+
+    # --- SelfConsumptionStrategy ---
+
+    def test_sc_with_ctx_same_as_without(self):
+        """SelfConsumption: decision identical with/without grid_charge_ctx."""
+        s = SelfConsumptionStrategy()
+        with_ctx = s.decide_action(
+            timestamp=self._TS,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+            grid_charge_ctx=self._CHEAP_CTX,
+        )
+        without = self._baseline_sc()
+        assert with_ctx.charge_kw == without.charge_kw
+        assert with_ctx.discharge_kw == without.discharge_kw
+        assert with_ctx.grid_charge_kw == 0.0
+
+    def test_sc_ctx_none_same_as_without(self):
+        """SelfConsumption: explicit grid_charge_ctx=None is the same as omitting."""
+        s = SelfConsumptionStrategy()
+        with_none = s.decide_action(
+            timestamp=self._TS,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+            grid_charge_ctx=None,
+        )
+        without = self._baseline_sc()
+        assert with_none.charge_kw == without.charge_kw
+        assert with_none.discharge_kw == without.discharge_kw
+
+    def test_sc_ctx_is_keyword_only(self):
+        """SelfConsumption: passing grid_charge_ctx positionally raises TypeError."""
+        s = SelfConsumptionStrategy()
+        with pytest.raises(TypeError):
+            s.decide_action(  # type: ignore[call-arg]
+                self._TS, 1.0, 3.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
+            )
+
+    # --- TOUOptimizedStrategy ---
+
+    def test_tou_with_ctx_same_as_without(self):
+        """TOUOptimized: decision identical with/without grid_charge_ctx."""
+        s = TOUOptimizedStrategy(peak_hours=[(17, 20)])
+        with_ctx = s.decide_action(
+            timestamp=self._TS,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+            grid_charge_ctx=self._CHEAP_CTX,
+        )
+        without = self._baseline_tou()
+        assert with_ctx.charge_kw == without.charge_kw
+        assert with_ctx.discharge_kw == without.discharge_kw
+        assert with_ctx.grid_charge_kw == 0.0
+
+    def test_tou_ctx_is_keyword_only(self):
+        """TOUOptimized: passing grid_charge_ctx positionally raises TypeError."""
+        s = TOUOptimizedStrategy(peak_hours=[(17, 20)])
+        with pytest.raises(TypeError):
+            s.decide_action(  # type: ignore[call-arg]
+                self._TS, 3.0, 1.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
+            )
+
+    # --- PeakShavingStrategy ---
+
+    def test_ps_with_ctx_same_as_without(self):
+        """PeakShaving: decision identical with/without grid_charge_ctx."""
+        s = PeakShavingStrategy(import_limit_kw=2.0)
+        with_ctx = s.decide_action(
+            timestamp=self._TS,
+            generation_kw=0.0,
+            demand_kw=5.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+            grid_charge_ctx=self._CHEAP_CTX,
+        )
+        without = self._baseline_ps()
+        assert with_ctx.charge_kw == without.charge_kw
+        assert with_ctx.discharge_kw == without.discharge_kw
+        assert with_ctx.grid_charge_kw == 0.0
+
+    def test_ps_ctx_is_keyword_only(self):
+        """PeakShaving: passing grid_charge_ctx positionally raises TypeError."""
+        s = PeakShavingStrategy(import_limit_kw=2.0)
+        with pytest.raises(TypeError):
+            s.decide_action(  # type: ignore[call-arg]
+                self._TS, 0.0, 5.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
+            )
+
+
 class TestPeakShavingStrategyEdgeCases:
     """Test peak shaving edge cases."""
 
