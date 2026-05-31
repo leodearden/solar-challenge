@@ -1005,3 +1005,29 @@ class TestErrorPaths:
         """DELETE on job status endpoint returns 405."""
         resp = client.delete("/api/jobs/some-id")
         assert resp.status_code == 405
+
+
+# ===================================================================
+# _parse_home_config boundary tests (call the function directly)
+# ===================================================================
+
+
+class TestParseHomeConfigCapabilities:
+    """Boundary tests calling _parse_home_config directly."""
+
+    def test_heat_pump_fields_populate_home_config(self) -> None:
+        """heat_pump dict in payload populates HomeConfig.heat_pump_config."""
+        from solar_challenge.web.api import _parse_home_config
+
+        payload = {
+            **VALID_HOME_PAYLOAD,
+            "heat_pump": {
+                "type": "ASHP",
+                "thermal_capacity_kw": 8.0,
+                "annual_heat_demand_kwh": 8000,
+            },
+        }
+        home_config, _start, _end, _name = _parse_home_config(payload)
+        assert home_config.heat_pump_config is not None
+        assert home_config.heat_pump_config.heat_pump_type == "ASHP"
+        assert home_config.heat_pump_config.thermal_capacity_kw == 8.0
