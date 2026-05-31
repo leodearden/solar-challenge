@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 import pandas as pd
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 
@@ -172,31 +172,67 @@ def simulate_community(
     -------
     CommunityResults
     """
-    if config.sharing_mode != "p2p":
-        raise NotImplementedError(
-            f"sharing_mode={config.sharing_mode!r} is not yet implemented; "
-            "community_battery dispatch will be added in β (task #31)."
-        )
-
     surplus: pd.Series = fleet_results.total_grid_export
     deficit: pd.Series = fleet_results.total_grid_import
     index: pd.DatetimeIndex = surplus.index
 
-    # Vectorised P2P netting — exact for p2p because there is no SOC state to
-    # track sequentially.  (simulate_timestep/validate_energy_balance are kept
-    # for the future community_battery path in β where battery SOC is sequential.)
-    cg_exp: pd.Series = (surplus - deficit).clip(lower=0)
-    cg_imp: pd.Series = (deficit - surplus).clip(lower=0)
-    zeros: pd.Series = pd.Series(0.0, index=index, dtype=float)
+    # Branch on the community battery config; using a local variable so mypy
+    # narrows Optional[BatteryConfig] → BatteryConfig for the Battery(...) call.
+    cb_config = config.community_battery
 
-    result = CommunityResults(
-        grid_export=cg_exp,
-        grid_import=cg_imp,
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        fleet_results=fleet_results,
-    )
+    if cb_config is None:
+        # Vectorised P2P netting — exact for p2p because there is no SOC state
+        # to track sequentially.
+        cg_exp: pd.Series = (surplus - deficit).clip(lower=0)
+        cg_imp: pd.Series = (deficit - surplus).clip(lower=0)
+        zeros: pd.Series = pd.Series(0.0, index=index, dtype=float)
+
+        result = CommunityResults(
+            grid_export=cg_exp,
+            grid_import=cg_imp,
+            battery_charge=zeros.copy(),
+            battery_discharge=zeros.copy(),
+            battery_soc=zeros.copy(),
+            fleet_results=fleet_results,
+        )
+    else:
+        # Community battery dispatch — sequential because SOC is stateful.
+        # Reuses Battery + simulate_timestep + SelfConsumptionStrategy from α.
+        battery = Battery(cb_config)
+        strategy = SelfConsumptionStrategy()
+
+        cg_imp_vals: list[float] = []
+        cg_exp_vals: list[float] = []
+        cb_ch_vals: list[float] = []
+        cb_dis_vals: list[float] = []
+        soc_vals: list[float] = []
+
+        for t in index:
+            net_surplus = max(0.0, float(surplus.loc[t]) - float(deficit.loc[t]))
+            net_deficit = max(0.0, float(deficit.loc[t]) - float(surplus.loc[t]))
+            r = simulate_timestep(
+                generation_kw=net_surplus,
+                demand_kw=net_deficit,
+                battery=battery,
+                timestep_minutes=1.0,
+                timestamp=pd.Timestamp(t).to_pydatetime(),
+                strategy=strategy,
+            )
+            # Scale kWh/step → kW (×60); SOC is energy state, kept in kWh.
+            cg_imp_vals.append(r.grid_import * 60.0)
+            cg_exp_vals.append(r.grid_export * 60.0)
+            cb_ch_vals.append(r.battery_charge * 60.0)
+            cb_dis_vals.append(r.battery_discharge * 60.0)
+            soc_vals.append(r.battery_soc)
+
+        result = CommunityResults(
+            grid_export=pd.Series(cg_exp_vals, index=index, dtype=float),
+            grid_import=pd.Series(cg_imp_vals, index=index, dtype=float),
+            battery_charge=pd.Series(cb_ch_vals, index=index, dtype=float),
+            battery_discharge=pd.Series(cb_dis_vals, index=index, dtype=float),
+            battery_soc=pd.Series(soc_vals, index=index, dtype=float),
+            fleet_results=fleet_results,
+        )
 
     if validate_balance:
         validate_community_balance(fleet_results, result)
