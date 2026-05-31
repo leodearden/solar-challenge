@@ -55,17 +55,25 @@ def _parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
     """Extract a (start, end) date-string pair from a JSON request body.
 
     Three resolution modes (checked in order):
-    1. ``days`` key present and equal to 365  → full 2024 calendar year.
-    2. ``days`` key present (any other value)  → *days*-day window anchored
-       at 2024-06-01.
-    3. Otherwise                               → use ``start`` / ``end`` keys
-       with defaults of ``"2024-01-01"`` / ``"2024-12-31"``.
+
+    1. ``days == 365``  → **sentinel for a full calendar year**: returns the
+       complete 2024 calendar year ``("2024-01-01", "2024-12-31")``.  Because
+       2024 is a leap year this window spans 366 days; ``365`` is intentionally
+       a *named sentinel* (not a literal day count) so callers can request a
+       full-year run without specifying explicit dates.
+    2. ``days`` key present (any *positive* integer ≠ 365) → *days*-day window
+       anchored at 2024-06-01.  ``days <= 0`` raises ``ValueError``.
+    3. Otherwise → use ``start`` / ``end`` keys with defaults
+       ``"2024-01-01"`` / ``"2024-12-31"``.
 
     Args:
         data: Parsed JSON body from the request.
 
     Returns:
         Tuple of ``(start, end)`` as ``"YYYY-MM-DD"`` strings.
+
+    Raises:
+        ValueError: If ``days`` is present but not a positive integer.
     """
     days_raw = data.get("days")
     start_raw = data.get("start", "")
@@ -73,6 +81,8 @@ def _parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
 
     if days_raw is not None:
         days = int(days_raw)
+        if days <= 0:
+            raise ValueError(f"days must be a positive integer, got {days}")
         if days == 365:
             return "2024-01-01", "2024-12-31"
         ref = pd.Timestamp("2024-06-01")
@@ -577,6 +587,9 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     if not data:
         return jsonify({"error": "Request body must be JSON"}), 400
 
+    # Validate service availability first — avoids wasted sampling on 503 path.
+    job_manager = _get_job_manager()
+
     from solar_challenge.web.fleet_config import form_to_fleet_distribution_config  # noqa: PLC0415
     from solar_challenge.config import (  # noqa: PLC0415
         _parse_fleet_distribution_config,
@@ -595,7 +608,6 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
         return jsonify({"error": str(exc)}), 400
 
     fleet_name = data.get("name", "Fleet Distribution Simulation")
-    job_manager = _get_job_manager()
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
 

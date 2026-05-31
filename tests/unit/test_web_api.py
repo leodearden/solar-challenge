@@ -1216,3 +1216,19 @@ class TestParseDateRange:
         start, end = _parse_date_range({})
         assert start == "2024-01-01"
         assert end == "2024-12-31"
+
+    def test_days_zero_raises_value_error(self) -> None:
+        """days=0 is not a valid window; must raise ValueError."""
+        import pytest
+        from solar_challenge.web.api import _parse_date_range
+
+        with pytest.raises(ValueError, match="positive"):
+            _parse_date_range({"days": 0})
+
+    def test_days_negative_raises_value_error(self) -> None:
+        """Negative days must raise ValueError."""
+        import pytest
+        from solar_challenge.web.api import _parse_date_range
+
+        with pytest.raises(ValueError, match="positive"):
+            _parse_date_range({"days": -7})
