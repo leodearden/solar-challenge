@@ -235,7 +235,7 @@ def fleet_distribution_to_yaml(config: dict[str, Any]) -> str:
         if component in config:
             fleet[component] = config[component]
 
-    return yaml.dump(scenario, default_flow_style=False, sort_keys=False)
+    return yaml.dump(scenario, default_flow_style=False, sort_keys=False)  # type: ignore[no-any-return]
 
 
 def yaml_to_fleet_distribution(yaml_str: str) -> dict[str, Any]:

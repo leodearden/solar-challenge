@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+pytest.importorskip("flask")
 from flask import Flask
 
 from solar_challenge.battery import BatteryConfig

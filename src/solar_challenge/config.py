@@ -1459,7 +1459,7 @@ def substitute_config_variables(
     Returns:
         Configuration with variables substituted
     """
-    return _substitute_variables(config, variables or {})
+    return _substitute_variables(config, variables or {})  # type: ignore[no-any-return]
 
 
 def detect_sweep_spec(config: FleetDistributionConfig) -> Optional[SweepSpec]:

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 

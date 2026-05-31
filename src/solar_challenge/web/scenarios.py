@@ -156,7 +156,7 @@ def _form_to_yaml_dict(data: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@bp.route("/builder")  # type: ignore[untyped-decorator]
+@bp.route("/builder")
 def builder() -> str:
     """Render the scenario builder page with dual-pane editor.
 
@@ -166,7 +166,7 @@ def builder() -> str:
     return str(render_template("scenarios/builder.html", page="scenarios-builder"))
 
 
-@bp.route("/sweep")  # type: ignore[untyped-decorator]
+@bp.route("/sweep")
 def sweep() -> str:
     """Render the parameter sweep configuration page.
 
@@ -181,31 +181,27 @@ def sweep() -> str:
 # ---------------------------------------------------------------------------
 
 
-@bp.route("/api/preview-yaml", methods=["POST"])  # type: ignore[untyped-decorator]
-def preview_yaml() -> Response:
+@bp.route("/api/preview-yaml", methods=["POST"])
+def preview_yaml() -> Any:
     """Redirect to consolidated API endpoint (preserves POST method)."""
-    return redirect(url_for("api.scenarios_preview_yaml"), code=307)  # type: ignore[return-value]
+    return redirect(url_for("api.scenarios_preview_yaml"), code=307)
 
-
-@bp.route("/api/validate", methods=["POST"])  # type: ignore[untyped-decorator]
-def validate_scenario() -> Response:
+@bp.route("/api/validate", methods=["POST"])
+def validate_scenario() -> Any:
     """Redirect to consolidated API endpoint (preserves POST method)."""
-    return redirect(url_for("api.scenarios_validate_scenario"), code=307)  # type: ignore[return-value]
+    return redirect(url_for("api.scenarios_validate_scenario"), code=307)
 
-
-@bp.route("/api/save", methods=["POST"])  # type: ignore[untyped-decorator]
-def save_scenario() -> Response:
+@bp.route("/api/save", methods=["POST"])
+def save_scenario() -> Any:
     """Redirect to consolidated API endpoint (preserves POST method)."""
-    return redirect(url_for("api.scenarios_save_scenario"), code=307)  # type: ignore[return-value]
+    return redirect(url_for("api.scenarios_save_scenario"), code=307)
 
-
-@bp.route("/api/presets", methods=["GET"])  # type: ignore[untyped-decorator]
-def list_presets() -> Response:
+@bp.route("/api/presets", methods=["GET"])
+def list_presets() -> Any:
     """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.scenarios_list_presets"), code=301)  # type: ignore[return-value]
+    return redirect(url_for("api.scenarios_list_presets"), code=301)
 
-
-@bp.route("/api/presets/<name>", methods=["GET"])  # type: ignore[untyped-decorator]
-def get_preset(name: str) -> Response:
+@bp.route("/api/presets/<name>", methods=["GET"])
+def get_preset(name: str) -> Any:
     """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.scenarios_get_preset", name=name), code=301)  # type: ignore[return-value]
+    return redirect(url_for("api.scenarios_get_preset", name=name), code=301)

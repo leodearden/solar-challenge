@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+pytest.importorskip("flask")
 import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient

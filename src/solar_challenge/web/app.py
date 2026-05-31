@@ -3,6 +3,7 @@
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 from flask import Flask, render_template
 
@@ -38,7 +39,7 @@ def _get_secret_key(data_dir: Path) -> str:
     return new_key
 
 
-def create_app(test_config: dict | None = None) -> Flask:
+def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     """Create and configure the Flask web dashboard application.
 
     Uses the application factory pattern to allow multiple instances
@@ -177,7 +178,7 @@ def _register_blueprints(app: Flask) -> None:
 
     # Register assistant blueprint
     try:
-        from solar_challenge.web.assistant import bp as assistant_bp
+        from solar_challenge.web.assistant import bp as assistant_bp  # type: ignore[import-untyped]
         app.register_blueprint(assistant_bp, url_prefix="/assistant")
     except ImportError as e:
         logger.warning("Assistant blueprint not available: %s", e)

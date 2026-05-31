@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+pytest.importorskip("werkzeug")
 from werkzeug.serving import make_server
 
 from solar_challenge.web.app import create_app

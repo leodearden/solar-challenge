@@ -4,12 +4,14 @@ A web-based dashboard for visualising solar PV and battery simulation results,
 providing interactive charts and metrics for individual home and fleet analysis.
 """
 
+from typing import Any
+
 __all__ = [
     "create_app",
 ]
 
 
-def create_app():
+def create_app() -> Any:
     """Create and configure the web dashboard application.
 
     Returns:
