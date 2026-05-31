@@ -40,6 +40,18 @@ class TestPVConfigBasics:
         assert config.tilt == 35.0  # UK optimal
         assert config.name == ""
 
+    def test_degradation_fields_default_values(self):
+        """PVConfig exposes system_age_years and degradation_rate_per_year with correct defaults."""
+        config = PVConfig(capacity_kw=4.0)
+        assert config.system_age_years == 0.0
+        assert config.degradation_rate_per_year == 0.005
+
+    def test_degradation_fields_store_explicit_values(self):
+        """PVConfig stores explicitly provided system_age_years and degradation_rate_per_year."""
+        config = PVConfig(capacity_kw=4.0, system_age_years=20, degradation_rate_per_year=0.01)
+        assert config.system_age_years == 20.0
+        assert config.degradation_rate_per_year == 0.01
+
 
 class TestPVConfigDefaults:
     """Test default system configurations."""
