@@ -18,6 +18,7 @@ from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
+from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.weather import get_tmy_data
 
@@ -47,6 +48,14 @@ class HomeConfig:
     name: str = ""
     tariff_config: Optional[TariffConfig] = None
     dispatch_strategy: str = "greedy"
+    seg_tariff: Optional[SEGTariff] = None
+    """Smart Export Guarantee tariff for pricing grid exports.
+
+    When set, simulate_home prices export_revenue using calculate_seg_revenue()
+    at this SEG rate (pence/kWh) rather than the import tariff rate.  This is
+    the cross-PRD seam field: the web UI (P2) sets it via HomeConfig so the
+    simulation automatically uses SEG pricing with no further wiring required.
+    """
 
 
 @dataclass
