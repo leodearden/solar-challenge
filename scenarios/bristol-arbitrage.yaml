@@ -57,6 +57,9 @@ home:
 
   dispatch_strategy: tou_optimized
 
-# SEG export pricing for real (non-zero PV) runs
+# SEG export pricing for real (non-zero PV) runs.
+# The CLI home/fleet run paths thread this into HomeConfig.seg_tariff automatically.
+# Callers using load_scenarios().home directly must wire ScenarioConfig.seg_tariff_pence_per_kwh
+# into HomeConfig.seg_tariff manually (e.g. via dataclasses.replace).
 seg:
   rate_pence_per_kwh: 15.0

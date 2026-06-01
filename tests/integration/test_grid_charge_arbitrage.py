@@ -28,7 +28,7 @@ pytestmark = pytest.mark.integration
 
 runner = CliRunner()
 
-SCENARIO = Path("scenarios/bristol-arbitrage.yaml")
+SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-arbitrage.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ def _zero_pv_weather(
 
 
 # ---------------------------------------------------------------------------
-# Config-surface tests (RED until scenarios/bristol-arbitrage.yaml exists)
+# Config-surface tests
 # ---------------------------------------------------------------------------
 
 
