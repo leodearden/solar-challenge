@@ -606,14 +606,25 @@ class PeakShavingStrategy(DispatchStrategy):
             battery_soc_kwh: Current battery state of charge in kWh
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
-            grid_charge_ctx: Optional rate-aware grid-charging context
-                (accepted but not used in the base substrate; consumed in α3).
+            grid_charge_ctx: Optional rate-aware grid-charging context.  When
+                supplied and ``grid_charge_ctx.is_cheap_period`` is ``True``,
+                the strategy will grid-charge the battery (via
+                ``compute_grid_charge_power_kw``) provided the battery is not
+                already being discharged to shave a peak.  The context's own
+                Gate 1/Gate 2/Gate 3 checks give defence-in-depth.  Pass
+                ``None`` (default) to disable grid-charging and preserve prior
+                behaviour exactly.
 
         Returns:
             DispatchDecision with:
             - charge_kw if excess PV available
             - discharge_kw to reduce grid import below threshold
-            - both zero if generation meets demand within threshold
+            - grid_charge_kw when a cheap period is active and the battery is
+              not currently shaving a peak (PRD §11 OQ3: peak-shaving discharge
+              takes precedence; grid-charging fires only in the non-shaving
+              branches — excess PV, below-threshold shortfall, balanced).
+              The inverter budget is shared: pv_charge_power_kw=charge_kw
+              ensures total charge ≤ max_charge_kw (PRD §3.2).
 
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)
@@ -642,19 +653,51 @@ class PeakShavingStrategy(DispatchStrategy):
         excess_kw = max(0.0, generation_kw - demand_kw)
         shortfall_kw = max(0.0, demand_kw - generation_kw)
 
-        # Decision logic based on excess/shortfall and import threshold
+        # Compute (charge_kw, discharge_kw) using the existing branch logic.
         if excess_kw > 0:
             # Charge from excess PV
-            return DispatchDecision(charge_kw=excess_kw, discharge_kw=0.0)
+            charge_kw = excess_kw
+            discharge_kw = 0.0
         elif shortfall_kw > 0:
             # Check if grid import would exceed threshold
             if shortfall_kw > self._import_limit_kw:
                 # Discharge to shave peak: reduce import to threshold
-                peak_shave_kw = shortfall_kw - self._import_limit_kw
-                return DispatchDecision(charge_kw=0.0, discharge_kw=peak_shave_kw)
+                charge_kw = 0.0
+                discharge_kw = shortfall_kw - self._import_limit_kw
             else:
                 # Shortfall is below threshold, no battery action needed
-                return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+                charge_kw = 0.0
+                discharge_kw = 0.0
         else:
             # Generation exactly equals demand
-            return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+            charge_kw = 0.0
+            discharge_kw = 0.0
+
+        # Grid-charge gate: delegate to the shared controller when a cheap
+        # context is supplied and the battery is not already discharging to
+        # shave a peak.  The "discharge_kw == 0.0" guard ensures we never
+        # return grid_charge_kw > 0 alongside discharge_kw > 0, which
+        # DispatchDecision forbids (PRD §11 OQ3 — peak-shaving takes
+        # precedence over cheap-window grid-charging).  Passing charge_kw
+        # (the PV charge already computed above) as pv_charge_power_kw lets
+        # the controller's residual clamp share the max_charge_kw inverter
+        # budget between PV and grid (PRD §3.2).
+        grid_charge_kw = 0.0
+        if (
+            grid_charge_ctx is not None
+            and grid_charge_ctx.is_cheap_period
+            and discharge_kw == 0.0
+        ):
+            grid_charge_kw = compute_grid_charge_power_kw(
+                grid_charge_ctx,
+                battery_soc_kwh=battery_soc_kwh,
+                capacity_kwh=battery_capacity_kwh,
+                pv_charge_power_kw=charge_kw,
+                timestep_minutes=timestep_minutes,
+            )
+
+        return DispatchDecision(
+            charge_kw=charge_kw,
+            discharge_kw=discharge_kw,
+            grid_charge_kw=grid_charge_kw,
+        )
