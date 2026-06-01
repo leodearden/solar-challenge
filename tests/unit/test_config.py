@@ -51,7 +51,7 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
-from solar_challenge.pv import PVConfig
+from solar_challenge.pv import PVConfig, calculate_degradation_factor
 
 
 class TestSimulationPeriod:
@@ -2374,23 +2374,37 @@ class TestGenerateHomesFromDistributionDegradation:
         assert all(0.0 <= age <= 30.0 for age in ages), "Ages must stay within [0, 30]"
 
     def test_scalar_age_preserves_rng_reproducibility(self) -> None:
-        """Two runs with the same scalar-age config and seed produce identical capacity sequences."""
-        config = FleetDistributionConfig(
+        """Scalar system_age_years does not perturb the RNG stream.
+
+        A config with system_age_years=20.0 (scalar) must yield the same
+        capacity_kw sequence as an otherwise-identical config with the
+        default age (0.0), given the same seed.  This directly proves the
+        new scalar field does not consume RNG and leaves the legacy
+        capacity-draw sequence undisturbed.
+        """
+        pv_capacity = WeightedDiscreteDistribution(
+            values=[3.0, 4.0, 5.0], weights=[0.3, 0.4, 0.3]
+        )
+        config_with_age = FleetDistributionConfig(
             n_homes=10,
-            pv=PVDistributionConfig(
-                capacity_kw=WeightedDiscreteDistribution(
-                    values=[3.0, 4.0, 5.0], weights=[0.3, 0.4, 0.3]
-                ),
-                system_age_years=20.0,
-            ),
+            pv=PVDistributionConfig(capacity_kw=pv_capacity, system_age_years=20.0),
             load=LoadDistributionConfig(),
             seed=99,
         )
-        homes_a = generate_homes_from_distribution(config, Location.bristol())
-        homes_b = generate_homes_from_distribution(config, Location.bristol())
-        caps_a = [h.pv_config.capacity_kw for h in homes_a]
-        caps_b = [h.pv_config.capacity_kw for h in homes_b]
-        assert caps_a == caps_b
+        config_no_age = FleetDistributionConfig(
+            n_homes=10,
+            pv=PVDistributionConfig(capacity_kw=pv_capacity, system_age_years=0.0),
+            load=LoadDistributionConfig(),
+            seed=99,
+        )
+        homes_aged = generate_homes_from_distribution(config_with_age, Location.bristol())
+        homes_unaged = generate_homes_from_distribution(config_no_age, Location.bristol())
+        caps_aged = [h.pv_config.capacity_kw for h in homes_aged]
+        caps_unaged = [h.pv_config.capacity_kw for h in homes_unaged]
+        assert caps_aged == caps_unaged, (
+            "Scalar system_age_years must not consume RNG; "
+            "capacity sequences should be identical regardless of scalar age value"
+        )
 
 
 class TestParsePVDistributionConfigDegradation:
@@ -2434,3 +2448,24 @@ class TestAgedScenario:
         fleet = load_fleet_config(baseline_path)
         for home in fleet.homes:
             assert home.pv_config.system_age_years == 0.0
+
+    def test_aged_scenario_degradation_factor_is_approx_90pct(self) -> None:
+        """The aged scenario yields degradation factor ≈ 0.90 (20yr × 0.5%/yr).
+
+        Exercises the signal chain end-to-end at config speed:
+          YAML system_age_years=20  →  home.pv_config.system_age_years==20.0
+          + default rate 0.005      →  calculate_degradation_factor → 0.90
+        This confirms the ≈10% lower aggregate generation claim without
+        running a live PVGIS simulation.
+        """
+        aged_path = self._SCENARIOS_DIR / "bristol-phase1-aged.yaml"
+        fleet = load_fleet_config(aged_path)
+        home = fleet.homes[0]  # all homes share the same scalar age
+        factor = calculate_degradation_factor(
+            home.pv_config.system_age_years,
+            home.pv_config.degradation_rate_per_year,
+        )
+        expected = 1.0 - 20.0 * 0.005  # 0.90
+        assert abs(factor - expected) < 1e-9, (
+            f"Expected degradation factor {expected}, got {factor}"
+        )
