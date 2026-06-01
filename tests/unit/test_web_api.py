@@ -925,6 +925,20 @@ class TestFleetFromDistribution:
         assert len(configs) == 4
         assert all(isinstance(c, HomeConfig) for c in configs)
 
+        # Assert both branches are actually present in this deterministic sample
+        # (seed=42, n=4, weight=[0:1, 5.0:1] → ~2/4 each).  If the sampler ever
+        # degenerates the error message explains why the branch test is vacuous.
+        homes_with_battery = [c for c in configs if c.battery_config is not None]
+        homes_without_battery = [c for c in configs if c.battery_config is None]
+        assert len(homes_with_battery) >= 1, (
+            "No home with battery in sampled fleet — distribution may have degenerated; "
+            "battery-gated dispatch branch was not exercised"
+        )
+        assert len(homes_without_battery) >= 1, (
+            "No battery-less home in sampled fleet — distribution may have degenerated; "
+            "'no fabricated battery' branch was not exercised"
+        )
+
         for cfg in configs:
             # Every home must have the tariff applied
             assert cfg.tariff_config is not None, "tariff_config missing on a home"
@@ -1615,26 +1629,28 @@ class TestFleetFormRender:
     ) -> None:
         """GET /simulate/fleet returns 200 with the fleet-wide overlay section rendered.
 
-        Checks for stable HTML markers that confirm:
-        - The tariff selector is present.
-        - The dispatch strategy selector is present.
-        - The SEG sub-section with preset dropdown and custom rate input are present.
-        - All six UK supplier SEG preset keys appear as option text (parity with home form).
+        Checks stable form-wiring markers:
+        - The tariff type selector is present (name="tariff_type").
+        - The dispatch strategy selector is present (name="dispatch_strategy_type").
+        - The SEG preset dropdown and custom rate input are present.
+        - All six UK supplier SEG preset keys appear as option text (parity with
+          test_home_form_shows_seg_section).
+
+        Heading-prose strings are intentionally NOT asserted — form-field name
+        attributes and preset-key option text are the meaningful contract checks
+        without pinning cosmetic copy.
         """
         resp = client.get("/simulate/fleet")
         assert resp.status_code == 200
         html = resp.get_data(as_text=True)
 
-        # Tariff section
-        assert "Import Tariff" in html, "Tariff section heading missing"
+        # Tariff section — wiring contract
         assert 'name="tariff_type"' in html, "tariff_type select missing"
 
-        # Dispatch strategy section
-        assert "Dispatch Strategy" in html, "Dispatch Strategy heading missing"
+        # Dispatch strategy section — wiring contract
         assert 'name="dispatch_strategy_type"' in html, "dispatch_strategy_type select missing"
 
-        # SEG section
-        assert "Smart Export Guarantee" in html, "SEG section heading missing"
+        # SEG section — wiring contract
         assert 'name="seg_preset"' in html, "seg_preset select missing"
         assert 'name="seg_rate_pence_per_kwh"' in html, "seg_rate_pence_per_kwh input missing"
 

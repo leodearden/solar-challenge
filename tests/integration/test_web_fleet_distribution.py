@@ -94,7 +94,12 @@ _DIST_PAYLOAD = {
     "load": {
         "annual_consumption_kwh": 3500.0,
     },
-    # Fleet-wide overlay — exercises the tariff/dispatch/SEG path through the real pipeline.
+    # Fleet-wide overlay — no-crash smoke coverage only.
+    # Exercises the parse + dataclasses.replace path through the real pipeline
+    # without erroring.  Effect verification (every HomeConfig carries the
+    # TariffConfig / SEGTariff, battery-gated dispatch) lives in the unit tests
+    # in tests/unit/test_web_api.py::TestApplyFleetOverlay and
+    # TestFleetFromDistribution.
     "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
     "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]},
     "seg": {"rate_pence_per_kwh": 5.0},
