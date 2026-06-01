@@ -185,6 +185,60 @@ def explain_metric(metric: str) -> dict[str, str]:
     }
 
 
+def suggest_config(
+    annual_consumption_kwh: float,
+    goal: str,
+) -> dict[str, Any]:
+    """Return rule-of-thumb PV and battery sizing for a household.
+
+    Uses the PRD §11.4 heuristics:
+    - PV kWp ≈ annual_consumption_kwh / 950  (UK-average yield ~950 kWh/kWp/yr)
+    - Battery kWh ≈ daily_shortfall × 1.2    (daily shortfall = daily demand × (1 − self-consumption))
+
+    Goal-aware nudging:
+    - ``"self_sufficiency"``  → slightly larger PV (+10 %) and battery (+15 %)
+    - ``"bill_savings"``      → standard sizing (no nudge; cost-optimal)
+    - other goals             → standard sizing
+
+    Args:
+        annual_consumption_kwh: Household annual electricity demand in kWh.
+        goal: Optimisation goal string (e.g. ``"self_sufficiency"``,
+              ``"bill_savings"``).
+
+    Returns:
+        Dict with keys:
+        - ``recommended_pv_kwp``      (float) — recommended PV array size
+        - ``recommended_battery_kwh`` (float) — recommended battery capacity
+        - ``note``                    (str)   — indicative-estimate disclaimer
+        Never raises.
+    """
+    # Base heuristics (PRD §11.4)
+    uk_yield_kwh_per_kwp = 950.0
+    pv_kwp: float = annual_consumption_kwh / uk_yield_kwh_per_kwp
+
+    # Battery: cover ~50 % of daily demand (rule-of-thumb shortfall for a typical
+    # house without PV self-consumption): daily shortfall ≈ consumption/365 × 0.5
+    daily_kwh = annual_consumption_kwh / 365.0
+    battery_kwh: float = daily_kwh * 0.5 * 1.2  # 1.2 for usable-capacity headroom
+
+    # Goal-aware nudging
+    normalised_goal = goal.lower().strip().replace(" ", "_").replace("-", "_")
+    if normalised_goal == "self_sufficiency":
+        pv_kwp *= 1.10
+        battery_kwh *= 1.15
+    # "bill_savings" and unknown goals → standard sizing (no multiplier)
+
+    return {
+        "recommended_pv_kwp": round(pv_kwp, 2),
+        "recommended_battery_kwh": round(battery_kwh, 2),
+        "note": (
+            "These figures are indicative estimates based on the PRD §11.4 rule-of-thumb "
+            "(PV kWp ≈ annual_consumption / 950; battery ≈ daily shortfall × 1.2). "
+            "Please run a simulation to confirm sizing for your specific site."
+        ),
+    }
+
+
 def _session_id() -> str:
     """Return the assistant session id from the Flask session cookie.
 
