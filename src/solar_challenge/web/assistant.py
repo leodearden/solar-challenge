@@ -159,6 +159,12 @@ def chat() -> Response:
             {"role": row["role"], "content": row["content"]}
             for row in all_turns[-_MAX_HISTORY_TURNS:]
         ]
+        # API invariant: the first message must be role=user and roles must
+        # strictly alternate.  After the even-width tail-slice, the window can
+        # start on an assistant row once the history exceeds _MAX_HISTORY_TURNS.
+        # Drop any leading non-user turns to restore the invariant.
+        while messages and messages[0]["role"] != "user":
+            messages.pop(0)
 
         # Request params (dict[str, Any] splat to stay mypy --strict compatible
         # with the installed anthropic 0.97.0 stubs that predate output_config /
