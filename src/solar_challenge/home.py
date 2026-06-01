@@ -304,6 +304,7 @@ def simulate_home(
                 timestep_minutes=1.0,
                 timestamp=timestamp.to_pydatetime(),
                 strategy=strategy,
+                tariff=config.tariff_config,
             )
 
         if validate_balance:
