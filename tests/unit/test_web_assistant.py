@@ -586,6 +586,65 @@ class TestChatPageWiring:
         )
 
 
+# ---------------------------------------------------------------------------
+# Slice ② — optional real-Anthropic smoke test (step-11)
+# Excluded from the standard verify loop by: -m 'not slow and not e2e'
+# Skipped automatically when ANTHROPIC_API_KEY is absent.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY"),
+    reason="ANTHROPIC_API_KEY not set — skipping live Anthropic smoke test",
+)
+class TestChatLiveSmoke:
+    """Real Anthropic API smoke tests — excluded from CI verify loop."""
+
+    def test_single_turn_returns_nonempty_reply(self, client: FlaskClient) -> None:
+        """A real POST /chat returns delta frames that reconstruct a non-empty reply."""
+        import json as _json
+
+        resp = client.post("/assistant/chat", json={"message": "Reply with exactly one word: hello"})
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert "event: delta" in body, "Expected at least one delta frame"
+        assert "event: done" in body, "Expected done frame"
+        assert "event: error" not in body, f"Unexpected error frame: {body[:500]}"
+
+        reconstructed = ""
+        for line in body.splitlines():
+            if line.startswith("data: "):
+                try:
+                    payload = _json.loads(line[6:])
+                    reconstructed += payload.get("text", "")
+                except _json.JSONDecodeError:
+                    pass
+        assert len(reconstructed) > 0, "Expected non-empty reconstructed reply"
+
+    def test_second_turn_shows_cache_hit(self, client: FlaskClient) -> None:
+        """A second turn in the same session shows cache_read_input_tokens > 0."""
+        # First turn
+        client.post("/assistant/chat", json={"message": "Say: first"})
+
+        # Second turn — system prompt cached from first turn
+        resp2 = client.post("/assistant/chat", json={"message": "Say: second"})
+        assert resp2.status_code == 200
+        resp2.get_data(as_text=True)
+
+        # Check history for cache metadata on the assistant's second turn
+        hist_resp = client.get("/assistant/history")
+        messages = hist_resp.get_json()["messages"]
+        # Find assistant messages and check for cache_read_input_tokens
+        assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+        assert len(assistant_msgs) >= 2, "Expected at least two assistant turns"
+        last_meta = assistant_msgs[-1].get("metadata") or {}
+        cache_reads = last_meta.get("cache_read_input_tokens", 0)
+        assert cache_reads > 0, (
+            f"Expected cache_read_input_tokens > 0 on second turn (prompt-cache hit); "
+            f"got metadata: {last_meta}"
+        )
+
+
 def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
     """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
 
