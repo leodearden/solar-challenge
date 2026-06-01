@@ -234,6 +234,8 @@ class PVDistributionConfig:
         tilt: Distribution for tilt angle (default: 35)
         module_efficiency: Distribution for module efficiency (default: 0.20)
         inverter_efficiency: Distribution for inverter efficiency (default: 0.96)
+        system_age_years: Distribution for system age in years (default: 0.0)
+        degradation_rate_per_year: Distribution for annual degradation rate (default: 0.005)
     """
 
     capacity_kw: DistributionSpec
@@ -241,6 +243,8 @@ class PVDistributionConfig:
     tilt: DistributionSpec = 35.0
     module_efficiency: DistributionSpec = 0.20
     inverter_efficiency: DistributionSpec = 0.96
+    system_age_years: DistributionSpec = 0.0
+    degradation_rate_per_year: DistributionSpec = 0.005
 
 
 @dataclass
@@ -1056,6 +1060,12 @@ def _parse_pv_distribution_config(data: dict[str, Any]) -> PVDistributionConfig:
         ),
         inverter_efficiency=_parse_distribution_spec(
             data.get("inverter_efficiency", 0.96), "pv.inverter_efficiency"
+        ),
+        system_age_years=_parse_distribution_spec(
+            data.get("system_age_years", 0.0), "pv.system_age_years"
+        ),
+        degradation_rate_per_year=_parse_distribution_spec(
+            data.get("degradation_rate_per_year", 0.005), "pv.degradation_rate_per_year"
         ),
     )
 
