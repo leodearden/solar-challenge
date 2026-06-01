@@ -1053,6 +1053,14 @@ class TestHomeFormRender:
         assert "Tariff" in html
         assert "Dispatch Strategy" in html
 
+    def test_home_form_shows_pv_age_inputs(self, client: FlaskClient) -> None:
+        """GET /simulate/home returns HTML containing the two PV-age number inputs."""
+        resp = client.get("/simulate/home")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert 'name="system_age_years"' in html
+        assert 'name="degradation_rate_per_year"' in html
+
 
 # ===================================================================
 # _parse_home_config boundary tests (call the function directly)
@@ -1232,3 +1240,62 @@ class TestParseDateRange:
 
         with pytest.raises(ValueError, match="positive"):
             _parse_date_range({"days": -7})
+
+
+# ===================================================================
+# PV-age form→engine boundary tests (task #20)
+# ===================================================================
+
+
+class TestParseHomeConfigPVAge:
+    """PV-age boundary tests: form→PVConfig threading (§D contract)."""
+
+    def test_endpoint_threads_system_age_years_to_pv_config(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """POST with system_age_years=20 returns 201 and HomeConfig carries the value."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "system_age_years": 20},
+        )
+        assert resp.status_code == 201
+        call_kwargs = mock_job_manager.submit_home_job.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs[0][0]
+        assert config.pv_config.system_age_years == 20.0
+
+    def test_direct_parse_sets_both_age_fields(self) -> None:
+        """_parse_home_config with explicit age values sets both PVConfig fields."""
+        from solar_challenge.web.api import _parse_home_config
+
+        payload = {
+            **VALID_HOME_PAYLOAD,
+            "system_age_years": 15,
+            "degradation_rate_per_year": 0.01,
+        }
+        home_config, _start, _end, _name = _parse_home_config(payload)
+        assert home_config.pv_config.system_age_years == 15.0
+        assert home_config.pv_config.degradation_rate_per_year == 0.01
+
+    def test_absent_age_keys_yield_pv_config_defaults(self) -> None:
+        """_parse_home_config with no age keys yields PVConfig default values."""
+        from solar_challenge.web.api import _parse_home_config
+
+        home_config, _start, _end, _name = _parse_home_config(VALID_HOME_PAYLOAD)
+        assert home_config.pv_config.system_age_years == 0.0
+        assert home_config.pv_config.degradation_rate_per_year == 0.005
+
+    def test_negative_system_age_returns_400(self, client: FlaskClient) -> None:
+        """POST with system_age_years=-5 returns HTTP 400 (PVConfig validates age >= 0)."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "system_age_years": -5},
+        )
+        assert resp.status_code == 400
+
+    def test_invalid_degradation_rate_returns_400(self, client: FlaskClient) -> None:
+        """POST with degradation_rate_per_year=1.5 returns HTTP 400 (PVConfig validates rate 0-1)."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "degradation_rate_per_year": 1.5},
+        )
+        assert resp.status_code == 400
