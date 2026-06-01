@@ -2604,3 +2604,79 @@ class TestSlice5RunToolSignal:
             f"Expected '{expected_url}' in tool_result content.\n"
             f"Content: {result_content!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — SLOW real-sim integration test (step-9)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+class TestSlice5RunHomeIntegration:
+    """SLOW: real 1-day Bristol home sim via real JobManager (excluded from fast verify).
+
+    Excluded from the standard verify loop by the 'slow' marker.  Run with
+    ``pytest -m slow`` when you need the anti-fake-done end-to-end proof.
+    """
+
+    def test_run_home_simulation_real_job_lands_in_runs(
+        self, app: Flask, tmp_path: Path
+    ) -> None:
+        """run_home_simulation() with the real JobManager creates a completed run."""
+        import time as _time
+
+        from solar_challenge.web.assistant import get_run_results, run_home_simulation
+
+        db_path: str = app.config["DATABASE"]
+        data_dir: str = app.config["DATA_DIR"]
+        job_manager = app.extensions.get("job_manager")
+        assert job_manager is not None, (
+            "Expected a real JobManager on app.extensions; got None. "
+            "Is the 'web' extra installed?"
+        )
+
+        result = run_home_simulation(
+            {
+                "pv_kw": 4.0,
+                "battery_kwh": 0,
+                "occupants": 3,
+                "location": "bristol",
+                "days": 1,
+            },
+            job_manager,
+            db_path,
+            data_dir,
+        )
+
+        assert "error" not in result, (
+            f"run_home_simulation returned an error: {result.get('error')}"
+        )
+        run_id: str = result.get("run_id", "")
+        results_url: str = result.get("results_url", "")
+        assert run_id, f"Expected non-empty run_id; got {run_id!r}"
+        assert results_url == f"/results/home/{run_id}", (
+            f"Expected results_url='/results/home/{run_id}'; got {results_url!r}"
+        )
+
+        # Poll (monotonic deadline ≤ 120 s) until the real sim completes.
+        deadline = _time.monotonic() + 120
+        status = "running"
+        while _time.monotonic() < deadline:
+            run_data = get_run_results(run_id, db_path)
+            status = run_data.get("status", "")
+            if status in ("completed", "failed"):
+                break
+            _time.sleep(2)
+
+        assert status == "completed", (
+            f"1-day Bristol sim did not reach 'completed' within 120 s; "
+            f"last status: {status!r}"
+        )
+
+        # Assert the completed run is fetchable with a non-None generation metric
+        run_data = get_run_results(run_id, db_path)
+        assert "error" not in run_data, f"get_run_results returned error: {run_data}"
+        summary = run_data.get("summary", {})
+        assert summary.get("total_generation_kwh") is not None, (
+            f"Expected non-None total_generation_kwh in completed run summary; "
+            f"got summary={summary!r}"
+        )
