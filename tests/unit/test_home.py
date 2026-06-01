@@ -973,6 +973,11 @@ class TestSimulateHomeStrategyPathGridCharging:
 
         RED before fix: home.py Strategy else-branch omits tariff= → grid_charge_ctx is
         None → no grid charging → battery_charge.sum() == 0. GREEN after fix.
+
+        Also verifies the §3.1 split-accounting energy balance closes on the Strategy path:
+        generation + grid_import ≈ demand + grid_export + (battery_charge - battery_discharge).
+        validate_balance=True already enforces this per-timestep; the explicit series check
+        below makes the guarantee visible as a reviewable assertion.
         """
         results = simulate_home(
             strategy_grid_charge_config,
@@ -985,47 +990,8 @@ class TestSimulateHomeStrategyPathGridCharging:
             "Expected battery_charge > 0: grid charging should engage via Strategy path "
             "when tariff=config.tariff_config is threaded into simulate_timestep"
         )
-
-    def test_soc_rises_overnight_from_grid(
-        self, strategy_grid_charge_config, night_weather_data
-    ):
-        """SOC climbs above initial midpoint during the cheap overnight window.
-
-        RED before fix: with tariff absent from the call, grid_charge_ctx is None,
-        no charging occurs, SOC stays at the initial midpoint (2.5 kWh).
-        GREEN after fix: overnight charging raises SOC toward target 4.5 kWh.
-        """
-        # Battery: 5 kWh, min_soc=0.1*5=0.5, max_soc=0.9*5=4.5 → initial = midpoint = 2.5
-        initial_soc = (0.1 * 5 + 0.9 * 5) / 2
-        results = simulate_home(
-            strategy_grid_charge_config,
-            start_date=pd.Timestamp("2024-06-21"),
-            end_date=pd.Timestamp("2024-06-21"),
-            validate_balance=True,
-            weather_data=night_weather_data,
-        )
-        assert results.battery_soc.max() > initial_soc, (
-            f"Expected SOC to rise above {initial_soc} kWh; "
-            f"max={results.battery_soc.max():.3f}"
-        )
-
-    def test_energy_balance_holds_end_to_end(
-        self, strategy_grid_charge_config, night_weather_data
-    ):
-        """Energy balance closes (kW) when Strategy-path grid-charging is active.
-
-        Guard test: green before and after the fix.
-        validate_balance=True enforces the per-timestep invariant;
-        the explicit series assertion makes the §3.1 split accounting visible.
-        """
-        results = simulate_home(
-            strategy_grid_charge_config,
-            start_date=pd.Timestamp("2024-06-21"),
-            end_date=pd.Timestamp("2024-06-21"),
-            validate_balance=True,
-            weather_data=night_weather_data,
-        )
-        # generation + grid_import ≈ demand + grid_export + (battery_charge - battery_discharge)
+        # §3.1 split-accounting identity (generation + grid_import == demand + grid_export +
+        # battery_net) should hold element-wise within floating-point tolerance.
         lhs = results.generation + results.grid_import
         rhs = (
             results.demand
@@ -1035,6 +1001,31 @@ class TestSimulateHomeStrategyPathGridCharging:
         imbalance = (lhs - rhs).abs().max()
         assert imbalance < 1e-6, (
             f"Energy balance violated: max imbalance = {imbalance:.2e} kW"
+        )
+
+    def test_soc_rises_overnight_from_grid(
+        self, strategy_grid_charge_config, night_weather_data
+    ):
+        """SOC climbs above the observed starting SOC during the cheap overnight window.
+
+        RED before fix: with tariff absent from the call, grid_charge_ctx is None,
+        no charging occurs, SOC stays at whatever the battery initialises to.
+        GREEN after fix: overnight charging raises SOC toward target 0.9 × capacity.
+
+        Uses results.battery_soc.iloc[0] rather than a re-derived constant so the
+        test stays decoupled from Battery's internal initial-SOC formula.
+        """
+        results = simulate_home(
+            strategy_grid_charge_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            validate_balance=True,
+            weather_data=night_weather_data,
+        )
+        initial_soc = results.battery_soc.iloc[0]
+        assert results.battery_soc.max() > initial_soc, (
+            f"Expected SOC to rise above observed initial {initial_soc:.3f} kWh; "
+            f"max={results.battery_soc.max():.3f}"
         )
 
     def test_grid_charge_inert_without_tariff(self, night_weather_data):
@@ -1068,7 +1059,7 @@ class TestSimulateHomeStrategyPathGridCharging:
         assert results.battery_charge.sum() == pytest.approx(0.0), (
             "Expected battery_charge == 0: without tariff, grid charging should be inert"
         )
-        initial_soc = (0.1 * 5 + 0.9 * 5) / 2
+        initial_soc = results.battery_soc.iloc[0]
         assert results.battery_soc.max() <= initial_soc + 1e-9, (
-            "Expected SOC to not rise above initial midpoint without tariff"
+            "Expected SOC to not rise above observed initial SOC without tariff"
         )
