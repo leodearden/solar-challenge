@@ -94,6 +94,10 @@ _DIST_PAYLOAD = {
     "load": {
         "annual_consumption_kwh": 3500.0,
     },
+    # Fleet-wide overlay — exercises the tariff/dispatch/SEG path through the real pipeline.
+    "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
+    "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]},
+    "seg": {"rate_pence_per_kwh": 5.0},
 }
 
 
