@@ -49,7 +49,10 @@ document.addEventListener('alpine:init', () => {
             tariff_peak_rate: 0.35,
             tariff_off_peak_rate: 0.13,
             system_age_years: 0,
-            degradation_rate_per_year: 0.005
+            degradation_rate_per_year: 0.005,
+            seg_enabled: false,
+            seg_preset: 'custom',
+            seg_rate_pence_per_kwh: 4.0
         },
         tabs: [
             { id: 'pv', label: 'PV' },
@@ -174,6 +177,12 @@ document.addEventListener('alpine:init', () => {
                     tariff.off_peak_rate = parseFloat(f.tariff_off_peak_rate);
                 }
                 payload.tariff = tariff;
+            }
+            // Optional: SEG export pricing
+            if (f.seg_enabled) {
+                payload.seg = (f.seg_preset && f.seg_preset !== 'custom')
+                    ? { preset: f.seg_preset }
+                    : { rate_pence_per_kwh: parseFloat(f.seg_rate_pence_per_kwh) };
             }
             // Optional: dispatch strategy (only meaningful when battery is enabled)
             if (f.battery_enabled && f.dispatch_strategy_type !== 'self_consumption') {
