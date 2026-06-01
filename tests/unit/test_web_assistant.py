@@ -1480,3 +1480,143 @@ class TestGetRunResults:
         assert is_graceful, (
             f"Expected graceful not-found signal (error or found=False); got: {result}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — list_recent_runs unit tests (step-3 RED)
+# ---------------------------------------------------------------------------
+
+class TestListRecentRuns:
+    """Tests for list_recent_runs(limit, db_path) -> dict."""
+
+    def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
+        """list_recent_runs returns runs newest-first, count bounded by limit."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        db_path = tmp_path / "lrr_test.db"
+        # Seed 5 runs with distinct created_at timestamps
+        for i in range(5):
+            _seed_run(
+                db_path,
+                run_id=f"run-{i:03d}",
+                name=f"run-name-{i}",
+                status="completed",
+                created_at=f"2026-01-{i + 1:02d}T12:00:00+00:00",
+                summary={"total_generation_kwh": float(i * 100)},
+            )
+
+        result = list_recent_runs(3, db_path)
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "runs" in result, f"Expected 'runs' key; got {result}"
+        runs = result["runs"]
+        assert isinstance(runs, list), f"Expected list, got {type(runs)}"
+        assert len(runs) == 3, f"Expected exactly 3 runs (limit=3); got {len(runs)}"
+
+        # Newest first: run-004 → run-003 → run-002
+        assert runs[0]["created_at"] > runs[1]["created_at"], (
+            f"Expected descending created_at; got {runs[0]['created_at']!r} then {runs[1]['created_at']!r}"
+        )
+        assert runs[1]["created_at"] > runs[2]["created_at"], (
+            f"Expected descending created_at; got {runs[1]['created_at']!r} then {runs[2]['created_at']!r}"
+        )
+
+    def test_each_row_has_identifying_fields(self, tmp_path: Path) -> None:
+        """Each entry carries id/run_id, name, type, status, created_at."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        db_path = tmp_path / "lrr_fields_test.db"
+        _seed_run(
+            db_path,
+            run_id="run-fields-001",
+            name="fields-run",
+            type="fleet",
+            status="completed",
+            created_at="2026-03-15T09:00:00+00:00",
+            summary={"self_consumption_ratio": 0.70},
+        )
+
+        result = list_recent_runs(10, db_path)
+        runs = result["runs"]
+        assert runs, "Expected at least one run"
+        row = runs[0]
+
+        # Must carry identifying fields
+        assert row.get("name") == "fields-run", f"name mismatch: {row}"
+        assert row.get("status") == "completed", f"status mismatch: {row}"
+        assert row.get("created_at") == "2026-03-15T09:00:00+00:00", f"created_at mismatch: {row}"
+        # Either 'id' or 'run_id' key must be present
+        has_id = "id" in row or "run_id" in row
+        assert has_id, f"Expected 'id' or 'run_id' field; got keys: {list(row.keys())}"
+
+    def test_empty_db_returns_empty_list(self, tmp_path: Path) -> None:
+        """list_recent_runs on empty DB returns {'runs': []} without raising."""
+        from solar_challenge.web.assistant import list_recent_runs
+        from solar_challenge.web.database import init_db
+
+        db_path = tmp_path / "lrr_empty_test.db"
+        init_db(db_path)
+
+        try:
+            result = list_recent_runs(10, db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"list_recent_runs should not raise on empty DB; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "runs" in result, f"Expected 'runs' key; got {result}"
+        assert result["runs"] == [], (
+            f"Expected empty list for empty DB; got {result['runs']}"
+        )
+
+    def test_limit_is_clamped_to_sane_max(self, tmp_path: Path) -> None:
+        """A very large limit is clamped so returned count <= clamp ceiling."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        db_path = tmp_path / "lrr_clamp_test.db"
+        # Seed 60 rows — more than any sane clamp ceiling (50)
+        for i in range(60):
+            _seed_run(
+                db_path,
+                run_id=f"clamp-run-{i:03d}",
+                name=f"clamp-{i}",
+                status="completed",
+                created_at=f"2026-01-01T{i // 60:02d}:{i % 60:02d}:00+00:00",
+                summary={},
+            )
+
+        result = list_recent_runs(9999, db_path)
+        runs = result["runs"]
+        # Returned count must be <= some sane upper bound (the implementation clamps to 1..50)
+        assert len(runs) <= 50, (
+            f"Expected clamped count (<= 50); got {len(runs)}"
+        )
+
+    def test_non_positive_limit_returns_results(self, tmp_path: Path) -> None:
+        """A non-positive limit is handled gracefully (clamped to default, no raise)."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        db_path = tmp_path / "lrr_nonpos_test.db"
+        _seed_run(
+            db_path,
+            run_id="run-np-001",
+            name="np-run",
+            status="completed",
+            created_at="2026-01-01T00:00:00+00:00",
+            summary={},
+        )
+
+        try:
+            result = list_recent_runs(0, db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"list_recent_runs should not raise for limit=0; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "runs" in result, f"Expected 'runs' key; got {result}"
+        # Non-positive limit is clamped to a default (>0 results expected)
+        assert len(result["runs"]) >= 1, (
+            f"Expected at least 1 result when limit clamped from 0; got {len(result['runs'])}"
+        )
