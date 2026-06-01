@@ -120,11 +120,17 @@ def _parse_seg_config(seg_data: dict[str, Any] | None) -> SEGTariff | None:
     if not seg_data:
         return None
     preset = seg_data.get("preset")
-    if preset:
+    # "custom" is the UI sentinel meaning "use explicit rate_pence_per_kwh instead of
+    # a named preset".  Treat it as absent so direct API callers sending
+    # {"preset": "custom", "rate_pence_per_kwh": 5.5} get the same fall-through
+    # behaviour as the front-end rather than an HTTP 400 from resolve_seg_tariff.
+    if preset and str(preset) != "custom":
         return resolve_seg_tariff(str(preset))
-    rate = seg_data.get("rate_pence_per_kwh")
-    if rate is not None:
-        return SEGTariff(name="Custom", rate_pence_per_kwh=float(rate))
+    if "rate_pence_per_kwh" in seg_data:
+        # Use key-presence check (not value-is-not-None) so that a null/NaN value
+        # serialised by the browser as JSON null triggers float(None) → TypeError
+        # → HTTP 400, rather than silently ignoring the user's SEG selection.
+        return SEGTariff(name="Custom", rate_pence_per_kwh=float(seg_data["rate_pence_per_kwh"]))
     return None
 
 

@@ -1368,6 +1368,35 @@ class TestParseHomeConfigSEG:
         assert config.seg_tariff is not None
         assert config.seg_tariff.rate_pence_per_kwh == pytest.approx(4.0)
 
+    def test_endpoint_threads_custom_rate_to_seg_tariff(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """POST with seg.rate_pence_per_kwh=5.5 returns 201 and HomeConfig carries that rate.
+
+        This exercises the most common non-preset user action (explicit custom rate)
+        through the full HTTP endpoint path, complementing the direct _parse_home_config
+        unit test for the same case.
+        """
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "seg": {"rate_pence_per_kwh": 5.5}},
+        )
+        assert resp.status_code == 201
+        call_kwargs = mock_job_manager.submit_home_job.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs[0][0]
+        assert config.seg_tariff is not None
+        assert config.seg_tariff.rate_pence_per_kwh == pytest.approx(5.5)
+
+    def test_null_rate_with_custom_preset_returns_400(self, client: FlaskClient) -> None:
+        """POST with seg.rate_pence_per_kwh=null returns 400 (NaN from blank input)."""
+        resp = client.post(
+            "/api/simulate/home",
+            # JSON null mirrors JSON.stringify({rate_pence_per_kwh: NaN}) from the
+            # browser when the custom rate input is blank — must not silently succeed.
+            json={**VALID_HOME_PAYLOAD, "seg": {"rate_pence_per_kwh": None}},
+        )
+        assert resp.status_code == 400
+
     def test_unknown_preset_returns_400(self, client: FlaskClient) -> None:
         """POST with seg.preset='NotASupplier' returns HTTP 400."""
         resp = client.post(
