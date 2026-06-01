@@ -13,6 +13,7 @@ is installed in the current environment.
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Generator
 from uuid import uuid4
 
@@ -302,6 +303,63 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any]:
+    """Return a simulation run's fields and parsed summary, or a graceful error dict.
+
+    Tries to resolve *run_id_or_name* first as an ``id`` (exact match), then as a
+    ``name`` (most-recent row by ``created_at``).  READ-ONLY — no writes to the DB.
+
+    Args:
+        run_id_or_name: A run ``id`` or ``name`` string to look up.
+        db_path:        Path to the SQLite database file.
+
+    Returns:
+        Dict with keys ``run_id``, ``name``, ``type``, ``status``,
+        ``created_at``, ``n_homes``, and ``summary`` (parsed dict).
+        Returns ``{"error": "<reason>"}`` when not found or on any DB error.
+        Never raises.
+    """
+    from solar_challenge.web.database import get_db
+
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            # First attempt: exact id match
+            cursor.execute(
+                "SELECT id, name, type, status, created_at, n_homes, summary_json "
+                "FROM runs WHERE id = ?",
+                (run_id_or_name,),
+            )
+            row = cursor.fetchone()
+
+            # Fallback: most-recent row with matching name
+            if row is None:
+                cursor.execute(
+                    "SELECT id, name, type, status, created_at, n_homes, summary_json "
+                    "FROM runs WHERE name = ? ORDER BY created_at DESC LIMIT 1",
+                    (run_id_or_name,),
+                )
+                row = cursor.fetchone()
+
+        if row is None:
+            return {"error": f"Run not found: {run_id_or_name!r}"}
+
+        summary_raw: Any = row["summary_json"]
+        summary: dict[str, Any] = json.loads(summary_raw) if summary_raw else {}
+
+        return {
+            "run_id": row["id"],
+            "name": row["name"],
+            "type": row["type"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "n_homes": row["n_homes"],
+            "summary": summary,
+        }
+    except Exception as exc:
+        return {"error": f"Database error fetching run {run_id_or_name!r}: {exc}"}
 
 
 def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
