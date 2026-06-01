@@ -1,7 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the AI assistant web blueprint (slice ①: foundation wiring)."""
+"""Tests for the AI assistant web blueprint (slice ①: foundation wiring + slice ②: chat core)."""
 
+import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -10,6 +15,87 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.app import create_app
+
+
+# ---------------------------------------------------------------------------
+# Slice ② helpers & fixtures
+# ---------------------------------------------------------------------------
+
+def make_fake_stream(text_chunks: list[str]) -> tuple[MagicMock, dict[str, Any]]:
+    """Build a context-manager mock for anthropic.Anthropic().messages.stream().
+
+    Returns (context_manager_mock, captured_kwargs_container) where
+    captured_kwargs_container['kwargs'] is populated when __enter__ is called.
+
+    The fake stream exposes:
+      - stream.text_stream   — an iterable over *text_chunks*
+      - stream.get_final_message() — returns a SimpleNamespace with .content (list)
+        and .usage (cache_creation_input_tokens, cache_read_input_tokens attrs)
+    """
+    captured: dict[str, Any] = {}
+
+    def _make_fake_usage() -> SimpleNamespace:
+        return SimpleNamespace(
+            cache_creation_input_tokens=100,
+            cache_read_input_tokens=0,
+        )
+
+    def _make_final_message() -> SimpleNamespace:
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="".join(text_chunks))],
+            usage=_make_fake_usage(),
+        )
+
+    fake_stream = MagicMock()
+    fake_stream.text_stream = iter(text_chunks)
+    fake_stream.get_final_message.return_value = _make_final_message()
+
+    cm = MagicMock()
+    cm.__enter__.return_value = fake_stream
+    cm.__exit__.return_value = False
+
+    return cm, captured
+
+
+@pytest.fixture
+def mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Set a dummy ANTHROPIC_API_KEY and patch anthropic.Anthropic.
+
+    Returns a dict with keys:
+      - 'client_cls'  : the patched MagicMock class
+      - 'set_chunks'  : callable(chunks) — replace what text_stream yields next call
+      - 'last_kwargs' : dict populated with the kwargs from the last stream() call
+
+    Usage in tests:
+        info = mock_anthropic
+        info['set_chunks'](["Hello", " world"])
+        resp = client.post('/assistant/chat', json={'message': 'hi'})
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-test-key")
+
+    state: dict[str, Any] = {"chunks": ["mock ", "reply"], "last_kwargs": {}}
+
+    def _stream_factory(**kwargs: Any) -> Any:
+        state["last_kwargs"] = kwargs
+        cm, _ = make_fake_stream(list(state["chunks"]))
+        return cm
+
+    mock_cls = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.messages.stream.side_effect = _stream_factory
+    mock_cls.return_value = mock_instance
+
+    monkeypatch.setattr("anthropic.Anthropic", mock_cls, raising=False)
+
+    def _set_chunks(chunks: list[str]) -> None:
+        state["chunks"] = chunks
+
+    return {
+        "client_cls": mock_cls,
+        "set_chunks": _set_chunks,
+        "last_kwargs": state["last_kwargs"],
+        "state": state,
+    }
 
 
 @pytest.fixture
