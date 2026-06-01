@@ -1353,3 +1353,130 @@ class TestToolUseLoop:
         assert "delta" in event_types, f"Expected delta frames; got: {event_types}"
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
         assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — test helpers for runs table seeding
+# ---------------------------------------------------------------------------
+
+def _seed_run(
+    db_path: "str | Path",
+    *,
+    run_id: str,
+    name: str,
+    type: str = "home",
+    status: str = "completed",
+    created_at: str,
+    summary: dict[str, Any],
+) -> None:
+    """Insert a row into the runs table for testing read-only handlers.
+
+    Calls init_db (idempotent) to ensure the schema exists, then inserts
+    a minimal runs row with summary_json=json.dumps(summary).
+    """
+    import json as _json
+    from solar_challenge.web.database import get_db, init_db
+
+    init_db(db_path)
+    with get_db(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO runs (id, name, type, status, created_at, summary_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, name, type, status, created_at, _json.dumps(summary)),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — get_run_results unit tests (step-1 RED)
+# ---------------------------------------------------------------------------
+
+class TestGetRunResults:
+    """Tests for get_run_results(run_id_or_name, db_path) -> dict."""
+
+    def test_lookup_by_id_returns_seeded_fields(self, tmp_path: Path) -> None:
+        """get_run_results(run_id, db_path) returns dict with seeded row fields."""
+        from solar_challenge.web.assistant import get_run_results
+
+        db_path = tmp_path / "grr_test.db"
+        summary = {"total_generation_kwh": 1234.5, "self_consumption_ratio": 0.62}
+        _seed_run(
+            db_path,
+            run_id="run-abc-123",
+            name="test-run",
+            type="home",
+            status="completed",
+            created_at="2026-01-01T12:00:00+00:00",
+            summary=summary,
+        )
+
+        result = get_run_results("run-abc-123", db_path)
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("run_id") == "run-abc-123", f"run_id mismatch: {result}"
+        assert result.get("name") == "test-run", f"name mismatch: {result}"
+        assert result.get("type") == "home", f"type mismatch: {result}"
+        assert result.get("status") == "completed", f"status mismatch: {result}"
+        assert result.get("created_at") == "2026-01-01T12:00:00+00:00", (
+            f"created_at mismatch: {result}"
+        )
+        assert result.get("summary") == summary, (
+            f"summary dict mismatch: expected {summary!r}, got {result.get('summary')!r}"
+        )
+
+    def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
+        """get_run_results(name, db_path) resolves to the same row as lookup by id."""
+        from solar_challenge.web.assistant import get_run_results
+
+        db_path = tmp_path / "grr_name_test.db"
+        summary = {"self_sufficiency": 0.45}
+        _seed_run(
+            db_path,
+            run_id="run-xyz-456",
+            name="my-named-run",
+            type="fleet",
+            status="completed",
+            created_at="2026-02-01T08:00:00+00:00",
+            summary=summary,
+        )
+
+        result_by_id = get_run_results("run-xyz-456", db_path)
+        result_by_name = get_run_results("my-named-run", db_path)
+
+        # Both should resolve to the same row
+        assert result_by_id.get("run_id") == "run-xyz-456"
+        assert result_by_name.get("run_id") == "run-xyz-456", (
+            f"Name lookup should resolve same row as id lookup; got: {result_by_name}"
+        )
+        assert result_by_name.get("name") == "my-named-run", (
+            f"name field should be 'my-named-run': {result_by_name}"
+        )
+
+    def test_unknown_id_returns_graceful_dict(self, tmp_path: Path) -> None:
+        """get_run_results with unknown id returns a graceful dict, does NOT raise."""
+        from solar_challenge.web.assistant import get_run_results
+
+        db_path = tmp_path / "grr_unknown_test.db"
+        _seed_run(
+            db_path,
+            run_id="run-known",
+            name="known-run",
+            status="completed",
+            created_at="2026-01-01T00:00:00+00:00",
+            summary={},
+        )
+
+        try:
+            result = get_run_results("totally-unknown-id-xyz", db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"get_run_results should not raise for unknown id; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        # Must signal not-found somehow (error key OR found=False)
+        is_graceful = "error" in result or result.get("found") is False
+        assert is_graceful, (
+            f"Expected graceful not-found signal (error or found=False); got: {result}"
+        )
