@@ -876,6 +876,88 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
 
+    def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """Fleet-wide overlay: tariff/dispatch/SEG are applied to every generated HomeConfig.
+
+        Uses a mix of battery/battery-less homes (weighted_discrete with 0 and 5 kWh)
+        to verify that:
+        - Every home carries the tariff_config and seg_tariff.
+        - Homes WITH a battery carry battery_config.dispatch_strategy.
+        - Homes WITHOUT a battery remain battery-less (no fabricated battery).
+        """
+        from solar_challenge.home import HomeConfig
+
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                "n_homes": 4,
+                "seed": 42,
+                "location": "bristol",
+                "days": 1,
+                "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
+                "load": {"annual_consumption_kwh": 3500.0},
+                "battery": {
+                    "enabled": True,
+                    "capacity_kwh": {
+                        "type": "weighted_discrete",
+                        "values": [
+                            {"value": 0, "weight": 1},
+                            {"value": 5.0, "weight": 1},
+                        ],
+                    },
+                },
+                "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
+                "dispatch_strategy": {
+                    "strategy_type": "tou_optimized",
+                    "peak_hours": [[16, 21]],
+                },
+                "seg": {"rate_pence_per_kwh": 5.5},
+            },
+        )
+        assert resp.status_code == 201, (
+            f"Expected 201, got {resp.status_code}: {resp.get_data(as_text=True)}"
+        )
+        mock_job_manager.submit_fleet_job.assert_called_once()
+        call_kwargs = mock_job_manager.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert len(configs) == 4
+        assert all(isinstance(c, HomeConfig) for c in configs)
+
+        for cfg in configs:
+            # Every home must have the tariff applied
+            assert cfg.tariff_config is not None, "tariff_config missing on a home"
+            # Every home must have the SEG tariff applied
+            assert cfg.seg_tariff is not None, "seg_tariff missing on a home"
+            assert cfg.seg_tariff.rate_pence_per_kwh == pytest.approx(5.5)
+            # Battery gate: dispatch only where battery exists; never fabricated
+            if cfg.battery_config is not None:
+                assert cfg.battery_config.dispatch_strategy is not None, (
+                    "dispatch_strategy missing on battery home"
+                )
+                assert cfg.battery_config.dispatch_strategy.strategy_type == "tou_optimized"
+            else:
+                # battery_config is None — no dispatch, no fabricated battery
+                assert cfg.battery_config is None
+
+    def test_fleet_wide_invalid_tariff_returns_400(self, client: FlaskClient) -> None:
+        """Missing required tariff field returns HTTP 400."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                "n_homes": 2,
+                "seed": 1,
+                "location": "bristol",
+                "days": 1,
+                "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
+                "load": {"annual_consumption_kwh": 3500.0},
+                # flat_rate without rate_per_kwh — must fail validation
+                "tariff": {"type": "flat_rate"},
+            },
+        )
+        assert resp.status_code == 400
+
 
 # ===================================================================
 # POST /api/fleet/export-yaml
