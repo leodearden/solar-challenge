@@ -568,8 +568,13 @@ def run_home_simulation(
 
     from solar_challenge.web.api import _parse_home_config  # deferred to avoid circularity
 
+    # Inject the documented default (7 days) when 'days' is absent.  A caller-supplied
+    # 'days' value always wins because **params overrides the sentinel key; the caller's
+    # tool_input dict is not mutated (we build a new dict).
+    effective_params: dict[str, Any] = {"days": 7, **params}
+
     try:
-        home_config, start_date, end_date, name = _parse_home_config(params)
+        home_config, start_date, end_date, name = _parse_home_config(effective_params)
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
@@ -625,6 +630,9 @@ def run_fleet_simulation(
 
     # Build per-home dict by excluding the fleet-level n_homes key
     per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
+    # Inject the documented default (7 days) when absent.  setdefault is safe here
+    # because per_home is a fresh copy — the caller's params dict is not mutated.
+    per_home.setdefault("days", 7)
 
     # Validate once; if it fails, return early without submitting
     try:
