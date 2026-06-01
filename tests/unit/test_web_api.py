@@ -1299,3 +1299,74 @@ class TestParseHomeConfigPVAge:
             json={**VALID_HOME_PAYLOAD, "degradation_rate_per_year": 1.5},
         )
         assert resp.status_code == 400
+
+
+# ===================================================================
+# SEG export-rate selector: field round-trip tests
+# ===================================================================
+
+
+class TestParseHomeConfigSEG:
+    """Boundary tests for the SEG export-rate field round-trip (task #21).
+
+    Scope (per PRD §14): validates field population only — not end-to-end
+    simulation pricing (which is task #2's already-proven math).
+    """
+
+    def test_preset_resolves_to_correct_seg_tariff(self) -> None:
+        """'seg': {'preset': 'Octopus'} yields SEGTariff with Octopus Energy rate."""
+        from solar_challenge.web.api import _parse_home_config
+
+        home_config, _start, _end, _name = _parse_home_config(
+            {**VALID_HOME_PAYLOAD, "seg": {"preset": "Octopus"}}
+        )
+        assert home_config.seg_tariff is not None
+        assert home_config.seg_tariff.rate_pence_per_kwh == pytest.approx(4.1)
+        assert home_config.seg_tariff.name == "Octopus Energy"
+
+    def test_explicit_rate_populates_seg_tariff(self) -> None:
+        """'seg': {'rate_pence_per_kwh': 5.5} yields SEGTariff with that rate."""
+        from solar_challenge.web.api import _parse_home_config
+
+        home_config, _start, _end, _name = _parse_home_config(
+            {**VALID_HOME_PAYLOAD, "seg": {"rate_pence_per_kwh": 5.5}}
+        )
+        assert home_config.seg_tariff is not None
+        assert home_config.seg_tariff.rate_pence_per_kwh == pytest.approx(5.5)
+
+    def test_absent_seg_key_yields_none(self) -> None:
+        """Plain VALID_HOME_PAYLOAD (no 'seg' key) gives seg_tariff=None (back-compat)."""
+        from solar_challenge.web.api import _parse_home_config
+
+        home_config, _start, _end, _name = _parse_home_config(VALID_HOME_PAYLOAD)
+        assert home_config.seg_tariff is None
+
+    def test_endpoint_threads_seg_preset_to_home_config(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """POST with seg.preset='OVO' returns 201 and HomeConfig carries OVO's rate."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "seg": {"preset": "OVO"}},
+        )
+        assert resp.status_code == 201
+        call_kwargs = mock_job_manager.submit_home_job.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs[0][0]
+        assert config.seg_tariff is not None
+        assert config.seg_tariff.rate_pence_per_kwh == pytest.approx(4.0)
+
+    def test_unknown_preset_returns_400(self, client: FlaskClient) -> None:
+        """POST with seg.preset='NotASupplier' returns HTTP 400."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "seg": {"preset": "NotASupplier"}},
+        )
+        assert resp.status_code == 400
+
+    def test_negative_rate_returns_400(self, client: FlaskClient) -> None:
+        """POST with seg.rate_pence_per_kwh=-2 returns HTTP 400."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "seg": {"rate_pence_per_kwh": -2}},
+        )
+        assert resp.status_code == 400
