@@ -285,6 +285,117 @@ class TestAssistantHistory:
         assert msgs_b[0]["content"] == "message B"
 
 
+# ---------------------------------------------------------------------------
+# Slice ② — POST /assistant/chat happy-path tests (step-5)
+# ---------------------------------------------------------------------------
+
+class TestChatEndpointHappyPath:
+    """Tests for POST /assistant/chat with a mocked Anthropic client."""
+
+    def test_chat_returns_sse_stream(
+        self,
+        client: FlaskClient,
+        mock_anthropic: dict,
+    ) -> None:
+        """POST /chat returns 200 text/event-stream with delta + done frames."""
+        mock_anthropic["set_chunks"](["Hello", " world"])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "hi"},
+        )
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.content_type
+
+        body = resp.get_data(as_text=True)
+        assert "event: delta" in body
+        assert "event: done" in body
+
+    def test_chat_delta_frames_reconstruct_reply(
+        self,
+        client: FlaskClient,
+        mock_anthropic: dict,
+    ) -> None:
+        """Concatenated delta frame texts equal the mocked reply."""
+        import json as _json
+
+        mock_anthropic["set_chunks"](["Hello", " world"])
+
+        resp = client.post("/assistant/chat", json={"message": "test"})
+        body = resp.get_data(as_text=True)
+
+        # Parse SSE frames: collect event types and data
+        reconstructed = ""
+        for line in body.splitlines():
+            if line.startswith("data: ") and "text" in line:
+                try:
+                    payload = _json.loads(line[6:])
+                    if "text" in payload:
+                        reconstructed += payload["text"]
+                except _json.JSONDecodeError:
+                    pass
+
+        assert reconstructed == "Hello world"
+
+    def test_chat_uses_default_model(
+        self,
+        client: FlaskClient,
+        mock_anthropic: dict,
+    ) -> None:
+        """Without SOLAR_ASSISTANT_MODEL env var, model defaults to claude-opus-4-8."""
+        mock_anthropic["set_chunks"](["ok"])
+
+        client.post("/assistant/chat", json={"message": "ping"})
+
+        kwargs = mock_anthropic["state"]["last_kwargs"]
+        assert kwargs.get("model") == "claude-opus-4-8"
+
+    def test_chat_system_block_has_cache_control(
+        self,
+        client: FlaskClient,
+        mock_anthropic: dict,
+    ) -> None:
+        """system block list has cache_control == {'type': 'ephemeral'}."""
+        mock_anthropic["set_chunks"](["ok"])
+
+        client.post("/assistant/chat", json={"message": "ping"})
+
+        kwargs = mock_anthropic["state"]["last_kwargs"]
+        system_list = kwargs.get("system", [])
+        assert len(system_list) >= 1
+        first_block = system_list[0]
+        assert first_block.get("cache_control") == {"type": "ephemeral"}
+
+    def test_chat_persists_user_and_assistant_turns(
+        self,
+        client: FlaskClient,
+        mock_anthropic: dict,
+        app: Flask,
+    ) -> None:
+        """After POST /chat, user+assistant rows appear in GET /history on the SAME client."""
+        mock_anthropic["set_chunks"](["mock reply"])
+
+        # Pin the session_id so we can be sure we're checking the right one
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "persist-test-sid"
+
+        resp = client.post("/assistant/chat", json={"message": "hi there"})
+        assert resp.status_code == 200
+        # consume the stream
+        resp.get_data(as_text=True)
+
+        # Now check history on the SAME client (cookie persists)
+        hist_resp = client.get("/assistant/history")
+        assert hist_resp.status_code == 200
+        messages = hist_resp.get_json()["messages"]
+
+        assert len(messages) == 2
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "hi there"
+        assert messages[1]["role"] == "assistant"
+        assert "mock reply" in messages[1]["content"]
+
+
 def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
     """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
 
