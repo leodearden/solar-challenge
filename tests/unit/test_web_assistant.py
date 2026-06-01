@@ -758,3 +758,95 @@ def test_sidebar_shows_assistant_link(client: FlaskClient) -> None:
     assert 'href="/assistant/"' in html, (
         "Expected href='/assistant/' link in sidebar (url_for('assistant.chat_page'))"
     )
+
+
+# ---------------------------------------------------------------------------
+# Slice ③ — explain_metric tests (step-1)
+# ---------------------------------------------------------------------------
+
+class TestExplainMetric:
+    """Tests for the explain_metric(metric) -> dict[str, str] handler."""
+
+    def test_known_metric_self_consumption_ratio(self) -> None:
+        """explain_metric('self_consumption_ratio') returns dict with non-empty definition and band."""
+        from solar_challenge.web.assistant import explain_metric
+
+        result = explain_metric("self_consumption_ratio")
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "definition" in result, f"Missing 'definition' key: {result}"
+        assert "uk_benchmark_band" in result, f"Missing 'uk_benchmark_band' key: {result}"
+        assert isinstance(result["definition"], str) and result["definition"], (
+            "definition must be a non-empty string"
+        )
+        assert isinstance(result["uk_benchmark_band"], str) and result["uk_benchmark_band"], (
+            "uk_benchmark_band must be a non-empty string"
+        )
+
+    def test_known_metric_self_sufficiency(self) -> None:
+        """explain_metric('self_sufficiency') returns dict with non-empty definition and band."""
+        from solar_challenge.web.assistant import explain_metric
+
+        result = explain_metric("self_sufficiency")
+        assert "definition" in result
+        assert "uk_benchmark_band" in result
+        assert result["definition"]
+        assert result["uk_benchmark_band"]
+
+    def test_key_normalization_hyphen(self) -> None:
+        """'self-consumption ratio' normalizes to same canonical entry as 'self_consumption_ratio'."""
+        from solar_challenge.web.assistant import explain_metric
+
+        r1 = explain_metric("self_consumption_ratio")
+        r2 = explain_metric("self-consumption ratio")
+        assert r1 == r2, (
+            f"Expected same result for canonical and hyphenated form; "
+            f"got {r1!r} vs {r2!r}"
+        )
+
+    def test_key_normalization_case(self) -> None:
+        """'Self_Consumption_Ratio' normalizes to same canonical entry."""
+        from solar_challenge.web.assistant import explain_metric
+
+        r1 = explain_metric("self_consumption_ratio")
+        r2 = explain_metric("Self_Consumption_Ratio")
+        assert r1 == r2, (
+            f"Expected case-insensitive lookup; got {r1!r} vs {r2!r}"
+        )
+
+    def test_unknown_metric_returns_graceful_dict(self) -> None:
+        """An unrecognized metric returns a dict with both keys present mentioning 'unknown'."""
+        from solar_challenge.web.assistant import explain_metric
+
+        result = explain_metric("nonexistent_metric_xyz")
+        assert isinstance(result, dict), "Must return a dict, not raise"
+        assert "definition" in result, f"Missing 'definition' in graceful response: {result}"
+        assert "uk_benchmark_band" in result, (
+            f"Missing 'uk_benchmark_band' in graceful response: {result}"
+        )
+        # Must mention the metric is unknown
+        combined = (result["definition"] + " " + result["uk_benchmark_band"]).lower()
+        assert "unknown" in combined or "not found" in combined or "not recognised" in combined, (
+            f"Graceful response should mention metric is unknown/not found: {result}"
+        )
+
+    def test_unknown_metric_does_not_raise(self) -> None:
+        """explain_metric with an unknown name must NOT raise any exception."""
+        from solar_challenge.web.assistant import explain_metric
+
+        try:
+            explain_metric("totally_made_up_metric_12345")
+        except Exception as exc:
+            raise AssertionError(
+                f"explain_metric should not raise for unknown metric, got: {exc!r}"
+            ) from exc
+
+    def test_all_known_metrics_have_both_keys(self) -> None:
+        """Every entry in _METRIC_TABLE has non-empty definition and uk_benchmark_band."""
+        from solar_challenge.web.assistant import _METRIC_TABLE
+
+        assert _METRIC_TABLE, "Expected _METRIC_TABLE to be non-empty"
+        for name, entry in _METRIC_TABLE.items():
+            assert "definition" in entry, f"Entry {name!r} missing 'definition'"
+            assert "uk_benchmark_band" in entry, f"Entry {name!r} missing 'uk_benchmark_band'"
+            assert entry["definition"], f"Entry {name!r} has empty definition"
+            assert entry["uk_benchmark_band"], f"Entry {name!r} has empty uk_benchmark_band"
