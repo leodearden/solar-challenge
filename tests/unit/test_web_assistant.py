@@ -1020,3 +1020,320 @@ class TestToolSurface:
             ) from exc
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "error" in result, f"Expected 'error' key in result: {result}"
+
+
+# ---------------------------------------------------------------------------
+# Slice ③ — manual tool-use loop tests (step-7)
+# ---------------------------------------------------------------------------
+
+def make_tool_use_stream(
+    tool_id: str,
+    tool_name: str,
+    tool_input: dict[str, Any],
+) -> MagicMock:
+    """Build a context-manager mock for a stream that ends with stop_reason='tool_use'.
+
+    The fake stream yields no text chunks; get_final_message() returns a
+    SimpleNamespace with stop_reason='tool_use' and a content list containing
+    one tool_use block.
+    """
+    def _make_final_message() -> SimpleNamespace:
+        return SimpleNamespace(
+            stop_reason="tool_use",
+            content=[
+                SimpleNamespace(
+                    type="tool_use",
+                    id=tool_id,
+                    name=tool_name,
+                    input=tool_input,
+                ),
+            ],
+            usage=SimpleNamespace(
+                cache_creation_input_tokens=50,
+                cache_read_input_tokens=0,
+            ),
+        )
+
+    fake_stream = MagicMock()
+    fake_stream.text_stream = iter([])  # no text in tool-use turn
+    fake_stream.get_final_message.return_value = _make_final_message()
+
+    cm = MagicMock()
+    cm.__enter__.return_value = fake_stream
+    cm.__exit__.return_value = False
+    return cm
+
+
+def make_end_turn_stream(text_chunks: list[str]) -> MagicMock:
+    """Build a context-manager mock for a stream that ends with stop_reason='end_turn'."""
+    def _make_final_message() -> SimpleNamespace:
+        return SimpleNamespace(
+            stop_reason="end_turn",
+            content=[SimpleNamespace(type="text", text="".join(text_chunks))],
+            usage=SimpleNamespace(
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=80,
+            ),
+        )
+
+    fake_stream = MagicMock()
+    fake_stream.text_stream = iter(text_chunks)
+    fake_stream.get_final_message.return_value = _make_final_message()
+
+    cm = MagicMock()
+    cm.__enter__.return_value = fake_stream
+    cm.__exit__.return_value = False
+    return cm
+
+
+@pytest.fixture
+def sequence_mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Multi-call sequence mock: records every stream() call's kwargs and streams.
+
+    Returns dict with:
+      - 'call_kwargs_list': list of kwargs dicts recorded per stream() call
+      - 'set_streams': callable(list[MagicMock]) — set the ordered stream responses
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-seq-test-key")
+
+    state: dict[str, Any] = {
+        "call_kwargs_list": [],
+        "streams": [],
+        "call_index": 0,
+    }
+
+    def _stream_factory(**kwargs: Any) -> Any:
+        state["call_kwargs_list"].append(dict(kwargs))
+        idx = state["call_index"]
+        state["call_index"] += 1
+        streams = state["streams"]
+        if idx < len(streams):
+            return streams[idx]
+        # fallback: end_turn with empty text
+        return make_end_turn_stream(["(fallback)"])
+
+    mock_cls = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.messages.stream.side_effect = _stream_factory
+    mock_cls.return_value = mock_instance
+
+    monkeypatch.setattr("anthropic.Anthropic", mock_cls, raising=False)
+
+    def _set_streams(streams: list[MagicMock]) -> None:
+        state["streams"] = streams
+        state["call_index"] = 0
+        state["call_kwargs_list"].clear()
+
+    return {
+        "call_kwargs_list": state["call_kwargs_list"],
+        "set_streams": _set_streams,
+        "state": state,
+    }
+
+
+class TestToolUseLoop:
+    """Boundary and termination tests for the manual agentic tool-use loop."""
+
+    def _parse_sse_events(self, body: str) -> list[dict[str, Any]]:
+        """Parse SSE body into list of {event, data} dicts."""
+        import json as _json
+
+        events = []
+        lines = body.splitlines()
+        i = 0
+        while i < len(lines):
+            event_type = None
+            data_str = None
+            while i < len(lines) and lines[i].strip():
+                line = lines[i]
+                if line.startswith("event: "):
+                    event_type = line[7:].strip()
+                elif line.startswith("data: "):
+                    data_str = line[6:]
+                i += 1
+            if event_type is not None:
+                parsed_data: Any = None
+                if data_str:
+                    try:
+                        parsed_data = _json.loads(data_str)
+                    except Exception:
+                        parsed_data = data_str
+                events.append({"event": event_type, "data": parsed_data})
+            i += 1  # skip blank line
+        return events
+
+    def test_tool_sse_frame_emitted(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """A tool_use response causes a 'tool' SSE frame with the tool name."""
+        TOOL_ID = "toolu_explain_001"
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
+            make_end_turn_stream(["The self-consumption ratio means X."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "explain my self-consumption ratio"})
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        events = self._parse_sse_events(body)
+        tool_events = [e for e in events if e["event"] == "tool"]
+        assert tool_events, f"Expected at least one 'tool' SSE frame; events: {events}"
+        assert tool_events[0]["data"]["name"] == "explain_metric", (
+            f"Expected tool frame with name='explain_metric', got: {tool_events[0]['data']}"
+        )
+
+    def test_stream_called_twice_and_tool_result_has_canonical_band(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """stream() called twice; 2nd call's messages[-1] contains the canonical band string."""
+        from solar_challenge.web.assistant import _METRIC_TABLE
+        TOOL_ID = "toolu_explain_002"
+        CANONICAL_BAND = _METRIC_TABLE["self_consumption_ratio"]["uk_benchmark_band"]
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
+            make_end_turn_stream(["Result follows."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "what is self-consumption ratio?"})
+        assert resp.status_code == 200
+        resp.get_data(as_text=True)
+
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert len(call_kwargs_list) == 2, (
+            f"Expected stream() to be called exactly 2 times, got {len(call_kwargs_list)}"
+        )
+
+        # The second call's messages must end with a user turn containing the tool_result
+        second_messages = call_kwargs_list[1]["messages"]
+        last_msg = second_messages[-1]
+        assert last_msg["role"] == "user", (
+            f"Expected last message in 2nd call to be role='user', got {last_msg['role']!r}"
+        )
+
+        # The tool_result content must carry the canonical band (data-seam cross)
+        content = last_msg["content"]
+        assert isinstance(content, list), f"Expected content list in tool_result turn: {content}"
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block in last user message; content: {content}"
+        )
+        assert tool_result_block.get("tool_use_id") == TOOL_ID, (
+            f"tool_use_id mismatch: expected {TOOL_ID!r}, got {tool_result_block.get('tool_use_id')!r}"
+        )
+        result_content = tool_result_block.get("content", "")
+        assert CANONICAL_BAND in result_content, (
+            f"Expected canonical band string in tool_result content.\n"
+            f"Band: {CANONICAL_BAND!r}\n"
+            f"Content: {result_content!r}"
+        )
+
+    def test_tools_param_present_and_ordered(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """stream() kwargs carry 'tools' with names ['explain_metric', 'suggest_config']."""
+        sequence_mock_anthropic["set_streams"]([
+            make_end_turn_stream(["reply"]),
+        ])
+
+        client.post("/assistant/chat", json={"message": "ping"})
+
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert call_kwargs_list, "Expected at least one stream() call"
+        first_kwargs = call_kwargs_list[0]
+        assert "tools" in first_kwargs, f"Expected 'tools' in stream() kwargs: {first_kwargs.keys()}"
+        tool_names = [t["name"] for t in first_kwargs["tools"]]
+        assert tool_names == ["explain_metric", "suggest_config"], (
+            f"Expected tool order ['explain_metric', 'suggest_config'], got {tool_names}"
+        )
+
+    def test_done_frame_terminates_stream(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """After a tool_use + end_turn, the SSE stream ends with a 'done' frame."""
+        TOOL_ID = "toolu_explain_003"
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
+            make_end_turn_stream(["done"]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "explain"})
+        body = resp.get_data(as_text=True)
+        events = self._parse_sse_events(body)
+        event_types = [e["event"] for e in events]
+        assert "done" in event_types, (
+            f"Expected 'done' frame in event types; got: {event_types}"
+        )
+
+    def test_termination_bounded_by_max_tool_iterations(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """A model that always returns tool_use is bounded by _MAX_TOOL_ITERATIONS."""
+        from solar_challenge.web.assistant import _MAX_TOOL_ITERATIONS
+
+        # Build an infinite sequence of tool_use streams
+        TOOL_ID_PREFIX = "toolu_inf_"
+        infinite_streams = [
+            make_tool_use_stream(
+                f"{TOOL_ID_PREFIX}{i}",
+                "explain_metric",
+                {"metric": "self_consumption_ratio"},
+            )
+            for i in range(_MAX_TOOL_ITERATIONS + 10)  # more than the cap
+        ]
+        sequence_mock_anthropic["set_streams"](infinite_streams)
+
+        resp = client.post("/assistant/chat", json={"message": "explain forever"})
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        # stream() should be called exactly _MAX_TOOL_ITERATIONS times
+        call_count = len(sequence_mock_anthropic["call_kwargs_list"])
+        assert call_count == _MAX_TOOL_ITERATIONS, (
+            f"Expected exactly {_MAX_TOOL_ITERATIONS} stream() calls (loop cap), "
+            f"got {call_count}"
+        )
+
+        # Stream must still terminate cleanly (done or error frame, no hang)
+        events = self._parse_sse_events(body)
+        event_types = [e["event"] for e in events]
+        assert "done" in event_types or "error" in event_types, (
+            f"Expected stream to terminate with done or error frame; got: {event_types}"
+        )
+
+    def test_slice2_happy_path_regression(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """Slice-② happy path (no stop_reason / end_turn) still yields delta + done."""
+        # Use the slice-② style: get_final_message has no stop_reason attr
+        sequence_mock_anthropic["set_streams"]([
+            make_fake_stream(["Hello", " world"]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "hi"})
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        events = self._parse_sse_events(body)
+        event_types = [e["event"] for e in events]
+        assert "delta" in event_types, f"Expected delta frames; got: {event_types}"
+        assert "done" in event_types, f"Expected done frame; got: {event_types}"
+        assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
