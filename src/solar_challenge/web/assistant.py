@@ -345,6 +345,79 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["limit"],
         },
     },
+    # --- Slice ⑤: trigger tools (appended after slice ④ read-only tools) ---
+    {
+        "name": "run_home_simulation",
+        "description": (
+            "Submit a single-home simulation job and return the run id and a "
+            "URL to the results page.  Use this when the user asks to run or "
+            "start a home simulation with specific PV/battery parameters."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pv_kw": {
+                    "type": "number",
+                    "description": "PV array capacity in kW (0.5–20).",
+                },
+                "battery_kwh": {
+                    "type": "number",
+                    "description": "Battery capacity in kWh (0 = no battery).",
+                },
+                "consumption_kwh": {
+                    "type": "number",
+                    "description": "Annual household electricity consumption in kWh.",
+                },
+                "occupants": {
+                    "type": "integer",
+                    "description": "Number of household occupants (default 3).",
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Simulation duration in days (default 7).",
+                },
+            },
+            "required": ["pv_kw"],
+        },
+    },
+    {
+        "name": "run_fleet_simulation",
+        "description": (
+            "Submit a homogeneous N-home fleet simulation job and return the "
+            "run id and a URL to the fleet results page.  Use this when the "
+            "user asks to run a fleet or multi-home simulation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n_homes": {
+                    "type": "integer",
+                    "description": "Number of homes in the fleet (1–100).",
+                },
+                "pv_kw": {
+                    "type": "number",
+                    "description": "PV capacity per home in kW (0.5–20).",
+                },
+                "battery_kwh": {
+                    "type": "number",
+                    "description": "Battery capacity per home in kWh (0 = no battery).",
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Simulation duration in days (default 7).",
+                },
+            },
+            "required": ["n_homes"],
+        },
+    },
 ]
 
 
@@ -587,15 +660,22 @@ def _dispatch_tool(
     name: str,
     tool_input: dict[str, Any],
     db_path: "str | Path | None" = None,
+    job_manager: Any = None,
+    data_dir: "str | Path | None" = None,
 ) -> dict[str, Any]:
     """Route a tool call to its handler and return the result dict.
 
     Args:
-        name:       The tool name as sent by the model.
-        tool_input: The validated input dict from the model's tool_use block.
-        db_path:    Optional path to the SQLite database file.  Required for
-                    DB-backed tools (``get_run_results``, ``list_recent_runs``);
-                    those tools return a graceful ``{"error": ...}`` when None.
+        name:        The tool name as sent by the model.
+        tool_input:  The validated input dict from the model's tool_use block.
+        db_path:     Optional path to the SQLite database file.  Required for
+                     DB-backed tools (``get_run_results``, ``list_recent_runs``);
+                     those tools return a graceful ``{"error": ...}`` when None.
+        job_manager: Optional JobManager instance.  Required for trigger tools
+                     (``run_home_simulation``, ``run_fleet_simulation``); those
+                     tools return a graceful ``{"error": ...}`` when None.
+        data_dir:    Optional path to the run data directory.  Required for
+                     trigger tools alongside *job_manager*.
 
     Returns:
         The handler's result dict, or ``{"error": "..."}`` for unknown names.
@@ -624,6 +704,14 @@ def _dispatch_tool(
         except (ValueError, TypeError):
             limit = 10
         return list_recent_runs(limit, db_path)
+    if name == "run_home_simulation":
+        _db = str(db_path) if db_path is not None else ""
+        _dir = str(data_dir) if data_dir is not None else ""
+        return run_home_simulation(dict(tool_input), job_manager, _db, _dir)
+    if name == "run_fleet_simulation":
+        _db = str(db_path) if db_path is not None else ""
+        _dir = str(data_dir) if data_dir is not None else ""
+        return run_fleet_simulation(dict(tool_input), job_manager, _db, _dir)
     all_names = ", ".join(t["name"] for t in _TOOLS)
     return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
 
