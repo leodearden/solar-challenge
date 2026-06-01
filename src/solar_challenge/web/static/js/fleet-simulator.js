@@ -43,6 +43,20 @@ document.addEventListener('alpine:init', () => {
             ]
         },
 
+        /* ---- Fleet-wide tariff / dispatch / SEG state ---- */
+        tariffEnabled: false,
+        tariffType: 'flat_rate',
+        tariffRatePerKwh: 0.28,
+        tariffPeakRate: 0.35,
+        tariffOffPeakRate: 0.13,
+        dispatchStrategyType: 'self_consumption',
+        dispatchPeakStart: 16,
+        dispatchPeakEnd: 21,
+        dispatchImportLimitKw: 3.0,
+        segEnabled: false,
+        segPreset: 'custom',
+        segRatePencePerKwh: 4.0,
+
         /* ---- Battery distribution state ---- */
         batteryEnabled: true,
         batteryDist: {
@@ -158,6 +172,36 @@ document.addEventListener('alpine:init', () => {
                 payload.start = this.startDate;
                 payload.end = this.endDate;
             }
+
+            // Fleet-wide tariff overlay
+            if (this.tariffEnabled) {
+                if (this.tariffType === 'flat_rate') {
+                    payload.tariff = { type: this.tariffType, rate_per_kwh: parseFloat(this.tariffRatePerKwh) };
+                } else {
+                    payload.tariff = { type: this.tariffType, peak_rate: parseFloat(this.tariffPeakRate), off_peak_rate: parseFloat(this.tariffOffPeakRate) };
+                }
+            }
+
+            // Fleet-wide SEG overlay
+            if (this.segEnabled) {
+                if (this.segPreset && this.segPreset !== 'custom') {
+                    payload.seg = { preset: this.segPreset };
+                } else {
+                    payload.seg = { rate_pence_per_kwh: parseFloat(this.segRatePencePerKwh) };
+                }
+            }
+
+            // Fleet-wide dispatch strategy overlay (only when battery enabled and non-default)
+            if (this.batteryEnabled && this.dispatchStrategyType !== 'self_consumption') {
+                const ds = { strategy_type: this.dispatchStrategyType };
+                if (this.dispatchStrategyType === 'tou_optimized') {
+                    ds.peak_hours = [[parseInt(this.dispatchPeakStart), parseInt(this.dispatchPeakEnd)]];
+                } else if (this.dispatchStrategyType === 'peak_shaving') {
+                    ds.import_limit_kw = parseFloat(this.dispatchImportLimitKw);
+                }
+                payload.dispatch_strategy = ds;
+            }
+
             return payload;
         },
 

@@ -169,6 +169,215 @@
 
     </div>
 
+    <!-- Fleet-wide Tariff, Dispatch & Export (SEG) card -->
+    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm mb-6 overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700">
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-emerald-500"></div>
+                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Fleet-wide Tariff, Dispatch &amp; Export (SEG)</h3>
+            </div>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Applied uniformly to every generated home. Dispatch strategy only affects homes that have a battery.</p>
+        </div>
+        <div class="p-6 space-y-8">
+
+            {# ── Import Tariff ──────────────────────────────────────────────────── #}
+            <div class="space-y-4">
+                <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Import Tariff</h3>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Optionally specify an electricity import tariff to model bill savings across the fleet.</p>
+
+                <!-- Enable/disable toggle -->
+                <div class="flex items-center gap-3">
+                    <button
+                        type="button"
+                        role="switch"
+                        :aria-checked="tariffEnabled"
+                        @click="tariffEnabled = !tariffEnabled"
+                        class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
+                        :class="tariffEnabled ? 'bg-amber-500' : 'bg-slate-300 dark:bg-slate-600'"
+                    >
+                        <span
+                            class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                            :class="tariffEnabled ? 'translate-x-5' : 'translate-x-0'"
+                        ></span>
+                    </button>
+                    <label class="text-sm font-semibold text-slate-700 dark:text-slate-300">Enable Tariff</label>
+                </div>
+
+                <!-- Tariff settings (shown when enabled) -->
+                <div x-show="tariffEnabled" x-cloak x-transition class="space-y-4">
+                    <div class="space-y-1.5">
+                        <label for="fleet_tariff_type" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Tariff Type</label>
+                        <select
+                            id="fleet_tariff_type"
+                            name="tariff_type"
+                            x-model="tariffType"
+                            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                        >
+                            <option value="flat_rate">Flat Rate</option>
+                            <option value="economy_7">Economy 7</option>
+                            <option value="economy_10">Economy 10</option>
+                        </select>
+                    </div>
+
+                    <!-- Flat rate -->
+                    <div x-show="tariffType === 'flat_rate'" x-cloak x-transition class="space-y-1.5">
+                        <label for="fleet_tariff_rate_per_kwh" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Rate (£/kWh)</label>
+                        <input
+                            type="number"
+                            id="fleet_tariff_rate_per_kwh"
+                            name="tariff_rate_per_kwh"
+                            min="0" max="2" step="0.01"
+                            x-model.number="tariffRatePerKwh"
+                            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                        >
+                    </div>
+
+                    <!-- Economy 7 / Economy 10 -->
+                    <div x-show="tariffType === 'economy_7' || tariffType === 'economy_10'" x-cloak x-transition class="grid grid-cols-2 gap-4">
+                        <div class="space-y-1.5">
+                            <label for="fleet_tariff_peak_rate" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Peak Rate (£/kWh)</label>
+                            <input
+                                type="number"
+                                id="fleet_tariff_peak_rate"
+                                name="tariff_peak_rate"
+                                min="0" max="2" step="0.01"
+                                x-model.number="tariffPeakRate"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                            >
+                        </div>
+                        <div class="space-y-1.5">
+                            <label for="fleet_tariff_off_peak_rate" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Off-peak Rate (£/kWh)</label>
+                            <input
+                                type="number"
+                                id="fleet_tariff_off_peak_rate"
+                                name="tariff_off_peak_rate"
+                                min="0" max="2" step="0.01"
+                                x-model.number="tariffOffPeakRate"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                            >
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# ── Dispatch Strategy ──────────────────────────────────────────────── #}
+            <div x-show="batteryEnabled" x-cloak x-transition class="space-y-4 pt-6 border-t border-slate-200 dark:border-slate-700">
+                <h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Dispatch Strategy</h4>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Applied only to homes that have a battery (battery-less homes are unaffected).</p>
+                <select
+                    id="fleet_dispatch_strategy_type"
+                    name="dispatch_strategy_type"
+                    x-model="dispatchStrategyType"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                >
+                    <option value="self_consumption">Self Consumption (default)</option>
+                    <option value="tou_optimized">Time-of-Use Optimised</option>
+                    <option value="peak_shaving">Peak Shaving</option>
+                </select>
+
+                <!-- Peak hours (tou_optimized only) -->
+                <div x-show="dispatchStrategyType === 'tou_optimized'" x-cloak x-transition class="space-y-2">
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Peak window (discharge during this range)</p>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="space-y-1">
+                            <label for="fleet_dispatch_peak_start" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Peak start (hour)</label>
+                            <input
+                                type="number"
+                                id="fleet_dispatch_peak_start"
+                                name="dispatch_peak_start"
+                                min="0" max="23" step="1"
+                                x-model.number="dispatchPeakStart"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                            >
+                        </div>
+                        <div class="space-y-1">
+                            <label for="fleet_dispatch_peak_end" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Peak end (hour)</label>
+                            <input
+                                type="number"
+                                id="fleet_dispatch_peak_end"
+                                name="dispatch_peak_end"
+                                min="0" max="23" step="1"
+                                x-model.number="dispatchPeakEnd"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                            >
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Import limit (peak_shaving only) -->
+                <div x-show="dispatchStrategyType === 'peak_shaving'" x-cloak x-transition class="space-y-1.5">
+                    <label for="fleet_dispatch_import_limit_kw" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Import limit (kW)</label>
+                    <input
+                        type="number"
+                        id="fleet_dispatch_import_limit_kw"
+                        name="dispatch_import_limit_kw"
+                        min="0.1" max="100" step="0.1"
+                        x-model.number="dispatchImportLimitKw"
+                        class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                    >
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Battery discharges when grid import would exceed this limit</p>
+                </div>
+            </div>
+
+            {# ── Smart Export Guarantee (SEG) ────────────────────────────────────── #}
+            <div class="space-y-4 pt-6 border-t border-slate-200 dark:border-slate-700">
+                <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Smart Export Guarantee (SEG)</h3>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Optionally price grid exports at a named supplier's SEG rate or a custom rate.</p>
+
+                <!-- Enable/disable toggle -->
+                <div class="flex items-center gap-3">
+                    <button
+                        type="button"
+                        role="switch"
+                        :aria-checked="segEnabled"
+                        @click="segEnabled = !segEnabled"
+                        class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
+                        :class="segEnabled ? 'bg-amber-500' : 'bg-slate-300 dark:bg-slate-600'"
+                    >
+                        <span
+                            class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                            :class="segEnabled ? 'translate-x-5' : 'translate-x-0'"
+                        ></span>
+                    </button>
+                    <label class="text-sm font-semibold text-slate-700 dark:text-slate-300">Enable SEG Export Pricing</label>
+                </div>
+
+                <!-- SEG settings (shown when enabled) -->
+                <div x-show="segEnabled" x-cloak x-transition class="space-y-4">
+                    <div class="space-y-1.5">
+                        <label for="fleet_seg_preset" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Supplier Preset</label>
+                        <select
+                            id="fleet_seg_preset"
+                            name="seg_preset"
+                            x-model="segPreset"
+                            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                        >
+                            <option value="custom">Custom rate…</option>
+                            {% for key, t in (seg_presets|default({})).items() %}
+                            <option value="{{ key }}">{{ t.name }} — {{ t.rate_pence_per_kwh }}p/kWh</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Custom rate input -->
+                    <div x-show="segPreset === 'custom'" x-cloak x-transition class="space-y-1.5">
+                        <label for="fleet_seg_rate_pence_per_kwh" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Export Rate (p/kWh)</label>
+                        <input
+                            type="number"
+                            id="fleet_seg_rate_pence_per_kwh"
+                            name="seg_rate_pence_per_kwh"
+                            min="0"
+                            step="0.1"
+                            x-model.number="segRatePencePerKwh"
+                            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                        >
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
     <!-- Action buttons -->
     <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 mb-6">
         <div class="flex flex-col sm:flex-row items-center gap-4">

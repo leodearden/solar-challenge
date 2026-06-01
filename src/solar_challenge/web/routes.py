@@ -206,6 +206,7 @@ def simulate_fleet_page() -> str:
         "simulate/fleet.html",
         presets=presets,
         page="simulate-fleet",
+        seg_presets=SEG_PRESETS,
     ))
 
 

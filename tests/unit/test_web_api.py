@@ -876,6 +876,102 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
 
+    def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """Fleet-wide overlay: tariff/dispatch/SEG are applied to every generated HomeConfig.
+
+        Uses a mix of battery/battery-less homes (weighted_discrete with 0 and 5 kWh)
+        to verify that:
+        - Every home carries the tariff_config and seg_tariff.
+        - Homes WITH a battery carry battery_config.dispatch_strategy.
+        - Homes WITHOUT a battery remain battery-less (no fabricated battery).
+        """
+        from solar_challenge.home import HomeConfig
+
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                "n_homes": 4,
+                "seed": 42,
+                "location": "bristol",
+                "days": 1,
+                "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
+                "load": {"annual_consumption_kwh": 3500.0},
+                "battery": {
+                    "enabled": True,
+                    "capacity_kwh": {
+                        "type": "weighted_discrete",
+                        "values": [
+                            {"value": 0, "weight": 1},
+                            {"value": 5.0, "weight": 1},
+                        ],
+                    },
+                },
+                "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
+                "dispatch_strategy": {
+                    "strategy_type": "tou_optimized",
+                    "peak_hours": [[16, 21]],
+                },
+                "seg": {"rate_pence_per_kwh": 5.5},
+            },
+        )
+        assert resp.status_code == 201, (
+            f"Expected 201, got {resp.status_code}: {resp.get_data(as_text=True)}"
+        )
+        mock_job_manager.submit_fleet_job.assert_called_once()
+        call_kwargs = mock_job_manager.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert len(configs) == 4
+        assert all(isinstance(c, HomeConfig) for c in configs)
+
+        # Assert both branches are actually present in this deterministic sample
+        # (seed=42, n=4, weight=[0:1, 5.0:1] → ~2/4 each).  If the sampler ever
+        # degenerates the error message explains why the branch test is vacuous.
+        homes_with_battery = [c for c in configs if c.battery_config is not None]
+        homes_without_battery = [c for c in configs if c.battery_config is None]
+        assert len(homes_with_battery) >= 1, (
+            "No home with battery in sampled fleet — distribution may have degenerated; "
+            "battery-gated dispatch branch was not exercised"
+        )
+        assert len(homes_without_battery) >= 1, (
+            "No battery-less home in sampled fleet — distribution may have degenerated; "
+            "'no fabricated battery' branch was not exercised"
+        )
+
+        for cfg in configs:
+            # Every home must have the tariff applied
+            assert cfg.tariff_config is not None, "tariff_config missing on a home"
+            # Every home must have the SEG tariff applied
+            assert cfg.seg_tariff is not None, "seg_tariff missing on a home"
+            assert cfg.seg_tariff.rate_pence_per_kwh == pytest.approx(5.5)
+            # Battery gate: dispatch only where battery exists; never fabricated
+            if cfg.battery_config is not None:
+                assert cfg.battery_config.dispatch_strategy is not None, (
+                    "dispatch_strategy missing on battery home"
+                )
+                assert cfg.battery_config.dispatch_strategy.strategy_type == "tou_optimized"
+            else:
+                # battery_config is None — no dispatch, no fabricated battery
+                assert cfg.battery_config is None
+
+    def test_fleet_wide_invalid_tariff_returns_400(self, client: FlaskClient) -> None:
+        """Missing required tariff field returns HTTP 400."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                "n_homes": 2,
+                "seed": 1,
+                "location": "bristol",
+                "days": 1,
+                "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
+                "load": {"annual_consumption_kwh": 3500.0},
+                # flat_rate without rate_per_kwh — must fail validation
+                "tariff": {"type": "flat_rate"},
+            },
+        )
+        assert resp.status_code == 400
+
 
 # ===================================================================
 # POST /api/fleet/export-yaml
@@ -1412,3 +1508,152 @@ class TestParseHomeConfigSEG:
             json={**VALID_HOME_PAYLOAD, "seg": {"rate_pence_per_kwh": -2}},
         )
         assert resp.status_code == 400
+
+
+# ===================================================================
+# apply_fleet_overlay pure helper unit tests
+# ===================================================================
+
+
+def _make_test_homes() -> tuple:
+    """Build two HomeConfig instances for overlay tests.
+
+    Returns:
+        (home_a, home_b) where home_a has a BatteryConfig and home_b does not.
+    """
+    from solar_challenge.battery import BatteryConfig
+    from solar_challenge.home import HomeConfig
+    from solar_challenge.load import LoadConfig
+    from solar_challenge.pv import PVConfig
+
+    pv_a = PVConfig(capacity_kw=4.0)
+    pv_b = PVConfig(capacity_kw=3.0)
+    load_a = LoadConfig(annual_consumption_kwh=3500.0)
+    load_b = LoadConfig(annual_consumption_kwh=2800.0)
+    battery_a = BatteryConfig(capacity_kwh=5.0)
+
+    home_a = HomeConfig(pv_config=pv_a, load_config=load_a, battery_config=battery_a)
+    home_b = HomeConfig(pv_config=pv_b, load_config=load_b, battery_config=None)
+    return home_a, home_b
+
+
+class TestApplyFleetOverlay:
+    """Unit tests for the pure helper apply_fleet_overlay in web/fleet_config.py."""
+
+    def test_tariff_applied_to_all_homes(self) -> None:
+        """Passing tariff_config sets tariff_config on every home in the fleet."""
+        from solar_challenge.tariff import TariffConfig
+        from solar_challenge.web.fleet_config import apply_fleet_overlay
+
+        home_a, home_b = _make_test_homes()
+        tariff = TariffConfig.flat_rate(rate_per_kwh=0.30)
+
+        result = apply_fleet_overlay([home_a, home_b], tariff_config=tariff)
+
+        assert len(result) == 2
+        assert result[0].tariff_config is tariff
+        assert result[1].tariff_config is tariff
+
+    def test_dispatch_applied_only_to_homes_with_battery(self) -> None:
+        """dispatch_strategy is set on BatteryConfig only when battery_config is not None."""
+        from solar_challenge.config import DispatchStrategyConfig
+        from solar_challenge.web.fleet_config import apply_fleet_overlay
+
+        home_a, home_b = _make_test_homes()
+        dispatch = DispatchStrategyConfig(
+            strategy_type="tou_optimized", peak_hours=[(16, 21)]
+        )
+
+        result = apply_fleet_overlay([home_a, home_b], dispatch_strategy=dispatch)
+
+        # Home A (has battery) — dispatch_strategy applied
+        assert result[0].battery_config is not None
+        assert result[0].battery_config.dispatch_strategy is dispatch
+        # Home B (no battery) — battery_config stays None, no fabricated battery
+        assert result[1].battery_config is None
+
+    def test_seg_tariff_applied_to_all_homes(self) -> None:
+        """Passing seg_tariff sets seg_tariff on every home in the fleet."""
+        from solar_challenge.seg import SEGTariff
+        from solar_challenge.web.fleet_config import apply_fleet_overlay
+
+        home_a, home_b = _make_test_homes()
+        seg = SEGTariff(name="Custom", rate_pence_per_kwh=5.5)
+
+        result = apply_fleet_overlay([home_a, home_b], seg_tariff=seg)
+
+        assert result[0].seg_tariff is seg
+        assert result[1].seg_tariff is seg
+
+    def test_original_homes_are_immutable(self) -> None:
+        """After the call the original HomeConfig objects are unchanged (frozen dataclass)."""
+        from solar_challenge.seg import SEGTariff
+        from solar_challenge.tariff import TariffConfig
+        from solar_challenge.web.fleet_config import apply_fleet_overlay
+
+        home_a, home_b = _make_test_homes()
+        tariff = TariffConfig.flat_rate(rate_per_kwh=0.30)
+        seg = SEGTariff(name="Custom", rate_pence_per_kwh=5.5)
+
+        apply_fleet_overlay([home_a, home_b], tariff_config=tariff, seg_tariff=seg)
+
+        # Originals must be unchanged
+        assert home_a.tariff_config is None
+        assert home_a.seg_tariff is None
+        assert home_b.tariff_config is None
+        assert home_b.seg_tariff is None
+
+    def test_all_none_overlay_is_noop(self) -> None:
+        """Calling with all None args returns homes that match the inputs field-for-field."""
+        from solar_challenge.web.fleet_config import apply_fleet_overlay
+
+        home_a, home_b = _make_test_homes()
+
+        result = apply_fleet_overlay([home_a, home_b])
+
+        # Should return the same objects (or equal ones) — no mutations
+        assert result[0] is home_a
+        assert result[1] is home_b
+
+
+# ===================================================================
+# GET /simulate/fleet — render smoke test
+# ===================================================================
+
+
+class TestFleetFormRender:
+    """Smoke test: GET /simulate/fleet renders the tariff/dispatch/SEG overlay section."""
+
+    def test_fleet_form_shows_tariff_dispatch_seg_section(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/fleet returns 200 with the fleet-wide overlay section rendered.
+
+        Checks stable form-wiring markers:
+        - The tariff type selector is present (name="tariff_type").
+        - The dispatch strategy selector is present (name="dispatch_strategy_type").
+        - The SEG preset dropdown and custom rate input are present.
+        - All six UK supplier SEG preset keys appear as option text (parity with
+          test_home_form_shows_seg_section).
+
+        Heading-prose strings are intentionally NOT asserted — form-field name
+        attributes and preset-key option text are the meaningful contract checks
+        without pinning cosmetic copy.
+        """
+        resp = client.get("/simulate/fleet")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+
+        # Tariff section — wiring contract
+        assert 'name="tariff_type"' in html, "tariff_type select missing"
+
+        # Dispatch strategy section — wiring contract
+        assert 'name="dispatch_strategy_type"' in html, "dispatch_strategy_type select missing"
+
+        # SEG section — wiring contract
+        assert 'name="seg_preset"' in html, "seg_preset select missing"
+        assert 'name="seg_rate_pence_per_kwh"' in html, "seg_rate_pence_per_kwh input missing"
+
+        # All six UK supplier preset keys (parity with test_home_form_shows_seg_section)
+        for preset_key in ("Octopus", "British Gas", "EDF", "E.ON", "Scottish Power", "OVO"):
+            assert preset_key in html, f"SEG preset '{preset_key}' missing from fleet form HTML"

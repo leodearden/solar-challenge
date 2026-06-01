@@ -2,13 +2,69 @@
 """Helper module for fleet configuration in the web dashboard.
 
 Provides utilities for sampling distributions, converting form data to
-fleet distribution configs, and YAML import/export.
+fleet distribution configs, YAML import/export, and fleet-wide overlay
+application for tariff/dispatch/SEG settings.
 """
 
+from __future__ import annotations
+
+import dataclasses
 import random
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+from solar_challenge.home import HomeConfig
+
+if TYPE_CHECKING:
+    from solar_challenge.config import DispatchStrategyConfig
+    from solar_challenge.seg import SEGTariff
+    from solar_challenge.tariff import TariffConfig
+
+
+def apply_fleet_overlay(
+    configs: list[HomeConfig],
+    *,
+    tariff_config: TariffConfig | None = None,
+    dispatch_strategy: DispatchStrategyConfig | None = None,
+    seg_tariff: SEGTariff | None = None,
+) -> list[HomeConfig]:
+    """Apply fleet-wide tariff, dispatch strategy, and SEG overlay to all homes.
+
+    Uses :func:`dataclasses.replace` to produce new frozen :class:`HomeConfig`
+    objects; the originals are never mutated.
+
+    The dispatch strategy is applied only to homes that already have a
+    :class:`~solar_challenge.battery.BatteryConfig` (i.e. ``battery_config is
+    not None``).  Battery-less homes are left unchanged so no battery is ever
+    fabricated merely to hold a dispatch strategy.
+
+    Args:
+        configs: List of :class:`~solar_challenge.home.HomeConfig` instances to
+            overlay.  Must not be mutated by the caller after passing in.
+        tariff_config: Optional tariff to set on every home.
+        dispatch_strategy: Optional dispatch strategy to set on every home that
+            has a battery.
+        seg_tariff: Optional SEG tariff to set on every home.
+
+    Returns:
+        A new list of :class:`~solar_challenge.home.HomeConfig` with the overlay
+        applied.  Items whose overlay is a no-op are returned as-is (same
+        object, not a copy) for efficiency.
+    """
+    result: list[HomeConfig] = []
+    for home in configs:
+        replacements: dict[str, Any] = {}
+        if tariff_config is not None:
+            replacements["tariff_config"] = tariff_config
+        if seg_tariff is not None:
+            replacements["seg_tariff"] = seg_tariff
+        if dispatch_strategy is not None and home.battery_config is not None:
+            replacements["battery_config"] = dataclasses.replace(
+                home.battery_config, dispatch_strategy=dispatch_strategy
+            )
+        result.append(dataclasses.replace(home, **replacements) if replacements else home)
+    return result
 
 
 def sample_distribution(
