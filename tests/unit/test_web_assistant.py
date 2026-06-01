@@ -216,6 +216,75 @@ class TestChatMessagePersistence:
         assert contents == [f"msg-{i}" for i in range(5)]
 
 
+# ---------------------------------------------------------------------------
+# Slice ② — GET /assistant/history tests (step-3)
+# ---------------------------------------------------------------------------
+
+class TestAssistantHistory:
+    """Tests for GET /assistant/history endpoint."""
+
+    def test_history_returns_seeded_messages(self, client: FlaskClient, app: Flask) -> None:
+        """Seeding rows under a pinned session_id → GET /history returns them in order."""
+        from solar_challenge.web.database import save_chat_message
+
+        db_path = app.config["DATABASE"]
+
+        # Pin a session_id in the signed cookie
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "test-history-sid"
+
+        save_chat_message(db_path, "test-history-sid", "user", "What is SOC?")
+        save_chat_message(db_path, "test-history-sid", "assistant", "SOC is state of charge.")
+
+        resp = client.get("/assistant/history")
+        assert resp.status_code == 200
+        assert "application/json" in resp.content_type
+        data = resp.get_json()
+        assert "messages" in data
+        msgs = data["messages"]
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == "What is SOC?"
+        assert msgs[1]["role"] == "assistant"
+        assert msgs[1]["content"] == "SOC is state of charge."
+
+    def test_history_empty_for_new_session(self, app: Flask) -> None:
+        """A fresh client (no session cookie) returns {messages: []}."""
+        fresh_client = app.test_client()
+        resp = fresh_client.get("/assistant/history")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data == {"messages": []}
+
+    def test_history_session_isolation(self, app: Flask) -> None:
+        """Two clients with different session_ids see only their own messages."""
+        from solar_challenge.web.database import save_chat_message
+
+        db_path = app.config["DATABASE"]
+
+        client_a = app.test_client()
+        client_b = app.test_client()
+
+        with client_a.session_transaction() as sess:
+            sess["assistant_session_id"] = "sid-a"
+        with client_b.session_transaction() as sess:
+            sess["assistant_session_id"] = "sid-b"
+
+        save_chat_message(db_path, "sid-a", "user", "message A")
+        save_chat_message(db_path, "sid-b", "user", "message B")
+
+        resp_a = client_a.get("/assistant/history")
+        resp_b = client_b.get("/assistant/history")
+
+        msgs_a = resp_a.get_json()["messages"]
+        msgs_b = resp_b.get_json()["messages"]
+
+        assert len(msgs_a) == 1
+        assert msgs_a[0]["content"] == "message A"
+        assert len(msgs_b) == 1
+        assert msgs_b[0]["content"] == "message B"
+
+
 def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
     """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
 
