@@ -3,6 +3,7 @@
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import (
     HomeConfig,
@@ -896,3 +897,178 @@ class TestHeatPumpIntegration:
         # Add some margin for numerical precision
         max_expected_load = config.heat_pump_config.thermal_capacity_kw / 1.5
         assert results.heat_pump_load.max() <= max_expected_load
+
+
+@pytest.fixture
+def night_weather_data() -> pd.DataFrame:
+    """Zero-irradiance synthetic 24-hour weather data for Bristol (June 21).
+
+    All irradiance (GHI/DNI/DHI) is zero so PV generation is ~0.
+    Any battery_charge > 0 is unambiguously from grid charging, not excess PV.
+    Covers all 24 hours (same index shape as june21_weather_data) so
+    _align_tmy_to_demand maps every simulation minute to a valid row.
+    Avoids a PVGIS network call.
+    """
+    index = pd.date_range(
+        "2024-06-21 00:00", periods=24, freq="1h", tz="Europe/London"
+    )
+    return pd.DataFrame(
+        {
+            "ghi": [0] * 24,
+            "dni": [0] * 24,
+            "dhi": [0] * 24,
+            "temp_air": [12] * 24,
+            "wind_speed": [2] * 24,
+        },
+        index=index,
+    )
+
+
+class TestSimulateHomeStrategyPathGridCharging:
+    """Test grid-charging wiring via the Strategy-pattern dispatch path.
+
+    The Strategy path (else branch in home.simulate_home) is taken when
+    BatteryConfig.dispatch_strategy is set, making use_tariff_tou False.
+    Before the fix, simulate_timestep on this path never receives tariff=…,
+    so grid_charge_ctx is always None and grid-charging is dead.
+    After the fix (adding tariff=config.tariff_config), the full grid-charge
+    chain fires: is_cheap + spread gates pass → battery charged from grid.
+    """
+
+    @pytest.fixture
+    def strategy_grid_charge_config(self):
+        """HomeConfig that routes to the Strategy (else) branch and enables grid-charging.
+
+        - BatteryConfig.dispatch_strategy is set → use_tariff_tou = False → else branch.
+        - GridChargeConfig(target_soc_fraction=0.9) enables arbitrage charging.
+        - Tariff: 0.10 £/kWh overnight (00:00-07:00, off-peak) + 0.30 £/kWh during day
+          (07:00-00:00, peak). rt_eff ≈ 0.9506 → is_cheap (0.10 ≤ 0.20 avg) ✓;
+          spread gate (0.30 > 0.10/0.9506 ≈ 0.1052) ✓.
+        """
+        off_peak = TariffPeriod("00:00", "07:00", 0.10, "Off-peak")
+        peak = TariffPeriod("07:00", "00:00", 0.30, "Peak")
+        return HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            battery_config=BatteryConfig(
+                capacity_kwh=5.0,
+                max_charge_kw=2.5,
+                dispatch_strategy=DispatchStrategyConfig(
+                    strategy_type="tou_optimized",
+                    peak_hours=[(7, 24)],
+                ),
+                grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+            ),
+            tariff_config=TariffConfig(
+                periods=(off_peak, peak),
+                name="E7-like",
+            ),
+            location=Location.bristol(),
+        )
+
+    def test_strategy_path_grid_charges_battery(
+        self, strategy_grid_charge_config, night_weather_data
+    ):
+        """Strategy path: zero-PV + tariff threaded → battery_charge > 0 (grid charging active).
+
+        RED before fix: home.py Strategy else-branch omits tariff= → grid_charge_ctx is
+        None → no grid charging → battery_charge.sum() == 0. GREEN after fix.
+        """
+        results = simulate_home(
+            strategy_grid_charge_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            validate_balance=True,
+            weather_data=night_weather_data,
+        )
+        assert results.battery_charge.sum() > 0, (
+            "Expected battery_charge > 0: grid charging should engage via Strategy path "
+            "when tariff=config.tariff_config is threaded into simulate_timestep"
+        )
+
+    def test_soc_rises_overnight_from_grid(
+        self, strategy_grid_charge_config, night_weather_data
+    ):
+        """SOC climbs above initial midpoint during the cheap overnight window.
+
+        RED before fix: with tariff absent from the call, grid_charge_ctx is None,
+        no charging occurs, SOC stays at the initial midpoint (2.5 kWh).
+        GREEN after fix: overnight charging raises SOC toward target 4.5 kWh.
+        """
+        # Battery: 5 kWh, min_soc=0.1*5=0.5, max_soc=0.9*5=4.5 → initial = midpoint = 2.5
+        initial_soc = (0.1 * 5 + 0.9 * 5) / 2
+        results = simulate_home(
+            strategy_grid_charge_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            validate_balance=True,
+            weather_data=night_weather_data,
+        )
+        assert results.battery_soc.max() > initial_soc, (
+            f"Expected SOC to rise above {initial_soc} kWh; "
+            f"max={results.battery_soc.max():.3f}"
+        )
+
+    def test_energy_balance_holds_end_to_end(
+        self, strategy_grid_charge_config, night_weather_data
+    ):
+        """Energy balance closes (kW) when Strategy-path grid-charging is active.
+
+        Guard test: green before and after the fix.
+        validate_balance=True enforces the per-timestep invariant;
+        the explicit series assertion makes the §3.1 split accounting visible.
+        """
+        results = simulate_home(
+            strategy_grid_charge_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            validate_balance=True,
+            weather_data=night_weather_data,
+        )
+        # generation + grid_import ≈ demand + grid_export + (battery_charge - battery_discharge)
+        lhs = results.generation + results.grid_import
+        rhs = (
+            results.demand
+            + results.grid_export
+            + (results.battery_charge - results.battery_discharge)
+        )
+        imbalance = (lhs - rhs).abs().max()
+        assert imbalance < 1e-6, (
+            f"Energy balance violated: max imbalance = {imbalance:.2e} kW"
+        )
+
+    def test_grid_charge_inert_without_tariff(self, night_weather_data):
+        """Without tariff_config, grid-charging stays inert (battery_charge == 0 with zero PV).
+
+        Guard/non-regression: pins the 'tariff_config=None → no behaviour change' contract.
+        Green before and after the fix (the impl threads config.tariff_config which is None here).
+        """
+        config_no_tariff = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            battery_config=BatteryConfig(
+                capacity_kwh=5.0,
+                max_charge_kw=2.5,
+                dispatch_strategy=DispatchStrategyConfig(
+                    strategy_type="tou_optimized",
+                    peak_hours=[(7, 24)],
+                ),
+                grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+            ),
+            tariff_config=None,
+            location=Location.bristol(),
+        )
+        results = simulate_home(
+            config_no_tariff,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            validate_balance=True,
+            weather_data=night_weather_data,
+        )
+        assert results.battery_charge.sum() == pytest.approx(0.0), (
+            "Expected battery_charge == 0: without tariff, grid charging should be inert"
+        )
+        initial_soc = (0.1 * 5 + 0.9 * 5) / 2
+        assert results.battery_soc.max() <= initial_soc + 1e-9, (
+            "Expected SOC to not rise above initial midpoint without tariff"
+        )
