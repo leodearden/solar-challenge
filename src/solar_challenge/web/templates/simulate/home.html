@@ -47,7 +47,9 @@ document.addEventListener('alpine:init', () => {
             tariff_type: 'flat_rate',
             tariff_rate_per_kwh: 0.28,
             tariff_peak_rate: 0.35,
-            tariff_off_peak_rate: 0.13
+            tariff_off_peak_rate: 0.13,
+            system_age_years: 0,
+            degradation_rate_per_year: 0.005
         },
         tabs: [
             { id: 'pv', label: 'PV' },
@@ -134,6 +136,8 @@ document.addEventListener('alpine:init', () => {
                 pv_kw: parseFloat(f.pv_kw),
                 azimuth: parseFloat(f.azimuth),
                 tilt: parseFloat(f.tilt),
+                system_age_years: parseFloat(f.system_age_years),
+                degradation_rate_per_year: parseFloat(f.degradation_rate_per_year),
                 battery_kwh: f.battery_enabled ? parseFloat(f.battery_kwh) : 0,
                 max_charge_kw: f.battery_enabled ? parseFloat(f.max_charge_kw) : null,
                 max_discharge_kw: f.battery_enabled ? parseFloat(f.max_discharge_kw) : null,
