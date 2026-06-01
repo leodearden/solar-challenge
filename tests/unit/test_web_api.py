@@ -1061,6 +1061,19 @@ class TestHomeFormRender:
         assert 'name="system_age_years"' in html
         assert 'name="degradation_rate_per_year"' in html
 
+    def test_home_form_shows_seg_section(self, client: FlaskClient) -> None:
+        """GET /simulate/home renders the SEG sub-section with all six preset options."""
+        resp = client.get("/simulate/home")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        # Preset dropdown field must be present
+        assert 'name="seg_preset"' in html
+        # Explicit-rate input field must be present
+        assert 'name="seg_rate_pence_per_kwh"' in html
+        # All six UK supplier preset keys must appear as selectable option values
+        for preset_key in ("Octopus", "British Gas", "EDF", "E.ON", "Scottish Power", "OVO"):
+            assert preset_key in html, f"SEG preset '{preset_key}' missing from form HTML"
+
 
 # ===================================================================
 # _parse_home_config boundary tests (call the function directly)
