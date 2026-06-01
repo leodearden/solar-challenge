@@ -850,3 +850,96 @@ class TestExplainMetric:
             assert "uk_benchmark_band" in entry, f"Entry {name!r} missing 'uk_benchmark_band'"
             assert entry["definition"], f"Entry {name!r} has empty definition"
             assert entry["uk_benchmark_band"], f"Entry {name!r} has empty uk_benchmark_band"
+
+
+# ---------------------------------------------------------------------------
+# Slice ③ — suggest_config tests (step-3)
+# ---------------------------------------------------------------------------
+
+class TestSuggestConfig:
+    """Tests for suggest_config(annual_consumption_kwh, goal) -> dict[str, Any]."""
+
+    def test_returns_dict_with_sizing_keys(self) -> None:
+        """suggest_config returns a dict with recommended_pv_kwp and recommended_battery_kwh."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "self_sufficiency")
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "recommended_pv_kwp" in result, f"Missing 'recommended_pv_kwp': {result}"
+        assert "recommended_battery_kwh" in result, f"Missing 'recommended_battery_kwh': {result}"
+
+    def test_numeric_outputs_are_positive_floats(self) -> None:
+        """recommended_pv_kwp and recommended_battery_kwh must be positive floats."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "self_sufficiency")
+        pv = result["recommended_pv_kwp"]
+        batt = result["recommended_battery_kwh"]
+        assert isinstance(pv, (int, float)) and pv > 0, (
+            f"recommended_pv_kwp must be positive float, got {pv!r}"
+        )
+        assert isinstance(batt, (int, float)) and batt > 0, (
+            f"recommended_battery_kwh must be positive float, got {batt!r}"
+        )
+
+    def test_higher_consumption_gives_larger_pv(self) -> None:
+        """Higher annual consumption → larger recommended PV (scaling check)."""
+        from solar_challenge.web.assistant import suggest_config
+
+        low_result = suggest_config(1900.0, "self_sufficiency")
+        high_result = suggest_config(4200.0, "self_sufficiency")
+        assert high_result["recommended_pv_kwp"] > low_result["recommended_pv_kwp"], (
+            f"Expected larger PV for higher consumption: "
+            f"got {high_result['recommended_pv_kwp']} vs {low_result['recommended_pv_kwp']}"
+        )
+
+    def test_caveat_contains_run_a_simulation(self) -> None:
+        """Result dict must include a caveat/note string containing 'run a simulation'."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "bill_savings")
+        # Look for a string value that mentions "run a simulation"
+        found = any(
+            isinstance(v, str) and "run a simulation" in v.lower()
+            for v in result.values()
+        )
+        assert found, (
+            f"Expected at least one string value containing 'run a simulation': {result}"
+        )
+
+    def test_accepts_self_sufficiency_goal(self) -> None:
+        """suggest_config with goal='self_sufficiency' must not raise."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "self_sufficiency")
+        assert isinstance(result, dict)
+
+    def test_accepts_bill_savings_goal(self) -> None:
+        """suggest_config with goal='bill_savings' must not raise."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "bill_savings")
+        assert isinstance(result, dict)
+
+    def test_accepts_unknown_goal_without_raising(self) -> None:
+        """suggest_config with an unrecognised goal must not raise."""
+        from solar_challenge.web.assistant import suggest_config
+
+        try:
+            result = suggest_config(3100.0, "mystery_goal")
+            assert isinstance(result, dict)
+        except Exception as exc:
+            raise AssertionError(
+                f"suggest_config should not raise for unknown goal; got: {exc!r}"
+            ) from exc
+
+    def test_battery_scales_with_consumption(self) -> None:
+        """Higher annual consumption → larger recommended battery."""
+        from solar_challenge.web.assistant import suggest_config
+
+        low = suggest_config(1900.0, "self_sufficiency")
+        high = suggest_config(4200.0, "self_sufficiency")
+        assert high["recommended_battery_kwh"] > low["recommended_battery_kwh"], (
+            f"Expected larger battery for higher consumption: "
+            f"{high['recommended_battery_kwh']} vs {low['recommended_battery_kwh']}"
+        )
