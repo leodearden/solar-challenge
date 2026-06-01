@@ -1053,6 +1053,14 @@ class TestHomeFormRender:
         assert "Tariff" in html
         assert "Dispatch Strategy" in html
 
+    def test_home_form_shows_pv_age_inputs(self, client: FlaskClient) -> None:
+        """GET /simulate/home returns HTML containing the two PV-age number inputs."""
+        resp = client.get("/simulate/home")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert 'name="system_age_years"' in html
+        assert 'name="degradation_rate_per_year"' in html
+
 
 # ===================================================================
 # _parse_home_config boundary tests (call the function directly)
