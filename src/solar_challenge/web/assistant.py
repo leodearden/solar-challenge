@@ -783,6 +783,8 @@ def chat() -> Response:
     run_id: str = str(data.get("run_id", "")).strip()
     sid = _session_id()
     db_path = current_app.config["DATABASE"]
+    data_dir: str = str(current_app.config.get("DATA_DIR", ""))
+    job_manager: Any = current_app.extensions.get("job_manager")
 
     def generate() -> Generator[str, None, None]:
         # Pre-check: API key must be set
@@ -932,7 +934,9 @@ def chat() -> Response:
                         )
 
                         # Dispatch to the handler and collect the result.
-                        tool_result = _dispatch_tool(block_name, block_input, db_path)
+                        tool_result = _dispatch_tool(
+                            block_name, block_input, db_path, job_manager, data_dir
+                        )
                         invoked_tools.append(block_name)
 
                         tool_result_content.append({

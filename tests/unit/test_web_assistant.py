@@ -2572,6 +2572,8 @@ class TestSlice5RunToolSignal:
             json={"message": "run a 3-home fleet"},
         )
         assert resp.status_code == 200
+        # Consume the response body to force the SSE generator to run to completion
+        resp.get_data(as_text=True)
 
         # submit_fleet_job called once with a 3-home configs list
         jm.submit_fleet_job.assert_called_once()
