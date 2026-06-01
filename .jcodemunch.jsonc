@@ -1,0 +1,19 @@
+{
+  // my_solar_challenge: Python energy-flow simulator (src/solar_challenge);
+  // Flask + Plotly web dashboard. Single package, setuptools build.
+  "languages": ["python"],
+  "max_folder_files": 5000,
+  "extra_ignore_patterns": [
+    // On top of the global ~/.code-index/config.jsonc. This project uses a
+    // non-dotfile "venv/" (the global list only knows ".venv/"), which holds
+    // thousands of installed library files — must be ignored explicitly.
+    "venv/",
+    "results/",
+    "finance/",
+    "logs/",
+    ".cache/",
+    "data/"
+  ],
+  "disabled_tools": ["search_columns"],
+  "staleness_days": 3
+}
