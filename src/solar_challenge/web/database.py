@@ -12,10 +12,12 @@ Schema migration strategy:
     from scratch using ``CREATE TABLE IF NOT EXISTS``.
 """
 
+import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 
 
 def init_db(db_path: str | Path) -> None:
@@ -114,6 +116,80 @@ def init_db(db_path: str | Path) -> None:
 
     conn.commit()
     conn.close()
+
+
+def save_chat_message(
+    db_path: str | Path,
+    session_id: str,
+    role: str,
+    content: str,
+    metadata: dict[str, Any] | None = None,
+) -> int:
+    """Insert a chat message row and return the new row id.
+
+    Args:
+        db_path: Path to the SQLite database file.
+        session_id: Browser-session identifier scoping the conversation.
+        role: Either ``'user'`` or ``'assistant'``.
+        content: Message text.
+        metadata: Optional dict serialised as JSON (e.g. usage/cache stats).
+
+    Returns:
+        The auto-incremented integer id of the newly inserted row.
+    """
+    created_at = datetime.now(timezone.utc).isoformat()
+    metadata_json: str | None = json.dumps(metadata) if metadata is not None else None
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO chat_messages (session_id, role, content, created_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (session_id, role, content, created_at, metadata_json),
+        )
+        return int(cursor.lastrowid or 0)
+
+
+def get_chat_history(
+    db_path: str | Path,
+    session_id: str,
+) -> list[dict[str, Any]]:
+    """Return all chat messages for a session in insertion order.
+
+    Args:
+        db_path: Path to the SQLite database file.
+        session_id: Browser-session identifier to filter by.
+
+    Returns:
+        List of dicts with keys: ``role``, ``content``, ``created_at``,
+        ``metadata`` (dict or ``None``).
+    """
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT role, content, created_at, metadata_json
+            FROM chat_messages
+            WHERE session_id = ?
+            ORDER BY id ASC
+            """,
+            (session_id,),
+        )
+        rows = cursor.fetchall()
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        meta_raw = row["metadata_json"]
+        result.append(
+            {
+                "role": row["role"],
+                "content": row["content"],
+                "created_at": row["created_at"],
+                "metadata": json.loads(meta_raw) if meta_raw is not None else None,
+            }
+        )
+    return result
 
 
 @contextmanager
