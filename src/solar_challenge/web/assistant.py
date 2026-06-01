@@ -465,6 +465,56 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
         return {"runs": [], "error": f"Database error listing recent runs: {exc}"}
 
 
+def run_home_simulation(
+    params: dict[str, Any],
+    job_manager: Any,
+    db_path: "str | Path",
+    data_dir: "str | Path",
+) -> dict[str, Any]:
+    """Submit a home simulation job via the JobManager and return {run_id, results_url}.
+
+    Parses *params* using the shared ``_parse_home_config`` helper from
+    ``solar_challenge.web.api`` (deferred import to avoid circular imports).
+    Returns a graceful ``{"error": ...}`` dict when *job_manager* is None or
+    when the params fail validation.  Never raises.
+
+    Args:
+        params:      Flat parameter dict (pv_kw, battery_kwh, occupants,
+                     location, days, name, …) — same shape as the JSON body
+                     accepted by POST /api/simulate/home.
+        job_manager: A ``JobManager`` instance (or ``None``).
+        db_path:     Path to the SQLite database.
+        data_dir:    Root directory for storing run artefacts.
+
+    Returns:
+        ``{"run_id": str, "results_url": str}`` on success, or
+        ``{"error": str}`` on failure.  Never raises.
+    """
+    if job_manager is None:
+        return {"error": "run_home_simulation requires a running JobManager (job_manager is None)"}
+
+    from solar_challenge.web.api import _parse_home_config  # deferred to avoid circularity
+
+    try:
+        home_config, start_date, end_date, name = _parse_home_config(params)
+    except (ValueError, TypeError) as exc:
+        return {"error": f"Invalid simulation parameters: {exc}"}
+
+    try:
+        _job_id, run_id = job_manager.submit_home_job(
+            config=home_config,
+            start_date=start_date,
+            end_date=end_date,
+            db_path=str(db_path),
+            data_dir=str(data_dir),
+            name=name,
+        )
+    except Exception as exc:
+        return {"error": f"Failed to submit home simulation job: {exc}"}
+
+    return {"run_id": run_id, "results_url": f"/results/home/{run_id}"}
+
+
 def _dispatch_tool(
     name: str,
     tool_input: dict[str, Any],
