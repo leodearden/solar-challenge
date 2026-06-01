@@ -2056,3 +2056,118 @@ class TestRunContextInjection:
             f"Without run_id, last message content should be the raw user text; "
             f"got: {last_msg['content']!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — run_home_simulation unit tests (step-1 RED)
+# ---------------------------------------------------------------------------
+
+class TestRunHomeSimulation:
+    """Tests for run_home_simulation(params, job_manager, db_path, data_dir) -> dict."""
+
+    def _make_jm(self) -> MagicMock:
+        """Return a MagicMock job_manager with submit_home_job stubbed."""
+        jm = MagicMock()
+        jm.submit_home_job.return_value = ("job-h", "run-h")
+        return jm
+
+    def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
+        """run_home_simulation returns {run_id, results_url} with correct values."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+        result = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("run_id") == "run-h", (
+            f"Expected run_id='run-h'; got {result.get('run_id')!r}"
+        )
+        assert result.get("results_url") == "/results/home/run-h", (
+            f"Expected results_url='/results/home/run-h'; got {result.get('results_url')!r}"
+        )
+
+    def test_submit_home_job_called_with_correct_config(self, tmp_path: Path) -> None:
+        """submit_home_job called once; config has correct pv_kw and battery_kwh."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+
+        # config should be a HomeConfig with pv 4.0 and battery 5.0
+        config = call_kwargs.kwargs.get("config") or call_kwargs.args[0]
+        assert hasattr(config, "pv_config"), (
+            f"Expected config to have pv_config; got {type(config)}"
+        )
+        assert config.pv_config.capacity_kw == 4.0, (
+            f"Expected pv capacity_kw=4.0; got {config.pv_config.capacity_kw}"
+        )
+        assert config.battery_config is not None, "Expected battery_config to be set"
+        assert config.battery_config.capacity_kwh == 5.0, (
+            f"Expected battery capacity_kwh=5.0; got {config.battery_config.capacity_kwh}"
+        )
+
+    def test_days_drives_start_end_window(self, tmp_path: Path) -> None:
+        """days parameter is reflected in the start/end dates passed to submit_home_job."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        params_7 = {"pv_kw": 4, "days": 7, "location": "bristol"}
+        params_30 = {"pv_kw": 4, "days": 30, "location": "bristol"}
+
+        run_home_simulation(params_7, jm, str(tmp_path / "t7.db"), str(tmp_path))
+        call_7 = jm.submit_home_job.call_args
+        start_7 = call_7.kwargs.get("start_date") or call_7.args[1]
+        end_7 = call_7.kwargs.get("end_date") or call_7.args[2]
+        span_7 = (end_7 - start_7).days
+
+        jm.reset_mock()
+        jm.submit_home_job.return_value = ("job-h", "run-h")
+
+        run_home_simulation(params_30, jm, str(tmp_path / "t30.db"), str(tmp_path))
+        call_30 = jm.submit_home_job.call_args
+        start_30 = call_30.kwargs.get("start_date") or call_30.args[1]
+        end_30 = call_30.kwargs.get("end_date") or call_30.args[2]
+        span_30 = (end_30 - start_30).days
+
+        assert span_30 > span_7, (
+            f"Expected 30-day span ({span_30}) > 7-day span ({span_7})"
+        )
+
+    def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
+        """Invalid pv_kw (out of 0.5-20 range) returns error dict; submit not called; no raise."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        params = {"pv_kw": 999, "battery_kwh": 5, "days": 7, "location": "bristol"}
+
+        try:
+            result = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        except Exception as exc:
+            raise AssertionError(
+                f"run_home_simulation should not raise on invalid params; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key; got {result}"
+        jm.submit_home_job.assert_not_called()
+
+    def test_job_manager_none_returns_graceful_error(self, tmp_path: Path) -> None:
+        """job_manager=None returns error dict, no raise."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+
+        try:
+            result = run_home_simulation(params, None, str(tmp_path / "t.db"), str(tmp_path))
+        except Exception as exc:
+            raise AssertionError(
+                f"run_home_simulation should not raise when job_manager=None; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
