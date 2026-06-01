@@ -32,6 +32,8 @@ from solar_challenge.config import (
     _parse_heat_pump_config,
     _parse_home_config,
     _parse_pv_config,
+    _parse_pv_distribution_config,
+    _modify_pv_config,
     load_community_config,
     _parse_distribution_spec,
     _parse_fleet_distribution_config,
@@ -49,7 +51,7 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
-from solar_challenge.pv import PVConfig
+from solar_challenge.pv import PVConfig, calculate_degradation_factor
 
 
 class TestSimulationPeriod:
@@ -2302,3 +2304,168 @@ class TestParsePVConfig:
         pv = _parse_pv_config(data)
         assert pv.system_age_years == 0.0
         assert pv.degradation_rate_per_year == 0.005
+
+
+class TestModifyPVConfigPreservesDegradation:
+    """Tests that _modify_pv_config sweeps do not drop system_age_years/degradation_rate_per_year."""
+
+    def _base_config(self) -> "PVConfig":
+        return PVConfig(
+            capacity_kw=4.0,
+            system_age_years=20.0,
+            degradation_rate_per_year=0.008,
+        )
+
+    def test_modify_pv_capacity_kw_preserves_age(self) -> None:
+        """Sweeping pv_capacity_kw keeps age and degradation rate intact."""
+        base = self._base_config()
+        result = _modify_pv_config(base, "pv_capacity_kw", 6.0)
+        assert result.capacity_kw == 6.0
+        assert result.system_age_years == 20.0
+        assert result.degradation_rate_per_year == 0.008
+
+    def test_modify_pv_tilt_preserves_age(self) -> None:
+        """Sweeping pv_tilt keeps age and degradation rate intact."""
+        base = self._base_config()
+        result = _modify_pv_config(base, "pv_tilt", 45.0)
+        assert result.tilt == 45.0
+        assert result.system_age_years == 20.0
+        assert result.degradation_rate_per_year == 0.008
+
+    def test_modify_pv_azimuth_preserves_age(self) -> None:
+        """Sweeping pv_azimuth keeps age and degradation rate intact."""
+        base = self._base_config()
+        result = _modify_pv_config(base, "pv_azimuth", 90.0)
+        assert result.azimuth == 90.0
+        assert result.system_age_years == 20.0
+        assert result.degradation_rate_per_year == 0.008
+
+
+class TestGenerateHomesFromDistributionDegradation:
+    """Tests that generate_homes_from_distribution threads age fields into each home's PVConfig."""
+
+    def test_scalar_age_reaches_all_homes(self) -> None:
+        """A fixed system_age_years scalar is present in every home's PVConfig."""
+        config = FleetDistributionConfig(
+            n_homes=10,
+            pv=PVDistributionConfig(capacity_kw=4.0, system_age_years=20.0),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        for home in homes:
+            assert home.pv_config.system_age_years == 20.0
+            assert home.pv_config.degradation_rate_per_year == 0.005  # default
+
+    def test_distribution_age_varies_across_homes(self) -> None:
+        """A NormalDistribution on system_age_years produces varying ages within [min, max]."""
+        config = FleetDistributionConfig(
+            n_homes=20,
+            pv=PVDistributionConfig(
+                capacity_kw=4.0,
+                system_age_years=NormalDistribution(mean=15.0, std=3.0, min=0.0, max=30.0),
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        ages = [home.pv_config.system_age_years for home in homes]
+        assert len(set(ages)) > 1, "Ages should vary across homes"
+        assert all(0.0 <= age <= 30.0 for age in ages), "Ages must stay within [0, 30]"
+
+    def test_scalar_age_preserves_rng_reproducibility(self) -> None:
+        """Scalar system_age_years does not perturb the RNG stream.
+
+        A config with system_age_years=20.0 (scalar) must yield the same
+        capacity_kw sequence as an otherwise-identical config with the
+        default age (0.0), given the same seed.  This directly proves the
+        new scalar field does not consume RNG and leaves the legacy
+        capacity-draw sequence undisturbed.
+        """
+        pv_capacity = WeightedDiscreteDistribution(
+            values=[3.0, 4.0, 5.0], weights=[0.3, 0.4, 0.3]
+        )
+        config_with_age = FleetDistributionConfig(
+            n_homes=10,
+            pv=PVDistributionConfig(capacity_kw=pv_capacity, system_age_years=20.0),
+            load=LoadDistributionConfig(),
+            seed=99,
+        )
+        config_no_age = FleetDistributionConfig(
+            n_homes=10,
+            pv=PVDistributionConfig(capacity_kw=pv_capacity, system_age_years=0.0),
+            load=LoadDistributionConfig(),
+            seed=99,
+        )
+        homes_aged = generate_homes_from_distribution(config_with_age, Location.bristol())
+        homes_unaged = generate_homes_from_distribution(config_no_age, Location.bristol())
+        caps_aged = [h.pv_config.capacity_kw for h in homes_aged]
+        caps_unaged = [h.pv_config.capacity_kw for h in homes_unaged]
+        assert caps_aged == caps_unaged, (
+            "Scalar system_age_years must not consume RNG; "
+            "capacity sequences should be identical regardless of scalar age value"
+        )
+
+
+class TestParsePVDistributionConfigDegradation:
+    """Tests that _parse_pv_distribution_config threads degradation keys into PVDistributionConfig."""
+
+    def test_explicit_keys_are_parsed(self) -> None:
+        """system_age_years and degradation_rate_per_year from data reach PVDistributionConfig."""
+        data = {
+            "capacity_kw": 4.0,
+            "system_age_years": 20.0,
+            "degradation_rate_per_year": 0.008,
+        }
+        pv_dist = _parse_pv_distribution_config(data)
+        assert pv_dist.system_age_years == 20.0
+        assert pv_dist.degradation_rate_per_year == 0.008
+
+    def test_defaults_apply_when_keys_omitted(self) -> None:
+        """Omitting both keys yields defaults: system_age_years=0.0, degradation_rate_per_year=0.005."""
+        data = {"capacity_kw": 4.0}
+        pv_dist = _parse_pv_distribution_config(data)
+        assert pv_dist.system_age_years == 0.0
+        assert pv_dist.degradation_rate_per_year == 0.005
+
+
+class TestAgedScenario:
+    """Full product read-path test: load_fleet_config propagates system_age_years from YAML."""
+
+    _SCENARIOS_DIR = Path(__file__).parent.parent.parent / "scenarios"
+
+    def test_aged_scenario_has_100_homes_all_aged_20(self) -> None:
+        """Loading bristol-phase1-aged.yaml returns 100 homes each with system_age_years=20.0."""
+        aged_path = self._SCENARIOS_DIR / "bristol-phase1-aged.yaml"
+        fleet = load_fleet_config(aged_path)
+        assert len(fleet.homes) == 100
+        for home in fleet.homes:
+            assert home.pv_config.system_age_years == 20.0
+
+    def test_baseline_scenario_has_age_zero(self) -> None:
+        """Loading bristol-phase1.yaml returns homes with default system_age_years=0.0."""
+        baseline_path = self._SCENARIOS_DIR / "bristol-phase1.yaml"
+        fleet = load_fleet_config(baseline_path)
+        for home in fleet.homes:
+            assert home.pv_config.system_age_years == 0.0
+
+    def test_aged_scenario_degradation_factor_is_approx_90pct(self) -> None:
+        """The aged scenario yields degradation factor ≈ 0.90 (20yr × 0.5%/yr).
+
+        Exercises the signal chain end-to-end at config speed:
+          YAML system_age_years=20  →  home.pv_config.system_age_years==20.0
+          + default rate 0.005      →  calculate_degradation_factor → 0.90
+        This confirms the ≈10% lower aggregate generation claim without
+        running a live PVGIS simulation.
+        """
+        aged_path = self._SCENARIOS_DIR / "bristol-phase1-aged.yaml"
+        fleet = load_fleet_config(aged_path)
+        home = fleet.homes[0]  # all homes share the same scalar age
+        factor = calculate_degradation_factor(
+            home.pv_config.system_age_years,
+            home.pv_config.degradation_rate_per_year,
+        )
+        expected = 1.0 - 20.0 * 0.005  # 0.90
+        assert abs(factor - expected) < 1e-9, (
+            f"Expected degradation factor {expected}, got {factor}"
+        )

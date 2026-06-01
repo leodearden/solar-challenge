@@ -234,6 +234,8 @@ class PVDistributionConfig:
         tilt: Distribution for tilt angle (default: 35)
         module_efficiency: Distribution for module efficiency (default: 0.20)
         inverter_efficiency: Distribution for inverter efficiency (default: 0.96)
+        system_age_years: Distribution for system age in years (default: 0.0)
+        degradation_rate_per_year: Distribution for annual degradation rate (default: 0.005)
     """
 
     capacity_kw: DistributionSpec
@@ -241,6 +243,8 @@ class PVDistributionConfig:
     tilt: DistributionSpec = 35.0
     module_efficiency: DistributionSpec = 0.20
     inverter_efficiency: DistributionSpec = 0.96
+    system_age_years: DistributionSpec = 0.0
+    degradation_rate_per_year: DistributionSpec = 0.005
 
 
 @dataclass
@@ -1057,6 +1061,12 @@ def _parse_pv_distribution_config(data: dict[str, Any]) -> PVDistributionConfig:
         inverter_efficiency=_parse_distribution_spec(
             data.get("inverter_efficiency", 0.96), "pv.inverter_efficiency"
         ),
+        system_age_years=_parse_distribution_spec(
+            data.get("system_age_years", 0.0), "pv.system_age_years"
+        ),
+        degradation_rate_per_year=_parse_distribution_spec(
+            data.get("degradation_rate_per_year", 0.005), "pv.degradation_rate_per_year"
+        ),
     )
 
 
@@ -1286,6 +1296,8 @@ def generate_homes_from_distribution(
         config.pv.tilt,
         config.pv.module_efficiency,
         config.pv.inverter_efficiency,
+        config.pv.system_age_years,
+        config.pv.degradation_rate_per_year,
         config.load.annual_consumption_kwh,
         config.load.household_occupants,
     ]
@@ -1338,6 +1350,8 @@ def generate_homes_from_distribution(
         pv_tilt = sampler.sample(config.pv.tilt)
         pv_module_eff = sampler.sample(config.pv.module_efficiency)
         pv_inverter_eff = sampler.sample(config.pv.inverter_efficiency)
+        pv_age = sampler.sample(config.pv.system_age_years)
+        pv_degradation = sampler.sample(config.pv.degradation_rate_per_year)
 
         pv_config = PVConfig(
             capacity_kw=pv_capacity,
@@ -1345,6 +1359,8 @@ def generate_homes_from_distribution(
             tilt=pv_tilt if pv_tilt is not None else 35.0,
             module_efficiency=pv_module_eff if pv_module_eff is not None else 0.20,
             inverter_efficiency=pv_inverter_eff if pv_inverter_eff is not None else 0.96,
+            system_age_years=pv_age if pv_age is not None else 0.0,
+            degradation_rate_per_year=pv_degradation if pv_degradation is not None else 0.005,
         )
 
         # Build context for proportional distributions
@@ -1932,6 +1948,8 @@ def _modify_pv_config(config: PVConfig, param_name: str, value: float) -> PVConf
             temperature_coefficient=config.temperature_coefficient,
             inverter_efficiency=config.inverter_efficiency,
             inverter_capacity_kw=config.inverter_capacity_kw,
+            system_age_years=config.system_age_years,
+            degradation_rate_per_year=config.degradation_rate_per_year,
         )
     elif param_name == "pv_tilt":
         return PVConfig(
@@ -1943,6 +1961,8 @@ def _modify_pv_config(config: PVConfig, param_name: str, value: float) -> PVConf
             temperature_coefficient=config.temperature_coefficient,
             inverter_efficiency=config.inverter_efficiency,
             inverter_capacity_kw=config.inverter_capacity_kw,
+            system_age_years=config.system_age_years,
+            degradation_rate_per_year=config.degradation_rate_per_year,
         )
     elif param_name == "pv_azimuth":
         return PVConfig(
@@ -1954,6 +1974,8 @@ def _modify_pv_config(config: PVConfig, param_name: str, value: float) -> PVConf
             temperature_coefficient=config.temperature_coefficient,
             inverter_efficiency=config.inverter_efficiency,
             inverter_capacity_kw=config.inverter_capacity_kw,
+            system_age_years=config.system_age_years,
+            degradation_rate_per_year=config.degradation_rate_per_year,
         )
     return config
 
