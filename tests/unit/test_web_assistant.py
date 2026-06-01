@@ -943,3 +943,80 @@ class TestSuggestConfig:
             f"Expected larger battery for higher consumption: "
             f"{high['recommended_battery_kwh']} vs {low['recommended_battery_kwh']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Slice ③ — tool surface tests (step-5)
+# ---------------------------------------------------------------------------
+
+class TestToolSurface:
+    """Tests for _TOOLS list and _dispatch_tool router."""
+
+    def test_tools_order_is_explain_metric_then_suggest_config(self) -> None:
+        """[t['name'] for t in _TOOLS] == ['explain_metric', 'suggest_config'] (fixed order)."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        names = [t["name"] for t in _TOOLS]
+        assert names == ["explain_metric", "suggest_config"], (
+            f"Expected fixed order ['explain_metric', 'suggest_config'], got {names}"
+        )
+
+    def test_every_tool_entry_has_required_keys(self) -> None:
+        """Every entry in _TOOLS has 'name', 'description', and 'input_schema'."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        for tool in _TOOLS:
+            assert "name" in tool, f"Missing 'name' in tool: {tool}"
+            assert "description" in tool, f"Missing 'description' in tool: {tool}"
+            assert "input_schema" in tool, f"Missing 'input_schema' in tool: {tool}"
+
+    def test_every_tool_input_schema_is_object_with_required(self) -> None:
+        """Every input_schema has type=='object' and a non-empty 'required' list."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        for tool in _TOOLS:
+            schema = tool["input_schema"]
+            assert isinstance(schema, dict), f"input_schema must be dict for {tool['name']!r}"
+            assert schema.get("type") == "object", (
+                f"input_schema.type must be 'object' for {tool['name']!r}; got {schema.get('type')!r}"
+            )
+            assert "required" in schema, f"input_schema missing 'required' for {tool['name']!r}"
+            assert isinstance(schema["required"], list) and schema["required"], (
+                f"input_schema.required must be non-empty list for {tool['name']!r}"
+            )
+
+    def test_dispatch_explain_metric(self) -> None:
+        """_dispatch_tool('explain_metric', {...}) returns the same dict as explain_metric()."""
+        from solar_challenge.web.assistant import _dispatch_tool, explain_metric
+
+        result = _dispatch_tool("explain_metric", {"metric": "self_consumption_ratio"})
+        expected = explain_metric("self_consumption_ratio")
+        assert result == expected, (
+            f"_dispatch_tool result mismatch: {result!r} vs {expected!r}"
+        )
+
+    def test_dispatch_suggest_config(self) -> None:
+        """_dispatch_tool('suggest_config', {...}) returns the same dict as suggest_config()."""
+        from solar_challenge.web.assistant import _dispatch_tool, suggest_config
+
+        result = _dispatch_tool(
+            "suggest_config",
+            {"annual_consumption_kwh": 3100, "goal": "self_sufficiency"},
+        )
+        expected = suggest_config(3100, "self_sufficiency")
+        assert result == expected, (
+            f"_dispatch_tool result mismatch: {result!r} vs {expected!r}"
+        )
+
+    def test_dispatch_unknown_returns_error_dict(self) -> None:
+        """_dispatch_tool with unknown name returns a dict with 'error' key, does NOT raise."""
+        from solar_challenge.web.assistant import _dispatch_tool
+
+        try:
+            result = _dispatch_tool("nonexistent_tool", {})
+        except Exception as exc:
+            raise AssertionError(
+                f"_dispatch_tool should not raise for unknown tool; got: {exc!r}"
+            ) from exc
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key in result: {result}"
