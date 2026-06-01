@@ -2186,6 +2186,49 @@ class TestRunHomeSimulation:
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
 
+    def test_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
+        """When 'days' is absent the window passed to submit_home_job is 7 days, not the full year."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        # No 'days' key — handler must default to 7
+        params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
+        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 6, (
+            f"Expected 7-day window (span=6) when 'days' omitted; got span={span}. "
+            "Handler must default to 7 days, not the full calendar year."
+        )
+        assert span != 365, (
+            "Handler is using the full-year fallback instead of the documented 7-day default"
+        )
+
+    def test_explicit_days_honored_over_default(self, tmp_path: Path) -> None:
+        """A caller-supplied 'days' value is not overwritten by the default."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        # Explicit days=30 must produce a 30-day window (span=29)
+        params: dict[str, Any] = {"pv_kw": 4, "days": 30, "location": "bristol"}
+        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 29, (
+            f"Expected 30-day window (span=29) when days=30; got span={span}. "
+            "Caller-supplied 'days' must not be clobbered by the default."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Slice ⑤ — run_fleet_simulation unit tests (step-3 RED)
@@ -2301,6 +2344,29 @@ class TestRunFleetSimulation:
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+
+    def test_fleet_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
+        """When 'days' is absent the fleet window passed to submit_fleet_job is 7 days, not the full year."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        # No 'days' key — handler must default to 7
+        params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol"}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 6, (
+            f"Expected 7-day window (span=6) when 'days' omitted; got span={span}. "
+            "Fleet handler must default to 7 days, not the full calendar year."
+        )
+        assert span != 365, (
+            "Fleet handler is using the full-year fallback instead of the documented 7-day default"
+        )
 
 
 # ---------------------------------------------------------------------------
