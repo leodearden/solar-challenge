@@ -758,3 +758,598 @@ def test_sidebar_shows_assistant_link(client: FlaskClient) -> None:
     assert 'href="/assistant/"' in html, (
         "Expected href='/assistant/' link in sidebar (url_for('assistant.chat_page'))"
     )
+
+
+# ---------------------------------------------------------------------------
+# Slice ③ — explain_metric tests (step-1)
+# ---------------------------------------------------------------------------
+
+class TestExplainMetric:
+    """Tests for the explain_metric(metric) -> dict[str, str] handler."""
+
+    def test_known_metric_self_consumption_ratio(self) -> None:
+        """explain_metric('self_consumption_ratio') returns dict with non-empty definition and band."""
+        from solar_challenge.web.assistant import explain_metric
+
+        result = explain_metric("self_consumption_ratio")
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "definition" in result, f"Missing 'definition' key: {result}"
+        assert "uk_benchmark_band" in result, f"Missing 'uk_benchmark_band' key: {result}"
+        assert isinstance(result["definition"], str) and result["definition"], (
+            "definition must be a non-empty string"
+        )
+        assert isinstance(result["uk_benchmark_band"], str) and result["uk_benchmark_band"], (
+            "uk_benchmark_band must be a non-empty string"
+        )
+
+    def test_known_metric_self_sufficiency(self) -> None:
+        """explain_metric('self_sufficiency') returns dict with non-empty definition and band."""
+        from solar_challenge.web.assistant import explain_metric
+
+        result = explain_metric("self_sufficiency")
+        assert "definition" in result
+        assert "uk_benchmark_band" in result
+        assert result["definition"]
+        assert result["uk_benchmark_band"]
+
+    def test_key_normalization_hyphen(self) -> None:
+        """'self-consumption ratio' normalizes to same canonical entry as 'self_consumption_ratio'."""
+        from solar_challenge.web.assistant import explain_metric
+
+        r1 = explain_metric("self_consumption_ratio")
+        r2 = explain_metric("self-consumption ratio")
+        assert r1 == r2, (
+            f"Expected same result for canonical and hyphenated form; "
+            f"got {r1!r} vs {r2!r}"
+        )
+
+    def test_key_normalization_case(self) -> None:
+        """'Self_Consumption_Ratio' normalizes to same canonical entry."""
+        from solar_challenge.web.assistant import explain_metric
+
+        r1 = explain_metric("self_consumption_ratio")
+        r2 = explain_metric("Self_Consumption_Ratio")
+        assert r1 == r2, (
+            f"Expected case-insensitive lookup; got {r1!r} vs {r2!r}"
+        )
+
+    def test_unknown_metric_returns_graceful_dict(self) -> None:
+        """An unrecognized metric returns a dict with both keys present mentioning 'unknown'."""
+        from solar_challenge.web.assistant import explain_metric
+
+        result = explain_metric("nonexistent_metric_xyz")
+        assert isinstance(result, dict), "Must return a dict, not raise"
+        assert "definition" in result, f"Missing 'definition' in graceful response: {result}"
+        assert "uk_benchmark_band" in result, (
+            f"Missing 'uk_benchmark_band' in graceful response: {result}"
+        )
+        # Must mention the metric is unknown
+        combined = (result["definition"] + " " + result["uk_benchmark_band"]).lower()
+        assert "unknown" in combined or "not found" in combined or "not recognised" in combined, (
+            f"Graceful response should mention metric is unknown/not found: {result}"
+        )
+
+    def test_unknown_metric_does_not_raise(self) -> None:
+        """explain_metric with an unknown name must NOT raise any exception."""
+        from solar_challenge.web.assistant import explain_metric
+
+        try:
+            explain_metric("totally_made_up_metric_12345")
+        except Exception as exc:
+            raise AssertionError(
+                f"explain_metric should not raise for unknown metric, got: {exc!r}"
+            ) from exc
+
+    def test_all_known_metrics_have_both_keys(self) -> None:
+        """Every entry in _METRIC_TABLE has non-empty definition and uk_benchmark_band."""
+        from solar_challenge.web.assistant import _METRIC_TABLE
+
+        assert _METRIC_TABLE, "Expected _METRIC_TABLE to be non-empty"
+        for name, entry in _METRIC_TABLE.items():
+            assert "definition" in entry, f"Entry {name!r} missing 'definition'"
+            assert "uk_benchmark_band" in entry, f"Entry {name!r} missing 'uk_benchmark_band'"
+            assert entry["definition"], f"Entry {name!r} has empty definition"
+            assert entry["uk_benchmark_band"], f"Entry {name!r} has empty uk_benchmark_band"
+
+
+# ---------------------------------------------------------------------------
+# Slice ③ — suggest_config tests (step-3)
+# ---------------------------------------------------------------------------
+
+class TestSuggestConfig:
+    """Tests for suggest_config(annual_consumption_kwh, goal) -> dict[str, Any]."""
+
+    def test_returns_dict_with_sizing_keys(self) -> None:
+        """suggest_config returns a dict with recommended_pv_kwp and recommended_battery_kwh."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "self_sufficiency")
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "recommended_pv_kwp" in result, f"Missing 'recommended_pv_kwp': {result}"
+        assert "recommended_battery_kwh" in result, f"Missing 'recommended_battery_kwh': {result}"
+
+    def test_numeric_outputs_are_positive_floats(self) -> None:
+        """recommended_pv_kwp and recommended_battery_kwh must be positive floats."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "self_sufficiency")
+        pv = result["recommended_pv_kwp"]
+        batt = result["recommended_battery_kwh"]
+        assert isinstance(pv, (int, float)) and pv > 0, (
+            f"recommended_pv_kwp must be positive float, got {pv!r}"
+        )
+        assert isinstance(batt, (int, float)) and batt > 0, (
+            f"recommended_battery_kwh must be positive float, got {batt!r}"
+        )
+
+    def test_higher_consumption_gives_larger_pv(self) -> None:
+        """Higher annual consumption → larger recommended PV (scaling check)."""
+        from solar_challenge.web.assistant import suggest_config
+
+        low_result = suggest_config(1900.0, "self_sufficiency")
+        high_result = suggest_config(4200.0, "self_sufficiency")
+        assert high_result["recommended_pv_kwp"] > low_result["recommended_pv_kwp"], (
+            f"Expected larger PV for higher consumption: "
+            f"got {high_result['recommended_pv_kwp']} vs {low_result['recommended_pv_kwp']}"
+        )
+
+    def test_caveat_contains_run_a_simulation(self) -> None:
+        """Result dict must include a caveat/note string containing 'run a simulation'."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "bill_savings")
+        # Look for a string value that mentions "run a simulation"
+        found = any(
+            isinstance(v, str) and "run a simulation" in v.lower()
+            for v in result.values()
+        )
+        assert found, (
+            f"Expected at least one string value containing 'run a simulation': {result}"
+        )
+
+    def test_accepts_self_sufficiency_goal(self) -> None:
+        """suggest_config with goal='self_sufficiency' must not raise."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "self_sufficiency")
+        assert isinstance(result, dict)
+
+    def test_accepts_bill_savings_goal(self) -> None:
+        """suggest_config with goal='bill_savings' must not raise."""
+        from solar_challenge.web.assistant import suggest_config
+
+        result = suggest_config(3100.0, "bill_savings")
+        assert isinstance(result, dict)
+
+    def test_accepts_unknown_goal_without_raising(self) -> None:
+        """suggest_config with an unrecognised goal must not raise."""
+        from solar_challenge.web.assistant import suggest_config
+
+        try:
+            result = suggest_config(3100.0, "mystery_goal")
+            assert isinstance(result, dict)
+        except Exception as exc:
+            raise AssertionError(
+                f"suggest_config should not raise for unknown goal; got: {exc!r}"
+            ) from exc
+
+    def test_battery_scales_with_consumption(self) -> None:
+        """Higher annual consumption → larger recommended battery."""
+        from solar_challenge.web.assistant import suggest_config
+
+        low = suggest_config(1900.0, "self_sufficiency")
+        high = suggest_config(4200.0, "self_sufficiency")
+        assert high["recommended_battery_kwh"] > low["recommended_battery_kwh"], (
+            f"Expected larger battery for higher consumption: "
+            f"{high['recommended_battery_kwh']} vs {low['recommended_battery_kwh']}"
+        )
+
+    def test_self_sufficiency_goal_gives_larger_sizing_than_bill_savings(self) -> None:
+        """suggest_config('self_sufficiency') yields strictly larger PV & battery than 'bill_savings'."""
+        from solar_challenge.web.assistant import suggest_config
+
+        consumption = 3100.0
+        ss = suggest_config(consumption, "self_sufficiency")
+        bs = suggest_config(consumption, "bill_savings")
+        assert ss["recommended_pv_kwp"] > bs["recommended_pv_kwp"], (
+            f"Expected self_sufficiency PV ({ss['recommended_pv_kwp']}) "
+            f"> bill_savings PV ({bs['recommended_pv_kwp']})"
+        )
+        assert ss["recommended_battery_kwh"] > bs["recommended_battery_kwh"], (
+            f"Expected self_sufficiency battery ({ss['recommended_battery_kwh']}) "
+            f"> bill_savings battery ({bs['recommended_battery_kwh']})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ③ — tool surface tests (step-5)
+# ---------------------------------------------------------------------------
+
+class TestToolSurface:
+    """Tests for _TOOLS list and _dispatch_tool router."""
+
+    def test_tools_order_is_explain_metric_then_suggest_config(self) -> None:
+        """[t['name'] for t in _TOOLS] == ['explain_metric', 'suggest_config'] (fixed order)."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        names = [t["name"] for t in _TOOLS]
+        assert names == ["explain_metric", "suggest_config"], (
+            f"Expected fixed order ['explain_metric', 'suggest_config'], got {names}"
+        )
+
+    def test_every_tool_entry_has_required_keys(self) -> None:
+        """Every entry in _TOOLS has 'name', 'description', and 'input_schema'."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        for tool in _TOOLS:
+            assert "name" in tool, f"Missing 'name' in tool: {tool}"
+            assert "description" in tool, f"Missing 'description' in tool: {tool}"
+            assert "input_schema" in tool, f"Missing 'input_schema' in tool: {tool}"
+
+    def test_every_tool_input_schema_is_object_with_required(self) -> None:
+        """Every input_schema has type=='object' and a non-empty 'required' list."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        for tool in _TOOLS:
+            schema = tool["input_schema"]
+            assert isinstance(schema, dict), f"input_schema must be dict for {tool['name']!r}"
+            assert schema.get("type") == "object", (
+                f"input_schema.type must be 'object' for {tool['name']!r}; got {schema.get('type')!r}"
+            )
+            assert "required" in schema, f"input_schema missing 'required' for {tool['name']!r}"
+            assert isinstance(schema["required"], list) and schema["required"], (
+                f"input_schema.required must be non-empty list for {tool['name']!r}"
+            )
+
+    def test_dispatch_explain_metric(self) -> None:
+        """_dispatch_tool('explain_metric', {...}) returns the same dict as explain_metric()."""
+        from solar_challenge.web.assistant import _dispatch_tool, explain_metric
+
+        result = _dispatch_tool("explain_metric", {"metric": "self_consumption_ratio"})
+        expected = explain_metric("self_consumption_ratio")
+        assert result == expected, (
+            f"_dispatch_tool result mismatch: {result!r} vs {expected!r}"
+        )
+
+    def test_dispatch_suggest_config(self) -> None:
+        """_dispatch_tool('suggest_config', {...}) returns the same dict as suggest_config()."""
+        from solar_challenge.web.assistant import _dispatch_tool, suggest_config
+
+        result = _dispatch_tool(
+            "suggest_config",
+            {"annual_consumption_kwh": 3100, "goal": "self_sufficiency"},
+        )
+        expected = suggest_config(3100, "self_sufficiency")
+        assert result == expected, (
+            f"_dispatch_tool result mismatch: {result!r} vs {expected!r}"
+        )
+
+    def test_dispatch_unknown_returns_error_dict(self) -> None:
+        """_dispatch_tool with unknown name returns a dict with 'error' key, does NOT raise."""
+        from solar_challenge.web.assistant import _dispatch_tool
+
+        try:
+            result = _dispatch_tool("nonexistent_tool", {})
+        except Exception as exc:
+            raise AssertionError(
+                f"_dispatch_tool should not raise for unknown tool; got: {exc!r}"
+            ) from exc
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key in result: {result}"
+
+
+# ---------------------------------------------------------------------------
+# Slice ③ — manual tool-use loop tests (step-7)
+# ---------------------------------------------------------------------------
+
+def make_tool_use_stream(
+    tool_id: str,
+    tool_name: str,
+    tool_input: dict[str, Any],
+) -> MagicMock:
+    """Build a context-manager mock for a stream that ends with stop_reason='tool_use'.
+
+    The fake stream yields no text chunks; get_final_message() returns a
+    SimpleNamespace with stop_reason='tool_use' and a content list containing
+    one tool_use block.
+    """
+    def _make_final_message() -> SimpleNamespace:
+        return SimpleNamespace(
+            stop_reason="tool_use",
+            content=[
+                SimpleNamespace(
+                    type="tool_use",
+                    id=tool_id,
+                    name=tool_name,
+                    input=tool_input,
+                ),
+            ],
+            usage=SimpleNamespace(
+                cache_creation_input_tokens=50,
+                cache_read_input_tokens=0,
+            ),
+        )
+
+    fake_stream = MagicMock()
+    fake_stream.text_stream = iter([])  # no text in tool-use turn
+    fake_stream.get_final_message.return_value = _make_final_message()
+
+    cm = MagicMock()
+    cm.__enter__.return_value = fake_stream
+    cm.__exit__.return_value = False
+    return cm
+
+
+def make_end_turn_stream(text_chunks: list[str]) -> MagicMock:
+    """Build a context-manager mock for a stream that ends with stop_reason='end_turn'."""
+    def _make_final_message() -> SimpleNamespace:
+        return SimpleNamespace(
+            stop_reason="end_turn",
+            content=[SimpleNamespace(type="text", text="".join(text_chunks))],
+            usage=SimpleNamespace(
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=80,
+            ),
+        )
+
+    fake_stream = MagicMock()
+    fake_stream.text_stream = iter(text_chunks)
+    fake_stream.get_final_message.return_value = _make_final_message()
+
+    cm = MagicMock()
+    cm.__enter__.return_value = fake_stream
+    cm.__exit__.return_value = False
+    return cm
+
+
+@pytest.fixture
+def sequence_mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Multi-call sequence mock: records every stream() call's kwargs and streams.
+
+    Returns dict with:
+      - 'call_kwargs_list': list of kwargs dicts recorded per stream() call
+      - 'set_streams': callable(list[MagicMock]) — set the ordered stream responses
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-seq-test-key")
+
+    state: dict[str, Any] = {
+        "call_kwargs_list": [],
+        "streams": [],
+        "call_index": 0,
+    }
+
+    def _stream_factory(**kwargs: Any) -> Any:
+        state["call_kwargs_list"].append(dict(kwargs))
+        idx = state["call_index"]
+        state["call_index"] += 1
+        streams = state["streams"]
+        if idx < len(streams):
+            return streams[idx]
+        # fallback: end_turn with empty text
+        return make_end_turn_stream(["(fallback)"])
+
+    mock_cls = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.messages.stream.side_effect = _stream_factory
+    mock_cls.return_value = mock_instance
+
+    monkeypatch.setattr("anthropic.Anthropic", mock_cls, raising=False)
+
+    def _set_streams(streams: list[MagicMock]) -> None:
+        state["streams"] = streams
+        state["call_index"] = 0
+        state["call_kwargs_list"].clear()
+
+    return {
+        "call_kwargs_list": state["call_kwargs_list"],
+        "set_streams": _set_streams,
+        "state": state,
+    }
+
+
+class TestToolUseLoop:
+    """Boundary and termination tests for the manual agentic tool-use loop."""
+
+    def _parse_sse_events(self, body: str) -> list[dict[str, Any]]:
+        """Parse SSE body into list of {event, data} dicts."""
+        import json as _json
+
+        events = []
+        lines = body.splitlines()
+        i = 0
+        while i < len(lines):
+            event_type = None
+            data_str = None
+            while i < len(lines) and lines[i].strip():
+                line = lines[i]
+                if line.startswith("event: "):
+                    event_type = line[7:].strip()
+                elif line.startswith("data: "):
+                    data_str = line[6:]
+                i += 1
+            if event_type is not None:
+                parsed_data: Any = None
+                if data_str:
+                    try:
+                        parsed_data = _json.loads(data_str)
+                    except Exception:
+                        parsed_data = data_str
+                events.append({"event": event_type, "data": parsed_data})
+            i += 1  # skip blank line
+        return events
+
+    def test_tool_sse_frame_emitted(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """A tool_use response causes a 'tool' SSE frame with the tool name."""
+        TOOL_ID = "toolu_explain_001"
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
+            make_end_turn_stream(["The self-consumption ratio means X."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "explain my self-consumption ratio"})
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        events = self._parse_sse_events(body)
+        tool_events = [e for e in events if e["event"] == "tool"]
+        assert tool_events, f"Expected at least one 'tool' SSE frame; events: {events}"
+        assert tool_events[0]["data"]["name"] == "explain_metric", (
+            f"Expected tool frame with name='explain_metric', got: {tool_events[0]['data']}"
+        )
+
+    def test_stream_called_twice_and_tool_result_has_canonical_band(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """stream() called twice; 2nd call's messages[-1] contains the canonical band string."""
+        from solar_challenge.web.assistant import _METRIC_TABLE
+        TOOL_ID = "toolu_explain_002"
+        CANONICAL_BAND = _METRIC_TABLE["self_consumption_ratio"]["uk_benchmark_band"]
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
+            make_end_turn_stream(["Result follows."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "what is self-consumption ratio?"})
+        assert resp.status_code == 200
+        resp.get_data(as_text=True)
+
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert len(call_kwargs_list) == 2, (
+            f"Expected stream() to be called exactly 2 times, got {len(call_kwargs_list)}"
+        )
+
+        # The second call's messages must end with a user turn containing the tool_result
+        second_messages = call_kwargs_list[1]["messages"]
+        last_msg = second_messages[-1]
+        assert last_msg["role"] == "user", (
+            f"Expected last message in 2nd call to be role='user', got {last_msg['role']!r}"
+        )
+
+        # The tool_result content must carry the canonical band (data-seam cross)
+        content = last_msg["content"]
+        assert isinstance(content, list), f"Expected content list in tool_result turn: {content}"
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block in last user message; content: {content}"
+        )
+        assert tool_result_block.get("tool_use_id") == TOOL_ID, (
+            f"tool_use_id mismatch: expected {TOOL_ID!r}, got {tool_result_block.get('tool_use_id')!r}"
+        )
+        result_content = tool_result_block.get("content", "")
+        assert CANONICAL_BAND in result_content, (
+            f"Expected canonical band string in tool_result content.\n"
+            f"Band: {CANONICAL_BAND!r}\n"
+            f"Content: {result_content!r}"
+        )
+
+    def test_tools_param_present_and_ordered(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """stream() kwargs carry 'tools' with names ['explain_metric', 'suggest_config']."""
+        sequence_mock_anthropic["set_streams"]([
+            make_end_turn_stream(["reply"]),
+        ])
+
+        client.post("/assistant/chat", json={"message": "ping"})
+
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert call_kwargs_list, "Expected at least one stream() call"
+        first_kwargs = call_kwargs_list[0]
+        assert "tools" in first_kwargs, f"Expected 'tools' in stream() kwargs: {first_kwargs.keys()}"
+        tool_names = [t["name"] for t in first_kwargs["tools"]]
+        assert tool_names == ["explain_metric", "suggest_config"], (
+            f"Expected tool order ['explain_metric', 'suggest_config'], got {tool_names}"
+        )
+
+    def test_done_frame_terminates_stream(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """After a tool_use + end_turn, the SSE stream ends with a 'done' frame."""
+        TOOL_ID = "toolu_explain_003"
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
+            make_end_turn_stream(["done"]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "explain"})
+        body = resp.get_data(as_text=True)
+        events = self._parse_sse_events(body)
+        event_types = [e["event"] for e in events]
+        assert "done" in event_types, (
+            f"Expected 'done' frame in event types; got: {event_types}"
+        )
+
+    def test_termination_bounded_by_max_tool_iterations(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """A model that always returns tool_use is bounded by _MAX_TOOL_ITERATIONS."""
+        from solar_challenge.web.assistant import _MAX_TOOL_ITERATIONS
+
+        # Build an infinite sequence of tool_use streams
+        TOOL_ID_PREFIX = "toolu_inf_"
+        infinite_streams = [
+            make_tool_use_stream(
+                f"{TOOL_ID_PREFIX}{i}",
+                "explain_metric",
+                {"metric": "self_consumption_ratio"},
+            )
+            for i in range(_MAX_TOOL_ITERATIONS + 10)  # more than the cap
+        ]
+        sequence_mock_anthropic["set_streams"](infinite_streams)
+
+        resp = client.post("/assistant/chat", json={"message": "explain forever"})
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        # stream() should be called exactly _MAX_TOOL_ITERATIONS times
+        call_count = len(sequence_mock_anthropic["call_kwargs_list"])
+        assert call_count == _MAX_TOOL_ITERATIONS, (
+            f"Expected exactly {_MAX_TOOL_ITERATIONS} stream() calls (loop cap), "
+            f"got {call_count}"
+        )
+
+        # Stream must still terminate cleanly (done or error frame, no hang)
+        events = self._parse_sse_events(body)
+        event_types = [e["event"] for e in events]
+        assert "done" in event_types or "error" in event_types, (
+            f"Expected stream to terminate with done or error frame; got: {event_types}"
+        )
+
+    def test_slice2_happy_path_regression(
+        self,
+        client: FlaskClient,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """Slice-② happy path (no stop_reason / end_turn) still yields delta + done."""
+        # Use the slice-② style: get_final_message has no stop_reason attr
+        sequence_mock_anthropic["set_streams"]([
+            make_fake_stream(["Hello", " world"]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "hi"})
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        events = self._parse_sse_events(body)
+        event_types = [e["event"] for e in events]
+        assert "delta" in event_types, f"Expected delta frames; got: {event_types}"
+        assert "done" in event_types, f"Expected done frame; got: {event_types}"
+        assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"

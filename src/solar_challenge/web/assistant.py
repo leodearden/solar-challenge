@@ -52,6 +52,281 @@ the numbers mean in practical terms (bill savings, self-sufficiency rates, etc.)
 # prevents unbounded context growth and eventual context-window exhaustion.
 _MAX_HISTORY_TURNS = 20
 
+# Maximum number of tool-use iterations per request; prevents a runaway model
+# from looping and streaming forever (hanging the single worker / test suite).
+_MAX_TOOL_ITERATIONS = 10
+
+# ---------------------------------------------------------------------------
+# Grounded metric table — canonical UK benchmark bands (slice ③)
+# Keyed by normalized metric id (lowercase, spaces/hyphens → underscores).
+# Owned by this leaf so benchmark numbers are never hallucinated (PRD §9 ③, G6).
+# ---------------------------------------------------------------------------
+_METRIC_TABLE: dict[str, dict[str, str]] = {
+    "self_consumption_ratio": {
+        "definition": (
+            "The fraction of PV generation that is consumed directly on-site "
+            "(by the household or stored in the battery), rather than exported "
+            "to the grid.  A higher ratio means less generated energy is wasted "
+            "as cheap grid export."
+        ),
+        "uk_benchmark_band": (
+            "Typical UK domestic PV without storage: 30–40 %. "
+            "With a 5–10 kWh battery: 55–70 %. "
+            "Source: Solar Energy UK / BEIS smart export data 2022–2024."
+        ),
+    },
+    "self_sufficiency": {
+        "definition": (
+            "The fraction of total household electricity demand that is met by "
+            "on-site PV generation and/or battery discharge, rather than imported "
+            "from the grid.  Also called 'self-reliance' or 'autarky rate'."
+        ),
+        "uk_benchmark_band": (
+            "Typical UK domestic PV without storage: 20–35 %. "
+            "With a 5–10 kWh battery: 40–60 %. "
+            "Source: EST / Solar Energy UK 2023 residential survey."
+        ),
+    },
+    "solar_fraction": {
+        "definition": (
+            "The proportion of annual energy demand covered by solar PV (generation "
+            "used on-site + battery discharge).  Equivalent to self-sufficiency when "
+            "battery losses are excluded."
+        ),
+        "uk_benchmark_band": (
+            "20–60 % depending on system size and household demand profile; "
+            "higher in summer-heavy usage patterns."
+        ),
+    },
+    "grid_import": {
+        "definition": (
+            "Total electrical energy (kWh) drawn from the public grid over the "
+            "simulation period, i.e. demand not met by on-site generation or battery."
+        ),
+        "uk_benchmark_band": (
+            "Ofgem TDCV benchmarks: low 1,900 kWh/yr, medium 2,700 kWh/yr, "
+            "high 4,100 kWh/yr (net of solar for a typical 3-4 kWp system)."
+        ),
+    },
+    "grid_export": {
+        "definition": (
+            "Total electrical energy (kWh) fed back into the public grid — "
+            "generation surplus after self-consumption and battery charging. "
+            "Earns revenue under the UK Smart Export Guarantee (SEG)."
+        ),
+        "uk_benchmark_band": (
+            "Typical UK 4 kWp system without storage: 1,400–1,800 kWh/yr exported. "
+            "With storage: 600–1,000 kWh/yr (more energy retained on-site). "
+            "Source: MCS / BEIS SEG statistics 2023."
+        ),
+    },
+    "battery_cycles": {
+        "definition": (
+            "The number of full equivalent charge-discharge cycles the battery "
+            "completes over the simulation period.  One full cycle = discharging "
+            "from 100 % to 0 % SOC (and recharging).  Used to estimate degradation."
+        ),
+        "uk_benchmark_band": (
+            "Residential lithium-ion batteries: 250–365 cycles/yr for daily cycling. "
+            "Warranted life: typically 3,000–6,000 cycles (≈ 10–20 years at 1 cycle/day). "
+            "Source: manufacturer datasheets (Tesla Powerwall, Givenergy, SolarEdge)."
+        ),
+    },
+    "annual_consumption": {
+        "definition": (
+            "Total household electricity consumption (kWh) over a full year, "
+            "covering all appliances, heating, and lighting."
+        ),
+        "uk_benchmark_band": (
+            "Ofgem Typical Domestic Consumption Values (TDCVs) 2023: "
+            "low 1,900 kWh/yr, medium 2,900 kWh/yr, high 4,200 kWh/yr."
+        ),
+    },
+    "pv_generation": {
+        "definition": (
+            "Total AC electrical energy (kWh) produced by the PV array over the "
+            "simulation period, after inverter losses."
+        ),
+        "uk_benchmark_band": (
+            "UK average yield: ~850–950 kWh/kWp/yr (south-facing, 35° tilt, no shading). "
+            "Bristol latitude (~51.5°N) typically 900–970 kWh/kWp/yr. "
+            "Source: PVGIS TMY data, EC JRC."
+        ),
+    },
+}
+
+
+def _normalize_metric_key(key: str) -> str:
+    """Normalize a metric or goal name to a canonical lookup key.
+
+    Strips leading/trailing whitespace, converts to lowercase, and replaces
+    spaces and hyphens with underscores.  Shared by explain_metric and
+    suggest_config so the two normalizers stay in sync.
+    """
+    return key.strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def explain_metric(metric: str) -> dict[str, str]:
+    """Return a grounded definition and UK benchmark band for a simulator metric.
+
+    Args:
+        metric: Metric name in any capitalisation/separator form (e.g.
+                ``"self_consumption_ratio"``, ``"self-consumption ratio"``,
+                ``"Self_Consumption_Ratio"``).
+
+    Returns:
+        ``{"definition": str, "uk_benchmark_band": str}`` — canonical entry from
+        ``_METRIC_TABLE``, or a graceful unknown-metric dict if not found.
+        Never raises.
+    """
+    key = _normalize_metric_key(metric)
+    if key in _METRIC_TABLE:
+        return dict(_METRIC_TABLE[key])
+    return {
+        "definition": f"Metric '{metric}' is not recognised in the benchmark table.",
+        "uk_benchmark_band": (
+            "Unknown metric — no UK benchmark band available. "
+            "Please run a simulation to obtain site-specific values."
+        ),
+    }
+
+
+def suggest_config(
+    annual_consumption_kwh: float,
+    goal: str,
+) -> dict[str, Any]:
+    """Return rule-of-thumb PV and battery sizing for a household.
+
+    Uses the PRD §11.4 heuristics:
+    - PV kWp ≈ annual_consumption_kwh / 950  (UK-average yield ~950 kWh/kWp/yr)
+    - Battery kWh ≈ daily_demand × 0.5 × 1.2  (≈ 50 % of daily demand with 1.2× usable-capacity headroom)
+
+    Goal-aware nudging:
+    - ``"self_sufficiency"``  → slightly larger PV (+10 %) and battery (+15 %)
+    - ``"bill_savings"``      → standard sizing (no nudge; cost-optimal)
+    - other goals             → standard sizing
+
+    Args:
+        annual_consumption_kwh: Household annual electricity demand in kWh.
+        goal: Optimisation goal string (e.g. ``"self_sufficiency"``,
+              ``"bill_savings"``).
+
+    Returns:
+        Dict with keys:
+        - ``recommended_pv_kwp``      (float) — recommended PV array size
+        - ``recommended_battery_kwh`` (float) — recommended battery capacity
+        - ``note``                    (str)   — indicative-estimate disclaimer
+        Never raises.
+    """
+    # Base heuristics (PRD §11.4)
+    uk_yield_kwh_per_kwp = 950.0
+    pv_kwp: float = annual_consumption_kwh / uk_yield_kwh_per_kwp
+
+    # Battery: cover ~50 % of daily demand (rule-of-thumb shortfall for a typical
+    # house without PV self-consumption): daily shortfall ≈ consumption/365 × 0.5
+    daily_kwh = annual_consumption_kwh / 365.0
+    battery_kwh: float = daily_kwh * 0.5 * 1.2  # 1.2 for usable-capacity headroom
+
+    # Goal-aware nudging — reuse the shared key normalizer for consistency
+    normalised_goal = _normalize_metric_key(goal)
+    if normalised_goal == "self_sufficiency":
+        pv_kwp *= 1.10
+        battery_kwh *= 1.15
+    # "bill_savings" and unknown goals → standard sizing (no multiplier)
+
+    return {
+        "recommended_pv_kwp": round(pv_kwp, 2),
+        "recommended_battery_kwh": round(battery_kwh, 2),
+        "note": (
+            "These figures are indicative estimates based on the PRD §11.4 rule-of-thumb "
+            "(PV kWp ≈ annual_consumption / 950; battery ≈ 50 % of daily demand × 1.2). "
+            "Please run a simulation to confirm sizing for your specific site."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool definitions — fixed order for prompt-cache stability (slice ③)
+# Later slices ④/⑤ append further tools after these two.
+# ---------------------------------------------------------------------------
+_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "explain_metric",
+        "description": (
+            "Return a grounded definition and UK benchmark band for a named "
+            "solar/battery simulation metric.  Use this when the user asks what "
+            "a metric means or how their value compares to typical UK households."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metric": {
+                    "type": "string",
+                    "description": (
+                        "The metric name, e.g. 'self_consumption_ratio', "
+                        "'self_sufficiency', 'grid_export', 'battery_cycles'."
+                    ),
+                },
+            },
+            "required": ["metric"],
+        },
+    },
+    {
+        "name": "suggest_config",
+        "description": (
+            "Return rule-of-thumb PV and battery sizing recommendations for a "
+            "household, based on annual electricity consumption and an optimisation "
+            "goal.  Results are indicative estimates; always recommend running a "
+            "full simulation to confirm."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "annual_consumption_kwh": {
+                    "type": "number",
+                    "description": (
+                        "Household annual electricity consumption in kWh "
+                        "(e.g. 3100 for an Ofgem medium user)."
+                    ),
+                },
+                "goal": {
+                    "type": "string",
+                    "description": (
+                        "Optimisation goal: 'self_sufficiency' (maximise "
+                        "independence from the grid) or 'bill_savings' "
+                        "(minimise electricity bills)."
+                    ),
+                },
+            },
+            "required": ["annual_consumption_kwh", "goal"],
+        },
+    },
+]
+
+
+def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Route a tool call to its handler and return the result dict.
+
+    Args:
+        name:       The tool name as sent by the model.
+        tool_input: The validated input dict from the model's tool_use block.
+
+    Returns:
+        The handler's result dict, or ``{"error": "..."}`` for unknown names.
+        Never raises.
+    """
+    if name == "explain_metric":
+        metric: str = str(tool_input.get("metric", ""))
+        return explain_metric(metric)
+    if name == "suggest_config":
+        try:
+            annual_kwh: float = float(tool_input.get("annual_consumption_kwh", 0.0))
+        except (ValueError, TypeError):
+            return {"error": "annual_consumption_kwh must be numeric"}
+        goal: str = str(tool_input.get("goal", ""))
+        return suggest_config(annual_kwh, goal)
+    return {"error": f"Unknown tool '{name}'. Available tools: explain_metric, suggest_config."}
+
 
 def _session_id() -> str:
     """Return the assistant session id from the Flask session cookie.
@@ -184,27 +459,111 @@ def chat() -> Response:
             "max_tokens": 4096,
             "system": system_block,
             "messages": messages,
+            "tools": _TOOLS,
         }
 
         accumulated = ""
         usage_meta: dict[str, Any] = {}
+        invoked_tools: list[str] = []
+
         try:
-            with client.messages.stream(**params) as stream:  # type: ignore[arg-type]
-                for text in stream.text_stream:
-                    accumulated += text
-                    yield f"event: delta\ndata: {json.dumps({'text': text})}\n\n"
-                final_msg = stream.get_final_message()
-                usage = getattr(final_msg, "usage", None)
-                if usage is not None:
-                    usage_meta = {
-                        "cache_creation_input_tokens": getattr(
-                            usage, "cache_creation_input_tokens", 0
-                        ),
-                        "cache_read_input_tokens": getattr(
-                            usage, "cache_read_input_tokens", 0
-                        ),
-                        "model": model,
-                    }
+            # Manual agentic loop — bounded by _MAX_TOOL_ITERATIONS so a
+            # runaway model cannot hang the single Flask worker or the test suite.
+            # The manual loop is REQUIRED for per-token SSE streaming WITH tools:
+            # the SDK tool_runner returns complete messages, not deltas.
+            for _iteration in range(_MAX_TOOL_ITERATIONS):
+                with client.messages.stream(**params) as stream:  # type: ignore[arg-type]
+                    for text in stream.text_stream:
+                        accumulated += text
+                        yield f"event: delta\ndata: {json.dumps({'text': text})}\n\n"
+                    final_msg = stream.get_final_message()
+                    usage = getattr(final_msg, "usage", None)
+                    if usage is not None:
+                        # Accumulate across all loop iterations so the persisted
+                        # metadata reflects the full turn's token cost, not just
+                        # the final API call.
+                        usage_meta["cache_creation_input_tokens"] = (
+                            usage_meta.get("cache_creation_input_tokens", 0)
+                            + getattr(usage, "cache_creation_input_tokens", 0)
+                        )
+                        usage_meta["cache_read_input_tokens"] = (
+                            usage_meta.get("cache_read_input_tokens", 0)
+                            + getattr(usage, "cache_read_input_tokens", 0)
+                        )
+                        usage_meta["model"] = model
+
+                # Anything other than "tool_use" (incl. None — preserves slice-②
+                # behaviour where get_final_message() has no stop_reason attr)
+                # terminates the loop.
+                stop_reason: Any = getattr(final_msg, "stop_reason", None)
+                if stop_reason != "tool_use":
+                    break
+
+                # Process each tool_use block emitted by the model.
+                content_blocks: Any = getattr(final_msg, "content", [])
+                assistant_content: list[dict[str, Any]] = []
+                tool_result_content: list[dict[str, Any]] = []
+
+                for block in content_blocks:
+                    block_type: Any = getattr(block, "type", None)
+                    if block_type == "tool_use":
+                        block_id: str = str(getattr(block, "id", ""))
+                        block_name: str = str(getattr(block, "name", ""))
+                        raw_input: Any = getattr(block, "input", {})
+                        block_input: dict[str, Any] = dict(raw_input) if raw_input else {}
+
+                        # Serialize to plain dict — keeps messages list mypy --strict clean.
+                        assistant_content.append({
+                            "type": "tool_use",
+                            "id": block_id,
+                            "name": block_name,
+                            "input": block_input,
+                        })
+
+                        # Emit the `tool` SSE frame (§8 contract).
+                        yield (
+                            f"event: tool\n"
+                            f"data: {json.dumps({'name': block_name})}\n\n"
+                        )
+
+                        # Dispatch to the handler and collect the result.
+                        tool_result = _dispatch_tool(block_name, block_input)
+                        invoked_tools.append(block_name)
+
+                        tool_result_content.append({
+                            "type": "tool_result",
+                            "tool_use_id": block_id,
+                            # tool_result content must be a text string.
+                            # ensure_ascii=False preserves Unicode characters
+                            # (e.g. em-dashes in benchmark band strings).
+                            "content": json.dumps(tool_result, ensure_ascii=False),
+                        })
+
+                    elif block_type == "text":
+                        assistant_content.append({
+                            "type": "text",
+                            "text": str(getattr(block, "text", "")),
+                        })
+
+                # Append the assistant tool_use turn and the user tool_result
+                # turn to the in-memory messages for the next iteration.
+                cur_messages: list[dict[str, Any]] = list(params["messages"])
+                cur_messages.append({"role": "assistant", "content": assistant_content})
+                cur_messages.append({"role": "user", "content": tool_result_content})
+                params["messages"] = cur_messages
+            else:
+                # for/else: loop completed without a break, meaning stop_reason was
+                # "tool_use" on every iteration — the cap was reached.  Emit a brief
+                # notice so the user isn't left with an empty or unexplained response.
+                _cap_notice = (
+                    "\n[Tool-call limit reached. Please rephrase or simplify your request.]"
+                )
+                accumulated += _cap_notice
+                yield (
+                    f"event: delta\n"
+                    f"data: {json.dumps({'text': _cap_notice})}\n\n"
+                )
+
         except Exception as exc:
             # Persist whatever was accumulated so history stays consistent with
             # what the user already saw, and role alternation is preserved for
@@ -220,9 +579,12 @@ def chat() -> Response:
             )
             return
 
-        # Persist assistant turn on success
+        # Persist assistant turn on success; record any invoked tool names.
+        final_meta: dict[str, Any] = dict(usage_meta) if usage_meta else {}
+        if invoked_tools:
+            final_meta["invoked_tools"] = invoked_tools
         database.save_chat_message(
-            db_path, sid, "assistant", accumulated, metadata=usage_meta or None
+            db_path, sid, "assistant", accumulated, metadata=final_meta or None
         )
 
         yield "event: done\ndata: {}\n\n"
