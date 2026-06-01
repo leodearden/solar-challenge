@@ -1600,3 +1600,44 @@ class TestApplyFleetOverlay:
         # Should return the same objects (or equal ones) — no mutations
         assert result[0] is home_a
         assert result[1] is home_b
+
+
+# ===================================================================
+# GET /simulate/fleet — render smoke test
+# ===================================================================
+
+
+class TestFleetFormRender:
+    """Smoke test: GET /simulate/fleet renders the tariff/dispatch/SEG overlay section."""
+
+    def test_fleet_form_shows_tariff_dispatch_seg_section(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/fleet returns 200 with the fleet-wide overlay section rendered.
+
+        Checks for stable HTML markers that confirm:
+        - The tariff selector is present.
+        - The dispatch strategy selector is present.
+        - The SEG sub-section with preset dropdown and custom rate input are present.
+        - All six UK supplier SEG preset keys appear as option text (parity with home form).
+        """
+        resp = client.get("/simulate/fleet")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+
+        # Tariff section
+        assert "Import Tariff" in html, "Tariff section heading missing"
+        assert 'name="tariff_type"' in html, "tariff_type select missing"
+
+        # Dispatch strategy section
+        assert "Dispatch Strategy" in html, "Dispatch Strategy heading missing"
+        assert 'name="dispatch_strategy_type"' in html, "dispatch_strategy_type select missing"
+
+        # SEG section
+        assert "Smart Export Guarantee" in html, "SEG section heading missing"
+        assert 'name="seg_preset"' in html, "seg_preset select missing"
+        assert 'name="seg_rate_pence_per_kwh"' in html, "seg_rate_pence_per_kwh input missing"
+
+        # All six UK supplier preset keys (parity with test_home_form_shows_seg_section)
+        for preset_key in ("Octopus", "British Gas", "EDF", "E.ON", "Scottish Power", "OVO"):
+            assert preset_key in html, f"SEG preset '{preset_key}' missing from fleet form HTML"
