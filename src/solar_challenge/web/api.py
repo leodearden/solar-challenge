@@ -110,6 +110,8 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     pv_kw = float(data.get("pv_kw", 4.0))
     azimuth = float(data.get("azimuth", 180))
     tilt = float(data.get("tilt", 35))
+    system_age_years = float(data.get("system_age_years", 0.0))
+    degradation_rate_per_year = float(data.get("degradation_rate_per_year", 0.005))
     battery_kwh_val = float(data.get("battery_kwh", 0.0))
     max_charge_kw_raw = data.get("max_charge_kw")
     max_discharge_kw_raw = data.get("max_discharge_kw")
@@ -133,7 +135,13 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     loc = resolve_location(location_preset)
 
     # Build component configs
-    pv_config = PVConfig(capacity_kw=pv_kw, azimuth=azimuth, tilt=tilt)
+    pv_config = PVConfig(
+        capacity_kw=pv_kw,
+        azimuth=azimuth,
+        tilt=tilt,
+        system_age_years=system_age_years,
+        degradation_rate_per_year=degradation_rate_per_year,
+    )
 
     battery_config: BatteryConfig | None = None
     if battery_kwh_val > 0:
