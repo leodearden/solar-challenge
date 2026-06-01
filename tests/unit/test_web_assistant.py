@@ -969,12 +969,12 @@ class TestToolSurface:
     """Tests for _TOOLS list and _dispatch_tool router."""
 
     def test_tools_order_is_explain_metric_then_suggest_config(self) -> None:
-        """[t['name'] for t in _TOOLS] == ['explain_metric', 'suggest_config'] (fixed order)."""
+        """[t['name'] for t in _TOOLS] == 4-tool order (fixed, cache-safe, slice ④ updated)."""
         from solar_challenge.web.assistant import _TOOLS
 
         names = [t["name"] for t in _TOOLS]
-        assert names == ["explain_metric", "suggest_config"], (
-            f"Expected fixed order ['explain_metric', 'suggest_config'], got {names}"
+        assert names == ["explain_metric", "suggest_config", "get_run_results", "list_recent_runs"], (
+            f"Expected fixed 4-tool order, got {names}"
         )
 
     def test_every_tool_entry_has_required_keys(self) -> None:
@@ -1258,7 +1258,7 @@ class TestToolUseLoop:
         client: FlaskClient,
         sequence_mock_anthropic: dict[str, Any],
     ) -> None:
-        """stream() kwargs carry 'tools' with names ['explain_metric', 'suggest_config']."""
+        """stream() kwargs carry 'tools' with 4-tool names in fixed order (slice ④ updated)."""
         sequence_mock_anthropic["set_streams"]([
             make_end_turn_stream(["reply"]),
         ])
@@ -1270,8 +1270,8 @@ class TestToolUseLoop:
         first_kwargs = call_kwargs_list[0]
         assert "tools" in first_kwargs, f"Expected 'tools' in stream() kwargs: {first_kwargs.keys()}"
         tool_names = [t["name"] for t in first_kwargs["tools"]]
-        assert tool_names == ["explain_metric", "suggest_config"], (
-            f"Expected tool order ['explain_metric', 'suggest_config'], got {tool_names}"
+        assert tool_names == ["explain_metric", "suggest_config", "get_run_results", "list_recent_runs"], (
+            f"Expected 4-tool order, got {tool_names}"
         )
 
     def test_done_frame_terminates_stream(
@@ -1619,4 +1619,174 @@ class TestListRecentRuns:
         # Non-positive limit is clamped to a default (>0 results expected)
         assert len(result["runs"]) >= 1, (
             f"Expected at least 1 result when limit clamped from 0; got {len(result['runs'])}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — tool surface + dispatch + tool-use signal tests (step-5 RED)
+# ---------------------------------------------------------------------------
+
+class TestSlice4ToolSurface:
+    """Tests for new tools registered/dispatched in slice ④."""
+
+    def test_new_tools_input_schema_is_object_with_required(self) -> None:
+        """get_run_results and list_recent_runs have type 'object' and non-empty required."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        new_tools = {t["name"]: t for t in _TOOLS if t["name"] in ("get_run_results", "list_recent_runs")}
+        assert "get_run_results" in new_tools, "get_run_results missing from _TOOLS"
+        assert "list_recent_runs" in new_tools, "list_recent_runs missing from _TOOLS"
+
+        for name, tool in new_tools.items():
+            schema = tool["input_schema"]
+            assert schema.get("type") == "object", f"{name}: input_schema.type must be 'object'"
+            required = schema.get("required", [])
+            assert required, f"{name}: required list must be non-empty"
+
+        # Specific required fields
+        grr_required = new_tools["get_run_results"]["input_schema"]["required"]
+        assert "run_id_or_name" in grr_required, (
+            f"get_run_results must require 'run_id_or_name'; got {grr_required}"
+        )
+        lrr_required = new_tools["list_recent_runs"]["input_schema"]["required"]
+        assert "limit" in lrr_required, (
+            f"list_recent_runs must require 'limit'; got {lrr_required}"
+        )
+
+    def test_dispatch_get_run_results_with_db_path(self, tmp_path: Path) -> None:
+        """_dispatch_tool('get_run_results', {...}, db_path) returns same dict as handler."""
+        from solar_challenge.web.assistant import _dispatch_tool, get_run_results
+
+        db_path = tmp_path / "disp_grr_test.db"
+        _seed_run(
+            db_path,
+            run_id="disp-run-001",
+            name="dispatch-run",
+            status="completed",
+            created_at="2026-04-01T10:00:00+00:00",
+            summary={"total_generation_kwh": 500.0},
+        )
+
+        result = _dispatch_tool("get_run_results", {"run_id_or_name": "disp-run-001"}, db_path=str(db_path))
+        expected = get_run_results("disp-run-001", db_path)
+
+        assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
+
+    def test_dispatch_list_recent_runs_with_db_path(self, tmp_path: Path) -> None:
+        """_dispatch_tool('list_recent_runs', {'limit': 5}, db_path) returns same dict as handler."""
+        from solar_challenge.web.assistant import _dispatch_tool, list_recent_runs
+
+        db_path = tmp_path / "disp_lrr_test.db"
+        _seed_run(
+            db_path,
+            run_id="disp-lrr-001",
+            name="lrr-dispatch-run",
+            status="completed",
+            created_at="2026-04-01T11:00:00+00:00",
+            summary={"self_consumption_ratio": 0.55},
+        )
+
+        result = _dispatch_tool("list_recent_runs", {"limit": 5}, db_path=str(db_path))
+        expected = list_recent_runs(5, db_path)
+
+        assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
+
+    def test_dispatch_get_run_results_no_db_path_returns_graceful_error(self) -> None:
+        """_dispatch_tool('get_run_results', {...}, db_path=None) returns graceful error, no raise."""
+        from solar_challenge.web.assistant import _dispatch_tool
+
+        try:
+            result = _dispatch_tool("get_run_results", {"run_id_or_name": "any-id"}, db_path=None)
+        except Exception as exc:
+            raise AssertionError(
+                f"_dispatch_tool should not raise when db_path=None; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key when db_path=None; got: {result}"
+
+    def test_end_to_end_get_run_results_tool_use_signal(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        sequence_mock_anthropic: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """SSE 'tool' frame emitted for get_run_results; 2nd stream contains seeded summary value."""
+        import json as _json
+
+        db_path = app.config["DATABASE"]
+        summary_val = 999.75
+        _seed_run(
+            db_path,
+            run_id="e2e-run-001",
+            name="e2e-signal-run",
+            status="completed",
+            created_at="2026-05-01T08:00:00+00:00",
+            summary={"total_generation_kwh": summary_val},
+        )
+
+        TOOL_ID = "toolu_grr_e2e_001"
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(
+                TOOL_ID, "get_run_results", {"run_id_or_name": "e2e-run-001"}
+            ),
+            make_end_turn_stream(["The run generated lots of power."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "summarise my last run"})
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        # 1. A 'tool' SSE frame named 'get_run_results' must be emitted
+        events: list[dict[str, Any]] = []
+        lines = body.splitlines()
+        i = 0
+        while i < len(lines):
+            event_type = None
+            data_str = None
+            while i < len(lines) and lines[i].strip():
+                line = lines[i]
+                if line.startswith("event: "):
+                    event_type = line[7:].strip()
+                elif line.startswith("data: "):
+                    data_str = line[6:]
+                i += 1
+            if event_type is not None:
+                parsed: Any = None
+                if data_str:
+                    try:
+                        parsed = _json.loads(data_str)
+                    except Exception:
+                        parsed = data_str
+                events.append({"event": event_type, "data": parsed})
+            i += 1
+
+        tool_events = [e for e in events if e["event"] == "tool"]
+        assert tool_events, f"Expected at least one 'tool' SSE frame; events: {events}"
+        assert tool_events[0]["data"]["name"] == "get_run_results", (
+            f"Expected tool frame 'get_run_results'; got: {tool_events[0]['data']}"
+        )
+
+        # 2. The 2nd stream() call's messages[-1] tool_result content must contain the summary value
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert len(call_kwargs_list) == 2, (
+            f"Expected stream() called exactly 2 times; got {len(call_kwargs_list)}"
+        )
+        second_messages = call_kwargs_list[1]["messages"]
+        last_msg = second_messages[-1]
+        assert last_msg["role"] == "user"
+        content = last_msg["content"]
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block in last user message; content: {content}"
+        )
+        result_content = tool_result_block.get("content", "")
+        # The seeded summary value must appear in the serialised tool_result
+        assert str(summary_val) in result_content, (
+            f"Expected summary value {summary_val!r} in tool_result content.\n"
+            f"Content: {result_content!r}"
         )
