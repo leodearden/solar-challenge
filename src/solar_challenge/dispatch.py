@@ -623,8 +623,10 @@ class PeakShavingStrategy(DispatchStrategy):
               not currently shaving a peak (PRD §11 OQ3: peak-shaving discharge
               takes precedence; grid-charging fires only in the non-shaving
               branches — excess PV, below-threshold shortfall, balanced).
-              The inverter budget is shared: pv_charge_power_kw=charge_kw
-              ensures total charge ≤ max_charge_kw (PRD §3.2).
+              pv_charge_power_kw=charge_kw lets the controller's residual
+              clamp limit the grid draw to the remaining max_charge_kw
+              headroom after PV.  The strategy itself does not enforce a
+              total-charge ceiling; the battery layer clamps downstream.
 
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)

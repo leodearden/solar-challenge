@@ -2385,3 +2385,28 @@ class TestPeakShavingStrategyGridCharging:
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == pytest.approx(3.0)
         assert decision.grid_charge_kw == 0.0
+
+    def test_excess_pv_saturates_budget_no_grid_charge(
+        self, standard_peak_shaving_strategy
+    ):
+        """Residual-saturation edge: excess PV alone meets/exceeds max_charge_kw.
+
+        gen=5.0, demand=1.0 → excess=4.0 > max_charge_kw=3.0.
+        residual = max_charge_kw(3.0) - pv_charge(4.0) = -1.0 → clamped to 0.0.
+        grid_charge_kw must be 0.0 even in a favourable cheap period because the
+        inverter budget is already exhausted (or over-committed) by PV.
+        charge_kw reports the raw excess (4.0) — the battery layer clamps downstream.
+        """
+        ctx = self._FAVOURABLE_CTX
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=5.0,
+            demand_kw=1.0,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.charge_kw == pytest.approx(4.0)
+        assert decision.discharge_kw == 0.0
+        assert decision.grid_charge_kw == 0.0
