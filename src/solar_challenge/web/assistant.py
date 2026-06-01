@@ -248,7 +248,7 @@ def suggest_config(
 
 # ---------------------------------------------------------------------------
 # Tool definitions — fixed order for prompt-cache stability (slice ③)
-# Later slices ④/⑤ append further tools after these two.
+# Slice ④ appends get_run_results and list_recent_runs after the first two.
 # ---------------------------------------------------------------------------
 _TOOLS: list[dict[str, Any]] = [
     {
@@ -300,6 +300,49 @@ _TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["annual_consumption_kwh", "goal"],
+        },
+    },
+    # --- Slice ④: read-only DB tools (appended after the first two) ---
+    {
+        "name": "get_run_results",
+        "description": (
+            "Fetch the results and summary of a specific simulation run by its "
+            "id or name.  Returns key output metrics and status information. "
+            "Use this when the user asks about a particular run's results."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "run_id_or_name": {
+                    "type": "string",
+                    "description": (
+                        "The run id (UUID) or run name to look up.  "
+                        "Resolves by exact id first, then most-recent name match."
+                    ),
+                },
+            },
+            "required": ["run_id_or_name"],
+        },
+    },
+    {
+        "name": "list_recent_runs",
+        "description": (
+            "List recent simulation runs in reverse chronological order.  "
+            "Returns identifying fields and key summary metrics for each run. "
+            "Use this when the user asks what simulations have been run recently."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Maximum number of runs to return (1–50, default 10). "
+                        "Values <= 0 are treated as the default (10)."
+                    ),
+                },
+            },
+            "required": ["limit"],
         },
     },
 ]
@@ -422,12 +465,19 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
         return {"runs": [], "error": f"Database error listing recent runs: {exc}"}
 
 
-def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+def _dispatch_tool(
+    name: str,
+    tool_input: dict[str, Any],
+    db_path: "str | Path | None" = None,
+) -> dict[str, Any]:
     """Route a tool call to its handler and return the result dict.
 
     Args:
         name:       The tool name as sent by the model.
         tool_input: The validated input dict from the model's tool_use block.
+        db_path:    Optional path to the SQLite database file.  Required for
+                    DB-backed tools (``get_run_results``, ``list_recent_runs``);
+                    those tools return a graceful ``{"error": ...}`` when None.
 
     Returns:
         The handler's result dict, or ``{"error": "..."}`` for unknown names.
@@ -443,7 +493,21 @@ def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
             return {"error": "annual_consumption_kwh must be numeric"}
         goal: str = str(tool_input.get("goal", ""))
         return suggest_config(annual_kwh, goal)
-    return {"error": f"Unknown tool '{name}'. Available tools: explain_metric, suggest_config."}
+    if name == "get_run_results":
+        if db_path is None:
+            return {"error": "get_run_results requires a database path (db_path is None)"}
+        run_id_or_name: str = str(tool_input.get("run_id_or_name", ""))
+        return get_run_results(run_id_or_name, db_path)
+    if name == "list_recent_runs":
+        if db_path is None:
+            return {"error": "list_recent_runs requires a database path (db_path is None)"}
+        try:
+            limit: int = int(tool_input.get("limit", 10))
+        except (ValueError, TypeError):
+            limit = 10
+        return list_recent_runs(limit, db_path)
+    all_names = ", ".join(t["name"] for t in _TOOLS)
+    return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
 
 
 def _session_id() -> str:
@@ -645,7 +709,7 @@ def chat() -> Response:
                         )
 
                         # Dispatch to the handler and collect the result.
-                        tool_result = _dispatch_tool(block_name, block_input)
+                        tool_result = _dispatch_tool(block_name, block_input, db_path)
                         invoked_tools.append(block_name)
 
                         tool_result_content.append({
