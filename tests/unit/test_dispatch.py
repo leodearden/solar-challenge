@@ -2145,3 +2145,243 @@ class TestTOUOptimizedStrategyGridCharging:
         # ctx.is_cheap_period=True + discharge_kw=0.0 → grid charging fires
         assert decision.discharge_kw == 0.0
         assert decision.grid_charge_kw > 0.0
+
+
+class TestPeakShavingStrategyGridCharging:
+    """Test grid-charging via GridChargeContext in PeakShavingStrategy.decide_action.
+
+    All cases reuse the standard_peak_shaving_strategy fixture (import_limit_kw=2.0).
+    Favourable context: current_rate=0.10, peak_rate=0.35 — spread gate passes
+    because 0.35 > 0.10/0.9 ≈ 0.111.
+    All scenarios use battery_capacity_kwh=5.0, timestep_minutes=60.0.
+    """
+
+    _FAVOURABLE_CTX = GridChargeContext(
+        current_rate=0.10,
+        peak_rate=0.35,
+        is_cheap_period=True,
+        target_soc_fraction=0.9,
+        max_charge_kw=3.0,
+        round_trip_efficiency=0.9,
+        charge_efficiency=0.95,
+    )
+
+    _TS = datetime(2024, 1, 1, 12, 0, 0)
+
+    # -------------------------------------------------------------------------
+    # Positive cases (RED today — decide_action currently ignores ctx)
+    # -------------------------------------------------------------------------
+
+    def test_below_threshold_grid_charges(self, standard_peak_shaving_strategy):
+        """(1) Below-threshold shortfall / not shaving: grid charges at controller rate.
+
+        shortfall=1.5 < import_limit=2.0 → no discharge.
+        pv_charge=0.0 → residual = max_charge(3.0) - 0.0 = 3.0.
+        gap_power = (4.5-1.0)/0.95/1.0 ≈ 3.68 > residual → residual clamps to 3.0.
+        """
+        ctx = self._FAVOURABLE_CTX
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=1.0,
+            demand_kw=2.5,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        expected_grid = compute_grid_charge_power_kw(
+            ctx,
+            battery_soc_kwh=1.0,
+            capacity_kwh=5.0,
+            pv_charge_power_kw=0.0,
+            timestep_minutes=60.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+        assert decision.grid_charge_kw > 0.0
+        assert decision.grid_charge_kw == pytest.approx(expected_grid)
+
+    def test_excess_pv_residual_clamp_budget_sharing(
+        self, standard_peak_shaving_strategy
+    ):
+        """(2) Excess-PV residual-clamp / budget-sharing: grid fills remaining headroom.
+
+        gen=3.0, demand=2.0 → excess=1.0 → charge_kw=1.0.
+        residual = max_charge(3.0) - pv_charge(1.0) = 2.0 kW.
+        gap_power = (4.5-1.0)/0.95/1.0 ≈ 3.68 > residual → residual clamps to 2.0.
+        charge_kw + grid_charge_kw = 1.0 + 2.0 = 3.0 = max_charge_kw (budget shared).
+        """
+        ctx = self._FAVOURABLE_CTX
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=3.0,
+            demand_kw=2.0,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.charge_kw == pytest.approx(1.0)
+        assert decision.discharge_kw == 0.0
+        # Residual clamp: max_charge_kw(3.0) - pv_charge_power_kw(1.0) = 2.0 kW
+        assert decision.grid_charge_kw == pytest.approx(2.0)
+        # Total charge ≤ max_charge_kw (budget shared between PV and grid)
+        assert decision.charge_kw + decision.grid_charge_kw == pytest.approx(3.0)
+
+    def test_balanced_grid_charges(self, standard_peak_shaving_strategy):
+        """(3) Balanced (gen == demand): no PV charge, grid charges at controller rate.
+
+        gen=2.0, demand=2.0 → excess=0, shortfall=0 → charge_kw=0.0, discharge_kw=0.0.
+        grid_charge_kw > 0.0 because the favourable ctx passes all controller gates.
+        """
+        ctx = self._FAVOURABLE_CTX
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=2.0,
+            demand_kw=2.0,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+        assert decision.grid_charge_kw > 0.0
+
+    # -------------------------------------------------------------------------
+    # Precedence / suppression (PRD §11 OQ3)
+    # -------------------------------------------------------------------------
+
+    def test_shaving_suppresses_grid_charge(self, standard_peak_shaving_strategy):
+        """Discharge guard (PRD §11 OQ3): peak-shaving discharge suppresses grid-charge.
+
+        gen=1.0, demand=5.0 → shortfall=4.0 > import_limit=2.0 → discharge=2.0 kW.
+        discharge_kw > 0 → grid-charge gate is blocked; grid_charge_kw stays 0.0.
+        Also verifies the call does NOT raise (guards against an unconditional
+        controller call that would trip DispatchDecision's mutual-exclusion validation).
+        """
+        ctx = self._FAVOURABLE_CTX
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=1.0,
+            demand_kw=5.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == pytest.approx(2.0)
+        assert decision.grid_charge_kw == 0.0
+
+    # -------------------------------------------------------------------------
+    # Guard cases
+    # -------------------------------------------------------------------------
+
+    def test_no_ctx_no_grid_charge(self, standard_peak_shaving_strategy):
+        """Guard: grid_charge_ctx=None → grid_charge_kw stays 0.0."""
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=1.0,
+            demand_kw=2.5,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=None,
+        )
+        assert decision.grid_charge_kw == 0.0
+
+    def test_not_cheap_period_no_grid_charge(self, standard_peak_shaving_strategy):
+        """Guard: is_cheap_period=False → grid_charge_kw stays 0.0."""
+        ctx = GridChargeContext(
+            current_rate=0.35,
+            peak_rate=0.35,
+            is_cheap_period=False,
+            target_soc_fraction=0.9,
+            max_charge_kw=3.0,
+            round_trip_efficiency=0.9,
+            charge_efficiency=0.95,
+        )
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=1.0,
+            demand_kw=2.5,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.grid_charge_kw == 0.0
+
+    def test_spread_gate_failure_no_grid_charge(self, standard_peak_shaving_strategy):
+        """Guard: spread gate fails → grid_charge_kw==0.0.
+
+        current_rate=0.30, peak_rate=0.31, rt_eff=0.9:
+        0.31 <= 0.30/0.9 ≈ 0.333 → Gate 2 blocks.
+        """
+        ctx = GridChargeContext(
+            current_rate=0.30,
+            peak_rate=0.31,
+            is_cheap_period=True,
+            target_soc_fraction=0.9,
+            max_charge_kw=3.0,
+            round_trip_efficiency=0.9,
+            charge_efficiency=0.95,
+        )
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=1.0,
+            demand_kw=2.5,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.grid_charge_kw == 0.0
+
+    def test_soc_at_target_no_grid_charge(self, standard_peak_shaving_strategy):
+        """Gate 3: battery already at target SOC → controller returns 0.0.
+
+        soc=4.5 = 0.9 * 5.0 → gap_kwh = 0.0 → controller returns 0.0.
+        """
+        ctx = self._FAVOURABLE_CTX
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=1.0,
+            demand_kw=2.5,
+            battery_soc_kwh=4.5,  # = 0.9 * 5.0
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+            grid_charge_ctx=ctx,
+        )
+        assert decision.grid_charge_kw == 0.0
+
+    # -------------------------------------------------------------------------
+    # Regression: ctx omitted → behaviour unchanged from pre-α3 baseline
+    # -------------------------------------------------------------------------
+
+    def test_regression_no_ctx_excess_pv(self, standard_peak_shaving_strategy):
+        """Regression: ctx=None, excess PV → charge only, no grid charge."""
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == pytest.approx(2.0)
+        assert decision.discharge_kw == 0.0
+        assert decision.grid_charge_kw == 0.0
+
+    def test_regression_no_ctx_shaving(self, standard_peak_shaving_strategy):
+        """Regression: ctx=None, shaving → discharge only, no grid charge."""
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=self._TS,
+            generation_kw=0.0,
+            demand_kw=5.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == pytest.approx(3.0)
+        assert decision.grid_charge_kw == 0.0
