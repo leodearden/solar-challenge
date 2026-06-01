@@ -239,6 +239,86 @@ def suggest_config(
     }
 
 
+# ---------------------------------------------------------------------------
+# Tool definitions — fixed order for prompt-cache stability (slice ③)
+# Later slices ④/⑤ append further tools after these two.
+# ---------------------------------------------------------------------------
+_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "explain_metric",
+        "description": (
+            "Return a grounded definition and UK benchmark band for a named "
+            "solar/battery simulation metric.  Use this when the user asks what "
+            "a metric means or how their value compares to typical UK households."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metric": {
+                    "type": "string",
+                    "description": (
+                        "The metric name, e.g. 'self_consumption_ratio', "
+                        "'self_sufficiency', 'grid_export', 'battery_cycles'."
+                    ),
+                },
+            },
+            "required": ["metric"],
+        },
+    },
+    {
+        "name": "suggest_config",
+        "description": (
+            "Return rule-of-thumb PV and battery sizing recommendations for a "
+            "household, based on annual electricity consumption and an optimisation "
+            "goal.  Results are indicative estimates; always recommend running a "
+            "full simulation to confirm."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "annual_consumption_kwh": {
+                    "type": "number",
+                    "description": (
+                        "Household annual electricity consumption in kWh "
+                        "(e.g. 3100 for an Ofgem medium user)."
+                    ),
+                },
+                "goal": {
+                    "type": "string",
+                    "description": (
+                        "Optimisation goal: 'self_sufficiency' (maximise "
+                        "independence from the grid) or 'bill_savings' "
+                        "(minimise electricity bills)."
+                    ),
+                },
+            },
+            "required": ["annual_consumption_kwh", "goal"],
+        },
+    },
+]
+
+
+def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Route a tool call to its handler and return the result dict.
+
+    Args:
+        name:       The tool name as sent by the model.
+        tool_input: The validated input dict from the model's tool_use block.
+
+    Returns:
+        The handler's result dict, or ``{"error": "..."}`` for unknown names.
+        Never raises.
+    """
+    if name == "explain_metric":
+        metric: str = str(tool_input.get("metric", ""))
+        return explain_metric(metric)
+    if name == "suggest_config":
+        annual_kwh: float = float(tool_input.get("annual_consumption_kwh", 0.0))
+        goal: str = str(tool_input.get("goal", ""))
+        return suggest_config(annual_kwh, goal)
+    return {"error": f"Unknown tool '{name}'. Available tools: explain_metric, suggest_config."}
+
+
 def _session_id() -> str:
     """Return the assistant session id from the Flask session cookie.
 
