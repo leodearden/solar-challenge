@@ -2413,3 +2413,24 @@ class TestParsePVDistributionConfigDegradation:
         pv_dist = _parse_pv_distribution_config(data)
         assert pv_dist.system_age_years == 0.0
         assert pv_dist.degradation_rate_per_year == 0.005
+
+
+class TestAgedScenario:
+    """Full product read-path test: load_fleet_config propagates system_age_years from YAML."""
+
+    _SCENARIOS_DIR = Path(__file__).parent.parent.parent / "scenarios"
+
+    def test_aged_scenario_has_100_homes_all_aged_20(self) -> None:
+        """Loading bristol-phase1-aged.yaml returns 100 homes each with system_age_years=20.0."""
+        aged_path = self._SCENARIOS_DIR / "bristol-phase1-aged.yaml"
+        fleet = load_fleet_config(aged_path)
+        assert len(fleet.homes) == 100
+        for home in fleet.homes:
+            assert home.pv_config.system_age_years == 20.0
+
+    def test_baseline_scenario_has_age_zero(self) -> None:
+        """Loading bristol-phase1.yaml returns homes with default system_age_years=0.0."""
+        baseline_path = self._SCENARIOS_DIR / "bristol-phase1.yaml"
+        fleet = load_fleet_config(baseline_path)
+        for home in fleet.homes:
+            assert home.pv_config.system_age_years == 0.0
