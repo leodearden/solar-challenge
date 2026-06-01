@@ -48,6 +48,10 @@ Be concise and precise. If the user asks about specific simulation results, expl
 the numbers mean in practical terms (bill savings, self-sufficiency rates, etc.).
 """.strip()
 
+# Maximum number of prior turns to replay to the model on each request;
+# prevents unbounded context growth and eventual context-window exhaustion.
+_MAX_HISTORY_TURNS = 20
+
 
 def _session_id() -> str:
     """Return the assistant session id from the Flask session cookie.
@@ -125,6 +129,15 @@ def chat() -> Response:
             )
             return
 
+        # Pre-check: reject empty/whitespace messages before hitting the API
+        # or writing a dangling user row (JS guards are insufficient).
+        if not user_message:
+            yield (
+                "event: error\n"
+                'data: {"message": "Message cannot be empty."}\n\n'
+            )
+            return
+
         # Deferred client construction — catches ImportError / SDK construction errors
         try:
             client = _create_client()
@@ -138,12 +151,13 @@ def chat() -> Response:
         # Persist the user turn
         database.save_chat_message(db_path, sid, "user", user_message)
 
-        # Build conversation history for the API
-        prior_turns = database.get_chat_history(db_path, sid)
-        # Include all turns EXCEPT the one we just inserted (already appended by the API call)
+        # Build conversation history for the API.  The just-saved user turn is
+        # intentionally included as the final message in the request.
+        # Cap to _MAX_HISTORY_TURNS to prevent unbounded context growth.
+        all_turns = database.get_chat_history(db_path, sid)
         messages: list[dict[str, Any]] = [
             {"role": row["role"], "content": row["content"]}
-            for row in prior_turns
+            for row in all_turns[-_MAX_HISTORY_TURNS:]
         ]
 
         # Request params (dict[str, Any] splat to stay mypy --strict compatible
@@ -186,13 +200,21 @@ def chat() -> Response:
                         "model": model,
                     }
         except Exception as exc:
+            # Persist whatever was accumulated so history stays consistent with
+            # what the user already saw, and role alternation is preserved for
+            # future turns (a dangling user-only row causes consecutive
+            # user-role messages which the Anthropic API rejects with a 400).
+            database.save_chat_message(
+                db_path, sid, "assistant", accumulated,
+                metadata={"error": str(exc), "truncated": True},
+            )
             yield (
                 "event: error\n"
                 f"data: {json.dumps({'message': f'Streaming error: {exc}'})}\n\n"
             )
             return
 
-        # Persist assistant turn
+        # Persist assistant turn on success
         database.save_chat_message(
             db_path, sid, "assistant", accumulated, metadata=usage_meta or None
         )

@@ -21,19 +21,15 @@ from solar_challenge.web.app import create_app
 # Slice ② helpers & fixtures
 # ---------------------------------------------------------------------------
 
-def make_fake_stream(text_chunks: list[str]) -> tuple[MagicMock, dict[str, Any]]:
+def make_fake_stream(text_chunks: list[str]) -> MagicMock:
     """Build a context-manager mock for anthropic.Anthropic().messages.stream().
 
-    Returns (context_manager_mock, captured_kwargs_container) where
-    captured_kwargs_container['kwargs'] is populated when __enter__ is called.
-
-    The fake stream exposes:
-      - stream.text_stream   — an iterable over *text_chunks*
-      - stream.get_final_message() — returns a SimpleNamespace with .content (list)
-        and .usage (cache_creation_input_tokens, cache_read_input_tokens attrs)
+    Returns a context-manager mock whose ``__enter__`` yields a fake stream
+    object with:
+      - ``stream.text_stream``        — an iterable over *text_chunks*
+      - ``stream.get_final_message()`` — a SimpleNamespace with ``.content``
+        and ``.usage`` (cache_creation_input_tokens, cache_read_input_tokens)
     """
-    captured: dict[str, Any] = {}
-
     def _make_fake_usage() -> SimpleNamespace:
         return SimpleNamespace(
             cache_creation_input_tokens=100,
@@ -54,7 +50,7 @@ def make_fake_stream(text_chunks: list[str]) -> tuple[MagicMock, dict[str, Any]]
     cm.__enter__.return_value = fake_stream
     cm.__exit__.return_value = False
 
-    return cm, captured
+    return cm
 
 
 @pytest.fixture
@@ -62,23 +58,26 @@ def mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Set a dummy ANTHROPIC_API_KEY and patch anthropic.Anthropic.
 
     Returns a dict with keys:
-      - 'client_cls'  : the patched MagicMock class
-      - 'set_chunks'  : callable(chunks) — replace what text_stream yields next call
-      - 'last_kwargs' : dict populated with the kwargs from the last stream() call
+      - 'client_cls' : the patched MagicMock class
+      - 'set_chunks' : callable(chunks) — replace what text_stream yields next call
+      - 'state'      : internal state dict; access kwargs from the last stream()
+                       call via ``state["last_kwargs"]``
 
     Usage in tests:
         info = mock_anthropic
         info['set_chunks'](["Hello", " world"])
         resp = client.post('/assistant/chat', json={'message': 'hi'})
+        kwargs = info['state']['last_kwargs']
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-test-key")
 
     state: dict[str, Any] = {"chunks": ["mock ", "reply"], "last_kwargs": {}}
 
     def _stream_factory(**kwargs: Any) -> Any:
-        state["last_kwargs"] = kwargs
-        cm, _ = make_fake_stream(list(state["chunks"]))
-        return cm
+        # Mutate in-place so all references to state["last_kwargs"] stay current.
+        state["last_kwargs"].clear()
+        state["last_kwargs"].update(kwargs)
+        return make_fake_stream(list(state["chunks"]))
 
     mock_cls = MagicMock()
     mock_instance = MagicMock()
@@ -93,7 +92,6 @@ def mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return {
         "client_cls": mock_cls,
         "set_chunks": _set_chunks,
-        "last_kwargs": state["last_kwargs"],
         "state": state,
     }
 
