@@ -1296,6 +1296,8 @@ def generate_homes_from_distribution(
         config.pv.tilt,
         config.pv.module_efficiency,
         config.pv.inverter_efficiency,
+        config.pv.system_age_years,
+        config.pv.degradation_rate_per_year,
         config.load.annual_consumption_kwh,
         config.load.household_occupants,
     ]
@@ -1348,6 +1350,8 @@ def generate_homes_from_distribution(
         pv_tilt = sampler.sample(config.pv.tilt)
         pv_module_eff = sampler.sample(config.pv.module_efficiency)
         pv_inverter_eff = sampler.sample(config.pv.inverter_efficiency)
+        pv_age = sampler.sample(config.pv.system_age_years)
+        pv_degradation = sampler.sample(config.pv.degradation_rate_per_year)
 
         pv_config = PVConfig(
             capacity_kw=pv_capacity,
@@ -1355,6 +1359,8 @@ def generate_homes_from_distribution(
             tilt=pv_tilt if pv_tilt is not None else 35.0,
             module_efficiency=pv_module_eff if pv_module_eff is not None else 0.20,
             inverter_efficiency=pv_inverter_eff if pv_inverter_eff is not None else 0.96,
+            system_age_years=pv_age if pv_age is not None else 0.0,
+            degradation_rate_per_year=pv_degradation if pv_degradation is not None else 0.005,
         )
 
         # Build context for proportional distributions
