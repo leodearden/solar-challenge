@@ -2306,6 +2306,41 @@ class TestParsePVConfig:
         assert pv.degradation_rate_per_year == 0.005
 
 
+class TestModifyPVConfigPreservesDegradation:
+    """Tests that _modify_pv_config sweeps do not drop system_age_years/degradation_rate_per_year."""
+
+    def _base_config(self) -> "PVConfig":
+        return PVConfig(
+            capacity_kw=4.0,
+            system_age_years=20.0,
+            degradation_rate_per_year=0.008,
+        )
+
+    def test_modify_pv_capacity_kw_preserves_age(self) -> None:
+        """Sweeping pv_capacity_kw keeps age and degradation rate intact."""
+        base = self._base_config()
+        result = _modify_pv_config(base, "pv_capacity_kw", 6.0)
+        assert result.capacity_kw == 6.0
+        assert result.system_age_years == 20.0
+        assert result.degradation_rate_per_year == 0.008
+
+    def test_modify_pv_tilt_preserves_age(self) -> None:
+        """Sweeping pv_tilt keeps age and degradation rate intact."""
+        base = self._base_config()
+        result = _modify_pv_config(base, "pv_tilt", 45.0)
+        assert result.tilt == 45.0
+        assert result.system_age_years == 20.0
+        assert result.degradation_rate_per_year == 0.008
+
+    def test_modify_pv_azimuth_preserves_age(self) -> None:
+        """Sweeping pv_azimuth keeps age and degradation rate intact."""
+        base = self._base_config()
+        result = _modify_pv_config(base, "pv_azimuth", 90.0)
+        assert result.azimuth == 90.0
+        assert result.system_age_years == 20.0
+        assert result.degradation_rate_per_year == 0.008
+
+
 class TestGenerateHomesFromDistributionDegradation:
     """Tests that generate_homes_from_distribution threads age fields into each home's PVConfig."""
 
