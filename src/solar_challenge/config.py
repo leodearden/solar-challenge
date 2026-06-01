@@ -1948,6 +1948,8 @@ def _modify_pv_config(config: PVConfig, param_name: str, value: float) -> PVConf
             temperature_coefficient=config.temperature_coefficient,
             inverter_efficiency=config.inverter_efficiency,
             inverter_capacity_kw=config.inverter_capacity_kw,
+            system_age_years=config.system_age_years,
+            degradation_rate_per_year=config.degradation_rate_per_year,
         )
     elif param_name == "pv_tilt":
         return PVConfig(
@@ -1959,6 +1961,8 @@ def _modify_pv_config(config: PVConfig, param_name: str, value: float) -> PVConf
             temperature_coefficient=config.temperature_coefficient,
             inverter_efficiency=config.inverter_efficiency,
             inverter_capacity_kw=config.inverter_capacity_kw,
+            system_age_years=config.system_age_years,
+            degradation_rate_per_year=config.degradation_rate_per_year,
         )
     elif param_name == "pv_azimuth":
         return PVConfig(
@@ -1970,6 +1974,8 @@ def _modify_pv_config(config: PVConfig, param_name: str, value: float) -> PVConf
             temperature_coefficient=config.temperature_coefficient,
             inverter_efficiency=config.inverter_efficiency,
             inverter_capacity_kw=config.inverter_capacity_kw,
+            system_age_years=config.system_age_years,
+            degradation_rate_per_year=config.degradation_rate_per_year,
         )
     return config
 
