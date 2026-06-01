@@ -968,7 +968,7 @@ class TestSuggestConfig:
 class TestToolSurface:
     """Tests for _TOOLS list and _dispatch_tool router."""
 
-    def test_tools_order_is_explain_metric_then_suggest_config(self) -> None:
+    def test_tools_fixed_order_for_cache_stability(self) -> None:
         """[t['name'] for t in _TOOLS] == 4-tool order (fixed, cache-safe, slice ④ updated)."""
         from solar_challenge.web.assistant import _TOOLS
 
@@ -1481,6 +1481,81 @@ class TestGetRunResults:
             f"Expected graceful not-found signal (error or found=False); got: {result}"
         )
 
+    def test_name_collision_returns_newest_run(self, tmp_path: Path) -> None:
+        """When two rows share a name, get_run_results returns the one with the later created_at."""
+        from solar_challenge.web.assistant import get_run_results
+
+        db_path = tmp_path / "grr_collision_test.db"
+        # Older run seeded first
+        _seed_run(
+            db_path,
+            run_id="run-old-collision",
+            name="shared-run-name",
+            status="completed",
+            created_at="2026-01-01T00:00:00+00:00",
+            summary={"total_generation_kwh": 100.0},
+        )
+        # Newer run with same name seeded second
+        _seed_run(
+            db_path,
+            run_id="run-new-collision",
+            name="shared-run-name",
+            status="completed",
+            created_at="2026-03-01T00:00:00+00:00",
+            summary={"total_generation_kwh": 200.0},
+        )
+
+        result = get_run_results("shared-run-name", db_path)
+
+        assert result.get("run_id") == "run-new-collision", (
+            f"Name tie-break should return newest run (run-new-collision); "
+            f"got run_id={result.get('run_id')!r}"
+        )
+
+    def test_null_summary_json_returns_empty_dict(self, tmp_path: Path) -> None:
+        """A run stored with NULL summary_json returns summary=={} and does not raise."""
+        from solar_challenge.web.assistant import get_run_results
+        from solar_challenge.web.database import get_db, init_db
+
+        db_path = tmp_path / "grr_null_summary.db"
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
+                "VALUES (?, ?, ?, ?, ?, NULL)",
+                ("run-null-summary", "null-summary-run", "home", "completed",
+                 "2026-01-01T00:00:00+00:00"),
+            )
+
+        try:
+            result = get_run_results("run-null-summary", db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"get_run_results should not raise for NULL summary_json; got: {exc!r}"
+            ) from exc
+
+        assert result.get("summary") == {}, (
+            f"Expected summary=={{}} for NULL summary_json; got {result.get('summary')!r}"
+        )
+
+    def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
+        """get_run_results with a nonexistent/unreadable db_path returns {'error':...}, no raise."""
+        from solar_challenge.web.assistant import get_run_results
+
+        bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
+
+        try:
+            result = get_run_results("any-run-id", bad_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"get_run_results should not raise for bad db_path; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, (
+            f"Expected 'error' key for unreadable db_path; got {result}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Slice ④ — list_recent_runs unit tests (step-3 RED)
@@ -1619,6 +1694,56 @@ class TestListRecentRuns:
         # Non-positive limit is clamped to a default (>0 results expected)
         assert len(result["runs"]) >= 1, (
             f"Expected at least 1 result when limit clamped from 0; got {len(result['runs'])}"
+        )
+
+    def test_null_summary_json_does_not_raise(self, tmp_path: Path) -> None:
+        """A run stored with NULL summary_json is returned with None metrics, no crash."""
+        from solar_challenge.web.assistant import list_recent_runs
+        from solar_challenge.web.database import get_db, init_db
+
+        db_path = tmp_path / "lrr_null_summary.db"
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
+                "VALUES (?, ?, ?, ?, ?, NULL)",
+                ("lrr-null-summary", "null-summary-run", "home", "completed",
+                 "2026-01-01T00:00:00+00:00"),
+            )
+
+        try:
+            result = list_recent_runs(5, db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"list_recent_runs should not raise for NULL summary_json; got: {exc!r}"
+            ) from exc
+
+        runs = result.get("runs", [])
+        assert len(runs) == 1, f"Expected 1 run; got {len(runs)}"
+        row = runs[0]
+        # total_generation_kwh and self_consumption_ratio default to None when summary is NULL
+        assert row.get("total_generation_kwh") is None, (
+            f"Expected None for total_generation_kwh with NULL summary; got {row.get('total_generation_kwh')!r}"
+        )
+
+    def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
+        """list_recent_runs with a nonexistent db_path returns {'runs':[],'error':...}, no raise."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
+
+        try:
+            result = list_recent_runs(5, bad_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"list_recent_runs should not raise for bad db_path; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "runs" in result, f"Expected 'runs' key for corrupt db; got {result}"
+        assert result["runs"] == [], f"Expected empty runs list for corrupt db; got {result['runs']}"
+        assert "error" in result, (
+            f"Expected 'error' key for unreadable db_path; got {result}"
         )
 
 
