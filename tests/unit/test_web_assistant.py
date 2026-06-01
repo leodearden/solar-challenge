@@ -643,6 +643,76 @@ class TestChatLiveSmoke:
         )
 
 
+# ---------------------------------------------------------------------------
+# Slice ② — history window alternation invariant tests (step-12)
+# ---------------------------------------------------------------------------
+
+class TestHistoryWindowAlternation:
+    """The replayed messages window must always start with a user turn.
+
+    After 11 complete exchanges (22 DB rows) the handler adds a 23rd user
+    row, then slices all_turns[-_MAX_HISTORY_TURNS:].  With _MAX_HISTORY_TURNS=20
+    the tail starts at DB-row index 3 which is an assistant row — violating the
+    Anthropic Messages API's "first message must be role=user" invariant.
+    """
+
+    def test_window_starts_with_user_turn_after_many_exchanges(
+        self,
+        client: FlaskClient,
+        mock_anthropic: dict,
+        app: Flask,
+    ) -> None:
+        """msgs[0]["role"] must be 'user' even when the tail starts on an assistant row."""
+        from solar_challenge.web.assistant import _MAX_HISTORY_TURNS
+        from solar_challenge.web.database import save_chat_message
+
+        db_path = app.config["DATABASE"]
+
+        # Pin a session_id
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "window-sid"
+
+        # Seed 11 complete turns = 22 rows strictly alternating user/assistant
+        for i in range(11):
+            save_chat_message(db_path, "window-sid", "user", f"user-{i}")
+            save_chat_message(db_path, "window-sid", "assistant", f"assistant-{i}")
+
+        mock_anthropic["set_chunks"](["window reply"])
+
+        # Handler saves user row → 23 total; slices last 20 → starts on assistant row
+        resp = client.post("/assistant/chat", json={"message": "latest"})
+        assert resp.status_code == 200
+        resp.get_data(as_text=True)  # consume the stream
+
+        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        assert msgs, "Expected non-empty messages list in captured kwargs"
+
+        # API invariant: window must start with a user turn
+        assert msgs[0]["role"] == "user", (
+            f"Expected first replayed message to be 'user', got {msgs[0]['role']!r}"
+        )
+
+        # Window must not exceed the cap
+        assert len(msgs) <= _MAX_HISTORY_TURNS, (
+            f"Expected <= {_MAX_HISTORY_TURNS} messages, got {len(msgs)}"
+        )
+
+        # Roles must strictly alternate throughout the window
+        for i in range(len(msgs) - 1):
+            assert msgs[i]["role"] != msgs[i + 1]["role"], (
+                f"Non-alternating roles at positions {i}/{i+1}: "
+                f"{msgs[i]['role']!r} then {msgs[i + 1]['role']!r}"
+            )
+
+        # The final replayed message must be the just-sent user turn
+        assert msgs[-1]["role"] == "user", (
+            f"Expected last replayed message to be 'user', got {msgs[-1]['role']!r}"
+        )
+        assert msgs[-1]["content"] == "latest", (
+            f"Expected last message content 'latest', got {msgs[-1]['content']!r}"
+        )
+
+
 def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
     """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
 
