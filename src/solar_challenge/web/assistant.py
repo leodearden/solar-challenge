@@ -515,6 +515,74 @@ def run_home_simulation(
     return {"run_id": run_id, "results_url": f"/results/home/{run_id}"}
 
 
+def run_fleet_simulation(
+    params: dict[str, Any],
+    job_manager: Any,
+    db_path: "str | Path",
+    data_dir: "str | Path",
+) -> dict[str, Any]:
+    """Submit a fleet simulation job via the JobManager and return {run_id, results_url}.
+
+    Builds a homogeneous N-home fleet by parsing the per-home param dict
+    (minus ``n_homes``) N times using ``_parse_home_config``.  ``n_homes``
+    is clamped to [1, 100] to protect the single-worker JobManager.
+
+    Args:
+        params:      Flat parameter dict including ``n_homes`` plus the per-home
+                     fields accepted by ``_parse_home_config``
+                     (pv_kw, battery_kwh, location, days, …).
+        job_manager: A ``JobManager`` instance (or ``None``).
+        db_path:     Path to the SQLite database.
+        data_dir:    Root directory for storing run artefacts.
+
+    Returns:
+        ``{"run_id": str, "results_url": str}`` on success, or
+        ``{"error": str}`` on failure.  Never raises.
+    """
+    if job_manager is None:
+        return {"error": "run_fleet_simulation requires a running JobManager (job_manager is None)"}
+
+    from solar_challenge.web.api import _parse_home_config  # deferred
+
+    # Clamp n_homes to [1, 100]
+    try:
+        n_homes: int = max(1, min(int(params.get("n_homes", 1)), 100))
+    except (ValueError, TypeError):
+        n_homes = 1
+
+    # Build per-home dict by excluding the fleet-level n_homes key
+    per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
+
+    # Validate once; if it fails, return early without submitting
+    try:
+        home_config_0, start_date, end_date, name = _parse_home_config(per_home)
+    except (ValueError, TypeError) as exc:
+        return {"error": f"Invalid simulation parameters: {exc}"}
+
+    # Build the homogeneous configs list (parse N times for correctness/independence)
+    configs = [home_config_0]
+    for _ in range(n_homes - 1):
+        try:
+            home_config_i, _, _, _ = _parse_home_config(per_home)
+            configs.append(home_config_i)
+        except (ValueError, TypeError) as exc:
+            return {"error": f"Invalid simulation parameters: {exc}"}
+
+    try:
+        _job_id, run_id = job_manager.submit_fleet_job(
+            configs=configs,
+            start_date=start_date,
+            end_date=end_date,
+            db_path=str(db_path),
+            data_dir=str(data_dir),
+            name=name or "Fleet Simulation",
+        )
+    except Exception as exc:
+        return {"error": f"Failed to submit fleet simulation job: {exc}"}
+
+    return {"run_id": run_id, "results_url": f"/results/fleet/{run_id}"}
+
+
 def _dispatch_tool(
     name: str,
     tool_input: dict[str, Any],
