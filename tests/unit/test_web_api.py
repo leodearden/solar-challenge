@@ -1291,3 +1291,11 @@ class TestParseHomeConfigPVAge:
             json={**VALID_HOME_PAYLOAD, "system_age_years": -5},
         )
         assert resp.status_code == 400
+
+    def test_invalid_degradation_rate_returns_400(self, client: FlaskClient) -> None:
+        """POST with degradation_rate_per_year=1.5 returns HTTP 400 (PVConfig validates rate 0-1)."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "degradation_rate_per_year": 1.5},
+        )
+        assert resp.status_code == 400

@@ -110,6 +110,10 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     pv_kw = float(data.get("pv_kw", 4.0))
     azimuth = float(data.get("azimuth", 180))
     tilt = float(data.get("tilt", 35))
+    # Range validation for system_age_years (>= 0) and degradation_rate_per_year
+    # ([0, 1]) is delegated to PVConfig.__post_init__, which raises ValueError.
+    # That propagates to the endpoint's (ValueError, TypeError) handler → HTTP 400.
+    # PVConfig is the single source of truth for these bounds.
     system_age_years = float(data.get("system_age_years", 0.0))
     degradation_rate_per_year = float(data.get("degradation_rate_per_year", 0.005))
     battery_kwh_val = float(data.get("battery_kwh", 0.0))
