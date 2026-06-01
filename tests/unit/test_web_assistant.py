@@ -969,12 +969,19 @@ class TestToolSurface:
     """Tests for _TOOLS list and _dispatch_tool router."""
 
     def test_tools_fixed_order_for_cache_stability(self) -> None:
-        """[t['name'] for t in _TOOLS] == 4-tool order (fixed, cache-safe, slice ④ updated)."""
+        """[t['name'] for t in _TOOLS] == 6-tool order (fixed, cache-safe, slice ⑤ updated)."""
         from solar_challenge.web.assistant import _TOOLS
 
         names = [t["name"] for t in _TOOLS]
-        assert names == ["explain_metric", "suggest_config", "get_run_results", "list_recent_runs"], (
-            f"Expected fixed 4-tool order, got {names}"
+        assert names == [
+            "explain_metric",
+            "suggest_config",
+            "get_run_results",
+            "list_recent_runs",
+            "run_home_simulation",
+            "run_fleet_simulation",
+        ], (
+            f"Expected fixed 6-tool order, got {names}"
         )
 
     def test_every_tool_entry_has_required_keys(self) -> None:
@@ -1258,7 +1265,7 @@ class TestToolUseLoop:
         client: FlaskClient,
         sequence_mock_anthropic: dict[str, Any],
     ) -> None:
-        """stream() kwargs carry 'tools' with 4-tool names in fixed order (slice ④ updated)."""
+        """stream() kwargs carry 'tools' with 6-tool names in fixed order (slice ⑤ updated)."""
         sequence_mock_anthropic["set_streams"]([
             make_end_turn_stream(["reply"]),
         ])
@@ -1270,8 +1277,15 @@ class TestToolUseLoop:
         first_kwargs = call_kwargs_list[0]
         assert "tools" in first_kwargs, f"Expected 'tools' in stream() kwargs: {first_kwargs.keys()}"
         tool_names = [t["name"] for t in first_kwargs["tools"]]
-        assert tool_names == ["explain_metric", "suggest_config", "get_run_results", "list_recent_runs"], (
-            f"Expected 4-tool order, got {tool_names}"
+        assert tool_names == [
+            "explain_metric",
+            "suggest_config",
+            "get_run_results",
+            "list_recent_runs",
+            "run_home_simulation",
+            "run_fleet_simulation",
+        ], (
+            f"Expected 6-tool order, got {tool_names}"
         )
 
     def test_done_frame_terminates_stream(
@@ -2283,6 +2297,132 @@ class TestRunFleetSimulation:
         except Exception as exc:
             raise AssertionError(
                 f"run_fleet_simulation should not raise when job_manager=None; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — tool surface + dispatch tests (step-5 RED)
+# ---------------------------------------------------------------------------
+
+class TestSlice5ToolSurface:
+    """Tool registration, schema, and dispatch tests for slice ⑤ trigger tools."""
+
+    def test_six_tools_fixed_order(self) -> None:
+        """_TOOLS has exactly 6 tools in the fixed cache-stable order."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        names = [t["name"] for t in _TOOLS]
+        assert names == [
+            "explain_metric",
+            "suggest_config",
+            "get_run_results",
+            "list_recent_runs",
+            "run_home_simulation",
+            "run_fleet_simulation",
+        ], f"Expected 6-tool order; got {names}"
+
+    def test_run_home_simulation_schema(self) -> None:
+        """run_home_simulation has object input_schema with pv_kw required."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        tool = next((t for t in _TOOLS if t["name"] == "run_home_simulation"), None)
+        assert tool is not None, "run_home_simulation missing from _TOOLS"
+        schema = tool["input_schema"]
+        assert schema.get("type") == "object", (
+            f"run_home_simulation input_schema.type must be 'object'; got {schema.get('type')!r}"
+        )
+        required = schema.get("required", [])
+        assert required, "run_home_simulation input_schema.required must be non-empty"
+        assert "pv_kw" in required, (
+            f"run_home_simulation must require 'pv_kw'; got {required}"
+        )
+
+    def test_run_fleet_simulation_schema(self) -> None:
+        """run_fleet_simulation has object input_schema with n_homes required."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        tool = next((t for t in _TOOLS if t["name"] == "run_fleet_simulation"), None)
+        assert tool is not None, "run_fleet_simulation missing from _TOOLS"
+        schema = tool["input_schema"]
+        assert schema.get("type") == "object", (
+            f"run_fleet_simulation input_schema.type must be 'object'; got {schema.get('type')!r}"
+        )
+        required = schema.get("required", [])
+        assert required, "run_fleet_simulation input_schema.required must be non-empty"
+        assert "n_homes" in required, (
+            f"run_fleet_simulation must require 'n_homes'; got {required}"
+        )
+
+    def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
+        """_dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
+        from solar_challenge.web.assistant import _dispatch_tool, run_home_simulation
+
+        jm = MagicMock()
+        jm.submit_home_job.return_value = ("job-h", "run-h")
+
+        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+        direct = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm2 = MagicMock()
+        jm2.submit_home_job.return_value = ("job-h", "run-h")
+        via_dispatch = _dispatch_tool(
+            "run_home_simulation",
+            params,
+            db_path=str(tmp_path / "t.db"),
+            job_manager=jm2,
+            data_dir=str(tmp_path),
+        )
+
+        assert direct == via_dispatch, (
+            f"Expected dispatch result to match handler result; got {via_dispatch!r} vs {direct!r}"
+        )
+
+    def test_dispatch_run_fleet_simulation(self, tmp_path: Path) -> None:
+        """_dispatch_tool('run_fleet_simulation', {...}, job_manager=mock) returns handler result."""
+        from solar_challenge.web.assistant import _dispatch_tool, run_fleet_simulation
+
+        params = {"n_homes": 2, "pv_kw": 4, "location": "bristol", "days": 7}
+
+        jm = MagicMock()
+        jm.submit_fleet_job.return_value = ("job-f", "run-f")
+        direct = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm2 = MagicMock()
+        jm2.submit_fleet_job.return_value = ("job-f", "run-f")
+        via_dispatch = _dispatch_tool(
+            "run_fleet_simulation",
+            params,
+            db_path=str(tmp_path / "t.db"),
+            job_manager=jm2,
+            data_dir=str(tmp_path),
+        )
+
+        assert direct == via_dispatch, (
+            f"Expected dispatch result to match handler result; got {via_dispatch!r} vs {direct!r}"
+        )
+
+    def test_dispatch_run_home_simulation_no_job_manager_returns_error(
+        self, tmp_path: Path
+    ) -> None:
+        """_dispatch_tool('run_home_simulation', {...}, job_manager=None) returns error dict."""
+        from solar_challenge.web.assistant import _dispatch_tool
+
+        params = {"pv_kw": 4, "days": 7, "location": "bristol"}
+
+        try:
+            result = _dispatch_tool(
+                "run_home_simulation",
+                params,
+                db_path=str(tmp_path / "t.db"),
+                job_manager=None,
+                data_dir=str(tmp_path),
+            )
+        except Exception as exc:
+            raise AssertionError(
+                f"_dispatch_tool should not raise when job_manager=None; got: {exc!r}"
             ) from exc
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
