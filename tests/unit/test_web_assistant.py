@@ -1790,3 +1790,144 @@ class TestSlice4ToolSurface:
             f"Expected summary value {summary_val!r} in tool_result content.\n"
             f"Content: {result_content!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — run-context injection tests (step-7 RED)
+# ---------------------------------------------------------------------------
+
+class TestRunContextInjection:
+    """Tests for run_id injection into the user turn on POST /assistant/chat."""
+
+    def test_run_id_injects_summary_into_api_messages(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        mock_anthropic: dict[str, Any],
+    ) -> None:
+        """POST with run_id injects summary into messages[-1]['content'] before API call."""
+        db_path = app.config["DATABASE"]
+        summary_marker = 987.65
+        _seed_run(
+            db_path,
+            run_id="ctx-run-001",
+            name="ctx-signal-run",
+            status="completed",
+            created_at="2026-06-01T09:00:00+00:00",
+            summary={"total_generation_kwh": summary_marker},
+        )
+
+        mock_anthropic["set_chunks"](["ok"])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "summarise", "run_id": "ctx-run-001"},
+        )
+        assert resp.status_code == 200
+        resp.get_data(as_text=True)
+
+        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        last_msg = msgs[-1]
+        assert last_msg["role"] == "user", f"Expected last msg role=user; got {last_msg['role']!r}"
+        content = last_msg["content"]
+        assert str(summary_marker) in content, (
+            f"Expected seeded summary value {summary_marker!r} injected into last user message;\n"
+            f"content: {content!r}"
+        )
+        assert "ctx-run-001" in content, (
+            f"Expected run_id 'ctx-run-001' in injected content; got: {content!r}"
+        )
+
+    def test_injection_is_not_persisted_in_history(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        mock_anthropic: dict[str, Any],
+    ) -> None:
+        """The persisted user row contains only the original user message, not injected context."""
+        db_path = app.config["DATABASE"]
+        _seed_run(
+            db_path,
+            run_id="ctx-run-002",
+            name="ctx-persist-run",
+            status="completed",
+            created_at="2026-06-01T10:00:00+00:00",
+            summary={"total_generation_kwh": 123.0},
+        )
+
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "ctx-persist-sid"
+
+        mock_anthropic["set_chunks"](["ok"])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "summarise run", "run_id": "ctx-run-002"},
+        )
+        assert resp.status_code == 200
+        resp.get_data(as_text=True)
+
+        # The persisted user row must be the ORIGINAL message only
+        hist_resp = client.get("/assistant/history")
+        messages = hist_resp.get_json()["messages"]
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        assert user_msgs, "Expected at least one user message in history"
+        stored_content = user_msgs[0]["content"]
+        assert stored_content == "summarise run", (
+            f"Persisted user message should be original text 'summarise run'; "
+            f"got: {stored_content!r}"
+        )
+        # The injected run context must NOT appear in stored history
+        assert "123.0" not in stored_content, (
+            f"Injected summary value should NOT be persisted; stored: {stored_content!r}"
+        )
+
+    def test_unknown_run_id_streams_normally(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        mock_anthropic: dict[str, Any],
+    ) -> None:
+        """POST with an unknown run_id streams normally (delta+done, no error/500)."""
+        mock_anthropic["set_chunks"](["normal reply"])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "what happened?", "run_id": "totally-unknown-run-xyz"},
+        )
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        assert "event: delta" in body, "Expected delta frames for unknown run_id"
+        assert "event: done" in body, "Expected done frame for unknown run_id"
+        assert "event: error" not in body, f"Unexpected error frame for unknown run_id: {body[:300]}"
+
+        # Messages sent to API must NOT contain injected run context for unknown id
+        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        last_content = msgs[-1]["content"]
+        assert "totally-unknown-run-xyz" not in last_content, (
+            f"Unknown run_id should not appear in injected content; got: {last_content!r}"
+        )
+
+    def test_no_run_id_leaves_user_message_unchanged(
+        self,
+        client: FlaskClient,
+        mock_anthropic: dict[str, Any],
+    ) -> None:
+        """POST without run_id: messages[-1]['content'] equals exactly the user message."""
+        mock_anthropic["set_chunks"](["plain reply"])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "plain message no run"},
+        )
+        assert resp.status_code == 200
+        resp.get_data(as_text=True)
+
+        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        last_msg = msgs[-1]
+        assert last_msg["role"] == "user"
+        assert last_msg["content"] == "plain message no run", (
+            f"Without run_id, last message content should be the raw user text; "
+            f"got: {last_msg['content']!r}"
+        )
