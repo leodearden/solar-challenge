@@ -396,6 +396,101 @@ class TestChatEndpointHappyPath:
         assert "mock reply" in messages[1]["content"]
 
 
+# ---------------------------------------------------------------------------
+# Slice ② — graceful degradation tests (step-7)
+# ---------------------------------------------------------------------------
+
+class TestChatDegradation:
+    """Graceful-degradation tests: no key → error SSE frame (never 500)."""
+
+    def test_missing_api_key_returns_error_frame(
+        self,
+        client: FlaskClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """POST /chat without ANTHROPIC_API_KEY returns 200 with an error SSE frame."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        resp = client.post("/assistant/chat", json={"message": "hi"})
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+        assert "text/event-stream" in resp.content_type
+
+        body = resp.get_data(as_text=True)
+        assert "event: error" in body
+        assert "event: delta" not in body
+        assert "event: done" not in body
+
+    def test_missing_api_key_error_frame_has_message_field(
+        self,
+        client: FlaskClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The error SSE frame carries a JSON data payload with a 'message' field."""
+        import json as _json
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        resp = client.post("/assistant/chat", json={"message": "hi"})
+        body = resp.get_data(as_text=True)
+
+        # Find the data line after the error event
+        error_data = None
+        lines = body.splitlines()
+        for i, line in enumerate(lines):
+            if line.strip() == "event: error" and i + 1 < len(lines):
+                data_line = lines[i + 1]
+                if data_line.startswith("data: "):
+                    try:
+                        error_data = _json.loads(data_line[6:])
+                    except _json.JSONDecodeError:
+                        pass
+                break
+
+        assert error_data is not None, "Could not find error data payload"
+        assert "message" in error_data, f"Error payload missing 'message': {error_data}"
+
+    def test_blueprint_registers_when_sdk_absent(self) -> None:
+        """Blueprint registers even if 'anthropic' is absent from sys.modules.
+
+        Fulfils the slice-② TODO from the slice-① foundation test:
+        deferred import keeps blueprint registration robust.
+        """
+        import sys
+
+        # Patch sys.modules so `import anthropic` would fail
+        original = sys.modules.get("anthropic", None)
+        sys.modules["anthropic"] = None  # type: ignore[assignment]
+        try:
+            # Build a fresh app — should NOT raise during blueprint registration
+            from solar_challenge.web.app import create_app as _create_app
+            import tempfile, os
+
+            with tempfile.TemporaryDirectory() as tmp:
+                db_path = os.path.join(tmp, "test.db")
+                fresh_app = _create_app(
+                    test_config={
+                        "TESTING": True,
+                        "SECRET_KEY": "deferred-test",
+                        "WTF_CSRF_ENABLED": False,
+                        "DATABASE": db_path,
+                        "DATA_DIR": tmp,
+                    }
+                )
+            assert "assistant" in fresh_app.blueprints, (
+                "Expected 'assistant' blueprint registered even when anthropic SDK absent"
+            )
+            # GET /assistant should still return 200 (page renders without the SDK)
+            with fresh_app.test_client() as fc:
+                resp = fc.get("/assistant")
+                assert resp.status_code == 200
+        finally:
+            # Restore sys.modules to original state
+            if original is None:
+                sys.modules.pop("anthropic", None)
+            else:
+                sys.modules["anthropic"] = original
+
+
 def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
     """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
 
