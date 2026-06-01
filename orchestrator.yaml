@@ -4,6 +4,15 @@
 
 project_root: "/home/leo/src/my-solar-challenge"
 
+# Orchestrator-level daily cost ceiling. The package default ($200,
+# defaults.yaml:330) is a pre-failover backstop that trips during normal
+# operation now that per-account Max caps are the real spend governor — spend
+# here is notional/imputed across flat-rate Max subscription accounts, not
+# metered API billing. Mirrors dark-factory's own config.yaml:51 (10000.0 =
+# effectively disabled). Without this, the scheduler self-pauses on the stale
+# default during architect-heavy days (the known false-positive pattern).
+orch_daily_cost_ceiling_usd: 10000.0
+
 # Shared fused-memory HTTP server (one server, all projects). Only project_id
 # is per-project; the URL is always 8002.
 fused_memory:
