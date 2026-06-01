@@ -120,6 +120,102 @@ def client(app: Flask) -> FlaskClient:
     return app.test_client()
 
 
+# ---------------------------------------------------------------------------
+# Slice ② — database helper tests (step-1)
+# ---------------------------------------------------------------------------
+
+class TestChatMessagePersistence:
+    """Tests for save_chat_message and get_chat_history helpers."""
+
+    def test_write_and_read_two_turns(self, tmp_path: Path) -> None:
+        """Writing user+assistant rows for one session_id returns both in order."""
+        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
+
+        db_path = tmp_path / "chat_test.db"
+        init_db(db_path)
+
+        save_chat_message(db_path, "session-1", "user", "Hello")
+        save_chat_message(db_path, "session-1", "assistant", "Hi there!")
+
+        history = get_chat_history(db_path, "session-1")
+        assert len(history) == 2
+        assert history[0]["role"] == "user"
+        assert history[0]["content"] == "Hello"
+        assert history[1]["role"] == "assistant"
+        assert history[1]["content"] == "Hi there!"
+        # created_at must be populated
+        assert history[0]["created_at"] is not None
+        assert history[1]["created_at"] is not None
+
+    def test_session_scoping(self, tmp_path: Path) -> None:
+        """Rows for a different session_id are NOT returned."""
+        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
+
+        db_path = tmp_path / "scope_test.db"
+        init_db(db_path)
+
+        save_chat_message(db_path, "session-A", "user", "For A")
+        save_chat_message(db_path, "session-B", "user", "For B")
+
+        history_a = get_chat_history(db_path, "session-A")
+        history_b = get_chat_history(db_path, "session-B")
+
+        assert len(history_a) == 1
+        assert history_a[0]["content"] == "For A"
+        assert len(history_b) == 1
+        assert history_b[0]["content"] == "For B"
+
+    def test_metadata_roundtrip(self, tmp_path: Path) -> None:
+        """A metadata dict round-trips through metadata_json (dict in → dict out)."""
+        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
+
+        db_path = tmp_path / "meta_test.db"
+        init_db(db_path)
+
+        meta = {"cache_read_input_tokens": 42, "model": "claude-opus-4-8"}
+        save_chat_message(db_path, "session-meta", "assistant", "reply", metadata=meta)
+
+        history = get_chat_history(db_path, "session-meta")
+        assert len(history) == 1
+        assert history[0]["metadata"] == meta
+
+    def test_no_metadata_returns_none(self, tmp_path: Path) -> None:
+        """A row written without metadata returns metadata=None."""
+        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
+
+        db_path = tmp_path / "nometa_test.db"
+        init_db(db_path)
+
+        save_chat_message(db_path, "session-nm", "user", "no meta")
+
+        history = get_chat_history(db_path, "session-nm")
+        assert history[0]["metadata"] is None
+
+    def test_empty_session_returns_empty_list(self, tmp_path: Path) -> None:
+        """get_chat_history returns [] for a session with no messages."""
+        from solar_challenge.web.database import get_chat_history, init_db
+
+        db_path = tmp_path / "empty_test.db"
+        init_db(db_path)
+
+        history = get_chat_history(db_path, "nonexistent-session")
+        assert history == []
+
+    def test_insertion_order_preserved(self, tmp_path: Path) -> None:
+        """Multiple messages are returned in insertion order (ORDER BY id ASC)."""
+        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
+
+        db_path = tmp_path / "order_test.db"
+        init_db(db_path)
+
+        for i in range(5):
+            save_chat_message(db_path, "session-ord", "user", f"msg-{i}")
+
+        history = get_chat_history(db_path, "session-ord")
+        contents = [h["content"] for h in history]
+        assert contents == [f"msg-{i}" for i in range(5)]
+
+
 def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
     """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
 
