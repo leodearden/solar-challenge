@@ -4,11 +4,29 @@
 
 {% block title %}AI Assistant - Solar Challenge{% endblock %}
 
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/assistant.js') }}" defer></script>
+{% endblock %}
+
 {% block content %}
 {{ page_header("AI Assistant", subtitle="Ask questions about your solar simulation results") }}
 
 <div class="max-w-3xl mx-auto">
-    <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col" style="height: 600px;">
+
+    {% if not api_key_configured %}
+    <div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+        <strong>AI assistant not configured.</strong>
+        Set the <code>ANTHROPIC_API_KEY</code> environment variable and restart the server to enable chat.
+    </div>
+    {% endif %}
+
+    <div
+        id="assistant-chat"
+        data-chat-url="{{ url_for('assistant.chat') }}"
+        data-history-url="{{ url_for('assistant.chat_history') }}"
+        class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col"
+        style="height: 600px;"
+    >
 
         {# ── Scrollable conversation area ── #}
         <div
@@ -36,8 +54,9 @@
                     class="flex-1 resize-none px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
                 ></textarea>
                 <button
+                    id="chat-send"
                     type="button"
-                    class="flex-shrink-0 inline-flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
+                    class="flex-shrink-0 inline-flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Send message"
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -46,9 +65,6 @@
                     Send
                 </button>
             </div>
-            <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">
-                Streaming chat will be available in the next release.
-            </p>
         </div>
 
     </div>
