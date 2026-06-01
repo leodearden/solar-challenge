@@ -944,6 +944,22 @@ class TestSuggestConfig:
             f"{high['recommended_battery_kwh']} vs {low['recommended_battery_kwh']}"
         )
 
+    def test_self_sufficiency_goal_gives_larger_sizing_than_bill_savings(self) -> None:
+        """suggest_config('self_sufficiency') yields strictly larger PV & battery than 'bill_savings'."""
+        from solar_challenge.web.assistant import suggest_config
+
+        consumption = 3100.0
+        ss = suggest_config(consumption, "self_sufficiency")
+        bs = suggest_config(consumption, "bill_savings")
+        assert ss["recommended_pv_kwp"] > bs["recommended_pv_kwp"], (
+            f"Expected self_sufficiency PV ({ss['recommended_pv_kwp']}) "
+            f"> bill_savings PV ({bs['recommended_pv_kwp']})"
+        )
+        assert ss["recommended_battery_kwh"] > bs["recommended_battery_kwh"], (
+            f"Expected self_sufficiency battery ({ss['recommended_battery_kwh']}) "
+            f"> bill_savings battery ({bs['recommended_battery_kwh']})"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Slice ③ — tool surface tests (step-5)

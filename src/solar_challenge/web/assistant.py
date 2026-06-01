@@ -156,12 +156,14 @@ _METRIC_TABLE: dict[str, dict[str, str]] = {
 }
 
 
-def _normalize_metric_key(metric: str) -> str:
-    """Normalize a metric name to the canonical _METRIC_TABLE key form.
+def _normalize_metric_key(key: str) -> str:
+    """Normalize a metric or goal name to a canonical lookup key.
 
-    Converts to lowercase and replaces spaces and hyphens with underscores.
+    Strips leading/trailing whitespace, converts to lowercase, and replaces
+    spaces and hyphens with underscores.  Shared by explain_metric and
+    suggest_config so the two normalizers stay in sync.
     """
-    return metric.lower().replace(" ", "_").replace("-", "_")
+    return key.strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def explain_metric(metric: str) -> dict[str, str]:
@@ -197,7 +199,7 @@ def suggest_config(
 
     Uses the PRD §11.4 heuristics:
     - PV kWp ≈ annual_consumption_kwh / 950  (UK-average yield ~950 kWh/kWp/yr)
-    - Battery kWh ≈ daily_shortfall × 1.2    (daily shortfall = daily demand × (1 − self-consumption))
+    - Battery kWh ≈ daily_demand × 0.5 × 1.2  (≈ 50 % of daily demand with 1.2× usable-capacity headroom)
 
     Goal-aware nudging:
     - ``"self_sufficiency"``  → slightly larger PV (+10 %) and battery (+15 %)
@@ -225,8 +227,8 @@ def suggest_config(
     daily_kwh = annual_consumption_kwh / 365.0
     battery_kwh: float = daily_kwh * 0.5 * 1.2  # 1.2 for usable-capacity headroom
 
-    # Goal-aware nudging
-    normalised_goal = goal.lower().strip().replace(" ", "_").replace("-", "_")
+    # Goal-aware nudging — reuse the shared key normalizer for consistency
+    normalised_goal = _normalize_metric_key(goal)
     if normalised_goal == "self_sufficiency":
         pv_kwp *= 1.10
         battery_kwh *= 1.15
@@ -237,7 +239,7 @@ def suggest_config(
         "recommended_battery_kwh": round(battery_kwh, 2),
         "note": (
             "These figures are indicative estimates based on the PRD §11.4 rule-of-thumb "
-            "(PV kWp ≈ annual_consumption / 950; battery ≈ daily shortfall × 1.2). "
+            "(PV kWp ≈ annual_consumption / 950; battery ≈ 50 % of daily demand × 1.2). "
             "Please run a simulation to confirm sizing for your specific site."
         ),
     }
@@ -317,7 +319,10 @@ def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
         metric: str = str(tool_input.get("metric", ""))
         return explain_metric(metric)
     if name == "suggest_config":
-        annual_kwh: float = float(tool_input.get("annual_consumption_kwh", 0.0))
+        try:
+            annual_kwh: float = float(tool_input.get("annual_consumption_kwh", 0.0))
+        except (ValueError, TypeError):
+            return {"error": "annual_consumption_kwh must be numeric"}
         goal: str = str(tool_input.get("goal", ""))
         return suggest_config(annual_kwh, goal)
     return {"error": f"Unknown tool '{name}'. Available tools: explain_metric, suggest_config."}
@@ -474,15 +479,18 @@ def chat() -> Response:
                     final_msg = stream.get_final_message()
                     usage = getattr(final_msg, "usage", None)
                     if usage is not None:
-                        usage_meta = {
-                            "cache_creation_input_tokens": getattr(
-                                usage, "cache_creation_input_tokens", 0
-                            ),
-                            "cache_read_input_tokens": getattr(
-                                usage, "cache_read_input_tokens", 0
-                            ),
-                            "model": model,
-                        }
+                        # Accumulate across all loop iterations so the persisted
+                        # metadata reflects the full turn's token cost, not just
+                        # the final API call.
+                        usage_meta["cache_creation_input_tokens"] = (
+                            usage_meta.get("cache_creation_input_tokens", 0)
+                            + getattr(usage, "cache_creation_input_tokens", 0)
+                        )
+                        usage_meta["cache_read_input_tokens"] = (
+                            usage_meta.get("cache_read_input_tokens", 0)
+                            + getattr(usage, "cache_read_input_tokens", 0)
+                        )
+                        usage_meta["model"] = model
 
                 # Anything other than "tool_use" (incl. None — preserves slice-②
                 # behaviour where get_final_message() has no stop_reason attr)
@@ -543,6 +551,18 @@ def chat() -> Response:
                 cur_messages.append({"role": "assistant", "content": assistant_content})
                 cur_messages.append({"role": "user", "content": tool_result_content})
                 params["messages"] = cur_messages
+            else:
+                # for/else: loop completed without a break, meaning stop_reason was
+                # "tool_use" on every iteration — the cap was reached.  Emit a brief
+                # notice so the user isn't left with an empty or unexplained response.
+                _cap_notice = (
+                    "\n[Tool-call limit reached. Please rephrase or simplify your request.]"
+                )
+                accumulated += _cap_notice
+                yield (
+                    f"event: delta\n"
+                    f"data: {json.dumps({'text': _cap_notice})}\n\n"
+                )
 
         except Exception as exc:
             # Persist whatever was accumulated so history stays consistent with
