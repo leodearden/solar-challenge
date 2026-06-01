@@ -968,13 +968,13 @@ class TestSuggestConfig:
 class TestToolSurface:
     """Tests for _TOOLS list and _dispatch_tool router."""
 
-    def test_tools_order_is_explain_metric_then_suggest_config(self) -> None:
-        """[t['name'] for t in _TOOLS] == ['explain_metric', 'suggest_config'] (fixed order)."""
+    def test_tools_fixed_order_for_cache_stability(self) -> None:
+        """[t['name'] for t in _TOOLS] == 4-tool order (fixed, cache-safe, slice ④ updated)."""
         from solar_challenge.web.assistant import _TOOLS
 
         names = [t["name"] for t in _TOOLS]
-        assert names == ["explain_metric", "suggest_config"], (
-            f"Expected fixed order ['explain_metric', 'suggest_config'], got {names}"
+        assert names == ["explain_metric", "suggest_config", "get_run_results", "list_recent_runs"], (
+            f"Expected fixed 4-tool order, got {names}"
         )
 
     def test_every_tool_entry_has_required_keys(self) -> None:
@@ -1258,7 +1258,7 @@ class TestToolUseLoop:
         client: FlaskClient,
         sequence_mock_anthropic: dict[str, Any],
     ) -> None:
-        """stream() kwargs carry 'tools' with names ['explain_metric', 'suggest_config']."""
+        """stream() kwargs carry 'tools' with 4-tool names in fixed order (slice ④ updated)."""
         sequence_mock_anthropic["set_streams"]([
             make_end_turn_stream(["reply"]),
         ])
@@ -1270,8 +1270,8 @@ class TestToolUseLoop:
         first_kwargs = call_kwargs_list[0]
         assert "tools" in first_kwargs, f"Expected 'tools' in stream() kwargs: {first_kwargs.keys()}"
         tool_names = [t["name"] for t in first_kwargs["tools"]]
-        assert tool_names == ["explain_metric", "suggest_config"], (
-            f"Expected tool order ['explain_metric', 'suggest_config'], got {tool_names}"
+        assert tool_names == ["explain_metric", "suggest_config", "get_run_results", "list_recent_runs"], (
+            f"Expected 4-tool order, got {tool_names}"
         )
 
     def test_done_frame_terminates_stream(
@@ -1353,3 +1353,706 @@ class TestToolUseLoop:
         assert "delta" in event_types, f"Expected delta frames; got: {event_types}"
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
         assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — test helpers for runs table seeding
+# ---------------------------------------------------------------------------
+
+def _seed_run(
+    db_path: "str | Path",
+    *,
+    run_id: str,
+    name: str,
+    type: str = "home",
+    status: str = "completed",
+    created_at: str,
+    summary: dict[str, Any],
+) -> None:
+    """Insert a row into the runs table for testing read-only handlers.
+
+    Calls init_db (idempotent) to ensure the schema exists, then inserts
+    a minimal runs row with summary_json=json.dumps(summary).
+    """
+    import json as _json
+    from solar_challenge.web.database import get_db, init_db
+
+    init_db(db_path)
+    with get_db(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO runs (id, name, type, status, created_at, summary_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, name, type, status, created_at, _json.dumps(summary)),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — get_run_results unit tests (step-1 RED)
+# ---------------------------------------------------------------------------
+
+class TestGetRunResults:
+    """Tests for get_run_results(run_id_or_name, db_path) -> dict."""
+
+    def test_lookup_by_id_returns_seeded_fields(self, tmp_path: Path) -> None:
+        """get_run_results(run_id, db_path) returns dict with seeded row fields."""
+        from solar_challenge.web.assistant import get_run_results
+
+        db_path = tmp_path / "grr_test.db"
+        summary = {"total_generation_kwh": 1234.5, "self_consumption_ratio": 0.62}
+        _seed_run(
+            db_path,
+            run_id="run-abc-123",
+            name="test-run",
+            type="home",
+            status="completed",
+            created_at="2026-01-01T12:00:00+00:00",
+            summary=summary,
+        )
+
+        result = get_run_results("run-abc-123", db_path)
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("run_id") == "run-abc-123", f"run_id mismatch: {result}"
+        assert result.get("name") == "test-run", f"name mismatch: {result}"
+        assert result.get("type") == "home", f"type mismatch: {result}"
+        assert result.get("status") == "completed", f"status mismatch: {result}"
+        assert result.get("created_at") == "2026-01-01T12:00:00+00:00", (
+            f"created_at mismatch: {result}"
+        )
+        assert result.get("summary") == summary, (
+            f"summary dict mismatch: expected {summary!r}, got {result.get('summary')!r}"
+        )
+
+    def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
+        """get_run_results(name, db_path) resolves to the same row as lookup by id."""
+        from solar_challenge.web.assistant import get_run_results
+
+        db_path = tmp_path / "grr_name_test.db"
+        summary = {"self_sufficiency": 0.45}
+        _seed_run(
+            db_path,
+            run_id="run-xyz-456",
+            name="my-named-run",
+            type="fleet",
+            status="completed",
+            created_at="2026-02-01T08:00:00+00:00",
+            summary=summary,
+        )
+
+        result_by_id = get_run_results("run-xyz-456", db_path)
+        result_by_name = get_run_results("my-named-run", db_path)
+
+        # Both should resolve to the same row
+        assert result_by_id.get("run_id") == "run-xyz-456"
+        assert result_by_name.get("run_id") == "run-xyz-456", (
+            f"Name lookup should resolve same row as id lookup; got: {result_by_name}"
+        )
+        assert result_by_name.get("name") == "my-named-run", (
+            f"name field should be 'my-named-run': {result_by_name}"
+        )
+
+    def test_unknown_id_returns_graceful_dict(self, tmp_path: Path) -> None:
+        """get_run_results with unknown id returns a graceful dict, does NOT raise."""
+        from solar_challenge.web.assistant import get_run_results
+
+        db_path = tmp_path / "grr_unknown_test.db"
+        _seed_run(
+            db_path,
+            run_id="run-known",
+            name="known-run",
+            status="completed",
+            created_at="2026-01-01T00:00:00+00:00",
+            summary={},
+        )
+
+        try:
+            result = get_run_results("totally-unknown-id-xyz", db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"get_run_results should not raise for unknown id; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        # Must signal not-found somehow (error key OR found=False)
+        is_graceful = "error" in result or result.get("found") is False
+        assert is_graceful, (
+            f"Expected graceful not-found signal (error or found=False); got: {result}"
+        )
+
+    def test_name_collision_returns_newest_run(self, tmp_path: Path) -> None:
+        """When two rows share a name, get_run_results returns the one with the later created_at."""
+        from solar_challenge.web.assistant import get_run_results
+
+        db_path = tmp_path / "grr_collision_test.db"
+        # Older run seeded first
+        _seed_run(
+            db_path,
+            run_id="run-old-collision",
+            name="shared-run-name",
+            status="completed",
+            created_at="2026-01-01T00:00:00+00:00",
+            summary={"total_generation_kwh": 100.0},
+        )
+        # Newer run with same name seeded second
+        _seed_run(
+            db_path,
+            run_id="run-new-collision",
+            name="shared-run-name",
+            status="completed",
+            created_at="2026-03-01T00:00:00+00:00",
+            summary={"total_generation_kwh": 200.0},
+        )
+
+        result = get_run_results("shared-run-name", db_path)
+
+        assert result.get("run_id") == "run-new-collision", (
+            f"Name tie-break should return newest run (run-new-collision); "
+            f"got run_id={result.get('run_id')!r}"
+        )
+
+    def test_null_summary_json_returns_empty_dict(self, tmp_path: Path) -> None:
+        """A run stored with NULL summary_json returns summary=={} and does not raise."""
+        from solar_challenge.web.assistant import get_run_results
+        from solar_challenge.web.database import get_db, init_db
+
+        db_path = tmp_path / "grr_null_summary.db"
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
+                "VALUES (?, ?, ?, ?, ?, NULL)",
+                ("run-null-summary", "null-summary-run", "home", "completed",
+                 "2026-01-01T00:00:00+00:00"),
+            )
+
+        try:
+            result = get_run_results("run-null-summary", db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"get_run_results should not raise for NULL summary_json; got: {exc!r}"
+            ) from exc
+
+        assert result.get("summary") == {}, (
+            f"Expected summary=={{}} for NULL summary_json; got {result.get('summary')!r}"
+        )
+
+    def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
+        """get_run_results with a nonexistent/unreadable db_path returns {'error':...}, no raise."""
+        from solar_challenge.web.assistant import get_run_results
+
+        bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
+
+        try:
+            result = get_run_results("any-run-id", bad_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"get_run_results should not raise for bad db_path; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, (
+            f"Expected 'error' key for unreadable db_path; got {result}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — list_recent_runs unit tests (step-3 RED)
+# ---------------------------------------------------------------------------
+
+class TestListRecentRuns:
+    """Tests for list_recent_runs(limit, db_path) -> dict."""
+
+    def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
+        """list_recent_runs returns runs newest-first, count bounded by limit."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        db_path = tmp_path / "lrr_test.db"
+        # Seed 5 runs with distinct created_at timestamps
+        for i in range(5):
+            _seed_run(
+                db_path,
+                run_id=f"run-{i:03d}",
+                name=f"run-name-{i}",
+                status="completed",
+                created_at=f"2026-01-{i + 1:02d}T12:00:00+00:00",
+                summary={"total_generation_kwh": float(i * 100)},
+            )
+
+        result = list_recent_runs(3, db_path)
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "runs" in result, f"Expected 'runs' key; got {result}"
+        runs = result["runs"]
+        assert isinstance(runs, list), f"Expected list, got {type(runs)}"
+        assert len(runs) == 3, f"Expected exactly 3 runs (limit=3); got {len(runs)}"
+
+        # Newest first: run-004 → run-003 → run-002
+        assert runs[0]["created_at"] > runs[1]["created_at"], (
+            f"Expected descending created_at; got {runs[0]['created_at']!r} then {runs[1]['created_at']!r}"
+        )
+        assert runs[1]["created_at"] > runs[2]["created_at"], (
+            f"Expected descending created_at; got {runs[1]['created_at']!r} then {runs[2]['created_at']!r}"
+        )
+
+    def test_each_row_has_identifying_fields(self, tmp_path: Path) -> None:
+        """Each entry carries id/run_id, name, type, status, created_at."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        db_path = tmp_path / "lrr_fields_test.db"
+        _seed_run(
+            db_path,
+            run_id="run-fields-001",
+            name="fields-run",
+            type="fleet",
+            status="completed",
+            created_at="2026-03-15T09:00:00+00:00",
+            summary={"self_consumption_ratio": 0.70},
+        )
+
+        result = list_recent_runs(10, db_path)
+        runs = result["runs"]
+        assert runs, "Expected at least one run"
+        row = runs[0]
+
+        # Must carry identifying fields
+        assert row.get("name") == "fields-run", f"name mismatch: {row}"
+        assert row.get("status") == "completed", f"status mismatch: {row}"
+        assert row.get("created_at") == "2026-03-15T09:00:00+00:00", f"created_at mismatch: {row}"
+        # Either 'id' or 'run_id' key must be present
+        has_id = "id" in row or "run_id" in row
+        assert has_id, f"Expected 'id' or 'run_id' field; got keys: {list(row.keys())}"
+
+    def test_empty_db_returns_empty_list(self, tmp_path: Path) -> None:
+        """list_recent_runs on empty DB returns {'runs': []} without raising."""
+        from solar_challenge.web.assistant import list_recent_runs
+        from solar_challenge.web.database import init_db
+
+        db_path = tmp_path / "lrr_empty_test.db"
+        init_db(db_path)
+
+        try:
+            result = list_recent_runs(10, db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"list_recent_runs should not raise on empty DB; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "runs" in result, f"Expected 'runs' key; got {result}"
+        assert result["runs"] == [], (
+            f"Expected empty list for empty DB; got {result['runs']}"
+        )
+
+    def test_limit_is_clamped_to_sane_max(self, tmp_path: Path) -> None:
+        """A very large limit is clamped so returned count <= clamp ceiling."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        db_path = tmp_path / "lrr_clamp_test.db"
+        # Seed 60 rows — more than any sane clamp ceiling (50)
+        for i in range(60):
+            _seed_run(
+                db_path,
+                run_id=f"clamp-run-{i:03d}",
+                name=f"clamp-{i}",
+                status="completed",
+                created_at=f"2026-01-01T{i // 60:02d}:{i % 60:02d}:00+00:00",
+                summary={},
+            )
+
+        result = list_recent_runs(9999, db_path)
+        runs = result["runs"]
+        # Returned count must be <= some sane upper bound (the implementation clamps to 1..50)
+        assert len(runs) <= 50, (
+            f"Expected clamped count (<= 50); got {len(runs)}"
+        )
+
+    def test_non_positive_limit_returns_results(self, tmp_path: Path) -> None:
+        """A non-positive limit is handled gracefully (clamped to default, no raise)."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        db_path = tmp_path / "lrr_nonpos_test.db"
+        _seed_run(
+            db_path,
+            run_id="run-np-001",
+            name="np-run",
+            status="completed",
+            created_at="2026-01-01T00:00:00+00:00",
+            summary={},
+        )
+
+        try:
+            result = list_recent_runs(0, db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"list_recent_runs should not raise for limit=0; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "runs" in result, f"Expected 'runs' key; got {result}"
+        # Non-positive limit is clamped to a default (>0 results expected)
+        assert len(result["runs"]) >= 1, (
+            f"Expected at least 1 result when limit clamped from 0; got {len(result['runs'])}"
+        )
+
+    def test_null_summary_json_does_not_raise(self, tmp_path: Path) -> None:
+        """A run stored with NULL summary_json is returned with None metrics, no crash."""
+        from solar_challenge.web.assistant import list_recent_runs
+        from solar_challenge.web.database import get_db, init_db
+
+        db_path = tmp_path / "lrr_null_summary.db"
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
+                "VALUES (?, ?, ?, ?, ?, NULL)",
+                ("lrr-null-summary", "null-summary-run", "home", "completed",
+                 "2026-01-01T00:00:00+00:00"),
+            )
+
+        try:
+            result = list_recent_runs(5, db_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"list_recent_runs should not raise for NULL summary_json; got: {exc!r}"
+            ) from exc
+
+        runs = result.get("runs", [])
+        assert len(runs) == 1, f"Expected 1 run; got {len(runs)}"
+        row = runs[0]
+        # total_generation_kwh and self_consumption_ratio default to None when summary is NULL
+        assert row.get("total_generation_kwh") is None, (
+            f"Expected None for total_generation_kwh with NULL summary; got {row.get('total_generation_kwh')!r}"
+        )
+
+    def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
+        """list_recent_runs with a nonexistent db_path returns {'runs':[],'error':...}, no raise."""
+        from solar_challenge.web.assistant import list_recent_runs
+
+        bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
+
+        try:
+            result = list_recent_runs(5, bad_path)
+        except Exception as exc:
+            raise AssertionError(
+                f"list_recent_runs should not raise for bad db_path; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "runs" in result, f"Expected 'runs' key for corrupt db; got {result}"
+        assert result["runs"] == [], f"Expected empty runs list for corrupt db; got {result['runs']}"
+        assert "error" in result, (
+            f"Expected 'error' key for unreadable db_path; got {result}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — tool surface + dispatch + tool-use signal tests (step-5 RED)
+# ---------------------------------------------------------------------------
+
+class TestSlice4ToolSurface:
+    """Tests for new tools registered/dispatched in slice ④."""
+
+    def test_new_tools_input_schema_is_object_with_required(self) -> None:
+        """get_run_results and list_recent_runs have type 'object' and non-empty required."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        new_tools = {t["name"]: t for t in _TOOLS if t["name"] in ("get_run_results", "list_recent_runs")}
+        assert "get_run_results" in new_tools, "get_run_results missing from _TOOLS"
+        assert "list_recent_runs" in new_tools, "list_recent_runs missing from _TOOLS"
+
+        for name, tool in new_tools.items():
+            schema = tool["input_schema"]
+            assert schema.get("type") == "object", f"{name}: input_schema.type must be 'object'"
+            required = schema.get("required", [])
+            assert required, f"{name}: required list must be non-empty"
+
+        # Specific required fields
+        grr_required = new_tools["get_run_results"]["input_schema"]["required"]
+        assert "run_id_or_name" in grr_required, (
+            f"get_run_results must require 'run_id_or_name'; got {grr_required}"
+        )
+        lrr_required = new_tools["list_recent_runs"]["input_schema"]["required"]
+        assert "limit" in lrr_required, (
+            f"list_recent_runs must require 'limit'; got {lrr_required}"
+        )
+
+    def test_dispatch_get_run_results_with_db_path(self, tmp_path: Path) -> None:
+        """_dispatch_tool('get_run_results', {...}, db_path) returns same dict as handler."""
+        from solar_challenge.web.assistant import _dispatch_tool, get_run_results
+
+        db_path = tmp_path / "disp_grr_test.db"
+        _seed_run(
+            db_path,
+            run_id="disp-run-001",
+            name="dispatch-run",
+            status="completed",
+            created_at="2026-04-01T10:00:00+00:00",
+            summary={"total_generation_kwh": 500.0},
+        )
+
+        result = _dispatch_tool("get_run_results", {"run_id_or_name": "disp-run-001"}, db_path=str(db_path))
+        expected = get_run_results("disp-run-001", db_path)
+
+        assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
+
+    def test_dispatch_list_recent_runs_with_db_path(self, tmp_path: Path) -> None:
+        """_dispatch_tool('list_recent_runs', {'limit': 5}, db_path) returns same dict as handler."""
+        from solar_challenge.web.assistant import _dispatch_tool, list_recent_runs
+
+        db_path = tmp_path / "disp_lrr_test.db"
+        _seed_run(
+            db_path,
+            run_id="disp-lrr-001",
+            name="lrr-dispatch-run",
+            status="completed",
+            created_at="2026-04-01T11:00:00+00:00",
+            summary={"self_consumption_ratio": 0.55},
+        )
+
+        result = _dispatch_tool("list_recent_runs", {"limit": 5}, db_path=str(db_path))
+        expected = list_recent_runs(5, db_path)
+
+        assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
+
+    def test_dispatch_get_run_results_no_db_path_returns_graceful_error(self) -> None:
+        """_dispatch_tool('get_run_results', {...}, db_path=None) returns graceful error, no raise."""
+        from solar_challenge.web.assistant import _dispatch_tool
+
+        try:
+            result = _dispatch_tool("get_run_results", {"run_id_or_name": "any-id"}, db_path=None)
+        except Exception as exc:
+            raise AssertionError(
+                f"_dispatch_tool should not raise when db_path=None; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key when db_path=None; got: {result}"
+
+    def test_end_to_end_get_run_results_tool_use_signal(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        sequence_mock_anthropic: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """SSE 'tool' frame emitted for get_run_results; 2nd stream contains seeded summary value."""
+        import json as _json
+
+        db_path = app.config["DATABASE"]
+        summary_val = 999.75
+        _seed_run(
+            db_path,
+            run_id="e2e-run-001",
+            name="e2e-signal-run",
+            status="completed",
+            created_at="2026-05-01T08:00:00+00:00",
+            summary={"total_generation_kwh": summary_val},
+        )
+
+        TOOL_ID = "toolu_grr_e2e_001"
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(
+                TOOL_ID, "get_run_results", {"run_id_or_name": "e2e-run-001"}
+            ),
+            make_end_turn_stream(["The run generated lots of power."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "summarise my last run"})
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        # 1. A 'tool' SSE frame named 'get_run_results' must be emitted
+        events: list[dict[str, Any]] = []
+        lines = body.splitlines()
+        i = 0
+        while i < len(lines):
+            event_type = None
+            data_str = None
+            while i < len(lines) and lines[i].strip():
+                line = lines[i]
+                if line.startswith("event: "):
+                    event_type = line[7:].strip()
+                elif line.startswith("data: "):
+                    data_str = line[6:]
+                i += 1
+            if event_type is not None:
+                parsed: Any = None
+                if data_str:
+                    try:
+                        parsed = _json.loads(data_str)
+                    except Exception:
+                        parsed = data_str
+                events.append({"event": event_type, "data": parsed})
+            i += 1
+
+        tool_events = [e for e in events if e["event"] == "tool"]
+        assert tool_events, f"Expected at least one 'tool' SSE frame; events: {events}"
+        assert tool_events[0]["data"]["name"] == "get_run_results", (
+            f"Expected tool frame 'get_run_results'; got: {tool_events[0]['data']}"
+        )
+
+        # 2. The 2nd stream() call's messages[-1] tool_result content must contain the summary value
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert len(call_kwargs_list) == 2, (
+            f"Expected stream() called exactly 2 times; got {len(call_kwargs_list)}"
+        )
+        second_messages = call_kwargs_list[1]["messages"]
+        last_msg = second_messages[-1]
+        assert last_msg["role"] == "user"
+        content = last_msg["content"]
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block in last user message; content: {content}"
+        )
+        result_content = tool_result_block.get("content", "")
+        # The seeded summary value must appear in the serialised tool_result
+        assert str(summary_val) in result_content, (
+            f"Expected summary value {summary_val!r} in tool_result content.\n"
+            f"Content: {result_content!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ④ — run-context injection tests (step-7 RED)
+# ---------------------------------------------------------------------------
+
+class TestRunContextInjection:
+    """Tests for run_id injection into the user turn on POST /assistant/chat."""
+
+    def test_run_id_injects_summary_into_api_messages(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        mock_anthropic: dict[str, Any],
+    ) -> None:
+        """POST with run_id injects summary into messages[-1]['content'] before API call."""
+        db_path = app.config["DATABASE"]
+        summary_marker = 987.65
+        _seed_run(
+            db_path,
+            run_id="ctx-run-001",
+            name="ctx-signal-run",
+            status="completed",
+            created_at="2026-06-01T09:00:00+00:00",
+            summary={"total_generation_kwh": summary_marker},
+        )
+
+        mock_anthropic["set_chunks"](["ok"])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "summarise", "run_id": "ctx-run-001"},
+        )
+        assert resp.status_code == 200
+        resp.get_data(as_text=True)
+
+        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        last_msg = msgs[-1]
+        assert last_msg["role"] == "user", f"Expected last msg role=user; got {last_msg['role']!r}"
+        content = last_msg["content"]
+        assert str(summary_marker) in content, (
+            f"Expected seeded summary value {summary_marker!r} injected into last user message;\n"
+            f"content: {content!r}"
+        )
+        assert "ctx-run-001" in content, (
+            f"Expected run_id 'ctx-run-001' in injected content; got: {content!r}"
+        )
+
+    def test_injection_is_not_persisted_in_history(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        mock_anthropic: dict[str, Any],
+    ) -> None:
+        """The persisted user row contains only the original user message, not injected context."""
+        db_path = app.config["DATABASE"]
+        _seed_run(
+            db_path,
+            run_id="ctx-run-002",
+            name="ctx-persist-run",
+            status="completed",
+            created_at="2026-06-01T10:00:00+00:00",
+            summary={"total_generation_kwh": 123.0},
+        )
+
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "ctx-persist-sid"
+
+        mock_anthropic["set_chunks"](["ok"])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "summarise run", "run_id": "ctx-run-002"},
+        )
+        assert resp.status_code == 200
+        resp.get_data(as_text=True)
+
+        # The persisted user row must be the ORIGINAL message only
+        hist_resp = client.get("/assistant/history")
+        messages = hist_resp.get_json()["messages"]
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        assert user_msgs, "Expected at least one user message in history"
+        stored_content = user_msgs[0]["content"]
+        assert stored_content == "summarise run", (
+            f"Persisted user message should be original text 'summarise run'; "
+            f"got: {stored_content!r}"
+        )
+        # The injected run context must NOT appear in stored history
+        assert "123.0" not in stored_content, (
+            f"Injected summary value should NOT be persisted; stored: {stored_content!r}"
+        )
+
+    def test_unknown_run_id_streams_normally(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        mock_anthropic: dict[str, Any],
+    ) -> None:
+        """POST with an unknown run_id streams normally (delta+done, no error/500)."""
+        mock_anthropic["set_chunks"](["normal reply"])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "what happened?", "run_id": "totally-unknown-run-xyz"},
+        )
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        assert "event: delta" in body, "Expected delta frames for unknown run_id"
+        assert "event: done" in body, "Expected done frame for unknown run_id"
+        assert "event: error" not in body, f"Unexpected error frame for unknown run_id: {body[:300]}"
+
+        # Messages sent to API must NOT contain injected run context for unknown id
+        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        last_content = msgs[-1]["content"]
+        assert "totally-unknown-run-xyz" not in last_content, (
+            f"Unknown run_id should not appear in injected content; got: {last_content!r}"
+        )
+
+    def test_no_run_id_leaves_user_message_unchanged(
+        self,
+        client: FlaskClient,
+        mock_anthropic: dict[str, Any],
+    ) -> None:
+        """POST without run_id: messages[-1]['content'] equals exactly the user message."""
+        mock_anthropic["set_chunks"](["plain reply"])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "plain message no run"},
+        )
+        assert resp.status_code == 200
+        resp.get_data(as_text=True)
+
+        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        last_msg = msgs[-1]
+        assert last_msg["role"] == "user"
+        assert last_msg["content"] == "plain message no run", (
+            f"Without run_id, last message content should be the raw user text; "
+            f"got: {last_msg['content']!r}"
+        )

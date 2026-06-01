@@ -13,6 +13,7 @@ is installed in the current environment.
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Generator
 from uuid import uuid4
 
@@ -247,7 +248,7 @@ def suggest_config(
 
 # ---------------------------------------------------------------------------
 # Tool definitions — fixed order for prompt-cache stability (slice ③)
-# Later slices ④/⑤ append further tools after these two.
+# Slice ④ appends get_run_results and list_recent_runs after the first two.
 # ---------------------------------------------------------------------------
 _TOOLS: list[dict[str, Any]] = [
     {
@@ -301,15 +302,182 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["annual_consumption_kwh", "goal"],
         },
     },
+    # --- Slice ④: read-only DB tools (appended after the first two) ---
+    {
+        "name": "get_run_results",
+        "description": (
+            "Fetch the results and summary of a specific simulation run by its "
+            "id or name.  Returns key output metrics and status information. "
+            "Use this when the user asks about a particular run's results."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "run_id_or_name": {
+                    "type": "string",
+                    "description": (
+                        "The run id (UUID) or run name to look up.  "
+                        "Resolves by exact id first, then most-recent name match."
+                    ),
+                },
+            },
+            "required": ["run_id_or_name"],
+        },
+    },
+    {
+        "name": "list_recent_runs",
+        "description": (
+            "List recent simulation runs in reverse chronological order.  "
+            "Returns identifying fields and key summary metrics for each run. "
+            "Use this when the user asks what simulations have been run recently."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Maximum number of runs to return (1–50, default 10). "
+                        "Values <= 0 are treated as the default (10)."
+                    ),
+                },
+            },
+            "required": ["limit"],
+        },
+    },
 ]
 
 
-def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any]:
+    """Return a simulation run's fields and parsed summary, or a graceful error dict.
+
+    Tries to resolve *run_id_or_name* first as an ``id`` (exact match), then as a
+    ``name`` (most-recent row by ``created_at``).  READ-ONLY — no writes to the DB.
+
+    Args:
+        run_id_or_name: A run ``id`` or ``name`` string to look up.
+        db_path:        Path to the SQLite database file.
+
+    Returns:
+        Dict with keys ``run_id``, ``name``, ``type``, ``status``,
+        ``created_at``, ``n_homes``, and ``summary`` (parsed dict).
+        Returns ``{"error": "<reason>"}`` when not found or on any DB error.
+        Never raises.
+    """
+    from solar_challenge.web.database import get_db
+
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            # First attempt: exact id match
+            cursor.execute(
+                "SELECT id, name, type, status, created_at, n_homes, summary_json "
+                "FROM runs WHERE id = ?",
+                (run_id_or_name,),
+            )
+            row = cursor.fetchone()
+
+            # Fallback: most-recent row with matching name
+            if row is None:
+                cursor.execute(
+                    "SELECT id, name, type, status, created_at, n_homes, summary_json "
+                    "FROM runs WHERE name = ? ORDER BY created_at DESC LIMIT 1",
+                    (run_id_or_name,),
+                )
+                row = cursor.fetchone()
+
+        if row is None:
+            return {"error": f"Run not found: {run_id_or_name!r}"}
+
+        summary_raw: Any = row["summary_json"]
+        summary: dict[str, Any] = json.loads(summary_raw) if summary_raw else {}
+
+        return {
+            "run_id": row["id"],
+            "name": row["name"],
+            "type": row["type"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "n_homes": row["n_homes"],
+            "summary": summary,
+        }
+    except Exception as exc:
+        return {"error": f"Database error fetching run {run_id_or_name!r}: {exc}"}
+
+
+def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
+    """Return a list of recent simulation runs, newest first.
+
+    Read-only SELECT on the runs table; limit is clamped to [1, 50] so callers
+    cannot request an unbounded result set.  Returns identifying fields plus key
+    summary metrics for each run.
+
+    Args:
+        limit:   Maximum number of runs to return (clamped to 1–50; defaults to
+                 10 when <= 0).
+        db_path: Path to the SQLite database file.
+
+    Returns:
+        ``{"runs": [...]}`` where each entry has ``run_id``, ``name``, ``type``,
+        ``status``, ``created_at``, ``n_homes``, ``total_generation_kwh``, and
+        ``self_consumption_ratio``.  Returns ``{"runs": []}`` on an empty table.
+        On any DB error returns ``{"runs": [], "error": "<reason>"}``.
+        Never raises.
+    """
+    from solar_challenge.web.database import get_db
+
+    # Clamp limit to a sane range; treat <= 0 as "use default 10"
+    _DEFAULT_LIMIT = 10
+    _MAX_LIMIT = 50
+    effective_limit = max(1, min(limit if limit > 0 else _DEFAULT_LIMIT, _MAX_LIMIT))
+
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, name, type, status, created_at, n_homes, summary_json "
+                "FROM runs ORDER BY created_at DESC LIMIT ?",
+                (effective_limit,),
+            )
+            rows = cursor.fetchall()
+
+        runs: list[dict[str, Any]] = []
+        for row in rows:
+            summary_raw: Any = row["summary_json"]
+            summary: dict[str, Any] = json.loads(summary_raw) if summary_raw else {}
+
+            entry: dict[str, Any] = {
+                "run_id": row["id"],
+                "name": row["name"],
+                "type": row["type"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "n_homes": row["n_homes"],
+                # Key summary metrics (omit raw summary_json blob)
+                "total_generation_kwh": summary.get("total_generation_kwh"),
+                "self_consumption_ratio": summary.get("self_consumption_ratio"),
+            }
+            runs.append(entry)
+
+        return {"runs": runs}
+
+    except Exception as exc:
+        return {"runs": [], "error": f"Database error listing recent runs: {exc}"}
+
+
+def _dispatch_tool(
+    name: str,
+    tool_input: dict[str, Any],
+    db_path: "str | Path | None" = None,
+) -> dict[str, Any]:
     """Route a tool call to its handler and return the result dict.
 
     Args:
         name:       The tool name as sent by the model.
         tool_input: The validated input dict from the model's tool_use block.
+        db_path:    Optional path to the SQLite database file.  Required for
+                    DB-backed tools (``get_run_results``, ``list_recent_runs``);
+                    those tools return a graceful ``{"error": ...}`` when None.
 
     Returns:
         The handler's result dict, or ``{"error": "..."}`` for unknown names.
@@ -325,7 +493,21 @@ def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
             return {"error": "annual_consumption_kwh must be numeric"}
         goal: str = str(tool_input.get("goal", ""))
         return suggest_config(annual_kwh, goal)
-    return {"error": f"Unknown tool '{name}'. Available tools: explain_metric, suggest_config."}
+    if name == "get_run_results":
+        if db_path is None:
+            return {"error": "get_run_results requires a database path (db_path is None)"}
+        run_id_or_name: str = str(tool_input.get("run_id_or_name", ""))
+        return get_run_results(run_id_or_name, db_path)
+    if name == "list_recent_runs":
+        if db_path is None:
+            return {"error": "list_recent_runs requires a database path (db_path is None)"}
+        try:
+            limit: int = int(tool_input.get("limit", 10))
+        except (ValueError, TypeError):
+            limit = 10
+        return list_recent_runs(limit, db_path)
+    all_names = ", ".join(t["name"] for t in _TOOLS)
+    return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
 
 
 def _session_id() -> str:
@@ -392,6 +574,7 @@ def chat() -> Response:
     """
     data = request.get_json(silent=True) or {}
     user_message: str = str(data.get("message", "")).strip()
+    run_id: str = str(data.get("run_id", "")).strip()
     sid = _session_id()
     db_path = current_app.config["DATABASE"]
 
@@ -440,6 +623,22 @@ def chat() -> Response:
         # Drop any leading non-user turns to restore the invariant.
         while messages and messages[0]["role"] != "user":
             messages.pop(0)
+
+        # Run-context injection (slice ④): when the request carries a run_id,
+        # prepend a compact preamble to the final (user) message in-memory ONLY.
+        # - NOT written to chat_messages (keeps stored history clean).
+        # - NOT placed in the cached system block (preserves prompt-cache stability).
+        # - Graceful no-op when run_id is absent/empty or the run is not found.
+        if run_id and messages and messages[-1]["role"] == "user":
+            run_data = get_run_results(run_id, db_path)
+            if "error" not in run_data:
+                preamble = (
+                    f"[Run context for run_id={run_id!r}, name={run_data.get('name')!r}: "
+                    f"{json.dumps(run_data.get('summary', {}), ensure_ascii=False)}]\n\n"
+                )
+                original_content: str = str(messages[-1]["content"])
+                messages[-1] = dict(messages[-1])
+                messages[-1]["content"] = preamble + original_content
 
         # Request params (dict[str, Any] splat to stay mypy --strict compatible
         # with the installed anthropic 0.97.0 stubs that predate output_config /
@@ -527,7 +726,7 @@ def chat() -> Response:
                         )
 
                         # Dispatch to the handler and collect the result.
-                        tool_result = _dispatch_tool(block_name, block_input)
+                        tool_result = _dispatch_tool(block_name, block_input, db_path)
                         invoked_tools.append(block_name)
 
                         tool_result_content.append({
