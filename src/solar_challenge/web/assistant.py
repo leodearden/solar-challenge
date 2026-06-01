@@ -568,10 +568,15 @@ def run_home_simulation(
 
     from solar_challenge.web.api import _parse_home_config  # deferred to avoid circularity
 
-    # Inject the documented default (7 days) when 'days' is absent.  A caller-supplied
-    # 'days' value always wins because **params overrides the sentinel key; the caller's
-    # tool_input dict is not mutated (we build a new dict).
+    # Inject the documented default (7 days) when 'days' is absent OR explicitly None.
+    # A caller-supplied non-None 'days' always wins because **params overrides the sentinel
+    # key; the caller's tool_input dict is not mutated (we build a new dict).
+    # The extra None-check is needed because {"days": 7, **params} leaves days=None when
+    # the model emits an explicit null — _parse_date_range would then fall through to the
+    # full 2024 calendar year (~366 days), contradicting the schema's "(default 7)".
     effective_params: dict[str, Any] = {"days": 7, **params}
+    if effective_params.get("days") is None:
+        effective_params["days"] = 7
 
     try:
         home_config, start_date, end_date, name = _parse_home_config(effective_params)
@@ -630,9 +635,12 @@ def run_fleet_simulation(
 
     # Build per-home dict by excluding the fleet-level n_homes key
     per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
-    # Inject the documented default (7 days) when absent.  setdefault is safe here
-    # because per_home is a fresh copy — the caller's params dict is not mutated.
+    # Inject the documented default (7 days) when absent OR explicitly None.
+    # setdefault only guards absent keys; an explicit None bypasses it and would
+    # fall through to _parse_date_range's full-year default — check both cases.
     per_home.setdefault("days", 7)
+    if per_home.get("days") is None:
+        per_home["days"] = 7
 
     # Validate once; if it fails, return early without submitting
     try:
@@ -640,14 +648,13 @@ def run_fleet_simulation(
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
-    # Build the homogeneous configs list (parse N times for correctness/independence)
-    configs = [home_config_0]
-    for _ in range(n_homes - 1):
-        try:
-            home_config_i, _, _, _ = _parse_home_config(per_home)
-            configs.append(home_config_i)
-        except (ValueError, TypeError) as exc:
-            return {"error": f"Invalid simulation parameters: {exc}"}
+    # Build the homogeneous configs list.  HomeConfig is a frozen dataclass so all
+    # N references can safely share the same immutable object — re-parsing N times
+    # adds no diversity and just wastes CPU.
+    # Intentional design: for this slice the fleet is homogeneous (identical params
+    # for every home).  Per-home variation (diverse seeds/capacities via distribution
+    # configs) is deferred to the P2 distribution-runner path.
+    configs: list[Any] = [home_config_0] * n_homes
 
     try:
         _job_id, run_id = job_manager.submit_fleet_job(

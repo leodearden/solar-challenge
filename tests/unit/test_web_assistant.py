@@ -2229,6 +2229,29 @@ class TestRunHomeSimulation:
             "Caller-supplied 'days' must not be clobbered by the default."
         )
 
+    def test_home_days_none_defaults_to_7(self, tmp_path: Path) -> None:
+        """Explicit days=None is treated as absent — handler falls back to 7-day window."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
+        params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
+        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 6, (
+            f"Expected 7-day window (span=6) when days=None; got span={span}. "
+            "Explicit None must normalise to the 7-day default, not the full calendar year."
+        )
+        assert span != 365, (
+            "Handler uses full-year fallback for days=None instead of the 7-day default"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Slice ⑤ — run_fleet_simulation unit tests (step-3 RED)
@@ -2366,6 +2389,29 @@ class TestRunFleetSimulation:
         )
         assert span != 365, (
             "Fleet handler is using the full-year fallback instead of the documented 7-day default"
+        )
+
+    def test_fleet_days_none_defaults_to_7(self, tmp_path: Path) -> None:
+        """Explicit days=None in fleet params is treated as absent — handler falls back to 7."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
+        params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": None}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 6, (
+            f"Expected 7-day window (span=6) when days=None; got span={span}. "
+            "Explicit None must normalise to the 7-day default, not the full calendar year."
+        )
+        assert span != 365, (
+            "Fleet handler uses full-year fallback for days=None instead of the 7-day default"
         )
 
 
