@@ -491,6 +491,101 @@ class TestChatDegradation:
                 sys.modules["anthropic"] = original
 
 
+# ---------------------------------------------------------------------------
+# Slice ② — chat page wiring + configure-notice tests (step-9)
+# ---------------------------------------------------------------------------
+
+class TestChatPageWiring:
+    """Tests for chat.html JS include, data-* attributes, and configure-notice."""
+
+    def test_page_includes_assistant_js_when_key_set(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With ANTHROPIC_API_KEY set, GET /assistant HTML includes assistant.js."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
+        resp = client.get("/assistant")
+        html = resp.data.decode()
+        assert "assistant.js" in html, (
+            "Expected assistant.js script include when ANTHROPIC_API_KEY is set"
+        )
+
+    def test_page_exposes_chat_url_data_attribute(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """chat.html exposes the chat endpoint URL via a data-* attribute."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
+        resp = client.get("/assistant")
+        html = resp.data.decode()
+        assert "data-chat-url" in html, (
+            "Expected data-chat-url attribute for JS to POST to"
+        )
+
+    def test_page_exposes_history_url_data_attribute(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """chat.html exposes the history endpoint URL via a data-* attribute."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
+        resp = client.get("/assistant")
+        html = resp.data.decode()
+        assert "data-history-url" in html, (
+            "Expected data-history-url attribute for JS to load history from"
+        )
+
+    def test_no_configure_notice_when_key_set(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With ANTHROPIC_API_KEY set, page does NOT show the configure-notice."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
+        resp = client.get("/assistant")
+        html = resp.data.decode()
+        assert "ANTHROPIC_API_KEY" not in html, (
+            "Configure-notice should NOT appear when ANTHROPIC_API_KEY is set"
+        )
+
+    def test_configure_notice_when_key_absent(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without ANTHROPIC_API_KEY, page shows configure-notice mentioning the var name."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        resp = client.get("/assistant")
+        html = resp.data.decode()
+        assert "ANTHROPIC_API_KEY" in html, (
+            "Configure-notice MUST appear when ANTHROPIC_API_KEY is unset"
+        )
+
+    def test_foundation_markers_present_key_set(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Foundation markers (#chat-messages, #chat-input, 'AI Assistant') still present with key."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
+        resp = client.get("/assistant")
+        html = resp.data.decode()
+        assert 'id="chat-messages"' in html
+        assert 'id="chat-input"' in html
+        assert "AI Assistant" in html
+
+    def test_foundation_markers_present_key_absent(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Foundation markers still present even when the key is absent."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        resp = client.get("/assistant")
+        html = resp.data.decode()
+        assert 'id="chat-messages"' in html
+        assert 'id="chat-input"' in html
+        assert "AI Assistant" in html
+
+    def test_next_release_placeholder_removed(
+        self, client: FlaskClient
+    ) -> None:
+        """The 'Streaming chat will be available in the next release' placeholder is gone."""
+        resp = client.get("/assistant")
+        html = resp.data.decode()
+        assert "next release" not in html, (
+            "The 'next release' placeholder should be removed in slice ②"
+        )
+
+
 def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
     """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
 
