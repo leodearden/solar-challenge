@@ -52,6 +52,138 @@ the numbers mean in practical terms (bill savings, self-sufficiency rates, etc.)
 # prevents unbounded context growth and eventual context-window exhaustion.
 _MAX_HISTORY_TURNS = 20
 
+# ---------------------------------------------------------------------------
+# Grounded metric table — canonical UK benchmark bands (slice ③)
+# Keyed by normalized metric id (lowercase, spaces/hyphens → underscores).
+# Owned by this leaf so benchmark numbers are never hallucinated (PRD §9 ③, G6).
+# ---------------------------------------------------------------------------
+_METRIC_TABLE: dict[str, dict[str, str]] = {
+    "self_consumption_ratio": {
+        "definition": (
+            "The fraction of PV generation that is consumed directly on-site "
+            "(by the household or stored in the battery), rather than exported "
+            "to the grid.  A higher ratio means less generated energy is wasted "
+            "as cheap grid export."
+        ),
+        "uk_benchmark_band": (
+            "Typical UK domestic PV without storage: 30–40 %. "
+            "With a 5–10 kWh battery: 55–70 %. "
+            "Source: Solar Energy UK / BEIS smart export data 2022–2024."
+        ),
+    },
+    "self_sufficiency": {
+        "definition": (
+            "The fraction of total household electricity demand that is met by "
+            "on-site PV generation and/or battery discharge, rather than imported "
+            "from the grid.  Also called 'self-reliance' or 'autarky rate'."
+        ),
+        "uk_benchmark_band": (
+            "Typical UK domestic PV without storage: 20–35 %. "
+            "With a 5–10 kWh battery: 40–60 %. "
+            "Source: EST / Solar Energy UK 2023 residential survey."
+        ),
+    },
+    "solar_fraction": {
+        "definition": (
+            "The proportion of annual energy demand covered by solar PV (generation "
+            "used on-site + battery discharge).  Equivalent to self-sufficiency when "
+            "battery losses are excluded."
+        ),
+        "uk_benchmark_band": (
+            "20–60 % depending on system size and household demand profile; "
+            "higher in summer-heavy usage patterns."
+        ),
+    },
+    "grid_import": {
+        "definition": (
+            "Total electrical energy (kWh) drawn from the public grid over the "
+            "simulation period, i.e. demand not met by on-site generation or battery."
+        ),
+        "uk_benchmark_band": (
+            "Ofgem TDCV benchmarks: low 1,900 kWh/yr, medium 2,700 kWh/yr, "
+            "high 4,100 kWh/yr (net of solar for a typical 3-4 kWp system)."
+        ),
+    },
+    "grid_export": {
+        "definition": (
+            "Total electrical energy (kWh) fed back into the public grid — "
+            "generation surplus after self-consumption and battery charging. "
+            "Earns revenue under the UK Smart Export Guarantee (SEG)."
+        ),
+        "uk_benchmark_band": (
+            "Typical UK 4 kWp system without storage: 1,400–1,800 kWh/yr exported. "
+            "With storage: 600–1,000 kWh/yr (more energy retained on-site). "
+            "Source: MCS / BEIS SEG statistics 2023."
+        ),
+    },
+    "battery_cycles": {
+        "definition": (
+            "The number of full equivalent charge-discharge cycles the battery "
+            "completes over the simulation period.  One full cycle = discharging "
+            "from 100 % to 0 % SOC (and recharging).  Used to estimate degradation."
+        ),
+        "uk_benchmark_band": (
+            "Residential lithium-ion batteries: 250–365 cycles/yr for daily cycling. "
+            "Warranted life: typically 3,000–6,000 cycles (≈ 10–20 years at 1 cycle/day). "
+            "Source: manufacturer datasheets (Tesla Powerwall, Givenergy, SolarEdge)."
+        ),
+    },
+    "annual_consumption": {
+        "definition": (
+            "Total household electricity consumption (kWh) over a full year, "
+            "covering all appliances, heating, and lighting."
+        ),
+        "uk_benchmark_band": (
+            "Ofgem Typical Domestic Consumption Values (TDCVs) 2023: "
+            "low 1,900 kWh/yr, medium 2,900 kWh/yr, high 4,200 kWh/yr."
+        ),
+    },
+    "pv_generation": {
+        "definition": (
+            "Total AC electrical energy (kWh) produced by the PV array over the "
+            "simulation period, after inverter losses."
+        ),
+        "uk_benchmark_band": (
+            "UK average yield: ~850–950 kWh/kWp/yr (south-facing, 35° tilt, no shading). "
+            "Bristol latitude (~51.5°N) typically 900–970 kWh/kWp/yr. "
+            "Source: PVGIS TMY data, EC JRC."
+        ),
+    },
+}
+
+
+def _normalize_metric_key(metric: str) -> str:
+    """Normalize a metric name to the canonical _METRIC_TABLE key form.
+
+    Converts to lowercase and replaces spaces and hyphens with underscores.
+    """
+    return metric.lower().replace(" ", "_").replace("-", "_")
+
+
+def explain_metric(metric: str) -> dict[str, str]:
+    """Return a grounded definition and UK benchmark band for a simulator metric.
+
+    Args:
+        metric: Metric name in any capitalisation/separator form (e.g.
+                ``"self_consumption_ratio"``, ``"self-consumption ratio"``,
+                ``"Self_Consumption_Ratio"``).
+
+    Returns:
+        ``{"definition": str, "uk_benchmark_band": str}`` — canonical entry from
+        ``_METRIC_TABLE``, or a graceful unknown-metric dict if not found.
+        Never raises.
+    """
+    key = _normalize_metric_key(metric)
+    if key in _METRIC_TABLE:
+        return dict(_METRIC_TABLE[key])
+    return {
+        "definition": f"Metric '{metric}' is not recognised in the benchmark table.",
+        "uk_benchmark_band": (
+            "Unknown metric — no UK benchmark band available. "
+            "Please run a simulation to obtain site-specific values."
+        ),
+    }
+
 
 def _session_id() -> str:
     """Return the assistant session id from the Flask session cookie.
