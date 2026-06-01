@@ -32,6 +32,8 @@ from solar_challenge.config import (
     _parse_heat_pump_config,
     _parse_home_config,
     _parse_pv_config,
+    _parse_pv_distribution_config,
+    _modify_pv_config,
     load_community_config,
     _parse_distribution_spec,
     _parse_fleet_distribution_config,
@@ -2302,3 +2304,25 @@ class TestParsePVConfig:
         pv = _parse_pv_config(data)
         assert pv.system_age_years == 0.0
         assert pv.degradation_rate_per_year == 0.005
+
+
+class TestParsePVDistributionConfigDegradation:
+    """Tests that _parse_pv_distribution_config threads degradation keys into PVDistributionConfig."""
+
+    def test_explicit_keys_are_parsed(self) -> None:
+        """system_age_years and degradation_rate_per_year from data reach PVDistributionConfig."""
+        data = {
+            "capacity_kw": 4.0,
+            "system_age_years": 20.0,
+            "degradation_rate_per_year": 0.008,
+        }
+        pv_dist = _parse_pv_distribution_config(data)
+        assert pv_dist.system_age_years == 20.0
+        assert pv_dist.degradation_rate_per_year == 0.008
+
+    def test_defaults_apply_when_keys_omitted(self) -> None:
+        """Omitting both keys yields defaults: system_age_years=0.0, degradation_rate_per_year=0.005."""
+        data = {"capacity_kw": 4.0}
+        pv_dist = _parse_pv_distribution_config(data)
+        assert pv_dist.system_age_years == 0.0
+        assert pv_dist.degradation_rate_per_year == 0.005
