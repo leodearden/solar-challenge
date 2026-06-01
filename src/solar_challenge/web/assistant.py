@@ -574,6 +574,7 @@ def chat() -> Response:
     """
     data = request.get_json(silent=True) or {}
     user_message: str = str(data.get("message", "")).strip()
+    run_id: str = str(data.get("run_id", "")).strip()
     sid = _session_id()
     db_path = current_app.config["DATABASE"]
 
@@ -622,6 +623,22 @@ def chat() -> Response:
         # Drop any leading non-user turns to restore the invariant.
         while messages and messages[0]["role"] != "user":
             messages.pop(0)
+
+        # Run-context injection (slice ④): when the request carries a run_id,
+        # prepend a compact preamble to the final (user) message in-memory ONLY.
+        # - NOT written to chat_messages (keeps stored history clean).
+        # - NOT placed in the cached system block (preserves prompt-cache stability).
+        # - Graceful no-op when run_id is absent/empty or the run is not found.
+        if run_id and messages and messages[-1]["role"] == "user":
+            run_data = get_run_results(run_id, db_path)
+            if "error" not in run_data:
+                preamble = (
+                    f"[Run context for run_id={run_id!r}, name={run_data.get('name')!r}: "
+                    f"{json.dumps(run_data.get('summary', {}), ensure_ascii=False)}]\n\n"
+                )
+                original_content: str = str(messages[-1]["content"])
+                messages[-1] = dict(messages[-1])
+                messages[-1]["content"] = preamble + original_content
 
         # Request params (dict[str, Any] splat to stay mypy --strict compatible
         # with the installed anthropic 0.97.0 stubs that predate output_config /
