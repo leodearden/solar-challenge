@@ -362,6 +362,66 @@ def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any
         return {"error": f"Database error fetching run {run_id_or_name!r}: {exc}"}
 
 
+def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
+    """Return a list of recent simulation runs, newest first.
+
+    Read-only SELECT on the runs table; limit is clamped to [1, 50] so callers
+    cannot request an unbounded result set.  Returns identifying fields plus key
+    summary metrics for each run.
+
+    Args:
+        limit:   Maximum number of runs to return (clamped to 1–50; defaults to
+                 10 when <= 0).
+        db_path: Path to the SQLite database file.
+
+    Returns:
+        ``{"runs": [...]}`` where each entry has ``run_id``, ``name``, ``type``,
+        ``status``, ``created_at``, ``n_homes``, ``total_generation_kwh``, and
+        ``self_consumption_ratio``.  Returns ``{"runs": []}`` on an empty table.
+        On any DB error returns ``{"runs": [], "error": "<reason>"}``.
+        Never raises.
+    """
+    from solar_challenge.web.database import get_db
+
+    # Clamp limit to a sane range; treat <= 0 as "use default 10"
+    _DEFAULT_LIMIT = 10
+    _MAX_LIMIT = 50
+    effective_limit = max(1, min(limit if limit > 0 else _DEFAULT_LIMIT, _MAX_LIMIT))
+
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, name, type, status, created_at, n_homes, summary_json "
+                "FROM runs ORDER BY created_at DESC LIMIT ?",
+                (effective_limit,),
+            )
+            rows = cursor.fetchall()
+
+        runs: list[dict[str, Any]] = []
+        for row in rows:
+            summary_raw: Any = row["summary_json"]
+            summary: dict[str, Any] = json.loads(summary_raw) if summary_raw else {}
+
+            entry: dict[str, Any] = {
+                "run_id": row["id"],
+                "name": row["name"],
+                "type": row["type"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "n_homes": row["n_homes"],
+                # Key summary metrics (omit raw summary_json blob)
+                "total_generation_kwh": summary.get("total_generation_kwh"),
+                "self_consumption_ratio": summary.get("self_consumption_ratio"),
+            }
+            runs.append(entry)
+
+        return {"runs": runs}
+
+    except Exception as exc:
+        return {"runs": [], "error": f"Database error listing recent runs: {exc}"}
+
+
 def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
     """Route a tool call to its handler and return the result dict.
 
