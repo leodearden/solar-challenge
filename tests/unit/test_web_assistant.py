@@ -2171,3 +2171,119 @@ class TestRunHomeSimulation:
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — run_fleet_simulation unit tests (step-3 RED)
+# ---------------------------------------------------------------------------
+
+class TestRunFleetSimulation:
+    """Tests for run_fleet_simulation(params, job_manager, db_path, data_dir) -> dict."""
+
+    def _make_jm(self) -> MagicMock:
+        """Return a MagicMock job_manager with submit_fleet_job stubbed."""
+        jm = MagicMock()
+        jm.submit_fleet_job.return_value = ("job-f", "run-f")
+        return jm
+
+    def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
+        """run_fleet_simulation returns {run_id, results_url} for fleet."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
+        result = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("run_id") == "run-f", (
+            f"Expected run_id='run-f'; got {result.get('run_id')!r}"
+        )
+        assert result.get("results_url") == "/results/fleet/run-f", (
+            f"Expected results_url='/results/fleet/run-f'; got {result.get('results_url')!r}"
+        )
+
+    def test_submit_fleet_job_called_with_correct_configs_list(self, tmp_path: Path) -> None:
+        """submit_fleet_job called once; configs is list of length n_homes with correct pv."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert isinstance(configs, list), f"Expected configs to be a list; got {type(configs)}"
+        assert len(configs) == 3, f"Expected 3-length configs list; got {len(configs)}"
+        for i, cfg in enumerate(configs):
+            assert hasattr(cfg, "pv_config"), (
+                f"configs[{i}] expected to have pv_config; got {type(cfg)}"
+            )
+            assert cfg.pv_config.capacity_kw == 4.0, (
+                f"configs[{i}].pv_config.capacity_kw expected 4.0; got {cfg.pv_config.capacity_kw}"
+            )
+
+    def test_n_homes_clamped_to_max_100(self, tmp_path: Path) -> None:
+        """n_homes=9999 results in configs list clamped to <= 100."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 9999, "pv_kw": 4, "location": "bristol", "days": 7}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert len(configs) <= 100, (
+            f"Expected n_homes clamped to <= 100; got {len(configs)}"
+        )
+
+    def test_n_homes_zero_clamped_to_at_least_1(self, tmp_path: Path) -> None:
+        """n_homes=0 is clamped to at least 1 (no empty fleet)."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 0, "pv_kw": 4, "location": "bristol", "days": 7}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert len(configs) >= 1, (
+            f"Expected n_homes=0 clamped to >= 1; got {len(configs)}"
+        )
+
+    def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
+        """Invalid pv_kw returns error dict; submit_fleet_job NOT called; no raise."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 3, "pv_kw": 999, "location": "bristol", "days": 7}
+
+        try:
+            result = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        except Exception as exc:
+            raise AssertionError(
+                f"run_fleet_simulation should not raise on invalid params; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key; got {result}"
+        jm.submit_fleet_job.assert_not_called()
+
+    def test_job_manager_none_returns_graceful_error(self, tmp_path: Path) -> None:
+        """job_manager=None returns error dict, no raise."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        params = {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": 7}
+
+        try:
+            result = run_fleet_simulation(params, None, str(tmp_path / "t.db"), str(tmp_path))
+        except Exception as exc:
+            raise AssertionError(
+                f"run_fleet_simulation should not raise when job_manager=None; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
