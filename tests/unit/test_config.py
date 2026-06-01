@@ -2306,6 +2306,58 @@ class TestParsePVConfig:
         assert pv.degradation_rate_per_year == 0.005
 
 
+class TestGenerateHomesFromDistributionDegradation:
+    """Tests that generate_homes_from_distribution threads age fields into each home's PVConfig."""
+
+    def test_scalar_age_reaches_all_homes(self) -> None:
+        """A fixed system_age_years scalar is present in every home's PVConfig."""
+        config = FleetDistributionConfig(
+            n_homes=10,
+            pv=PVDistributionConfig(capacity_kw=4.0, system_age_years=20.0),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        for home in homes:
+            assert home.pv_config.system_age_years == 20.0
+            assert home.pv_config.degradation_rate_per_year == 0.005  # default
+
+    def test_distribution_age_varies_across_homes(self) -> None:
+        """A NormalDistribution on system_age_years produces varying ages within [min, max]."""
+        config = FleetDistributionConfig(
+            n_homes=20,
+            pv=PVDistributionConfig(
+                capacity_kw=4.0,
+                system_age_years=NormalDistribution(mean=15.0, std=3.0, min=0.0, max=30.0),
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        ages = [home.pv_config.system_age_years for home in homes]
+        assert len(set(ages)) > 1, "Ages should vary across homes"
+        assert all(0.0 <= age <= 30.0 for age in ages), "Ages must stay within [0, 30]"
+
+    def test_scalar_age_preserves_rng_reproducibility(self) -> None:
+        """Two runs with the same scalar-age config and seed produce identical capacity sequences."""
+        config = FleetDistributionConfig(
+            n_homes=10,
+            pv=PVDistributionConfig(
+                capacity_kw=WeightedDiscreteDistribution(
+                    values=[3.0, 4.0, 5.0], weights=[0.3, 0.4, 0.3]
+                ),
+                system_age_years=20.0,
+            ),
+            load=LoadDistributionConfig(),
+            seed=99,
+        )
+        homes_a = generate_homes_from_distribution(config, Location.bristol())
+        homes_b = generate_homes_from_distribution(config, Location.bristol())
+        caps_a = [h.pv_config.capacity_kw for h in homes_a]
+        caps_b = [h.pv_config.capacity_kw for h in homes_b]
+        assert caps_a == caps_b
+
+
 class TestParsePVDistributionConfigDegradation:
     """Tests that _parse_pv_distribution_config threads degradation keys into PVDistributionConfig."""
 
