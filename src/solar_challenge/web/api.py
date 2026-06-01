@@ -26,6 +26,7 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import get_storage, resolve_location
 
@@ -93,6 +94,38 @@ def _parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
     start = str(start_raw) if start_raw else "2024-01-01"
     end = str(end_raw) if end_raw else "2024-12-31"
     return start, end
+
+
+def _parse_seg_config(seg_data: dict[str, Any] | None) -> SEGTariff | None:
+    """Parse a 'seg' sub-dict from the request body into a SEGTariff.
+
+    Resolution priority (mirrors config._parse_tariff_config naming convention):
+    1. ``{"preset": "<key>"}`` — resolved via :func:`resolve_seg_tariff`; raises
+       ``ValueError`` for unknown presets (surfaces as HTTP 400).
+    2. ``{"rate_pence_per_kwh": <float>}`` — constructs
+       ``SEGTariff(name="Custom", rate_pence_per_kwh=float(rate))``;
+       :class:`SEGTariff`'s ``__post_init__`` raises ``ValueError`` for negative
+       rates (surfaces as HTTP 400 via the endpoint's existing handler).
+    3. Absent or falsy ``seg_data`` → ``None`` (back-compatible default).
+
+    Args:
+        seg_data: The value of ``data.get("seg")`` from the request body, or None.
+
+    Returns:
+        A :class:`SEGTariff` instance, or ``None`` if *seg_data* is absent/falsy.
+
+    Raises:
+        ValueError: For unknown preset keys or negative rates.
+    """
+    if not seg_data:
+        return None
+    preset = seg_data.get("preset")
+    if preset:
+        return resolve_seg_tariff(str(preset))
+    rate = seg_data.get("rate_pence_per_kwh")
+    if rate is not None:
+        return SEGTariff(name="Custom", rate_pence_per_kwh=float(rate))
+    return None
 
 
 def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
@@ -206,12 +239,16 @@ def _parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, 
     except ConfigurationError as exc:
         raise ValueError(str(exc)) from exc
 
+    # Build optional SEG export-rate config (ValueError on bad input → HTTP 400)
+    seg_tariff = _parse_seg_config(data.get("seg"))
+
     home_config = HomeConfig(
         pv_config=pv_config,
         load_config=load_config,
         battery_config=battery_config,
         heat_pump_config=heat_pump_config,
         tariff_config=tariff_config,
+        seg_tariff=seg_tariff,
         location=loc,
         name=name or "Web Simulation",
     )
