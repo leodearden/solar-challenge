@@ -345,6 +345,79 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["limit"],
         },
     },
+    # --- Slice ⑤: trigger tools (appended after slice ④ read-only tools) ---
+    {
+        "name": "run_home_simulation",
+        "description": (
+            "Submit a single-home simulation job and return the run id and a "
+            "URL to the results page.  Use this when the user asks to run or "
+            "start a home simulation with specific PV/battery parameters."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pv_kw": {
+                    "type": "number",
+                    "description": "PV array capacity in kW (0.5–20).",
+                },
+                "battery_kwh": {
+                    "type": "number",
+                    "description": "Battery capacity in kWh (0 = no battery).",
+                },
+                "consumption_kwh": {
+                    "type": "number",
+                    "description": "Annual household electricity consumption in kWh.",
+                },
+                "occupants": {
+                    "type": "integer",
+                    "description": "Number of household occupants (default 3).",
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Simulation duration in days (default 7).",
+                },
+            },
+            "required": ["pv_kw"],
+        },
+    },
+    {
+        "name": "run_fleet_simulation",
+        "description": (
+            "Submit a homogeneous N-home fleet simulation job and return the "
+            "run id and a URL to the fleet results page.  Use this when the "
+            "user asks to run a fleet or multi-home simulation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n_homes": {
+                    "type": "integer",
+                    "description": "Number of homes in the fleet (1–100).",
+                },
+                "pv_kw": {
+                    "type": "number",
+                    "description": "PV capacity per home in kW (0.5–20).",
+                },
+                "battery_kwh": {
+                    "type": "number",
+                    "description": "Battery capacity per home in kWh (0 = no battery).",
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Simulation duration in days (default 7).",
+                },
+            },
+            "required": ["n_homes"],
+        },
+    },
 ]
 
 
@@ -465,19 +538,159 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
         return {"runs": [], "error": f"Database error listing recent runs: {exc}"}
 
 
+def run_home_simulation(
+    params: dict[str, Any],
+    job_manager: Any,
+    db_path: "str | Path",
+    data_dir: "str | Path",
+) -> dict[str, Any]:
+    """Submit a home simulation job via the JobManager and return {run_id, results_url}.
+
+    Parses *params* using the shared ``_parse_home_config`` helper from
+    ``solar_challenge.web.api`` (deferred import to avoid circular imports).
+    Returns a graceful ``{"error": ...}`` dict when *job_manager* is None or
+    when the params fail validation.  Never raises.
+
+    Args:
+        params:      Flat parameter dict (pv_kw, battery_kwh, occupants,
+                     location, days, name, …) — same shape as the JSON body
+                     accepted by POST /api/simulate/home.
+        job_manager: A ``JobManager`` instance (or ``None``).
+        db_path:     Path to the SQLite database.
+        data_dir:    Root directory for storing run artefacts.
+
+    Returns:
+        ``{"run_id": str, "results_url": str}`` on success, or
+        ``{"error": str}`` on failure.  Never raises.
+    """
+    if job_manager is None:
+        return {"error": "run_home_simulation requires a running JobManager (job_manager is None)"}
+
+    from solar_challenge.web.api import _parse_home_config  # deferred to avoid circularity
+
+    # Inject the documented default (7 days) when 'days' is absent OR explicitly None.
+    # A caller-supplied non-None 'days' always wins because **params overrides the sentinel
+    # key; the caller's tool_input dict is not mutated (we build a new dict).
+    # The extra None-check is needed because {"days": 7, **params} leaves days=None when
+    # the model emits an explicit null — _parse_date_range would then fall through to the
+    # full 2024 calendar year (~366 days), contradicting the schema's "(default 7)".
+    effective_params: dict[str, Any] = {"days": 7, **params}
+    if effective_params.get("days") is None:
+        effective_params["days"] = 7
+
+    try:
+        home_config, start_date, end_date, name = _parse_home_config(effective_params)
+    except (ValueError, TypeError) as exc:
+        return {"error": f"Invalid simulation parameters: {exc}"}
+
+    try:
+        _job_id, run_id = job_manager.submit_home_job(
+            config=home_config,
+            start_date=start_date,
+            end_date=end_date,
+            db_path=str(db_path),
+            data_dir=str(data_dir),
+            name=name,
+        )
+    except Exception as exc:
+        return {"error": f"Failed to submit home simulation job: {exc}"}
+
+    return {"run_id": run_id, "results_url": f"/results/home/{run_id}"}
+
+
+def run_fleet_simulation(
+    params: dict[str, Any],
+    job_manager: Any,
+    db_path: "str | Path",
+    data_dir: "str | Path",
+) -> dict[str, Any]:
+    """Submit a fleet simulation job via the JobManager and return {run_id, results_url}.
+
+    Builds a homogeneous N-home fleet by parsing the per-home param dict
+    (minus ``n_homes``) N times using ``_parse_home_config``.  ``n_homes``
+    is clamped to [1, 100] to protect the single-worker JobManager.
+
+    Args:
+        params:      Flat parameter dict including ``n_homes`` plus the per-home
+                     fields accepted by ``_parse_home_config``
+                     (pv_kw, battery_kwh, location, days, …).
+        job_manager: A ``JobManager`` instance (or ``None``).
+        db_path:     Path to the SQLite database.
+        data_dir:    Root directory for storing run artefacts.
+
+    Returns:
+        ``{"run_id": str, "results_url": str}`` on success, or
+        ``{"error": str}`` on failure.  Never raises.
+    """
+    if job_manager is None:
+        return {"error": "run_fleet_simulation requires a running JobManager (job_manager is None)"}
+
+    from solar_challenge.web.api import _parse_home_config  # deferred
+
+    # Clamp n_homes to [1, 100]
+    try:
+        n_homes: int = max(1, min(int(params.get("n_homes", 1)), 100))
+    except (ValueError, TypeError):
+        n_homes = 1
+
+    # Build per-home dict by excluding the fleet-level n_homes key
+    per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
+    # Inject the documented default (7 days) when absent OR explicitly None.
+    # setdefault only guards absent keys; an explicit None bypasses it and would
+    # fall through to _parse_date_range's full-year default — check both cases.
+    per_home.setdefault("days", 7)
+    if per_home.get("days") is None:
+        per_home["days"] = 7
+
+    # Validate once; if it fails, return early without submitting
+    try:
+        home_config_0, start_date, end_date, name = _parse_home_config(per_home)
+    except (ValueError, TypeError) as exc:
+        return {"error": f"Invalid simulation parameters: {exc}"}
+
+    # Build the homogeneous configs list.  HomeConfig is a frozen dataclass so all
+    # N references can safely share the same immutable object — re-parsing N times
+    # adds no diversity and just wastes CPU.
+    # Intentional design: for this slice the fleet is homogeneous (identical params
+    # for every home).  Per-home variation (diverse seeds/capacities via distribution
+    # configs) is deferred to the P2 distribution-runner path.
+    configs: list[Any] = [home_config_0] * n_homes
+
+    try:
+        _job_id, run_id = job_manager.submit_fleet_job(
+            configs=configs,
+            start_date=start_date,
+            end_date=end_date,
+            db_path=str(db_path),
+            data_dir=str(data_dir),
+            name=name or "Fleet Simulation",
+        )
+    except Exception as exc:
+        return {"error": f"Failed to submit fleet simulation job: {exc}"}
+
+    return {"run_id": run_id, "results_url": f"/results/fleet/{run_id}"}
+
+
 def _dispatch_tool(
     name: str,
     tool_input: dict[str, Any],
     db_path: "str | Path | None" = None,
+    job_manager: Any = None,
+    data_dir: "str | Path | None" = None,
 ) -> dict[str, Any]:
     """Route a tool call to its handler and return the result dict.
 
     Args:
-        name:       The tool name as sent by the model.
-        tool_input: The validated input dict from the model's tool_use block.
-        db_path:    Optional path to the SQLite database file.  Required for
-                    DB-backed tools (``get_run_results``, ``list_recent_runs``);
-                    those tools return a graceful ``{"error": ...}`` when None.
+        name:        The tool name as sent by the model.
+        tool_input:  The validated input dict from the model's tool_use block.
+        db_path:     Optional path to the SQLite database file.  Required for
+                     DB-backed tools (``get_run_results``, ``list_recent_runs``);
+                     those tools return a graceful ``{"error": ...}`` when None.
+        job_manager: Optional JobManager instance.  Required for trigger tools
+                     (``run_home_simulation``, ``run_fleet_simulation``); those
+                     tools return a graceful ``{"error": ...}`` when None.
+        data_dir:    Optional path to the run data directory.  Required for
+                     trigger tools alongside *job_manager*.
 
     Returns:
         The handler's result dict, or ``{"error": "..."}`` for unknown names.
@@ -506,6 +719,14 @@ def _dispatch_tool(
         except (ValueError, TypeError):
             limit = 10
         return list_recent_runs(limit, db_path)
+    if name == "run_home_simulation":
+        _db = str(db_path) if db_path is not None else ""
+        _dir = str(data_dir) if data_dir is not None else ""
+        return run_home_simulation(dict(tool_input), job_manager, _db, _dir)
+    if name == "run_fleet_simulation":
+        _db = str(db_path) if db_path is not None else ""
+        _dir = str(data_dir) if data_dir is not None else ""
+        return run_fleet_simulation(dict(tool_input), job_manager, _db, _dir)
     all_names = ", ".join(t["name"] for t in _TOOLS)
     return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
 
@@ -577,6 +798,8 @@ def chat() -> Response:
     run_id: str = str(data.get("run_id", "")).strip()
     sid = _session_id()
     db_path = current_app.config["DATABASE"]
+    data_dir: str = str(current_app.config.get("DATA_DIR", ""))
+    job_manager: Any = current_app.extensions.get("job_manager")
 
     def generate() -> Generator[str, None, None]:
         # Pre-check: API key must be set
@@ -726,7 +949,9 @@ def chat() -> Response:
                         )
 
                         # Dispatch to the handler and collect the result.
-                        tool_result = _dispatch_tool(block_name, block_input, db_path)
+                        tool_result = _dispatch_tool(
+                            block_name, block_input, db_path, job_manager, data_dir
+                        )
                         invoked_tools.append(block_name)
 
                         tool_result_content.append({

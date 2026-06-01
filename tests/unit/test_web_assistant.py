@@ -969,12 +969,19 @@ class TestToolSurface:
     """Tests for _TOOLS list and _dispatch_tool router."""
 
     def test_tools_fixed_order_for_cache_stability(self) -> None:
-        """[t['name'] for t in _TOOLS] == 4-tool order (fixed, cache-safe, slice ④ updated)."""
+        """[t['name'] for t in _TOOLS] == 6-tool order (fixed, cache-safe, slice ⑤ updated)."""
         from solar_challenge.web.assistant import _TOOLS
 
         names = [t["name"] for t in _TOOLS]
-        assert names == ["explain_metric", "suggest_config", "get_run_results", "list_recent_runs"], (
-            f"Expected fixed 4-tool order, got {names}"
+        assert names == [
+            "explain_metric",
+            "suggest_config",
+            "get_run_results",
+            "list_recent_runs",
+            "run_home_simulation",
+            "run_fleet_simulation",
+        ], (
+            f"Expected fixed 6-tool order, got {names}"
         )
 
     def test_every_tool_entry_has_required_keys(self) -> None:
@@ -1258,7 +1265,7 @@ class TestToolUseLoop:
         client: FlaskClient,
         sequence_mock_anthropic: dict[str, Any],
     ) -> None:
-        """stream() kwargs carry 'tools' with 4-tool names in fixed order (slice ④ updated)."""
+        """stream() kwargs carry 'tools' with 6-tool names in fixed order (slice ⑤ updated)."""
         sequence_mock_anthropic["set_streams"]([
             make_end_turn_stream(["reply"]),
         ])
@@ -1270,8 +1277,15 @@ class TestToolUseLoop:
         first_kwargs = call_kwargs_list[0]
         assert "tools" in first_kwargs, f"Expected 'tools' in stream() kwargs: {first_kwargs.keys()}"
         tool_names = [t["name"] for t in first_kwargs["tools"]]
-        assert tool_names == ["explain_metric", "suggest_config", "get_run_results", "list_recent_runs"], (
-            f"Expected 4-tool order, got {tool_names}"
+        assert tool_names == [
+            "explain_metric",
+            "suggest_config",
+            "get_run_results",
+            "list_recent_runs",
+            "run_home_simulation",
+            "run_fleet_simulation",
+        ], (
+            f"Expected 6-tool order, got {tool_names}"
         )
 
     def test_done_frame_terminates_stream(
@@ -2055,4 +2069,726 @@ class TestRunContextInjection:
         assert last_msg["content"] == "plain message no run", (
             f"Without run_id, last message content should be the raw user text; "
             f"got: {last_msg['content']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — run_home_simulation unit tests (step-1 RED)
+# ---------------------------------------------------------------------------
+
+class TestRunHomeSimulation:
+    """Tests for run_home_simulation(params, job_manager, db_path, data_dir) -> dict."""
+
+    def _make_jm(self) -> MagicMock:
+        """Return a MagicMock job_manager with submit_home_job stubbed."""
+        jm = MagicMock()
+        jm.submit_home_job.return_value = ("job-h", "run-h")
+        return jm
+
+    def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
+        """run_home_simulation returns {run_id, results_url} with correct values."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+        result = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("run_id") == "run-h", (
+            f"Expected run_id='run-h'; got {result.get('run_id')!r}"
+        )
+        assert result.get("results_url") == "/results/home/run-h", (
+            f"Expected results_url='/results/home/run-h'; got {result.get('results_url')!r}"
+        )
+
+    def test_submit_home_job_called_with_correct_config(self, tmp_path: Path) -> None:
+        """submit_home_job called once; config has correct pv_kw and battery_kwh."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+
+        # config should be a HomeConfig with pv 4.0 and battery 5.0
+        config = call_kwargs.kwargs.get("config") or call_kwargs.args[0]
+        assert hasattr(config, "pv_config"), (
+            f"Expected config to have pv_config; got {type(config)}"
+        )
+        assert config.pv_config.capacity_kw == 4.0, (
+            f"Expected pv capacity_kw=4.0; got {config.pv_config.capacity_kw}"
+        )
+        assert config.battery_config is not None, "Expected battery_config to be set"
+        assert config.battery_config.capacity_kwh == 5.0, (
+            f"Expected battery capacity_kwh=5.0; got {config.battery_config.capacity_kwh}"
+        )
+
+    def test_days_drives_start_end_window(self, tmp_path: Path) -> None:
+        """days parameter is reflected in the start/end dates passed to submit_home_job."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        params_7 = {"pv_kw": 4, "days": 7, "location": "bristol"}
+        params_30 = {"pv_kw": 4, "days": 30, "location": "bristol"}
+
+        run_home_simulation(params_7, jm, str(tmp_path / "t7.db"), str(tmp_path))
+        call_7 = jm.submit_home_job.call_args
+        start_7 = call_7.kwargs.get("start_date") or call_7.args[1]
+        end_7 = call_7.kwargs.get("end_date") or call_7.args[2]
+        span_7 = (end_7 - start_7).days
+
+        jm.reset_mock()
+        jm.submit_home_job.return_value = ("job-h", "run-h")
+
+        run_home_simulation(params_30, jm, str(tmp_path / "t30.db"), str(tmp_path))
+        call_30 = jm.submit_home_job.call_args
+        start_30 = call_30.kwargs.get("start_date") or call_30.args[1]
+        end_30 = call_30.kwargs.get("end_date") or call_30.args[2]
+        span_30 = (end_30 - start_30).days
+
+        assert span_30 > span_7, (
+            f"Expected 30-day span ({span_30}) > 7-day span ({span_7})"
+        )
+
+    def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
+        """Invalid pv_kw (out of 0.5-20 range) returns error dict; submit not called; no raise."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        params = {"pv_kw": 999, "battery_kwh": 5, "days": 7, "location": "bristol"}
+
+        try:
+            result = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        except Exception as exc:
+            raise AssertionError(
+                f"run_home_simulation should not raise on invalid params; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key; got {result}"
+        jm.submit_home_job.assert_not_called()
+
+    def test_job_manager_none_returns_graceful_error(self, tmp_path: Path) -> None:
+        """job_manager=None returns error dict, no raise."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+
+        try:
+            result = run_home_simulation(params, None, str(tmp_path / "t.db"), str(tmp_path))
+        except Exception as exc:
+            raise AssertionError(
+                f"run_home_simulation should not raise when job_manager=None; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+
+    def test_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
+        """When 'days' is absent the window passed to submit_home_job is 7 days, not the full year."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        # No 'days' key — handler must default to 7
+        params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
+        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 6, (
+            f"Expected 7-day window (span=6) when 'days' omitted; got span={span}. "
+            "Handler must default to 7 days, not the full calendar year."
+        )
+        assert span != 365, (
+            "Handler is using the full-year fallback instead of the documented 7-day default"
+        )
+
+    def test_explicit_days_honored_over_default(self, tmp_path: Path) -> None:
+        """A caller-supplied 'days' value is not overwritten by the default."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        # Explicit days=30 must produce a 30-day window (span=29)
+        params: dict[str, Any] = {"pv_kw": 4, "days": 30, "location": "bristol"}
+        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 29, (
+            f"Expected 30-day window (span=29) when days=30; got span={span}. "
+            "Caller-supplied 'days' must not be clobbered by the default."
+        )
+
+    def test_home_days_none_defaults_to_7(self, tmp_path: Path) -> None:
+        """Explicit days=None is treated as absent — handler falls back to 7-day window."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
+        params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
+        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 6, (
+            f"Expected 7-day window (span=6) when days=None; got span={span}. "
+            "Explicit None must normalise to the 7-day default, not the full calendar year."
+        )
+        assert span != 365, (
+            "Handler uses full-year fallback for days=None instead of the 7-day default"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — run_fleet_simulation unit tests (step-3 RED)
+# ---------------------------------------------------------------------------
+
+class TestRunFleetSimulation:
+    """Tests for run_fleet_simulation(params, job_manager, db_path, data_dir) -> dict."""
+
+    def _make_jm(self) -> MagicMock:
+        """Return a MagicMock job_manager with submit_fleet_job stubbed."""
+        jm = MagicMock()
+        jm.submit_fleet_job.return_value = ("job-f", "run-f")
+        return jm
+
+    def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
+        """run_fleet_simulation returns {run_id, results_url} for fleet."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
+        result = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("run_id") == "run-f", (
+            f"Expected run_id='run-f'; got {result.get('run_id')!r}"
+        )
+        assert result.get("results_url") == "/results/fleet/run-f", (
+            f"Expected results_url='/results/fleet/run-f'; got {result.get('results_url')!r}"
+        )
+
+    def test_submit_fleet_job_called_with_correct_configs_list(self, tmp_path: Path) -> None:
+        """submit_fleet_job called once; configs is list of length n_homes with correct pv."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert isinstance(configs, list), f"Expected configs to be a list; got {type(configs)}"
+        assert len(configs) == 3, f"Expected 3-length configs list; got {len(configs)}"
+        for i, cfg in enumerate(configs):
+            assert hasattr(cfg, "pv_config"), (
+                f"configs[{i}] expected to have pv_config; got {type(cfg)}"
+            )
+            assert cfg.pv_config.capacity_kw == 4.0, (
+                f"configs[{i}].pv_config.capacity_kw expected 4.0; got {cfg.pv_config.capacity_kw}"
+            )
+
+    def test_n_homes_clamped_to_max_100(self, tmp_path: Path) -> None:
+        """n_homes=9999 results in configs list clamped to <= 100."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 9999, "pv_kw": 4, "location": "bristol", "days": 7}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert len(configs) <= 100, (
+            f"Expected n_homes clamped to <= 100; got {len(configs)}"
+        )
+
+    def test_n_homes_zero_clamped_to_at_least_1(self, tmp_path: Path) -> None:
+        """n_homes=0 is clamped to at least 1 (no empty fleet)."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 0, "pv_kw": 4, "location": "bristol", "days": 7}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert len(configs) >= 1, (
+            f"Expected n_homes=0 clamped to >= 1; got {len(configs)}"
+        )
+
+    def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
+        """Invalid pv_kw returns error dict; submit_fleet_job NOT called; no raise."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        params = {"n_homes": 3, "pv_kw": 999, "location": "bristol", "days": 7}
+
+        try:
+            result = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        except Exception as exc:
+            raise AssertionError(
+                f"run_fleet_simulation should not raise on invalid params; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key; got {result}"
+        jm.submit_fleet_job.assert_not_called()
+
+    def test_job_manager_none_returns_graceful_error(self, tmp_path: Path) -> None:
+        """job_manager=None returns error dict, no raise."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        params = {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": 7}
+
+        try:
+            result = run_fleet_simulation(params, None, str(tmp_path / "t.db"), str(tmp_path))
+        except Exception as exc:
+            raise AssertionError(
+                f"run_fleet_simulation should not raise when job_manager=None; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+
+    def test_fleet_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
+        """When 'days' is absent the fleet window passed to submit_fleet_job is 7 days, not the full year."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        # No 'days' key — handler must default to 7
+        params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol"}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 6, (
+            f"Expected 7-day window (span=6) when 'days' omitted; got span={span}. "
+            "Fleet handler must default to 7 days, not the full calendar year."
+        )
+        assert span != 365, (
+            "Fleet handler is using the full-year fallback instead of the documented 7-day default"
+        )
+
+    def test_fleet_days_none_defaults_to_7(self, tmp_path: Path) -> None:
+        """Explicit days=None in fleet params is treated as absent — handler falls back to 7."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
+        params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": None}
+        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        start_date = call_kwargs.kwargs.get("start_date") or call_kwargs.args[1]
+        end_date = call_kwargs.kwargs.get("end_date") or call_kwargs.args[2]
+        span = (end_date - start_date).days
+
+        assert span == 6, (
+            f"Expected 7-day window (span=6) when days=None; got span={span}. "
+            "Explicit None must normalise to the 7-day default, not the full calendar year."
+        )
+        assert span != 365, (
+            "Fleet handler uses full-year fallback for days=None instead of the 7-day default"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — tool surface + dispatch tests (step-5 RED)
+# ---------------------------------------------------------------------------
+
+class TestSlice5ToolSurface:
+    """Tool registration, schema, and dispatch tests for slice ⑤ trigger tools."""
+
+    def test_six_tools_fixed_order(self) -> None:
+        """_TOOLS has exactly 6 tools in the fixed cache-stable order."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        names = [t["name"] for t in _TOOLS]
+        assert names == [
+            "explain_metric",
+            "suggest_config",
+            "get_run_results",
+            "list_recent_runs",
+            "run_home_simulation",
+            "run_fleet_simulation",
+        ], f"Expected 6-tool order; got {names}"
+
+    def test_run_home_simulation_schema(self) -> None:
+        """run_home_simulation has object input_schema with pv_kw required."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        tool = next((t for t in _TOOLS if t["name"] == "run_home_simulation"), None)
+        assert tool is not None, "run_home_simulation missing from _TOOLS"
+        schema = tool["input_schema"]
+        assert schema.get("type") == "object", (
+            f"run_home_simulation input_schema.type must be 'object'; got {schema.get('type')!r}"
+        )
+        required = schema.get("required", [])
+        assert required, "run_home_simulation input_schema.required must be non-empty"
+        assert "pv_kw" in required, (
+            f"run_home_simulation must require 'pv_kw'; got {required}"
+        )
+
+    def test_run_fleet_simulation_schema(self) -> None:
+        """run_fleet_simulation has object input_schema with n_homes required."""
+        from solar_challenge.web.assistant import _TOOLS
+
+        tool = next((t for t in _TOOLS if t["name"] == "run_fleet_simulation"), None)
+        assert tool is not None, "run_fleet_simulation missing from _TOOLS"
+        schema = tool["input_schema"]
+        assert schema.get("type") == "object", (
+            f"run_fleet_simulation input_schema.type must be 'object'; got {schema.get('type')!r}"
+        )
+        required = schema.get("required", [])
+        assert required, "run_fleet_simulation input_schema.required must be non-empty"
+        assert "n_homes" in required, (
+            f"run_fleet_simulation must require 'n_homes'; got {required}"
+        )
+
+    def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
+        """_dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
+        from solar_challenge.web.assistant import _dispatch_tool, run_home_simulation
+
+        jm = MagicMock()
+        jm.submit_home_job.return_value = ("job-h", "run-h")
+
+        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+        direct = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm2 = MagicMock()
+        jm2.submit_home_job.return_value = ("job-h", "run-h")
+        via_dispatch = _dispatch_tool(
+            "run_home_simulation",
+            params,
+            db_path=str(tmp_path / "t.db"),
+            job_manager=jm2,
+            data_dir=str(tmp_path),
+        )
+
+        assert direct == via_dispatch, (
+            f"Expected dispatch result to match handler result; got {via_dispatch!r} vs {direct!r}"
+        )
+
+    def test_dispatch_run_fleet_simulation(self, tmp_path: Path) -> None:
+        """_dispatch_tool('run_fleet_simulation', {...}, job_manager=mock) returns handler result."""
+        from solar_challenge.web.assistant import _dispatch_tool, run_fleet_simulation
+
+        params = {"n_homes": 2, "pv_kw": 4, "location": "bristol", "days": 7}
+
+        jm = MagicMock()
+        jm.submit_fleet_job.return_value = ("job-f", "run-f")
+        direct = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+
+        jm2 = MagicMock()
+        jm2.submit_fleet_job.return_value = ("job-f", "run-f")
+        via_dispatch = _dispatch_tool(
+            "run_fleet_simulation",
+            params,
+            db_path=str(tmp_path / "t.db"),
+            job_manager=jm2,
+            data_dir=str(tmp_path),
+        )
+
+        assert direct == via_dispatch, (
+            f"Expected dispatch result to match handler result; got {via_dispatch!r} vs {direct!r}"
+        )
+
+    def test_dispatch_run_home_simulation_no_job_manager_returns_error(
+        self, tmp_path: Path
+    ) -> None:
+        """_dispatch_tool('run_home_simulation', {...}, job_manager=None) returns error dict."""
+        from solar_challenge.web.assistant import _dispatch_tool
+
+        params = {"pv_kw": 4, "days": 7, "location": "bristol"}
+
+        try:
+            result = _dispatch_tool(
+                "run_home_simulation",
+                params,
+                db_path=str(tmp_path / "t.db"),
+                job_manager=None,
+                data_dir=str(tmp_path),
+            )
+        except Exception as exc:
+            raise AssertionError(
+                f"_dispatch_tool should not raise when job_manager=None; got: {exc!r}"
+            ) from exc
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — end-to-end boundary tool-use signal tests (step-7 RED)
+# ---------------------------------------------------------------------------
+
+class TestSlice5RunToolSignal:
+    """E2E boundary tests: mock Anthropic + mock JobManager across the tool_result seam."""
+
+    def _parse_sse_events(self, body: str) -> list[dict[str, Any]]:
+        """Parse SSE body into list of {event, data} dicts."""
+        import json as _json
+
+        events = []
+        lines = body.splitlines()
+        i = 0
+        while i < len(lines):
+            event_type = None
+            data_str = None
+            while i < len(lines) and lines[i].strip():
+                line = lines[i]
+                if line.startswith("event: "):
+                    event_type = line[7:].strip()
+                elif line.startswith("data: "):
+                    data_str = line[6:]
+                i += 1
+            if event_type is not None:
+                parsed: Any = None
+                if data_str:
+                    try:
+                        parsed = _json.loads(data_str)
+                    except Exception:
+                        parsed = data_str
+                events.append({"event": event_type, "data": parsed})
+            i += 1
+        return events
+
+    def test_run_home_simulation_tool_use_signal(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config;
+        tool_result content contains /results/home/<run_id>."""
+        import json as _json
+
+        RUN_ID = "run-home-001"
+        JOB_ID = "job-home-001"
+        TOOL_ID = "toolu_rhs_e2e_001"
+
+        # Install mock JobManager with submit_home_job return value
+        jm = MagicMock()
+        jm.submit_home_job.return_value = (JOB_ID, RUN_ID)
+        app.extensions["job_manager"] = jm
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(
+                TOOL_ID,
+                "run_home_simulation",
+                {"pv_kw": 4, "battery_kwh": 5, "days": 7},
+            ),
+            make_end_turn_stream(["Started your run."]),
+        ])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "run a 4 kW home with a 5 kWh battery for 7 days"},
+        )
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        # 1. 'tool' SSE frame named 'run_home_simulation' must be emitted
+        events = self._parse_sse_events(body)
+        tool_events = [e for e in events if e["event"] == "tool"]
+        assert tool_events, f"Expected at least one 'tool' SSE frame; events: {events}"
+        assert tool_events[0]["data"]["name"] == "run_home_simulation", (
+            f"Expected tool frame 'run_home_simulation'; got: {tool_events[0]['data']}"
+        )
+
+        # 2. submit_home_job called once with correct HomeConfig
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs.args[0]
+        assert config.pv_config.capacity_kw == 4.0, (
+            f"Expected pv capacity_kw=4.0; got {config.pv_config.capacity_kw}"
+        )
+        assert config.battery_config is not None, "Expected battery_config set"
+        assert config.battery_config.capacity_kwh == 5.0, (
+            f"Expected battery capacity_kwh=5.0; got {config.battery_config.capacity_kwh}"
+        )
+
+        # 3. 2nd stream() call's messages[-1] tool_result content must contain results_url
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert len(call_kwargs_list) == 2, (
+            f"Expected stream() called exactly 2 times; got {len(call_kwargs_list)}"
+        )
+        second_messages = call_kwargs_list[1]["messages"]
+        last_msg = second_messages[-1]
+        assert last_msg["role"] == "user"
+        content = last_msg["content"]
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block in last user message; content: {content}"
+        )
+        result_content = tool_result_block.get("content", "")
+        expected_url = f"/results/home/{RUN_ID}"
+        assert expected_url in result_content, (
+            f"Expected '{expected_url}' in tool_result content.\n"
+            f"Content: {result_content!r}"
+        )
+
+    def test_run_fleet_simulation_tool_use_signal(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """run_fleet_simulation: submit_fleet_job receives 3-home configs list;
+        tool_result contains /results/fleet/<run_id>."""
+        RUN_ID = "run-fleet-001"
+        JOB_ID = "job-fleet-001"
+        TOOL_ID = "toolu_rfs_e2e_001"
+
+        jm = MagicMock()
+        jm.submit_fleet_job.return_value = (JOB_ID, RUN_ID)
+        app.extensions["job_manager"] = jm
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(
+                TOOL_ID,
+                "run_fleet_simulation",
+                {"n_homes": 3, "pv_kw": 4, "days": 7},
+            ),
+            make_end_turn_stream(["Fleet run started."]),
+        ])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "run a 3-home fleet"},
+        )
+        assert resp.status_code == 200
+        # Consume the response body to force the SSE generator to run to completion
+        resp.get_data(as_text=True)
+
+        # submit_fleet_job called once with a 3-home configs list
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert len(configs) == 3, (
+            f"Expected submit_fleet_job configs list of length 3; got {len(configs)}"
+        )
+
+        # 2nd stream's tool_result content must contain the fleet results_url
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert len(call_kwargs_list) == 2, (
+            f"Expected stream() called exactly 2 times; got {len(call_kwargs_list)}"
+        )
+        second_messages = call_kwargs_list[1]["messages"]
+        last_msg = second_messages[-1]
+        content = last_msg["content"]
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block; content: {content}"
+        )
+        result_content = tool_result_block.get("content", "")
+        expected_url = f"/results/fleet/{RUN_ID}"
+        assert expected_url in result_content, (
+            f"Expected '{expected_url}' in tool_result content.\n"
+            f"Content: {result_content!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — SLOW real-sim integration test (step-9)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+class TestSlice5RunHomeIntegration:
+    """SLOW: real 1-day Bristol home sim via real JobManager (excluded from fast verify).
+
+    Excluded from the standard verify loop by the 'slow' marker.  Run with
+    ``pytest -m slow`` when you need the anti-fake-done end-to-end proof.
+    """
+
+    def test_run_home_simulation_real_job_lands_in_runs(
+        self, app: Flask, tmp_path: Path
+    ) -> None:
+        """run_home_simulation() with the real JobManager creates a completed run."""
+        import time as _time
+
+        from solar_challenge.web.assistant import get_run_results, run_home_simulation
+
+        db_path: str = app.config["DATABASE"]
+        data_dir: str = app.config["DATA_DIR"]
+        job_manager = app.extensions.get("job_manager")
+        assert job_manager is not None, (
+            "Expected a real JobManager on app.extensions; got None. "
+            "Is the 'web' extra installed?"
+        )
+
+        result = run_home_simulation(
+            {
+                "pv_kw": 4.0,
+                "battery_kwh": 0,
+                "occupants": 3,
+                "location": "bristol",
+                "days": 1,
+            },
+            job_manager,
+            db_path,
+            data_dir,
+        )
+
+        assert "error" not in result, (
+            f"run_home_simulation returned an error: {result.get('error')}"
+        )
+        run_id: str = result.get("run_id", "")
+        results_url: str = result.get("results_url", "")
+        assert run_id, f"Expected non-empty run_id; got {run_id!r}"
+        assert results_url == f"/results/home/{run_id}", (
+            f"Expected results_url='/results/home/{run_id}'; got {results_url!r}"
+        )
+
+        # Poll (monotonic deadline ≤ 120 s) until the real sim completes.
+        deadline = _time.monotonic() + 120
+        status = "running"
+        while _time.monotonic() < deadline:
+            run_data = get_run_results(run_id, db_path)
+            status = run_data.get("status", "")
+            if status in ("completed", "failed"):
+                break
+            _time.sleep(2)
+
+        assert status == "completed", (
+            f"1-day Bristol sim did not reach 'completed' within 120 s; "
+            f"last status: {status!r}"
+        )
+
+        # Assert the completed run is fetchable with a non-None generation metric
+        run_data = get_run_results(run_id, db_path)
+        assert "error" not in run_data, f"get_run_results returned error: {run_data}"
+        summary = run_data.get("summary", {})
+        assert summary.get("total_generation_kwh") is not None, (
+            f"Expected non-None total_generation_kwh in completed run summary; "
+            f"got summary={summary!r}"
         )
