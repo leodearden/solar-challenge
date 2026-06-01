@@ -1,0 +1,62 @@
+# Bristol Arbitrage Demo — TOU Grid-Charging Economics Scenario
+#
+# Demonstrates battery arbitrage with Economy 7 pricing:
+# - Grid-charges overnight at off-peak rate (0.09 £/kWh, 00:30–07:30)
+# - Discharges into the evening peak (0.25 £/kWh), reducing net cost
+#
+# dispatch_strategy: tou_optimized routes through the function path
+# (simulate_timestep_tou + compute_grid_charge_power_kw in flow.py).
+# No battery.dispatch_strategy block — that would select the strategy path instead.
+#
+# use_stochastic: false gives the deterministic Elexon Profile Class 1 load
+# with a real evening peak at 18:00, ensuring the battery cycles fully on
+# any winter day (Jan daily demand ~11 kWh >> battery usable capacity ~4 kWh).
+
+name: Bristol Arbitrage Demo
+description: >
+  Single-home Economy 7 grid-charging arbitrage demonstration.
+  Charges battery overnight at 0.09 £/kWh, discharges into 0.25 £/kWh evening peak.
+  Run with dispatch_strategy: tou_optimized to activate the arbitrage controller.
+
+location:
+  latitude: 51.45
+  longitude: -2.58
+  timezone: Europe/London
+  altitude: 11.0
+  name: Bristol, UK
+
+# Short winter window for a fast demo (A/B test overrides start/end directly)
+period:
+  start_date: "2024-01-15"
+  end_date: "2024-01-15"
+
+home:
+  pv:
+    capacity_kw: 4.0
+    azimuth: 180
+    tilt: 35
+
+  battery:
+    capacity_kwh: 5.0
+    max_charge_kw: 2.5
+    max_discharge_kw: 2.5
+    grid_charging:
+      target_soc_fraction: 0.9
+    # No dispatch_strategy block here — use the function path (tou_optimized)
+
+  load:
+    annual_consumption_kwh: 3400
+    use_stochastic: false
+
+  tariff:
+    type: economy_7
+    off_peak_rate: 0.09
+    peak_rate: 0.25
+    off_peak_start: "00:30"
+    off_peak_end: "07:30"
+
+  dispatch_strategy: tou_optimized
+
+# SEG export pricing for real (non-zero PV) runs
+seg:
+  rate_pence_per_kwh: 15.0
