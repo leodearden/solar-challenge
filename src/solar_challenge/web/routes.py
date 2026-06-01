@@ -12,6 +12,7 @@ from flask import (
     url_for,
 )
 
+from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunStorage
 
@@ -94,6 +95,7 @@ def simulate_home_page() -> str:
     return str(render_template(
         "simulate/home.html",
         page="simulate-home",
+        seg_presets=SEG_PRESETS,
     ))
 
 
