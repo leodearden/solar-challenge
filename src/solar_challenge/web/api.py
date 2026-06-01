@@ -645,7 +645,10 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     # Validate service availability first — avoids wasted sampling on 503 path.
     job_manager = _get_job_manager()
 
-    from solar_challenge.web.fleet_config import form_to_fleet_distribution_config  # noqa: PLC0415
+    from solar_challenge.web.fleet_config import (  # noqa: PLC0415
+        apply_fleet_overlay,
+        form_to_fleet_distribution_config,
+    )
     from solar_challenge.config import (  # noqa: PLC0415
         _parse_fleet_distribution_config,
         generate_homes_from_distribution,
@@ -656,6 +659,16 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
         fleet_cfg = _parse_fleet_distribution_config(cfg_dict)
         loc = resolve_location(data.get("location", "bristol"))
         configs = generate_homes_from_distribution(fleet_cfg, loc)
+        # Apply fleet-wide overlay (tariff / dispatch / SEG) — mirrors single-home contract.
+        tariff_config = _parse_tariff_config(data.get("tariff"))
+        dispatch_strategy = _parse_dispatch_strategy_config(data.get("dispatch_strategy"))
+        seg_tariff = _parse_seg_config(data.get("seg"))
+        configs = apply_fleet_overlay(
+            configs,
+            tariff_config=tariff_config,
+            dispatch_strategy=dispatch_strategy,
+            seg_tariff=seg_tariff,
+        )
         start_s, end_s = _parse_date_range(data)
         start_date = pd.Timestamp(start_s, tz=loc.timezone)
         end_date = pd.Timestamp(end_s, tz=loc.timezone)
