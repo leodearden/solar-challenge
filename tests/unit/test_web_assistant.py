@@ -2427,3 +2427,178 @@ class TestSlice5ToolSurface:
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+
+
+# ---------------------------------------------------------------------------
+# Slice ⑤ — end-to-end boundary tool-use signal tests (step-7 RED)
+# ---------------------------------------------------------------------------
+
+class TestSlice5RunToolSignal:
+    """E2E boundary tests: mock Anthropic + mock JobManager across the tool_result seam."""
+
+    def _parse_sse_events(self, body: str) -> list[dict[str, Any]]:
+        """Parse SSE body into list of {event, data} dicts."""
+        import json as _json
+
+        events = []
+        lines = body.splitlines()
+        i = 0
+        while i < len(lines):
+            event_type = None
+            data_str = None
+            while i < len(lines) and lines[i].strip():
+                line = lines[i]
+                if line.startswith("event: "):
+                    event_type = line[7:].strip()
+                elif line.startswith("data: "):
+                    data_str = line[6:]
+                i += 1
+            if event_type is not None:
+                parsed: Any = None
+                if data_str:
+                    try:
+                        parsed = _json.loads(data_str)
+                    except Exception:
+                        parsed = data_str
+                events.append({"event": event_type, "data": parsed})
+            i += 1
+        return events
+
+    def test_run_home_simulation_tool_use_signal(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config;
+        tool_result content contains /results/home/<run_id>."""
+        import json as _json
+
+        RUN_ID = "run-home-001"
+        JOB_ID = "job-home-001"
+        TOOL_ID = "toolu_rhs_e2e_001"
+
+        # Install mock JobManager with submit_home_job return value
+        jm = MagicMock()
+        jm.submit_home_job.return_value = (JOB_ID, RUN_ID)
+        app.extensions["job_manager"] = jm
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(
+                TOOL_ID,
+                "run_home_simulation",
+                {"pv_kw": 4, "battery_kwh": 5, "days": 7},
+            ),
+            make_end_turn_stream(["Started your run."]),
+        ])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "run a 4 kW home with a 5 kWh battery for 7 days"},
+        )
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        # 1. 'tool' SSE frame named 'run_home_simulation' must be emitted
+        events = self._parse_sse_events(body)
+        tool_events = [e for e in events if e["event"] == "tool"]
+        assert tool_events, f"Expected at least one 'tool' SSE frame; events: {events}"
+        assert tool_events[0]["data"]["name"] == "run_home_simulation", (
+            f"Expected tool frame 'run_home_simulation'; got: {tool_events[0]['data']}"
+        )
+
+        # 2. submit_home_job called once with correct HomeConfig
+        jm.submit_home_job.assert_called_once()
+        call_kwargs = jm.submit_home_job.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs.args[0]
+        assert config.pv_config.capacity_kw == 4.0, (
+            f"Expected pv capacity_kw=4.0; got {config.pv_config.capacity_kw}"
+        )
+        assert config.battery_config is not None, "Expected battery_config set"
+        assert config.battery_config.capacity_kwh == 5.0, (
+            f"Expected battery capacity_kwh=5.0; got {config.battery_config.capacity_kwh}"
+        )
+
+        # 3. 2nd stream() call's messages[-1] tool_result content must contain results_url
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert len(call_kwargs_list) == 2, (
+            f"Expected stream() called exactly 2 times; got {len(call_kwargs_list)}"
+        )
+        second_messages = call_kwargs_list[1]["messages"]
+        last_msg = second_messages[-1]
+        assert last_msg["role"] == "user"
+        content = last_msg["content"]
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block in last user message; content: {content}"
+        )
+        result_content = tool_result_block.get("content", "")
+        expected_url = f"/results/home/{RUN_ID}"
+        assert expected_url in result_content, (
+            f"Expected '{expected_url}' in tool_result content.\n"
+            f"Content: {result_content!r}"
+        )
+
+    def test_run_fleet_simulation_tool_use_signal(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        sequence_mock_anthropic: dict[str, Any],
+    ) -> None:
+        """run_fleet_simulation: submit_fleet_job receives 3-home configs list;
+        tool_result contains /results/fleet/<run_id>."""
+        RUN_ID = "run-fleet-001"
+        JOB_ID = "job-fleet-001"
+        TOOL_ID = "toolu_rfs_e2e_001"
+
+        jm = MagicMock()
+        jm.submit_fleet_job.return_value = (JOB_ID, RUN_ID)
+        app.extensions["job_manager"] = jm
+
+        sequence_mock_anthropic["set_streams"]([
+            make_tool_use_stream(
+                TOOL_ID,
+                "run_fleet_simulation",
+                {"n_homes": 3, "pv_kw": 4, "days": 7},
+            ),
+            make_end_turn_stream(["Fleet run started."]),
+        ])
+
+        resp = client.post(
+            "/assistant/chat",
+            json={"message": "run a 3-home fleet"},
+        )
+        assert resp.status_code == 200
+
+        # submit_fleet_job called once with a 3-home configs list
+        jm.submit_fleet_job.assert_called_once()
+        call_kwargs = jm.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert len(configs) == 3, (
+            f"Expected submit_fleet_job configs list of length 3; got {len(configs)}"
+        )
+
+        # 2nd stream's tool_result content must contain the fleet results_url
+        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        assert len(call_kwargs_list) == 2, (
+            f"Expected stream() called exactly 2 times; got {len(call_kwargs_list)}"
+        )
+        second_messages = call_kwargs_list[1]["messages"]
+        last_msg = second_messages[-1]
+        content = last_msg["content"]
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block; content: {content}"
+        )
+        result_content = tool_result_block.get("content", "")
+        expected_url = f"/results/fleet/{RUN_ID}"
+        assert expected_url in result_content, (
+            f"Expected '{expected_url}' in tool_result content.\n"
+            f"Content: {result_content!r}"
+        )
