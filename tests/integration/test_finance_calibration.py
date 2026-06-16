@@ -388,3 +388,148 @@ class TestFinCalibrationScenarioParses:
             assert h.battery_config.capacity_kwh == pytest.approx(5.0), (
                 f"Home {i}: expected battery_kwh=5.0, got {h.battery_config.capacity_kwh}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Step-5: TestCalibrationCapexMethodAgreement — H6 capex gate (fast/no-PVGIS)
+# ---------------------------------------------------------------------------
+
+
+class TestCalibrationCapexMethodAgreement:
+    """H6 capex method-agreement tests (fast, no PVGIS) (task/48 step-5).
+
+    project_economics(spreadsheet_revenue_curve(...), scenario, finance) must
+    reproduce the spreadsheet capex cells exactly:
+    - Capital_Stack!B6 = £775,000 at 5 kWh per home (inp_Batt_kWh=5)
+    - Workings!C94 = £900,000 at 10 kWh per home (Workings build-up)
+    - Delta = £125,000 = 100 × 5 kWh × £250 (pure battery-size, §2.3)
+    """
+
+    def _make_spreadsheet_curve(self, asset_life_years: int = 25) -> "MultiYearCurve":  # type: ignore[name-defined]
+        """Build the [FIN]-assumption spreadsheet revenue curve."""
+        from solar_challenge.finance import spreadsheet_revenue_curve
+
+        return spreadsheet_revenue_curve(
+            n_homes=100,
+            pv_kwp=_FIN_GOLDEN["inp_kWp"],
+            kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
+            self_consumption_fraction=_FIN_SCF,
+            own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
+            export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
+            asset_life_years=asset_life_years,
+        )
+
+    def test_capex_5kwh_matches_capital_stack_b6(self) -> None:
+        """Capex for 100 × 5.5kWp + 5kWh must equal Capital_Stack!B6 = £775,000 exactly.
+
+        Arithmetic: 100 × (5.5×£1000 + £1000 + 5.0kWh×£250) = 100×£7,750 = £775,000
+        Cell ref: Capital_Stack!B6 = £775,000
+        """
+        from solar_challenge.finance import project_economics
+
+        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        finance = _make_finance_fin()
+        curve = self._make_spreadsheet_curve()
+
+        econ = project_economics(curve, scenario, finance)
+
+        assert econ.total_capex_gbp == pytest.approx(
+            _FIN_GOLDEN["capital_stack_b6"], abs=1.0
+        ), (
+            f"Capex (5 kWh) expected Capital_Stack!B6=£{_FIN_GOLDEN['capital_stack_b6']:,.2f}, "
+            f"got £{econ.total_capex_gbp:,.2f}"
+        )
+
+    def test_capex_5kwh_exact_arithmetic(self) -> None:
+        """Exact arithmetic check: 100×(5.5×1000+1000+5×250)=775000 matches cell."""
+        from solar_challenge.finance import project_economics
+
+        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        finance = _make_finance_fin()
+        curve = self._make_spreadsheet_curve()
+
+        econ = project_economics(curve, scenario, finance)
+
+        # Verify the arithmetic manually
+        expected = 100.0 * (5.5 * 1000.0 + 1000.0 + 5.0 * 250.0)
+        assert expected == 775000.0, "Sanity: arithmetic gives £775,000"
+        assert econ.total_capex_gbp == pytest.approx(expected, abs=1e-6)
+
+    def test_capex_10kwh_matches_workings_c94(self) -> None:
+        """Capex for 100 × 5.5kWp + 10kWh must equal Workings!C94 = £900,000.
+
+        Arithmetic: 100 × (5.5×£1000 + £1000 + 10kWh×£250) = 100×£9,000 = £900,000
+        Cell ref: Workings!C94 = £900,000
+        """
+        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
+
+        # 10 kWh fleet (Workings build-up basis)
+        scenario_10kwh = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=10.0)
+        finance = _make_finance_fin()
+        curve = spreadsheet_revenue_curve(
+            n_homes=100,
+            pv_kwp=5.5,
+            kwh_per_kwp=1050.0,
+            self_consumption_fraction=_FIN_SCF,
+            own_use_rate_pence_per_kwh=15.0,
+            export_rate_pence_per_kwh=6.0,
+            asset_life_years=25,
+        )
+
+        econ_10kwh = project_economics(curve, scenario_10kwh, finance)
+
+        assert econ_10kwh.total_capex_gbp == pytest.approx(
+            _FIN_GOLDEN["workings_c94"], abs=1.0
+        ), (
+            f"Capex (10 kWh) expected Workings!C94=£{_FIN_GOLDEN['workings_c94']:,.0f}, "
+            f"got £{econ_10kwh.total_capex_gbp:,.2f}"
+        )
+
+    def test_capex_delta_is_battery_size_difference(self) -> None:
+        """§2.3 delta: capex_10kwh − capex_5kwh == £125,000 == 100×5kWh×£250.
+
+        This is the §2.3 '£775k ↔ £900k' reconciliation:
+        Pure battery-size difference (inp_Batt_kWh=5 vs Workings 10 kWh), NOT an error.
+        """
+        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
+
+        curve = spreadsheet_revenue_curve(
+            n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
+            self_consumption_fraction=_FIN_SCF,
+            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
+            asset_life_years=25,
+        )
+        finance = _make_finance_fin()
+
+        econ_5 = project_economics(curve, _make_scenario_fin(battery_kwh=5.0), finance)
+        econ_10 = project_economics(curve, _make_scenario_fin(battery_kwh=10.0), finance)
+
+        delta = econ_10.total_capex_gbp - econ_5.total_capex_gbp
+        expected_delta = 100.0 * 5.0 * 250.0  # 100 homes × 5 kWh × £250/kWh
+
+        assert delta == pytest.approx(expected_delta, abs=1e-6), (
+            f"§2.3 capex delta: expected £{expected_delta:,.0f} (100×5kWh×£250), "
+            f"got £{delta:,.2f}"
+        )
+        assert delta == pytest.approx(125000.0, abs=1e-6), (
+            "Delta must equal £125,000 = 100 × 5 kWh × £250 (battery-size, NOT error)"
+        )
+
+    def test_capex_report_values(self) -> None:
+        """Sanity: report the capex values in assertion message for documentation."""
+        from solar_challenge.finance import project_economics
+
+        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        finance = _make_finance_fin()
+        curve = self._make_spreadsheet_curve()
+
+        econ = project_economics(curve, scenario, finance)
+
+        # Report: document the values in test output for the reconciliation note
+        print(
+            f"\n[CAPEX REPORT] Capital_Stack!B6={_FIN_GOLDEN['capital_stack_b6']:,.0f}; "
+            f"project_economics={econ.total_capex_gbp:,.2f}; "
+            f"delta={abs(econ.total_capex_gbp - _FIN_GOLDEN['capital_stack_b6']):.4f}"
+        )
+        # Must be within £1
+        assert abs(econ.total_capex_gbp - _FIN_GOLDEN["capital_stack_b6"]) < 1.0
