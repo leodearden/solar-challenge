@@ -266,14 +266,20 @@ class TestSpreadsheetRevenueCurve:
 
 
 class TestFinCalibrationScenarioParses:
-    """Fast tests for scenarios/bristol-fin-calibration.yaml loading (step-3)."""
+    """Fast tests for scenarios/bristol-fin-calibration.yaml loading (step-3).
+
+    The scenario uses fleet_distribution format (100 identical homes), which is
+    parsed via load_fleet_config (matching how the finance CLI loads scenarios).
+    Finance block is parsed separately via _parse_finance_config + load_config,
+    exactly as the finance CLI does internally.
+    """
 
     _SCENARIO_PATH = "scenarios/bristol-fin-calibration.yaml"
 
-    def _load(self) -> "ScenarioConfig":  # type: ignore[name-defined]
-        """Load the [FIN]-aligned calibration scenario from YAML."""
+    def _load_finance(self) -> "FinanceConfig":  # type: ignore[name-defined]
+        """Parse the finance block from the calibration scenario YAML."""
         from pathlib import Path
-        from solar_challenge.config import load_scenarios
+        from solar_challenge.config import _parse_finance_config, load_config
 
         path = Path(self._SCENARIO_PATH)
         if not path.exists():
@@ -281,9 +287,24 @@ class TestFinCalibrationScenarioParses:
                 f"Scenario file not found: {self._SCENARIO_PATH}. "
                 "Create it with step-4 impl."
             )
-        scenarios = load_scenarios(path)
-        assert len(scenarios) == 1, f"Expected 1 scenario, got {len(scenarios)}"
-        return scenarios[0]
+        raw = load_config(path)
+        finance = _parse_finance_config(raw.get("finance"))
+        assert finance is not None, "Expected finance block in scenario, got None"
+        return finance
+
+    def _load_homes(self) -> list:
+        """Parse the fleet homes from the calibration scenario YAML."""
+        from pathlib import Path
+        from solar_challenge.config import load_fleet_config
+
+        path = Path(self._SCENARIO_PATH)
+        if not path.exists():
+            pytest.fail(
+                f"Scenario file not found: {self._SCENARIO_PATH}. "
+                "Create it with step-4 impl."
+            )
+        fleet = load_fleet_config(path)
+        return list(fleet.homes)
 
     def test_scenario_file_exists(self) -> None:
         """scenarios/bristol-fin-calibration.yaml must exist on disk."""
@@ -292,76 +313,67 @@ class TestFinCalibrationScenarioParses:
             f"{self._SCENARIO_PATH} not found — create it in step-4"
         )
 
-    def test_scenario_parses_without_error(self) -> None:
-        """The scenario YAML must parse without raising exceptions."""
-        # Will raise if file missing or malformed
-        scenario = self._load()
-        assert scenario is not None
+    def test_finance_parses_without_error(self) -> None:
+        """The scenario YAML must parse finance block without raising exceptions."""
+        finance = self._load_finance()
+        assert finance is not None
 
     def test_scenario_has_finance_block(self) -> None:
         """Parsed scenario must have a finance block (not None)."""
-        scenario = self._load()
-        assert scenario.finance is not None, "Expected finance block, got None"
+        finance = self._load_finance()
+        assert finance is not None
 
     def test_finance_self_consumption_override(self) -> None:
         """finance.self_consumption_override must be 0.70 ([FIN] with-battery assumption)."""
-        scenario = self._load()
-        assert scenario.finance is not None
-        assert scenario.finance.self_consumption_override == pytest.approx(_FIN_SCF), (
+        finance = self._load_finance()
+        assert finance.self_consumption_override == pytest.approx(_FIN_SCF), (
             f"Expected self_consumption_override=0.70, "
-            f"got {scenario.finance.self_consumption_override}"
+            f"got {finance.self_consumption_override}"
         )
 
     def test_finance_grant_gbp(self) -> None:
         """finance.grant_gbp must be £250,000 ([FIN] grant)."""
-        scenario = self._load()
-        assert scenario.finance is not None
-        assert scenario.finance.grant_gbp == pytest.approx(
-            _FIN_GOLDEN["grant_gbp"]
-        )
+        finance = self._load_finance()
+        assert finance.grant_gbp == pytest.approx(_FIN_GOLDEN["grant_gbp"])
 
     def test_finance_equity_fraction(self) -> None:
         """finance.equity_fraction must be 0.75 ([FIN] equity split)."""
-        scenario = self._load()
-        assert scenario.finance is not None
-        assert scenario.finance.equity_fraction == pytest.approx(
-            _FIN_GOLDEN["equity_fraction"]
-        )
+        finance = self._load_finance()
+        assert finance.equity_fraction == pytest.approx(_FIN_GOLDEN["equity_fraction"])
 
     def test_finance_loan_term_years(self) -> None:
         """finance.loan_term_years must be 15 ([FIN] loan term)."""
-        scenario = self._load()
-        assert scenario.finance is not None
-        assert scenario.finance.loan_term_years == _FIN_GOLDEN["loan_term_years"]
+        finance = self._load_finance()
+        assert finance.loan_term_years == _FIN_GOLDEN["loan_term_years"]
 
     def test_finance_loan_rate(self) -> None:
         """finance.loan_rate must be 0.07 ([FIN] loan interest rate)."""
-        scenario = self._load()
-        assert scenario.finance is not None
-        assert scenario.finance.loan_rate == pytest.approx(_FIN_GOLDEN["loan_rate"])
+        finance = self._load_finance()
+        assert finance.loan_rate == pytest.approx(_FIN_GOLDEN["loan_rate"])
 
     def test_finance_pv_cost_per_kwp(self) -> None:
         """finance.pv_cost_per_kwp_gbp must be £1000 ([FIN] PV cost)."""
-        scenario = self._load()
-        assert scenario.finance is not None
-        assert scenario.finance.pv_cost_per_kwp_gbp == pytest.approx(1000.0)
+        finance = self._load_finance()
+        assert finance.pv_cost_per_kwp_gbp == pytest.approx(1000.0)
 
     def test_finance_battery_cost_per_kwh(self) -> None:
         """finance.battery_cost_per_kwh_gbp must be £250 ([FIN] battery cost)."""
-        scenario = self._load()
-        assert scenario.finance is not None
-        assert scenario.finance.battery_cost_per_kwh_gbp == pytest.approx(250.0)
+        finance = self._load_finance()
+        assert finance.battery_cost_per_kwh_gbp == pytest.approx(250.0)
 
     def test_finance_asset_life_years(self) -> None:
         """finance.asset_life_years must be 25."""
-        scenario = self._load()
-        assert scenario.finance is not None
-        assert scenario.finance.asset_life_years == 25
+        finance = self._load_finance()
+        assert finance.asset_life_years == 25
+
+    def test_fleet_is_100_homes(self) -> None:
+        """Fleet must have exactly 100 homes ([FIN] n_homes=100)."""
+        homes = self._load_homes()
+        assert len(homes) == 100, f"Expected 100 homes, got {len(homes)}"
 
     def test_fleet_is_homogeneous_5_5kwp(self) -> None:
         """All homes must have pv_kwp=5.5 ([FIN] inp_kWp=5.5)."""
-        scenario = self._load()
-        homes = scenario.homes or []
+        homes = self._load_homes()
         assert len(homes) == 100, f"Expected 100 homes, got {len(homes)}"
         for i, h in enumerate(homes):
             assert h.pv_config.capacity_kw == pytest.approx(5.5), (
@@ -370,8 +382,7 @@ class TestFinCalibrationScenarioParses:
 
     def test_fleet_is_homogeneous_5kwh_battery(self) -> None:
         """All homes must have battery_kwh=5.0 ([FIN] inp_Batt_kWh=5)."""
-        scenario = self._load()
-        homes = scenario.homes or []
+        homes = self._load_homes()
         for i, h in enumerate(homes):
             assert h.battery_config is not None, f"Home {i}: no battery config"
             assert h.battery_config.capacity_kwh == pytest.approx(5.0), (
