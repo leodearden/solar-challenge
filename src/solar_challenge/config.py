@@ -565,6 +565,11 @@ class FinanceConfig:
             raise ConfigurationError(
                 f"grant_gbp must be >= 0, got {self.grant_gbp}"
             )
+        # Inverter cost may be zero (opt-in default) but not negative
+        if self.inverter_cost_per_kw_gbp < 0.0:
+            raise ConfigurationError(
+                f"inverter_cost_per_kw_gbp must be >= 0, got {self.inverter_cost_per_kw_gbp}"
+            )
 
 
 @dataclass
