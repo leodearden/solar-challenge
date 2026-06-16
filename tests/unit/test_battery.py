@@ -395,6 +395,36 @@ class TestBatteryReadsSOCEffFromConfig:
         # Initial SOC: midpoint of 0.5-4.5 = 2.5
         assert battery.soc_kwh == 2.5
 
+    def test_constructor_arg_overrides_config_min_soc_fraction(self) -> None:
+        """Explicit min_soc_fraction arg overrides config value."""
+        cfg = BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.1, max_soc_fraction=0.9)
+        battery = Battery(cfg, min_soc_fraction=0.2)
+        assert battery.min_soc_fraction == 0.2
+
+    def test_constructor_arg_overrides_config_max_soc_fraction(self) -> None:
+        """Explicit max_soc_fraction arg overrides config value."""
+        cfg = BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.1, max_soc_fraction=0.9)
+        battery = Battery(cfg, max_soc_fraction=0.8)
+        assert battery.max_soc_fraction == 0.8
+
+    def test_out_of_range_min_soc_constructor_override_raises(self) -> None:
+        """min_soc_fraction > max_soc_fraction explicit override raises ValueError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(ValueError, match="SOC"):
+            Battery(cfg, min_soc_fraction=0.95, max_soc_fraction=0.1)
+
+    def test_out_of_range_charge_efficiency_constructor_override_raises(self) -> None:
+        """charge_efficiency > 1 explicit override raises ValueError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(ValueError, match="[Cc]harge"):
+            Battery(cfg, charge_efficiency=1.5)
+
+    def test_out_of_range_discharge_efficiency_constructor_override_raises(self) -> None:
+        """discharge_efficiency == 0 explicit override raises ValueError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(ValueError, match="[Dd]ischarge"):
+            Battery(cfg, discharge_efficiency=0.0)
+
 
 @pytest.fixture
 def default_config():
