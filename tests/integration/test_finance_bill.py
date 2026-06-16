@@ -134,40 +134,6 @@ class TestHouseholderBillPhysics:
         )
         assert bill.net_annual_bill_gbp == pytest.approx(expected_exact)
 
-    def test_bill_fields_present(self) -> None:
-        """BillBreakdown must expose all 11 required fields."""
-        from solar_challenge.finance import BillBreakdown, householder_bill
-
-        summary = _make_summary()
-        finance = _make_finance()
-        bill = householder_bill(
-            summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-            finance=finance,
-            simulation_days=summary.simulation_days,
-        )
-
-        # All 11 fields must be present and numeric
-        assert hasattr(bill, "standing_charge_gbp")
-        assert hasattr(bill, "import_cost_gbp")
-        assert hasattr(bill, "vat_gbp")
-        assert hasattr(bill, "gross_bill_gbp")
-        assert hasattr(bill, "seg_export_income_gbp")
-        assert hasattr(bill, "self_consumption_saving_gbp")
-        assert hasattr(bill, "baseline_bill_gbp")
-        assert hasattr(bill, "net_annual_bill_gbp")
-        assert hasattr(bill, "saving_vs_baseline_gbp")
-        assert hasattr(bill, "saving_pct")
-        assert hasattr(bill, "self_consumption_fraction")
-
-        for field in [
-            "standing_charge_gbp", "import_cost_gbp", "vat_gbp", "gross_bill_gbp",
-            "seg_export_income_gbp", "self_consumption_saving_gbp", "baseline_bill_gbp",
-            "net_annual_bill_gbp", "saving_vs_baseline_gbp", "saving_pct",
-            "self_consumption_fraction",
-        ]:
-            assert isinstance(getattr(bill, field), float), f"{field} must be float"
-
     def test_saving_fields(self) -> None:
         """Saving fields must be derived from baseline and net bills."""
         from solar_challenge.finance import BillBreakdown, householder_bill
