@@ -508,7 +508,7 @@ def _interpolate_per_year(
     try:
         from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
-        import numpy as np  # type: ignore[import-untyped]
+        import numpy as np
 
         xs = np.array(sampled_ages, dtype=float)
         ys = np.array(sampled_values, dtype=float)
@@ -588,10 +588,10 @@ MAX_NODES: int = 12
 
 
 def _aged_homes(
-    homes: "list[any]",  # list[HomeConfig]
+    homes: "list[Any]",  # list[HomeConfig]
     age: int,
     cum_throughput: Optional[List[float]] = None,
-) -> "list[any]":  # list[HomeConfig]
+) -> "list[Any]":  # list[HomeConfig]
     """Return HomeConfig list with PV system_age_years and battery SOH set to ``age``.
 
     For each home the PV config's ``system_age_years`` is updated to ``age``.
@@ -665,7 +665,7 @@ def project_multi_year(
     # ---- Lazy import for the real simulate_fleet ----------------------------
     if simulate is None:
         from solar_challenge.fleet import simulate_fleet as _simulate_fleet
-        simulate = _simulate_fleet  # type: ignore[assignment]
+        simulate = _simulate_fleet
 
     # ---- Resolve homes (support both .homes list and single .home) ----------
     homes = list(scenario.homes) if scenario.homes else (
@@ -698,12 +698,12 @@ def project_multi_year(
 
     # Node data tuple: (fleet_sc, fleet_exp, fleet_imp, per_home_discharge,
     #                   mean_pv_soh, mean_battery_soh)
-    sampled_data: dict[int, tuple] = {}
+    sampled_data: dict[int, tuple[Any, ...]] = {}
 
     def _simulate_age(
         age: int,
         cum_tp: list[float],
-    ) -> tuple:
+    ) -> tuple[Any, ...]:
         """Simulate the fleet at a given age, compute SOH, and return aggregates."""
         from solar_challenge.battery import compute_soh
         from solar_challenge.fleet import FleetConfig
@@ -712,7 +712,7 @@ def project_multi_year(
 
         aged = _aged_homes(homes, age, cum_tp)
         fleet_config = FleetConfig(homes=aged, name=f"proj-age-{age}")
-        fleet_results = simulate(fleet_config, start_ts, end_ts)  # type: ignore[misc]
+        fleet_results = simulate(fleet_config, start_ts, end_ts)
 
         per_home_summaries = [
             calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
