@@ -409,10 +409,12 @@ def calculate_fleet_summary(
             total_seg_revenue_gbp = sum(seg_revenues)
             per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
 
-    # Fleet financial aggregates (per-home fields are always-present floats)
-    total_import_cost = sum(s.total_import_cost_gbp for s in home_summaries)
-    total_export_revenue = sum(s.total_export_revenue_gbp for s in home_summaries)
-    total_net_cost = sum(s.net_cost_gbp for s in home_summaries)
+    # Fleet financial aggregates (per-home fields are always-present floats).
+    # float() ensures the result is 0.0 (float), not 0 (int), when home_summaries is
+    # empty — Python's sum() of an empty generator returns int 0 by default.
+    total_import_cost = float(sum(s.total_import_cost_gbp for s in home_summaries))
+    total_export_revenue = float(sum(s.total_export_revenue_gbp for s in home_summaries))
+    total_net_cost = float(sum(s.net_cost_gbp for s in home_summaries))
 
     return FleetSummary(
         n_homes=len(results),

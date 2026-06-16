@@ -349,6 +349,31 @@ class TestFleetSummary:
         assert summary.total_import_cost_gbp is None
         assert summary.total_export_revenue_gbp is None
 
+    def test_financial_fields_are_float_for_empty_fleet(self):
+        """Financial aggregates are float (not int) for an empty fleet.
+
+        Python's sum() of an empty generator returns int 0.  Without an
+        explicit float() wrap, FleetSummary would receive int 0 for the
+        Optional[float] fields, violating the declared type contract.
+        FleetResults itself has no empty-list guard, so this path is
+        reachable if a caller constructs FleetResults directly.
+        """
+        fleet_results = FleetResults(per_home_results=[], home_configs=[])
+        summary = calculate_fleet_summary(fleet_results)
+        # Values must be 0.0 AND of type float (not int 0)
+        assert summary.total_import_cost_gbp == 0.0
+        assert isinstance(summary.total_import_cost_gbp, float), (
+            f"expected float, got {type(summary.total_import_cost_gbp).__name__}"
+        )
+        assert summary.total_export_revenue_gbp == 0.0
+        assert isinstance(summary.total_export_revenue_gbp, float), (
+            f"expected float, got {type(summary.total_export_revenue_gbp).__name__}"
+        )
+        assert summary.total_net_cost_gbp == 0.0
+        assert isinstance(summary.total_net_cost_gbp, float), (
+            f"expected float, got {type(summary.total_net_cost_gbp).__name__}"
+        )
+
 
 @pytest.mark.slow
 class TestSimulateFleetIter:
