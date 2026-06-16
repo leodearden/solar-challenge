@@ -406,6 +406,89 @@ class MultiYearCurve:
 
 
 # ---------------------------------------------------------------------------
+# ProjectEconomics — project-level economics result (§3.1, η)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ProjectEconomics:
+    """Project-level financial appraisal results for a community PV/battery fleet.
+
+    Produced by :func:`project_economics` from a :class:`MultiYearCurve` and a
+    :class:`~solar_challenge.config.FinanceConfig`.  All monetary values are in
+    nominal GBP (£).
+
+    Attributes:
+        total_capex_gbp: Total capital expenditure across the fleet (£).
+            3-term build-up: Σ_home(pv_kwp × pv_cost + roof_fit + battery_kwh
+            × battery_cost).  No inverter term (that is task #49's scope).
+        grant_gbp: Total grant received by the project (£, passthrough from
+            FinanceConfig).
+        equity_gbp: Equity portion of the financed amount (£):
+            (capex − grant) × equity_fraction.
+        debt_gbp: Debt portion of the financed amount (£):
+            (capex − grant) × (1 − equity_fraction).
+        annual_debt_service_gbp: Level annuity payment on debt over
+            loan_term_years at loan_rate (£/year).
+        per_year_surplus_gbp: Per-year fleet surplus (£), one entry per
+            asset_life year (0-based).  surplus_y = revenue_y − fleet_opex
+            − debt_service (y < loan_term) or revenue_y − fleet_opex
+            (y ≥ loan_term).
+        min_dscr: Minimum Debt Service Coverage Ratio over loan years only:
+            min_y<loan_term ((revenue_y − fleet_opex) / annual_debt_service).
+            float('inf') when annual_debt_service_gbp == 0.
+        equity_irr: Internal rate of return on equity (fraction), computed via
+            NPV bisection on cashflow [−equity, surplus_0 … surplus_{N-1}].
+            float('nan') when equity_gbp == 0 or cashflow has no sign change.
+        payback_years: First 1-based year where cumulative equity cashflow
+            (−equity + Σ surplus) ≥ 0 (float), or None if never within the
+            asset life.
+        net_surplus_per_home_per_year_gbp: Mean per-year surplus divided by
+            the number of homes (£/home/year).
+    """
+
+    total_capex_gbp: float
+    """Total capital expenditure across the fleet (£)."""
+
+    grant_gbp: float
+    """Grant received by the project (£)."""
+
+    equity_gbp: float
+    """Equity portion of project financing (£)."""
+
+    debt_gbp: float
+    """Debt portion of project financing (£)."""
+
+    annual_debt_service_gbp: float
+    """Annual level annuity debt service payment (£/year)."""
+
+    per_year_surplus_gbp: tuple[float, ...]
+    """Per-year fleet surplus after opex and debt service (£), len == asset_life_years."""
+
+    min_dscr: float
+    """Minimum DSCR over loan years (float('inf') when debt-free)."""
+
+    equity_irr: float
+    """Equity IRR as a fraction (float('nan') when undefined)."""
+
+    payback_years: Optional[float]
+    """First year cumulative equity cashflow ≥ 0 (1-based), or None."""
+
+    net_surplus_per_home_per_year_gbp: float
+    """Mean per-year surplus per home (£/home/year)."""
+
+    def __post_init__(self) -> None:
+        if not self.per_year_surplus_gbp:
+            raise ValueError(
+                "per_year_surplus_gbp must be non-empty; got empty tuple"
+            )
+        if self.payback_years is not None and self.payback_years < 0.0:
+            raise ValueError(
+                f"payback_years must be None or ≥ 0, got {self.payback_years!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Interpolation helpers — PCHIP primary, Fritsch–Carlson fallback (step-4/6)
 # ---------------------------------------------------------------------------
 
