@@ -406,6 +406,100 @@ class MultiYearCurve:
 
 
 # ---------------------------------------------------------------------------
+# ProjectEconomics — project-level economics result (§3.1, η)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ProjectEconomics:
+    """Project-level financial appraisal results for a community PV/battery fleet.
+
+    Produced by :func:`project_economics` from a :class:`MultiYearCurve` and a
+    :class:`~solar_challenge.config.FinanceConfig`.  All monetary values are in
+    nominal GBP (£).
+
+    Attributes:
+        total_capex_gbp: Total capital expenditure across the fleet (£).
+            3-term build-up: Σ_home(pv_kwp × pv_cost + roof_fit + battery_kwh
+            × battery_cost).  No inverter term (that is task #49's scope).
+        grant_gbp: Total grant received by the project (£, passthrough from
+            FinanceConfig).
+        equity_gbp: Equity portion of the financed amount (£):
+            (capex − grant) × equity_fraction.
+        debt_gbp: Debt portion of the financed amount (£):
+            (capex − grant) × (1 − equity_fraction).
+        annual_debt_service_gbp: Level annuity payment on debt over
+            loan_term_years at loan_rate (£/year).
+        per_year_surplus_gbp: Per-year fleet surplus (£), one entry per
+            asset_life year (0-based).  surplus_y = revenue_y − fleet_opex
+            − debt_service (y < loan_term) or revenue_y − fleet_opex
+            (y ≥ loan_term).
+        min_dscr: Minimum Debt Service Coverage Ratio over loan years only:
+            min_y<loan_term ((revenue_y − fleet_opex) / annual_debt_service).
+            float('inf') when annual_debt_service_gbp == 0.
+        equity_irr: Internal rate of return on equity (fraction), computed via
+            NPV bisection on cashflow [−equity, surplus_0 … surplus_{N-1}].
+            float('nan') when equity_gbp == 0 or cashflow has no sign change.
+        payback_years: First 1-based year where cumulative equity cashflow
+            (−equity + Σ surplus) ≥ 0 (float), or None if never within the
+            asset life.
+        net_surplus_per_home_per_year_gbp: Mean per-year surplus divided by
+            the number of homes (£/home/year).
+        mean_fleet_surplus_per_year_gbp: Mean annual fleet surplus across the
+            full asset life (£/year).  Equals mean(per_year_surplus_gbp).
+    """
+
+    total_capex_gbp: float
+    """Total capital expenditure across the fleet (£)."""
+
+    grant_gbp: float
+    """Grant received by the project (£)."""
+
+    equity_gbp: float
+    """Equity portion of project financing (£)."""
+
+    debt_gbp: float
+    """Debt portion of project financing (£)."""
+
+    annual_debt_service_gbp: float
+    """Annual level annuity debt service payment (£/year)."""
+
+    per_year_surplus_gbp: tuple[float, ...]
+    """Per-year fleet surplus after opex and debt service (£), len == asset_life_years."""
+
+    min_dscr: float
+    """Minimum DSCR over loan years (float('inf') when debt-free)."""
+
+    equity_irr: float
+    """Equity IRR as a fraction (float('nan') when undefined)."""
+
+    payback_years: Optional[float]
+    """First year cumulative equity cashflow ≥ 0 (1-based), or None."""
+
+    net_surplus_per_home_per_year_gbp: float
+    """Mean per-year surplus per home (£/home/year)."""
+
+    fleet_opex_gbp: float
+    """Total fleet operating expenditure per year (£/year):
+    opex_per_home_per_year_gbp × n_homes."""
+
+    mean_fleet_surplus_per_year_gbp: float
+    """Mean annual fleet surplus across the full asset life (£/year):
+    mean(per_year_surplus_gbp).  Single source of truth used by the economics
+    report; avoids recomputing the mean from the tuple at render time."""
+
+    def __post_init__(self) -> None:
+        if not self.per_year_surplus_gbp:
+            raise ValueError(
+                "per_year_surplus_gbp must be non-empty; got empty tuple"
+            )
+        if self.payback_years is not None and self.payback_years < 0.0:
+            raise ValueError(
+                f"payback_years must be None or ≥ 0, got {self.payback_years!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Interpolation helpers — PCHIP primary, Fritsch–Carlson fallback (step-4/6)
 # ---------------------------------------------------------------------------
 
@@ -716,11 +810,7 @@ def project_multi_year(
         simulate = _simulate_fleet
 
     # ---- Resolve homes (support both .homes list and single .home) ----------
-    homes = list(scenario.homes) if scenario.homes else (
-        [scenario.home] if scenario.home is not None else []
-    )
-    if not homes:
-        raise ValueError("scenario must have at least one home")
+    homes = _resolve_homes(scenario)
 
     # ---- Derive timezone from scenario location (or first home) -------------
     tz: str
@@ -968,4 +1058,245 @@ def project_multi_year(
         points=points,
         sampled_ages=tuple(ages_sorted),
         interp_error_estimate=max_deviation,
+    )
+
+
+# ---------------------------------------------------------------------------
+# project_economics — project-level financial appraisal (η)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_homes(scenario: "ScenarioConfig") -> List[Any]:
+    """Resolve a list of homes from a ScenarioConfig.
+
+    Supports both the ``.homes`` list form and the single ``.home`` form.
+    Raises :class:`ValueError` when neither form yields at least one home.
+
+    Args:
+        scenario: The scenario whose homes should be resolved.
+
+    Returns:
+        Non-empty list of HomeConfig objects.
+
+    Raises:
+        ValueError: When scenario has no homes.
+    """
+    homes: List[Any] = (
+        list(scenario.homes) if scenario.homes
+        else ([scenario.home] if scenario.home is not None else [])
+    )
+    if not homes:
+        raise ValueError("scenario must have at least one home")
+    return homes
+
+
+def _annuity_payment(principal: float, rate: float, n_years: int) -> float:
+    """Compute the level annual payment on a loan (closed-form annuity).
+
+    Args:
+        principal: Loan principal (£).
+        rate: Annual interest rate as a fraction (e.g., 0.07 for 7%).
+        n_years: Loan term in years (must be > 0).
+
+    Returns:
+        Annual level payment (£).  When rate == 0 returns principal / n_years.
+    """
+    if principal == 0.0:
+        return 0.0
+    if rate == 0.0:
+        return principal / n_years
+    return principal * rate / (1.0 - (1.0 + rate) ** (-n_years))
+
+
+def _npv(rate: float, cashflows: List[float]) -> float:
+    """Compute NPV of cashflows discounted at *rate*.
+
+    cashflows[0] is the t=0 outflow (negative equity), cashflows[1..N] are
+    inflows at t=1..N.
+
+    Args:
+        rate: Discount rate as a fraction.
+        cashflows: List of cash flows starting at t=0.
+
+    Returns:
+        Net present value (£).
+    """
+    total = 0.0
+    for t, cf in enumerate(cashflows):
+        total += cf / (1.0 + rate) ** t
+    return total
+
+
+def _irr_bisection(cashflows: List[float]) -> float:
+    """Internal rate of return via NPV bisection root-find.
+
+    Finds *r* such that NPV(r, cashflows) ≈ 0.  Returns float('nan') when
+    there is no sign change (non-conventional or never-profitable cashflow) or
+    when cashflows[0] == 0 (no equity invested).
+
+    Args:
+        cashflows: Cash flow list; cashflows[0] is typically −equity (negative).
+
+    Returns:
+        IRR as a fraction, or float('nan') if undefined.
+    """
+    if not cashflows or cashflows[0] == 0.0:
+        return float("nan")
+
+    # Bracket: search within [-50%, +10000%]; upper end is capped high so
+    # very profitable low-equity projects (where true IRR >> 500%) are still
+    # captured rather than returning nan.
+    lo, hi = -0.5, 100.0
+    npv_lo = _npv(lo, cashflows)
+    npv_hi = _npv(hi, cashflows)
+
+    if npv_lo * npv_hi > 0.0:
+        # No sign change in bracket → IRR undefined
+        return float("nan")
+
+    # Bisect to tolerance
+    tol = 1e-10
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        npv_mid = _npv(mid, cashflows)
+        if abs(npv_mid) < tol or (hi - lo) < tol:
+            return mid
+        if npv_lo * npv_mid <= 0.0:
+            hi = mid
+            npv_hi = npv_mid
+        else:
+            lo = mid
+            npv_lo = npv_mid
+
+    return 0.5 * (lo + hi)
+
+
+def project_economics(
+    curve: MultiYearCurve,
+    scenario: "ScenarioConfig",
+    finance: "FinanceConfig",
+) -> ProjectEconomics:
+    """Compute project-level financial appraisal from a multi-year revenue curve.
+
+    Pure and deterministic: given the same curve, scenario, and finance
+    parameters, always returns the same :class:`ProjectEconomics`.
+
+    Algorithm:
+    1. Resolve homes; raise ValueError if empty.
+    2. Compute total_capex_gbp via the 3-term build-up:
+       Σ_home(pv_kwp × pv_cost + roof_fit + battery_kwh × battery_cost).
+       No inverter term (#49's scope).
+    3. financed = max(capex − grant, 0); equity = financed × equity_fraction;
+       debt = financed × (1 − equity_fraction).
+    4. annual_debt_service via level annuity (_annuity_payment).
+    5. fleet_opex = opex_per_home × n_homes.
+    6. per_year_surplus[y] = revenue[y] − fleet_opex − debt_service (y < loan_term)
+       or revenue[y] − fleet_opex (y ≥ loan_term).
+    7. min_dscr = min over loan years of (revenue_y − opex) / debt_service;
+       float('inf') when debt_service == 0.
+    8. equity_irr via NPV bisection on [−equity, surplus_0 … surplus_{N-1}].
+    9. payback_years = first 1-based year cumulative(−equity + Σ surplus) ≥ 0,
+       or None.
+    10. net_surplus_per_home_per_year_gbp = mean(surplus) / n_homes.
+
+    Args:
+        curve: MultiYearCurve produced by project_multi_year.
+        scenario: ScenarioConfig with homes list (or single home) and finance.
+        finance: FinanceConfig with cost and finance parameters.
+
+    Returns:
+        Fully populated :class:`ProjectEconomics`.
+
+    Raises:
+        ValueError: When scenario has no homes.
+    """
+    # 1. Resolve homes
+    homes = _resolve_homes(scenario)
+    n_homes = len(homes)
+
+    # 2. Capex: 3-term build-up (no inverter)
+    total_capex_gbp = 0.0
+    for home in homes:
+        pv_kwp = home.pv_config.capacity_kw
+        batt_kwh = (
+            home.battery_config.capacity_kwh
+            if home.battery_config is not None
+            else 0.0
+        )
+        total_capex_gbp += (
+            pv_kwp * finance.pv_cost_per_kwp_gbp
+            + finance.roof_fit_cost_gbp
+            + batt_kwh * finance.battery_cost_per_kwh_gbp
+        )
+
+    # 3. Grant / equity / debt split
+    financed = max(total_capex_gbp - finance.grant_gbp, 0.0)
+    equity_gbp = financed * finance.equity_fraction
+    debt_gbp = financed * (1.0 - finance.equity_fraction)
+
+    # 4. Annual debt service
+    annual_debt_service_gbp = _annuity_payment(
+        debt_gbp, finance.loan_rate, finance.loan_term_years
+    )
+
+    # Guard: curve must be long enough to cover the full asset life.
+    # Raised as a clear domain error rather than an opaque IndexError.
+    if len(curve.points) < finance.asset_life_years:
+        raise ValueError(
+            f"curve has {len(curve.points)} points but finance.asset_life_years="
+            f"{finance.asset_life_years}; pass a curve built from the same FinanceConfig"
+        )
+
+    # 5. Fleet opex
+    fleet_opex = finance.opex_per_home_per_year_gbp * n_homes
+
+    # 6. Per-year surplus
+    asset_life = finance.asset_life_years
+    loan_term = finance.loan_term_years
+    per_year_surplus: List[float] = []
+    for y in range(asset_life):
+        revenue_y = curve.points[y].fleet_revenue_gbp
+        debt_y = annual_debt_service_gbp if y < loan_term else 0.0
+        per_year_surplus.append(revenue_y - fleet_opex - debt_y)
+
+    # 7. min_dscr over loan years
+    if annual_debt_service_gbp == 0.0:
+        min_dscr = float("inf")
+    else:
+        dscr_values = [
+            (curve.points[y].fleet_revenue_gbp - fleet_opex) / annual_debt_service_gbp
+            for y in range(loan_term)
+        ]
+        min_dscr = min(dscr_values)
+
+    # 8. Equity IRR
+    cashflows: List[float] = [-equity_gbp] + per_year_surplus
+    equity_irr = _irr_bisection(cashflows)
+
+    # 9. Payback years
+    payback_years: Optional[float] = None
+    cumulative = -equity_gbp
+    for y, surplus in enumerate(per_year_surplus, start=1):
+        cumulative += surplus
+        if cumulative >= 0.0:
+            payback_years = float(y)
+            break
+
+    # 10. Net surplus per home per year
+    mean_surplus = sum(per_year_surplus) / len(per_year_surplus)
+    net_surplus_per_home_per_year_gbp = mean_surplus / n_homes
+
+    return ProjectEconomics(
+        total_capex_gbp=total_capex_gbp,
+        grant_gbp=finance.grant_gbp,
+        equity_gbp=equity_gbp,
+        debt_gbp=debt_gbp,
+        annual_debt_service_gbp=annual_debt_service_gbp,
+        per_year_surplus_gbp=tuple(per_year_surplus),
+        min_dscr=min_dscr,
+        equity_irr=equity_irr,
+        payback_years=payback_years,
+        net_surplus_per_home_per_year_gbp=net_surplus_per_home_per_year_gbp,
+        fleet_opex_gbp=fleet_opex,
+        mean_fleet_surplus_per_year_gbp=mean_surplus,
     )
