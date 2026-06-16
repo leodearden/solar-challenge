@@ -2674,6 +2674,11 @@ class TestFinanceConfigValidation:
         with pytest.raises(ConfigurationError):
             FinanceConfig(**self._BASE, loan_term_years=0)
 
+    def test_loan_term_years_negative_raises(self) -> None:
+        """loan_term_years < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, loan_term_years=-1)
+
     # ---- loan_rate ----
 
     def test_loan_rate_negative_raises(self) -> None:
@@ -2821,6 +2826,33 @@ class TestFinanceConfigParsing:
         assert result is not None
         assert result.grant_gbp == 0.0
 
+    def test_missing_standing_charge_raises(self) -> None:
+        """Finance block without standing_charge_pence_per_day raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="standing_charge_pence_per_day"):
+            _parse_finance_config({"vat_rate": 0.05})
+
+    def test_int_coercion_of_year_fields(self) -> None:
+        """loan_term_years/asset_life_years given as floats in the dict are coerced to int."""
+        result = _parse_finance_config(
+            {
+                "standing_charge_pence_per_day": 60.0,
+                "loan_term_years": 20.0,
+                "asset_life_years": 25.0,
+            }
+        )
+        assert result is not None
+        assert result.loan_term_years == 20
+        assert isinstance(result.loan_term_years, int)
+        assert result.asset_life_years == 25
+        assert isinstance(result.asset_life_years, int)
+
+    def test_non_numeric_value_raises_configuration_error(self) -> None:
+        """A non-numeric string for a numeric field raises ConfigurationError (not ValueError)."""
+        with pytest.raises(ConfigurationError, match="non-numeric"):
+            _parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, "vat_rate": "not-a-number"}
+            )
+
 
 # ---------------------------------------------------------------------------
 # ScenarioConfig.finance field + load_scenarios round-trip (step-7)
@@ -2838,12 +2870,6 @@ class TestScenarioFinance:
         "pv": {"capacity_kw": 4.0},
         "load": {"annual_consumption_kwh": 3400},
     }
-
-    def test_scenario_config_finance_field_exists(self) -> None:
-        """ScenarioConfig declares a 'finance' field."""
-        import dataclasses
-        field_names = {f.name for f in dataclasses.fields(ScenarioConfig)}
-        assert "finance" in field_names
 
     def test_scenario_config_finance_defaults_to_none(self) -> None:
         """ScenarioConfig.finance is None when not provided (constructed directly)."""

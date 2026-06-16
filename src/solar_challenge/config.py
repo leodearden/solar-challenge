@@ -1596,23 +1596,35 @@ def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceCon
     """
     if data is None:
         return None
-    return FinanceConfig(
-        standing_charge_pence_per_day=data.get("standing_charge_pence_per_day", 0.0),
-        vat_rate=data.get("vat_rate", 0.05),
-        retail_baseline_rate_pence_per_kwh=data.get(
-            "retail_baseline_rate_pence_per_kwh", 23.0
-        ),
-        self_consumption_override=data.get("self_consumption_override"),
-        pv_cost_per_kwp_gbp=data.get("pv_cost_per_kwp_gbp", 1000.0),
-        roof_fit_cost_gbp=data.get("roof_fit_cost_gbp", 1000.0),
-        battery_cost_per_kwh_gbp=data.get("battery_cost_per_kwh_gbp", 250.0),
-        grant_gbp=data.get("grant_gbp", 250000.0),
-        equity_fraction=data.get("equity_fraction", 0.75),
-        loan_term_years=int(data.get("loan_term_years", 15)),
-        loan_rate=data.get("loan_rate", 0.07),
-        opex_per_home_per_year_gbp=data.get("opex_per_home_per_year_gbp", 131.0),
-        asset_life_years=int(data.get("asset_life_years", 25)),
-    )
+    if "standing_charge_pence_per_day" not in data:
+        raise ConfigurationError(
+            "finance.standing_charge_pence_per_day is required"
+        )
+    try:
+        sc_raw = data.get("self_consumption_override")
+        return FinanceConfig(
+            standing_charge_pence_per_day=float(data["standing_charge_pence_per_day"]),
+            vat_rate=float(data.get("vat_rate", 0.05)),
+            retail_baseline_rate_pence_per_kwh=float(
+                data.get("retail_baseline_rate_pence_per_kwh", 23.0)
+            ),
+            self_consumption_override=float(sc_raw) if sc_raw is not None else None,
+            pv_cost_per_kwp_gbp=float(data.get("pv_cost_per_kwp_gbp", 1000.0)),
+            roof_fit_cost_gbp=float(data.get("roof_fit_cost_gbp", 1000.0)),
+            battery_cost_per_kwh_gbp=float(data.get("battery_cost_per_kwh_gbp", 250.0)),
+            grant_gbp=float(data.get("grant_gbp", 250000.0)),
+            equity_fraction=float(data.get("equity_fraction", 0.75)),
+            loan_term_years=int(data.get("loan_term_years", 15)),
+            loan_rate=float(data.get("loan_rate", 0.07)),
+            opex_per_home_per_year_gbp=float(
+                data.get("opex_per_home_per_year_gbp", 131.0)
+            ),
+            asset_life_years=int(data.get("asset_life_years", 25)),
+        )
+    except (ValueError, TypeError) as exc:
+        raise ConfigurationError(
+            f"finance block contains a non-numeric value: {exc}"
+        ) from exc
 
 
 def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
