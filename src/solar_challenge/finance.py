@@ -1304,3 +1304,98 @@ def project_economics(
         fleet_opex_gbp=fleet_opex,
         mean_fleet_surplus_per_year_gbp=mean_surplus,
     )
+
+
+# ---------------------------------------------------------------------------
+# spreadsheet_revenue_curve — [FIN]-assumption analytic revenue curve (θ)
+# ---------------------------------------------------------------------------
+
+
+def spreadsheet_revenue_curve(
+    *,
+    n_homes: int,
+    pv_kwp: float,
+    kwh_per_kwp: float,
+    self_consumption_fraction: float,
+    own_use_rate_pence_per_kwh: float,
+    export_rate_pence_per_kwh: float,
+    asset_life_years: int,
+) -> MultiYearCurve:
+    """Build a flat [FIN]-assumption fleet-revenue :class:`MultiYearCurve`.
+
+    Produces a deterministic, physics-free revenue curve matching the investor
+    spreadsheet's named input assumptions:
+
+    * ``inp_kWhPerkWp`` (Sensitivity!B8) → ``kwh_per_kwp``
+    * Own-use rate 15 p/kWh (§3 [FIN] assumptions)
+    * Export rate 6 p/kWh (Smart Export Guarantee [FIN] basis)
+    * Self-consumption fraction 0.45 (PV-only) or 0.70 (with battery, [FIN])
+
+    Per-home generation::
+
+        gen = pv_kwp × kwh_per_kwp   [kWh/yr]
+
+    Fleet revenue::
+
+        fleet_revenue_gbp = n_homes × (
+            self_consumption_fraction × gen × own_use_rate_pence_per_kwh / 100
+            + (1 − self_consumption_fraction) × gen × export_rate_pence_per_kwh / 100
+        )
+
+    The curve is *flat* — SOH fractions are pinned at 1.0 for every year because
+    the spreadsheet's revenue projection does not model PV/battery degradation
+    (verified via Capital_Stack!B6 arithmetic).  This makes the curve suitable as
+    the *spreadsheet-input column* fed into :func:`project_economics` for the H6
+    calibration gate.
+
+    Do **not** use this curve for real simulation output — use
+    :func:`project_multi_year` for physics-backed projections.
+
+    Args:
+        n_homes: Number of homes in the fleet.
+        pv_kwp: PV capacity per home (kWp).
+        kwh_per_kwp: Annual yield per kWp (kWh/kWp, e.g. 1050 from inp_kWhPerkWp).
+        self_consumption_fraction: Fraction of generation consumed on-site (0–1).
+        own_use_rate_pence_per_kwh: Retail value of self-consumed solar (p/kWh).
+        export_rate_pence_per_kwh: SEG export rate for surplus generation (p/kWh).
+        asset_life_years: Number of years in the projection (len of returned curve).
+
+    Returns:
+        A flat :class:`MultiYearCurve` with ``asset_life_years`` identical
+        :class:`YearPoint` objects and ``interp_error_estimate == 0.0``.
+    """
+    # Per-home annual generation (kWh)
+    gen_per_home_kwh: float = pv_kwp * kwh_per_kwp
+
+    # Fleet generation (kWh)
+    fleet_gen_kwh: float = float(n_homes) * gen_per_home_kwh
+
+    # Energy split
+    fleet_self_kwh: float = self_consumption_fraction * fleet_gen_kwh
+    fleet_export_kwh: float = (1.0 - self_consumption_fraction) * fleet_gen_kwh
+
+    # Fleet revenue (£/yr)  — own-use saving + SEG export income
+    fleet_revenue_gbp: float = (
+        fleet_self_kwh * own_use_rate_pence_per_kwh / 100.0
+        + fleet_export_kwh * export_rate_pence_per_kwh / 100.0
+    )
+
+    # Build identical YearPoints for each year (flat — no degradation in spreadsheet)
+    points: tuple[YearPoint, ...] = tuple(
+        YearPoint(
+            year=y,
+            pv_soh=1.0,
+            battery_soh=1.0,
+            fleet_self_consumption_kwh=fleet_self_kwh,
+            fleet_export_kwh=fleet_export_kwh,
+            fleet_import_kwh=0.0,   # not modelled by the spreadsheet; set to 0
+            fleet_revenue_gbp=fleet_revenue_gbp,
+        )
+        for y in range(asset_life_years)
+    )
+
+    return MultiYearCurve(
+        points=points,
+        sampled_ages=(0,),          # analytic; no simulation nodes
+        interp_error_estimate=0.0,  # exact; no interpolation
+    )
