@@ -11,7 +11,7 @@ from solar_challenge.home import SimulationResults, SummaryStatistics, calculate
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
-    from solar_challenge.finance import BillDistribution
+    from solar_challenge.finance import BillDistribution, ProjectEconomics
 
 
 @dataclass(frozen=True)
@@ -668,6 +668,7 @@ def generate_finance_report(
     bill_spreadsheet: Optional["BillDistribution"] = None,
     *,
     scenario_name: str = "",
+    economics: Optional["ProjectEconomics"] = None,
 ) -> str:
     """Generate a markdown finance report from one or two BillDistributions.
 
@@ -686,6 +687,10 @@ def generate_finance_report(
         bill_spreadsheet: Optional BillDistribution from the spreadsheet
             (override) path; when supplied both are rendered side by side.
         scenario_name: Optional scenario label for the report title.
+        economics: Optional :class:`~solar_challenge.finance.ProjectEconomics`
+            from :func:`~solar_challenge.finance.project_economics`; when
+            provided, a ``## Project Economics`` block is appended after the
+            bill block.  ``None`` (default) reproduces the δ output exactly.
 
     Returns:
         A markdown-formatted finance report string.
@@ -754,6 +759,48 @@ def generate_finance_report(
 | Mean | £{bill_physics.mean_gbp:.2f} | £{bill_spreadsheet.mean_gbp:.2f} |
 | Median | £{bill_physics.median_gbp:.2f} | £{bill_spreadsheet.median_gbp:.2f} |
 | Max | £{bill_physics.max_gbp:.2f} | £{bill_spreadsheet.max_gbp:.2f} |
+"""
+
+    # ---- Optional project-economics block (η) --------------------------------
+    if economics is not None:
+        import math as _math
+
+        # Format IRR: NaN → "n/a"
+        if _math.isnan(economics.equity_irr):
+            irr_str = "n/a"
+        else:
+            irr_str = f"{economics.equity_irr:.1%}"
+
+        # Format payback: None → "—"
+        payback_str = (
+            "—" if economics.payback_years is None
+            else f"{economics.payback_years:.1f} yr"
+        )
+
+        # Format min DSCR: inf → "∞"
+        if _math.isinf(economics.min_dscr):
+            dscr_str = "∞"
+        else:
+            dscr_str = f"{economics.min_dscr:.2f}×"
+
+        n_years = len(economics.per_year_surplus_gbp)
+        mean_surplus = sum(economics.per_year_surplus_gbp) / n_years
+
+        report += f"""
+## Project Economics
+
+| Item | Value |
+|------|-------|
+| Total CapEx | £{economics.total_capex_gbp:,.0f} |
+| Grant | £{economics.grant_gbp:,.0f} |
+| Debt | £{economics.debt_gbp:,.0f} |
+| Equity | £{economics.equity_gbp:,.0f} |
+| Annual Debt Service | £{economics.annual_debt_service_gbp:,.0f} |
+| Fleet OpEx / yr | £{economics.net_surplus_per_home_per_year_gbp * (n_years / n_years):.0f} |
+| Mean Fleet Surplus / yr | £{mean_surplus:,.0f} |
+| Min DSCR (loan years) | {dscr_str} |
+| Equity IRR | {irr_str} |
+| Payback | {payback_str} |
 """
 
     return report
