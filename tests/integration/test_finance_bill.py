@@ -391,3 +391,124 @@ class TestHouseholderBillOverrideAndAnnualisation:
         assert bill_30.seg_export_income_gbp == pytest.approx(
             bill_365.seg_export_income_gbp, rel=1e-6
         )
+
+
+# ---------------------------------------------------------------------------
+# Step-5: bill_distribution / BillDistribution tests
+# ---------------------------------------------------------------------------
+
+
+class TestBillDistribution:
+    """Fast (no-network) tests for bill_distribution and BillDistribution."""
+
+    def _make_fleet(self) -> list:
+        """Create a 5-home fleet with varying costs."""
+        # Five homes with increasing import costs → distinct net bills
+        homes = []
+        for multiplier in [0.5, 0.8, 1.0, 1.3, 1.6]:
+            homes.append(
+                _make_summary(
+                    total_import_cost_gbp=276.0 * multiplier,
+                    total_export_revenue_gbp=73.8 * multiplier,
+                    net_cost_gbp=202.2 * multiplier,
+                    total_generation_kwh=4000.0,
+                    total_demand_kwh=3400.0,
+                    total_self_consumption_kwh=2200.0 * multiplier,
+                    total_grid_import_kwh=1200.0 * multiplier,
+                    total_grid_export_kwh=1800.0 * multiplier,
+                    seg_revenue_gbp=73.8 * multiplier,
+                )
+            )
+        return homes
+
+    def test_distribution_length(self) -> None:
+        """per_home_net_bill_gbp must have length == n_homes."""
+        from solar_challenge.finance import bill_distribution
+
+        summaries = self._make_fleet()
+        finance = _make_finance()
+        dist = bill_distribution(summaries, finance, 365)
+
+        assert len(dist.per_home_net_bill_gbp) == len(summaries)
+
+    def test_per_home_bills_match_individual(self) -> None:
+        """per_home_net_bill_gbp[i] must equal householder_bill(summaries[i]).net_annual_bill_gbp."""
+        from solar_challenge.finance import bill_distribution, householder_bill
+
+        summaries = self._make_fleet()
+        finance = _make_finance()
+        dist = bill_distribution(summaries, finance, 365)
+
+        for i, s in enumerate(summaries):
+            expected_bill = householder_bill(
+                summary=s,
+                annual_self_consumption_kwh=s.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=365,
+            )
+            assert dist.per_home_net_bill_gbp[i] == pytest.approx(expected_bill.net_annual_bill_gbp)
+
+    def test_stats_match_net_bills(self) -> None:
+        """min/mean/median/max must match pd.Series stats of per_home_net_bill_gbp."""
+        import pandas as pd
+        from solar_challenge.finance import bill_distribution
+
+        summaries = self._make_fleet()
+        finance = _make_finance()
+        dist = bill_distribution(summaries, finance, 365)
+
+        series = pd.Series(list(dist.per_home_net_bill_gbp))
+        assert dist.min_gbp == pytest.approx(float(series.min()))
+        assert dist.mean_gbp == pytest.approx(float(series.mean()))
+        assert dist.median_gbp == pytest.approx(float(series.median()))
+        assert dist.max_gbp == pytest.approx(float(series.max()))
+
+    def test_representative_is_median_home(self) -> None:
+        """representative must be the BillBreakdown of the median-net-bill home."""
+        from solar_challenge.finance import bill_distribution, householder_bill
+
+        summaries = self._make_fleet()
+        finance = _make_finance()
+        dist = bill_distribution(summaries, finance, 365)
+
+        # Find the median home index manually
+        import pandas as pd
+        net_bills = list(dist.per_home_net_bill_gbp)
+        series = pd.Series(net_bills)
+        median_val = float(series.median())
+        rep_idx = int((series - median_val).abs().idxmin())
+
+        expected_rep = householder_bill(
+            summary=summaries[rep_idx],
+            annual_self_consumption_kwh=summaries[rep_idx].total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=365,
+        )
+        assert dist.representative.net_annual_bill_gbp == pytest.approx(
+            expected_rep.net_annual_bill_gbp
+        )
+
+    def test_single_home_fleet(self) -> None:
+        """Single-home fleet: representative equals that home, min==mean==median==max."""
+        from solar_challenge.finance import bill_distribution
+
+        summary = _make_summary()
+        finance = _make_finance()
+        dist = bill_distribution([summary], finance, 365)
+
+        assert len(dist.per_home_net_bill_gbp) == 1
+        net = dist.per_home_net_bill_gbp[0]
+        assert dist.representative.net_annual_bill_gbp == pytest.approx(net)
+        assert dist.min_gbp == pytest.approx(net)
+        assert dist.mean_gbp == pytest.approx(net)
+        assert dist.median_gbp == pytest.approx(net)
+        assert dist.max_gbp == pytest.approx(net)
+
+    def test_per_home_net_bill_is_tuple(self) -> None:
+        """per_home_net_bill_gbp must be a tuple (immutable)."""
+        from solar_challenge.finance import bill_distribution
+
+        summaries = self._make_fleet()
+        dist = bill_distribution(summaries, _make_finance(), 365)
+
+        assert isinstance(dist.per_home_net_bill_gbp, tuple)
