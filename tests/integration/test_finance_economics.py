@@ -203,6 +203,27 @@ class TestProjectEconomicsDataclass:
                 net_surplus_per_home_per_year_gbp=150.0,
             )
 
+    def test_fleet_opex_gbp_dataclass_field(self) -> None:
+        """fleet_opex_gbp must be a constructable, readable field on ProjectEconomics.
+
+        Step-15 RED: field does not exist yet → TypeError on construction.
+        """
+        from solar_challenge.finance import ProjectEconomics
+        econ = ProjectEconomics(
+            total_capex_gbp=50000.0,
+            grant_gbp=10000.0,
+            equity_gbp=30000.0,
+            debt_gbp=10000.0,
+            annual_debt_service_gbp=900.0,
+            per_year_surplus_gbp=(100.0, 200.0, 300.0),
+            min_dscr=1.2,
+            equity_irr=0.08,
+            payback_years=5.0,
+            net_surplus_per_home_per_year_gbp=150.0,
+            fleet_opex_gbp=12000.0,  # type: ignore[call-arg]  # new field
+        )
+        assert econ.fleet_opex_gbp == pytest.approx(12000.0)  # type: ignore[attr-defined]
+
 
 # ---------------------------------------------------------------------------
 # Step-3: capex build-up + grant/equity/debt split
@@ -606,6 +627,21 @@ class TestProjectEconomicsSurplusDSCR:
         expected_mean = sum(econ.per_year_surplus_gbp) / len(econ.per_year_surplus_gbp)
         expected_per_home = expected_mean / 2  # 2 homes
         assert econ.net_surplus_per_home_per_year_gbp == pytest.approx(expected_per_home, rel=1e-9)
+
+    def test_fleet_opex_gbp_exposed(self) -> None:
+        """fleet_opex_gbp must equal opex_per_home_per_year_gbp * n_homes exactly.
+
+        Step-15 RED: ProjectEconomics currently has no fleet_opex_gbp field,
+        so this raises AttributeError until step-16 adds it.
+        """
+        from solar_challenge.finance import project_economics
+
+        scenario, finance, curve, fleet_opex, _ = self._setup()
+        econ = project_economics(curve, scenario, finance)
+
+        # 2 homes, opex_per_home=200 → fleet_opex_gbp = 400
+        assert econ.fleet_opex_gbp == finance.opex_per_home_per_year_gbp * 2  # type: ignore[attr-defined]
+        assert econ.fleet_opex_gbp == pytest.approx(fleet_opex)  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
