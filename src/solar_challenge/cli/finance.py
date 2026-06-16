@@ -5,7 +5,7 @@
 import dataclasses
 import enum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 import pandas as pd
 import typer
@@ -13,12 +13,20 @@ import typer
 from solar_challenge.cli.utils import console, handle_errors, print_info
 from solar_challenge.config import (
     ConfigurationError,
-    load_config,
-    load_fleet_config,
+    ScenarioConfig,
+    SimulationPeriod,
     _parse_finance_config,
     _parse_seg_config,
+    load_config,
+    load_fleet_config,
 )
-from solar_challenge.finance import DEFAULT_SPREADSHEET_SELF_CONSUMPTION, bill_distribution
+from solar_challenge.finance import (
+    DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
+    ProjectEconomics,
+    bill_distribution,
+    project_economics,
+    project_multi_year,
+)
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
@@ -68,6 +76,13 @@ def run(
             help="Simulation end date (YYYY-MM-DD)",
         ),
     ] = "2024-12-31",
+    project: Annotated[
+        bool,
+        typer.Option(
+            "--project/--no-project",
+            help="Compute project-level economics (DSCR/IRR/payback) and append to report",
+        ),
+    ] = False,
 ) -> None:
     """Run a householder bill analysis for a fleet scenario.
 
@@ -146,18 +161,37 @@ def run(
         )
         dist_spreadsheet = bill_distribution(summaries, finance_spreadsheet, days)
 
+    # ---- Project economics (optional) ---------------------------------------
+    economics_result: Optional[ProjectEconomics] = None
+    if project:
+        print_info("Computing project-level economics (DSCR/IRR/payback)…")
+        econ_scenario = ScenarioConfig(
+            name=raw.get("name", str(scenario)),
+            period=SimulationPeriod(
+                start_date=start,
+                end_date=end,
+            ),
+            homes=list(fleet_config.homes),
+            location=loc,
+            finance=finance,
+        )
+        curve = project_multi_year(econ_scenario, finance)
+        economics_result = project_economics(curve, econ_scenario, finance)
+
     # ---- Render report ------------------------------------------------------
     if assumptions == AssumptionMode.physics:
         assert dist_physics is not None
         report = generate_finance_report(
             dist_physics,
             scenario_name=raw.get("name", str(scenario)),
+            economics=economics_result,
         )
     elif assumptions == AssumptionMode.spreadsheet:
         assert dist_spreadsheet is not None
         report = generate_finance_report(
             dist_spreadsheet,
             scenario_name=raw.get("name", str(scenario)),
+            economics=economics_result,
         )
     else:  # both
         assert dist_physics is not None
@@ -166,6 +200,7 @@ def run(
             dist_physics,
             bill_spreadsheet=dist_spreadsheet,
             scenario_name=raw.get("name", str(scenario)),
+            economics=economics_result,
         )
 
     console.print(report)
