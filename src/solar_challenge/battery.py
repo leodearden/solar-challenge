@@ -64,6 +64,17 @@ class BatteryConfig:
             ``efficiency``.  To change per-direction values, also clear
             ``efficiency`` (``dataclasses.replace(cfg, efficiency=None,
             charge_efficiency=x, discharge_efficiency=y)``).
+        system_age_years: Age of the battery system in years (≥ 0); used to
+            compute calendar fade when no ``soh`` override is provided.
+        calendar_fade_rate_per_year: Linear calendar SOH fade rate per year
+            (≥ 0; default 0.02/yr ≈ 70 % SOH at 15-yr warranty horizon).
+        cycle_fade_per_equivalent_full_cycle: SOH fade per equivalent full
+            cycle (≥ 0; default 5e-5/EFC ≈ 30 % fade over ~6 000 EFC).
+        soh_floor: Minimum allowed SOH after clamping (0 < soh_floor ≤ 1;
+            default 0.5, reflecting end-of-useful-life convention).
+        soh: Optional direct SOH override (0 < soh ≤ 1).  When set, the
+            computed calendar+cycle fade is bypassed and this value is used
+            directly by ``Battery.__init__``.
     """
 
     capacity_kwh: float
@@ -77,6 +88,11 @@ class BatteryConfig:
     charge_efficiency: float = 0.975
     discharge_efficiency: float = 0.975
     efficiency: Optional[float] = None
+    system_age_years: float = 0.0
+    calendar_fade_rate_per_year: float = 0.02
+    cycle_fade_per_equivalent_full_cycle: float = 5e-5
+    soh_floor: float = 0.5
+    soh: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Validate battery configuration parameters."""
