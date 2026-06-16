@@ -2923,6 +2923,18 @@ class TestFinanceConfigValidation:
         fc = FinanceConfig(**self._BASE, grant_gbp=0.0)
         assert fc.grant_gbp == 0.0
 
+    # ---- inverter_cost_per_kw_gbp (must be >= 0) ----
+
+    def test_inverter_cost_negative_raises(self) -> None:
+        """inverter_cost_per_kw_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, inverter_cost_per_kw_gbp=-5.0)
+
+    def test_inverter_cost_zero_accepted(self) -> None:
+        """inverter_cost_per_kw_gbp == 0.0 is valid (opt-in with zero default)."""
+        fc = FinanceConfig(**self._BASE, inverter_cost_per_kw_gbp=0.0)
+        assert fc.inverter_cost_per_kw_gbp == 0.0
+
 
 # ---------------------------------------------------------------------------
 # _parse_finance_config tests (step-5)
