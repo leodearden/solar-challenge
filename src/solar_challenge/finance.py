@@ -17,14 +17,16 @@ deterministic and has no side-effects: suitable for use in parallel fleet runs.
 """
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, List, Optional, Sequence
 
 import pandas as pd
 
 if TYPE_CHECKING:
-    from solar_challenge.config import FinanceConfig
+    from solar_challenge.config import FinanceConfig, ScenarioConfig
+    from solar_challenge.fleet import FleetConfig, FleetResults
     from solar_challenge.home import SummaryStatistics
 
 
@@ -574,4 +576,160 @@ def bill_distribution(
         mean_gbp=float(series.mean()),
         median_gbp=median_val,
         max_gbp=float(series.max()),
+    )
+
+
+# ---------------------------------------------------------------------------
+# project_multi_year — forward-march driver (step-8 skeleton, extended later)
+# ---------------------------------------------------------------------------
+
+#: Maximum number of simulation nodes before the adaptive loop is capped.
+MAX_NODES: int = 12
+
+
+def _aged_homes(
+    homes: "list[any]",  # list[HomeConfig]
+    age: int,
+) -> "list[any]":  # list[HomeConfig]
+    """Return a list of HomeConfig with PV system_age_years set to ``age``.
+
+    Battery SOH injection (step-10) and throughput accumulation (step-12) are
+    wired in later; for the step-8 skeleton only PV age is set.
+    """
+    from solar_challenge.pv import PVConfig  # noqa: F401
+
+    result = []
+    for home in homes:
+        new_pv = dataclasses.replace(home.pv_config, system_age_years=float(age))
+        result.append(dataclasses.replace(home, pv_config=new_pv))
+    return result
+
+
+def project_multi_year(
+    scenario: "ScenarioConfig",
+    finance: "FinanceConfig",
+    *,
+    error_target_pct: float = 1.0,
+    simulate: Optional[Callable[["FleetConfig", pd.Timestamp, pd.Timestamp], "FleetResults"]] = None,
+) -> MultiYearCurve:
+    """Project fleet energy and revenue over the full asset life.
+
+    Performs a forward-march over the asset lifetime, simulating the fleet at
+    a set of *sampled ages* (seeded at 0, asset_life//2, asset_life-1 and
+    adaptively refined via bisection in step-16), then interpolating the
+    resulting per-year curves with PCHIP.
+
+    Args:
+        scenario: ScenarioConfig with homes, period, and location.
+        finance: FinanceConfig with ``asset_life_years`` and other parameters.
+        error_target_pct: Target maximum PCHIP midpoint deviation (%) before
+            adaptive bisection stops.
+        simulate: Optional inject for testing.  Defaults to None → lazy import
+            ``fleet.simulate_fleet``.
+
+    Returns:
+        :class:`MultiYearCurve` with one :class:`YearPoint` per year and
+        metadata about the sampled ages and interpolation error.
+    """
+    # ---- Lazy import for the real simulate_fleet ----------------------------
+    if simulate is None:
+        from solar_challenge.fleet import simulate_fleet as _simulate_fleet
+        simulate = _simulate_fleet  # type: ignore[assignment]
+
+    # ---- Resolve homes (support both .homes list and single .home) ----------
+    homes = list(scenario.homes) if scenario.homes else (
+        [scenario.home] if scenario.home is not None else []
+    )
+    if not homes:
+        raise ValueError("scenario must have at least one home")
+
+    # ---- Derive timezone from scenario location (or first home) -------------
+    tz: str
+    if scenario.location is not None:
+        tz = scenario.location.timezone
+    else:
+        tz = homes[0].location.timezone
+
+    # ---- Derive start/end timestamps from scenario period -------------------
+    start_ts = scenario.period.get_start_timestamp(tz)
+    end_ts = scenario.period.get_end_timestamp(tz)
+
+    asset_life = finance.asset_life_years
+
+    # ---- Seed nodes ---------------------------------------------------------
+    seed_ages: list[int] = sorted({0, asset_life // 2, asset_life - 1})
+
+    # ---- Forward-march: simulate at each seed age, collect aggregates -------
+    # Per-home cumulative throughput (kWh): tracks battery history across ages.
+    # Initialised to 0 at age 0; accumulated trapezoidally (steps-10/12).
+    n_homes = len(homes)
+    cum_throughput: list[float] = [0.0] * n_homes
+
+    # Mapping: age → (fleet_self, fleet_export, fleet_import, per_home_discharge)
+    SimNode = tuple  # (float, float, float, list[float])
+
+    sampled_data: dict[int, SimNode] = {}
+
+    def _simulate_age(age: int) -> SimNode:
+        """Simulate the fleet at a given age and return aggregate totals."""
+        from solar_challenge.fleet import FleetConfig
+        from solar_challenge.home import calculate_summary
+
+        aged = _aged_homes(homes, age)
+        fleet_config = FleetConfig(homes=aged, name=f"proj-age-{age}")
+        fleet_results = simulate(fleet_config, start_ts, end_ts)  # type: ignore[misc]
+
+        per_home_summaries = [
+            calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
+            for r in fleet_results.per_home_results
+        ]
+
+        fleet_sc = sum(s.total_self_consumption_kwh for s in per_home_summaries)
+        fleet_exp = sum(s.total_grid_export_kwh for s in per_home_summaries)
+        fleet_imp = sum(s.total_grid_import_kwh for s in per_home_summaries)
+        per_home_discharge = [s.total_battery_discharge_kwh for s in per_home_summaries]
+
+        return (fleet_sc, fleet_exp, fleet_imp, per_home_discharge)
+
+    # March ascending
+    prev_age: Optional[int] = None
+    for age in seed_ages:
+        node = _simulate_age(age)
+        sampled_data[age] = node
+        # Accumulate cumulative throughput toward next node (trapezoidal; step-12)
+        if prev_age is not None:
+            dt = age - prev_age
+            prev_discharge = sampled_data[prev_age][3]
+            for i in range(n_homes):
+                cum_throughput[i] += 0.5 * (prev_discharge[i] + node[3][i]) * dt
+        prev_age = age
+
+    # ---- Interpolate per-year curves ----------------------------------------
+    ages_sorted = sorted(sampled_data.keys())
+    sc_vals = [sampled_data[a][0] for a in ages_sorted]
+    exp_vals = [sampled_data[a][1] for a in ages_sorted]
+    imp_vals = [sampled_data[a][2] for a in ages_sorted]
+
+    sc_per_year = _interpolate_per_year(ages_sorted, sc_vals, asset_life)
+    exp_per_year = _interpolate_per_year(ages_sorted, exp_vals, asset_life)
+    imp_per_year = _interpolate_per_year(ages_sorted, imp_vals, asset_life)
+
+    # ---- Assemble YearPoints (SOH + revenue are placeholder 1.0/0.0) --------
+    points = tuple(
+        YearPoint(
+            year=y,
+            pv_soh=1.0,              # wired in step-10
+            battery_soh=1.0,          # wired in step-10
+            fleet_self_consumption_kwh=max(0.0, sc_per_year[y]),
+            fleet_export_kwh=max(0.0, exp_per_year[y]),
+            fleet_import_kwh=max(0.0, imp_per_year[y]),
+            fleet_revenue_gbp=0.0,    # wired in step-14
+        )
+        for y in range(asset_life)
+    )
+
+    return MultiYearCurve(
+        points=points,
+        sampled_ages=tuple(ages_sorted),
+        interp_error_estimate=0.0,   # wired in step-16
     )

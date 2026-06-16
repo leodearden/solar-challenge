@@ -428,6 +428,7 @@ def _make_scenario(
     finance = FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life_years,
+        loan_term_years=min(asset_life_years, 15),  # must be <= asset_life_years
     )
     scenario = ScenarioConfig(
         name="test-scenario",
