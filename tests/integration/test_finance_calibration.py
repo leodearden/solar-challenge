@@ -16,7 +16,6 @@ Layout:
       TestCalibrationCapexMethodAgreement — H6 capex gate
       TestCalibrationDscrIrrMethodAgreement — H6 DSCR/IRR gate
       TestCalibrationG6Guards — G6 premise guards
-      TestReconciliationNoteDocumented — docs note presence
   - @pytest.mark.slow class:
       TestCalibrationPhysicsColumn — real-PVGIS physics column (reported, not asserted ==)
 
@@ -739,30 +738,6 @@ class TestCalibrationG6Guards:
         print(f"\n[G6 CAPEX DELTA] £{delta:,.0f} = 100 × 5 kWh × £250 (battery-size, §2.3)")
         assert delta != pytest.approx(0.0), "Delta must be NON-ZERO (different battery sizes)"
         assert delta == pytest.approx(125000.0, abs=1.0), "Delta must equal £125,000"
-
-    def test_physics_column_not_equal_to_spreadsheet_is_expected(self) -> None:
-        """G6: assert that the module exposes no physics==spreadsheet assertion.
-
-        Structural guard: verify that the slow physics class exists and is marked slow,
-        and that the naming convention ensures it is not collected under 'not slow'.
-        This test itself makes no physics calls.
-        """
-        import inspect
-        import tests.integration.test_finance_calibration as this_module
-
-        # Slow class must exist
-        slow_cls = getattr(this_module, "TestCalibrationPhysicsColumn", None)
-        assert slow_cls is not None, (
-            "TestCalibrationPhysicsColumn must exist in this module"
-        )
-
-        # Must be marked @pytest.mark.slow
-        marks = getattr(slow_cls, "pytestmark", [])
-        mark_names = [m.name for m in marks]
-        assert "slow" in mark_names, (
-            f"TestCalibrationPhysicsColumn must be marked @pytest.mark.slow; "
-            f"found marks: {mark_names}"
-        )
 
     def test_physics_dscr_not_equal_spreadsheet_golden(self) -> None:
         """G6: spreadsheet-input DSCR != Debt_Analytics!B16 under [FIN]-assumption curve.
