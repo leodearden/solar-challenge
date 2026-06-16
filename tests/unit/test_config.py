@@ -13,6 +13,7 @@ from solar_challenge.config import (
     BatteryDistributionConfig,
     ConfigurationError,
     DispatchStrategyConfig,
+    FinanceConfig,
     FleetDistributionConfig,
     GridChargeConfig,
     HeatPumpDistributionConfig,
@@ -29,6 +30,7 @@ from solar_challenge.config import (
     _parse_community_config,
     _parse_dispatch_strategy_config,
     _parse_ev_config,
+    _parse_finance_config,
     _parse_heat_pump_config,
     _parse_home_config,
     _parse_pv_config,
@@ -2469,3 +2471,484 @@ class TestAgedScenario:
         assert abs(factor - expected) < 1e-9, (
             f"Expected degradation factor {expected}, got {factor}"
         )
+
+
+# ---------------------------------------------------------------------------
+# FinanceConfig tests (step-1: construction + defaults)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceConfig:
+    """Tests for FinanceConfig dataclass construction, defaults, and immutability."""
+
+    def test_construction_with_required_arg(self) -> None:
+        """FinanceConfig can be constructed with only standing_charge_pence_per_day."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.standing_charge_pence_per_day == 60.0
+
+    def test_defaults_vat_rate(self) -> None:
+        """Default vat_rate is 0.05."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.vat_rate == 0.05
+
+    def test_defaults_retail_baseline_rate(self) -> None:
+        """Default retail_baseline_rate_pence_per_kwh is 23.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.retail_baseline_rate_pence_per_kwh == 23.0
+
+    def test_defaults_self_consumption_override_is_none(self) -> None:
+        """Default self_consumption_override is None."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.self_consumption_override is None
+
+    def test_defaults_pv_cost_per_kwp(self) -> None:
+        """Default pv_cost_per_kwp_gbp is 1000.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.pv_cost_per_kwp_gbp == 1000.0
+
+    def test_defaults_roof_fit_cost(self) -> None:
+        """Default roof_fit_cost_gbp is 1000.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.roof_fit_cost_gbp == 1000.0
+
+    def test_defaults_battery_cost_per_kwh(self) -> None:
+        """Default battery_cost_per_kwh_gbp is 250.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.battery_cost_per_kwh_gbp == 250.0
+
+    def test_defaults_grant_gbp(self) -> None:
+        """Default grant_gbp is 250000.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.grant_gbp == 250000.0
+
+    def test_defaults_equity_fraction(self) -> None:
+        """Default equity_fraction is 0.75."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.equity_fraction == 0.75
+
+    def test_defaults_loan_term_years(self) -> None:
+        """Default loan_term_years is 15."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.loan_term_years == 15
+
+    def test_defaults_loan_rate(self) -> None:
+        """Default loan_rate is 0.07."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.loan_rate == 0.07
+
+    def test_defaults_opex_per_home_per_year(self) -> None:
+        """Default opex_per_home_per_year_gbp is 131.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.opex_per_home_per_year_gbp == 131.0
+
+    def test_defaults_asset_life_years(self) -> None:
+        """Default asset_life_years is 25."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.asset_life_years == 25
+
+    def test_frozen_raises_on_assignment(self) -> None:
+        """FinanceConfig is frozen: attribute assignment raises FrozenInstanceError."""
+        import dataclasses
+
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            fc.vat_rate = 0.20  # type: ignore[misc]
+
+    def test_standing_charge_is_required(self) -> None:
+        """standing_charge_pence_per_day has no default; omitting it raises TypeError."""
+        with pytest.raises(TypeError):
+            FinanceConfig()  # type: ignore[call-arg]
+
+    def test_custom_values_round_trip(self) -> None:
+        """All fields can be set to custom values and are retrievable."""
+        fc = FinanceConfig(
+            standing_charge_pence_per_day=75.0,
+            vat_rate=0.20,
+            retail_baseline_rate_pence_per_kwh=28.0,
+            self_consumption_override=0.80,
+            pv_cost_per_kwp_gbp=900.0,
+            roof_fit_cost_gbp=1200.0,
+            battery_cost_per_kwh_gbp=300.0,
+            grant_gbp=200000.0,
+            equity_fraction=0.60,
+            loan_term_years=20,
+            loan_rate=0.06,
+            opex_per_home_per_year_gbp=150.0,
+            asset_life_years=25,
+        )
+        assert fc.standing_charge_pence_per_day == 75.0
+        assert fc.vat_rate == 0.20
+        assert fc.retail_baseline_rate_pence_per_kwh == 28.0
+        assert fc.self_consumption_override == 0.80
+        assert fc.pv_cost_per_kwp_gbp == 900.0
+        assert fc.roof_fit_cost_gbp == 1200.0
+        assert fc.battery_cost_per_kwh_gbp == 300.0
+        assert fc.grant_gbp == 200000.0
+        assert fc.equity_fraction == 0.60
+        assert fc.loan_term_years == 20
+        assert fc.loan_rate == 0.06
+        assert fc.opex_per_home_per_year_gbp == 150.0
+        assert fc.asset_life_years == 25
+
+
+# ---------------------------------------------------------------------------
+# FinanceConfig validation tests (step-3: __post_init__ rejections + acceptances)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceConfigValidation:
+    """Tests for FinanceConfig.__post_init__ validation (raises ConfigurationError)."""
+
+    _BASE = dict(standing_charge_pence_per_day=60.0)
+
+    # ---- vat_rate ----
+
+    def test_vat_rate_too_high_raises(self) -> None:
+        """vat_rate > 1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, vat_rate=2.0)
+
+    def test_vat_rate_negative_raises(self) -> None:
+        """vat_rate < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, vat_rate=-0.1)
+
+    def test_vat_rate_zero_ok(self) -> None:
+        """vat_rate == 0 is valid (VAT-exempt scenario)."""
+        fc = FinanceConfig(**self._BASE, vat_rate=0.0)
+        assert fc.vat_rate == 0.0
+
+    def test_vat_rate_one_ok(self) -> None:
+        """vat_rate == 1 is valid (100% VAT, boundary)."""
+        fc = FinanceConfig(**self._BASE, vat_rate=1.0)
+        assert fc.vat_rate == 1.0
+
+    # ---- equity_fraction ----
+
+    def test_equity_fraction_too_high_raises(self) -> None:
+        """equity_fraction > 1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, equity_fraction=1.5)
+
+    def test_equity_fraction_negative_raises(self) -> None:
+        """equity_fraction < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, equity_fraction=-0.1)
+
+    def test_equity_fraction_zero_ok(self) -> None:
+        """equity_fraction == 0 is valid (fully debt-financed)."""
+        fc = FinanceConfig(**self._BASE, equity_fraction=0.0)
+        assert fc.equity_fraction == 0.0
+
+    def test_equity_fraction_one_ok(self) -> None:
+        """equity_fraction == 1 is valid (fully equity-financed)."""
+        fc = FinanceConfig(**self._BASE, equity_fraction=1.0)
+        assert fc.equity_fraction == 1.0
+
+    # ---- self_consumption_override ----
+
+    def test_self_consumption_override_zero_raises(self) -> None:
+        """self_consumption_override == 0 raises ConfigurationError (must be > 0)."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, self_consumption_override=0.0)
+
+    def test_self_consumption_override_too_high_raises(self) -> None:
+        """self_consumption_override > 1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, self_consumption_override=1.5)
+
+    def test_self_consumption_override_one_ok(self) -> None:
+        """self_consumption_override == 1 is valid (100% self-consumed)."""
+        fc = FinanceConfig(**self._BASE, self_consumption_override=1.0)
+        assert fc.self_consumption_override == 1.0
+
+    def test_self_consumption_override_none_ok(self) -> None:
+        """self_consumption_override == None skips override validation."""
+        fc = FinanceConfig(**self._BASE, self_consumption_override=None)
+        assert fc.self_consumption_override is None
+
+    # ---- loan_term_years ----
+
+    def test_loan_term_years_zero_raises(self) -> None:
+        """loan_term_years == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, loan_term_years=0)
+
+    def test_loan_term_years_negative_raises(self) -> None:
+        """loan_term_years < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, loan_term_years=-1)
+
+    # ---- loan_rate ----
+
+    def test_loan_rate_negative_raises(self) -> None:
+        """loan_rate < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, loan_rate=-0.01)
+
+    def test_loan_rate_zero_ok(self) -> None:
+        """loan_rate == 0 is valid (interest-free loan)."""
+        fc = FinanceConfig(**self._BASE, loan_rate=0.0)
+        assert fc.loan_rate == 0.0
+
+    # ---- asset_life_years vs loan_term_years ----
+
+    def test_asset_life_less_than_loan_term_raises(self) -> None:
+        """asset_life_years < loan_term_years raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, asset_life_years=10, loan_term_years=15)
+
+    def test_asset_life_equals_loan_term_ok(self) -> None:
+        """asset_life_years == loan_term_years is valid (equality allowed)."""
+        fc = FinanceConfig(**self._BASE, asset_life_years=15, loan_term_years=15)
+        assert fc.asset_life_years == 15
+
+    # ---- cost fields (must be > 0) ----
+
+    def test_standing_charge_zero_raises(self) -> None:
+        """standing_charge_pence_per_day == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(standing_charge_pence_per_day=0.0)
+
+    def test_retail_baseline_rate_zero_raises(self) -> None:
+        """retail_baseline_rate_pence_per_kwh == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, retail_baseline_rate_pence_per_kwh=0.0)
+
+    def test_pv_cost_per_kwp_zero_raises(self) -> None:
+        """pv_cost_per_kwp_gbp == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, pv_cost_per_kwp_gbp=0.0)
+
+    def test_roof_fit_cost_negative_raises(self) -> None:
+        """roof_fit_cost_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, roof_fit_cost_gbp=-1.0)
+
+    def test_battery_cost_per_kwh_zero_raises(self) -> None:
+        """battery_cost_per_kwh_gbp == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, battery_cost_per_kwh_gbp=0.0)
+
+    def test_opex_per_home_per_year_negative_raises(self) -> None:
+        """opex_per_home_per_year_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, opex_per_home_per_year_gbp=-1.0)
+
+    # ---- grant_gbp (must be >= 0) ----
+
+    def test_grant_negative_raises(self) -> None:
+        """grant_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, grant_gbp=-1.0)
+
+    def test_grant_zero_ok(self) -> None:
+        """grant_gbp == 0 is valid (no grant received)."""
+        fc = FinanceConfig(**self._BASE, grant_gbp=0.0)
+        assert fc.grant_gbp == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _parse_finance_config tests (step-5)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceConfigParsing:
+    """Tests for _parse_finance_config parser function."""
+
+    def test_none_returns_none(self) -> None:
+        """_parse_finance_config(None) returns None (no finance block in YAML)."""
+        assert _parse_finance_config(None) is None
+
+    def test_minimal_dict_uses_defaults(self) -> None:
+        """Dict with only standing_charge_pence_per_day uses all other defaults."""
+        result = _parse_finance_config({"standing_charge_pence_per_day": 60.0})
+        assert result is not None
+        assert result.standing_charge_pence_per_day == 60.0
+        assert result.vat_rate == 0.05
+        assert result.retail_baseline_rate_pence_per_kwh == 23.0
+        assert result.self_consumption_override is None
+        assert result.pv_cost_per_kwp_gbp == 1000.0
+        assert result.roof_fit_cost_gbp == 1000.0
+        assert result.battery_cost_per_kwh_gbp == 250.0
+        assert result.grant_gbp == 250000.0
+        assert result.equity_fraction == 0.75
+        assert result.loan_term_years == 15
+        assert result.loan_rate == 0.07
+        assert result.opex_per_home_per_year_gbp == 131.0
+        assert result.asset_life_years == 25
+
+    def test_full_dict_round_trips(self) -> None:
+        """All fields supplied in the dict are reflected on the returned FinanceConfig."""
+        data = {
+            "standing_charge_pence_per_day": 70.0,
+            "vat_rate": 0.08,
+            "retail_baseline_rate_pence_per_kwh": 28.5,
+            "self_consumption_override": 0.70,
+            "pv_cost_per_kwp_gbp": 950.0,
+            "roof_fit_cost_gbp": 1100.0,
+            "battery_cost_per_kwh_gbp": 280.0,
+            "grant_gbp": 200000.0,
+            "equity_fraction": 0.60,
+            "loan_term_years": 20,
+            "loan_rate": 0.065,
+            "opex_per_home_per_year_gbp": 140.0,
+            "asset_life_years": 25,
+        }
+        result = _parse_finance_config(data)
+        assert result is not None
+        assert result.standing_charge_pence_per_day == 70.0
+        assert result.vat_rate == 0.08
+        assert result.retail_baseline_rate_pence_per_kwh == 28.5
+        assert result.self_consumption_override == 0.70
+        assert result.pv_cost_per_kwp_gbp == 950.0
+        assert result.roof_fit_cost_gbp == 1100.0
+        assert result.battery_cost_per_kwh_gbp == 280.0
+        assert result.grant_gbp == 200000.0
+        assert result.equity_fraction == 0.60
+        assert result.loan_term_years == 20
+        assert result.loan_rate == 0.065
+        assert result.opex_per_home_per_year_gbp == 140.0
+        assert result.asset_life_years == 25
+
+    def test_out_of_range_propagates_configuration_error(self) -> None:
+        """An out-of-range field (vat_rate=2.0) raises ConfigurationError via __post_init__."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, "vat_rate": 2.0}
+            )
+
+    def test_zero_grant_accepted(self) -> None:
+        """grant_gbp=0 is accepted by the parser (non-negative allowed)."""
+        result = _parse_finance_config(
+            {"standing_charge_pence_per_day": 60.0, "grant_gbp": 0.0}
+        )
+        assert result is not None
+        assert result.grant_gbp == 0.0
+
+    def test_missing_standing_charge_raises(self) -> None:
+        """Finance block without standing_charge_pence_per_day raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="standing_charge_pence_per_day"):
+            _parse_finance_config({"vat_rate": 0.05})
+
+    def test_int_coercion_of_year_fields(self) -> None:
+        """loan_term_years/asset_life_years given as floats in the dict are coerced to int."""
+        result = _parse_finance_config(
+            {
+                "standing_charge_pence_per_day": 60.0,
+                "loan_term_years": 20.0,
+                "asset_life_years": 25.0,
+            }
+        )
+        assert result is not None
+        assert result.loan_term_years == 20
+        assert isinstance(result.loan_term_years, int)
+        assert result.asset_life_years == 25
+        assert isinstance(result.asset_life_years, int)
+
+    def test_non_numeric_value_raises_configuration_error(self) -> None:
+        """A non-numeric string for a numeric field raises ConfigurationError (not ValueError)."""
+        with pytest.raises(ConfigurationError, match="non-numeric"):
+            _parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, "vat_rate": "not-a-number"}
+            )
+
+
+# ---------------------------------------------------------------------------
+# ScenarioConfig.finance field + load_scenarios round-trip (step-7)
+# ---------------------------------------------------------------------------
+
+
+class TestScenarioFinance:
+    """Tests for ScenarioConfig.finance field and _parse_scenario wiring."""
+
+    _MINIMAL_PERIOD = {
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-07",
+    }
+    _MINIMAL_HOME = {
+        "pv": {"capacity_kw": 4.0},
+        "load": {"annual_consumption_kwh": 3400},
+    }
+
+    def test_scenario_config_finance_defaults_to_none(self) -> None:
+        """ScenarioConfig.finance is None when not provided (constructed directly)."""
+        from solar_challenge.home import HomeConfig
+        from solar_challenge.pv import PVConfig
+        from solar_challenge.load import LoadConfig
+
+        home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+        )
+        sc = ScenarioConfig(
+            name="test",
+            period=SimulationPeriod(**self._MINIMAL_PERIOD),
+            home=home,
+        )
+        assert sc.finance is None
+
+    def test_load_scenarios_with_finance_block_populates_field(self) -> None:
+        """YAML with a top-level finance: block → scenarios[0].finance is FinanceConfig."""
+        yaml_content = (
+            "name: Finance Test\n"
+            "period:\n"
+            "  start_date: '2024-01-01'\n"
+            "  end_date: '2024-01-07'\n"
+            "home:\n"
+            "  pv:\n"
+            "    capacity_kw: 4.0\n"
+            "  load:\n"
+            "    annual_consumption_kwh: 3400\n"
+            "finance:\n"
+            "  standing_charge_pence_per_day: 65.0\n"
+            "  vat_rate: 0.08\n"
+            "  self_consumption_override: 0.75\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            scenarios = load_scenarios(path)
+            assert len(scenarios) == 1
+            fc = scenarios[0].finance
+            assert fc is not None
+            assert isinstance(fc, FinanceConfig)
+            assert fc.standing_charge_pence_per_day == 65.0
+            assert fc.vat_rate == 0.08
+            assert fc.self_consumption_override == 0.75
+            # Un-overridden fields use defaults
+            assert fc.loan_term_years == 15
+        finally:
+            path.unlink()
+
+    def test_load_scenarios_without_finance_block_is_none(self) -> None:
+        """YAML without a finance: block → scenarios[0].finance is None."""
+        yaml_content = (
+            "name: No Finance Test\n"
+            "period:\n"
+            "  start_date: '2024-01-01'\n"
+            "  end_date: '2024-01-07'\n"
+            "home:\n"
+            "  pv:\n"
+            "    capacity_kw: 4.0\n"
+            "  load:\n"
+            "    annual_consumption_kwh: 3400\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            scenarios = load_scenarios(path)
+            assert len(scenarios) == 1
+            assert scenarios[0].finance is None
+        finally:
+            path.unlink()
