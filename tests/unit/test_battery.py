@@ -1,6 +1,7 @@
 """Tests for Battery configuration and state."""
 
 import dataclasses
+import math
 import pickle
 
 import pytest
@@ -104,6 +105,61 @@ class TestBatteryConfigGridCharging:
         cfg = BatteryConfig(capacity_kwh=5.0, grid_charging=gc)
         restored = pickle.loads(pickle.dumps(cfg))
         assert restored == cfg
+
+
+class TestBatteryConfigRoundTripEfficiency:
+    """Test BatteryConfig round-trip efficiency split via sqrt."""
+
+    def test_efficiency_splits_into_sqrt(self) -> None:
+        """efficiency=0.9 -> charge_efficiency==sqrt(0.9), discharge_efficiency==sqrt(0.9)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
+        assert cfg.charge_efficiency == pytest.approx(math.sqrt(0.9))
+        assert cfg.discharge_efficiency == pytest.approx(math.sqrt(0.9))
+
+    def test_efficiency_retained_as_raw(self) -> None:
+        """efficiency field retains the original round-trip value."""
+        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
+        assert cfg.efficiency == 0.9
+
+    def test_efficiency_overrides_explicit_charge_discharge(self) -> None:
+        """efficiency takes precedence over explicit charge_efficiency/discharge_efficiency."""
+        cfg = BatteryConfig(
+            capacity_kwh=5.0,
+            efficiency=0.81,
+            charge_efficiency=0.99,
+            discharge_efficiency=0.99,
+        )
+        assert cfg.charge_efficiency == pytest.approx(math.sqrt(0.81))
+        assert cfg.discharge_efficiency == pytest.approx(math.sqrt(0.81))
+
+    def test_efficiency_zero_raises(self) -> None:
+        """efficiency == 0 raises ValueError."""
+        with pytest.raises(ValueError, match="efficiency"):
+            BatteryConfig(capacity_kwh=5.0, efficiency=0.0)
+
+    def test_efficiency_greater_than_one_raises(self) -> None:
+        """efficiency > 1 raises ValueError."""
+        with pytest.raises(ValueError, match="efficiency"):
+            BatteryConfig(capacity_kwh=5.0, efficiency=1.5)
+
+    def test_efficiency_negative_raises(self) -> None:
+        """efficiency < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="efficiency"):
+            BatteryConfig(capacity_kwh=5.0, efficiency=-0.5)
+
+    def test_efficiency_one_is_valid(self) -> None:
+        """efficiency == 1 is valid (100% round-trip)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=1.0)
+        assert cfg.charge_efficiency == pytest.approx(1.0)
+        assert cfg.discharge_efficiency == pytest.approx(1.0)
+
+    def test_efficiency_pickles_idempotently(self) -> None:
+        """BatteryConfig with efficiency round-trips through pickle correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
+        restored = pickle.loads(pickle.dumps(cfg))
+        assert restored == cfg
+        # After pickle, charge_efficiency should still equal sqrt(0.9)
+        assert restored.charge_efficiency == pytest.approx(math.sqrt(0.9))
 
 
 class TestBatteryConfigSOCEfficiencyValidation:
