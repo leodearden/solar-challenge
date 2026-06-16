@@ -348,3 +348,100 @@ class TestProjectEconomicsCapex:
 
         with pytest.raises(ValueError, match="at least one home"):
             project_economics(curve, empty_scenario, finance)
+
+
+# ---------------------------------------------------------------------------
+# Step-5: level-amortisation annuity debt service (H5)
+# ---------------------------------------------------------------------------
+
+
+class TestProjectEconomicsDebtService:
+    """Fast tests for annual_debt_service_gbp: level annuity formula (H5)."""
+
+    def test_annuity_formula_positive_rate(self) -> None:
+        """annual_debt_service_gbp == debt*r/(1-(1+r)^-n) for known parameters."""
+        from solar_challenge.finance import _annuity_payment, project_economics
+
+        # Known debt, rate, term
+        # capex = 1*1000 + 1000 + 0 = 2000; grant=0; equity_frac=0.5
+        # financed=2000; equity=1000; debt=1000
+        home = _make_home_config(pv_kwp=1.0, battery_kwh=None)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            grant_gbp=0.0,
+            equity_fraction=0.5,
+            loan_rate=0.07,
+            loan_term_years=15,
+        )
+        curve = _make_curve([5000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        # capex = 1*1000 + 1000 = 2000; debt = 2000 * 0.5 = 1000
+        expected_debt = 2000.0 * 0.5
+        expected_annuity = _annuity_payment(expected_debt, 0.07, 15)
+        # verify helper itself
+        hand_annuity = expected_debt * 0.07 / (1.0 - (1.07) ** -15)
+        assert expected_annuity == pytest.approx(hand_annuity, rel=1e-9)
+        assert econ.annual_debt_service_gbp == pytest.approx(hand_annuity, rel=1e-9)
+
+    def test_annuity_zero_rate(self) -> None:
+        """loan_rate==0 → annual_debt_service == debt / loan_term_years."""
+        from solar_challenge.finance import _annuity_payment, project_economics
+
+        home = _make_home_config(pv_kwp=2.0, battery_kwh=None)
+        scenario = _make_scenario(homes=[home])
+        # capex = 2*800+1000=2600; grant=0; debt=2600*0.5=1300
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=800.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            grant_gbp=0.0,
+            equity_fraction=0.5,
+            loan_rate=0.0,
+            loan_term_years=10,
+        )
+        curve = _make_curve([5000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        # debt = 2600 * 0.5 = 1300; annuity = 1300/10 = 130
+        capex = 2.0 * 800.0 + 1000.0
+        expected_debt = capex * 0.5
+        expected_annuity = expected_debt / 10
+        assert econ.annual_debt_service_gbp == pytest.approx(expected_annuity, rel=1e-9)
+
+    def test_annuity_zero_debt(self) -> None:
+        """When debt==0 (grant covers all), annual_debt_service_gbp==0."""
+        from solar_challenge.finance import project_economics
+
+        home = _make_home_config(pv_kwp=2.0)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(grant_gbp=999999.0)  # grant >> capex
+        curve = _make_curve([5000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        assert econ.annual_debt_service_gbp == pytest.approx(0.0, abs=1e-9)
+
+    def test_annuity_helper_direct(self) -> None:
+        """_annuity_payment helper: closed-form check at known values."""
+        from solar_challenge.finance import _annuity_payment
+
+        # 1000 @ 10% for 10 years: payment = 1000 * 0.1 / (1 - 1.1^-10)
+        principal = 1000.0
+        rate = 0.10
+        n = 10
+        expected = principal * rate / (1.0 - (1.0 + rate) ** -n)
+        result = _annuity_payment(principal, rate, n)
+        assert result == pytest.approx(expected, rel=1e-9)
+
+    def test_annuity_helper_zero_rate(self) -> None:
+        """_annuity_payment: zero rate falls back to principal/n."""
+        from solar_challenge.finance import _annuity_payment
+
+        result = _annuity_payment(1000.0, 0.0, 8)
+        assert result == pytest.approx(125.0, rel=1e-9)
