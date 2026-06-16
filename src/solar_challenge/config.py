@@ -578,6 +578,7 @@ class ScenarioConfig:
         output: Output preferences
         seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional)
         tariff_config: Tariff configuration (None for no cost tracking)
+        finance: Financial appraisal parameters (None for no financial analysis)
     """
 
     name: str
@@ -589,6 +590,7 @@ class ScenarioConfig:
     output: Optional[OutputConfig] = None
     seg_tariff_pence_per_kwh: Optional[float] = None
     tariff_config: Optional[TariffConfig] = None
+    finance: Optional[FinanceConfig] = None
 
     def __post_init__(self) -> None:
         """Validate scenario configuration."""
@@ -1646,6 +1648,7 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         output=_parse_output_config(data.get("output")),
         seg_tariff_pence_per_kwh=_parse_seg_config(data.get("seg")),
         tariff_config=_parse_tariff_config(data.get("tariff_config")),
+        finance=_parse_finance_config(data.get("finance")),
     )
 
 
