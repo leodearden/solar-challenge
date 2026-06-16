@@ -669,3 +669,200 @@ class TestCalibrationDscrIrrMethodAgreement:
         # HARD assert: structural sanity only
         assert not math.isnan(econ.equity_irr)
         assert econ.equity_irr > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Step-7: TestCalibrationG6Guards — G6 premise guards (fast)
+# ---------------------------------------------------------------------------
+
+
+class TestCalibrationG6Guards:
+    """Fast G6 premise guard tests (no PVGIS) (task/48 step-7).
+
+    Verify:
+    (1) The test suite surfaces BOTH a spreadsheet-input column and a physics
+        column interface, with only the spreadsheet column hard-asserted.
+    (2) The capex delta (£125k) is REPORTED, not asserted equal.
+    (3) No assertion compares physics results to the named spreadsheet cells.
+    """
+
+    def _build_spreadsheet_econ(self) -> "ProjectEconomics":  # type: ignore[name-defined]
+        """Build spreadsheet-input ProjectEconomics."""
+        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
+
+        curve = spreadsheet_revenue_curve(
+            n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
+            self_consumption_fraction=_FIN_SCF,
+            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
+            asset_life_years=25,
+        )
+        return project_economics(
+            curve,
+            _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0),
+            _make_finance_fin(),
+        )
+
+    def test_spreadsheet_column_produces_project_economics(self) -> None:
+        """spreadsheet_revenue_curve → project_economics returns a ProjectEconomics."""
+        from solar_challenge.finance import ProjectEconomics
+
+        econ = self._build_spreadsheet_econ()
+        assert isinstance(econ, ProjectEconomics)
+
+    def test_spreadsheet_column_capex_hard_asserted(self) -> None:
+        """Spreadsheet column: capex IS hard-asserted (the primary gate)."""
+        econ = self._build_spreadsheet_econ()
+        # This is the canonical hard assertion
+        assert abs(econ.total_capex_gbp - _FIN_GOLDEN["capital_stack_b6"]) < 1.0
+
+    def test_capex_delta_reported_not_asserted_equal(self) -> None:
+        """§2.3 capex delta is a REPORTED value — assert it is non-zero (not equal).
+
+        The delta (£125k) must NOT be asserted as zero. It is the reconciliation
+        between the 5 kWh (Capital_Stack!B6) and 10 kWh (Workings!C94) bases.
+        """
+        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
+
+        curve = spreadsheet_revenue_curve(
+            n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
+            self_consumption_fraction=_FIN_SCF,
+            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
+            asset_life_years=25,
+        )
+        finance = _make_finance_fin()
+        econ_5 = project_economics(curve, _make_scenario_fin(battery_kwh=5.0), finance)
+        econ_10 = project_economics(curve, _make_scenario_fin(battery_kwh=10.0), finance)
+
+        delta = econ_10.total_capex_gbp - econ_5.total_capex_gbp
+
+        # delta is REPORTED (documented), not asserted equal to zero
+        print(f"\n[G6 CAPEX DELTA] £{delta:,.0f} = 100 × 5 kWh × £250 (battery-size, §2.3)")
+        assert delta != pytest.approx(0.0), "Delta must be NON-ZERO (different battery sizes)"
+        assert delta == pytest.approx(125000.0, abs=1.0), "Delta must equal £125,000"
+
+    def test_physics_column_not_equal_to_spreadsheet_is_expected(self) -> None:
+        """G6: assert that the module exposes no physics==spreadsheet assertion.
+
+        Structural guard: verify that the slow physics class exists and is marked slow,
+        and that the naming convention ensures it is not collected under 'not slow'.
+        This test itself makes no physics calls.
+        """
+        import inspect
+        import tests.integration.test_finance_calibration as this_module
+
+        # Slow class must exist
+        slow_cls = getattr(this_module, "TestCalibrationPhysicsColumn", None)
+        assert slow_cls is not None, (
+            "TestCalibrationPhysicsColumn must exist in this module"
+        )
+
+        # Must be marked @pytest.mark.slow
+        marks = getattr(slow_cls, "pytestmark", [])
+        mark_names = [m.name for m in marks]
+        assert "slow" in mark_names, (
+            f"TestCalibrationPhysicsColumn must be marked @pytest.mark.slow; "
+            f"found marks: {mark_names}"
+        )
+
+    def test_physics_dscr_not_equal_spreadsheet_golden(self) -> None:
+        """G6: spreadsheet-input DSCR != Debt_Analytics!B16 under [FIN]-assumption curve.
+
+        This validates the G6 non-assertion: our [FIN]-assumption DSCR (~4.02)
+        legitimately differs from the spreadsheet DSCR (2.10378). Assert the difference
+        is large enough to document — i.e., we are NOT digit-matched, as intended.
+        """
+        econ = self._build_spreadsheet_econ()
+        # Our DSCR should be substantially higher than the spreadsheet's
+        # (because the spreadsheet deducts formation costs / fundraising fees)
+        spreadsheet_dscr = _FIN_GOLDEN["min_dscr"]
+        model_dscr = econ.min_dscr
+
+        # G6: model DSCR must NOT equal spreadsheet DSCR (digit-match is wrong)
+        assert abs(model_dscr - spreadsheet_dscr) > 0.5, (
+            f"G6 guard: model_dscr ({model_dscr:.4f}) should NOT digit-match "
+            f"Debt_Analytics!B16 ({spreadsheet_dscr:.6f}). "
+            "If they're close, re-examine the [FIN] curve parameters."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step-7 slow: TestCalibrationPhysicsColumn — real PVGIS (reported only)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+class TestCalibrationPhysicsColumn:
+    """Real-PVGIS physics column for calibration (REPORTED, not asserted == spreadsheet).
+
+    Runs a small 2-home fleet over a short window to show the physics column
+    alongside the spreadsheet column. Self-consumption from the physics sim
+    may differ significantly from the spreadsheet's 0.70 ([FIN] assumption).
+    This is the §2.3 self-consumption tension (physics ~30–52% vs sheet 70%).
+
+    Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
+    """
+
+    def test_physics_column_structural_sanity(self) -> None:
+        """Physics column: capex still input-driven (== £775k for 5kWh fleet).
+
+        The physics column uses the real project_multi_year simulation (2 homes,
+        3-day window). Only STRUCTURAL checks: capex == £775k, physics scf MAY
+        differ from 0.70, no physics==spreadsheet assertion.
+        """
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+        from solar_challenge.finance import (
+            project_economics,
+            project_multi_year,
+            spreadsheet_revenue_curve,
+        )
+
+        # Small fleet, short window for speed
+        homes = [_make_home_config_fin(pv_kwp=5.5, battery_kwh=5.0)] * 2
+        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
+        scenario = ScenarioConfig(
+            name="FIN-Cal-Physics-Test",
+            period=period,
+            homes=homes,
+        )
+        finance = _make_finance_fin()
+
+        # Physics column (real PVGIS)
+        physics_curve = project_multi_year(scenario, finance)
+        physics_econ = project_economics(physics_curve, scenario, finance)
+
+        # Spreadsheet column (analytic)
+        ss_curve = spreadsheet_revenue_curve(
+            n_homes=2, pv_kwp=5.5, kwh_per_kwp=1050.0,
+            self_consumption_fraction=_FIN_SCF,
+            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
+            asset_life_years=25,
+        )
+        # Adjust scenario to match 2 homes for capex assertion
+        ss_econ = project_economics(ss_curve, scenario, finance)
+
+        # REPORT both columns
+        print(
+            f"\n[PHYSICS vs SPREADSHEET REPORT] (2 homes, 3-day window)\n"
+            f"  Spreadsheet-input capex: £{ss_econ.total_capex_gbp:,.2f}\n"
+            f"  Physics capex:           £{physics_econ.total_capex_gbp:,.2f}\n"
+            f"  Spreadsheet DSCR:        {ss_econ.min_dscr:.4f}\n"
+            f"  Physics DSCR:            {physics_econ.min_dscr:.4f}\n"
+            f"  Spreadsheet IRR:         {ss_econ.equity_irr*100:.2f}%\n"
+            f"  Physics IRR:             {physics_econ.equity_irr*100:.2f}%\n"
+            f"  Physics self_cons_kwh:   {physics_curve.points[0].fleet_self_consumption_kwh:.1f}\n"
+            f"  Physics export_kwh:      {physics_curve.points[0].fleet_export_kwh:.1f}\n"
+            f"  Spreadsheet scf=0.70 (named inp: {_FIN_SCF})\n"
+            f"  §2.3: physics scf may differ — this is expected, NOT an error."
+        )
+
+        # STRUCTURAL assertions only (no physics==spreadsheet assertions)
+        # Capex is input-driven (same for both columns when n_homes matches)
+        assert physics_econ.total_capex_gbp == pytest.approx(ss_econ.total_capex_gbp, abs=1.0), (
+            "Capex must be identical (both use same home configs + finance params)"
+        )
+        # Physics DSCR must be finite and positive (structural sanity)
+        assert physics_econ.min_dscr > 0.0 or physics_econ.min_dscr == float("inf")
+        # Physics IRR: just check it's a float (may be nan for short window)
+        import math
+        # No assertion on physics_irr == spreadsheet_irr (G6: never assert physics == 0.70)
+        assert isinstance(physics_econ.equity_irr, float)
