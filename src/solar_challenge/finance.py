@@ -445,6 +445,8 @@ class ProjectEconomics:
             asset life.
         net_surplus_per_home_per_year_gbp: Mean per-year surplus divided by
             the number of homes (£/home/year).
+        mean_fleet_surplus_per_year_gbp: Mean annual fleet surplus across the
+            full asset life (£/year).  Equals mean(per_year_surplus_gbp).
     """
 
     total_capex_gbp: float
@@ -480,6 +482,11 @@ class ProjectEconomics:
     fleet_opex_gbp: float
     """Total fleet operating expenditure per year (£/year):
     opex_per_home_per_year_gbp × n_homes."""
+
+    mean_fleet_surplus_per_year_gbp: float
+    """Mean annual fleet surplus across the full asset life (£/year):
+    mean(per_year_surplus_gbp).  Single source of truth used by the economics
+    report; avoids recomputing the mean from the tuple at render time."""
 
     def __post_init__(self) -> None:
         if not self.per_year_surplus_gbp:
@@ -803,11 +810,7 @@ def project_multi_year(
         simulate = _simulate_fleet
 
     # ---- Resolve homes (support both .homes list and single .home) ----------
-    homes = list(scenario.homes) if scenario.homes else (
-        [scenario.home] if scenario.home is not None else []
-    )
-    if not homes:
-        raise ValueError("scenario must have at least one home")
+    homes = _resolve_homes(scenario)
 
     # ---- Derive timezone from scenario location (or first home) -------------
     tz: str
@@ -1063,6 +1066,30 @@ def project_multi_year(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_homes(scenario: "ScenarioConfig") -> List[Any]:
+    """Resolve a list of homes from a ScenarioConfig.
+
+    Supports both the ``.homes`` list form and the single ``.home`` form.
+    Raises :class:`ValueError` when neither form yields at least one home.
+
+    Args:
+        scenario: The scenario whose homes should be resolved.
+
+    Returns:
+        Non-empty list of HomeConfig objects.
+
+    Raises:
+        ValueError: When scenario has no homes.
+    """
+    homes: List[Any] = (
+        list(scenario.homes) if scenario.homes
+        else ([scenario.home] if scenario.home is not None else [])
+    )
+    if not homes:
+        raise ValueError("scenario must have at least one home")
+    return homes
+
+
 def _annuity_payment(principal: float, rate: float, n_years: int) -> float:
     """Compute the level annual payment on a loan (closed-form annuity).
 
@@ -1116,8 +1143,10 @@ def _irr_bisection(cashflows: List[float]) -> float:
     if not cashflows or cashflows[0] == 0.0:
         return float("nan")
 
-    # Bracket: search within [-50%, +500%] — wide enough for any realistic project
-    lo, hi = -0.5, 5.0
+    # Bracket: search within [-50%, +10000%]; upper end is capped high so
+    # very profitable low-equity projects (where true IRR >> 500%) are still
+    # captured rather than returning nan.
+    lo, hi = -0.5, 100.0
     npv_lo = _npv(lo, cashflows)
     npv_hi = _npv(hi, cashflows)
 
@@ -1182,11 +1211,7 @@ def project_economics(
         ValueError: When scenario has no homes.
     """
     # 1. Resolve homes
-    homes = list(scenario.homes) if scenario.homes else (
-        [scenario.home] if scenario.home is not None else []
-    )
-    if not homes:
-        raise ValueError("scenario must have at least one home")
+    homes = _resolve_homes(scenario)
     n_homes = len(homes)
 
     # 2. Capex: 3-term build-up (no inverter)
@@ -1213,6 +1238,14 @@ def project_economics(
     annual_debt_service_gbp = _annuity_payment(
         debt_gbp, finance.loan_rate, finance.loan_term_years
     )
+
+    # Guard: curve must be long enough to cover the full asset life.
+    # Raised as a clear domain error rather than an opaque IndexError.
+    if len(curve.points) < finance.asset_life_years:
+        raise ValueError(
+            f"curve has {len(curve.points)} points but finance.asset_life_years="
+            f"{finance.asset_life_years}; pass a curve built from the same FinanceConfig"
+        )
 
     # 5. Fleet opex
     fleet_opex = finance.opex_per_home_per_year_gbp * n_homes
@@ -1265,4 +1298,5 @@ def project_economics(
         payback_years=payback_years,
         net_surplus_per_home_per_year_gbp=net_surplus_per_home_per_year_gbp,
         fleet_opex_gbp=fleet_opex,
+        mean_fleet_surplus_per_year_gbp=mean_surplus,
     )

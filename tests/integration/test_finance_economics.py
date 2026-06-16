@@ -138,6 +138,7 @@ class TestProjectEconomicsDataclass:
             payback_years=payback_years,
             net_surplus_per_home_per_year_gbp=150.0,
             fleet_opex_gbp=0.0,
+            mean_fleet_surplus_per_year_gbp=200.0,
         )
 
     def test_construction_with_all_fields(self) -> None:
@@ -186,6 +187,7 @@ class TestProjectEconomicsDataclass:
                 payback_years=5.0,
                 net_surplus_per_home_per_year_gbp=150.0,
                 fleet_opex_gbp=0.0,
+                mean_fleet_surplus_per_year_gbp=0.0,
             )
 
     def test_negative_payback_years_raises(self) -> None:
@@ -204,13 +206,11 @@ class TestProjectEconomicsDataclass:
                 payback_years=-1.0,  # negative!
                 net_surplus_per_home_per_year_gbp=150.0,
                 fleet_opex_gbp=0.0,
+                mean_fleet_surplus_per_year_gbp=100.0,
             )
 
     def test_fleet_opex_gbp_dataclass_field(self) -> None:
-        """fleet_opex_gbp must be a constructable, readable field on ProjectEconomics.
-
-        Step-15 RED: field does not exist yet → TypeError on construction.
-        """
+        """fleet_opex_gbp must be a constructable, readable field on ProjectEconomics."""
         from solar_challenge.finance import ProjectEconomics
         econ = ProjectEconomics(
             total_capex_gbp=50000.0,
@@ -223,9 +223,10 @@ class TestProjectEconomicsDataclass:
             equity_irr=0.08,
             payback_years=5.0,
             net_surplus_per_home_per_year_gbp=150.0,
-            fleet_opex_gbp=12000.0,  # type: ignore[call-arg]  # new field
+            fleet_opex_gbp=12000.0,
+            mean_fleet_surplus_per_year_gbp=200.0,
         )
-        assert econ.fleet_opex_gbp == pytest.approx(12000.0)  # type: ignore[attr-defined]
+        assert econ.fleet_opex_gbp == pytest.approx(12000.0)
 
 
 # ---------------------------------------------------------------------------
@@ -845,6 +846,7 @@ def _make_project_economics(
         payback_years=payback_years,
         net_surplus_per_home_per_year_gbp=80.0,
         fleet_opex_gbp=fleet_opex_gbp,
+        mean_fleet_surplus_per_year_gbp=8000.0,
     )
 
 
@@ -859,7 +861,7 @@ class TestGenerateFinanceReportEconomics:
         econ = _make_project_economics()
         report = generate_finance_report(dist, economics=econ)
 
-        assert "Project Economics" in report or "project economics" in report.lower()
+        assert "Project Economics" in report
 
     def test_economics_capex_in_report(self) -> None:
         """Economics block must include total capex value."""
@@ -880,7 +882,7 @@ class TestGenerateFinanceReportEconomics:
         econ = _make_project_economics()
         report = generate_finance_report(dist, economics=econ)
 
-        assert "DSCR" in report or "dscr" in report.lower()
+        assert "DSCR" in report
 
     def test_economics_irr_in_report(self) -> None:
         """Economics block must include IRR label."""
@@ -890,7 +892,7 @@ class TestGenerateFinanceReportEconomics:
         econ = _make_project_economics()
         report = generate_finance_report(dist, economics=econ)
 
-        assert "IRR" in report or "irr" in report.lower()
+        assert "IRR" in report
 
     def test_economics_payback_in_report(self) -> None:
         """Economics block must include payback label."""
@@ -900,7 +902,7 @@ class TestGenerateFinanceReportEconomics:
         econ = _make_project_economics()
         report = generate_finance_report(dist, economics=econ)
 
-        assert "payback" in report.lower() or "Payback" in report
+        assert "Payback" in report
 
     def test_economics_none_payback_no_crash(self) -> None:
         """economics with payback_years=None must not crash and must render gracefully."""
@@ -946,12 +948,10 @@ class TestGenerateFinanceReportEconomics:
         assert "Project Economics" not in report
 
     def test_fleet_opex_row_shows_fleet_opex_not_per_home_surplus(self) -> None:
-        """Fleet OpEx / yr row must show fleet_opex_gbp, not net_surplus_per_home_per_year_gbp.
+        """Fleet OpEx / yr row shows fleet_opex_gbp; per-home surplus has its own row.
 
-        Step-17 RED: current output.py renders net_surplus_per_home_per_year_gbp (80)
-        under the 'Fleet OpEx / yr' label via a no-op multiplier (n_years/n_years==1).
-        This test asserts the fleet-opex value (12000) is shown in that row and the
-        per-home surplus (80) appears under a separate correctly-labeled per-home row.
+        fleet_opex_gbp (12000) must appear in the Fleet OpEx row, not the per-home
+        surplus (80).  A separate, correctly-labeled per-home row must also show 80.
         """
         from solar_challenge.output import generate_finance_report
 
@@ -1003,7 +1003,7 @@ class TestFinanceProjectCLI:
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--help"])
         assert result.exit_code == 0, result.output
-        assert "--project" in result.output or "project" in result.output.lower()
+        assert "--project" in result.output
 
     def test_project_without_finance_block_exits_nonzero(self, tmp_path: "Path") -> None:
         """Invoking `finance run --project` on a scenario WITHOUT a finance: block exits non-zero."""
