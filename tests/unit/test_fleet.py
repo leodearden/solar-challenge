@@ -267,6 +267,88 @@ class TestFleetSummary:
         assert summary.total_seg_revenue_gbp is None
         assert summary.per_home_seg_revenue_mean_gbp is None
 
+    def test_aggregates_financial_totals(self):
+        """Fleet aggregates per-home financial totals correctly (P6ε §3.6/§10)."""
+        index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
+
+        # home1: import_cost=0.01/min, export_revenue=0.004/min
+        # home2: import_cost=0.02/min, export_revenue=0.005/min
+        results = [
+            SimulationResults(
+                generation=pd.Series([3.0] * 1440, index=index),
+                demand=pd.Series([2.0] * 1440, index=index),
+                self_consumption=pd.Series([2.0] * 1440, index=index),
+                battery_charge=pd.Series([0.0] * 1440, index=index),
+                battery_discharge=pd.Series([0.0] * 1440, index=index),
+                battery_soc=pd.Series([0.0] * 1440, index=index),
+                grid_import=pd.Series([0.0] * 1440, index=index),
+                grid_export=pd.Series([1.0] * 1440, index=index),
+                import_cost=pd.Series([0.01] * 1440, index=index),
+                export_revenue=pd.Series([0.004] * 1440, index=index),
+                tariff_rate=pd.Series([0.0] * 1440, index=index),
+            ),
+            SimulationResults(
+                generation=pd.Series([4.0] * 1440, index=index),
+                demand=pd.Series([2.0] * 1440, index=index),
+                self_consumption=pd.Series([2.0] * 1440, index=index),
+                battery_charge=pd.Series([0.0] * 1440, index=index),
+                battery_discharge=pd.Series([0.0] * 1440, index=index),
+                battery_soc=pd.Series([0.0] * 1440, index=index),
+                grid_import=pd.Series([0.0] * 1440, index=index),
+                grid_export=pd.Series([2.0] * 1440, index=index),
+                import_cost=pd.Series([0.02] * 1440, index=index),
+                export_revenue=pd.Series([0.005] * 1440, index=index),
+                tariff_rate=pd.Series([0.0] * 1440, index=index),
+            ),
+        ]
+        configs = [
+            HomeConfig(pv_config=PVConfig(capacity_kw=3.0), load_config=LoadConfig()),
+            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+        ]
+        fleet_results = FleetResults(per_home_results=results, home_configs=configs)
+
+        summary = calculate_fleet_summary(fleet_results)
+
+        # Fleet totals: sum of per-home series sums (no /60 conversion)
+        # total_import = 0.01*1440 + 0.02*1440 = 14.4 + 28.8 = 43.20
+        # total_export = 0.004*1440 + 0.005*1440 = 5.76 + 7.20 = 12.96
+        # total_net = 43.20 - 12.96 = 30.24
+        assert summary.total_import_cost_gbp == pytest.approx(43.20)
+        assert summary.total_export_revenue_gbp == pytest.approx(12.96)
+        assert summary.total_net_cost_gbp == pytest.approx(30.24)
+        # Internal consistency: net == import - export
+        assert summary.total_net_cost_gbp == pytest.approx(
+            summary.total_import_cost_gbp - summary.total_export_revenue_gbp  # type: ignore[operator]
+        )
+
+    def test_financial_fields_default_none_when_not_computed(self):
+        """New financial fields default to None on direct construction (backward-compat)."""
+        # Construct FleetSummary with only pre-existing fields — omit the new kwargs
+        summary = FleetSummary(
+            n_homes=1,
+            total_generation_kwh=72.0,
+            total_demand_kwh=48.0,
+            total_self_consumption_kwh=48.0,
+            total_grid_import_kwh=0.0,
+            total_grid_export_kwh=24.0,
+            fleet_self_consumption_ratio=0.667,
+            fleet_grid_dependency_ratio=0.0,
+            per_home_generation_min_kwh=72.0,
+            per_home_generation_max_kwh=72.0,
+            per_home_generation_mean_kwh=72.0,
+            per_home_generation_median_kwh=72.0,
+            per_home_self_consumption_ratio_min=0.667,
+            per_home_self_consumption_ratio_max=0.667,
+            per_home_self_consumption_ratio_mean=0.667,
+            simulation_days=1,
+            # SEG fields omitted (already Optional[float] = None)
+            # new financial fields omitted — must also default to None
+        )
+
+        assert summary.total_net_cost_gbp is None
+        assert summary.total_import_cost_gbp is None
+        assert summary.total_export_revenue_gbp is None
+
 
 @pytest.mark.slow
 class TestSimulateFleetIter:
