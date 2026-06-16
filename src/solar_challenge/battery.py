@@ -121,6 +121,28 @@ class BatteryConfig:
             self.discharge_efficiency,
         )
 
+        if self.system_age_years < 0:
+            raise ValueError(
+                f"system_age_years must be >= 0, got {self.system_age_years}"
+            )
+        if self.calendar_fade_rate_per_year < 0:
+            raise ValueError(
+                f"calendar_fade_rate_per_year must be >= 0, got {self.calendar_fade_rate_per_year}"
+            )
+        if self.cycle_fade_per_equivalent_full_cycle < 0:
+            raise ValueError(
+                f"cycle_fade_per_equivalent_full_cycle must be >= 0, "
+                f"got {self.cycle_fade_per_equivalent_full_cycle}"
+            )
+        if not 0 < self.soh_floor <= 1:
+            raise ValueError(
+                f"soh_floor must be in (0, 1], got {self.soh_floor}"
+            )
+        if self.soh is not None and not 0 < self.soh <= 1:
+            raise ValueError(
+                f"soh override must be in (0, 1], got {self.soh}"
+            )
+
     @classmethod
     def default_5kwh(cls) -> "BatteryConfig":
         """Create a typical UK domestic 5 kWh battery.
