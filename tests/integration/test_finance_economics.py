@@ -137,6 +137,7 @@ class TestProjectEconomicsDataclass:
             equity_irr=0.08,
             payback_years=payback_years,
             net_surplus_per_home_per_year_gbp=150.0,
+            fleet_opex_gbp=0.0,
         )
 
     def test_construction_with_all_fields(self) -> None:
@@ -184,6 +185,7 @@ class TestProjectEconomicsDataclass:
                 equity_irr=0.08,
                 payback_years=5.0,
                 net_surplus_per_home_per_year_gbp=150.0,
+                fleet_opex_gbp=0.0,
             )
 
     def test_negative_payback_years_raises(self) -> None:
@@ -201,6 +203,7 @@ class TestProjectEconomicsDataclass:
                 equity_irr=0.08,
                 payback_years=-1.0,  # negative!
                 net_surplus_per_home_per_year_gbp=150.0,
+                fleet_opex_gbp=0.0,
             )
 
     def test_fleet_opex_gbp_dataclass_field(self) -> None:
@@ -825,6 +828,7 @@ def _make_project_economics(
     *,
     payback_years: Optional[float] = 10.0,
     equity_irr: float = 0.08,
+    fleet_opex_gbp: float = 12000.0,
 ) -> "ProjectEconomics":  # type: ignore[name-defined]
     """Build a synthetic ProjectEconomics for report tests."""
     from solar_challenge.finance import ProjectEconomics
@@ -840,6 +844,7 @@ def _make_project_economics(
         equity_irr=equity_irr,
         payback_years=payback_years,
         net_surplus_per_home_per_year_gbp=80.0,
+        fleet_opex_gbp=fleet_opex_gbp,
     )
 
 

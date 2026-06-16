@@ -477,6 +477,10 @@ class ProjectEconomics:
     net_surplus_per_home_per_year_gbp: float
     """Mean per-year surplus per home (£/home/year)."""
 
+    fleet_opex_gbp: float
+    """Total fleet operating expenditure per year (£/year):
+    opex_per_home_per_year_gbp × n_homes."""
+
     def __post_init__(self) -> None:
         if not self.per_year_surplus_gbp:
             raise ValueError(
@@ -1260,4 +1264,5 @@ def project_economics(
         equity_irr=equity_irr,
         payback_years=payback_years,
         net_surplus_per_home_per_year_gbp=net_surplus_per_home_per_year_gbp,
+        fleet_opex_gbp=fleet_opex,
     )
