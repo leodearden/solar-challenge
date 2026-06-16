@@ -514,6 +514,55 @@ class FinanceConfig:
     opex_per_home_per_year_gbp: float = 131.0
     asset_life_years: int = 25
 
+    def __post_init__(self) -> None:
+        """Validate financial parameters, raising ConfigurationError on violation."""
+        if not (0.0 <= self.vat_rate <= 1.0):
+            raise ConfigurationError(
+                f"vat_rate must be in [0, 1], got {self.vat_rate}"
+            )
+        if not (0.0 <= self.equity_fraction <= 1.0):
+            raise ConfigurationError(
+                f"equity_fraction must be in [0, 1], got {self.equity_fraction}"
+            )
+        if self.self_consumption_override is not None:
+            if not (0.0 < self.self_consumption_override <= 1.0):
+                raise ConfigurationError(
+                    "self_consumption_override must be in (0, 1] when set, "
+                    f"got {self.self_consumption_override}"
+                )
+        if self.loan_term_years <= 0:
+            raise ConfigurationError(
+                f"loan_term_years must be > 0, got {self.loan_term_years}"
+            )
+        if self.loan_rate < 0.0:
+            raise ConfigurationError(
+                f"loan_rate must be >= 0, got {self.loan_rate}"
+            )
+        if self.asset_life_years < self.loan_term_years:
+            raise ConfigurationError(
+                f"asset_life_years ({self.asset_life_years}) must be >= "
+                f"loan_term_years ({self.loan_term_years})"
+            )
+        # Cost/rate fields must be strictly positive
+        _positive_fields = {
+            "standing_charge_pence_per_day": self.standing_charge_pence_per_day,
+            "retail_baseline_rate_pence_per_kwh": self.retail_baseline_rate_pence_per_kwh,
+            "pv_cost_per_kwp_gbp": self.pv_cost_per_kwp_gbp,
+            "roof_fit_cost_gbp": self.roof_fit_cost_gbp,
+            "battery_cost_per_kwh_gbp": self.battery_cost_per_kwh_gbp,
+            "opex_per_home_per_year_gbp": self.opex_per_home_per_year_gbp,
+        }
+        for field_name, value in _positive_fields.items():
+            if value <= 0.0:
+                raise ConfigurationError(
+                    f"{field_name} must be > 0, got {value}"
+                )
+        # Grant may be zero but not negative
+        if self.grant_gbp < 0.0:
+            raise ConfigurationError(
+                f"grant_gbp must be >= 0, got {self.grant_gbp}"
+            )
+
 
 @dataclass
 class ScenarioConfig:
