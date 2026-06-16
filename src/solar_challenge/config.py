@@ -474,6 +474,47 @@ class OutputConfig:
     aggregation: str = "minute"
 
 
+@dataclass(frozen=True)
+class FinanceConfig:
+    """Financial parameters for community PV/battery project appraisal.
+
+    Holds investor-spreadsheet defaults (§3.1 of the financial-layer PRD)
+    used to compute project NPV, payback period, and per-home savings.
+    All monetary values are in nominal GBP or pence; rates are fractional.
+
+    Attributes:
+        standing_charge_pence_per_day: Retail grid standing charge (required).
+        vat_rate: VAT fraction applied to retail electricity (default 0.05).
+        retail_baseline_rate_pence_per_kwh: Grid import unit rate before project
+            (default 23.0 p/kWh).
+        self_consumption_override: Optional fixed self-consumption fraction
+            (0, 1]; if None the simulator uses the modelled value.
+        pv_cost_per_kwp_gbp: PV hardware + install cost per kWp (default 1000.0).
+        roof_fit_cost_gbp: Fixed per-home roof-fitting cost (default 1000.0).
+        battery_cost_per_kwh_gbp: Battery hardware cost per kWh (default 250.0).
+        grant_gbp: Total grant received by the project (default 250000.0; 0 allowed).
+        equity_fraction: Fraction of project cost financed by equity (default 0.75).
+        loan_term_years: Loan repayment term in years (default 15).
+        loan_rate: Annual loan interest rate as a fraction (default 0.07).
+        opex_per_home_per_year_gbp: Annual operating cost per home (default 131.0).
+        asset_life_years: Useful life of the asset in years (default 25).
+    """
+
+    standing_charge_pence_per_day: float
+    vat_rate: float = 0.05
+    retail_baseline_rate_pence_per_kwh: float = 23.0
+    self_consumption_override: Optional[float] = None
+    pv_cost_per_kwp_gbp: float = 1000.0
+    roof_fit_cost_gbp: float = 1000.0
+    battery_cost_per_kwh_gbp: float = 250.0
+    grant_gbp: float = 250000.0
+    equity_fraction: float = 0.75
+    loan_term_years: int = 15
+    loan_rate: float = 0.07
+    opex_per_home_per_year_gbp: float = 131.0
+    asset_life_years: int = 25
+
+
 @dataclass
 class ScenarioConfig:
     """Configuration for a simulation scenario.
@@ -1487,6 +1528,40 @@ def _parse_seg_config(data: Optional[dict[str, Any]]) -> Optional[float]:
     if rate is None:
         return None
     return float(rate)
+
+
+def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConfig]:
+    """Parse finance configuration from config data.
+
+    Args:
+        data: Finance configuration dictionary or None
+
+    Returns:
+        FinanceConfig object or None if data is None
+
+    Raises:
+        ConfigurationError: If any field value is out of its allowed range
+            (propagated from FinanceConfig.__post_init__)
+    """
+    if data is None:
+        return None
+    return FinanceConfig(
+        standing_charge_pence_per_day=data.get("standing_charge_pence_per_day", 0.0),
+        vat_rate=data.get("vat_rate", 0.05),
+        retail_baseline_rate_pence_per_kwh=data.get(
+            "retail_baseline_rate_pence_per_kwh", 23.0
+        ),
+        self_consumption_override=data.get("self_consumption_override"),
+        pv_cost_per_kwp_gbp=data.get("pv_cost_per_kwp_gbp", 1000.0),
+        roof_fit_cost_gbp=data.get("roof_fit_cost_gbp", 1000.0),
+        battery_cost_per_kwh_gbp=data.get("battery_cost_per_kwh_gbp", 250.0),
+        grant_gbp=data.get("grant_gbp", 250000.0),
+        equity_fraction=data.get("equity_fraction", 0.75),
+        loan_term_years=int(data.get("loan_term_years", 15)),
+        loan_rate=data.get("loan_rate", 0.07),
+        opex_per_home_per_year_gbp=data.get("opex_per_home_per_year_gbp", 131.0),
+        asset_life_years=int(data.get("asset_life_years", 25)),
+    )
 
 
 def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
