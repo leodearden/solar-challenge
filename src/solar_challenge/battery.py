@@ -51,6 +51,14 @@ class BatteryConfig:
             raise ValueError(
                 f"Max discharge power must be positive, got {self.max_discharge_kw} kW"
             )
+        if self.efficiency is not None:
+            if not 0 < self.efficiency <= 1:
+                raise ValueError(
+                    f"Round-trip efficiency must be (0, 1], got {self.efficiency}"
+                )
+            object.__setattr__(self, "charge_efficiency", math.sqrt(self.efficiency))
+            object.__setattr__(self, "discharge_efficiency", math.sqrt(self.efficiency))
+
         if not 0 <= self.min_soc_fraction < self.max_soc_fraction <= 1:
             raise ValueError(
                 f"Invalid SOC limits: min={self.min_soc_fraction}, max={self.max_soc_fraction}"
