@@ -492,6 +492,8 @@ class FinanceConfig:
         pv_cost_per_kwp_gbp: PV hardware + install cost per kWp (default 1000.0).
         roof_fit_cost_gbp: Fixed per-home roof-fitting cost (default 1000.0).
         battery_cost_per_kwh_gbp: Battery hardware cost per kWh (default 250.0).
+        inverter_cost_per_kw_gbp: Inverter capex cost per kW of effective (AC) inverter
+            capacity (default 0.0; 0 permitted).
         grant_gbp: Total grant received by the project (default 250000.0; 0 allowed).
         equity_fraction: Fraction of project cost financed by equity (default 0.75).
         loan_term_years: Loan repayment term in years (default 15).
@@ -507,6 +509,7 @@ class FinanceConfig:
     pv_cost_per_kwp_gbp: float = 1000.0
     roof_fit_cost_gbp: float = 1000.0
     battery_cost_per_kwh_gbp: float = 250.0
+    inverter_cost_per_kw_gbp: float = 0.0
     grant_gbp: float = 250000.0
     equity_fraction: float = 0.75
     loan_term_years: int = 15
