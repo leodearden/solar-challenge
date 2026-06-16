@@ -817,3 +817,144 @@ class TestProjectMultiYearSOH:
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         for pt in curve.points:
             assert pt.battery_soh == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Cycle-fade term engagement (H3 final clause) — step-11 / step-12
+# ---------------------------------------------------------------------------
+
+
+def _make_battery_scenario(
+    discharge_kwh: float = 1000.0,
+    cycle_fade: float = 0.0002,
+    calendar_fade: float = 0.02,
+) -> tuple:
+    """Build a scenario+finance with one home with battery."""
+    from solar_challenge.battery import BatteryConfig
+    from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+    from solar_challenge.home import HomeConfig
+    from solar_challenge.location import Location
+
+    bc = BatteryConfig(
+        capacity_kwh=10.0,
+        max_charge_kw=3.5,
+        max_discharge_kw=3.5,
+        calendar_fade_rate_per_year=calendar_fade,
+        cycle_fade_per_equivalent_full_cycle=cycle_fade,
+        soh_floor=0.60,
+    )
+    homes = [
+        HomeConfig(
+            pv_config=_make_pv_config(),
+            load_config=_make_load_config(),
+            battery_config=bc,
+            location=Location.bristol(),
+        )
+    ]
+    scenario = ScenarioConfig(
+        name="cycle-fade-test",
+        period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+        description="Cycle fade test",
+        homes=homes,
+    )
+    finance = FinanceConfig(standing_charge_pence_per_day=28.0, asset_life_years=25)
+    return scenario, finance, bc, discharge_kwh
+
+
+class TestCycleFadeEngagement:
+    """Cumulative throughput from the march feeds compute_soh (H3 final clause)."""
+
+    def _make_simulate_with_discharge(
+        self,
+        discharge_kwh: float,
+    ) -> "Callable":  # type: ignore[name-defined]
+        """Synthetic simulate that returns a fixed per-home discharge amount."""
+        from typing import Callable
+
+        def _simulate(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+            from solar_challenge.fleet import FleetResults
+
+            per_home = [
+                _make_sim_results(
+                    self_kwh=3000.0,
+                    export_kwh=1000.0,
+                    import_kwh=500.0,
+                    discharge_kwh=discharge_kwh,
+                )
+                for _ in fc.homes
+            ]
+            return FleetResults(per_home_results=per_home, home_configs=list(fc.homes))
+
+        return _simulate
+
+    def test_high_throughput_lower_battery_soh_than_zero(self) -> None:
+        """High-throughput run has strictly lower battery_soh at end of life than zero-throughput."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance, _, _ = _make_battery_scenario(
+            discharge_kwh=1000.0,   # high throughput
+            cycle_fade=0.0002,
+            calendar_fade=0.01,
+        )
+
+        # High throughput run
+        high_sim = self._make_simulate_with_discharge(discharge_kwh=1000.0)
+        curve_high = project_multi_year(scenario, finance, simulate=high_sim)
+
+        # Zero throughput control
+        zero_sim = self._make_simulate_with_discharge(discharge_kwh=0.0)
+        curve_zero = project_multi_year(scenario, finance, simulate=zero_sim)
+
+        # Year-N battery SOH: high must be strictly lower than zero-throughput
+        final_high = curve_high.points[-1].battery_soh
+        final_zero = curve_zero.points[-1].battery_soh
+        assert final_high < final_zero, (
+            f"High-throughput SOH ({final_high:.4f}) should be < "
+            f"zero-throughput SOH ({final_zero:.4f})"
+        )
+
+    def test_zero_throughput_is_calendar_only(self) -> None:
+        """Zero-throughput run's final SOH matches pure calendar fade prediction."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.battery import compute_soh
+        from solar_challenge.battery import BatteryConfig
+
+        calendar_fade = 0.02
+        bc = BatteryConfig(
+            capacity_kwh=10.0,
+            max_charge_kw=3.5,
+            max_discharge_kw=3.5,
+            calendar_fade_rate_per_year=calendar_fade,
+            cycle_fade_per_equivalent_full_cycle=0.0001,
+            soh_floor=0.60,
+        )
+
+        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+        from solar_challenge.home import HomeConfig
+        from solar_challenge.location import Location
+
+        homes = [
+            HomeConfig(
+                pv_config=_make_pv_config(),
+                load_config=_make_load_config(),
+                battery_config=bc,
+                location=Location.bristol(),
+            )
+        ]
+        scenario = ScenarioConfig(
+            name="calendar-only",
+            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+            description="Calendar-only test",
+            homes=homes,
+        )
+        finance = FinanceConfig(standing_charge_pence_per_day=28.0, asset_life_years=25)
+
+        zero_sim = self._make_simulate_with_discharge(discharge_kwh=0.0)
+        curve = project_multi_year(scenario, finance, simulate=zero_sim)
+
+        # With zero throughput, battery SOH at age 24 (last sampled age)
+        # is compute_soh(24, 0, usable, bc)
+        usable = bc.capacity_kwh * (bc.max_soc_fraction - bc.min_soc_fraction)
+        expected_soh = compute_soh(24.0, 0.0, usable, bc)
+        # The interpolated value at year 24 should match the sampled node
+        assert curve.points[24].battery_soh == pytest.approx(expected_soh, rel=1e-4)
