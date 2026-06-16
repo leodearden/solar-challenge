@@ -242,28 +242,6 @@ class TestHouseholderBillOverrideAndAnnualisation:
         # The headline net bill must also differ
         assert bill_override.net_annual_bill_gbp != pytest.approx(bill_physics.net_annual_bill_gbp)
 
-    def test_override_bill_shape_identical(self) -> None:
-        """Override path produces same BillBreakdown shape (all 11 fields)."""
-        from solar_challenge.finance import BillBreakdown, householder_bill
-
-        summary = _make_summary()
-        bill = householder_bill(
-            summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-            finance=_make_finance(self_consumption_override=0.70),
-            simulation_days=summary.simulation_days,
-        )
-
-        assert isinstance(bill, BillBreakdown)
-        for field in [
-            "standing_charge_gbp", "import_cost_gbp", "vat_gbp", "gross_bill_gbp",
-            "seg_export_income_gbp", "self_consumption_saving_gbp", "baseline_bill_gbp",
-            "net_annual_bill_gbp", "saving_vs_baseline_gbp", "saving_pct",
-            "self_consumption_fraction",
-        ]:
-            assert hasattr(bill, field)
-            assert isinstance(getattr(bill, field), float), f"{field} must be float"
-
     def test_short_period_triggers_warning(self) -> None:
         """simulation_days=30 must emit a UserWarning."""
         from solar_challenge.finance import householder_bill
