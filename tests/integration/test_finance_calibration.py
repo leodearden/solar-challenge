@@ -533,3 +533,139 @@ class TestCalibrationCapexMethodAgreement:
         )
         # Must be within £1
         assert abs(econ.total_capex_gbp - _FIN_GOLDEN["capital_stack_b6"]) < 1.0
+
+
+# ---------------------------------------------------------------------------
+# Step-6: TestCalibrationDscrIrrMethodAgreement — H6 DSCR/IRR gate (fast)
+# ---------------------------------------------------------------------------
+
+
+class TestCalibrationDscrIrrMethodAgreement:
+    """H6 DSCR/IRR method-agreement tests (fast, no PVGIS) (task/48 step-6).
+
+    G6 PREMISE GUARD (load-bearing):
+    The [FIN]-assumption spreadsheet_revenue_curve yields DSCR ≈ 4.02
+    (vs Debt_Analytics!B16 = 2.10378). The discrepancy is EXPECTED and DOCUMENTED:
+    the spreadsheet's lower DSCR results from equity-fundraising fees, formation
+    costs, dividend deferral, and grant timing that the pure financial layer
+    abstracts away. Per PRD §13 / task G6 latitude:
+      - HARD assert: min_dscr ≥ 1.20 (covenant floor)
+      - HARD assert: equity_irr > 0 (structural sanity)
+      - REPORTED: actual values vs spreadsheet cells (Debt_Analytics!B16/B17)
+    The digit-match (min_dscr ≈ 2.10378) is DELIBERATELY NOT asserted here.
+    See docs/finance-spreadsheet-reconciliation.md for full rationale.
+    """
+
+    def _build_econ(self) -> "ProjectEconomics":  # type: ignore[name-defined]
+        """Build [FIN]-assumption ProjectEconomics for DSCR/IRR tests."""
+        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
+
+        curve = spreadsheet_revenue_curve(
+            n_homes=100,
+            pv_kwp=_FIN_GOLDEN["inp_kWp"],
+            kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
+            self_consumption_fraction=_FIN_SCF,
+            own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
+            export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
+            asset_life_years=25,
+        )
+        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        finance = _make_finance_fin()
+        return project_economics(curve, scenario, finance)
+
+    def test_min_dscr_meets_covenant_floor(self) -> None:
+        """min_dscr must be ≥ 1.20 (covenant floor) under [FIN]-assumption inputs.
+
+        G6 fallback: we cannot assert min_dscr ≈ 2.10378 (Debt_Analytics!B16)
+        because the sheet accounts for equity fundraising fees / formation costs /
+        dividend deferral that reduce the effective DSCR below our pure-layer value.
+        The covenant floor (1.20) IS structurally achievable and asserted hard.
+        """
+        econ = self._build_econ()
+        assert econ.min_dscr >= 1.20, (
+            f"min_dscr={econ.min_dscr:.4f} falls below covenant floor 1.20"
+        )
+
+    def test_equity_irr_positive(self) -> None:
+        """equity_irr must be > 0 (structural sanity: project generates positive returns).
+
+        G6 fallback: we cannot assert equity_irr ≈ spreadsheet's value (~69% prose)
+        because the sheet's equity is net of formation costs / fundraising fees /
+        dividend deferral that substantially reduce the effective equity invested,
+        inflating IRR well above our pure-layer value (~11%).
+        """
+        import math
+
+        econ = self._build_econ()
+        assert not math.isnan(econ.equity_irr), "equity_irr must not be NaN"
+        assert econ.equity_irr > _FIN_GOLDEN["equity_irr_floor"], (
+            f"equity_irr={econ.equity_irr:.4f} must be > 0 (structural sanity)"
+        )
+
+    def test_determinism(self) -> None:
+        """Two project_economics calls with same [FIN] inputs must be bit-identical."""
+        econ1 = self._build_econ()
+        econ2 = self._build_econ()
+        assert econ1.min_dscr == econ2.min_dscr
+        assert econ1.equity_irr == econ2.equity_irr
+        assert econ1.per_year_surplus_gbp == econ2.per_year_surplus_gbp
+
+    def test_dscr_reported_vs_spreadsheet(self) -> None:
+        """Report: [FIN]-assumption min_dscr vs Debt_Analytics!B16 (NOT asserted equal).
+
+        The [FIN]-assumption curve yields min_dscr ≈ 4.02 because it uses flat
+        revenues (no formation costs, no dividend deferral).
+        Debt_Analytics!B16 = 2.10378 accounts for those deductions.
+        Per G6, only the covenant floor (1.20) is asserted; the cell value is REPORTED.
+        """
+        econ = self._build_econ()
+
+        fin_dscr = _FIN_GOLDEN["min_dscr"]
+        model_dscr = econ.min_dscr
+
+        # REPORT: document both values for reconciliation note
+        print(
+            f"\n[DSCR REPORT] "
+            f"Debt_Analytics!B16={fin_dscr:.6f}; "
+            f"[FIN]-assumption model={model_dscr:.6f}; "
+            f"ratio={model_dscr/fin_dscr:.4f}"
+        )
+        print(
+            "  G6 note: model DSCR > spreadsheet because the sheet deducts "
+            "equity fundraising fees / formation costs / dividend deferral "
+            "from the numerator (revenue-opex). Pure layer does not model these."
+        )
+
+        # HARD assert: covenant floor only
+        assert model_dscr >= 1.20
+        # SOFT assert: documented comment (not a real assertion)
+        # model_dscr ≠ fin_dscr — this is the §2.3 self-consumption tension mirror
+
+    def test_irr_reported_vs_spreadsheet_cashflow(self) -> None:
+        """Report: [FIN]-assumption equity_irr vs spreadsheet 'Cash for IRR' row.
+
+        Debt_Analytics row 13 'Cash for IRR': B13=-244821, C13=155947, D13=163911, ...
+        Prose estimate: spreadsheet equity_irr ~69% (net of formation costs / fees).
+        Our model equity_irr ~11% (pure annuity + surplus, full equity investment).
+        Per G6, only equity_irr > 0 is asserted; the spreadsheet value is REPORTED.
+        """
+        import math
+
+        econ = self._build_econ()
+
+        # Documented spreadsheet cashflow (Debt_Analytics!B13:...)
+        # B13=-244821, C13=155947, D13=163911, E13=172837 (equity net of fees)
+        _sheet_equity_cashflow_start = -244821.0  # Debt_Analytics!B13
+        # IRR not directly asserted — documented for reconciliation
+
+        print(
+            f"\n[IRR REPORT] "
+            f"[FIN]-assumption equity_irr={econ.equity_irr*100:.2f}%; "
+            f"equity_gbp=£{econ.equity_gbp:,.2f}; "
+            f"sheet equity_cashflow_start=£{_sheet_equity_cashflow_start:,.0f}; "
+            f"spreadsheet equity_irr ~69% (net of formation/fee deductions)"
+        )
+
+        # HARD assert: structural sanity only
+        assert not math.isnan(econ.equity_irr)
+        assert econ.equity_irr > 0.0
