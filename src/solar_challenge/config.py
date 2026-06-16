@@ -1632,6 +1632,7 @@ def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceCon
             pv_cost_per_kwp_gbp=float(data.get("pv_cost_per_kwp_gbp", 1000.0)),
             roof_fit_cost_gbp=float(data.get("roof_fit_cost_gbp", 1000.0)),
             battery_cost_per_kwh_gbp=float(data.get("battery_cost_per_kwh_gbp", 250.0)),
+            inverter_cost_per_kw_gbp=float(data.get("inverter_cost_per_kw_gbp", 0.0)),
             grant_gbp=float(data.get("grant_gbp", 250000.0)),
             equity_fraction=float(data.get("equity_fraction", 0.75)),
             loan_term_years=int(data.get("loan_term_years", 15)),
