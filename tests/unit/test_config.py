@@ -2589,3 +2589,155 @@ class TestFinanceConfig:
         assert fc.loan_rate == 0.06
         assert fc.opex_per_home_per_year_gbp == 150.0
         assert fc.asset_life_years == 25
+
+
+# ---------------------------------------------------------------------------
+# FinanceConfig validation tests (step-3: __post_init__ rejections + acceptances)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceConfigValidation:
+    """Tests for FinanceConfig.__post_init__ validation (raises ConfigurationError)."""
+
+    _BASE = dict(standing_charge_pence_per_day=60.0)
+
+    # ---- vat_rate ----
+
+    def test_vat_rate_too_high_raises(self) -> None:
+        """vat_rate > 1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, vat_rate=2.0)
+
+    def test_vat_rate_negative_raises(self) -> None:
+        """vat_rate < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, vat_rate=-0.1)
+
+    def test_vat_rate_zero_ok(self) -> None:
+        """vat_rate == 0 is valid (VAT-exempt scenario)."""
+        fc = FinanceConfig(**self._BASE, vat_rate=0.0)
+        assert fc.vat_rate == 0.0
+
+    def test_vat_rate_one_ok(self) -> None:
+        """vat_rate == 1 is valid (100% VAT, boundary)."""
+        fc = FinanceConfig(**self._BASE, vat_rate=1.0)
+        assert fc.vat_rate == 1.0
+
+    # ---- equity_fraction ----
+
+    def test_equity_fraction_too_high_raises(self) -> None:
+        """equity_fraction > 1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, equity_fraction=1.5)
+
+    def test_equity_fraction_negative_raises(self) -> None:
+        """equity_fraction < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, equity_fraction=-0.1)
+
+    def test_equity_fraction_zero_ok(self) -> None:
+        """equity_fraction == 0 is valid (fully debt-financed)."""
+        fc = FinanceConfig(**self._BASE, equity_fraction=0.0)
+        assert fc.equity_fraction == 0.0
+
+    def test_equity_fraction_one_ok(self) -> None:
+        """equity_fraction == 1 is valid (fully equity-financed)."""
+        fc = FinanceConfig(**self._BASE, equity_fraction=1.0)
+        assert fc.equity_fraction == 1.0
+
+    # ---- self_consumption_override ----
+
+    def test_self_consumption_override_zero_raises(self) -> None:
+        """self_consumption_override == 0 raises ConfigurationError (must be > 0)."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, self_consumption_override=0.0)
+
+    def test_self_consumption_override_too_high_raises(self) -> None:
+        """self_consumption_override > 1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, self_consumption_override=1.5)
+
+    def test_self_consumption_override_one_ok(self) -> None:
+        """self_consumption_override == 1 is valid (100% self-consumed)."""
+        fc = FinanceConfig(**self._BASE, self_consumption_override=1.0)
+        assert fc.self_consumption_override == 1.0
+
+    def test_self_consumption_override_none_ok(self) -> None:
+        """self_consumption_override == None skips override validation."""
+        fc = FinanceConfig(**self._BASE, self_consumption_override=None)
+        assert fc.self_consumption_override is None
+
+    # ---- loan_term_years ----
+
+    def test_loan_term_years_zero_raises(self) -> None:
+        """loan_term_years == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, loan_term_years=0)
+
+    # ---- loan_rate ----
+
+    def test_loan_rate_negative_raises(self) -> None:
+        """loan_rate < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, loan_rate=-0.01)
+
+    def test_loan_rate_zero_ok(self) -> None:
+        """loan_rate == 0 is valid (interest-free loan)."""
+        fc = FinanceConfig(**self._BASE, loan_rate=0.0)
+        assert fc.loan_rate == 0.0
+
+    # ---- asset_life_years vs loan_term_years ----
+
+    def test_asset_life_less_than_loan_term_raises(self) -> None:
+        """asset_life_years < loan_term_years raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, asset_life_years=10, loan_term_years=15)
+
+    def test_asset_life_equals_loan_term_ok(self) -> None:
+        """asset_life_years == loan_term_years is valid (equality allowed)."""
+        fc = FinanceConfig(**self._BASE, asset_life_years=15, loan_term_years=15)
+        assert fc.asset_life_years == 15
+
+    # ---- cost fields (must be > 0) ----
+
+    def test_standing_charge_zero_raises(self) -> None:
+        """standing_charge_pence_per_day == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(standing_charge_pence_per_day=0.0)
+
+    def test_retail_baseline_rate_zero_raises(self) -> None:
+        """retail_baseline_rate_pence_per_kwh == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, retail_baseline_rate_pence_per_kwh=0.0)
+
+    def test_pv_cost_per_kwp_zero_raises(self) -> None:
+        """pv_cost_per_kwp_gbp == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, pv_cost_per_kwp_gbp=0.0)
+
+    def test_roof_fit_cost_negative_raises(self) -> None:
+        """roof_fit_cost_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, roof_fit_cost_gbp=-1.0)
+
+    def test_battery_cost_per_kwh_zero_raises(self) -> None:
+        """battery_cost_per_kwh_gbp == 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, battery_cost_per_kwh_gbp=0.0)
+
+    def test_opex_per_home_per_year_negative_raises(self) -> None:
+        """opex_per_home_per_year_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, opex_per_home_per_year_gbp=-1.0)
+
+    # ---- grant_gbp (must be >= 0) ----
+
+    def test_grant_negative_raises(self) -> None:
+        """grant_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, grant_gbp=-1.0)
+
+    def test_grant_zero_ok(self) -> None:
+        """grant_gbp == 0 is valid (no grant received)."""
+        fc = FinanceConfig(**self._BASE, grant_gbp=0.0)
+        assert fc.grant_gbp == 0.0
