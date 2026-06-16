@@ -903,3 +903,91 @@ class TestGenerateFinanceReportEconomics:
 
         # No economics block should appear
         assert "Project Economics" not in report
+
+
+# ---------------------------------------------------------------------------
+# Step-13: CLI finance run --project (fast tests)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceProjectCLI:
+    """Fast CLI tests for finance run --project (typer CliRunner, no simulation)."""
+
+    def test_help_shows_project_flag(self) -> None:
+        """`finance run --help` must show --project flag."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--project" in result.output or "project" in result.output.lower()
+
+    def test_project_without_finance_block_exits_nonzero(self, tmp_path: "Path") -> None:
+        """Invoking `finance run --project` on a scenario WITHOUT a finance: block exits non-zero."""
+        import yaml
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        # Minimal scenario without finance:
+        scenario = {
+            "name": "No Finance Test",
+            "location": {
+                "latitude": 51.45,
+                "longitude": -2.58,
+                "timezone": "Europe/London",
+            },
+            "fleet_distribution": {
+                "n_homes": 1,
+                "seed": 1,
+                "pv": {"capacity_kw": 4.0, "azimuth": 180, "tilt": 35},
+                "battery": {"capacity_kwh": None},
+                "load": {"annual_consumption_kwh": 3400},
+            },
+        }
+        scenario_file = tmp_path / "no_finance_project.yaml"
+        scenario_file.write_text(yaml.dump(scenario))
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", "--project", str(scenario_file)])
+        assert result.exit_code != 0
+
+
+@pytest.mark.slow
+class TestFinanceProjectCLIEndToEnd:
+    """Slow end-to-end CLI test for finance run --project (real PVGIS)."""
+
+    def test_finance_run_project_bristol(self) -> None:
+        """E2E: `finance run --project scenarios/bristol-phase1.yaml` exits 0 with economics block."""
+        from pathlib import Path
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario = Path("scenarios/bristol-phase1.yaml")
+        if not scenario.exists():
+            pytest.skip("bristol-phase1.yaml not found")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "finance",
+                "run",
+                "--project",
+                str(scenario),
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-03",
+            ],
+        )
+        assert result.exit_code == 0, (
+            f"Exit {result.exit_code}. Output:\n{result.output}"
+        )
+        output = result.output.lower()
+        # Economics block headings must be present
+        assert "project economics" in output
+        assert "capex" in output
+        assert "dscr" in output or "debt service" in output
+        assert "irr" in output
+        assert "payback" in output
