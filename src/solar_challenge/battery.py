@@ -51,6 +51,18 @@ class BatteryConfig:
             raise ValueError(
                 f"Max discharge power must be positive, got {self.max_discharge_kw} kW"
             )
+        if not 0 <= self.min_soc_fraction < self.max_soc_fraction <= 1:
+            raise ValueError(
+                f"Invalid SOC limits: min={self.min_soc_fraction}, max={self.max_soc_fraction}"
+            )
+        if not 0 < self.charge_efficiency <= 1:
+            raise ValueError(
+                f"Charge efficiency must be (0, 1], got {self.charge_efficiency}"
+            )
+        if not 0 < self.discharge_efficiency <= 1:
+            raise ValueError(
+                f"Discharge efficiency must be (0, 1], got {self.discharge_efficiency}"
+            )
 
     @classmethod
     def default_5kwh(cls) -> "BatteryConfig":
