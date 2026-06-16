@@ -156,6 +156,63 @@ class TestHouseholderBillPhysics:
             expected_pct = (bill.saving_vs_baseline_gbp / bill.baseline_bill_gbp) * 100
             assert bill.saving_pct == pytest.approx(expected_pct)
 
+    def test_physics_missing_tariff_fallback(self) -> None:
+        """Physics path with £0 import cost but real import kWh falls back to retail rate.
+
+        Homes generated from a fleet_distribution carry tariff_config=None, so
+        simulate_home reports total_import_cost_gbp == 0 even though energy was
+        imported.  householder_bill must price that imported energy at the
+        retail baseline rate (and warn) rather than silently emit a £0 import.
+        """
+        from solar_challenge.finance import householder_bill
+
+        # 1200 kWh imported but tariff absent => physics import cost reported £0
+        summary = _make_summary(
+            total_import_cost_gbp=0.0,
+            total_export_revenue_gbp=0.0,
+            net_cost_gbp=0.0,
+            seg_revenue_gbp=None,
+        )
+        finance = _make_finance(retail_baseline_rate_pence_per_kwh=23.0)
+
+        with pytest.warns(UserWarning, match="no tariff configured"):
+            bill = householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=summary.simulation_days,
+            )
+
+        # import priced at retail baseline rate: 1200 kWh × 23 p/kWh = £276
+        expected_import = summary.total_grid_import_kwh * 23.0 / 100.0
+        assert bill.import_cost_gbp == pytest.approx(expected_import)
+        # the headline bill must now exceed just standing + VAT
+        assert bill.import_cost_gbp > 0.0
+
+    def test_physics_no_import_no_fallback(self) -> None:
+        """When import kWh is genuinely zero, no fallback and no warning fire."""
+        import warnings as _warnings
+
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary(
+            total_grid_import_kwh=0.0,
+            total_import_cost_gbp=0.0,
+            net_cost_gbp=0.0,
+        )
+        finance = _make_finance()
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")
+            bill = householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=summary.simulation_days,
+            )
+
+        assert bill.import_cost_gbp == pytest.approx(0.0)
+
 
 # ---------------------------------------------------------------------------
 # Step-3: H2 – self-consumption override switch + annualisation
