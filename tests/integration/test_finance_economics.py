@@ -51,6 +51,7 @@ def _make_curve(revenues: list[float]) -> "MultiYearCurve":  # type: ignore[name
 def _make_home_config(
     pv_kwp: float,
     battery_kwh: Optional[float] = None,
+    inverter_kw: Optional[float] = None,
 ) -> "HomeConfig":  # type: ignore[name-defined]
     """Build a minimal HomeConfig for economics tests."""
     from solar_challenge.home import HomeConfig
@@ -58,7 +59,7 @@ def _make_home_config(
     from solar_challenge.load import LoadConfig
     from solar_challenge.battery import BatteryConfig
 
-    pv = PVConfig(capacity_kw=pv_kwp)
+    pv = PVConfig(capacity_kw=pv_kwp, inverter_capacity_kw=inverter_kw)
     load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
     batt = BatteryConfig(capacity_kwh=battery_kwh) if battery_kwh is not None else None
     return HomeConfig(pv_config=pv, load_config=load, battery_config=batt)
@@ -87,6 +88,7 @@ def _make_finance(
     pv_cost_per_kwp_gbp: float = 1000.0,
     roof_fit_cost_gbp: float = 1000.0,
     battery_cost_per_kwh_gbp: float = 250.0,
+    inverter_cost_per_kw_gbp: float = 0.0,
     grant_gbp: float = 0.0,
     equity_fraction: float = 0.75,
     loan_term_years: int = 15,
@@ -101,6 +103,7 @@ def _make_finance(
         pv_cost_per_kwp_gbp=pv_cost_per_kwp_gbp,
         roof_fit_cost_gbp=roof_fit_cost_gbp,
         battery_cost_per_kwh_gbp=battery_cost_per_kwh_gbp,
+        inverter_cost_per_kw_gbp=inverter_cost_per_kw_gbp,
         grant_gbp=grant_gbp,
         equity_fraction=equity_fraction,
         loan_term_years=loan_term_years,
