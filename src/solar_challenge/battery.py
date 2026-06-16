@@ -249,6 +249,15 @@ class Battery:
         self.charge_efficiency = resolved_charge_eff
         self.discharge_efficiency = resolved_discharge_eff
 
+        # Resolve SOH once: override wins; else calendar-only (throughput=0)
+        if config.soh is not None:
+            self._soh: float = config.soh
+        else:
+            nominal_usable = config.capacity_kwh * (resolved_max_soc - resolved_min_soc)
+            self._soh = compute_soh(
+                config.system_age_years, 0.0, nominal_usable, config
+            )
+
         # Set initial SOC
         if initial_soc_kwh is None:
             # Default to midpoint of usable range
@@ -262,24 +271,34 @@ class Battery:
             self._soc_kwh = initial_soc_kwh
 
     @property
+    def soh(self) -> float:
+        """State of health as a fraction in [soh_floor, 1.0]."""
+        return self._soh
+
+    @property
+    def effective_capacity_kwh(self) -> float:
+        """Effective capacity after SOH de-rating (capacity_kwh * soh)."""
+        return self.config.capacity_kwh * self._soh
+
+    @property
     def soc_kwh(self) -> float:
         """Current state of charge in kWh."""
         return self._soc_kwh
 
     @property
     def soc_fraction(self) -> float:
-        """Current state of charge as fraction of capacity."""
-        return self._soc_kwh / self.config.capacity_kwh
+        """Current state of charge as fraction of effective capacity."""
+        return self._soc_kwh / self.effective_capacity_kwh
 
     @property
     def min_soc_kwh(self) -> float:
-        """Minimum allowed SOC in kWh."""
-        return self.config.capacity_kwh * self.min_soc_fraction
+        """Minimum allowed SOC in kWh (based on effective capacity)."""
+        return self.effective_capacity_kwh * self.min_soc_fraction
 
     @property
     def max_soc_kwh(self) -> float:
-        """Maximum allowed SOC in kWh."""
-        return self.config.capacity_kwh * self.max_soc_fraction
+        """Maximum allowed SOC in kWh (based on effective capacity)."""
+        return self.effective_capacity_kwh * self.max_soc_fraction
 
     @property
     def usable_capacity_kwh(self) -> float:
