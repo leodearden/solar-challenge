@@ -380,3 +380,232 @@ class TestMonotoneHermiteFallback:
         fallback_result = self._call(self._AGES, self._VALUES, 25)
         assert pchip_result[0] == pytest.approx(fallback_result[0], rel=1e-5)
         assert pchip_result[24] == pytest.approx(fallback_result[24], rel=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# project_multi_year — shape + energy aggregation (step-7 / step-8)
+# ---------------------------------------------------------------------------
+
+
+def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
+    from solar_challenge.pv import PVConfig
+
+    return PVConfig(
+        capacity_kw=4.0,
+        azimuth=180.0,
+        tilt=35.0,
+        system_age_years=system_age_years,
+        degradation_rate_per_year=0.005,
+    )
+
+
+def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
+    from solar_challenge.load import LoadConfig
+
+    return LoadConfig(annual_consumption_kwh=3500.0)
+
+
+def _make_home_config(system_age_years: float = 0.0) -> "HomeConfig":  # type: ignore[name-defined]
+    from solar_challenge.home import HomeConfig
+    from solar_challenge.location import Location
+
+    return HomeConfig(
+        pv_config=_make_pv_config(system_age_years),
+        load_config=_make_load_config(),
+        location=Location.bristol(),
+    )
+
+
+def _make_scenario(
+    n_homes: int = 1,
+    asset_life_years: int = 5,
+    start: str = "2020-01-01",
+    end: str = "2020-12-31",
+) -> tuple:  # returns (ScenarioConfig, FinanceConfig)
+    from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+
+    homes = [_make_home_config() for _ in range(n_homes)]
+    finance = FinanceConfig(
+        standing_charge_pence_per_day=28.0,
+        asset_life_years=asset_life_years,
+    )
+    scenario = ScenarioConfig(
+        name="test-scenario",
+        period=SimulationPeriod(start_date=start, end_date=end),
+        description="Unit test scenario",
+        homes=homes,
+    )
+    return scenario, finance
+
+
+def _make_sim_results(
+    self_kwh: float = 24.0,
+    export_kwh: float = 48.0,
+    import_kwh: float = 12.0,
+    discharge_kwh: float = 0.0,
+    n_minutes: int = 1440,  # 1 day
+) -> "SimulationResults":  # type: ignore[name-defined]
+    """Build a minimal SimulationResults with constant power series."""
+    import pandas as pd
+    from solar_challenge.home import SimulationResults
+
+    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
+    # Convert kWh to kW for constant-power series (energy = power * n_minutes/60)
+    sc_kw = self_kwh / (n_minutes / 60.0)
+    exp_kw = export_kwh / (n_minutes / 60.0)
+    imp_kw = import_kwh / (n_minutes / 60.0)
+    dis_kw = discharge_kwh / (n_minutes / 60.0)
+    gen_kw = sc_kw + exp_kw
+    demand_kw = sc_kw + imp_kw - dis_kw
+
+    zeros = pd.Series(0.0, index=idx)
+
+    return SimulationResults(
+        generation=pd.Series(gen_kw, index=idx),
+        demand=pd.Series(demand_kw, index=idx),
+        self_consumption=pd.Series(sc_kw, index=idx),
+        battery_charge=zeros.copy(),
+        battery_discharge=pd.Series(dis_kw, index=idx),
+        battery_soc=zeros.copy(),
+        grid_import=pd.Series(imp_kw, index=idx),
+        grid_export=pd.Series(exp_kw, index=idx),
+        import_cost=zeros.copy(),
+        export_revenue=zeros.copy(),
+        tariff_rate=zeros.copy(),
+    )
+
+
+def _make_fleet_results(
+    n_homes: int = 1,
+    self_kwh: float = 24.0,
+    export_kwh: float = 48.0,
+    import_kwh: float = 12.0,
+) -> "FleetResults":  # type: ignore[name-defined]
+    from solar_challenge.fleet import FleetResults
+
+    homes = [_make_home_config() for _ in range(n_homes)]
+    per_home = [_make_sim_results(self_kwh, export_kwh, import_kwh) for _ in range(n_homes)]
+    return FleetResults(
+        per_home_results=per_home,
+        home_configs=homes,
+    )
+
+
+class TestProjectMultiYearShape:
+    """project_multi_year shape + energy aggregation tests."""
+
+    def test_returns_multi_year_curve(self) -> None:
+        """project_multi_year returns a MultiYearCurve."""
+        from solar_challenge.finance import MultiYearCurve, project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = _make_scenario(asset_life_years=5)
+        fr = _make_fleet_results(n_homes=1)
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        assert isinstance(curve, MultiYearCurve)
+
+    def test_points_length_equals_asset_life(self) -> None:
+        """len(curve.points) == finance.asset_life_years."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = _make_scenario(asset_life_years=5)
+        fr = _make_fleet_results(n_homes=1)
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        assert len(curve.points) == 5
+
+    def test_points_year_ascending(self) -> None:
+        """points[i].year == i (ascending 0..asset_life-1)."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = _make_scenario(asset_life_years=5)
+        fr = _make_fleet_results(n_homes=1)
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        for i, pt in enumerate(curve.points):
+            assert pt.year == i
+
+    def test_sampled_ages_sorted(self) -> None:
+        """sampled_ages is sorted in ascending order."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = _make_scenario(asset_life_years=5)
+        fr = _make_fleet_results(n_homes=1)
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        assert list(curve.sampled_ages) == sorted(curve.sampled_ages)
+
+    def test_sampled_ages_within_range(self) -> None:
+        """All sampled_ages are within [0, asset_life)."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = _make_scenario(asset_life_years=5)
+        fr = _make_fleet_results(n_homes=1)
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        for age in curve.sampled_ages:
+            assert 0 <= age < 5
+
+    def test_sampled_ages_includes_seed_endpoints(self) -> None:
+        """sampled_ages includes age 0 (seed start) and asset_life-1 (seed end)."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = _make_scenario(asset_life_years=5)
+        fr = _make_fleet_results(n_homes=1)
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        assert 0 in curve.sampled_ages
+        assert 4 in curve.sampled_ages  # asset_life-1
+
+    def test_fleet_self_consumption_at_sampled_age(self) -> None:
+        """fleet_self_consumption_kwh at a sampled age equals sum of per-home totals."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.home import calculate_summary
+
+        n_homes = 2
+        sc_per_home = 1000.0
+        scenario, finance = _make_scenario(n_homes=n_homes, asset_life_years=5)
+        fr = _make_fleet_results(n_homes=n_homes, self_kwh=sc_per_home)
+
+        # Compute expected total from calculate_summary
+        expected_sc = sum(
+            calculate_summary(r).total_self_consumption_kwh
+            for r in fr.per_home_results
+        )
+
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+
+        # At age 0 (a seed point), the value should match the injected summary
+        assert curve.points[0].fleet_self_consumption_kwh == pytest.approx(
+            expected_sc, rel=1e-4
+        )
+
+    def test_fleet_export_at_sampled_age(self) -> None:
+        """fleet_export_kwh at a sampled age equals sum of per-home totals."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.home import calculate_summary
+
+        n_homes = 2
+        exp_per_home = 500.0
+        scenario, finance = _make_scenario(n_homes=n_homes, asset_life_years=5)
+        fr = _make_fleet_results(n_homes=n_homes, export_kwh=exp_per_home)
+
+        expected_export = sum(
+            calculate_summary(r).total_grid_export_kwh
+            for r in fr.per_home_results
+        )
+
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        assert curve.points[0].fleet_export_kwh == pytest.approx(expected_export, rel=1e-4)
+
+    def test_fleet_import_at_sampled_age(self) -> None:
+        """fleet_import_kwh at a sampled age equals sum of per-home totals."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.home import calculate_summary
+
+        n_homes = 2
+        imp_per_home = 200.0
+        scenario, finance = _make_scenario(n_homes=n_homes, asset_life_years=5)
+        fr = _make_fleet_results(n_homes=n_homes, import_kwh=imp_per_home)
+
+        expected_import = sum(
+            calculate_summary(r).total_grid_import_kwh
+            for r in fr.per_home_results
+        )
+
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        assert curve.points[0].fleet_import_kwh == pytest.approx(expected_import, rel=1e-4)
