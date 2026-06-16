@@ -2820,3 +2820,109 @@ class TestFinanceConfigParsing:
         )
         assert result is not None
         assert result.grant_gbp == 0.0
+
+
+# ---------------------------------------------------------------------------
+# ScenarioConfig.finance field + load_scenarios round-trip (step-7)
+# ---------------------------------------------------------------------------
+
+
+class TestScenarioFinance:
+    """Tests for ScenarioConfig.finance field and _parse_scenario wiring."""
+
+    _MINIMAL_PERIOD = {
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-07",
+    }
+    _MINIMAL_HOME = {
+        "pv": {"capacity_kw": 4.0},
+        "load": {"annual_consumption_kwh": 3400},
+    }
+
+    def test_scenario_config_finance_field_exists(self) -> None:
+        """ScenarioConfig declares a 'finance' field."""
+        import dataclasses
+        field_names = {f.name for f in dataclasses.fields(ScenarioConfig)}
+        assert "finance" in field_names
+
+    def test_scenario_config_finance_defaults_to_none(self) -> None:
+        """ScenarioConfig.finance is None when not provided (constructed directly)."""
+        from solar_challenge.home import HomeConfig
+        from solar_challenge.pv import PVConfig
+        from solar_challenge.load import LoadConfig
+
+        home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+        )
+        sc = ScenarioConfig(
+            name="test",
+            period=SimulationPeriod(**self._MINIMAL_PERIOD),
+            home=home,
+        )
+        assert sc.finance is None
+
+    def test_load_scenarios_with_finance_block_populates_field(self) -> None:
+        """YAML with a top-level finance: block → scenarios[0].finance is FinanceConfig."""
+        yaml_content = (
+            "name: Finance Test\n"
+            "period:\n"
+            "  start_date: '2024-01-01'\n"
+            "  end_date: '2024-01-07'\n"
+            "home:\n"
+            "  pv:\n"
+            "    capacity_kw: 4.0\n"
+            "  load:\n"
+            "    annual_consumption_kwh: 3400\n"
+            "finance:\n"
+            "  standing_charge_pence_per_day: 65.0\n"
+            "  vat_rate: 0.08\n"
+            "  self_consumption_override: 0.75\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            scenarios = load_scenarios(path)
+            assert len(scenarios) == 1
+            fc = scenarios[0].finance
+            assert fc is not None
+            assert isinstance(fc, FinanceConfig)
+            assert fc.standing_charge_pence_per_day == 65.0
+            assert fc.vat_rate == 0.08
+            assert fc.self_consumption_override == 0.75
+            # Un-overridden fields use defaults
+            assert fc.loan_term_years == 15
+        finally:
+            path.unlink()
+
+    def test_load_scenarios_without_finance_block_is_none(self) -> None:
+        """YAML without a finance: block → scenarios[0].finance is None."""
+        yaml_content = (
+            "name: No Finance Test\n"
+            "period:\n"
+            "  start_date: '2024-01-01'\n"
+            "  end_date: '2024-01-07'\n"
+            "home:\n"
+            "  pv:\n"
+            "    capacity_kw: 4.0\n"
+            "  load:\n"
+            "    annual_consumption_kwh: 3400\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            scenarios = load_scenarios(path)
+            assert len(scenarios) == 1
+            assert scenarios[0].finance is None
+        finally:
+            path.unlink()
