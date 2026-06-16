@@ -203,3 +203,155 @@ class TestProjectEconomicsDataclass:
                 payback_years=-1.0,  # negative!
                 net_surplus_per_home_per_year_gbp=150.0,
             )
+
+
+# ---------------------------------------------------------------------------
+# Step-3: capex build-up + grant/equity/debt split
+# ---------------------------------------------------------------------------
+
+
+class TestProjectEconomicsCapex:
+    """Fast tests for project_economics capex build-up and financing split."""
+
+    def test_two_home_capex_exact(self) -> None:
+        """total_capex_gbp must equal the exact 3-term sum for a 2-home fleet.
+
+        Home A: pv=4.0kWp, battery=5.0kWh
+        Home B: pv=3.0kWp, battery=None (PV-only, battery_kwh=0)
+        pv_cost=1000, roof_fit=1000, battery_cost=250
+        expected_capex = (4*1000 + 1000 + 5*250) + (3*1000 + 1000 + 0*250)
+                       = (4000 + 1000 + 1250) + (3000 + 1000 + 0)
+                       = 6250 + 4000 = 10250
+        """
+        from solar_challenge.finance import project_economics
+
+        home_a = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
+        home_b = _make_home_config(pv_kwp=3.0, battery_kwh=None)
+        scenario = _make_scenario(homes=[home_a, home_b])
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            grant_gbp=0.0,
+        )
+        # 25 revenue entries (asset_life_years=25)
+        revenues = [10000.0] * 25
+        curve = _make_curve(revenues)
+
+        econ = project_economics(curve, scenario, finance)
+
+        expected_capex = (4.0 * 1000.0 + 1000.0 + 5.0 * 250.0) + (3.0 * 1000.0 + 1000.0 + 0.0 * 250.0)
+        assert econ.total_capex_gbp == pytest.approx(expected_capex)
+
+    def test_no_inverter_term_in_capex(self) -> None:
+        """Regression guard: capex must exactly equal the 3-term sum, no more.
+
+        This ensures no inverter term slips in (that is task #49's scope).
+        """
+        from solar_challenge.finance import project_economics
+
+        home = _make_home_config(pv_kwp=5.0, battery_kwh=10.0)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=800.0,
+            roof_fit_cost_gbp=1200.0,
+            battery_cost_per_kwh_gbp=300.0,
+            grant_gbp=0.0,
+        )
+        curve = _make_curve([9000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        # 3-term only: 5*800 + 1200 + 10*300 = 4000+1200+3000=8200
+        expected_3term = 5.0 * 800.0 + 1200.0 + 10.0 * 300.0
+        assert econ.total_capex_gbp == pytest.approx(expected_3term)
+
+    def test_grant_passthrough(self) -> None:
+        """grant_gbp in ProjectEconomics must equal FinanceConfig.grant_gbp."""
+        from solar_challenge.finance import project_economics
+
+        home = _make_home_config(pv_kwp=4.0)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(grant_gbp=5000.0)
+        curve = _make_curve([8000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        assert econ.grant_gbp == pytest.approx(5000.0)
+
+    def test_equity_debt_split(self) -> None:
+        """equity_gbp + debt_gbp must equal (capex - grant); equity fraction correct."""
+        from solar_challenge.finance import project_economics
+
+        home = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            grant_gbp=1000.0,
+            equity_fraction=0.60,
+        )
+        curve = _make_curve([8000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        financed = max(econ.total_capex_gbp - 1000.0, 0.0)
+        expected_equity = financed * 0.60
+        expected_debt = financed * 0.40
+
+        assert econ.equity_gbp == pytest.approx(expected_equity, rel=1e-9)
+        assert econ.debt_gbp == pytest.approx(expected_debt, rel=1e-9)
+        assert econ.equity_gbp + econ.debt_gbp == pytest.approx(financed, rel=1e-9)
+
+    def test_grant_exceeds_capex_clamps_to_zero(self) -> None:
+        """When grant >= capex, financed=0, equity=0, debt=0."""
+        from solar_challenge.finance import project_economics
+
+        home = _make_home_config(pv_kwp=2.0)
+        scenario = _make_scenario(homes=[home])
+        # capex = 2*1000 + 1000 + 0 = 3000; grant=50000 >> capex
+        finance = _make_finance(grant_gbp=50000.0)
+        curve = _make_curve([8000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        assert econ.equity_gbp == pytest.approx(0.0, abs=1e-9)
+        assert econ.debt_gbp == pytest.approx(0.0, abs=1e-9)
+
+    def test_empty_homes_raises_value_error(self) -> None:
+        """project_economics must raise ValueError when scenario has no homes."""
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+        from solar_challenge.finance import project_economics
+        import pandas as pd
+
+        period = SimulationPeriod(
+            start=pd.Timestamp("2024-01-01"),
+            end=pd.Timestamp("2024-12-31"),
+        )
+        # ScenarioConfig.__post_init__ requires homes OR home — use one then clear
+        # We need to bypass: directly pass homes=[] would fail ScenarioConfig validation.
+        # Use a single home scenario but call project_economics on a zero-home one
+        # via a monkeypatch — but simpler: test that project_economics raises when
+        # it finds no homes via the resolution path.
+        # ScenarioConfig requires at least one home, so we test that by passing
+        # a scenario whose homes list is empty after resolution by providing
+        # scenario.homes=[] and scenario.home=None — but this is blocked by
+        # __post_init__. We verify project_economics raises ValueError by
+        # constructing a valid 1-home scenario and monkeypatching (not possible
+        # without object.__setattr__).
+        # Instead: test project_economics with a patched scenario-like object.
+        import dataclasses
+
+        valid_scenario = _make_scenario(homes=[_make_home_config(4.0)])
+        finance = _make_finance()
+        curve = _make_curve([8000.0] * 25)
+
+        # Monkey-patch: clear homes list on a copy
+        empty_scenario = dataclasses.replace(valid_scenario)
+        # ScenarioConfig is not frozen — we can set homes directly
+        object.__setattr__(empty_scenario, "homes", [])
+        object.__setattr__(empty_scenario, "home", None)
+
+        with pytest.raises(ValueError, match="at least one home"):
+            project_economics(curve, empty_scenario, finance)
