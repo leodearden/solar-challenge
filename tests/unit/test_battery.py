@@ -106,6 +106,87 @@ class TestBatteryConfigGridCharging:
         assert restored == cfg
 
 
+class TestBatteryConfigSOCEfficiencyFields:
+    """Contract guard: SOC-limit and efficiency fields on BatteryConfig are frozen and picklable."""
+
+    def test_default_min_soc_fraction(self) -> None:
+        """BatteryConfig default min_soc_fraction is 0.1."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.min_soc_fraction == 0.1
+
+    def test_default_max_soc_fraction(self) -> None:
+        """BatteryConfig default max_soc_fraction is 0.9."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.max_soc_fraction == 0.9
+
+    def test_default_charge_efficiency(self) -> None:
+        """BatteryConfig default charge_efficiency is 0.975."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.charge_efficiency == 0.975
+
+    def test_default_discharge_efficiency(self) -> None:
+        """BatteryConfig default discharge_efficiency is 0.975."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.discharge_efficiency == 0.975
+
+    def test_default_efficiency_is_none(self) -> None:
+        """BatteryConfig default efficiency (round-trip) is None."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.efficiency is None
+
+    def test_custom_soc_fractions(self) -> None:
+        """Custom SOC fractions are stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.2, max_soc_fraction=0.8)
+        assert cfg.min_soc_fraction == 0.2
+        assert cfg.max_soc_fraction == 0.8
+
+    def test_custom_efficiencies(self) -> None:
+        """Custom per-direction efficiencies are stored correctly."""
+        cfg = BatteryConfig(
+            capacity_kwh=5.0,
+            charge_efficiency=0.95,
+            discharge_efficiency=0.92,
+        )
+        assert cfg.charge_efficiency == 0.95
+        assert cfg.discharge_efficiency == 0.92
+
+    def test_min_soc_fraction_frozen(self) -> None:
+        """Assigning to BatteryConfig.min_soc_fraction raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.min_soc_fraction = 0.2  # type: ignore[misc]
+
+    def test_max_soc_fraction_frozen(self) -> None:
+        """Assigning to BatteryConfig.max_soc_fraction raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.max_soc_fraction = 0.8  # type: ignore[misc]
+
+    def test_charge_efficiency_frozen(self) -> None:
+        """Assigning to BatteryConfig.charge_efficiency raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.charge_efficiency = 0.9  # type: ignore[misc]
+
+    def test_discharge_efficiency_frozen(self) -> None:
+        """Assigning to BatteryConfig.discharge_efficiency raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.discharge_efficiency = 0.9  # type: ignore[misc]
+
+    def test_picklable_with_custom_soc_eff(self) -> None:
+        """BatteryConfig with custom SOC/efficiency values round-trips through pickle."""
+        cfg = BatteryConfig(
+            capacity_kwh=5.0,
+            min_soc_fraction=0.15,
+            max_soc_fraction=0.85,
+            charge_efficiency=0.96,
+            discharge_efficiency=0.94,
+        )
+        restored = pickle.loads(pickle.dumps(cfg))
+        assert restored == cfg
+
+
 @pytest.fixture
 def default_config():
     """Create a default 5 kWh battery config."""
