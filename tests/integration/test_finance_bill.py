@@ -189,3 +189,205 @@ class TestHouseholderBillPhysics:
         if bill.baseline_bill_gbp != 0:
             expected_pct = (bill.saving_vs_baseline_gbp / bill.baseline_bill_gbp) * 100
             assert bill.saving_pct == pytest.approx(expected_pct)
+
+
+# ---------------------------------------------------------------------------
+# Step-3: H2 – self-consumption override switch + annualisation
+# ---------------------------------------------------------------------------
+
+
+class TestHouseholderBillOverrideAndAnnualisation:
+    """Fast (no-network) tests for override switch (H2) and annualisation."""
+
+    def test_override_self_consumption_fraction(self) -> None:
+        """With self_consumption_override=0.70, fraction must equal 0.70."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary()
+        finance = _make_finance(self_consumption_override=0.70)
+
+        bill = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=summary.simulation_days,
+        )
+
+        assert bill.self_consumption_fraction == pytest.approx(0.70)
+
+    def test_override_implied_self_consumption(self) -> None:
+        """Implied self_consumption == override × total_generation."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary()
+        finance = _make_finance(self_consumption_override=0.70)
+
+        bill = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=summary.simulation_days,
+        )
+
+        expected_sc = 0.70 * summary.total_generation_kwh
+        # self_consumption_saving reflects self-consumed energy at baseline rate
+        # so we can back-calculate sc_kwh = saving / (rate × (1+vat) / 100)
+        rate = finance.retail_baseline_rate_pence_per_kwh
+        vat = finance.vat_rate
+        implied_sc = bill.self_consumption_saving_gbp / (rate * (1 + vat) / 100.0)
+        assert implied_sc == pytest.approx(expected_sc, rel=1e-6)
+
+    def test_override_differs_from_physics(self) -> None:
+        """Override self_consumption_saving_gbp differs from physics when override ≠ physics fraction."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary()
+        physics_fraction = summary.total_self_consumption_kwh / summary.total_generation_kwh
+        # Use an override that is distinctly different from the physics fraction
+        override_val = 0.90
+
+        assert abs(physics_fraction - override_val) > 0.1, (
+            "Test requires override to differ materially from physics fraction"
+        )
+
+        bill_physics = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=_make_finance(self_consumption_override=None),
+            simulation_days=summary.simulation_days,
+        )
+        bill_override = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=_make_finance(self_consumption_override=override_val),
+            simulation_days=summary.simulation_days,
+        )
+
+        # Higher self-consumption → less export, less import → different bill
+        assert bill_override.self_consumption_saving_gbp != pytest.approx(
+            bill_physics.self_consumption_saving_gbp
+        )
+
+    def test_override_bill_shape_identical(self) -> None:
+        """Override path produces same BillBreakdown shape (all 11 fields)."""
+        from solar_challenge.finance import BillBreakdown, householder_bill
+
+        summary = _make_summary()
+        bill = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=_make_finance(self_consumption_override=0.70),
+            simulation_days=summary.simulation_days,
+        )
+
+        assert isinstance(bill, BillBreakdown)
+        for field in [
+            "standing_charge_gbp", "import_cost_gbp", "vat_gbp", "gross_bill_gbp",
+            "seg_export_income_gbp", "self_consumption_saving_gbp", "baseline_bill_gbp",
+            "net_annual_bill_gbp", "saving_vs_baseline_gbp", "saving_pct",
+            "self_consumption_fraction",
+        ]:
+            assert hasattr(bill, field)
+            assert isinstance(getattr(bill, field), float), f"{field} must be float"
+
+    def test_short_period_triggers_warning(self) -> None:
+        """simulation_days=30 must emit a UserWarning."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary(
+            simulation_days=30,
+            # Scale down the financials to be consistent with 30-day period
+            total_import_cost_gbp=22.68,
+            total_export_revenue_gbp=6.07,
+            net_cost_gbp=16.61,
+            total_generation_kwh=328.77,
+            total_demand_kwh=279.45,
+            total_self_consumption_kwh=180.82,
+            total_grid_import_kwh=98.63,
+            total_grid_export_kwh=147.95,
+            seg_revenue_gbp=6.07,
+        )
+        finance = _make_finance()
+
+        with pytest.warns(UserWarning, match="30 days"):
+            bill = householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=30,
+            )
+
+        # After annualisation to 365 days, standing charge must be the full annual value
+        expected_standing = finance.standing_charge_pence_per_day * 365 / 100
+        assert bill.standing_charge_gbp == pytest.approx(expected_standing)
+
+    def test_full_year_no_warning(self) -> None:
+        """simulation_days=365 must not emit any warning."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary(simulation_days=365)
+        finance = _make_finance()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            bill = householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=365,
+            )
+
+        # No exception means no warning was emitted
+        assert bill.net_annual_bill_gbp > 0
+
+    def test_annualisation_scales_energy_quantities(self) -> None:
+        """Short-period bill's net cost must be approximately (365/30)× the 30-day sim values."""
+        from solar_challenge.finance import householder_bill
+
+        # 30-day summary: energy quantities are 30/365 of typical annual
+        scale_factor = 365 / 30
+        gen_30 = 4000.0 / scale_factor
+        demand_30 = 3400.0 / scale_factor
+        sc_30 = 2200.0 / scale_factor
+        import_kwh_30 = 1200.0 / scale_factor
+        export_kwh_30 = 1800.0 / scale_factor
+        import_cost_30 = 276.0 / scale_factor
+        export_rev_30 = 73.8 / scale_factor
+        net_cost_30 = (276.0 - 73.8) / scale_factor
+
+        summary_30 = _make_summary(
+            simulation_days=30,
+            total_generation_kwh=gen_30,
+            total_demand_kwh=demand_30,
+            total_self_consumption_kwh=sc_30,
+            total_grid_import_kwh=import_kwh_30,
+            total_grid_export_kwh=export_kwh_30,
+            total_import_cost_gbp=import_cost_30,
+            total_export_revenue_gbp=export_rev_30,
+            net_cost_gbp=net_cost_30,
+            seg_revenue_gbp=export_rev_30,
+        )
+
+        summary_365 = _make_summary(simulation_days=365)
+        finance = _make_finance()
+
+        with pytest.warns(UserWarning):
+            bill_30 = householder_bill(
+                summary=summary_30,
+                annual_self_consumption_kwh=summary_30.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=30,
+            )
+
+        bill_365 = householder_bill(
+            summary=summary_365,
+            annual_self_consumption_kwh=summary_365.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=365,
+        )
+
+        # Annualised 30-day bill should be approximately equal to the 365-day bill
+        assert bill_30.import_cost_gbp == pytest.approx(bill_365.import_cost_gbp, rel=1e-6)
+        assert bill_30.seg_export_income_gbp == pytest.approx(
+            bill_365.seg_export_income_gbp, rel=1e-6
+        )
