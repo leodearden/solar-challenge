@@ -46,6 +46,7 @@ import — bound below with a no-new-dep fallback; confirm at ζ/θ start.
 | `_parse_scenario` is the assembly point for a new `_parse_finance_config` | grep:`config.py:1515-1525` wired | ✅ |
 | `config validate` / `ConfigurationError` path exists | grep:`config.py` `ConfigurationError` (raised in `_parse_battery_config`, e.g. :640) wired | ✅ |
 | Signal = `finance:` block round-trips; out-of-range raises `ConfigurationError`; omit ⟹ `None` | unit test on `_parse_finance_config` (own task); rejection observed by constructing bad value | ✅ |
+| `inverter_cost_per_kw_gbp: float = 0.0` field + `>=0` validation (W3 seam, added 2026-06-16) | identity: additive frozen field authored in γ; default 0 ⟹ existing finance YAMLs round-trip unchanged; consumed by η + W3 | ✅ |
 
 ## δ — HOUSEHOLDER-BILL + finance report + CLI — leaf
 
@@ -87,7 +88,8 @@ import — bound below with a no-new-dep fallback; confirm at ζ/θ start.
 |---|---|---|
 | `MultiYearCurve` (per-year energy/revenue) available | **producer:task-ζ** — dep η→ζ wired | ✅ |
 | `FinanceConfig` (capex rates, grant, equity/debt, loan term/rate, opex) | **producer:task-γ** — dep η→γ wired | ✅ |
-| Resolved fleet configs expose per-home PV kWp + battery kWh for capex build-up | grep:`fleet.py:132-197` (`FleetResults.home_configs`) wired | ✅ |
+| Resolved fleet configs expose per-home PV kWp + battery kWh (+ `PVConfig.effective_inverter_capacity_kw`) for capex build-up | grep:`fleet.py:132-197` (`FleetResults.home_configs`) + grep:`pv.py:102-104` (`effective_inverter_capacity_kw`) wired | ✅ |
+| Inverter capex term `Σ inverter_kw×inverter_cost_per_kw` in the build-up (W3 seam, added 2026-06-16) | **producer:task-γ** (the `inverter_cost_per_kw_gbp` field) — dep η→γ wired; default 0.0 ⟹ build-up + θ/H6 calibration bit-identical; consumer = W3 | ✅ |
 | `output.generate_finance_report` economics block (extends δ's report) | **producer:task-δ** — dep η→δ (serialises `output.py` finance sections) wired | ✅ |
 | Identity: level-amortisation debt service; `min_dscr` over loan years; IRR via NPV root-find (no `numpy.irr` dep) | identity: standard annuity + NPV bisection, pure; H5 re-checks vs hand annuity | ✅ |
 | Signal = `finance run --project …` prints capex/grant/debt/equity/finance/opex/surplus/min-DSCR/IRR/payback; deterministic | integration test (own task) | ✅ |
