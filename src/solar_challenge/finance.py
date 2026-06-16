@@ -20,7 +20,7 @@ from __future__ import annotations
 import dataclasses
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence
 
 import pandas as pd
 
@@ -764,9 +764,12 @@ def project_multi_year(
         return (fleet_sc, fleet_exp, fleet_imp, per_home_discharge,
                 mean_pv_soh, mean_battery_soh, fleet_revenue)
 
-    # March ascending
+    # ---- Seed forward-march (snapshot cum_tp BEFORE each simulation) ---------
+    # cum_tp_snapshot[age] = per-home throughput used as input for that age's sim.
+    cum_tp_snapshot: dict[int, List[float]] = {}
     prev_age: Optional[int] = None
     for age in seed_ages:
+        cum_tp_snapshot[age] = list(cum_throughput)      # snapshot before sim
         node = _simulate_age(age, list(cum_throughput))
         sampled_data[age] = node
         # Accumulate cumulative throughput toward next node (trapezoidal; step-12)
@@ -777,7 +780,85 @@ def project_multi_year(
                 cum_throughput[i] += 0.5 * (prev_discharge[i] + node[3][i]) * dt
         prev_age = age
 
-    # ---- Interpolate per-year curves ----------------------------------------
+    # ---- Adaptive bisection (H4, §3.3) --------------------------------------
+    # Key metric: fleet_self_consumption_kwh (index 0).  Annual scale normalises
+    # deviations as percentages relative to the age-0 peak.
+    annual_scale: float = max(sampled_data[0][0], 1e-9)
+    max_deviation: float = 0.0
+    capped: bool = False
+
+    while True:
+        current_ages = sorted(sampled_data.keys())
+
+        # Build PCHIP over the current node set for deviation checking
+        sc_vals_now = [sampled_data[a][0] for a in current_ages]
+        sc_interp_now = _interpolate_per_year(current_ages, sc_vals_now, asset_life)
+
+        # Scan adjacent intervals for bisectable midpoints above the error target
+        to_bisect: List[Any] = []
+        current_max_dev: float = 0.0
+
+        for i_interval in range(len(current_ages) - 1):
+            a_k = current_ages[i_interval]
+            a_k1 = current_ages[i_interval + 1]
+            if a_k1 - a_k <= 1:
+                continue  # width-1 interval — finest resolution
+            mid = (a_k + a_k1) // 2
+            if mid in sampled_data:
+                continue  # already a simulation node
+
+            # PCHIP prediction at mid
+            pred_sc = sc_interp_now[mid]
+
+            # Estimated cum_tp at mid: forward-Euler from the lower node snapshot
+            cum_tp_for_mid = list(cum_tp_snapshot[a_k])
+            discharge_at_k: List[float] = sampled_data[a_k][3]
+            for j in range(n_homes):
+                cum_tp_for_mid[j] += discharge_at_k[j] * float(mid - a_k)
+
+            # Trial simulation at mid
+            trial_node = _simulate_age(mid, cum_tp_for_mid)
+            trial_sc: float = trial_node[0]
+
+            dev = abs(pred_sc - trial_sc) / annual_scale * 100.0
+            current_max_dev = max(current_max_dev, dev)
+
+            if dev > error_target_pct:
+                to_bisect.append((mid, trial_node, cum_tp_for_mid))
+
+        # Always update the convergence invariant with the latest check
+        max_deviation = current_max_dev
+
+        if not to_bisect:
+            break  # All intervals within target — converged
+
+        if len(sampled_data) >= MAX_NODES:
+            # Cannot add any more nodes; surface the remaining error
+            capped = True
+            break
+
+        # Add bisection nodes (stop if we hit the cap mid-iteration)
+        for mid_age, trial_node, cum_tp_for_mid in to_bisect:
+            if len(sampled_data) >= MAX_NODES:
+                capped = True
+                break
+            sampled_data[mid_age] = trial_node
+            cum_tp_snapshot[mid_age] = list(cum_tp_for_mid)
+
+        if capped:
+            break
+        # Loop: rebuilt PCHIP with new nodes → re-check all intervals
+
+    if capped:
+        warnings.warn(
+            f"project_multi_year: adaptive bisection reached MAX_NODES ({MAX_NODES}); "
+            f"interp_error_estimate surfaced at {max_deviation:.3f}% "
+            f"(target was {error_target_pct}%).",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # ---- Interpolate per-year curves with the converged node set ------------
     ages_sorted = sorted(sampled_data.keys())
     sc_vals = [sampled_data[a][0] for a in ages_sorted]
     exp_vals = [sampled_data[a][1] for a in ages_sorted]
@@ -810,5 +891,5 @@ def project_multi_year(
     return MultiYearCurve(
         points=points,
         sampled_ages=tuple(ages_sorted),
-        interp_error_estimate=0.0,   # wired in step-16
+        interp_error_estimate=max_deviation,
     )
