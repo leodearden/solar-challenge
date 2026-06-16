@@ -69,10 +69,9 @@ def _make_scenario(
 ) -> "ScenarioConfig":  # type: ignore[name-defined]
     """Build a minimal ScenarioConfig for economics tests."""
     from solar_challenge.config import ScenarioConfig, SimulationPeriod
-    import pandas as pd
     period = SimulationPeriod(
-        start=pd.Timestamp("2024-01-01"),
-        end=pd.Timestamp("2024-12-31"),
+        start_date="2024-01-01",
+        end_date="2024-12-31",
     )
     if homes is None:
         homes = [_make_home_config(4.0, battery_kwh=5.0)]
@@ -321,14 +320,8 @@ class TestProjectEconomicsCapex:
 
     def test_empty_homes_raises_value_error(self) -> None:
         """project_economics must raise ValueError when scenario has no homes."""
-        from solar_challenge.config import ScenarioConfig, SimulationPeriod
         from solar_challenge.finance import project_economics
-        import pandas as pd
 
-        period = SimulationPeriod(
-            start=pd.Timestamp("2024-01-01"),
-            end=pd.Timestamp("2024-12-31"),
-        )
         # ScenarioConfig.__post_init__ requires homes OR home — use one then clear
         # We need to bypass: directly pass homes=[] would fail ScenarioConfig validation.
         # Use a single home scenario but call project_economics on a zero-home one
