@@ -5,7 +5,7 @@ import math
 import pickle
 
 import pytest
-from solar_challenge.battery import BatteryConfig, Battery
+from solar_challenge.battery import BatteryConfig, Battery, compute_soh
 from solar_challenge.config import GridChargeConfig
 
 
@@ -863,3 +863,64 @@ class TestBatterySOHFieldValidation:
         """soh == None (no override) is valid."""
         cfg = BatteryConfig(capacity_kwh=5.0, soh=None)
         assert cfg.soh is None
+
+
+class TestComputeSOH:
+    """Tests for the pure compute_soh function."""
+
+    def test_age_zero_throughput_zero_returns_one(self) -> None:
+        """compute_soh(age=0, throughput=0) == 1.0 (no degradation)."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        assert compute_soh(0.0, 0.0, 4.0, params) == pytest.approx(1.0)
+
+    def test_monotone_non_increasing_in_age(self) -> None:
+        """compute_soh is non-increasing as system_age_years increases."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        ages = [0, 5, 10, 15, 25]
+        soh_values = [compute_soh(a, 100.0, 4.0, params) for a in ages]
+        for i in range(1, len(soh_values)):
+            assert soh_values[i] <= soh_values[i - 1], (
+                f"SOH should not increase with age: soh[{ages[i]}]={soh_values[i]} "
+                f"> soh[{ages[i-1]}]={soh_values[i-1]}"
+            )
+
+    def test_monotone_non_increasing_in_throughput(self) -> None:
+        """compute_soh is non-increasing as cumulative_throughput_kwh increases."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        throughputs = [0, 500, 1000, 5000, 10000]
+        soh_values = [compute_soh(5.0, t, 4.0, params) for t in throughputs]
+        for i in range(1, len(soh_values)):
+            assert soh_values[i] <= soh_values[i - 1], (
+                f"SOH should not increase with throughput: "
+                f"soh[{throughputs[i]}]={soh_values[i]} > soh[{throughputs[i-1]}]={soh_values[i-1]}"
+            )
+
+    def test_clamp_upper_never_exceeds_one(self) -> None:
+        """compute_soh never returns more than 1.0."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        # Even with zero age and throughput, result is clamped to 1.0
+        result = compute_soh(0.0, 0.0, 4.0, params)
+        assert result <= 1.0
+
+    def test_clamp_lower_returns_soh_floor(self) -> None:
+        """compute_soh clamps to soh_floor when degradation is extreme."""
+        # Use a high floor (0.9) so it's easy to trigger with age > 5yr at 0.02/yr
+        params = BatteryConfig(capacity_kwh=5.0, soh_floor=0.9)
+        # At 25 years, calendar fade = 0.02 * 25 = 0.5 -> raw SOH = 0.5 < floor 0.9
+        result = compute_soh(25.0, 0.0, 4.0, params)
+        assert result == pytest.approx(0.9)
+
+    def test_combined_greater_than_calendar_alone(self) -> None:
+        """At fixed nonzero age, adding throughput > 0 gives strictly lower SOH."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        soh_calendar_only = compute_soh(5.0, 0.0, 4.0, params)
+        soh_combined = compute_soh(5.0, 5000.0, 4.0, params)
+        assert soh_combined < soh_calendar_only
+
+    def test_usable_capacity_zero_does_not_raise(self) -> None:
+        """compute_soh with usable_capacity_kwh=0 does not raise (efc guarded)."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        result = compute_soh(5.0, 100.0, 0.0, params)
+        # With usable=0, efc=0, so only calendar fade applies
+        expected = 1.0 - params.calendar_fade_rate_per_year * 5.0
+        assert result == pytest.approx(max(params.soh_floor, min(1.0, expected)))
