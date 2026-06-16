@@ -744,6 +744,11 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
         name=data.get("name", ""),
         dispatch_strategy=dispatch_strategy,
         grid_charging=grid_charging,
+        min_soc_fraction=data.get("min_soc_fraction", 0.1),
+        max_soc_fraction=data.get("max_soc_fraction", 0.9),
+        charge_efficiency=data.get("charge_efficiency", 0.975),
+        discharge_efficiency=data.get("discharge_efficiency", 0.975),
+        efficiency=data.get("efficiency"),
     )
 
 

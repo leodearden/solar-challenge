@@ -437,6 +437,113 @@ home:
             path.unlink()
 
 
+class TestBatterySOCEfficiencyParsing:
+    """Tests for _parse_battery_config SOC + efficiency key forwarding."""
+
+    def test_parse_explicit_soc_and_eff_keys(self) -> None:
+        """All five SOC/eff keys are forwarded to BatteryConfig."""
+        result = _parse_battery_config(
+            {
+                "capacity_kwh": 5.0,
+                "min_soc_fraction": 0.2,
+                "max_soc_fraction": 0.85,
+                "charge_efficiency": 0.96,
+                "discharge_efficiency": 0.97,
+            }
+        )
+        assert result is not None
+        assert result.min_soc_fraction == 0.2
+        assert result.max_soc_fraction == 0.85
+        assert result.charge_efficiency == 0.96
+        assert result.discharge_efficiency == 0.97
+
+    def test_parse_efficiency_splits_via_sqrt(self) -> None:
+        """efficiency key is forwarded and split as sqrt by BatteryConfig.__post_init__."""
+        import math
+
+        result = _parse_battery_config({"capacity_kwh": 5.0, "efficiency": 0.95})
+        assert result is not None
+        assert result.efficiency == 0.95
+        assert result.charge_efficiency == pytest.approx(math.sqrt(0.95))
+        assert result.discharge_efficiency == pytest.approx(math.sqrt(0.95))
+
+    def test_absent_keys_use_defaults(self) -> None:
+        """Absent SOC/eff keys yield the correct defaults."""
+        result = _parse_battery_config({"capacity_kwh": 5.0})
+        assert result is not None
+        assert result.min_soc_fraction == 0.1
+        assert result.max_soc_fraction == 0.9
+        assert result.charge_efficiency == 0.975
+        assert result.discharge_efficiency == 0.975
+        assert result.efficiency is None
+
+    def test_out_of_range_soc_raises_value_error(self) -> None:
+        """Out-of-range SOC fractions propagate as ValueError."""
+        with pytest.raises(ValueError, match="SOC"):
+            _parse_battery_config(
+                {"capacity_kwh": 5.0, "min_soc_fraction": 0.9, "max_soc_fraction": 0.5}
+            )
+
+    def test_out_of_range_efficiency_raises_value_error(self) -> None:
+        """Out-of-range efficiency propagates as ValueError."""
+        with pytest.raises(ValueError, match="[Cc]harge"):
+            _parse_battery_config({"capacity_kwh": 5.0, "charge_efficiency": 0.0})
+
+    def test_yaml_round_trip_efficiency(self) -> None:
+        """YAML with battery.efficiency round-trips into home.battery_config.charge_efficiency."""
+        import math
+
+        yaml_content = """
+home:
+  pv:
+    capacity_kw: 4.0
+  load:
+    annual_consumption_kwh: 3400
+  battery:
+    capacity_kwh: 5.0
+    efficiency: 0.95
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            home = load_home_config(path)
+            assert home.battery_config is not None
+            assert home.battery_config.efficiency == 0.95
+            assert home.battery_config.charge_efficiency == pytest.approx(math.sqrt(0.95))
+            assert home.battery_config.discharge_efficiency == pytest.approx(math.sqrt(0.95))
+        finally:
+            path.unlink()
+
+    def test_yaml_round_trip_min_max_soc(self) -> None:
+        """YAML with battery.min_soc_fraction/max_soc_fraction round-trips correctly."""
+        yaml_content = """
+home:
+  pv:
+    capacity_kw: 4.0
+  load:
+    annual_consumption_kwh: 3400
+  battery:
+    capacity_kwh: 5.0
+    min_soc_fraction: 0.15
+    max_soc_fraction: 0.85
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            home = load_home_config(path)
+            assert home.battery_config is not None
+            assert home.battery_config.min_soc_fraction == 0.15
+            assert home.battery_config.max_soc_fraction == 0.85
+        finally:
+            path.unlink()
+
+
 class TestDispatchStrategyParsing:
     """Tests for _parse_dispatch_strategy_config function."""
 

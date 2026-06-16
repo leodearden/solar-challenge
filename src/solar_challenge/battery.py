@@ -1,11 +1,40 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Battery storage configuration and modelling."""
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
+
+
+def _validate_soc_and_efficiency(
+    min_soc: float,
+    max_soc: float,
+    charge_eff: float,
+    discharge_eff: float,
+) -> None:
+    """Validate SOC limits and per-direction efficiency values.
+
+    This is the single source of truth for these bounds; called from both
+    BatteryConfig.__post_init__ and Battery.__init__ so the checks stay in sync.
+
+    Args:
+        min_soc: Minimum SOC fraction (must satisfy 0 <= min_soc < max_soc <= 1)
+        max_soc: Maximum SOC fraction
+        charge_eff: Charging efficiency (must satisfy 0 < charge_eff <= 1)
+        discharge_eff: Discharging efficiency (must satisfy 0 < discharge_eff <= 1)
+
+    Raises:
+        ValueError: If any argument is out of range.
+    """
+    if not 0 <= min_soc < max_soc <= 1:
+        raise ValueError(f"Invalid SOC limits: min={min_soc}, max={max_soc}")
+    if not 0 < charge_eff <= 1:
+        raise ValueError(f"Charge efficiency must be (0, 1], got {charge_eff}")
+    if not 0 < discharge_eff <= 1:
+        raise ValueError(f"Discharge efficiency must be (0, 1], got {discharge_eff}")
 
 
 @dataclass(frozen=True)
@@ -19,6 +48,22 @@ class BatteryConfig:
         name: Optional identifier for the battery
         dispatch_strategy: Optional dispatch strategy configuration
         grid_charging: Optional grid-charge (arbitrage) configuration; None means disabled
+        min_soc_fraction: Minimum state of charge as fraction of capacity (default 0.1)
+        max_soc_fraction: Maximum state of charge as fraction of capacity (default 0.9)
+        charge_efficiency: Charging efficiency, fraction of energy stored (default 0.975)
+        discharge_efficiency: Discharging efficiency, fraction of stored energy output (default 0.975)
+        efficiency: Round-trip efficiency; when set, derives
+            ``charge_efficiency = discharge_efficiency = sqrt(efficiency)``,
+            silently overriding any explicitly-supplied per-direction values.
+            The raw value is retained on the field so pickle round-trips are
+            idempotent (``__post_init__`` always re-derives from ``efficiency``,
+            never from the already-split values).
+            **Caveat:** ``dataclasses.replace(cfg, charge_efficiency=x)`` on a
+            config that has ``efficiency`` set will not take effect, because
+            ``__post_init__`` re-derives charge/discharge from the retained
+            ``efficiency``.  To change per-direction values, also clear
+            ``efficiency`` (``dataclasses.replace(cfg, efficiency=None,
+            charge_efficiency=x, discharge_efficiency=y)``).
     """
 
     capacity_kwh: float
@@ -27,6 +72,11 @@ class BatteryConfig:
     name: str = ""
     dispatch_strategy: Optional["DispatchStrategyConfig"] = None
     grid_charging: Optional["GridChargeConfig"] = None
+    min_soc_fraction: float = 0.1
+    max_soc_fraction: float = 0.9
+    charge_efficiency: float = 0.975
+    discharge_efficiency: float = 0.975
+    efficiency: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Validate battery configuration parameters."""
@@ -40,6 +90,20 @@ class BatteryConfig:
             raise ValueError(
                 f"Max discharge power must be positive, got {self.max_discharge_kw} kW"
             )
+        if self.efficiency is not None:
+            if not 0 < self.efficiency <= 1:
+                raise ValueError(
+                    f"Round-trip efficiency must be (0, 1], got {self.efficiency}"
+                )
+            object.__setattr__(self, "charge_efficiency", math.sqrt(self.efficiency))
+            object.__setattr__(self, "discharge_efficiency", math.sqrt(self.efficiency))
+
+        _validate_soc_and_efficiency(
+            self.min_soc_fraction,
+            self.max_soc_fraction,
+            self.charge_efficiency,
+            self.discharge_efficiency,
+        )
 
     @classmethod
     def default_5kwh(cls) -> "BatteryConfig":
@@ -74,38 +138,36 @@ class Battery:
         self,
         config: BatteryConfig,
         initial_soc_kwh: Optional[float] = None,
-        min_soc_fraction: float = 0.1,
-        max_soc_fraction: float = 0.9,
-        charge_efficiency: float = 0.975,
-        discharge_efficiency: float = 0.975,
+        min_soc_fraction: Optional[float] = None,
+        max_soc_fraction: Optional[float] = None,
+        charge_efficiency: Optional[float] = None,
+        discharge_efficiency: Optional[float] = None,
     ) -> None:
         """Initialize battery with configuration and state.
 
         Args:
             config: Battery configuration
             initial_soc_kwh: Initial SOC in kWh (default: mid-point of usable range)
-            min_soc_fraction: Minimum SOC as fraction (0-1)
-            max_soc_fraction: Maximum SOC as fraction (0-1)
-            charge_efficiency: Charging efficiency (0-1)
-            discharge_efficiency: Discharging efficiency (0-1)
+            min_soc_fraction: Minimum SOC as fraction (0-1); defaults to config.min_soc_fraction
+            max_soc_fraction: Maximum SOC as fraction (0-1); defaults to config.max_soc_fraction
+            charge_efficiency: Charging efficiency (0-1); defaults to config.charge_efficiency
+            discharge_efficiency: Discharging efficiency (0-1); defaults to config.discharge_efficiency
         """
         self.config = config
 
-        if not 0 <= min_soc_fraction < max_soc_fraction <= 1:
-            raise ValueError(
-                f"Invalid SOC limits: min={min_soc_fraction}, max={max_soc_fraction}"
-            )
-        self.min_soc_fraction = min_soc_fraction
-        self.max_soc_fraction = max_soc_fraction
+        # Resolve optional params from config when not explicitly supplied
+        resolved_min_soc: float = config.min_soc_fraction if min_soc_fraction is None else min_soc_fraction
+        resolved_max_soc: float = config.max_soc_fraction if max_soc_fraction is None else max_soc_fraction
+        resolved_charge_eff: float = config.charge_efficiency if charge_efficiency is None else charge_efficiency
+        resolved_discharge_eff: float = config.discharge_efficiency if discharge_efficiency is None else discharge_efficiency
 
-        if not 0 < charge_efficiency <= 1:
-            raise ValueError(f"Charge efficiency must be (0, 1], got {charge_efficiency}")
-        if not 0 < discharge_efficiency <= 1:
-            raise ValueError(
-                f"Discharge efficiency must be (0, 1], got {discharge_efficiency}"
-            )
-        self.charge_efficiency = charge_efficiency
-        self.discharge_efficiency = discharge_efficiency
+        _validate_soc_and_efficiency(
+            resolved_min_soc, resolved_max_soc, resolved_charge_eff, resolved_discharge_eff
+        )
+        self.min_soc_fraction = resolved_min_soc
+        self.max_soc_fraction = resolved_max_soc
+        self.charge_efficiency = resolved_charge_eff
+        self.discharge_efficiency = resolved_discharge_eff
 
         # Set initial SOC
         if initial_soc_kwh is None:
