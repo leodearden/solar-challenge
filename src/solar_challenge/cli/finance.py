@@ -18,7 +18,7 @@ from solar_challenge.config import (
     _parse_finance_config,
     _parse_seg_config,
 )
-from solar_challenge.finance import bill_distribution
+from solar_challenge.finance import DEFAULT_SPREADSHEET_SELF_CONSUMPTION, bill_distribution
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
@@ -124,14 +124,23 @@ def run(
     ]
 
     # ---- Build bill distributions -------------------------------------------
-    finance_physics = dataclasses.replace(finance, self_consumption_override=None)
-
-    dist_physics = bill_distribution(summaries, finance_physics, days)
+    # Only compute the distributions that are actually needed for the selected
+    # --assumptions mode.  dist_physics is skipped for spreadsheet-only to
+    # avoid unnecessary arithmetic (cheap but misleading control flow).
+    dist_physics = None
+    if assumptions in (AssumptionMode.physics, AssumptionMode.both):
+        finance_physics = dataclasses.replace(finance, self_consumption_override=None)
+        dist_physics = bill_distribution(summaries, finance_physics, days)
 
     dist_spreadsheet = None
     if assumptions in (AssumptionMode.spreadsheet, AssumptionMode.both):
-        # Use the finance.self_consumption_override if set, otherwise default to 0.70
-        override_val = finance.self_consumption_override if finance.self_consumption_override is not None else 0.70
+        # Use the finance.self_consumption_override if set, otherwise use the
+        # module-level default documented alongside the other finance constants.
+        override_val = (
+            finance.self_consumption_override
+            if finance.self_consumption_override is not None
+            else DEFAULT_SPREADSHEET_SELF_CONSUMPTION
+        )
         finance_spreadsheet = dataclasses.replace(
             finance, self_consumption_override=override_val
         )
@@ -139,6 +148,7 @@ def run(
 
     # ---- Render report ------------------------------------------------------
     if assumptions == AssumptionMode.physics:
+        assert dist_physics is not None
         report = generate_finance_report(
             dist_physics,
             scenario_name=raw.get("name", str(scenario)),
@@ -150,6 +160,7 @@ def run(
             scenario_name=raw.get("name", str(scenario)),
         )
     else:  # both
+        assert dist_physics is not None
         assert dist_spreadsheet is not None
         report = generate_finance_report(
             dist_physics,

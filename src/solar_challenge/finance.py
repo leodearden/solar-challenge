@@ -112,6 +112,17 @@ class BillDistribution:
 
 
 # ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+#: Default self-consumption fraction used for the spreadsheet assumption when no
+#: explicit ``self_consumption_override`` is set in ``FinanceConfig``.  Exposed
+#: here (rather than buried in the CLI) so config-file authors and non-CLI
+#: callers can discover and reference the value alongside the other finance
+#: parameters.
+DEFAULT_SPREADSHEET_SELF_CONSUMPTION: float = 0.70
+
+# ---------------------------------------------------------------------------
 # householder_bill
 # ---------------------------------------------------------------------------
 
@@ -269,13 +280,20 @@ def bill_distribution(
     max via ``pd.Series`` (mirroring ``calculate_fleet_summary``).
 
     Args:
-        summaries: Sequence of per-home SummaryStatistics.
+        summaries: Sequence of per-home SummaryStatistics.  Must contain at
+            least one entry; an empty sequence raises ``ValueError``.
         finance: Common FinanceConfig for all homes.
         simulation_days: Actual simulation duration in days.
 
     Returns:
         A BillDistribution with representative and per-home statistics.
+
+    Raises:
+        ValueError: If ``summaries`` is empty.
     """
+    if not summaries:
+        raise ValueError("bill_distribution requires at least one summary")
+
     bills = [
         householder_bill(
             summary=s,

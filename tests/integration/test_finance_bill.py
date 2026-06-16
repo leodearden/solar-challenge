@@ -238,7 +238,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
         assert implied_sc == pytest.approx(expected_sc, rel=1e-6)
 
     def test_override_differs_from_physics(self) -> None:
-        """Override self_consumption_saving_gbp differs from physics when override ≠ physics fraction."""
+        """Override bill differs from physics on import_cost, export income, and net bill."""
         from solar_challenge.finance import householder_bill
 
         summary = _make_summary()
@@ -263,10 +263,18 @@ class TestHouseholderBillOverrideAndAnnualisation:
             simulation_days=summary.simulation_days,
         )
 
-        # Higher self-consumption → less export, less import → different bill
+        # Higher self-consumption → different self-consumption saving
         assert bill_override.self_consumption_saving_gbp != pytest.approx(
             bill_physics.self_consumption_saving_gbp
         )
+        # import_cost_gbp must change: override implies different grid import
+        assert bill_override.import_cost_gbp != pytest.approx(bill_physics.import_cost_gbp)
+        # seg_export_income_gbp must change: override implies different grid export
+        assert bill_override.seg_export_income_gbp != pytest.approx(
+            bill_physics.seg_export_income_gbp
+        )
+        # The headline net bill must also differ
+        assert bill_override.net_annual_bill_gbp != pytest.approx(bill_physics.net_annual_bill_gbp)
 
     def test_override_bill_shape_identical(self) -> None:
         """Override path produces same BillBreakdown shape (all 11 fields)."""
@@ -394,6 +402,121 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
 
 # ---------------------------------------------------------------------------
+# Override exact-numeric validation (Suggestion 1)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideExactValues:
+    """Verify exact import/export recomputation in the spreadsheet override path.
+
+    Uses _make_summary() which has consistent physics figures:
+      - import_rate  = 276.0 / 1200.0 × 100 = 23.0 p/kWh
+      - export_rate  =  73.8 / 1800.0 × 100 =  4.1 p/kWh
+
+    With override = 0.90 and gen = 4000 kWh, demand = 3400 kWh:
+      - sc_kwh               = 0.90 × 4000 = 3600.0 kWh
+      - override_export_kwh  = max(4000 - 3600, 0) = 400.0 kWh
+      - override_import_kwh  = max(3400 - 3600, 0) = 0.0 kWh  (clamped)
+      - import_cost_gbp      = 0.0 × 23.0 / 100 = 0.0 £
+      - seg_export_income    = 400.0 × 4.1 / 100 = 16.4 £
+      - standing             = 60.0 × 365 / 100  = 219.0 £
+      - gross_bill           = (0.0 + 219.0) × 1.05 = 229.95 £
+      - net_annual_bill      = 229.95 - 16.4 = 213.55 £
+    """
+
+    def test_override_exact_import_cost(self) -> None:
+        """import_cost_gbp must match hand-computed expectation for override=0.90."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary()  # import_rate = 23.0 p/kWh, gen=4000, demand=3400
+        bill = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=_make_finance(self_consumption_override=0.90),
+            simulation_days=365,
+        )
+        # demand(3400) < sc(3600) → override_import_kwh = 0 → import_cost = 0
+        assert bill.import_cost_gbp == pytest.approx(0.0, abs=1e-6)
+
+    def test_override_exact_seg_export_income(self) -> None:
+        """seg_export_income_gbp must match hand-computed expectation for override=0.90."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary()  # export_rate = 4.1 p/kWh, gen=4000
+        bill = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=_make_finance(self_consumption_override=0.90),
+            simulation_days=365,
+        )
+        # override_export_kwh = max(4000 - 3600, 0) = 400 kWh
+        # seg_export_income = 400 × 4.1 / 100 = 16.4 £
+        assert bill.seg_export_income_gbp == pytest.approx(16.4, rel=1e-6)
+
+    def test_override_exact_net_annual_bill(self) -> None:
+        """net_annual_bill_gbp must match hand-computed expectation for override=0.90."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary()
+        bill = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=_make_finance(self_consumption_override=0.90),
+            simulation_days=365,
+        )
+        # gross = (0.0 + 219.0) × 1.05 = 229.95; net = 229.95 - 16.4 = 213.55
+        assert bill.net_annual_bill_gbp == pytest.approx(213.55, rel=1e-5)
+
+    def test_override_zero_import_kwh_fallback(self) -> None:
+        """When total_grid_import_kwh==0, effective import rate falls back to retail_baseline_rate."""
+        from solar_challenge.finance import householder_bill
+
+        # Summary where physics import is zero (all demand met by solar/battery)
+        summary_no_import = _make_summary(
+            total_grid_import_kwh=0.0,
+            total_import_cost_gbp=0.0,
+            total_grid_export_kwh=1800.0,
+            total_export_revenue_gbp=73.8,
+            net_cost_gbp=-73.8,  # exporter only
+        )
+        finance = _make_finance(self_consumption_override=0.50)  # will need some import
+
+        bill = householder_bill(
+            summary=summary_no_import,
+            annual_self_consumption_kwh=summary_no_import.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=365,
+        )
+        # With override=0.50: sc=2000kWh, import=max(3400-2000,0)=1400kWh
+        # fallback import rate = retail_baseline_rate = 23.0 p/kWh
+        expected_import_cost = 1400.0 * 23.0 / 100.0
+        assert bill.import_cost_gbp == pytest.approx(expected_import_cost, rel=1e-5)
+
+    def test_override_zero_export_kwh_fallback(self) -> None:
+        """When total_grid_export_kwh==0, effective export rate falls back to 0.0."""
+        from solar_challenge.finance import householder_bill
+
+        # Summary where physics export is zero (no surplus)
+        summary_no_export = _make_summary(
+            total_grid_export_kwh=0.0,
+            total_export_revenue_gbp=0.0,
+            total_grid_import_kwh=1200.0,
+            total_import_cost_gbp=276.0,
+            net_cost_gbp=276.0,
+        )
+        finance = _make_finance(self_consumption_override=0.30)  # leaves surplus
+
+        bill = householder_bill(
+            summary=summary_no_export,
+            annual_self_consumption_kwh=summary_no_export.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=365,
+        )
+        # export_rate fallback = 0.0, so seg_export_income = 0 regardless of export kWh
+        assert bill.seg_export_income_gbp == pytest.approx(0.0, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
 # Step-5: bill_distribution / BillDistribution tests
 # ---------------------------------------------------------------------------
 
@@ -512,6 +635,13 @@ class TestBillDistribution:
         dist = bill_distribution(summaries, _make_finance(), 365)
 
         assert isinstance(dist.per_home_net_bill_gbp, tuple)
+
+    def test_empty_summaries_raises_value_error(self) -> None:
+        """bill_distribution must raise ValueError for an empty summaries sequence."""
+        from solar_challenge.finance import bill_distribution
+
+        with pytest.raises(ValueError, match="at least one summary"):
+            bill_distribution([], _make_finance(), 365)
 
 
 # ---------------------------------------------------------------------------
