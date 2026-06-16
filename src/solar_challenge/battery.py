@@ -37,6 +37,48 @@ def _validate_soc_and_efficiency(
         raise ValueError(f"Discharge efficiency must be (0, 1], got {discharge_eff}")
 
 
+def compute_soh(
+    system_age_years: float,
+    cumulative_throughput_kwh: float,
+    usable_capacity_kwh: float,
+    params: "BatteryConfig",
+) -> float:
+    """Compute battery State of Health from calendar + cycle degradation.
+
+    Uses a linear calendar fade and equivalent-full-cycle (EFC) cycle fade:
+
+    - ``calendar_fade = params.calendar_fade_rate_per_year * system_age_years``
+    - ``efc = cumulative_throughput_kwh / (2 * usable_capacity_kwh)`` if
+      ``usable_capacity_kwh > 0`` else ``0.0``
+    - ``cycle_fade = params.cycle_fade_per_equivalent_full_cycle * efc``
+    - ``soh = clamp(1 - calendar_fade - cycle_fade, [soh_floor, 1.0])``
+
+    The result is monotone non-increasing in both *system_age_years* and
+    *cumulative_throughput_kwh* (both partial derivatives are ≤ 0).  The
+    clamp preserves this property.
+
+    Args:
+        system_age_years: Age of the battery in years (≥ 0).
+        cumulative_throughput_kwh: Total energy discharged over the battery's
+            lifetime in kWh (≥ 0).
+        usable_capacity_kwh: Nominal usable capacity in kWh; used to convert
+            throughput to EFC.  Pass 0.0 to disable cycle fade (safe).
+        params: BatteryConfig carrying the fade-rate and floor parameters.
+
+    Returns:
+        SOH in [params.soh_floor, 1.0].
+    """
+    calendar_fade = params.calendar_fade_rate_per_year * system_age_years
+    efc = (
+        cumulative_throughput_kwh / (2.0 * usable_capacity_kwh)
+        if usable_capacity_kwh > 0
+        else 0.0
+    )
+    cycle_fade = params.cycle_fade_per_equivalent_full_cycle * efc
+    raw_soh = 1.0 - calendar_fade - cycle_fade
+    return max(params.soh_floor, min(1.0, raw_soh))
+
+
 @dataclass(frozen=True)
 class BatteryConfig:
     """Configuration for a battery storage system.
