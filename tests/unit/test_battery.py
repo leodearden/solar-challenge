@@ -106,6 +106,98 @@ class TestBatteryConfigGridCharging:
         assert restored == cfg
 
 
+class TestBatteryConfigSOCEfficiencyValidation:
+    """Test BatteryConfig.__post_init__ validates SOC fractions and efficiencies."""
+
+    # --- SOC fraction validation ---
+
+    def test_min_soc_equal_to_max_raises(self) -> None:
+        """min_soc_fraction == max_soc_fraction raises ValueError."""
+        with pytest.raises(ValueError, match="SOC"):
+            BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.5, max_soc_fraction=0.5)
+
+    def test_min_soc_greater_than_max_raises(self) -> None:
+        """min_soc_fraction > max_soc_fraction raises ValueError."""
+        with pytest.raises(ValueError, match="SOC"):
+            BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.8, max_soc_fraction=0.3)
+
+    def test_min_soc_fraction_negative_raises(self) -> None:
+        """min_soc_fraction < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="SOC"):
+            BatteryConfig(capacity_kwh=5.0, min_soc_fraction=-0.1, max_soc_fraction=0.9)
+
+    def test_max_soc_fraction_exceeds_one_raises(self) -> None:
+        """max_soc_fraction > 1 raises ValueError."""
+        with pytest.raises(ValueError, match="SOC"):
+            BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.1, max_soc_fraction=1.1)
+
+    # --- charge_efficiency validation ---
+
+    def test_charge_efficiency_zero_raises(self) -> None:
+        """charge_efficiency == 0 raises ValueError."""
+        with pytest.raises(ValueError, match="[Cc]harge"):
+            BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.0)
+
+    def test_charge_efficiency_greater_than_one_raises(self) -> None:
+        """charge_efficiency > 1 raises ValueError."""
+        with pytest.raises(ValueError, match="[Cc]harge"):
+            BatteryConfig(capacity_kwh=5.0, charge_efficiency=1.1)
+
+    def test_charge_efficiency_negative_raises(self) -> None:
+        """charge_efficiency < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="[Cc]harge"):
+            BatteryConfig(capacity_kwh=5.0, charge_efficiency=-0.5)
+
+    # --- discharge_efficiency validation ---
+
+    def test_discharge_efficiency_zero_raises(self) -> None:
+        """discharge_efficiency == 0 raises ValueError."""
+        with pytest.raises(ValueError, match="[Dd]ischarge"):
+            BatteryConfig(capacity_kwh=5.0, discharge_efficiency=0.0)
+
+    def test_discharge_efficiency_greater_than_one_raises(self) -> None:
+        """discharge_efficiency > 1 raises ValueError."""
+        with pytest.raises(ValueError, match="[Dd]ischarge"):
+            BatteryConfig(capacity_kwh=5.0, discharge_efficiency=1.2)
+
+    def test_discharge_efficiency_negative_raises(self) -> None:
+        """discharge_efficiency < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="[Dd]ischarge"):
+            BatteryConfig(capacity_kwh=5.0, discharge_efficiency=-0.1)
+
+    # --- valid in-range values pass ---
+
+    def test_valid_custom_values_construct_successfully(self) -> None:
+        """In-range custom SOC/eff values construct without error."""
+        cfg = BatteryConfig(
+            capacity_kwh=5.0,
+            min_soc_fraction=0.2,
+            max_soc_fraction=0.8,
+            charge_efficiency=0.9,
+            discharge_efficiency=0.92,
+        )
+        assert cfg.min_soc_fraction == 0.2
+        assert cfg.max_soc_fraction == 0.8
+        assert cfg.charge_efficiency == 0.9
+        assert cfg.discharge_efficiency == 0.92
+
+    def test_zero_min_soc_is_valid(self) -> None:
+        """min_soc_fraction == 0 is valid (no minimum reserve required)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.0, max_soc_fraction=0.9)
+        assert cfg.min_soc_fraction == 0.0
+
+    def test_one_max_soc_is_valid(self) -> None:
+        """max_soc_fraction == 1 is valid (full capacity usable)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.0, max_soc_fraction=1.0)
+        assert cfg.max_soc_fraction == 1.0
+
+    def test_efficiency_one_is_valid(self) -> None:
+        """charge_efficiency == 1 is valid (perfect efficiency)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, charge_efficiency=1.0, discharge_efficiency=1.0)
+        assert cfg.charge_efficiency == 1.0
+        assert cfg.discharge_efficiency == 1.0
+
+
 class TestBatteryConfigSOCEfficiencyFields:
     """Contract guard: SOC-limit and efficiency fields on BatteryConfig are frozen and picklable."""
 
