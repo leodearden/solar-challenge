@@ -749,6 +749,13 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
         charge_efficiency=data.get("charge_efficiency", 0.975),
         discharge_efficiency=data.get("discharge_efficiency", 0.975),
         efficiency=data.get("efficiency"),
+        system_age_years=data.get("system_age_years", 0.0),
+        calendar_fade_rate_per_year=data.get("calendar_fade_rate_per_year", 0.02),
+        cycle_fade_per_equivalent_full_cycle=data.get(
+            "cycle_fade_per_equivalent_full_cycle", 5e-5
+        ),
+        soh_floor=data.get("soh_floor", 0.5),
+        soh=data.get("soh"),
     )
 
 
