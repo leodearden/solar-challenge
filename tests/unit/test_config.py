@@ -2741,3 +2741,82 @@ class TestFinanceConfigValidation:
         """grant_gbp == 0 is valid (no grant received)."""
         fc = FinanceConfig(**self._BASE, grant_gbp=0.0)
         assert fc.grant_gbp == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _parse_finance_config tests (step-5)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceConfigParsing:
+    """Tests for _parse_finance_config parser function."""
+
+    def test_none_returns_none(self) -> None:
+        """_parse_finance_config(None) returns None (no finance block in YAML)."""
+        assert _parse_finance_config(None) is None
+
+    def test_minimal_dict_uses_defaults(self) -> None:
+        """Dict with only standing_charge_pence_per_day uses all other defaults."""
+        result = _parse_finance_config({"standing_charge_pence_per_day": 60.0})
+        assert result is not None
+        assert result.standing_charge_pence_per_day == 60.0
+        assert result.vat_rate == 0.05
+        assert result.retail_baseline_rate_pence_per_kwh == 23.0
+        assert result.self_consumption_override is None
+        assert result.pv_cost_per_kwp_gbp == 1000.0
+        assert result.roof_fit_cost_gbp == 1000.0
+        assert result.battery_cost_per_kwh_gbp == 250.0
+        assert result.grant_gbp == 250000.0
+        assert result.equity_fraction == 0.75
+        assert result.loan_term_years == 15
+        assert result.loan_rate == 0.07
+        assert result.opex_per_home_per_year_gbp == 131.0
+        assert result.asset_life_years == 25
+
+    def test_full_dict_round_trips(self) -> None:
+        """All fields supplied in the dict are reflected on the returned FinanceConfig."""
+        data = {
+            "standing_charge_pence_per_day": 70.0,
+            "vat_rate": 0.08,
+            "retail_baseline_rate_pence_per_kwh": 28.5,
+            "self_consumption_override": 0.70,
+            "pv_cost_per_kwp_gbp": 950.0,
+            "roof_fit_cost_gbp": 1100.0,
+            "battery_cost_per_kwh_gbp": 280.0,
+            "grant_gbp": 200000.0,
+            "equity_fraction": 0.60,
+            "loan_term_years": 20,
+            "loan_rate": 0.065,
+            "opex_per_home_per_year_gbp": 140.0,
+            "asset_life_years": 25,
+        }
+        result = _parse_finance_config(data)
+        assert result is not None
+        assert result.standing_charge_pence_per_day == 70.0
+        assert result.vat_rate == 0.08
+        assert result.retail_baseline_rate_pence_per_kwh == 28.5
+        assert result.self_consumption_override == 0.70
+        assert result.pv_cost_per_kwp_gbp == 950.0
+        assert result.roof_fit_cost_gbp == 1100.0
+        assert result.battery_cost_per_kwh_gbp == 280.0
+        assert result.grant_gbp == 200000.0
+        assert result.equity_fraction == 0.60
+        assert result.loan_term_years == 20
+        assert result.loan_rate == 0.065
+        assert result.opex_per_home_per_year_gbp == 140.0
+        assert result.asset_life_years == 25
+
+    def test_out_of_range_propagates_configuration_error(self) -> None:
+        """An out-of-range field (vat_rate=2.0) raises ConfigurationError via __post_init__."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, "vat_rate": 2.0}
+            )
+
+    def test_zero_grant_accepted(self) -> None:
+        """grant_gbp=0 is accepted by the parser (non-negative allowed)."""
+        result = _parse_finance_config(
+            {"standing_charge_pence_per_day": 60.0, "grant_gbp": 0.0}
+        )
+        assert result is not None
+        assert result.grant_gbp == 0.0
