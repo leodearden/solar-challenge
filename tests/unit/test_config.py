@@ -2715,6 +2715,11 @@ class TestFinanceConfig:
         fc = FinanceConfig(standing_charge_pence_per_day=60.0)
         assert fc.asset_life_years == 25
 
+    def test_defaults_inverter_cost_per_kw_is_zero(self) -> None:
+        """Default inverter_cost_per_kw_gbp is 0.0 (opt-in, zero-allowed)."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.inverter_cost_per_kw_gbp == 0.0
+
     def test_frozen_raises_on_assignment(self) -> None:
         """FinanceConfig is frozen: attribute assignment raises FrozenInstanceError."""
         import dataclasses
@@ -2738,6 +2743,7 @@ class TestFinanceConfig:
             pv_cost_per_kwp_gbp=900.0,
             roof_fit_cost_gbp=1200.0,
             battery_cost_per_kwh_gbp=300.0,
+            inverter_cost_per_kw_gbp=200.0,
             grant_gbp=200000.0,
             equity_fraction=0.60,
             loan_term_years=20,
@@ -2752,6 +2758,7 @@ class TestFinanceConfig:
         assert fc.pv_cost_per_kwp_gbp == 900.0
         assert fc.roof_fit_cost_gbp == 1200.0
         assert fc.battery_cost_per_kwh_gbp == 300.0
+        assert fc.inverter_cost_per_kw_gbp == 200.0
         assert fc.grant_gbp == 200000.0
         assert fc.equity_fraction == 0.60
         assert fc.loan_term_years == 20
