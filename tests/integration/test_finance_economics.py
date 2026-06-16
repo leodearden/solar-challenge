@@ -945,6 +945,47 @@ class TestGenerateFinanceReportEconomics:
         # No economics block should appear
         assert "Project Economics" not in report
 
+    def test_fleet_opex_row_shows_fleet_opex_not_per_home_surplus(self) -> None:
+        """Fleet OpEx / yr row must show fleet_opex_gbp, not net_surplus_per_home_per_year_gbp.
+
+        Step-17 RED: current output.py renders net_surplus_per_home_per_year_gbp (80)
+        under the 'Fleet OpEx / yr' label via a no-op multiplier (n_years/n_years==1).
+        This test asserts the fleet-opex value (12000) is shown in that row and the
+        per-home surplus (80) appears under a separate correctly-labeled per-home row.
+        """
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        # fleet_opex_gbp=12000 is clearly distinct from net_surplus_per_home=80
+        econ = _make_project_economics(fleet_opex_gbp=12000.0)
+        assert econ.net_surplus_per_home_per_year_gbp == 80.0  # sanity
+        report = generate_finance_report(dist, economics=econ)
+
+        # The Fleet OpEx row must contain "12,000" or "12000" (the actual fleet opex)
+        lines = report.splitlines()
+        fleet_opex_rows = [ln for ln in lines if "Fleet OpEx" in ln or "fleet opex" in ln.lower()]
+        assert fleet_opex_rows, "No 'Fleet OpEx' row found in report"
+        fleet_opex_row = fleet_opex_rows[0]
+        # Fleet OpEx row must show 12000 (possibly formatted as "12,000")
+        row_stripped = fleet_opex_row.replace(",", "").replace(" ", "")
+        assert "12000" in row_stripped, (
+            f"Fleet OpEx row should show 12000 (fleet_opex_gbp), got: {fleet_opex_row!r}"
+        )
+        # Fleet OpEx row must NOT show 80 as a standalone number
+        assert "| 80" not in fleet_opex_row and "£80" not in fleet_opex_row, (
+            f"Fleet OpEx row incorrectly shows per-home surplus (80): {fleet_opex_row!r}"
+        )
+
+        # A separate per-home surplus row must exist and show 80
+        per_home_rows = [
+            ln for ln in lines
+            if ("home" in ln.lower() or "per home" in ln.lower() or "surplus" in ln.lower())
+            and "80" in ln.replace(",", "")
+        ]
+        assert per_home_rows, (
+            "Expected a correctly-labeled per-home surplus row containing '80', found none"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Step-13: CLI finance run --project (fast tests)
