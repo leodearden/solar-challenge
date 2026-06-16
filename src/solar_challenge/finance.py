@@ -724,6 +724,21 @@ def project_multi_year(
         fleet_imp = sum(s.total_grid_import_kwh for s in per_home_summaries)
         per_home_discharge = [s.total_battery_discharge_kwh for s in per_home_summaries]
 
+        # Fleet revenue: Σ_home (self_consumption_saving_gbp + seg_export_income_gbp)
+        # Reuses householder_bill so self_consumption_override is automatically honoured.
+        bills = [
+            householder_bill(
+                s,
+                annual_self_consumption_kwh=s.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=s.simulation_days,
+            )
+            for s in per_home_summaries
+        ]
+        fleet_revenue = sum(
+            b.self_consumption_saving_gbp + b.seg_export_income_gbp for b in bills
+        )
+
         # PV SOH: mean of calculate_degradation_factor over all homes
         pv_sohs = [
             calculate_degradation_factor(float(age), h.pv_config.degradation_rate_per_year)
@@ -747,7 +762,7 @@ def project_multi_year(
         mean_battery_soh = sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0
 
         return (fleet_sc, fleet_exp, fleet_imp, per_home_discharge,
-                mean_pv_soh, mean_battery_soh)
+                mean_pv_soh, mean_battery_soh, fleet_revenue)
 
     # March ascending
     prev_age: Optional[int] = None
@@ -769,14 +784,16 @@ def project_multi_year(
     imp_vals = [sampled_data[a][2] for a in ages_sorted]
     pv_soh_vals = [sampled_data[a][4] for a in ages_sorted]
     batt_soh_vals = [sampled_data[a][5] for a in ages_sorted]
+    rev_vals = [sampled_data[a][6] for a in ages_sorted]
 
     sc_per_year = _interpolate_per_year(ages_sorted, sc_vals, asset_life)
     exp_per_year = _interpolate_per_year(ages_sorted, exp_vals, asset_life)
     imp_per_year = _interpolate_per_year(ages_sorted, imp_vals, asset_life)
     pv_soh_per_year = _interpolate_per_year(ages_sorted, pv_soh_vals, asset_life)
     batt_soh_per_year = _interpolate_per_year(ages_sorted, batt_soh_vals, asset_life)
+    rev_per_year = _interpolate_per_year(ages_sorted, rev_vals, asset_life)
 
-    # ---- Assemble YearPoints (revenue is placeholder 0.0 until step-14) -----
+    # ---- Assemble YearPoints ------------------------------------------------
     points = tuple(
         YearPoint(
             year=y,
@@ -785,7 +802,7 @@ def project_multi_year(
             fleet_self_consumption_kwh=max(0.0, sc_per_year[y]),
             fleet_export_kwh=max(0.0, exp_per_year[y]),
             fleet_import_kwh=max(0.0, imp_per_year[y]),
-            fleet_revenue_gbp=0.0,    # wired in step-14
+            fleet_revenue_gbp=max(0.0, rev_per_year[y]),
         )
         for y in range(asset_life)
     )
