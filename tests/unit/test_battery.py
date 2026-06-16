@@ -667,3 +667,100 @@ class TestBatterySOCTimeSeries:
 
         assert len(soc_values) == 60
         assert all(0.5 <= s <= 4.5 for s in soc_values)  # Within limits
+
+
+class TestBatterySOHFields:
+    """Contract guard: SOH/aging fields on BatteryConfig are frozen and picklable."""
+
+    def test_default_system_age_years(self) -> None:
+        """BatteryConfig default system_age_years is 0.0."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.system_age_years == 0.0
+
+    def test_default_calendar_fade_rate_per_year(self) -> None:
+        """BatteryConfig default calendar_fade_rate_per_year is 0.02."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.calendar_fade_rate_per_year == 0.02
+
+    def test_default_cycle_fade_per_equivalent_full_cycle(self) -> None:
+        """BatteryConfig default cycle_fade_per_equivalent_full_cycle is 5e-5."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.cycle_fade_per_equivalent_full_cycle == 5e-5
+
+    def test_default_soh_floor(self) -> None:
+        """BatteryConfig default soh_floor is 0.5."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.soh_floor == 0.5
+
+    def test_default_soh_is_none(self) -> None:
+        """BatteryConfig default soh (override) is None."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.soh is None
+
+    def test_custom_system_age_years(self) -> None:
+        """Custom system_age_years is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        assert cfg.system_age_years == 10.0
+
+    def test_custom_calendar_fade_rate_per_year(self) -> None:
+        """Custom calendar_fade_rate_per_year is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, calendar_fade_rate_per_year=0.03)
+        assert cfg.calendar_fade_rate_per_year == 0.03
+
+    def test_custom_cycle_fade_per_equivalent_full_cycle(self) -> None:
+        """Custom cycle_fade_per_equivalent_full_cycle is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, cycle_fade_per_equivalent_full_cycle=1e-4)
+        assert cfg.cycle_fade_per_equivalent_full_cycle == 1e-4
+
+    def test_custom_soh_floor(self) -> None:
+        """Custom soh_floor is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh_floor=0.7)
+        assert cfg.soh_floor == 0.7
+
+    def test_custom_soh_override(self) -> None:
+        """Custom soh override is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.85)
+        assert cfg.soh == pytest.approx(0.85)
+
+    def test_system_age_years_frozen(self) -> None:
+        """Assigning to BatteryConfig.system_age_years raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.system_age_years = 5.0  # type: ignore[misc]
+
+    def test_calendar_fade_rate_per_year_frozen(self) -> None:
+        """Assigning to BatteryConfig.calendar_fade_rate_per_year raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.calendar_fade_rate_per_year = 0.01  # type: ignore[misc]
+
+    def test_cycle_fade_per_equivalent_full_cycle_frozen(self) -> None:
+        """Assigning to BatteryConfig.cycle_fade_per_equivalent_full_cycle raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.cycle_fade_per_equivalent_full_cycle = 1e-4  # type: ignore[misc]
+
+    def test_soh_floor_frozen(self) -> None:
+        """Assigning to BatteryConfig.soh_floor raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.soh_floor = 0.6  # type: ignore[misc]
+
+    def test_soh_frozen(self) -> None:
+        """Assigning to BatteryConfig.soh raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.soh = 0.9  # type: ignore[misc]
+
+    def test_picklable_with_custom_soh_fields(self) -> None:
+        """BatteryConfig with custom SOH fields round-trips through pickle."""
+        cfg = BatteryConfig(
+            capacity_kwh=5.0,
+            system_age_years=8.0,
+            calendar_fade_rate_per_year=0.025,
+            cycle_fade_per_equivalent_full_cycle=6e-5,
+            soh_floor=0.6,
+            soh=0.8,
+        )
+        restored = pickle.loads(pickle.dumps(cfg))
+        assert restored == cfg
