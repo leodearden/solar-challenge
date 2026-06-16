@@ -445,3 +445,164 @@ class TestProjectEconomicsDebtService:
 
         result = _annuity_payment(1000.0, 0.0, 8)
         assert result == pytest.approx(125.0, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Step-7: per-year surplus + min_dscr + net_surplus_per_home
+# ---------------------------------------------------------------------------
+
+
+class TestProjectEconomicsSurplusDSCR:
+    """Fast tests for per_year_surplus_gbp, min_dscr, net_surplus_per_home."""
+
+    def _setup(self) -> tuple:
+        """Build a canonical 2-home scenario for surplus/DSCR tests.
+
+        Home A: pv=4kWp, battery=5kWh; Home B: pv=3kWp, no battery.
+        finance: pv_cost=1000, roof_fit=1000, battery_cost=250, grant=0,
+                 equity_fraction=0.75, loan_rate=0.07, loan_term=15,
+                 opex_per_home=200, asset_life=25.
+        capex = (4*1000+1000+5*250)+(3*1000+1000+0) = 6250+4000=10250
+        financed = 10250; equity = 7687.5; debt = 2562.5
+        annual_debt_service = _annuity_payment(2562.5, 0.07, 15)
+        fleet_opex = 200 * 2 = 400
+        revenues = [5000.0] * 25 (flat)
+        per_year_surplus[y<15] = 5000 - 400 - debt_service
+        per_year_surplus[y>=15] = 5000 - 400 = 4600
+        """
+        from solar_challenge.finance import _annuity_payment
+
+        homes = [
+            _make_home_config(pv_kwp=4.0, battery_kwh=5.0),
+            _make_home_config(pv_kwp=3.0, battery_kwh=None),
+        ]
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            grant_gbp=0.0,
+            equity_fraction=0.75,
+            loan_rate=0.07,
+            loan_term_years=15,
+            opex_per_home_per_year_gbp=200.0,
+            asset_life_years=25,
+        )
+        revenues = [5000.0] * 25
+        curve = _make_curve(revenues)
+        scenario = _make_scenario(homes=homes)
+
+        capex = 10250.0
+        debt = capex * 0.25
+        fleet_opex = 200.0 * 2
+        annual_ds = _annuity_payment(debt, 0.07, 15)
+        return scenario, finance, curve, fleet_opex, annual_ds
+
+    def test_surplus_length_equals_asset_life(self) -> None:
+        """len(per_year_surplus_gbp) must equal finance.asset_life_years."""
+        from solar_challenge.finance import project_economics
+
+        scenario, finance, curve, _, _ = self._setup()
+        econ = project_economics(curve, scenario, finance)
+
+        assert len(econ.per_year_surplus_gbp) == 25
+
+    def test_surplus_loan_years_include_debt_service(self) -> None:
+        """Surplus for loan years must deduct both opex and debt service."""
+        from solar_challenge.finance import project_economics
+
+        scenario, finance, curve, fleet_opex, annual_ds = self._setup()
+        econ = project_economics(curve, scenario, finance)
+
+        # For y<15: surplus = 5000 - fleet_opex - annual_ds
+        for y in range(15):
+            expected = 5000.0 - fleet_opex - annual_ds
+            assert econ.per_year_surplus_gbp[y] == pytest.approx(expected, rel=1e-9), (
+                f"Mismatch at year {y}"
+            )
+
+    def test_surplus_post_loan_years_no_debt_service(self) -> None:
+        """Surplus for post-loan years must deduct only opex (no debt service)."""
+        from solar_challenge.finance import project_economics
+
+        scenario, finance, curve, fleet_opex, _ = self._setup()
+        econ = project_economics(curve, scenario, finance)
+
+        # For y>=15: surplus = 5000 - fleet_opex (4600)
+        for y in range(15, 25):
+            expected = 5000.0 - fleet_opex
+            assert econ.per_year_surplus_gbp[y] == pytest.approx(expected, rel=1e-9), (
+                f"Mismatch at year {y}"
+            )
+
+    def test_min_dscr_over_loan_years_only(self) -> None:
+        """min_dscr must be computed over loan years only, not post-loan years.
+
+        Use a curve where post-loan year has lowest (revenue-opex)/debt_service,
+        but DSCR should ignore it.  All loan-year revenues are equal here,
+        so min_dscr = (5000 - fleet_opex) / annual_ds.
+        """
+        from solar_challenge.finance import project_economics
+
+        # Revenues: loan years have 5000, post-loan years have 1000 (very low)
+        # Post-loan year 15..24 → (1000-400)/annual_ds which would be low
+        # But min_dscr must only look at y<15
+        homes = [
+            _make_home_config(pv_kwp=4.0, battery_kwh=5.0),
+            _make_home_config(pv_kwp=3.0, battery_kwh=None),
+        ]
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            grant_gbp=0.0,
+            equity_fraction=0.75,
+            loan_rate=0.07,
+            loan_term_years=15,
+            opex_per_home_per_year_gbp=200.0,
+            asset_life_years=25,
+        )
+        # Loan years: 5000 revenue; post-loan: 1000 revenue (very low)
+        revenues = [5000.0] * 15 + [1000.0] * 10
+        curve = _make_curve(revenues)
+        scenario = _make_scenario(homes=homes)
+
+        from solar_challenge.finance import _annuity_payment
+        capex = 10250.0
+        debt = capex * 0.25
+        annual_ds = _annuity_payment(debt, 0.07, 15)
+        fleet_opex = 200.0 * 2
+        expected_dscr = (5000.0 - fleet_opex) / annual_ds
+
+        econ = project_economics(curve, scenario, finance)
+
+        # DSCR over loan years (all 5000 revenue) should be much > post-loan DSCR
+        assert econ.min_dscr == pytest.approx(expected_dscr, rel=1e-6)
+        # Sanity: post-loan DSCR would have been much lower (< 1.0 even)
+        post_loan_dscr = (1000.0 - fleet_opex) / annual_ds  # negative!
+        assert post_loan_dscr < econ.min_dscr, (
+            "Post-loan DSCR is lower than loan DSCR — min_dscr should exclude it"
+        )
+
+    def test_min_dscr_zero_debt_service_is_inf(self) -> None:
+        """When annual_debt_service_gbp==0, min_dscr must be float('inf')."""
+        from solar_challenge.finance import project_economics
+
+        home = _make_home_config(pv_kwp=2.0)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(grant_gbp=999999.0)  # no debt
+        curve = _make_curve([5000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        assert math.isinf(econ.min_dscr)
+
+    def test_net_surplus_per_home_per_year(self) -> None:
+        """net_surplus_per_home_per_year_gbp == mean(per_year_surplus)/n_homes."""
+        from solar_challenge.finance import project_economics
+
+        scenario, finance, curve, _, _ = self._setup()
+        econ = project_economics(curve, scenario, finance)
+
+        expected_mean = sum(econ.per_year_surplus_gbp) / len(econ.per_year_surplus_gbp)
+        expected_per_home = expected_mean / 2  # 2 homes
+        assert econ.net_surplus_per_home_per_year_gbp == pytest.approx(expected_per_home, rel=1e-9)
