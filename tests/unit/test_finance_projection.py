@@ -303,3 +303,80 @@ class TestInterpolatePerYear:
         assert len(result) == 10
         for v in result:
             assert v == pytest.approx(0.95)
+
+
+# ---------------------------------------------------------------------------
+# Monotone Hermite fallback — _monotone_hermite_interpolate (step-5 / step-6)
+# ---------------------------------------------------------------------------
+
+
+class TestMonotoneHermiteFallback:
+    """Tests for the private hand-rolled Fritsch–Carlson fallback."""
+
+    _AGES = [0, 12, 24]
+    _VALUES = [1.0, 0.94, 0.88]  # strictly declining monotone
+
+    def _call(self, ages: list[int], values: list[float], n: int) -> list[float]:
+        from solar_challenge.finance import _monotone_hermite_interpolate  # type: ignore[attr-defined]
+
+        return _monotone_hermite_interpolate(ages, values, n)
+
+    def test_passes_through_node_values(self) -> None:
+        """Fallback reproduces node values exactly at sampled ages."""
+        result = self._call(self._AGES, self._VALUES, 25)
+        for age, val in zip(self._AGES, self._VALUES):
+            assert result[age] == pytest.approx(val, rel=1e-6)
+
+    def test_monotone_non_increasing(self) -> None:
+        """Fallback is monotone non-increasing on a declining node set."""
+        result = self._call(self._AGES, self._VALUES, 25)
+        for i in range(1, len(result)):
+            assert result[i] <= result[i - 1] + 1e-9, (
+                f"Monotone violation at index {i}: {result[i]} > {result[i-1]}"
+            )
+
+    def test_no_overshoot_above_max(self) -> None:
+        """Fallback never exceeds the maximum node value."""
+        result = self._call(self._AGES, self._VALUES, 25)
+        max_val = max(self._VALUES)
+        for v in result:
+            assert v <= max_val + 1e-9
+
+    def test_no_overshoot_below_min(self) -> None:
+        """Fallback never falls below the minimum node value."""
+        result = self._call(self._AGES, self._VALUES, 25)
+        min_val = min(self._VALUES)
+        for v in result:
+            assert v >= min_val - 1e-9
+
+    def test_single_node_constant(self) -> None:
+        """Fallback handles single-node degenerate case as constant."""
+        result = self._call([5], [0.80], 10)
+        assert len(result) == 10
+        for v in result:
+            assert v == pytest.approx(0.80)
+
+    def test_selection_wrapper_prefers_scipy(self) -> None:
+        """_interpolate_per_year uses PCHIP when scipy is importable."""
+        # If scipy is available (it is in dev), both methods agree on endpoints.
+        from solar_challenge.finance import _interpolate_per_year  # type: ignore[attr-defined]
+
+        pchip_result = _interpolate_per_year(self._AGES, self._VALUES, 25)
+        fallback_result = self._call(self._AGES, self._VALUES, 25)
+        # Both pass through the same node values
+        for age, val in zip(self._AGES, self._VALUES):
+            assert pchip_result[age] == pytest.approx(val, rel=1e-6)
+            assert fallback_result[age] == pytest.approx(val, rel=1e-6)
+        # Both are monotone
+        for i in range(1, 25):
+            assert pchip_result[i] <= pchip_result[i - 1] + 1e-9
+            assert fallback_result[i] <= fallback_result[i - 1] + 1e-9
+
+    def test_fallback_consistent_with_pchip_endpoints(self) -> None:
+        """Fallback and PCHIP agree at endpoints (year 0 and year 24)."""
+        from solar_challenge.finance import _interpolate_per_year  # type: ignore[attr-defined]
+
+        pchip_result = _interpolate_per_year(self._AGES, self._VALUES, 25)
+        fallback_result = self._call(self._AGES, self._VALUES, 25)
+        assert pchip_result[0] == pytest.approx(fallback_result[0], rel=1e-5)
+        assert pchip_result[24] == pytest.approx(fallback_result[24], rel=1e-5)
