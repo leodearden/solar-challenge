@@ -796,8 +796,9 @@ def generate_finance_report(
 | Debt | £{economics.debt_gbp:,.0f} |
 | Equity | £{economics.equity_gbp:,.0f} |
 | Annual Debt Service | £{economics.annual_debt_service_gbp:,.0f} |
-| Fleet OpEx / yr | £{economics.net_surplus_per_home_per_year_gbp * (n_years / n_years):.0f} |
+| Fleet OpEx / yr | £{economics.fleet_opex_gbp:,.0f} |
 | Mean Fleet Surplus / yr | £{mean_surplus:,.0f} |
+| Net Surplus / home / yr | £{economics.net_surplus_per_home_per_year_gbp:,.0f} |
 | Min DSCR (loan years) | {dscr_str} |
 | Equity IRR | {irr_str} |
 | Payback | {payback_str} |
