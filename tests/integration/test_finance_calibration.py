@@ -866,3 +866,125 @@ class TestCalibrationPhysicsColumn:
         import math
         # No assertion on physics_irr == spreadsheet_irr (G6: never assert physics == 0.70)
         assert isinstance(physics_econ.equity_irr, float)
+
+
+# ---------------------------------------------------------------------------
+# Step-8: TestReconciliationNoteDocumented — docs note presence (fast)
+# ---------------------------------------------------------------------------
+
+
+class TestReconciliationNoteDocumented:
+    """Fast tests verifying docs/finance-spreadsheet-reconciliation.md exists (step-8)."""
+
+    _DOC_PATH = "docs/finance-spreadsheet-reconciliation.md"
+
+    def _read_doc(self) -> str:
+        """Read the reconciliation note, failing if absent."""
+        from pathlib import Path
+        path = Path(self._DOC_PATH)
+        if not path.exists():
+            pytest.fail(
+                f"{self._DOC_PATH} not found — create it in step-9 impl"
+            )
+        return path.read_text()
+
+    def test_doc_file_exists(self) -> None:
+        """docs/finance-spreadsheet-reconciliation.md must exist."""
+        from pathlib import Path
+        assert Path(self._DOC_PATH).exists(), (
+            f"{self._DOC_PATH} not found — create it in step-9"
+        )
+
+    def test_doc_contains_capital_stack_ref(self) -> None:
+        """Note must document Capital_Stack!B6 cell reference."""
+        text = self._read_doc()
+        assert "Capital_Stack" in text or "Capital Stack" in text, (
+            "Note must reference Capital_Stack!B6 (Total Capex cell)"
+        )
+
+    def test_doc_contains_workings_c57_or_c94_ref(self) -> None:
+        """Note must document Workings!C57/C94 cell references."""
+        text = self._read_doc()
+        assert "Workings" in text and ("C57" in text or "C94" in text), (
+            "Note must reference Workings!C57 and/or C94 (per-roof build-up cells)"
+        )
+
+    def test_doc_contains_debt_analytics_ref(self) -> None:
+        """Note must document Debt_Analytics!B16/B17 cell references."""
+        text = self._read_doc()
+        assert "Debt_Analytics" in text or "Debt Analytics" in text, (
+            "Note must reference Debt_Analytics!B16/B17 (DSCR cells)"
+        )
+
+    def test_doc_contains_sensitivity_ref(self) -> None:
+        """Note must document Sensitivity sheet named inputs."""
+        text = self._read_doc()
+        assert "Sensitivity" in text or "inp_kWp" in text or "inp_Batt_kWh" in text, (
+            "Note must reference Sensitivity sheet named inputs (inp_kWp, inp_Batt_kWh, etc.)"
+        )
+
+    def test_doc_documents_775k_capex(self) -> None:
+        """Note must document the £775,000 Total Capex figure."""
+        text = self._read_doc()
+        assert "775" in text.replace(",", ""), (
+            "Note must document £775,000 (Capital_Stack!B6)"
+        )
+
+    def test_doc_documents_900k_capex(self) -> None:
+        """Note must document the £900,000 Workings build-up figure."""
+        text = self._read_doc()
+        assert "900" in text.replace(",", ""), (
+            "Note must document £900,000 (Workings!C94)"
+        )
+
+    def test_doc_documents_125k_delta(self) -> None:
+        """Note must document the £125,000 battery-size delta."""
+        text = self._read_doc()
+        assert "125" in text.replace(",", ""), (
+            "Note must document £125,000 delta (100×5kWh×£250)"
+        )
+
+    def test_doc_explains_battery_size_reconciliation(self) -> None:
+        """Note must explain that the delta is battery-size difference, not an error."""
+        text = self._read_doc()
+        lower = text.lower()
+        assert "battery" in lower and ("size" in lower or "kwh" in lower), (
+            "Note must explain §2.3 delta as battery-size difference (5 kWh vs 10 kWh)"
+        )
+
+    def test_doc_documents_min_dscr_cell(self) -> None:
+        """Note must document the min_dscr value from Debt_Analytics!B16."""
+        text = self._read_doc()
+        assert "2.10" in text, (
+            "Note must document Debt_Analytics!B16 min_dscr = 2.10378..."
+        )
+
+    def test_doc_documents_dscr_irr_tolerances(self) -> None:
+        """Note must document the DSCR/IRR calibration tolerances and rationale."""
+        text = self._read_doc()
+        lower = text.lower()
+        assert "dscr" in lower or "debt service" in lower.replace("-", " "), (
+            "Note must document DSCR calibration tolerance"
+        )
+        assert "irr" in lower, (
+            "Note must document IRR calibration tolerance"
+        )
+
+    def test_doc_documents_self_consumption_tension(self) -> None:
+        """Note must document the §2.3 self-consumption tension (sheet 0.70 vs physics)."""
+        text = self._read_doc()
+        lower = text.lower()
+        assert "self" in lower and "consumption" in lower, (
+            "Note must document self-consumption tension (§2.3)"
+        )
+        assert "0.70" in text or "70%" in text or "70 %" in text, (
+            "Note must reference the spreadsheet's 0.70 self-consumption fraction"
+        )
+
+    def test_doc_describes_g6_framing(self) -> None:
+        """Note must describe the G6 gate framing (assert structural, report the rest)."""
+        text = self._read_doc()
+        lower = text.lower()
+        assert "structural" in lower or "covenant" in lower or "floor" in lower, (
+            "Note must reference G6 framing: assert structural method-agreement, report the rest"
+        )
