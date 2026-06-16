@@ -245,3 +245,61 @@ class TestMultiYearCurve:
                 sampled_ages=(),
                 interp_error_estimate=0.0,
             )
+
+
+# ---------------------------------------------------------------------------
+# Interpolation core — _interpolate_per_year (step-3 / step-4)
+# ---------------------------------------------------------------------------
+
+
+class TestInterpolatePerYear:
+    """Tests for the private per-year interpolation helper."""
+
+    # Monotone declining nodes: ages [0, 12, 24], values [1.0, 0.94, 0.88]
+    _AGES = [0, 12, 24]
+    _VALUES = [1.0, 0.94, 0.88]
+
+    def _call(self, ages: list[int], values: list[float], n_years: int) -> list[float]:
+        from solar_challenge.finance import _interpolate_per_year  # type: ignore[attr-defined]
+
+        return _interpolate_per_year(ages, values, n_years)
+
+    def test_returns_one_value_per_year(self) -> None:
+        """Output length equals n_years."""
+        result = self._call(self._AGES, self._VALUES, 25)
+        assert len(result) == 25
+
+    def test_passes_through_node_values(self) -> None:
+        """Interpolant exactly reproduces values at sampled ages."""
+        result = self._call(self._AGES, self._VALUES, 25)
+        for age, val in zip(self._AGES, self._VALUES):
+            assert result[age] == pytest.approx(val, rel=1e-6)
+
+    def test_monotone_non_increasing(self) -> None:
+        """On a declining node set the produced series is monotone non-increasing."""
+        result = self._call(self._AGES, self._VALUES, 25)
+        for i in range(1, len(result)):
+            assert result[i] <= result[i - 1] + 1e-9, (
+                f"Not monotone at index {i}: {result[i]} > {result[i-1]}"
+            )
+
+    def test_no_overshoot_above_max(self) -> None:
+        """No value exceeds the maximum node value."""
+        result = self._call(self._AGES, self._VALUES, 25)
+        max_val = max(self._VALUES)
+        for v in result:
+            assert v <= max_val + 1e-9
+
+    def test_no_overshoot_below_min(self) -> None:
+        """No value falls below the minimum node value."""
+        result = self._call(self._AGES, self._VALUES, 25)
+        min_val = min(self._VALUES)
+        for v in result:
+            assert v >= min_val - 1e-9
+
+    def test_single_node_returns_constant(self) -> None:
+        """Single-node degenerate case returns a constant for all years."""
+        result = self._call([0], [0.95], 10)
+        assert len(result) == 10
+        for v in result:
+            assert v == pytest.approx(0.95)
