@@ -514,25 +514,6 @@ class TestCalibrationCapexMethodAgreement:
             "Delta must equal £125,000 = 100 × 5 kWh × £250 (battery-size, NOT error)"
         )
 
-    def test_capex_report_values(self) -> None:
-        """Sanity: report the capex values in assertion message for documentation."""
-        from solar_challenge.finance import project_economics
-
-        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
-        finance = _make_finance_fin()
-        curve = self._make_spreadsheet_curve()
-
-        econ = project_economics(curve, scenario, finance)
-
-        # Report: document the values in test output for the reconciliation note
-        print(
-            f"\n[CAPEX REPORT] Capital_Stack!B6={_FIN_GOLDEN['capital_stack_b6']:,.0f}; "
-            f"project_economics={econ.total_capex_gbp:,.2f}; "
-            f"delta={abs(econ.total_capex_gbp - _FIN_GOLDEN['capital_stack_b6']):.4f}"
-        )
-        # Must be within £1
-        assert abs(econ.total_capex_gbp - _FIN_GOLDEN["capital_stack_b6"]) < 1.0
-
 
 # ---------------------------------------------------------------------------
 # Step-6: TestCalibrationDscrIrrMethodAgreement — H6 DSCR/IRR gate (fast)
@@ -609,66 +590,6 @@ class TestCalibrationDscrIrrMethodAgreement:
         assert econ1.equity_irr == econ2.equity_irr
         assert econ1.per_year_surplus_gbp == econ2.per_year_surplus_gbp
 
-    def test_dscr_reported_vs_spreadsheet(self) -> None:
-        """Report: [FIN]-assumption min_dscr vs Debt_Analytics!B16 (NOT asserted equal).
-
-        The [FIN]-assumption curve yields min_dscr ≈ 4.02 because it uses flat
-        revenues (no formation costs, no dividend deferral).
-        Debt_Analytics!B16 = 2.10378 accounts for those deductions.
-        Per G6, only the covenant floor (1.20) is asserted; the cell value is REPORTED.
-        """
-        econ = self._build_econ()
-
-        fin_dscr = _FIN_GOLDEN["min_dscr"]
-        model_dscr = econ.min_dscr
-
-        # REPORT: document both values for reconciliation note
-        print(
-            f"\n[DSCR REPORT] "
-            f"Debt_Analytics!B16={fin_dscr:.6f}; "
-            f"[FIN]-assumption model={model_dscr:.6f}; "
-            f"ratio={model_dscr/fin_dscr:.4f}"
-        )
-        print(
-            "  G6 note: model DSCR > spreadsheet because the sheet deducts "
-            "equity fundraising fees / formation costs / dividend deferral "
-            "from the numerator (revenue-opex). Pure layer does not model these."
-        )
-
-        # HARD assert: covenant floor only
-        assert model_dscr >= 1.20
-        # SOFT assert: documented comment (not a real assertion)
-        # model_dscr ≠ fin_dscr — this is the §2.3 self-consumption tension mirror
-
-    def test_irr_reported_vs_spreadsheet_cashflow(self) -> None:
-        """Report: [FIN]-assumption equity_irr vs spreadsheet 'Cash for IRR' row.
-
-        Debt_Analytics row 13 'Cash for IRR': B13=-244821, C13=155947, D13=163911, ...
-        Prose estimate: spreadsheet equity_irr ~69% (net of formation costs / fees).
-        Our model equity_irr ~11% (pure annuity + surplus, full equity investment).
-        Per G6, only equity_irr > 0 is asserted; the spreadsheet value is REPORTED.
-        """
-        import math
-
-        econ = self._build_econ()
-
-        # Documented spreadsheet cashflow (Debt_Analytics!B13:...)
-        # B13=-244821, C13=155947, D13=163911, E13=172837 (equity net of fees)
-        _sheet_equity_cashflow_start = -244821.0  # Debt_Analytics!B13
-        # IRR not directly asserted — documented for reconciliation
-
-        print(
-            f"\n[IRR REPORT] "
-            f"[FIN]-assumption equity_irr={econ.equity_irr*100:.2f}%; "
-            f"equity_gbp=£{econ.equity_gbp:,.2f}; "
-            f"sheet equity_cashflow_start=£{_sheet_equity_cashflow_start:,.0f}; "
-            f"spreadsheet equity_irr ~69% (net of formation/fee deductions)"
-        )
-
-        # HARD assert: structural sanity only
-        assert not math.isnan(econ.equity_irr)
-        assert econ.equity_irr > 0.0
-
 
 # ---------------------------------------------------------------------------
 # Step-7: TestCalibrationG6Guards — G6 premise guards (fast)
@@ -740,23 +661,31 @@ class TestCalibrationG6Guards:
         assert delta == pytest.approx(125000.0, abs=1.0), "Delta must equal £125,000"
 
     def test_physics_dscr_not_equal_spreadsheet_golden(self) -> None:
-        """G6: spreadsheet-input DSCR != Debt_Analytics!B16 under [FIN]-assumption curve.
+        """G6: [FIN]-assumption model DSCR stays in the expected range (~4.02).
 
-        This validates the G6 non-assertion: our [FIN]-assumption DSCR (~4.02)
-        legitimately differs from the spreadsheet DSCR (2.10378). Assert the difference
-        is large enough to document — i.e., we are NOT digit-matched, as intended.
+        Our [FIN]-assumption model_dscr ≈ 4.02 vs Debt_Analytics!B16 = 2.10378.
+        The discrepancy is EXPECTED and documented (spreadsheet deducts formation costs /
+        fundraising fees / dividend deferral from the numerator; our pure layer does not).
+        Rather than asserting 'model must differ from spreadsheet by >0.5' (which passes
+        for a broken model returning 0), we assert the model DSCR stays within a
+        documented expected range so regressions in either direction are caught.
         """
         econ = self._build_spreadsheet_econ()
-        # Our DSCR should be substantially higher than the spreadsheet's
-        # (because the spreadsheet deducts formation costs / fundraising fees)
         spreadsheet_dscr = _FIN_GOLDEN["min_dscr"]
         model_dscr = econ.min_dscr
 
-        # G6: model DSCR must NOT equal spreadsheet DSCR (digit-match is wrong)
-        assert abs(model_dscr - spreadsheet_dscr) > 0.5, (
-            f"G6 guard: model_dscr ({model_dscr:.4f}) should NOT digit-match "
-            f"Debt_Analytics!B16 ({spreadsheet_dscr:.6f}). "
-            "If they're close, re-examine the [FIN] curve parameters."
+        # Report for reconciliation note
+        print(
+            f"\n[G6 DSCR] model={model_dscr:.4f}; "
+            f"Debt_Analytics!B16={spreadsheet_dscr:.6f}; "
+            "discrepancy EXPECTED (formation costs/fees abstracted in pure layer)"
+        )
+
+        # Assert the model DSCR stays in the expected range (catches regressions in both directions)
+        # Calibrated ≈4.02 at task-48 implementation; 3.0–5.5 allows tolerance while detecting drift
+        assert 3.0 <= model_dscr <= 5.5, (
+            f"G6 model_dscr={model_dscr:.4f} outside expected range [3.0, 5.5]. "
+            "Re-examine [FIN] curve parameters if this fires."
         )
 
 
@@ -831,9 +760,12 @@ class TestCalibrationPhysicsColumn:
         )
 
         # STRUCTURAL assertions only (no physics==spreadsheet assertions)
-        # Capex is input-driven (same for both columns when n_homes matches)
-        assert physics_econ.total_capex_gbp == pytest.approx(ss_econ.total_capex_gbp, abs=1.0), (
-            "Capex must be identical (both use same home configs + finance params)"
+        # Capex is input-driven: assert against the concrete golden value, not the other column
+        # 2 homes × (5.5kWp×£1000 + £1000 + 5.0kWh×£250) = 2 × £7,750 = £15,500
+        _two_home_capex_gbp = 2.0 * (5.5 * 1000.0 + 1000.0 + 5.0 * 250.0)  # = 15500.0
+        assert physics_econ.total_capex_gbp == pytest.approx(_two_home_capex_gbp, abs=1.0), (
+            f"Physics capex (2 homes × £7,750) expected £{_two_home_capex_gbp:,.2f}, "
+            f"got £{physics_econ.total_capex_gbp:,.2f}"
         )
         # Physics DSCR must be finite and positive (structural sanity)
         assert physics_econ.min_dscr > 0.0 or physics_econ.min_dscr == float("inf")

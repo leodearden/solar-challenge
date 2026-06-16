@@ -1329,7 +1329,8 @@ def spreadsheet_revenue_curve(
     * ``inp_kWhPerkWp`` (Sensitivity!B8) → ``kwh_per_kwp``
     * Own-use rate 15 p/kWh (§3 [FIN] assumptions)
     * Export rate 6 p/kWh (Smart Export Guarantee [FIN] basis)
-    * Self-consumption fraction 0.45 (PV-only) or 0.70 (with battery, [FIN])
+    * Self-consumption fraction: typically 0.45 (PV-only) or 0.70 (with battery,
+      [FIN]); caller-supplied, not enforced by this function
 
     Per-home generation::
 
@@ -1364,6 +1365,17 @@ def spreadsheet_revenue_curve(
         A flat :class:`MultiYearCurve` with ``asset_life_years`` identical
         :class:`YearPoint` objects and ``interp_error_estimate == 0.0``.
     """
+    # Validate domain constraints (mirror __post_init__ style used elsewhere)
+    if not (0.0 <= self_consumption_fraction <= 1.0):
+        raise ValueError(
+            f"self_consumption_fraction must be in [0.0, 1.0], "
+            f"got {self_consumption_fraction}"
+        )
+    if asset_life_years < 1:
+        raise ValueError(
+            f"asset_life_years must be >= 1, got {asset_life_years}"
+        )
+
     # Per-home annual generation (kWh)
     gen_per_home_kwh: float = pv_kwp * kwh_per_kwp
 
