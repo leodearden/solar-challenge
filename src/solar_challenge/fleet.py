@@ -229,6 +229,11 @@ class FleetSummary:
     total_seg_revenue_gbp: Optional[float] = None
     per_home_seg_revenue_mean_gbp: Optional[float] = None
 
+    # Financial aggregates (always populated on computed path, None on direct construction)
+    total_net_cost_gbp: Optional[float] = None
+    total_import_cost_gbp: Optional[float] = None
+    total_export_revenue_gbp: Optional[float] = None
+
 
 def _simulate_home_worker(
     home_index: int,
@@ -404,6 +409,11 @@ def calculate_fleet_summary(
             total_seg_revenue_gbp = sum(seg_revenues)
             per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
 
+    # Fleet financial aggregates (per-home fields are always-present floats)
+    total_import_cost = sum(s.total_import_cost_gbp for s in home_summaries)
+    total_export_revenue = sum(s.total_export_revenue_gbp for s in home_summaries)
+    total_net_cost = sum(s.net_cost_gbp for s in home_summaries)
+
     return FleetSummary(
         n_homes=len(results),
         total_generation_kwh=total_gen,
@@ -423,6 +433,9 @@ def calculate_fleet_summary(
         simulation_days=home_summaries[0].simulation_days if home_summaries else 0,
         total_seg_revenue_gbp=total_seg_revenue_gbp,
         per_home_seg_revenue_mean_gbp=per_home_seg_revenue_mean_gbp,
+        total_net_cost_gbp=total_net_cost,
+        total_import_cost_gbp=total_import_cost,
+        total_export_revenue_gbp=total_export_revenue,
     )
 
 
