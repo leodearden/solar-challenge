@@ -610,3 +610,210 @@ class TestProjectMultiYearShape:
 
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         assert curve.points[0].fleet_import_kwh == pytest.approx(expected_import, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# SOH + degradation behaviour over 25-yr projection (step-9 / step-10)
+# ---------------------------------------------------------------------------
+
+
+def _make_degrading_simulate(
+    base_sc: float = 5000.0,
+    base_export: float = 2000.0,
+    base_import: float = 1000.0,
+    degradation_rate: float = 0.005,
+) -> "Callable":  # type: ignore[name-defined]
+    """Return a synthetic simulate that scales self-consumption by PV SOH.
+
+    The injected simulate reads pv_config.system_age_years from each home in
+    the FleetConfig, computes a degradation factor, and scales the energy
+    output accordingly.  This makes fleet_self_consumption_kwh decline with age
+    in a controlled, verifiable way.
+    """
+    from typing import Callable
+
+    def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        from solar_challenge.fleet import FleetResults
+        from solar_challenge.pv import calculate_degradation_factor
+
+        homes = fleet_config.homes
+        # Mean degradation factor across homes
+        mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
+        pv_factor = calculate_degradation_factor(mean_age, degradation_rate)
+
+        per_home = [
+            _make_sim_results(
+                self_kwh=base_sc * pv_factor,
+                export_kwh=base_export * pv_factor,
+                import_kwh=base_import,
+            )
+            for _ in homes
+        ]
+        home_cfgs = list(homes)
+        return FleetResults(per_home_results=per_home, home_configs=home_cfgs)
+
+    return _simulate
+
+
+class TestProjectMultiYearSOH:
+    """SOH and PV degradation behaviour tests (H3)."""
+
+    def test_pv_soh_monotone_non_increasing(self) -> None:
+        """points.pv_soh is monotone non-increasing across years."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = _make_scenario(asset_life_years=25)
+        sim = _make_degrading_simulate()
+        curve = project_multi_year(scenario, finance, simulate=sim)
+        for i in range(1, len(curve.points)):
+            assert curve.points[i].pv_soh <= curve.points[i - 1].pv_soh + 1e-9, (
+                f"pv_soh not monotone at year {i}: "
+                f"{curve.points[i].pv_soh} > {curve.points[i-1].pv_soh}"
+            )
+
+    def test_pv_soh_declines_over_life(self) -> None:
+        """pv_soh at end of life is strictly less than at installation."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = _make_scenario(asset_life_years=25)
+        sim = _make_degrading_simulate(degradation_rate=0.005)
+        curve = project_multi_year(scenario, finance, simulate=sim)
+        assert curve.points[-1].pv_soh < curve.points[0].pv_soh
+
+    def test_battery_soh_monotone_non_increasing(self) -> None:
+        """points.battery_soh is monotone non-increasing across years (when batteries present)."""
+        from solar_challenge.battery import BatteryConfig
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.fleet import FleetResults
+        from solar_challenge.pv import calculate_degradation_factor
+
+        # Fleet with a battery
+        bc = BatteryConfig(
+            capacity_kwh=10.0,
+            max_charge_kw=3.5,
+            max_discharge_kw=3.5,
+            calendar_fade_rate_per_year=0.02,
+            cycle_fade_per_equivalent_full_cycle=0.0001,
+            soh_floor=0.60,
+        )
+
+        def _simulate_with_battery(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+            homes = fc.homes
+            mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
+            pv_factor = calculate_degradation_factor(mean_age, 0.005)
+            per_home = [
+                _make_sim_results(
+                    self_kwh=5000.0 * pv_factor,
+                    export_kwh=2000.0 * pv_factor,
+                    import_kwh=1000.0,
+                    discharge_kwh=1000.0,
+                )
+                for _ in homes
+            ]
+            return FleetResults(per_home_results=per_home, home_configs=list(homes))
+
+        from solar_challenge.home import HomeConfig
+        from solar_challenge.location import Location
+
+        homes = [
+            HomeConfig(
+                pv_config=_make_pv_config(),
+                load_config=_make_load_config(),
+                battery_config=bc,
+                location=Location.bristol(),
+            )
+        ]
+        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+
+        scenario = ScenarioConfig(
+            name="battery-test",
+            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+            description="Battery SOH test",
+            homes=homes,
+        )
+        finance = FinanceConfig(standing_charge_pence_per_day=28.0, asset_life_years=25)
+        curve = project_multi_year(scenario, finance, simulate=_simulate_with_battery)
+
+        for i in range(1, len(curve.points)):
+            assert curve.points[i].battery_soh <= curve.points[i - 1].battery_soh + 1e-9
+
+    def test_battery_soh_declines_over_life(self) -> None:
+        """battery_soh at end of life < beginning (calendar fade present)."""
+        from solar_challenge.battery import BatteryConfig
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.fleet import FleetResults
+        from solar_challenge.pv import calculate_degradation_factor
+
+        bc = BatteryConfig(
+            capacity_kwh=10.0,
+            max_charge_kw=3.5,
+            max_discharge_kw=3.5,
+            calendar_fade_rate_per_year=0.02,
+            cycle_fade_per_equivalent_full_cycle=0.0001,
+            soh_floor=0.60,
+        )
+
+        def _simulate_with_battery(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+            homes = fc.homes
+            mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
+            pv_factor = calculate_degradation_factor(mean_age, 0.005)
+            per_home = [
+                _make_sim_results(
+                    self_kwh=5000.0 * pv_factor,
+                    export_kwh=2000.0 * pv_factor,
+                    import_kwh=1000.0,
+                    discharge_kwh=500.0,
+                )
+                for _ in homes
+            ]
+            return FleetResults(per_home_results=per_home, home_configs=list(homes))
+
+        from solar_challenge.home import HomeConfig
+        from solar_challenge.location import Location
+        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+
+        homes = [
+            HomeConfig(
+                pv_config=_make_pv_config(),
+                load_config=_make_load_config(),
+                battery_config=bc,
+                location=Location.bristol(),
+            )
+        ]
+        scenario = ScenarioConfig(
+            name="battery-soh-decline",
+            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+            description="Battery SOH decline test",
+            homes=homes,
+        )
+        finance = FinanceConfig(standing_charge_pence_per_day=28.0, asset_life_years=25)
+        curve = project_multi_year(scenario, finance, simulate=_simulate_with_battery)
+        assert curve.points[-1].battery_soh < curve.points[0].battery_soh
+
+    def test_pv_soh_matches_degradation_factor(self) -> None:
+        """pv_soh at a sampled age matches calculate_degradation_factor exactly."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.pv import calculate_degradation_factor
+
+        rate = 0.005
+        scenario, finance = _make_scenario(asset_life_years=25)
+        sim = _make_degrading_simulate(degradation_rate=rate)
+        curve = project_multi_year(scenario, finance, simulate=sim)
+
+        # At a sampled age (age 0 is always seeded), pv_soh = degradation_factor
+        # For age 0: degradation_factor = 1.0 (no degradation yet)
+        expected_age0 = calculate_degradation_factor(0.0, rate)
+        assert curve.points[0].pv_soh == pytest.approx(expected_age0, rel=1e-6)
+
+        # Check fleet_self_consumption declines from year 0 to year 24
+        assert curve.points[24].fleet_self_consumption_kwh < curve.points[0].fleet_self_consumption_kwh
+
+    def test_no_battery_soh_defaults_to_one(self) -> None:
+        """battery_soh == 1.0 for all years when the fleet has no batteries."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = _make_scenario(asset_life_years=25)
+        fr = _make_fleet_results(n_homes=1)
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        for pt in curve.points:
+            assert pt.battery_soh == pytest.approx(1.0)
