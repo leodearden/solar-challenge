@@ -544,6 +544,68 @@ home:
             path.unlink()
 
 
+class TestBatterySOHParsing:
+    """Tests for _parse_battery_config SOH/aging key forwarding."""
+
+    def test_parse_explicit_soh_keys(self) -> None:
+        """All five SOH keys are forwarded to BatteryConfig."""
+        result = _parse_battery_config(
+            {
+                "capacity_kwh": 5.0,
+                "system_age_years": 8.0,
+                "calendar_fade_rate_per_year": 0.025,
+                "cycle_fade_per_equivalent_full_cycle": 6e-5,
+                "soh_floor": 0.6,
+                "soh": 0.85,
+            }
+        )
+        assert result is not None
+        assert result.system_age_years == 8.0
+        assert result.calendar_fade_rate_per_year == 0.025
+        assert result.cycle_fade_per_equivalent_full_cycle == 6e-5
+        assert result.soh_floor == 0.6
+        assert result.soh == pytest.approx(0.85)
+
+    def test_absent_soh_keys_use_defaults(self) -> None:
+        """Absent SOH keys yield the correct BatteryConfig defaults."""
+        result = _parse_battery_config({"capacity_kwh": 5.0})
+        assert result is not None
+        assert result.system_age_years == 0.0
+        assert result.calendar_fade_rate_per_year == 0.02
+        assert result.cycle_fade_per_equivalent_full_cycle == 5e-5
+        assert result.soh_floor == 0.5
+        assert result.soh is None
+
+    def test_yaml_round_trip_system_age_years(self) -> None:
+        """YAML with battery.system_age_years round-trips into battery_config.system_age_years."""
+        yaml_content = """
+home:
+  pv:
+    capacity_kw: 4.0
+  load:
+    annual_consumption_kwh: 3400
+  battery:
+    capacity_kwh: 5.0
+    system_age_years: 10
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            home = load_home_config(path)
+            assert home.battery_config is not None
+            assert home.battery_config.system_age_years == 10
+        finally:
+            path.unlink()
+
+    def test_out_of_range_system_age_raises(self) -> None:
+        """Negative system_age_years surfaces as ValueError."""
+        with pytest.raises(ValueError, match="system_age_years"):
+            _parse_battery_config({"capacity_kwh": 5.0, "system_age_years": -1.0})
+
+
 class TestDispatchStrategyParsing:
     """Tests for _parse_dispatch_strategy_config function."""
 
