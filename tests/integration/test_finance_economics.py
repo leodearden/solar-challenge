@@ -271,9 +271,10 @@ class TestProjectEconomicsCapex:
         assert econ.total_capex_gbp == pytest.approx(expected_capex)
 
     def test_no_inverter_term_in_capex(self) -> None:
-        """Regression guard: capex must exactly equal the 3-term sum, no more.
+        """Regression guard: with default (zero) inverter cost, capex equals the 3-term sum.
 
-        This ensures no inverter term slips in (that is task #49's scope).
+        The 4th (inverter) term exists post-#49 but contributes nothing when
+        inverter_cost_per_kw_gbp == 0.0 (the default).
         """
         from solar_challenge.finance import project_economics
 
@@ -1076,3 +1077,107 @@ class TestFinanceProjectCLIEndToEnd:
         assert "dscr" in output or "debt service" in output
         assert "irr" in output
         assert "payback" in output
+
+
+# ---------------------------------------------------------------------------
+# Step-7: TestProjectEconomicsInverterCapex
+# ---------------------------------------------------------------------------
+
+
+class TestProjectEconomicsInverterCapex:
+    """Tests for the inverter-capex term in project_economics (task #49)."""
+
+    def test_default_inverter_cost_capex_bit_identical(self) -> None:
+        """With default inverter cost (0.0), total_capex_gbp equals the 3-term sum exactly.
+
+        The 4th term is eff_inv*0.0 == 0.0 and S+0.0 == S in IEEE-754, so
+        the result is bit-identical to the pre-#49 accumulation.
+        """
+        from solar_challenge.finance import project_economics
+
+        home_a = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
+        home_b = _make_home_config(pv_kwp=3.0, battery_kwh=None)
+        scenario = _make_scenario(homes=[home_a, home_b])
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            inverter_cost_per_kw_gbp=0.0,
+        )
+        curve = _make_curve([10000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        # Accumulate in the same per-home order as project_economics does
+        expected_3term = 0.0
+        for home in [home_a, home_b]:
+            pv_kwp = home.pv_config.capacity_kw
+            batt_kwh = (
+                home.battery_config.capacity_kwh
+                if home.battery_config is not None
+                else 0.0
+            )
+            expected_3term += (
+                pv_kwp * 1000.0 + 1000.0 + batt_kwh * 250.0
+            )
+        # Exact equality: eff_inv*0.0 == 0.0, and S+0.0 == S in IEEE-754
+        assert econ.total_capex_gbp == expected_3term
+
+    def test_nonzero_inverter_cost_raises_capex_by_sigma(self) -> None:
+        """With inverter_cost=200.0, capex rises by sum(eff_inv_kw * 200.0)."""
+        from solar_challenge.finance import project_economics
+
+        home_a = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
+        home_b = _make_home_config(pv_kwp=3.0, battery_kwh=None)
+        homes = [home_a, home_b]
+        scenario = _make_scenario(homes=homes)
+        curve = _make_curve([10000.0] * 25)
+
+        baseline = project_economics(
+            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=0.0)
+        )
+        nonzero = project_economics(
+            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=200.0)
+        )
+
+        expected_delta = sum(
+            h.pv_config.effective_inverter_capacity_kw * 200.0 for h in homes
+        )
+        assert (nonzero.total_capex_gbp - baseline.total_capex_gbp) == pytest.approx(
+            expected_delta
+        )
+
+    def test_inverter_term_uses_effective_capacity(self) -> None:
+        """Inverter cost is priced on effective_inverter_capacity_kw, not capacity_kw.
+
+        Home with explicit inverter_kw != DC capacity (2.5 kW AC cap on a 4 kW DC
+        array) ensures the 4th term uses effective_inverter_capacity_kw (2.5),
+        not capacity_kw (4.0).
+        """
+        from solar_challenge.finance import project_economics
+
+        # Home with explicit AC inverter cap smaller than DC rating
+        home_clipped = _make_home_config(pv_kwp=4.0, inverter_kw=2.5)
+        # Home using default (effective == DC)
+        home_default = _make_home_config(pv_kwp=3.0)
+        homes = [home_clipped, home_default]
+        scenario = _make_scenario(homes=homes)
+        curve = _make_curve([10000.0] * 25)
+
+        cost_per_kw = 200.0
+        baseline = project_economics(
+            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=0.0)
+        )
+        nonzero = project_economics(
+            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=cost_per_kw)
+        )
+
+        # effective_inverter_capacity_kw: 2.5 for home_clipped, 3.0 for home_default
+        expected_delta = (
+            home_clipped.pv_config.effective_inverter_capacity_kw * cost_per_kw
+            + home_default.pv_config.effective_inverter_capacity_kw * cost_per_kw
+        )
+        assert expected_delta == pytest.approx(2.5 * 200.0 + 3.0 * 200.0)
+        assert (nonzero.total_capex_gbp - baseline.total_capex_gbp) == pytest.approx(
+            expected_delta
+        )
