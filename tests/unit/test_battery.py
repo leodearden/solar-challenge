@@ -335,6 +335,67 @@ class TestBatteryConfigSOCEfficiencyFields:
         assert restored == cfg
 
 
+class TestBatteryReadsSOCEffFromConfig:
+    """Battery inherits SOC limits and efficiencies from BatteryConfig when not overridden."""
+
+    def test_battery_inherits_min_soc_from_config(self) -> None:
+        """Battery reads min_soc_fraction from BatteryConfig."""
+        cfg = BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.2, max_soc_fraction=0.8)
+        battery = Battery(cfg)
+        assert battery.min_soc_fraction == 0.2
+
+    def test_battery_inherits_max_soc_from_config(self) -> None:
+        """Battery reads max_soc_fraction from BatteryConfig."""
+        cfg = BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.2, max_soc_fraction=0.8)
+        battery = Battery(cfg)
+        assert battery.max_soc_fraction == 0.8
+
+    def test_battery_inherits_charge_efficiency_from_config(self) -> None:
+        """Battery reads charge_efficiency from BatteryConfig."""
+        cfg = BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.9, discharge_efficiency=0.92)
+        battery = Battery(cfg)
+        assert battery.charge_efficiency == 0.9
+
+    def test_battery_inherits_discharge_efficiency_from_config(self) -> None:
+        """Battery reads discharge_efficiency from BatteryConfig."""
+        cfg = BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.9, discharge_efficiency=0.92)
+        battery = Battery(cfg)
+        assert battery.discharge_efficiency == 0.92
+
+    def test_constructor_arg_overrides_config_charge_efficiency(self) -> None:
+        """Explicit charge_efficiency arg overrides config value."""
+        cfg = BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.9)
+        battery = Battery(cfg, charge_efficiency=0.5)
+        assert battery.charge_efficiency == 0.5
+
+    def test_constructor_arg_overrides_config_discharge_efficiency(self) -> None:
+        """Explicit discharge_efficiency arg overrides config value."""
+        cfg = BatteryConfig(capacity_kwh=5.0, discharge_efficiency=0.9)
+        battery = Battery(cfg, discharge_efficiency=0.6)
+        assert battery.discharge_efficiency == 0.6
+
+    def test_battery_uses_config_efficiency_for_charging(self) -> None:
+        """Battery built from config with efficiency=0.9 charges with sqrt(0.9)."""
+        cfg = BatteryConfig(capacity_kwh=10.0, efficiency=0.9)
+        battery = Battery(cfg, initial_soc_kwh=cfg.capacity_kwh * cfg.min_soc_fraction + 1.0)
+        initial_soc = battery.soc_kwh
+        # Charge 1 kW for 1 hour
+        battery.charge(power_kw=1.0, duration_minutes=60)
+        expected_stored = 1.0 * math.sqrt(0.9)
+        assert battery.soc_kwh == pytest.approx(initial_soc + expected_stored)
+
+    def test_backward_compat_default_config_keeps_existing_values(self) -> None:
+        """Battery(BatteryConfig(capacity_kwh=5.0)) is bit-identical to today (H7)."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        battery = Battery(cfg)
+        assert battery.min_soc_fraction == 0.1
+        assert battery.max_soc_fraction == 0.9
+        assert battery.charge_efficiency == 0.975
+        assert battery.discharge_efficiency == 0.975
+        # Initial SOC: midpoint of 0.5-4.5 = 2.5
+        assert battery.soc_kwh == 2.5
+
+
 @pytest.fixture
 def default_config():
     """Create a default 5 kWh battery config."""
