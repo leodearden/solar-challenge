@@ -764,3 +764,102 @@ class TestBatterySOHFields:
         )
         restored = pickle.loads(pickle.dumps(cfg))
         assert restored == cfg
+
+
+class TestBatterySOHFieldValidation:
+    """Test BatteryConfig.__post_init__ validates SOH/aging fields."""
+
+    # --- system_age_years ---
+
+    def test_negative_system_age_years_raises(self) -> None:
+        """system_age_years < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="system_age_years"):
+            BatteryConfig(capacity_kwh=5.0, system_age_years=-1.0)
+
+    def test_zero_system_age_years_is_valid(self) -> None:
+        """system_age_years == 0.0 is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=0.0)
+        assert cfg.system_age_years == 0.0
+
+    def test_positive_system_age_years_is_valid(self) -> None:
+        """system_age_years > 0 is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        assert cfg.system_age_years == 10.0
+
+    # --- calendar_fade_rate_per_year ---
+
+    def test_negative_calendar_fade_rate_raises(self) -> None:
+        """calendar_fade_rate_per_year < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="calendar_fade_rate_per_year"):
+            BatteryConfig(capacity_kwh=5.0, calendar_fade_rate_per_year=-0.01)
+
+    def test_zero_calendar_fade_rate_is_valid(self) -> None:
+        """calendar_fade_rate_per_year == 0 is valid (no calendar fade)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, calendar_fade_rate_per_year=0.0)
+        assert cfg.calendar_fade_rate_per_year == 0.0
+
+    # --- cycle_fade_per_equivalent_full_cycle ---
+
+    def test_negative_cycle_fade_raises(self) -> None:
+        """cycle_fade_per_equivalent_full_cycle < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="cycle_fade_per_equivalent_full_cycle"):
+            BatteryConfig(capacity_kwh=5.0, cycle_fade_per_equivalent_full_cycle=-1e-5)
+
+    def test_zero_cycle_fade_is_valid(self) -> None:
+        """cycle_fade_per_equivalent_full_cycle == 0 is valid (no cycle fade)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, cycle_fade_per_equivalent_full_cycle=0.0)
+        assert cfg.cycle_fade_per_equivalent_full_cycle == 0.0
+
+    # --- soh_floor ---
+
+    def test_soh_floor_zero_raises(self) -> None:
+        """soh_floor == 0 raises ValueError."""
+        with pytest.raises(ValueError, match="soh_floor"):
+            BatteryConfig(capacity_kwh=5.0, soh_floor=0.0)
+
+    def test_soh_floor_negative_raises(self) -> None:
+        """soh_floor < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="soh_floor"):
+            BatteryConfig(capacity_kwh=5.0, soh_floor=-0.1)
+
+    def test_soh_floor_greater_than_one_raises(self) -> None:
+        """soh_floor > 1 raises ValueError."""
+        with pytest.raises(ValueError, match="soh_floor"):
+            BatteryConfig(capacity_kwh=5.0, soh_floor=1.1)
+
+    def test_soh_floor_one_is_valid(self) -> None:
+        """soh_floor == 1.0 is valid (floor at full SOH)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh_floor=1.0)
+        assert cfg.soh_floor == 1.0
+
+    def test_soh_floor_small_positive_is_valid(self) -> None:
+        """soh_floor == 0.1 is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh_floor=0.1)
+        assert cfg.soh_floor == 0.1
+
+    # --- soh override ---
+
+    def test_soh_override_zero_raises(self) -> None:
+        """soh == 0 raises ValueError."""
+        with pytest.raises(ValueError, match="soh"):
+            BatteryConfig(capacity_kwh=5.0, soh=0.0)
+
+    def test_soh_override_negative_raises(self) -> None:
+        """soh < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="soh"):
+            BatteryConfig(capacity_kwh=5.0, soh=-0.5)
+
+    def test_soh_override_greater_than_one_raises(self) -> None:
+        """soh > 1 raises ValueError."""
+        with pytest.raises(ValueError, match="soh"):
+            BatteryConfig(capacity_kwh=5.0, soh=1.5)
+
+    def test_soh_override_one_is_valid(self) -> None:
+        """soh == 1.0 is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=1.0)
+        assert cfg.soh == 1.0
+
+    def test_soh_none_is_valid(self) -> None:
+        """soh == None (no override) is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=None)
+        assert cfg.soh is None
