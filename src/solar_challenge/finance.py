@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Per-householder bill computation and fleet bill distribution (δ surface).
+"""Per-householder bill computation, fleet bill distribution, and multi-year
+projection (ζ surface).
 
 Provides:
   - ``BillBreakdown`` — frozen dataclass with 11 financial line items.
   - ``BillDistribution`` — frozen dataclass with fleet-level bill statistics.
   - ``householder_bill`` — pure function mapping simulation outputs to a bill.
   - ``bill_distribution`` — aggregates per-home bills into a BillDistribution.
+  - ``YearPoint`` — frozen dataclass for one year in a multi-year projection.
+  - ``MultiYearCurve`` — frozen dataclass for a full 25-yr projection curve.
+  - ``project_multi_year`` — forward-march driver for adaptive PCHIP projection.
 
 All monetary values are in GBP (£); energy in kWh.  The module is fully
 deterministic and has no side-effects: suitable for use in parallel fleet runs.
@@ -281,6 +285,111 @@ def householder_bill(
         saving_pct=float(saving_pct),
         self_consumption_fraction=float(self_consumption_fraction),
     )
+
+
+# ---------------------------------------------------------------------------
+# YearPoint — one year in a multi-year projection (§3.1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class YearPoint:
+    """Energy and financial snapshot for one year in a multi-year projection.
+
+    ``year`` is the age of the system in calendar years (0-based from
+    installation).  SOH fractions are mean fleet values:
+    ``pv_soh`` from :func:`pv.calculate_degradation_factor`; ``battery_soh``
+    from :func:`battery.compute_soh` (1.0 when the fleet has no batteries).
+
+    All energy values are in kWh (fleet totals for that simulated year).
+    ``fleet_revenue_gbp`` is the sum of per-home
+    (self_consumption_saving_gbp + seg_export_income_gbp).
+    """
+
+    year: int
+    """Calendar age of the system in years (≥ 0)."""
+
+    pv_soh: float
+    """Mean PV state-of-health across the fleet (fraction, 0–1)."""
+
+    battery_soh: float
+    """Mean battery state-of-health across the fleet (fraction, 0–1;
+    1.0 when the fleet has no batteries)."""
+
+    fleet_self_consumption_kwh: float
+    """Total self-consumed solar energy for the fleet that year (kWh, ≥ 0)."""
+
+    fleet_export_kwh: float
+    """Total grid export from the fleet that year (kWh, ≥ 0)."""
+
+    fleet_import_kwh: float
+    """Total grid import by the fleet that year (kWh, ≥ 0)."""
+
+    fleet_revenue_gbp: float
+    """Fleet total revenue (self-consumption saving + SEG export income) (£)."""
+
+    def __post_init__(self) -> None:
+        if self.year < 0:
+            raise ValueError(f"year must be ≥ 0, got {self.year!r}")
+        if not (0.0 <= self.pv_soh <= 1.0):
+            raise ValueError(
+                f"pv_soh must be in [0, 1], got {self.pv_soh!r}"
+            )
+        if not (0.0 <= self.battery_soh <= 1.0):
+            raise ValueError(
+                f"battery_soh must be in [0, 1], got {self.battery_soh!r}"
+            )
+        if self.fleet_self_consumption_kwh < 0.0:
+            raise ValueError(
+                f"fleet_self_consumption_kwh must be ≥ 0, got "
+                f"{self.fleet_self_consumption_kwh!r}"
+            )
+        if self.fleet_export_kwh < 0.0:
+            raise ValueError(
+                f"fleet_export_kwh must be ≥ 0, got {self.fleet_export_kwh!r}"
+            )
+        if self.fleet_import_kwh < 0.0:
+            raise ValueError(
+                f"fleet_import_kwh must be ≥ 0, got {self.fleet_import_kwh!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# MultiYearCurve — full projection curve (§3.1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MultiYearCurve:
+    """Full multi-year projection curve for a fleet.
+
+    ``points`` covers years 0 .. asset_life_years - 1 (one :class:`YearPoint`
+    per year).  ``sampled_ages`` records the ages at which the driver actually
+    ran simulations; the remaining years are filled by PCHIP interpolation.
+    ``interp_error_estimate`` is the maximum interpolation deviation as a
+    percentage of the annual-scale value at the time the adaptive loop
+    converged (or was capped at ``MAX_NODES``).
+    """
+
+    points: tuple[YearPoint, ...]
+    """Per-year snapshots (len == asset_life_years)."""
+
+    sampled_ages: tuple[int, ...]
+    """Ages at which full simulations were run (subset of 0..asset_life-1)."""
+
+    interp_error_estimate: float
+    """Max remaining PCHIP midpoint deviation (%), convergence invariant."""
+
+    def __post_init__(self) -> None:
+        if not self.points:
+            raise ValueError("points must be non-empty")
+        if not self.sampled_ages:
+            raise ValueError("sampled_ages must be non-empty")
+        if self.interp_error_estimate < 0.0:
+            raise ValueError(
+                f"interp_error_estimate must be ≥ 0, got "
+                f"{self.interp_error_estimate!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
