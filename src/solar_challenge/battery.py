@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Battery storage configuration and modelling."""
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -19,6 +20,11 @@ class BatteryConfig:
         name: Optional identifier for the battery
         dispatch_strategy: Optional dispatch strategy configuration
         grid_charging: Optional grid-charge (arbitrage) configuration; None means disabled
+        min_soc_fraction: Minimum state of charge as fraction of capacity (default 0.1)
+        max_soc_fraction: Maximum state of charge as fraction of capacity (default 0.9)
+        charge_efficiency: Charging efficiency, fraction of energy stored (default 0.975)
+        discharge_efficiency: Discharging efficiency, fraction of stored energy output (default 0.975)
+        efficiency: Round-trip efficiency; when set, overrides charge/discharge as sqrt(efficiency) each
     """
 
     capacity_kwh: float
@@ -27,6 +33,11 @@ class BatteryConfig:
     name: str = ""
     dispatch_strategy: Optional["DispatchStrategyConfig"] = None
     grid_charging: Optional["GridChargeConfig"] = None
+    min_soc_fraction: float = 0.1
+    max_soc_fraction: float = 0.9
+    charge_efficiency: float = 0.975
+    discharge_efficiency: float = 0.975
+    efficiency: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Validate battery configuration parameters."""
