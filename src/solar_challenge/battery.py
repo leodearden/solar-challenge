@@ -249,7 +249,15 @@ class Battery:
         self.charge_efficiency = resolved_charge_eff
         self.discharge_efficiency = resolved_discharge_eff
 
-        # Resolve SOH once: override wins; else calendar-only (throughput=0)
+        # Resolve SOH once: override wins; else calendar-only (throughput=0).
+        # NOTE: cumulative_throughput_kwh is hard-coded to 0.0 here — this is
+        # the correct single-run approximation (calendar fade only).  The cycle
+        # term in compute_soh is structurally complete and directly unit-tested;
+        # real multi-year cumulative throughput is injected by task ζ
+        # (project_multi_year), which calls compute_soh with the accrued
+        # discharge total.  Users setting cycle_fade_per_equivalent_full_cycle
+        # in YAML will see its effect in ζ multi-year projections; single-run
+        # simulations capture calendar fade only.
         if config.soh is not None:
             self._soh: float = config.soh
         else:
@@ -272,7 +280,15 @@ class Battery:
 
     @property
     def soh(self) -> float:
-        """State of health as a fraction in [soh_floor, 1.0]."""
+        """State of health as a fraction.
+
+        Normally in ``[config.soh_floor, 1.0]`` (guaranteed by
+        :func:`compute_soh`'s clamp when the calendar+cycle path is taken).
+        When ``config.soh`` is an explicit override that value is used
+        *directly*, without clamping to ``soh_floor`` — the override wins
+        outright.  Supply an override consistent with ``soh_floor`` if the
+        ``[soh_floor, 1.0]`` invariant matters for your use case.
+        """
         return self._soh
 
     @property
