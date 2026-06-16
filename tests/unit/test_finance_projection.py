@@ -958,3 +958,117 @@ class TestCycleFadeEngagement:
         expected_soh = compute_soh(24.0, 0.0, usable, bc)
         # The interpolated value at year 24 should match the sampled node
         assert curve.points[24].battery_soh == pytest.approx(expected_soh, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# fleet_revenue_gbp + self-consumption override (step-13 / step-14)
+# ---------------------------------------------------------------------------
+
+
+class TestProjectMultiYearRevenue:
+    """fleet_revenue_gbp aggregation and self-consumption override switch."""
+
+    def _make_revenue_scenario(
+        self,
+        n_homes: int = 2,
+        self_consumption_override: Optional[float] = None,
+        seg_tariff_pence: Optional[float] = 5.0,
+    ) -> tuple:
+        """Build scenario + finance for revenue tests."""
+        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+
+        homes = [_make_home_config() for _ in range(n_homes)]
+        finance = FinanceConfig(
+            standing_charge_pence_per_day=28.0,
+            asset_life_years=25,
+            self_consumption_override=self_consumption_override,
+            retail_baseline_rate_pence_per_kwh=30.0,
+            vat_rate=0.05,
+        )
+        scenario = ScenarioConfig(
+            name="revenue-test",
+            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+            description="Revenue test",
+            homes=homes,
+            seg_tariff_pence_per_kwh=seg_tariff_pence,
+        )
+        return scenario, finance
+
+    def _fixed_fleet_results(
+        self,
+        n_homes: int,
+        self_kwh: float,
+        export_kwh: float,
+        import_kwh: float,
+    ) -> "FleetResults":  # type: ignore[name-defined]
+        return _make_fleet_results(n_homes=n_homes, self_kwh=self_kwh,
+                                   export_kwh=export_kwh, import_kwh=import_kwh)
+
+    def test_fleet_revenue_at_sampled_age_matches_householder_bill_sum(self) -> None:
+        """fleet_revenue_gbp at age 0 equals sum of per-home householder_bill revenue."""
+        from solar_challenge.finance import householder_bill, project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.home import calculate_summary
+
+        n_homes = 2
+        sc, exp, imp = 3000.0, 1500.0, 500.0
+        scenario, finance = self._make_revenue_scenario(n_homes=n_homes)
+        fr = self._fixed_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
+
+        # Compute expected revenue from householder_bill per home
+        summaries = [calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
+                     for r in fr.per_home_results]
+        expected_revenue = sum(
+            householder_bill(
+                s,
+                annual_self_consumption_kwh=s.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=s.simulation_days,
+            ).self_consumption_saving_gbp
+            + householder_bill(
+                s,
+                annual_self_consumption_kwh=s.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=s.simulation_days,
+            ).seg_export_income_gbp
+            for s in summaries
+        )
+
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        # At year 0 (a seeded age), the revenue should match the injected data
+        assert curve.points[0].fleet_revenue_gbp == pytest.approx(expected_revenue, rel=1e-4)
+
+    def test_self_consumption_override_yields_different_revenue(self) -> None:
+        """A finance with self_consumption_override produces different fleet_revenue_gbp."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        n_homes = 1
+        fr = _make_fleet_results(n_homes=n_homes, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
+
+        # Physics path (no override)
+        scenario_phys, finance_phys = self._make_revenue_scenario(
+            n_homes=n_homes,
+            self_consumption_override=None,
+        )
+        curve_phys = project_multi_year(scenario_phys, finance_phys, simulate=lambda fc, s, e: fr)
+
+        # Spreadsheet path (with override)
+        scenario_over, finance_over = self._make_revenue_scenario(
+            n_homes=n_homes,
+            self_consumption_override=0.50,  # 50% self-consumption
+        )
+        curve_over = project_multi_year(scenario_over, finance_over, simulate=lambda fc, s, e: fr)
+
+        # The two revenue values should differ
+        assert curve_phys.points[0].fleet_revenue_gbp != pytest.approx(
+            curve_over.points[0].fleet_revenue_gbp, rel=1e-3
+        )
+
+    def test_fleet_revenue_non_negative(self) -> None:
+        """fleet_revenue_gbp is non-negative for all years."""
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        scenario, finance = self._make_revenue_scenario(n_homes=1)
+        fr = _make_fleet_results(n_homes=1, self_kwh=2000.0, export_kwh=800.0, import_kwh=300.0)
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        for pt in curve.points:
+            assert pt.fleet_revenue_gbp >= 0.0
