@@ -20,7 +20,7 @@ from __future__ import annotations
 import dataclasses
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, List, NamedTuple, Optional, Sequence
 
 import pandas as pd
 
@@ -303,7 +303,16 @@ class YearPoint:
     ``pv_soh`` from :func:`pv.calculate_degradation_factor`; ``battery_soh``
     from :func:`battery.compute_soh` (1.0 when the fleet has no batteries).
 
-    All energy values are in kWh (fleet totals for that simulated year).
+    Energy fields are kWh totals for the *simulation period* as returned by
+    :func:`home.calculate_summary` — **not** necessarily a full calendar year.
+    When ``scenario.period`` covers ≥ 360 days these values approximate annual
+    totals; for shorter periods they are sub-annual.  By contrast,
+    ``fleet_revenue_gbp`` is annualised by :func:`householder_bill` (which
+    scales short periods to 365 days), so direct £/kWh derivations from a
+    sub-year :class:`YearPoint` will yield inconsistent results.  Callers
+    should ensure the scenario period covers approximately one year for
+    consistent energy and revenue units.
+
     ``fleet_revenue_gbp`` is the sum of per-home
     (self_consumption_saving_gbp + seg_export_income_gbp).
     """
@@ -380,7 +389,9 @@ class MultiYearCurve:
     """Ages at which full simulations were run (subset of 0..asset_life-1)."""
 
     interp_error_estimate: float
-    """Max remaining PCHIP midpoint deviation (%), convergence invariant."""
+    """Max remaining PCHIP midpoint deviation (%) across all driven metrics
+    (fleet_self_consumption_kwh, fleet_export_kwh, fleet_import_kwh,
+    fleet_revenue_gbp), convergence invariant of the adaptive loop."""
 
     def __post_init__(self) -> None:
         if not self.points:
@@ -587,6 +598,35 @@ def bill_distribution(
 MAX_NODES: int = 12
 
 
+class _NodeData(NamedTuple):
+    """Aggregates from one simulated fleet age in the forward-march.
+
+    Collected once per :func:`_simulate_age` call and stored in ``sampled_data``
+    (keyed by age).  Named fields replace magic-index access throughout the driver.
+    """
+
+    fleet_sc: float
+    """Fleet total self-consumed solar for the simulation period (kWh)."""
+
+    fleet_exp: float
+    """Fleet total grid export for the simulation period (kWh)."""
+
+    fleet_imp: float
+    """Fleet total grid import for the simulation period (kWh)."""
+
+    per_home_discharge: List[float]
+    """Per-home battery discharge for the simulation period (kWh)."""
+
+    mean_pv_soh: float
+    """Mean PV state-of-health across the fleet (fraction, 0–1)."""
+
+    mean_battery_soh: float
+    """Mean battery state-of-health across the fleet (fraction, 0–1)."""
+
+    fleet_revenue: float
+    """Fleet total (self-consumption saving + SEG export income) (£, annualised)."""
+
+
 def _aged_homes(
     homes: "list[Any]",  # list[HomeConfig]
     age: int,
@@ -658,6 +698,14 @@ def project_multi_year(
         simulate: Optional inject for testing.  Defaults to None → lazy import
             ``fleet.simulate_fleet``.
 
+    Note:
+        For consistent units between energy fields and ``fleet_revenue_gbp``
+        in the returned :class:`YearPoint` objects, ``scenario.period`` should
+        cover approximately one full year (≥ 360 days).  For shorter periods
+        the energy fields are sub-annual totals while ``fleet_revenue_gbp`` is
+        annualised by :func:`householder_bill` — direct £/kWh derivations from
+        such a curve will yield inconsistent results.
+
     Returns:
         :class:`MultiYearCurve` with one :class:`YearPoint` per year and
         metadata about the sampled ages and interpolation error.
@@ -696,14 +744,12 @@ def project_multi_year(
     n_homes = len(homes)
     cum_throughput: list[float] = [0.0] * n_homes
 
-    # Node data tuple: (fleet_sc, fleet_exp, fleet_imp, per_home_discharge,
-    #                   mean_pv_soh, mean_battery_soh)
-    sampled_data: dict[int, tuple[Any, ...]] = {}
+    sampled_data: dict[int, _NodeData] = {}
 
     def _simulate_age(
         age: int,
         cum_tp: list[float],
-    ) -> tuple[Any, ...]:
+    ) -> _NodeData:
         """Simulate the fleet at a given age, compute SOH, and return aggregates."""
         from solar_challenge.battery import compute_soh
         from solar_challenge.fleet import FleetConfig
@@ -761,8 +807,15 @@ def project_multi_year(
                 battery_sohs.append(soh_i)
         mean_battery_soh = sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0
 
-        return (fleet_sc, fleet_exp, fleet_imp, per_home_discharge,
-                mean_pv_soh, mean_battery_soh, fleet_revenue)
+        return _NodeData(
+            fleet_sc=fleet_sc,
+            fleet_exp=fleet_exp,
+            fleet_imp=fleet_imp,
+            per_home_discharge=per_home_discharge,
+            mean_pv_soh=mean_pv_soh,
+            mean_battery_soh=mean_battery_soh,
+            fleet_revenue=fleet_revenue,
+        )
 
     # ---- Seed forward-march (snapshot cum_tp BEFORE each simulation) ---------
     # cum_tp_snapshot[age] = per-home throughput used as input for that age's sim.
@@ -775,27 +828,45 @@ def project_multi_year(
         # Accumulate cumulative throughput toward next node (trapezoidal; step-12)
         if prev_age is not None:
             dt = age - prev_age
-            prev_discharge = sampled_data[prev_age][3]
+            prev_discharge = sampled_data[prev_age].per_home_discharge
             for i in range(n_homes):
-                cum_throughput[i] += 0.5 * (prev_discharge[i] + node[3][i]) * dt
+                cum_throughput[i] += 0.5 * (prev_discharge[i] + node.per_home_discharge[i]) * dt
         prev_age = age
 
     # ---- Adaptive bisection (H4, §3.3) --------------------------------------
-    # Key metric: fleet_self_consumption_kwh (index 0).  Annual scale normalises
-    # deviations as percentages relative to the age-0 peak.
-    annual_scale: float = max(sampled_data[0][0], 1e-9)
+    # Deviation is the max across all driven energy + revenue metrics, normalised
+    # to percentages by each metric's age-0 value.  This ensures interp_error_estimate
+    # bounds ALL interpolated curves (self-consumption, export, import, revenue),
+    # not just self-consumption.
+    annual_scale_sc: float = max(sampled_data[0].fleet_sc, 1e-9)
+    annual_scale_exp: float = max(sampled_data[0].fleet_exp, 1e-9)
+    annual_scale_imp: float = max(sampled_data[0].fleet_imp, 1e-9)
+    annual_scale_rev: float = max(sampled_data[0].fleet_revenue, 1e-9)
     max_deviation: float = 0.0
     capped: bool = False
+
+    # Cache trial node results by midpoint age to avoid re-simulating the same
+    # midpoint on subsequent bisection passes.  The cache is keyed by age: a given
+    # mid always has the same lower boundary (a_k) and therefore the same forward-
+    # Euler cum_tp estimate throughout the loop, so the result is stable.
+    _trial_cache: dict[int, tuple[_NodeData, List[float]]] = {}
 
     while True:
         current_ages = sorted(sampled_data.keys())
 
-        # Build PCHIP over the current node set for deviation checking
-        sc_vals_now = [sampled_data[a][0] for a in current_ages]
+        # Build PCHIP over the current node set for all driven metrics
+        sc_vals_now = [sampled_data[a].fleet_sc for a in current_ages]
+        exp_vals_now = [sampled_data[a].fleet_exp for a in current_ages]
+        imp_vals_now = [sampled_data[a].fleet_imp for a in current_ages]
+        rev_vals_now = [sampled_data[a].fleet_revenue for a in current_ages]
+
         sc_interp_now = _interpolate_per_year(current_ages, sc_vals_now, asset_life)
+        exp_interp_now = _interpolate_per_year(current_ages, exp_vals_now, asset_life)
+        imp_interp_now = _interpolate_per_year(current_ages, imp_vals_now, asset_life)
+        rev_interp_now = _interpolate_per_year(current_ages, rev_vals_now, asset_life)
 
         # Scan adjacent intervals for bisectable midpoints above the error target
-        to_bisect: List[Any] = []
+        to_bisect: List[tuple[int, _NodeData, List[float]]] = []
         current_max_dev: float = 0.0
 
         for i_interval in range(len(current_ages) - 1):
@@ -807,20 +878,25 @@ def project_multi_year(
             if mid in sampled_data:
                 continue  # already a simulation node
 
-            # PCHIP prediction at mid
-            pred_sc = sc_interp_now[mid]
+            # Retrieve or compute the trial node at mid (memoised by age to avoid
+            # re-simulating on subsequent passes when intervals haven't changed).
+            if mid not in _trial_cache:
+                cum_tp_for_mid = list(cum_tp_snapshot[a_k])
+                discharge_at_k: List[float] = sampled_data[a_k].per_home_discharge
+                for j in range(n_homes):
+                    cum_tp_for_mid[j] += discharge_at_k[j] * float(mid - a_k)
+                trial_node = _simulate_age(mid, cum_tp_for_mid)
+                _trial_cache[mid] = (trial_node, list(cum_tp_for_mid))
+            else:
+                trial_node, cum_tp_for_mid = _trial_cache[mid]
 
-            # Estimated cum_tp at mid: forward-Euler from the lower node snapshot
-            cum_tp_for_mid = list(cum_tp_snapshot[a_k])
-            discharge_at_k: List[float] = sampled_data[a_k][3]
-            for j in range(n_homes):
-                cum_tp_for_mid[j] += discharge_at_k[j] * float(mid - a_k)
-
-            # Trial simulation at mid
-            trial_node = _simulate_age(mid, cum_tp_for_mid)
-            trial_sc: float = trial_node[0]
-
-            dev = abs(pred_sc - trial_sc) / annual_scale * 100.0
+            # Max PCHIP deviation across all driven metrics (percentage)
+            dev = max(
+                abs(sc_interp_now[mid] - trial_node.fleet_sc) / annual_scale_sc * 100.0,
+                abs(exp_interp_now[mid] - trial_node.fleet_exp) / annual_scale_exp * 100.0,
+                abs(imp_interp_now[mid] - trial_node.fleet_imp) / annual_scale_imp * 100.0,
+                abs(rev_interp_now[mid] - trial_node.fleet_revenue) / annual_scale_rev * 100.0,
+            )
             current_max_dev = max(current_max_dev, dev)
 
             if dev > error_target_pct:
@@ -847,7 +923,7 @@ def project_multi_year(
 
         if capped:
             break
-        # Loop: rebuilt PCHIP with new nodes → re-check all intervals
+        # Loop: rebuild PCHIP with new nodes → re-check all intervals
 
     if capped:
         warnings.warn(
@@ -860,12 +936,12 @@ def project_multi_year(
 
     # ---- Interpolate per-year curves with the converged node set ------------
     ages_sorted = sorted(sampled_data.keys())
-    sc_vals = [sampled_data[a][0] for a in ages_sorted]
-    exp_vals = [sampled_data[a][1] for a in ages_sorted]
-    imp_vals = [sampled_data[a][2] for a in ages_sorted]
-    pv_soh_vals = [sampled_data[a][4] for a in ages_sorted]
-    batt_soh_vals = [sampled_data[a][5] for a in ages_sorted]
-    rev_vals = [sampled_data[a][6] for a in ages_sorted]
+    sc_vals = [sampled_data[a].fleet_sc for a in ages_sorted]
+    exp_vals = [sampled_data[a].fleet_exp for a in ages_sorted]
+    imp_vals = [sampled_data[a].fleet_imp for a in ages_sorted]
+    pv_soh_vals = [sampled_data[a].mean_pv_soh for a in ages_sorted]
+    batt_soh_vals = [sampled_data[a].mean_battery_soh for a in ages_sorted]
+    rev_vals = [sampled_data[a].fleet_revenue for a in ages_sorted]
 
     sc_per_year = _interpolate_per_year(ages_sorted, sc_vals, asset_life)
     exp_per_year = _interpolate_per_year(ages_sorted, exp_vals, asset_life)
