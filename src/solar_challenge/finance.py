@@ -420,8 +420,9 @@ class ProjectEconomics:
 
     Attributes:
         total_capex_gbp: Total capital expenditure across the fleet (£).
-            3-term build-up: Σ_home(pv_kwp × pv_cost + roof_fit + battery_kwh
-            × battery_cost).  No inverter term (that is task #49's scope).
+            4-term build-up: Σ_home(pv_kwp × pv_cost + roof_fit
+            + battery_kwh × battery_cost + eff_inv_kw × inverter_cost).
+            Inverter term is zero when inverter_cost_per_kw_gbp == 0.0 (default).
         grant_gbp: Total grant received by the project (£, passthrough from
             FinanceConfig).
         equity_gbp: Equity portion of the financed amount (£):
@@ -1183,9 +1184,10 @@ def project_economics(
 
     Algorithm:
     1. Resolve homes; raise ValueError if empty.
-    2. Compute total_capex_gbp via the 3-term build-up:
-       Σ_home(pv_kwp × pv_cost + roof_fit + battery_kwh × battery_cost).
-       No inverter term (#49's scope).
+    2. Compute total_capex_gbp via the 4-term build-up:
+       Σ_home(pv_kwp × pv_cost + roof_fit + battery_kwh × battery_cost
+       + eff_inv_kw × inverter_cost).  Inverter term is zero when
+       inverter_cost_per_kw_gbp == 0.0 (the default).
     3. financed = max(capex − grant, 0); equity = financed × equity_fraction;
        debt = financed × (1 − equity_fraction).
     4. annual_debt_service via level annuity (_annuity_payment).
@@ -1214,7 +1216,7 @@ def project_economics(
     homes = _resolve_homes(scenario)
     n_homes = len(homes)
 
-    # 2. Capex: 3-term build-up (no inverter)
+    # 2. Capex: 4-term build-up (pv + roof + battery + inverter)
     total_capex_gbp = 0.0
     for home in homes:
         pv_kwp = home.pv_config.capacity_kw
@@ -1223,10 +1225,12 @@ def project_economics(
             if home.battery_config is not None
             else 0.0
         )
+        eff_inv_kw = home.pv_config.effective_inverter_capacity_kw
         total_capex_gbp += (
             pv_kwp * finance.pv_cost_per_kwp_gbp
             + finance.roof_fit_cost_gbp
             + batt_kwh * finance.battery_cost_per_kwh_gbp
+            + eff_inv_kw * finance.inverter_cost_per_kw_gbp
         )
 
     # 3. Grant / equity / debt split
