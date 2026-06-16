@@ -628,3 +628,139 @@ class TestGenerateFinanceReport:
         report = generate_finance_report(dist)
 
         assert "spreadsheet" not in report.lower()
+
+
+# ---------------------------------------------------------------------------
+# Step-9: CLI tests (fast + slow e2e)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceCLI:
+    """Fast CLI tests using typer CliRunner (no simulation)."""
+
+    def test_help_exits_zero(self) -> None:
+        """`finance run --help` must exit 0."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", "--help"])
+        assert result.exit_code == 0, result.output
+
+    def test_help_shows_run_command(self) -> None:
+        """`finance --help` must list the `run` command."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "run" in result.output.lower()
+
+    def test_help_shows_assumptions_option(self) -> None:
+        """`finance run --help` must show `--assumptions` with physics|spreadsheet|both."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", "--help"])
+        assert result.exit_code == 0, result.output
+        output = result.output.lower()
+        assert "assumptions" in output
+        assert "physics" in output
+        assert "spreadsheet" in output
+        assert "both" in output
+
+    def test_missing_finance_block_exits_nonzero(self, tmp_path: "Path") -> None:
+        """Invoking `finance run` on a scenario without `finance:` must exit non-zero."""
+        import yaml
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        # Minimal scenario without finance:
+        scenario = {
+            "name": "No Finance Test",
+            "location": {
+                "latitude": 51.45,
+                "longitude": -2.58,
+                "timezone": "Europe/London",
+            },
+            "fleet_distribution": {
+                "n_homes": 1,
+                "seed": 1,
+                "pv": {"capacity_kw": 4.0, "azimuth": 180, "tilt": 35},
+                "battery": {"capacity_kwh": None},
+                "load": {"annual_consumption_kwh": 3400},
+            },
+        }
+        scenario_file = tmp_path / "no_finance.yaml"
+        scenario_file.write_text(yaml.dump(scenario))
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+        assert result.exit_code != 0
+
+    def test_missing_finance_block_error_message(self, tmp_path: "Path") -> None:
+        """Error message must mention 'finance' when finance: block is missing."""
+        import yaml
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario = {
+            "name": "No Finance Test",
+            "location": {
+                "latitude": 51.45,
+                "longitude": -2.58,
+                "timezone": "Europe/London",
+            },
+            "fleet_distribution": {
+                "n_homes": 1,
+                "seed": 1,
+                "pv": {"capacity_kw": 4.0, "azimuth": 180, "tilt": 35},
+                "battery": {"capacity_kwh": None},
+                "load": {"annual_consumption_kwh": 3400},
+            },
+        }
+        scenario_file = tmp_path / "no_finance2.yaml"
+        scenario_file.write_text(yaml.dump(scenario))
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+        combined = (result.output or "") + (str(result.exception) if result.exception else "")
+        assert "finance" in combined.lower()
+
+
+@pytest.mark.slow
+class TestFinanceCLIEndToEnd:
+    """Slow end-to-end CLI test using real PVGIS (weather cache must be warm)."""
+
+    def test_finance_run_bristol_short_window(self) -> None:
+        """E2E: `finance run scenarios/bristol-phase1.yaml` exits 0 with report headings."""
+        from pathlib import Path
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario = Path("scenarios/bristol-phase1.yaml")
+        if not scenario.exists():
+            pytest.skip("bristol-phase1.yaml not found")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "finance",
+                "run",
+                str(scenario),
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-01-03",
+            ],
+        )
+        assert result.exit_code == 0, (
+            f"Exit {result.exit_code}. Output:\n{result.output}"
+        )
+        output = result.output.lower()
+        # Householder-bill block headings must be present
+        assert "finance" in output or "bill" in output
+        assert "net" in output or "annual" in output
