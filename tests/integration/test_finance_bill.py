@@ -512,3 +512,119 @@ class TestBillDistribution:
         dist = bill_distribution(summaries, _make_finance(), 365)
 
         assert isinstance(dist.per_home_net_bill_gbp, tuple)
+
+
+# ---------------------------------------------------------------------------
+# Step-7: generate_finance_report rendering tests
+# ---------------------------------------------------------------------------
+
+
+def _make_bill_distribution(multiplier: float = 1.0) -> "BillDistribution":  # type: ignore[name-defined]
+    """Build a synthetic BillDistribution for report rendering tests."""
+    from solar_challenge.finance import BillBreakdown, BillDistribution
+
+    rep = BillBreakdown(
+        standing_charge_gbp=219.0 * multiplier,
+        import_cost_gbp=276.0 * multiplier,
+        vat_gbp=24.75 * multiplier,
+        gross_bill_gbp=519.75 * multiplier,
+        seg_export_income_gbp=73.8 * multiplier,
+        self_consumption_saving_gbp=531.3 * multiplier,
+        baseline_bill_gbp=980.0 * multiplier,
+        net_annual_bill_gbp=445.95 * multiplier,
+        saving_vs_baseline_gbp=534.05 * multiplier,
+        saving_pct=54.5 * multiplier,
+        self_consumption_fraction=0.55 * multiplier,
+    )
+    return BillDistribution(
+        representative=rep,
+        per_home_net_bill_gbp=(rep.net_annual_bill_gbp,),
+        min_gbp=300.0 * multiplier,
+        mean_gbp=440.0 * multiplier,
+        median_gbp=rep.net_annual_bill_gbp,
+        max_gbp=600.0 * multiplier,
+    )
+
+
+class TestGenerateFinanceReport:
+    """Fast (no-network) tests for output.generate_finance_report rendering."""
+
+    def test_returns_string(self) -> None:
+        """generate_finance_report must return a str."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        report = generate_finance_report(dist)
+        assert isinstance(report, str)
+
+    def test_physics_bill_block_present(self) -> None:
+        """Report must contain the householder-bill block headings."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        report = generate_finance_report(dist)
+
+        # Key line items must be present
+        assert "Standing Charge" in report or "standing" in report.lower()
+        assert "Import" in report or "import" in report.lower()
+        assert "VAT" in report or "vat" in report.lower()
+        assert "Gross Bill" in report or "gross" in report.lower()
+        assert "SEG" in report or "seg" in report.lower() or "Export" in report
+        assert "Net Annual Bill" in report or "net" in report.lower()
+
+    def test_distribution_table_present(self) -> None:
+        """Report must contain a per-home distribution table with min/mean/median/max."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        report = generate_finance_report(dist)
+
+        assert "min" in report.lower() or "Min" in report
+        assert "mean" in report.lower() or "Mean" in report
+        assert "median" in report.lower() or "Median" in report
+        assert "max" in report.lower() or "Max" in report
+
+    def test_representative_values_in_report(self) -> None:
+        """Report must include representative bill values."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        report = generate_finance_report(dist)
+
+        # Check net_annual_bill_gbp appears (formatted to 2 dp)
+        net = dist.representative.net_annual_bill_gbp
+        assert f"{net:.2f}" in report
+
+    def test_scenario_name_in_report(self) -> None:
+        """When scenario_name is provided it must appear in the report."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        report = generate_finance_report(dist, scenario_name="Bristol Phase 1")
+
+        assert "Bristol Phase 1" in report
+
+    def test_both_assumptions_side_by_side(self) -> None:
+        """With physics AND spreadsheet BillDistributions, both labels must appear."""
+        from solar_challenge.output import generate_finance_report
+
+        dist_physics = _make_bill_distribution(multiplier=1.0)
+        dist_spreadsheet = _make_bill_distribution(multiplier=1.2)
+
+        report = generate_finance_report(
+            dist_physics,
+            bill_spreadsheet=dist_spreadsheet,
+        )
+
+        # Both assumption labels must be present
+        assert "physics" in report.lower() or "Physics" in report
+        assert "spreadsheet" in report.lower() or "Spreadsheet" in report
+
+    def test_physics_only_no_spreadsheet_label(self) -> None:
+        """With only physics BillDistribution, 'Spreadsheet' label must NOT appear."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        report = generate_finance_report(dist)
+
+        assert "spreadsheet" not in report.lower()
