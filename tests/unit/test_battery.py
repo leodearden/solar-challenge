@@ -752,6 +752,15 @@ class TestBatterySOHFields:
         with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.soh = 0.9  # type: ignore[misc]
 
+    def test_all_soh_field_defaults(self) -> None:
+        """All five SOH/aging fields have the correct defaults simultaneously."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.system_age_years == 0.0
+        assert cfg.calendar_fade_rate_per_year == 0.02
+        assert cfg.cycle_fade_per_equivalent_full_cycle == 5e-5
+        assert cfg.soh_floor == 0.5
+        assert cfg.soh is None
+
     def test_picklable_with_custom_soh_fields(self) -> None:
         """BatteryConfig with custom SOH fields round-trips through pickle."""
         cfg = BatteryConfig(
@@ -996,3 +1005,54 @@ class TestBatterySOHDerating:
         battery = Battery(cfg)
         assert isinstance(battery.soh, float)
         assert isinstance(battery.effective_capacity_kwh, float)
+
+    # --- soh override bypasses soh_floor (Suggestion 2) ---
+
+    def test_soh_override_below_floor_bypasses_floor(self) -> None:
+        """soh override below soh_floor is applied as-is; override wins outright."""
+        # Override 0.1 is below soh_floor 0.5 — the override still takes effect.
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.1, soh_floor=0.5)
+        battery = Battery(cfg)
+        assert battery.soh == pytest.approx(0.1)
+
+    # --- charge/discharge interact with effective (de-rated) capacity (Suggestion 4) ---
+
+    def test_aged_battery_charge_stops_at_effective_max_soc(self) -> None:
+        """Charging an aged battery saturates at effective max_soc_kwh, not nominal."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        battery = Battery(cfg)
+        # Large charge request — saturates the battery
+        battery.charge(power_kw=100.0, duration_minutes=600)
+        assert battery.soc_kwh == pytest.approx(battery.max_soc_kwh)
+        # Effective max < nominal 4.5 kWh (10-yr age, 0.02/yr → soh 0.8)
+        assert battery.max_soc_kwh < 4.5
+
+    def test_aged_battery_discharge_stops_at_effective_min_soc(self) -> None:
+        """Discharging an aged battery drains to effective min_soc_kwh, not nominal."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        battery = Battery(cfg)
+        # Large discharge request — drains the battery
+        battery.discharge(power_kw=100.0, duration_minutes=600)
+        assert battery.soc_kwh == pytest.approx(battery.min_soc_kwh)
+        # Effective min < nominal 0.5 kWh
+        assert battery.min_soc_kwh < 0.5
+
+    def test_aged_battery_soc_fraction_relative_to_effective_capacity(self) -> None:
+        """soc_fraction for an aged battery is computed against effective_capacity_kwh."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        battery = Battery(cfg)
+        # soc_fraction = soc_kwh / effective_capacity_kwh
+        expected = battery.soc_kwh / battery.effective_capacity_kwh
+        assert battery.soc_fraction == pytest.approx(expected)
+        # Confirm it differs from soc_kwh / nominal capacity
+        nominal_fraction = battery.soc_kwh / cfg.capacity_kwh
+        assert battery.soc_fraction != pytest.approx(nominal_fraction)
+
+    def test_soh_override_battery_charge_stops_at_effective_max_soc(self) -> None:
+        """Battery with soh override charges only to effective (de-rated) max_soc_kwh."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.8)
+        battery = Battery(cfg)
+        battery.charge(power_kw=100.0, duration_minutes=600)
+        assert battery.soc_kwh == pytest.approx(battery.max_soc_kwh)
+        # effective_cap = 5.0 * 0.8 = 4.0; max_soc = 4.0 * 0.9 = 3.6 kWh
+        assert battery.soc_kwh == pytest.approx(5.0 * 0.8 * 0.9)
