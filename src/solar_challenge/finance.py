@@ -590,18 +590,49 @@ MAX_NODES: int = 12
 def _aged_homes(
     homes: "list[any]",  # list[HomeConfig]
     age: int,
+    cum_throughput: Optional[List[float]] = None,
 ) -> "list[any]":  # list[HomeConfig]
-    """Return a list of HomeConfig with PV system_age_years set to ``age``.
+    """Return HomeConfig list with PV system_age_years and battery SOH set to ``age``.
 
-    Battery SOH injection (step-10) and throughput accumulation (step-12) are
-    wired in later; for the step-8 skeleton only PV age is set.
+    For each home the PV config's ``system_age_years`` is updated to ``age``.
+    When ``cum_throughput`` is provided (a per-home list of kWh accumulated
+    since installation), battery SOH at that age is computed via
+    :func:`battery.compute_soh` and injected into the battery config via
+    ``dataclasses.replace(battery_config, soh=soh_i)`` so :class:`Battery`
+    uses it directly at construction time (β seam).
+
+    Args:
+        homes: Original fleet home configs.
+        age: System age in calendar years.
+        cum_throughput: Per-home cumulative battery throughput in kWh (0.0 if
+            no history yet or if the home has no battery).
+
+    Returns:
+        New list of HomeConfig with aged PV and (optionally) aged battery.
     """
-    from solar_challenge.pv import PVConfig  # noqa: F401
+    from solar_challenge.battery import compute_soh
+
+    if cum_throughput is None:
+        cum_throughput = [0.0] * len(homes)
 
     result = []
-    for home in homes:
+    for i, home in enumerate(homes):
+        # Age the PV config
         new_pv = dataclasses.replace(home.pv_config, system_age_years=float(age))
-        result.append(dataclasses.replace(home, pv_config=new_pv))
+
+        # Age the battery config (inject SOH via dataclasses.replace if present)
+        new_bc = home.battery_config
+        if new_bc is not None:
+            usable = new_bc.capacity_kwh * (new_bc.max_soc_fraction - new_bc.min_soc_fraction)
+            soh_i = compute_soh(
+                system_age_years=float(age),
+                cumulative_throughput_kwh=cum_throughput[i],
+                usable_capacity_kwh=usable,
+                params=new_bc,
+            )
+            new_bc = dataclasses.replace(new_bc, soh=soh_i)
+
+        result.append(dataclasses.replace(home, pv_config=new_pv, battery_config=new_bc))
     return result
 
 
@@ -661,21 +692,25 @@ def project_multi_year(
 
     # ---- Forward-march: simulate at each seed age, collect aggregates -------
     # Per-home cumulative throughput (kWh): tracks battery history across ages.
-    # Initialised to 0 at age 0; accumulated trapezoidally (steps-10/12).
+    # Initialised to 0 at age 0; accumulated trapezoidally (step-12).
     n_homes = len(homes)
     cum_throughput: list[float] = [0.0] * n_homes
 
-    # Mapping: age → (fleet_self, fleet_export, fleet_import, per_home_discharge)
-    SimNode = tuple  # (float, float, float, list[float])
+    # Node data tuple: (fleet_sc, fleet_exp, fleet_imp, per_home_discharge,
+    #                   mean_pv_soh, mean_battery_soh)
+    sampled_data: dict[int, tuple] = {}
 
-    sampled_data: dict[int, SimNode] = {}
-
-    def _simulate_age(age: int) -> SimNode:
-        """Simulate the fleet at a given age and return aggregate totals."""
+    def _simulate_age(
+        age: int,
+        cum_tp: list[float],
+    ) -> tuple:
+        """Simulate the fleet at a given age, compute SOH, and return aggregates."""
+        from solar_challenge.battery import compute_soh
         from solar_challenge.fleet import FleetConfig
         from solar_challenge.home import calculate_summary
+        from solar_challenge.pv import calculate_degradation_factor
 
-        aged = _aged_homes(homes, age)
+        aged = _aged_homes(homes, age, cum_tp)
         fleet_config = FleetConfig(homes=aged, name=f"proj-age-{age}")
         fleet_results = simulate(fleet_config, start_ts, end_ts)  # type: ignore[misc]
 
@@ -689,12 +724,35 @@ def project_multi_year(
         fleet_imp = sum(s.total_grid_import_kwh for s in per_home_summaries)
         per_home_discharge = [s.total_battery_discharge_kwh for s in per_home_summaries]
 
-        return (fleet_sc, fleet_exp, fleet_imp, per_home_discharge)
+        # PV SOH: mean of calculate_degradation_factor over all homes
+        pv_sohs = [
+            calculate_degradation_factor(float(age), h.pv_config.degradation_rate_per_year)
+            for h in homes
+        ]
+        mean_pv_soh = sum(pv_sohs) / len(pv_sohs) if pv_sohs else 1.0
+
+        # Battery SOH: mean of per-home compute_soh (1.0 if no batteries)
+        battery_sohs: list[float] = []
+        for i, home in enumerate(homes):
+            bc = home.battery_config
+            if bc is not None:
+                usable = bc.capacity_kwh * (bc.max_soc_fraction - bc.min_soc_fraction)
+                soh_i = compute_soh(
+                    system_age_years=float(age),
+                    cumulative_throughput_kwh=cum_tp[i],
+                    usable_capacity_kwh=usable,
+                    params=bc,
+                )
+                battery_sohs.append(soh_i)
+        mean_battery_soh = sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0
+
+        return (fleet_sc, fleet_exp, fleet_imp, per_home_discharge,
+                mean_pv_soh, mean_battery_soh)
 
     # March ascending
     prev_age: Optional[int] = None
     for age in seed_ages:
-        node = _simulate_age(age)
+        node = _simulate_age(age, list(cum_throughput))
         sampled_data[age] = node
         # Accumulate cumulative throughput toward next node (trapezoidal; step-12)
         if prev_age is not None:
@@ -709,17 +767,21 @@ def project_multi_year(
     sc_vals = [sampled_data[a][0] for a in ages_sorted]
     exp_vals = [sampled_data[a][1] for a in ages_sorted]
     imp_vals = [sampled_data[a][2] for a in ages_sorted]
+    pv_soh_vals = [sampled_data[a][4] for a in ages_sorted]
+    batt_soh_vals = [sampled_data[a][5] for a in ages_sorted]
 
     sc_per_year = _interpolate_per_year(ages_sorted, sc_vals, asset_life)
     exp_per_year = _interpolate_per_year(ages_sorted, exp_vals, asset_life)
     imp_per_year = _interpolate_per_year(ages_sorted, imp_vals, asset_life)
+    pv_soh_per_year = _interpolate_per_year(ages_sorted, pv_soh_vals, asset_life)
+    batt_soh_per_year = _interpolate_per_year(ages_sorted, batt_soh_vals, asset_life)
 
-    # ---- Assemble YearPoints (SOH + revenue are placeholder 1.0/0.0) --------
+    # ---- Assemble YearPoints (revenue is placeholder 0.0 until step-14) -----
     points = tuple(
         YearPoint(
             year=y,
-            pv_soh=1.0,              # wired in step-10
-            battery_soh=1.0,          # wired in step-10
+            pv_soh=max(0.0, min(1.0, pv_soh_per_year[y])),
+            battery_soh=max(0.0, min(1.0, batt_soh_per_year[y])),
             fleet_self_consumption_kwh=max(0.0, sc_per_year[y]),
             fleet_export_kwh=max(0.0, exp_per_year[y]),
             fleet_import_kwh=max(0.0, imp_per_year[y]),
