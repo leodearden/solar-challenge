@@ -751,3 +751,155 @@ class TestProjectEconomicsIRRPayback:
         assert econ1.payback_years == econ2.payback_years
         assert econ1.per_year_surplus_gbp == econ2.per_year_surplus_gbp
         assert econ1.min_dscr == econ2.min_dscr
+
+
+# ---------------------------------------------------------------------------
+# Step-11: generate_finance_report economics block
+# ---------------------------------------------------------------------------
+
+
+def _make_bill_distribution(multiplier: float = 1.0) -> "BillDistribution":  # type: ignore[name-defined]
+    """Build a synthetic BillDistribution for report tests."""
+    from solar_challenge.finance import BillBreakdown, BillDistribution
+
+    rep = BillBreakdown(
+        standing_charge_gbp=219.0 * multiplier,
+        import_cost_gbp=276.0 * multiplier,
+        vat_gbp=24.75 * multiplier,
+        gross_bill_gbp=519.75 * multiplier,
+        seg_export_income_gbp=73.8 * multiplier,
+        self_consumption_saving_gbp=531.3 * multiplier,
+        baseline_bill_gbp=980.0 * multiplier,
+        net_annual_bill_gbp=445.95 * multiplier,
+        saving_vs_baseline_gbp=534.05 * multiplier,
+        saving_pct=54.5 * multiplier,
+        self_consumption_fraction=0.55 * multiplier,
+    )
+    return BillDistribution(
+        representative=rep,
+        per_home_net_bill_gbp=(rep.net_annual_bill_gbp,),
+        min_gbp=300.0 * multiplier,
+        mean_gbp=440.0 * multiplier,
+        median_gbp=rep.net_annual_bill_gbp,
+        max_gbp=600.0 * multiplier,
+    )
+
+
+def _make_project_economics(
+    *,
+    payback_years: Optional[float] = 10.0,
+    equity_irr: float = 0.08,
+) -> "ProjectEconomics":  # type: ignore[name-defined]
+    """Build a synthetic ProjectEconomics for report tests."""
+    from solar_challenge.finance import ProjectEconomics
+
+    return ProjectEconomics(
+        total_capex_gbp=250000.0,
+        grant_gbp=50000.0,
+        equity_gbp=150000.0,
+        debt_gbp=50000.0,
+        annual_debt_service_gbp=5500.0,
+        per_year_surplus_gbp=tuple([8000.0] * 25),
+        min_dscr=1.45,
+        equity_irr=equity_irr,
+        payback_years=payback_years,
+        net_surplus_per_home_per_year_gbp=80.0,
+    )
+
+
+class TestGenerateFinanceReportEconomics:
+    """Fast tests for output.generate_finance_report economics block (η)."""
+
+    def test_economics_section_present(self) -> None:
+        """Report with economics= must contain a Project Economics section."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        econ = _make_project_economics()
+        report = generate_finance_report(dist, economics=econ)
+
+        assert "Project Economics" in report or "project economics" in report.lower()
+
+    def test_economics_capex_in_report(self) -> None:
+        """Economics block must include total capex value."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        econ = _make_project_economics()
+        report = generate_finance_report(dist, economics=econ)
+
+        # capex = 250000.00 or similar formatting
+        assert "250000" in report.replace(",", "").replace(" ", "")
+
+    def test_economics_dscr_in_report(self) -> None:
+        """Economics block must include min DSCR label."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        econ = _make_project_economics()
+        report = generate_finance_report(dist, economics=econ)
+
+        assert "DSCR" in report or "dscr" in report.lower()
+
+    def test_economics_irr_in_report(self) -> None:
+        """Economics block must include IRR label."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        econ = _make_project_economics()
+        report = generate_finance_report(dist, economics=econ)
+
+        assert "IRR" in report or "irr" in report.lower()
+
+    def test_economics_payback_in_report(self) -> None:
+        """Economics block must include payback label."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        econ = _make_project_economics()
+        report = generate_finance_report(dist, economics=econ)
+
+        assert "payback" in report.lower() or "Payback" in report
+
+    def test_economics_none_payback_no_crash(self) -> None:
+        """economics with payback_years=None must not crash and must render gracefully."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        econ = _make_project_economics(payback_years=None)
+        # Should not raise
+        report = generate_finance_report(dist, economics=econ)
+        assert isinstance(report, str)
+        # Should render a "never" or "—" or similar string, not "None"
+        assert "None" not in report
+
+    def test_economics_nan_irr_no_crash(self) -> None:
+        """economics with equity_irr=nan must not crash."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        econ = _make_project_economics(equity_irr=float("nan"))
+        report = generate_finance_report(dist, economics=econ)
+        assert isinstance(report, str)
+
+    def test_backward_compat_economics_none(self) -> None:
+        """generate_finance_report() with no economics kwarg must return same as before."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        # Call without economics kwarg
+        report_no_econ = generate_finance_report(dist)
+        # Call with economics=None (explicit)
+        report_econ_none = generate_finance_report(dist, economics=None)
+
+        assert report_no_econ == report_econ_none
+
+    def test_backward_compat_no_economics_section(self) -> None:
+        """Report without economics kwarg must not contain Project Economics section."""
+        from solar_challenge.output import generate_finance_report
+
+        dist = _make_bill_distribution()
+        report = generate_finance_report(dist)
+
+        # No economics block should appear
+        assert "Project Economics" not in report
