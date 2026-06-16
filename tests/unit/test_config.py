@@ -13,6 +13,7 @@ from solar_challenge.config import (
     BatteryDistributionConfig,
     ConfigurationError,
     DispatchStrategyConfig,
+    FinanceConfig,
     FleetDistributionConfig,
     GridChargeConfig,
     HeatPumpDistributionConfig,
@@ -29,6 +30,7 @@ from solar_challenge.config import (
     _parse_community_config,
     _parse_dispatch_strategy_config,
     _parse_ev_config,
+    _parse_finance_config,
     _parse_heat_pump_config,
     _parse_home_config,
     _parse_pv_config,
@@ -2469,3 +2471,121 @@ class TestAgedScenario:
         assert abs(factor - expected) < 1e-9, (
             f"Expected degradation factor {expected}, got {factor}"
         )
+
+
+# ---------------------------------------------------------------------------
+# FinanceConfig tests (step-1: construction + defaults)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceConfig:
+    """Tests for FinanceConfig dataclass construction, defaults, and immutability."""
+
+    def test_construction_with_required_arg(self) -> None:
+        """FinanceConfig can be constructed with only standing_charge_pence_per_day."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.standing_charge_pence_per_day == 60.0
+
+    def test_defaults_vat_rate(self) -> None:
+        """Default vat_rate is 0.05."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.vat_rate == 0.05
+
+    def test_defaults_retail_baseline_rate(self) -> None:
+        """Default retail_baseline_rate_pence_per_kwh is 23.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.retail_baseline_rate_pence_per_kwh == 23.0
+
+    def test_defaults_self_consumption_override_is_none(self) -> None:
+        """Default self_consumption_override is None."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.self_consumption_override is None
+
+    def test_defaults_pv_cost_per_kwp(self) -> None:
+        """Default pv_cost_per_kwp_gbp is 1000.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.pv_cost_per_kwp_gbp == 1000.0
+
+    def test_defaults_roof_fit_cost(self) -> None:
+        """Default roof_fit_cost_gbp is 1000.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.roof_fit_cost_gbp == 1000.0
+
+    def test_defaults_battery_cost_per_kwh(self) -> None:
+        """Default battery_cost_per_kwh_gbp is 250.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.battery_cost_per_kwh_gbp == 250.0
+
+    def test_defaults_grant_gbp(self) -> None:
+        """Default grant_gbp is 250000.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.grant_gbp == 250000.0
+
+    def test_defaults_equity_fraction(self) -> None:
+        """Default equity_fraction is 0.75."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.equity_fraction == 0.75
+
+    def test_defaults_loan_term_years(self) -> None:
+        """Default loan_term_years is 15."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.loan_term_years == 15
+
+    def test_defaults_loan_rate(self) -> None:
+        """Default loan_rate is 0.07."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.loan_rate == 0.07
+
+    def test_defaults_opex_per_home_per_year(self) -> None:
+        """Default opex_per_home_per_year_gbp is 131.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.opex_per_home_per_year_gbp == 131.0
+
+    def test_defaults_asset_life_years(self) -> None:
+        """Default asset_life_years is 25."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.asset_life_years == 25
+
+    def test_frozen_raises_on_assignment(self) -> None:
+        """FinanceConfig is frozen: attribute assignment raises FrozenInstanceError."""
+        import dataclasses
+
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            fc.vat_rate = 0.20  # type: ignore[misc]
+
+    def test_standing_charge_is_required(self) -> None:
+        """standing_charge_pence_per_day has no default; omitting it raises TypeError."""
+        with pytest.raises(TypeError):
+            FinanceConfig()  # type: ignore[call-arg]
+
+    def test_custom_values_round_trip(self) -> None:
+        """All fields can be set to custom values and are retrievable."""
+        fc = FinanceConfig(
+            standing_charge_pence_per_day=75.0,
+            vat_rate=0.20,
+            retail_baseline_rate_pence_per_kwh=28.0,
+            self_consumption_override=0.80,
+            pv_cost_per_kwp_gbp=900.0,
+            roof_fit_cost_gbp=1200.0,
+            battery_cost_per_kwh_gbp=300.0,
+            grant_gbp=200000.0,
+            equity_fraction=0.60,
+            loan_term_years=20,
+            loan_rate=0.06,
+            opex_per_home_per_year_gbp=150.0,
+            asset_life_years=25,
+        )
+        assert fc.standing_charge_pence_per_day == 75.0
+        assert fc.vat_rate == 0.20
+        assert fc.retail_baseline_rate_pence_per_kwh == 28.0
+        assert fc.self_consumption_override == 0.80
+        assert fc.pv_cost_per_kwp_gbp == 900.0
+        assert fc.roof_fit_cost_gbp == 1200.0
+        assert fc.battery_cost_per_kwh_gbp == 300.0
+        assert fc.grant_gbp == 200000.0
+        assert fc.equity_fraction == 0.60
+        assert fc.loan_term_years == 20
+        assert fc.loan_rate == 0.06
+        assert fc.opex_per_home_per_year_gbp == 150.0
+        assert fc.asset_life_years == 25
