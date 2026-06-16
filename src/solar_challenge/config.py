@@ -492,6 +492,8 @@ class FinanceConfig:
         pv_cost_per_kwp_gbp: PV hardware + install cost per kWp (default 1000.0).
         roof_fit_cost_gbp: Fixed per-home roof-fitting cost (default 1000.0).
         battery_cost_per_kwh_gbp: Battery hardware cost per kWh (default 250.0).
+        inverter_cost_per_kw_gbp: Inverter capex cost per kW of effective (AC) inverter
+            capacity (default 0.0; 0 permitted).
         grant_gbp: Total grant received by the project (default 250000.0; 0 allowed).
         equity_fraction: Fraction of project cost financed by equity (default 0.75).
         loan_term_years: Loan repayment term in years (default 15).
@@ -507,6 +509,7 @@ class FinanceConfig:
     pv_cost_per_kwp_gbp: float = 1000.0
     roof_fit_cost_gbp: float = 1000.0
     battery_cost_per_kwh_gbp: float = 250.0
+    inverter_cost_per_kw_gbp: float = 0.0
     grant_gbp: float = 250000.0
     equity_fraction: float = 0.75
     loan_term_years: int = 15
@@ -561,6 +564,11 @@ class FinanceConfig:
         if self.grant_gbp < 0.0:
             raise ConfigurationError(
                 f"grant_gbp must be >= 0, got {self.grant_gbp}"
+            )
+        # Inverter cost may be zero (opt-in default) but not negative
+        if self.inverter_cost_per_kw_gbp < 0.0:
+            raise ConfigurationError(
+                f"inverter_cost_per_kw_gbp must be >= 0, got {self.inverter_cost_per_kw_gbp}"
             )
 
 
@@ -1624,6 +1632,7 @@ def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceCon
             pv_cost_per_kwp_gbp=float(data.get("pv_cost_per_kwp_gbp", 1000.0)),
             roof_fit_cost_gbp=float(data.get("roof_fit_cost_gbp", 1000.0)),
             battery_cost_per_kwh_gbp=float(data.get("battery_cost_per_kwh_gbp", 250.0)),
+            inverter_cost_per_kw_gbp=float(data.get("inverter_cost_per_kw_gbp", 0.0)),
             grant_gbp=float(data.get("grant_gbp", 250000.0)),
             equity_fraction=float(data.get("equity_fraction", 0.75)),
             loan_term_years=int(data.get("loan_term_years", 15)),

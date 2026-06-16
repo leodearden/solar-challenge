@@ -2715,6 +2715,11 @@ class TestFinanceConfig:
         fc = FinanceConfig(standing_charge_pence_per_day=60.0)
         assert fc.asset_life_years == 25
 
+    def test_defaults_inverter_cost_per_kw_is_zero(self) -> None:
+        """Default inverter_cost_per_kw_gbp is 0.0 (opt-in, zero-allowed)."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.inverter_cost_per_kw_gbp == 0.0
+
     def test_frozen_raises_on_assignment(self) -> None:
         """FinanceConfig is frozen: attribute assignment raises FrozenInstanceError."""
         import dataclasses
@@ -2738,6 +2743,7 @@ class TestFinanceConfig:
             pv_cost_per_kwp_gbp=900.0,
             roof_fit_cost_gbp=1200.0,
             battery_cost_per_kwh_gbp=300.0,
+            inverter_cost_per_kw_gbp=200.0,
             grant_gbp=200000.0,
             equity_fraction=0.60,
             loan_term_years=20,
@@ -2752,6 +2758,7 @@ class TestFinanceConfig:
         assert fc.pv_cost_per_kwp_gbp == 900.0
         assert fc.roof_fit_cost_gbp == 1200.0
         assert fc.battery_cost_per_kwh_gbp == 300.0
+        assert fc.inverter_cost_per_kw_gbp == 200.0
         assert fc.grant_gbp == 200000.0
         assert fc.equity_fraction == 0.60
         assert fc.loan_term_years == 20
@@ -2916,6 +2923,18 @@ class TestFinanceConfigValidation:
         fc = FinanceConfig(**self._BASE, grant_gbp=0.0)
         assert fc.grant_gbp == 0.0
 
+    # ---- inverter_cost_per_kw_gbp (must be >= 0) ----
+
+    def test_inverter_cost_negative_raises(self) -> None:
+        """inverter_cost_per_kw_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, inverter_cost_per_kw_gbp=-5.0)
+
+    def test_inverter_cost_zero_accepted(self) -> None:
+        """inverter_cost_per_kw_gbp == 0.0 is valid (opt-in with zero default)."""
+        fc = FinanceConfig(**self._BASE, inverter_cost_per_kw_gbp=0.0)
+        assert fc.inverter_cost_per_kw_gbp == 0.0
+
 
 # ---------------------------------------------------------------------------
 # _parse_finance_config tests (step-5)
@@ -2940,6 +2959,7 @@ class TestFinanceConfigParsing:
         assert result.pv_cost_per_kwp_gbp == 1000.0
         assert result.roof_fit_cost_gbp == 1000.0
         assert result.battery_cost_per_kwh_gbp == 250.0
+        assert result.inverter_cost_per_kw_gbp == 0.0
         assert result.grant_gbp == 250000.0
         assert result.equity_fraction == 0.75
         assert result.loan_term_years == 15
@@ -2957,6 +2977,7 @@ class TestFinanceConfigParsing:
             "pv_cost_per_kwp_gbp": 950.0,
             "roof_fit_cost_gbp": 1100.0,
             "battery_cost_per_kwh_gbp": 280.0,
+            "inverter_cost_per_kw_gbp": 200.0,
             "grant_gbp": 200000.0,
             "equity_fraction": 0.60,
             "loan_term_years": 20,
@@ -2973,12 +2994,34 @@ class TestFinanceConfigParsing:
         assert result.pv_cost_per_kwp_gbp == 950.0
         assert result.roof_fit_cost_gbp == 1100.0
         assert result.battery_cost_per_kwh_gbp == 280.0
+        assert result.inverter_cost_per_kw_gbp == 200.0
         assert result.grant_gbp == 200000.0
         assert result.equity_fraction == 0.60
         assert result.loan_term_years == 20
         assert result.loan_rate == 0.065
         assert result.opex_per_home_per_year_gbp == 140.0
         assert result.asset_life_years == 25
+
+    def test_inverter_cost_omission_defaults_zero(self) -> None:
+        """Parser with no inverter_cost_per_kw_gbp key returns 0.0 (acceptance guard)."""
+        result = _parse_finance_config({"standing_charge_pence_per_day": 60.0})
+        assert result is not None
+        assert result.inverter_cost_per_kw_gbp == 0.0
+
+    def test_inverter_cost_key_round_trips(self) -> None:
+        """inverter_cost_per_kw_gbp in dict is reflected on the returned FinanceConfig."""
+        result = _parse_finance_config(
+            {"standing_charge_pence_per_day": 60.0, "inverter_cost_per_kw_gbp": 200.0}
+        )
+        assert result is not None
+        assert result.inverter_cost_per_kw_gbp == 200.0
+
+    def test_negative_inverter_cost_propagates_configuration_error(self) -> None:
+        """negative inverter_cost_per_kw_gbp in dict raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, "inverter_cost_per_kw_gbp": -5.0}
+            )
 
     def test_out_of_range_propagates_configuration_error(self) -> None:
         """An out-of-range field (vat_rate=2.0) raises ConfigurationError via __post_init__."""
