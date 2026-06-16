@@ -11,6 +11,7 @@ from solar_challenge.home import SimulationResults, SummaryStatistics, calculate
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
+    from solar_challenge.finance import BillDistribution
 
 
 @dataclass(frozen=True)
@@ -658,5 +659,101 @@ def generate_community_report(
         report += "\n## Additional Information\n"
         for key, value in community_summary.items():
             report += f"- {key}: {value}\n"
+
+    return report
+
+
+def generate_finance_report(
+    bill_physics: "BillDistribution",
+    bill_spreadsheet: Optional["BillDistribution"] = None,
+    *,
+    scenario_name: str = "",
+) -> str:
+    """Generate a markdown finance report from one or two BillDistributions.
+
+    Renders the representative householder bill line items (standing charge,
+    import cost, VAT, gross bill, SEG export income, self-consumption saving,
+    net annual bill, saving %) and a per-home distribution table
+    (min / mean / median / max).
+
+    When ``bill_spreadsheet`` is provided the report includes side-by-side
+    Physics vs Spreadsheet columns (the ``--assumptions both`` surface).
+    The δ-owned scaffold; η extends it additively with a project-economics
+    block.
+
+    Args:
+        bill_physics: BillDistribution from the physics self-consumption path.
+        bill_spreadsheet: Optional BillDistribution from the spreadsheet
+            (override) path; when supplied both are rendered side by side.
+        scenario_name: Optional scenario label for the report title.
+
+    Returns:
+        A markdown-formatted finance report string.
+    """
+    title = (
+        f"# Finance Report: {scenario_name}"
+        if scenario_name
+        else "# Finance Report"
+    )
+
+    rep = bill_physics.representative
+
+    if bill_spreadsheet is None:
+        # ---- Physics-only path -------------------------------------------
+        report = f"""{title}
+
+## Householder Bill (Physics Assumptions)
+
+| Line Item | Value |
+|-----------|-------|
+| Standing Charge | £{rep.standing_charge_gbp:.2f} |
+| Import Cost | £{rep.import_cost_gbp:.2f} |
+| VAT | £{rep.vat_gbp:.2f} |
+| Gross Bill | £{rep.gross_bill_gbp:.2f} |
+| SEG Export Income | −£{rep.seg_export_income_gbp:.2f} |
+| Net Annual Bill | £{rep.net_annual_bill_gbp:.2f} |
+| Self-Consumption Saving | £{rep.self_consumption_saving_gbp:.2f} |
+| Baseline Bill (no solar) | £{rep.baseline_bill_gbp:.2f} |
+| Saving vs Baseline | £{rep.saving_vs_baseline_gbp:.2f} ({rep.saving_pct:.1f}%) |
+| Self-Consumption Fraction | {rep.self_consumption_fraction:.1%} |
+
+## Per-Home Bill Distribution (Net Annual Bill, £)
+
+| Metric | Value |
+|--------|-------|
+| Min | £{bill_physics.min_gbp:.2f} |
+| Mean | £{bill_physics.mean_gbp:.2f} |
+| Median | £{bill_physics.median_gbp:.2f} |
+| Max | £{bill_physics.max_gbp:.2f} |
+"""
+    else:
+        # ---- Physics vs Spreadsheet side-by-side -------------------------
+        rep_s = bill_spreadsheet.representative
+        report = f"""{title}
+
+## Householder Bill — Physics vs Spreadsheet Assumptions
+
+| Line Item | Physics | Spreadsheet |
+|-----------|---------|-------------|
+| Standing Charge | £{rep.standing_charge_gbp:.2f} | £{rep_s.standing_charge_gbp:.2f} |
+| Import Cost | £{rep.import_cost_gbp:.2f} | £{rep_s.import_cost_gbp:.2f} |
+| VAT | £{rep.vat_gbp:.2f} | £{rep_s.vat_gbp:.2f} |
+| Gross Bill | £{rep.gross_bill_gbp:.2f} | £{rep_s.gross_bill_gbp:.2f} |
+| SEG Export Income | −£{rep.seg_export_income_gbp:.2f} | −£{rep_s.seg_export_income_gbp:.2f} |
+| Net Annual Bill | £{rep.net_annual_bill_gbp:.2f} | £{rep_s.net_annual_bill_gbp:.2f} |
+| Self-Consumption Saving | £{rep.self_consumption_saving_gbp:.2f} | £{rep_s.self_consumption_saving_gbp:.2f} |
+| Baseline Bill (no solar) | £{rep.baseline_bill_gbp:.2f} | £{rep_s.baseline_bill_gbp:.2f} |
+| Saving vs Baseline | £{rep.saving_vs_baseline_gbp:.2f} ({rep.saving_pct:.1f}%) | £{rep_s.saving_vs_baseline_gbp:.2f} ({rep_s.saving_pct:.1f}%) |
+| Self-Consumption Fraction | {rep.self_consumption_fraction:.1%} | {rep_s.self_consumption_fraction:.1%} |
+
+## Per-Home Bill Distribution (Net Annual Bill, £)
+
+| Metric | Physics | Spreadsheet |
+|--------|---------|-------------|
+| Min | £{bill_physics.min_gbp:.2f} | £{bill_spreadsheet.min_gbp:.2f} |
+| Mean | £{bill_physics.mean_gbp:.2f} | £{bill_spreadsheet.mean_gbp:.2f} |
+| Median | £{bill_physics.median_gbp:.2f} | £{bill_spreadsheet.median_gbp:.2f} |
+| Max | £{bill_physics.max_gbp:.2f} | £{bill_spreadsheet.max_gbp:.2f} |
+"""
 
     return report

@@ -7,6 +7,7 @@ import typer
 
 from solar_challenge import __version__
 from solar_challenge.cli import config as config_app
+from solar_challenge.cli import finance as finance_app
 from solar_challenge.cli import fleet as fleet_app
 from solar_challenge.cli import home as home_app
 from solar_challenge.cli import validate as validate_app
@@ -26,6 +27,7 @@ app.add_typer(fleet_app.app, name="fleet")
 app.add_typer(validate_app.app, name="validate")
 app.add_typer(config_app.app, name="config")
 app.add_typer(web_app.app, name="web")
+app.add_typer(finance_app.app, name="finance")
 
 
 def version_callback(value: bool) -> None:
