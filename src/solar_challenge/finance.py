@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, List, Optional, Sequence
 
 import pandas as pd
 
@@ -390,6 +390,134 @@ class MultiYearCurve:
                 f"interp_error_estimate must be ≥ 0, got "
                 f"{self.interp_error_estimate!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Interpolation helpers — PCHIP primary, Fritsch–Carlson fallback (step-4/6)
+# ---------------------------------------------------------------------------
+
+
+def _monotone_hermite_interpolate(
+    sampled_ages: List[int],
+    sampled_values: List[float],
+    all_years: int,
+) -> List[float]:
+    """Hand-rolled monotone cubic Hermite (Fritsch–Carlson) interpolant.
+
+    No scipy dependency.  Used as fallback when scipy is unavailable.  Directly
+    tested by ``TestMonotoneHermiteFallback`` so it is live, not dead code.
+
+    Args:
+        sampled_ages: Strictly ascending integer ages at which values are known.
+        sampled_values: Corresponding values (same length as sampled_ages).
+        all_years: Number of integer years (0 .. all_years-1) to interpolate.
+
+    Returns:
+        List of length ``all_years`` with one interpolated value per year.
+    """
+    n = len(sampled_ages)
+    if n == 0:
+        raise ValueError("sampled_ages must be non-empty")
+    if n == 1:
+        return [sampled_values[0]] * all_years
+
+    xs = [float(a) for a in sampled_ages]
+    ys = list(sampled_values)
+
+    # Step 1: secant slopes
+    h = [xs[i + 1] - xs[i] for i in range(n - 1)]
+    delta = [(ys[i + 1] - ys[i]) / h[i] for i in range(n - 1)]
+
+    # Step 2: initial tangent estimates (average of adjacent secants)
+    m: List[float] = [0.0] * n
+    m[0] = delta[0]
+    m[-1] = delta[-1]
+    for i in range(1, n - 1):
+        m[i] = (delta[i - 1] + delta[i]) / 2.0
+
+    # Step 3: Fritsch–Carlson monotonicity fix
+    for i in range(n - 1):
+        if delta[i] == 0.0:
+            m[i] = 0.0
+            m[i + 1] = 0.0
+        else:
+            alpha = m[i] / delta[i]
+            beta = m[i + 1] / delta[i]
+            r2 = alpha * alpha + beta * beta
+            if r2 > 9.0:
+                tau = 3.0 / (r2 ** 0.5)
+                m[i] = tau * alpha * delta[i]
+                m[i + 1] = tau * beta * delta[i]
+
+    # Step 4: evaluate Hermite basis at each integer year in [0, all_years)
+    result: List[float] = []
+    seg_idx = 0  # current segment index
+    for year in range(all_years):
+        x = float(year)
+        # Advance to the correct segment
+        while seg_idx < n - 2 and x >= xs[seg_idx + 1]:
+            seg_idx += 1
+        # Clamp to valid range
+        if x <= xs[0]:
+            result.append(ys[0])
+        elif x >= xs[-1]:
+            result.append(ys[-1])
+        else:
+            x0, x1 = xs[seg_idx], xs[seg_idx + 1]
+            y0, y1 = ys[seg_idx], ys[seg_idx + 1]
+            m0, m1 = m[seg_idx], m[seg_idx + 1]
+            dx = x1 - x0
+            t = (x - x0) / dx
+            h00 = 2 * t ** 3 - 3 * t ** 2 + 1
+            h10 = t ** 3 - 2 * t ** 2 + t
+            h01 = -2 * t ** 3 + 3 * t ** 2
+            h11 = t ** 3 - t ** 2
+            val = h00 * y0 + h10 * dx * m0 + h01 * y1 + h11 * dx * m1
+            result.append(val)
+    return result
+
+
+def _interpolate_per_year(
+    sampled_ages: List[int],
+    sampled_values: List[float],
+    all_years: int,
+) -> List[float]:
+    """Interpolate sampled (age, value) pairs to every year in 0..all_years-1.
+
+    Uses :class:`scipy.interpolate.PchipInterpolator` when available;
+    falls back to :func:`_monotone_hermite_interpolate` (Fritsch–Carlson) so
+    no new runtime dependency is required.
+
+    The degenerate single-node case returns a constant for all years.
+
+    Args:
+        sampled_ages: Strictly ascending integer ages at which values are known.
+        sampled_values: Corresponding values (same length as sampled_ages).
+        all_years: Number of integer years (0 .. all_years-1) to interpolate.
+
+    Returns:
+        List of length ``all_years`` with one interpolated value per year.
+    """
+    if len(sampled_ages) == 0:
+        raise ValueError("sampled_ages must be non-empty")
+    if len(sampled_ages) == 1:
+        return [sampled_values[0]] * all_years
+
+    try:
+        from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
+
+        import numpy as np  # type: ignore[import-untyped]
+
+        xs = np.array(sampled_ages, dtype=float)
+        ys = np.array(sampled_values, dtype=float)
+        pchip = PchipInterpolator(xs, ys, extrapolate=False)
+        all_x = np.arange(all_years, dtype=float)
+        vals = pchip(all_x)
+        # Extrapolation outside the node range → clip to boundary values
+        vals = np.where(np.isnan(vals), np.interp(all_x, xs, ys), vals)
+        return [float(v) for v in vals]
+    except ImportError:
+        return _monotone_hermite_interpolate(sampled_ages, sampled_values, all_years)
 
 
 # ---------------------------------------------------------------------------
