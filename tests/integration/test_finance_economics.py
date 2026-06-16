@@ -606,3 +606,148 @@ class TestProjectEconomicsSurplusDSCR:
         expected_mean = sum(econ.per_year_surplus_gbp) / len(econ.per_year_surplus_gbp)
         expected_per_home = expected_mean / 2  # 2 homes
         assert econ.net_surplus_per_home_per_year_gbp == pytest.approx(expected_per_home, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Step-9: equity_irr + payback + determinism (H5)
+# ---------------------------------------------------------------------------
+
+
+class TestProjectEconomicsIRRPayback:
+    """Fast tests for equity_irr, payback_years, and determinism (H5)."""
+
+    def test_irr_bisection_simple_cashflow(self) -> None:
+        """_irr_bisection: [-100, 110] → IRR = 0.10."""
+        from solar_challenge.finance import _irr_bisection
+
+        result = _irr_bisection([-100.0, 110.0])
+        assert result == pytest.approx(0.10, rel=1e-6)
+
+    def test_irr_bisection_two_period(self) -> None:
+        """_irr_bisection: [-100, 0, 121] → IRR = 0.10."""
+        from solar_challenge.finance import _irr_bisection
+
+        result = _irr_bisection([-100.0, 0.0, 121.0])
+        assert result == pytest.approx(0.10, rel=1e-6)
+
+    def test_irr_npv_consistency(self) -> None:
+        """NPV of cashflows at equity_irr must be approximately zero."""
+        from solar_challenge.finance import _npv, project_economics
+
+        # Profitable project: flat 8000 revenue, small equity investment
+        home = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            grant_gbp=0.0,
+            equity_fraction=0.75,
+            loan_rate=0.07,
+            loan_term_years=15,
+            opex_per_home_per_year_gbp=100.0,
+            asset_life_years=25,
+        )
+        curve = _make_curve([8000.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        if not math.isnan(econ.equity_irr):
+            cashflows = [-econ.equity_gbp] + list(econ.per_year_surplus_gbp)
+            npv_at_irr = _npv(econ.equity_irr, cashflows)
+            # |NPV| < 1e-6 * equity
+            assert abs(npv_at_irr) < 1e-6 * max(abs(econ.equity_gbp), 1.0)
+
+    def test_payback_years_hand_computed(self) -> None:
+        """payback_years equals the hand-computed first 1-based cumulative crossing."""
+        from solar_challenge.finance import project_economics
+
+        # Set up so payback is at a known year.
+        # Use equity_fraction=1.0 (no debt) for simplicity.
+        # capex = 1*1000+1000+0=2000; grant=0; equity=2000; debt=0; debt_service=0
+        # flat revenue=600/yr; opex=100; surplus=500/yr
+        # cumulative: -2000+500=-1500, +500=-1000, +500=-500, +500=0 → payback=year 4
+        home = _make_home_config(pv_kwp=1.0, battery_kwh=None)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            grant_gbp=0.0,
+            equity_fraction=1.0,
+            loan_rate=0.07,
+            loan_term_years=15,
+            opex_per_home_per_year_gbp=100.0,
+            asset_life_years=25,
+        )
+        # Revenue 600/yr; opex=100; surplus=500/yr; equity=2000
+        curve = _make_curve([600.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        # capex=2000, equity=2000, debt=0
+        # surplus each year = 600 - 100 - 0 = 500
+        # cumulative: year1=-2000+500=-1500, y2=-1000, y3=-500, y4=0
+        assert econ.payback_years == pytest.approx(4.0)
+
+    def test_never_profitable_payback_is_none(self) -> None:
+        """Never-profitable project → payback_years is None."""
+        from solar_challenge.finance import project_economics
+
+        home = _make_home_config(pv_kwp=4.0)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(
+            grant_gbp=0.0,
+            equity_fraction=1.0,
+            loan_rate=0.0,
+            loan_term_years=15,
+            opex_per_home_per_year_gbp=9999.0,  # massive opex → always negative surplus
+            asset_life_years=25,
+        )
+        # Low revenue, massive opex → surplus always negative
+        curve = _make_curve([1.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        assert econ.payback_years is None
+
+    def test_never_profitable_irr_is_nan(self) -> None:
+        """Never-profitable project → equity_irr is NaN."""
+        from solar_challenge.finance import project_economics
+
+        home = _make_home_config(pv_kwp=4.0)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance(
+            grant_gbp=0.0,
+            equity_fraction=1.0,
+            loan_rate=0.0,
+            loan_term_years=15,
+            opex_per_home_per_year_gbp=9999.0,
+            asset_life_years=25,
+        )
+        curve = _make_curve([1.0] * 25)
+
+        econ = project_economics(curve, scenario, finance)
+
+        assert math.isnan(econ.equity_irr)
+
+    def test_determinism(self) -> None:
+        """Two project_economics calls with same inputs return bit-identical results."""
+        from solar_challenge.finance import project_economics
+
+        home = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
+        scenario = _make_scenario(homes=[home])
+        finance = _make_finance()
+        curve = _make_curve([7000.0] * 25)
+
+        econ1 = project_economics(curve, scenario, finance)
+        econ2 = project_economics(curve, scenario, finance)
+
+        # Bit-identical for all float fields
+        assert econ1.total_capex_gbp == econ2.total_capex_gbp
+        assert econ1.equity_irr == econ2.equity_irr or (
+            math.isnan(econ1.equity_irr) and math.isnan(econ2.equity_irr)
+        )
+        assert econ1.payback_years == econ2.payback_years
+        assert econ1.per_year_surplus_gbp == econ2.per_year_surplus_gbp
+        assert econ1.min_dscr == econ2.min_dscr
