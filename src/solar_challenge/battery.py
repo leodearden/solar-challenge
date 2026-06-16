@@ -37,6 +37,48 @@ def _validate_soc_and_efficiency(
         raise ValueError(f"Discharge efficiency must be (0, 1], got {discharge_eff}")
 
 
+def compute_soh(
+    system_age_years: float,
+    cumulative_throughput_kwh: float,
+    usable_capacity_kwh: float,
+    params: "BatteryConfig",
+) -> float:
+    """Compute battery State of Health from calendar + cycle degradation.
+
+    Uses a linear calendar fade and equivalent-full-cycle (EFC) cycle fade:
+
+    - ``calendar_fade = params.calendar_fade_rate_per_year * system_age_years``
+    - ``efc = cumulative_throughput_kwh / (2 * usable_capacity_kwh)`` if
+      ``usable_capacity_kwh > 0`` else ``0.0``
+    - ``cycle_fade = params.cycle_fade_per_equivalent_full_cycle * efc``
+    - ``soh = clamp(1 - calendar_fade - cycle_fade, [soh_floor, 1.0])``
+
+    The result is monotone non-increasing in both *system_age_years* and
+    *cumulative_throughput_kwh* (both partial derivatives are ≤ 0).  The
+    clamp preserves this property.
+
+    Args:
+        system_age_years: Age of the battery in years (≥ 0).
+        cumulative_throughput_kwh: Total energy discharged over the battery's
+            lifetime in kWh (≥ 0).
+        usable_capacity_kwh: Nominal usable capacity in kWh; used to convert
+            throughput to EFC.  Pass 0.0 to disable cycle fade (safe).
+        params: BatteryConfig carrying the fade-rate and floor parameters.
+
+    Returns:
+        SOH in [params.soh_floor, 1.0].
+    """
+    calendar_fade = params.calendar_fade_rate_per_year * system_age_years
+    efc = (
+        cumulative_throughput_kwh / (2.0 * usable_capacity_kwh)
+        if usable_capacity_kwh > 0
+        else 0.0
+    )
+    cycle_fade = params.cycle_fade_per_equivalent_full_cycle * efc
+    raw_soh = 1.0 - calendar_fade - cycle_fade
+    return max(params.soh_floor, min(1.0, raw_soh))
+
+
 @dataclass(frozen=True)
 class BatteryConfig:
     """Configuration for a battery storage system.
@@ -64,6 +106,17 @@ class BatteryConfig:
             ``efficiency``.  To change per-direction values, also clear
             ``efficiency`` (``dataclasses.replace(cfg, efficiency=None,
             charge_efficiency=x, discharge_efficiency=y)``).
+        system_age_years: Age of the battery system in years (≥ 0); used to
+            compute calendar fade when no ``soh`` override is provided.
+        calendar_fade_rate_per_year: Linear calendar SOH fade rate per year
+            (≥ 0; default 0.02/yr ≈ 70 % SOH at 15-yr warranty horizon).
+        cycle_fade_per_equivalent_full_cycle: SOH fade per equivalent full
+            cycle (≥ 0; default 5e-5/EFC ≈ 30 % fade over ~6 000 EFC).
+        soh_floor: Minimum allowed SOH after clamping (0 < soh_floor ≤ 1;
+            default 0.5, reflecting end-of-useful-life convention).
+        soh: Optional direct SOH override (0 < soh ≤ 1).  When set, the
+            computed calendar+cycle fade is bypassed and this value is used
+            directly by ``Battery.__init__``.
     """
 
     capacity_kwh: float
@@ -77,6 +130,11 @@ class BatteryConfig:
     charge_efficiency: float = 0.975
     discharge_efficiency: float = 0.975
     efficiency: Optional[float] = None
+    system_age_years: float = 0.0
+    calendar_fade_rate_per_year: float = 0.02
+    cycle_fade_per_equivalent_full_cycle: float = 5e-5
+    soh_floor: float = 0.5
+    soh: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Validate battery configuration parameters."""
@@ -104,6 +162,28 @@ class BatteryConfig:
             self.charge_efficiency,
             self.discharge_efficiency,
         )
+
+        if self.system_age_years < 0:
+            raise ValueError(
+                f"system_age_years must be >= 0, got {self.system_age_years}"
+            )
+        if self.calendar_fade_rate_per_year < 0:
+            raise ValueError(
+                f"calendar_fade_rate_per_year must be >= 0, got {self.calendar_fade_rate_per_year}"
+            )
+        if self.cycle_fade_per_equivalent_full_cycle < 0:
+            raise ValueError(
+                f"cycle_fade_per_equivalent_full_cycle must be >= 0, "
+                f"got {self.cycle_fade_per_equivalent_full_cycle}"
+            )
+        if not 0 < self.soh_floor <= 1:
+            raise ValueError(
+                f"soh_floor must be in (0, 1], got {self.soh_floor}"
+            )
+        if self.soh is not None and not 0 < self.soh <= 1:
+            raise ValueError(
+                f"soh override must be in (0, 1], got {self.soh}"
+            )
 
     @classmethod
     def default_5kwh(cls) -> "BatteryConfig":
@@ -169,6 +249,23 @@ class Battery:
         self.charge_efficiency = resolved_charge_eff
         self.discharge_efficiency = resolved_discharge_eff
 
+        # Resolve SOH once: override wins; else calendar-only (throughput=0).
+        # NOTE: cumulative_throughput_kwh is hard-coded to 0.0 here — this is
+        # the correct single-run approximation (calendar fade only).  The cycle
+        # term in compute_soh is structurally complete and directly unit-tested;
+        # real multi-year cumulative throughput is injected by task ζ
+        # (project_multi_year), which calls compute_soh with the accrued
+        # discharge total.  Users setting cycle_fade_per_equivalent_full_cycle
+        # in YAML will see its effect in ζ multi-year projections; single-run
+        # simulations capture calendar fade only.
+        if config.soh is not None:
+            self._soh: float = config.soh
+        else:
+            nominal_usable = config.capacity_kwh * (resolved_max_soc - resolved_min_soc)
+            self._soh = compute_soh(
+                config.system_age_years, 0.0, nominal_usable, config
+            )
+
         # Set initial SOC
         if initial_soc_kwh is None:
             # Default to midpoint of usable range
@@ -182,24 +279,42 @@ class Battery:
             self._soc_kwh = initial_soc_kwh
 
     @property
+    def soh(self) -> float:
+        """State of health as a fraction.
+
+        Normally in ``[config.soh_floor, 1.0]`` (guaranteed by
+        :func:`compute_soh`'s clamp when the calendar+cycle path is taken).
+        When ``config.soh`` is an explicit override that value is used
+        *directly*, without clamping to ``soh_floor`` — the override wins
+        outright.  Supply an override consistent with ``soh_floor`` if the
+        ``[soh_floor, 1.0]`` invariant matters for your use case.
+        """
+        return self._soh
+
+    @property
+    def effective_capacity_kwh(self) -> float:
+        """Effective capacity after SOH de-rating (capacity_kwh * soh)."""
+        return self.config.capacity_kwh * self._soh
+
+    @property
     def soc_kwh(self) -> float:
         """Current state of charge in kWh."""
         return self._soc_kwh
 
     @property
     def soc_fraction(self) -> float:
-        """Current state of charge as fraction of capacity."""
-        return self._soc_kwh / self.config.capacity_kwh
+        """Current state of charge as fraction of effective capacity."""
+        return self._soc_kwh / self.effective_capacity_kwh
 
     @property
     def min_soc_kwh(self) -> float:
-        """Minimum allowed SOC in kWh."""
-        return self.config.capacity_kwh * self.min_soc_fraction
+        """Minimum allowed SOC in kWh (based on effective capacity)."""
+        return self.effective_capacity_kwh * self.min_soc_fraction
 
     @property
     def max_soc_kwh(self) -> float:
-        """Maximum allowed SOC in kWh."""
-        return self.config.capacity_kwh * self.max_soc_fraction
+        """Maximum allowed SOC in kWh (based on effective capacity)."""
+        return self.effective_capacity_kwh * self.max_soc_fraction
 
     @property
     def usable_capacity_kwh(self) -> float:

@@ -5,7 +5,7 @@ import math
 import pickle
 
 import pytest
-from solar_challenge.battery import BatteryConfig, Battery
+from solar_challenge.battery import BatteryConfig, Battery, compute_soh
 from solar_challenge.config import GridChargeConfig
 
 
@@ -667,3 +667,392 @@ class TestBatterySOCTimeSeries:
 
         assert len(soc_values) == 60
         assert all(0.5 <= s <= 4.5 for s in soc_values)  # Within limits
+
+
+class TestBatterySOHFields:
+    """Contract guard: SOH/aging fields on BatteryConfig are frozen and picklable."""
+
+    def test_default_system_age_years(self) -> None:
+        """BatteryConfig default system_age_years is 0.0."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.system_age_years == 0.0
+
+    def test_default_calendar_fade_rate_per_year(self) -> None:
+        """BatteryConfig default calendar_fade_rate_per_year is 0.02."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.calendar_fade_rate_per_year == 0.02
+
+    def test_default_cycle_fade_per_equivalent_full_cycle(self) -> None:
+        """BatteryConfig default cycle_fade_per_equivalent_full_cycle is 5e-5."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.cycle_fade_per_equivalent_full_cycle == 5e-5
+
+    def test_default_soh_floor(self) -> None:
+        """BatteryConfig default soh_floor is 0.5."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.soh_floor == 0.5
+
+    def test_default_soh_is_none(self) -> None:
+        """BatteryConfig default soh (override) is None."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.soh is None
+
+    def test_custom_system_age_years(self) -> None:
+        """Custom system_age_years is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        assert cfg.system_age_years == 10.0
+
+    def test_custom_calendar_fade_rate_per_year(self) -> None:
+        """Custom calendar_fade_rate_per_year is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, calendar_fade_rate_per_year=0.03)
+        assert cfg.calendar_fade_rate_per_year == 0.03
+
+    def test_custom_cycle_fade_per_equivalent_full_cycle(self) -> None:
+        """Custom cycle_fade_per_equivalent_full_cycle is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, cycle_fade_per_equivalent_full_cycle=1e-4)
+        assert cfg.cycle_fade_per_equivalent_full_cycle == 1e-4
+
+    def test_custom_soh_floor(self) -> None:
+        """Custom soh_floor is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh_floor=0.7)
+        assert cfg.soh_floor == 0.7
+
+    def test_custom_soh_override(self) -> None:
+        """Custom soh override is stored correctly."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.85)
+        assert cfg.soh == pytest.approx(0.85)
+
+    def test_system_age_years_frozen(self) -> None:
+        """Assigning to BatteryConfig.system_age_years raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.system_age_years = 5.0  # type: ignore[misc]
+
+    def test_calendar_fade_rate_per_year_frozen(self) -> None:
+        """Assigning to BatteryConfig.calendar_fade_rate_per_year raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.calendar_fade_rate_per_year = 0.01  # type: ignore[misc]
+
+    def test_cycle_fade_per_equivalent_full_cycle_frozen(self) -> None:
+        """Assigning to BatteryConfig.cycle_fade_per_equivalent_full_cycle raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.cycle_fade_per_equivalent_full_cycle = 1e-4  # type: ignore[misc]
+
+    def test_soh_floor_frozen(self) -> None:
+        """Assigning to BatteryConfig.soh_floor raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.soh_floor = 0.6  # type: ignore[misc]
+
+    def test_soh_frozen(self) -> None:
+        """Assigning to BatteryConfig.soh raises FrozenInstanceError."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.soh = 0.9  # type: ignore[misc]
+
+    def test_all_soh_field_defaults(self) -> None:
+        """All five SOH/aging fields have the correct defaults simultaneously."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        assert cfg.system_age_years == 0.0
+        assert cfg.calendar_fade_rate_per_year == 0.02
+        assert cfg.cycle_fade_per_equivalent_full_cycle == 5e-5
+        assert cfg.soh_floor == 0.5
+        assert cfg.soh is None
+
+    def test_picklable_with_custom_soh_fields(self) -> None:
+        """BatteryConfig with custom SOH fields round-trips through pickle."""
+        cfg = BatteryConfig(
+            capacity_kwh=5.0,
+            system_age_years=8.0,
+            calendar_fade_rate_per_year=0.025,
+            cycle_fade_per_equivalent_full_cycle=6e-5,
+            soh_floor=0.6,
+            soh=0.8,
+        )
+        restored = pickle.loads(pickle.dumps(cfg))
+        assert restored == cfg
+
+
+class TestBatterySOHFieldValidation:
+    """Test BatteryConfig.__post_init__ validates SOH/aging fields."""
+
+    # --- system_age_years ---
+
+    def test_negative_system_age_years_raises(self) -> None:
+        """system_age_years < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="system_age_years"):
+            BatteryConfig(capacity_kwh=5.0, system_age_years=-1.0)
+
+    def test_zero_system_age_years_is_valid(self) -> None:
+        """system_age_years == 0.0 is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=0.0)
+        assert cfg.system_age_years == 0.0
+
+    def test_positive_system_age_years_is_valid(self) -> None:
+        """system_age_years > 0 is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        assert cfg.system_age_years == 10.0
+
+    # --- calendar_fade_rate_per_year ---
+
+    def test_negative_calendar_fade_rate_raises(self) -> None:
+        """calendar_fade_rate_per_year < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="calendar_fade_rate_per_year"):
+            BatteryConfig(capacity_kwh=5.0, calendar_fade_rate_per_year=-0.01)
+
+    def test_zero_calendar_fade_rate_is_valid(self) -> None:
+        """calendar_fade_rate_per_year == 0 is valid (no calendar fade)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, calendar_fade_rate_per_year=0.0)
+        assert cfg.calendar_fade_rate_per_year == 0.0
+
+    # --- cycle_fade_per_equivalent_full_cycle ---
+
+    def test_negative_cycle_fade_raises(self) -> None:
+        """cycle_fade_per_equivalent_full_cycle < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="cycle_fade_per_equivalent_full_cycle"):
+            BatteryConfig(capacity_kwh=5.0, cycle_fade_per_equivalent_full_cycle=-1e-5)
+
+    def test_zero_cycle_fade_is_valid(self) -> None:
+        """cycle_fade_per_equivalent_full_cycle == 0 is valid (no cycle fade)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, cycle_fade_per_equivalent_full_cycle=0.0)
+        assert cfg.cycle_fade_per_equivalent_full_cycle == 0.0
+
+    # --- soh_floor ---
+
+    def test_soh_floor_zero_raises(self) -> None:
+        """soh_floor == 0 raises ValueError."""
+        with pytest.raises(ValueError, match="soh_floor"):
+            BatteryConfig(capacity_kwh=5.0, soh_floor=0.0)
+
+    def test_soh_floor_negative_raises(self) -> None:
+        """soh_floor < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="soh_floor"):
+            BatteryConfig(capacity_kwh=5.0, soh_floor=-0.1)
+
+    def test_soh_floor_greater_than_one_raises(self) -> None:
+        """soh_floor > 1 raises ValueError."""
+        with pytest.raises(ValueError, match="soh_floor"):
+            BatteryConfig(capacity_kwh=5.0, soh_floor=1.1)
+
+    def test_soh_floor_one_is_valid(self) -> None:
+        """soh_floor == 1.0 is valid (floor at full SOH)."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh_floor=1.0)
+        assert cfg.soh_floor == 1.0
+
+    def test_soh_floor_small_positive_is_valid(self) -> None:
+        """soh_floor == 0.1 is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh_floor=0.1)
+        assert cfg.soh_floor == 0.1
+
+    # --- soh override ---
+
+    def test_soh_override_zero_raises(self) -> None:
+        """soh == 0 raises ValueError."""
+        with pytest.raises(ValueError, match="soh"):
+            BatteryConfig(capacity_kwh=5.0, soh=0.0)
+
+    def test_soh_override_negative_raises(self) -> None:
+        """soh < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="soh"):
+            BatteryConfig(capacity_kwh=5.0, soh=-0.5)
+
+    def test_soh_override_greater_than_one_raises(self) -> None:
+        """soh > 1 raises ValueError."""
+        with pytest.raises(ValueError, match="soh"):
+            BatteryConfig(capacity_kwh=5.0, soh=1.5)
+
+    def test_soh_override_one_is_valid(self) -> None:
+        """soh == 1.0 is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=1.0)
+        assert cfg.soh == 1.0
+
+    def test_soh_none_is_valid(self) -> None:
+        """soh == None (no override) is valid."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=None)
+        assert cfg.soh is None
+
+
+class TestComputeSOH:
+    """Tests for the pure compute_soh function."""
+
+    def test_age_zero_throughput_zero_returns_one(self) -> None:
+        """compute_soh(age=0, throughput=0) == 1.0 (no degradation)."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        assert compute_soh(0.0, 0.0, 4.0, params) == pytest.approx(1.0)
+
+    def test_monotone_non_increasing_in_age(self) -> None:
+        """compute_soh is non-increasing as system_age_years increases."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        ages = [0, 5, 10, 15, 25]
+        soh_values = [compute_soh(a, 100.0, 4.0, params) for a in ages]
+        for i in range(1, len(soh_values)):
+            assert soh_values[i] <= soh_values[i - 1], (
+                f"SOH should not increase with age: soh[{ages[i]}]={soh_values[i]} "
+                f"> soh[{ages[i-1]}]={soh_values[i-1]}"
+            )
+
+    def test_monotone_non_increasing_in_throughput(self) -> None:
+        """compute_soh is non-increasing as cumulative_throughput_kwh increases."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        throughputs = [0, 500, 1000, 5000, 10000]
+        soh_values = [compute_soh(5.0, t, 4.0, params) for t in throughputs]
+        for i in range(1, len(soh_values)):
+            assert soh_values[i] <= soh_values[i - 1], (
+                f"SOH should not increase with throughput: "
+                f"soh[{throughputs[i]}]={soh_values[i]} > soh[{throughputs[i-1]}]={soh_values[i-1]}"
+            )
+
+    def test_clamp_upper_never_exceeds_one(self) -> None:
+        """compute_soh never returns more than 1.0."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        # Even with zero age and throughput, result is clamped to 1.0
+        result = compute_soh(0.0, 0.0, 4.0, params)
+        assert result <= 1.0
+
+    def test_clamp_lower_returns_soh_floor(self) -> None:
+        """compute_soh clamps to soh_floor when degradation is extreme."""
+        # Use a high floor (0.9) so it's easy to trigger with age > 5yr at 0.02/yr
+        params = BatteryConfig(capacity_kwh=5.0, soh_floor=0.9)
+        # At 25 years, calendar fade = 0.02 * 25 = 0.5 -> raw SOH = 0.5 < floor 0.9
+        result = compute_soh(25.0, 0.0, 4.0, params)
+        assert result == pytest.approx(0.9)
+
+    def test_combined_greater_than_calendar_alone(self) -> None:
+        """At fixed nonzero age, adding throughput > 0 gives strictly lower SOH."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        soh_calendar_only = compute_soh(5.0, 0.0, 4.0, params)
+        soh_combined = compute_soh(5.0, 5000.0, 4.0, params)
+        assert soh_combined < soh_calendar_only
+
+    def test_usable_capacity_zero_does_not_raise(self) -> None:
+        """compute_soh with usable_capacity_kwh=0 does not raise (efc guarded)."""
+        params = BatteryConfig(capacity_kwh=5.0)
+        result = compute_soh(5.0, 100.0, 0.0, params)
+        # With usable=0, efc=0, so only calendar fade applies
+        expected = 1.0 - params.calendar_fade_rate_per_year * 5.0
+        assert result == pytest.approx(max(params.soh_floor, min(1.0, expected)))
+
+
+class TestBatterySOHDerating:
+    """Battery de-rates usable capacity by SOH."""
+
+    def test_fresh_battery_soh_is_one(self) -> None:
+        """Battery at age 0 (default) has soh == 1.0."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        battery = Battery(cfg)
+        assert battery.soh == pytest.approx(1.0)
+
+    def test_fresh_battery_effective_capacity_equals_nominal(self) -> None:
+        """Battery at age 0 has effective_capacity_kwh == capacity_kwh (bit-identical)."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        battery = Battery(cfg)
+        assert battery.effective_capacity_kwh == pytest.approx(5.0)
+
+    def test_fresh_battery_usable_capacity_is_4kwh(self) -> None:
+        """Battery at age 0 with default 5 kWh config has usable_capacity_kwh == 4.0."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        battery = Battery(cfg)
+        assert battery.usable_capacity_kwh == pytest.approx(4.0)
+
+    def test_aged_battery_soh_less_than_one(self) -> None:
+        """Battery with system_age_years=10 has soh < 1.0."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        battery = Battery(cfg)
+        assert battery.soh < 1.0
+
+    def test_aged_battery_usable_capacity_reduced(self) -> None:
+        """Battery with age has strictly smaller usable_capacity_kwh than fresh battery."""
+        fresh_cfg = BatteryConfig(capacity_kwh=5.0)
+        aged_cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        fresh = Battery(fresh_cfg)
+        aged = Battery(aged_cfg)
+        assert aged.usable_capacity_kwh < fresh.usable_capacity_kwh
+
+    def test_aged_battery_max_soc_kwh_reduced(self) -> None:
+        """Battery with age has strictly smaller max_soc_kwh than fresh battery."""
+        fresh_cfg = BatteryConfig(capacity_kwh=5.0)
+        aged_cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        fresh = Battery(fresh_cfg)
+        aged = Battery(aged_cfg)
+        assert aged.max_soc_kwh < fresh.max_soc_kwh
+
+    def test_aged_battery_available_discharge_reduced(self) -> None:
+        """Battery with age has smaller available_discharge_capacity_kwh."""
+        fresh_cfg = BatteryConfig(capacity_kwh=5.0)
+        aged_cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        # Start both at their respective midpoints
+        fresh = Battery(fresh_cfg)
+        aged = Battery(aged_cfg)
+        assert aged.available_discharge_capacity_kwh < fresh.available_discharge_capacity_kwh
+
+    def test_soh_override_applied(self) -> None:
+        """Battery with soh=0.8 override has soh == 0.8."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.8)
+        battery = Battery(cfg)
+        assert battery.soh == pytest.approx(0.8)
+
+    def test_soh_override_scales_effective_capacity(self) -> None:
+        """Battery with soh=0.8 has effective_capacity_kwh == 0.8 * capacity_kwh."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.8)
+        battery = Battery(cfg)
+        assert battery.effective_capacity_kwh == pytest.approx(0.8 * 5.0)
+
+    def test_soh_and_effective_capacity_kwh_are_floats(self) -> None:
+        """soh and effective_capacity_kwh properties exist and return floats."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        battery = Battery(cfg)
+        assert isinstance(battery.soh, float)
+        assert isinstance(battery.effective_capacity_kwh, float)
+
+    # --- soh override bypasses soh_floor (Suggestion 2) ---
+
+    def test_soh_override_below_floor_bypasses_floor(self) -> None:
+        """soh override below soh_floor is applied as-is; override wins outright."""
+        # Override 0.1 is below soh_floor 0.5 — the override still takes effect.
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.1, soh_floor=0.5)
+        battery = Battery(cfg)
+        assert battery.soh == pytest.approx(0.1)
+
+    # --- charge/discharge interact with effective (de-rated) capacity (Suggestion 4) ---
+
+    def test_aged_battery_charge_stops_at_effective_max_soc(self) -> None:
+        """Charging an aged battery saturates at effective max_soc_kwh, not nominal."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        battery = Battery(cfg)
+        # Large charge request — saturates the battery
+        battery.charge(power_kw=100.0, duration_minutes=600)
+        assert battery.soc_kwh == pytest.approx(battery.max_soc_kwh)
+        # Effective max < nominal 4.5 kWh (10-yr age, 0.02/yr → soh 0.8)
+        assert battery.max_soc_kwh < 4.5
+
+    def test_aged_battery_discharge_stops_at_effective_min_soc(self) -> None:
+        """Discharging an aged battery drains to effective min_soc_kwh, not nominal."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        battery = Battery(cfg)
+        # Large discharge request — drains the battery
+        battery.discharge(power_kw=100.0, duration_minutes=600)
+        assert battery.soc_kwh == pytest.approx(battery.min_soc_kwh)
+        # Effective min < nominal 0.5 kWh
+        assert battery.min_soc_kwh < 0.5
+
+    def test_aged_battery_soc_fraction_relative_to_effective_capacity(self) -> None:
+        """soc_fraction for an aged battery is computed against effective_capacity_kwh."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        battery = Battery(cfg)
+        # soc_fraction = soc_kwh / effective_capacity_kwh
+        expected = battery.soc_kwh / battery.effective_capacity_kwh
+        assert battery.soc_fraction == pytest.approx(expected)
+        # Confirm it differs from soc_kwh / nominal capacity
+        nominal_fraction = battery.soc_kwh / cfg.capacity_kwh
+        assert battery.soc_fraction != pytest.approx(nominal_fraction)
+
+    def test_soh_override_battery_charge_stops_at_effective_max_soc(self) -> None:
+        """Battery with soh override charges only to effective (de-rated) max_soc_kwh."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.8)
+        battery = Battery(cfg)
+        battery.charge(power_kw=100.0, duration_minutes=600)
+        assert battery.soc_kwh == pytest.approx(battery.max_soc_kwh)
+        # effective_cap = 5.0 * 0.8 = 4.0; max_soc = 4.0 * 0.9 = 3.6 kWh
+        assert battery.soc_kwh == pytest.approx(5.0 * 0.8 * 0.9)
