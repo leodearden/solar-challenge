@@ -924,3 +924,75 @@ class TestComputeSOH:
         # With usable=0, efc=0, so only calendar fade applies
         expected = 1.0 - params.calendar_fade_rate_per_year * 5.0
         assert result == pytest.approx(max(params.soh_floor, min(1.0, expected)))
+
+
+class TestBatterySOHDerating:
+    """Battery de-rates usable capacity by SOH."""
+
+    def test_fresh_battery_soh_is_one(self) -> None:
+        """Battery at age 0 (default) has soh == 1.0."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        battery = Battery(cfg)
+        assert battery.soh == pytest.approx(1.0)
+
+    def test_fresh_battery_effective_capacity_equals_nominal(self) -> None:
+        """Battery at age 0 has effective_capacity_kwh == capacity_kwh (bit-identical)."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        battery = Battery(cfg)
+        assert battery.effective_capacity_kwh == pytest.approx(5.0)
+
+    def test_fresh_battery_usable_capacity_is_4kwh(self) -> None:
+        """Battery at age 0 with default 5 kWh config has usable_capacity_kwh == 4.0."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        battery = Battery(cfg)
+        assert battery.usable_capacity_kwh == pytest.approx(4.0)
+
+    def test_aged_battery_soh_less_than_one(self) -> None:
+        """Battery with system_age_years=10 has soh < 1.0."""
+        cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        battery = Battery(cfg)
+        assert battery.soh < 1.0
+
+    def test_aged_battery_usable_capacity_reduced(self) -> None:
+        """Battery with age has strictly smaller usable_capacity_kwh than fresh battery."""
+        fresh_cfg = BatteryConfig(capacity_kwh=5.0)
+        aged_cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        fresh = Battery(fresh_cfg)
+        aged = Battery(aged_cfg)
+        assert aged.usable_capacity_kwh < fresh.usable_capacity_kwh
+
+    def test_aged_battery_max_soc_kwh_reduced(self) -> None:
+        """Battery with age has strictly smaller max_soc_kwh than fresh battery."""
+        fresh_cfg = BatteryConfig(capacity_kwh=5.0)
+        aged_cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        fresh = Battery(fresh_cfg)
+        aged = Battery(aged_cfg)
+        assert aged.max_soc_kwh < fresh.max_soc_kwh
+
+    def test_aged_battery_available_discharge_reduced(self) -> None:
+        """Battery with age has smaller available_discharge_capacity_kwh."""
+        fresh_cfg = BatteryConfig(capacity_kwh=5.0)
+        aged_cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
+        # Start both at their respective midpoints
+        fresh = Battery(fresh_cfg)
+        aged = Battery(aged_cfg)
+        assert aged.available_discharge_capacity_kwh < fresh.available_discharge_capacity_kwh
+
+    def test_soh_override_applied(self) -> None:
+        """Battery with soh=0.8 override has soh == 0.8."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.8)
+        battery = Battery(cfg)
+        assert battery.soh == pytest.approx(0.8)
+
+    def test_soh_override_scales_effective_capacity(self) -> None:
+        """Battery with soh=0.8 has effective_capacity_kwh == 0.8 * capacity_kwh."""
+        cfg = BatteryConfig(capacity_kwh=5.0, soh=0.8)
+        battery = Battery(cfg)
+        assert battery.effective_capacity_kwh == pytest.approx(0.8 * 5.0)
+
+    def test_soh_and_effective_capacity_kwh_are_floats(self) -> None:
+        """soh and effective_capacity_kwh properties exist and return floats."""
+        cfg = BatteryConfig(capacity_kwh=5.0)
+        battery = Battery(cfg)
+        assert isinstance(battery.soh, float)
+        assert isinstance(battery.effective_capacity_kwh, float)
