@@ -286,3 +286,48 @@ class TestGenerateFinanceReportCostRecoveryFull:
         assert r_floor != r_clamped, "floor and rate_clamped_zero must produce different reports"
         assert r_floor != r_infeasible, "floor and infeasible_above_retail must produce different reports"
         assert r_clamped != r_infeasible, "rate_clamped_zero and infeasible_above_retail must produce different reports"
+
+
+# ---------------------------------------------------------------------------
+# §D — RED tests for CLI --cost-recovery flag existence (step-5)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceCLICostRecoveryHelp:
+    """RED: `finance run --help` must list the --cost-recovery flag."""
+
+    def test_help_exits_zero(self) -> None:
+        """`finance run --help` must exit 0."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", "--help"])
+        assert result.exit_code == 0, result.output
+
+    def test_help_shows_cost_recovery_flag(self) -> None:
+        """`finance run --help` must show --cost-recovery / --no-cost-recovery."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", "--help"])
+        assert result.exit_code == 0, result.output
+        output = result.output.lower()
+        assert "cost-recovery" in output, (
+            f"Expected '--cost-recovery' in finance run --help output:\n{result.output}"
+        )
+
+    def test_help_cost_recovery_mentions_solved_rate(self) -> None:
+        """`finance run --help` cost-recovery flag must mention solved rate or cost-recovery."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", "--help"])
+        assert result.exit_code == 0, result.output
+        output = result.output.lower()
+        # Flag help text should mention "cost-recovery" or "own-use" or "solve"
+        assert any(kw in output for kw in ("cost-recovery", "own-use", "solve", "solved")), (
+            f"Expected cost-recovery flag help text to mention solved rate:\n{result.output}"
+        )
