@@ -17,10 +17,10 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Sequence
 
 from solar_challenge.config import ScenarioConfig
+from solar_challenge.home import HomeConfig
 
 if TYPE_CHECKING:
     from solar_challenge.battery import BatteryConfig
-    from solar_challenge.home import HomeConfig
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +108,35 @@ def enumerate_configs(
     result: list[tuple[ConfigPoint, ScenarioConfig]] = []
     for pv, batt, inv in itertools.product(pv_kwp, battery_kwh, inverter_kw):
         point = ConfigPoint(pv_kwp=pv, battery_kwh=batt, inverter_kw=inv)
-        scenario = replace(base, homes=list(base.homes))
+        new_homes = [_apply_install(h, point) for h in base.homes]
+        scenario = replace(base, homes=new_homes)
         result.append((point, scenario))
     return result
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
+    """Return a new :class:`~solar_challenge.home.HomeConfig` with the PV and
+    inverter capacities from *point* applied homogeneously.
+
+    ``load_config`` and ``dispatch_strategy`` are left untouched so load/occupancy
+    diversity and the board dispatch strategy are preserved (PRD §3.2, W-H2).
+    Battery logic is applied by the same function (see step-8); at this stage
+    only PV + inverter are set.
+
+    Args:
+        home: Original (frozen) home configuration.
+        point: Install specification for this grid cell.
+
+    Returns:
+        A fresh :class:`~solar_challenge.home.HomeConfig` with updated PV config.
+    """
+    new_pv = replace(
+        home.pv_config,
+        capacity_kw=point.pv_kwp,
+        inverter_capacity_kw=point.inverter_kw,
+    )
+    return replace(home, pv_config=new_pv)
