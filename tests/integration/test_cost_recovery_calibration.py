@@ -300,6 +300,102 @@ class TestNoFlexAnchorReconciliation:
 
 
 # ---------------------------------------------------------------------------
+# Step-7 RED / step-8 GREEN: flex helper functions
+# ---------------------------------------------------------------------------
+
+
+def _make_finance_flex_cr6(
+    *,
+    grid_services: float = 0.0,
+    retained_cash_floor: float = 50.0,
+    pv_cost_per_kwp: float = 2000.0,
+    grant_gbp: float = 0.0,
+    retail_rate: float = 30.0,
+) -> "FinanceConfig":  # type: ignore[name-defined]
+    """Build a FinanceConfig with flex (grid_services > 0) for directional tests.
+
+    Identical to _make_finance_interior_cr6 except grid_services is non-zero.
+    Central grid-services example: £100/kW/yr × Σ max_discharge_kw.
+    """
+    from solar_challenge.config import FinanceConfig
+
+    return FinanceConfig(
+        standing_charge_pence_per_day=60.0,
+        pv_cost_per_kwp_gbp=pv_cost_per_kwp,
+        roof_fit_cost_gbp=1000.0,
+        battery_cost_per_kwh_gbp=250.0,
+        inverter_cost_per_kw_gbp=0.0,
+        grant_gbp=grant_gbp,
+        equity_fraction=0.75,
+        loan_term_years=15,
+        loan_rate=0.07,
+        opex_per_home_per_year_gbp=131.0,
+        asset_life_years=25,
+        own_use_rate_pence_per_kwh=15.0,
+        retained_cash_floor_per_home_per_year_gbp=retained_cash_floor,
+        retail_baseline_rate_pence_per_kwh=retail_rate,
+        vat_rate=0.05,
+        grid_services_income_per_kw_per_year_gbp=grid_services,
+    )
+
+
+def _make_arbitrage_fleet_cr6(
+    n_homes: int = 5,
+    self_kwh: float = 2400.0,    # elevated sc vs flat-rate 2000 kWh
+    export_kwh: float = 400.0,
+    import_kwh: float = 800.0,
+    grid_charge_cost_per_home_gbp: float = 50.0,  # CBS pays to charge battery from grid
+) -> "FleetResults":  # type: ignore[name-defined]
+    """Build an 'arbitrage-on' synthetic FleetResults representing W1 TOU time-shift.
+
+    Arbitrage on: elevated self-consumption (TOU charging of battery raises sc)
+    + CBS grid-charge cost (cbs_grid_charge_cost > 0 from a non-None grid_charge_cost series).
+
+    Net benefit direction at r = retail = 30p:
+      uplift_sc = (2400 − 2000) × 30/100 = £120/home
+      grid_charge = £50/home
+      net_benefit = £70/home > 0 → revenue higher → rate lower ✓
+
+    The CBS grid-charge cost is modelled by injecting a non-zero grid_charge_cost
+    time series in SimulationResults (so total_grid_charge_cost_gbp > 0).
+    """
+    import pandas as pd
+    from solar_challenge.home import SimulationResults
+    from solar_challenge.fleet import FleetResults
+
+    n_minutes = 525600  # 365 days
+    idx = pd.date_range("2024-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
+    sc_kw = self_kwh / (n_minutes / 60.0)
+    exp_kw = export_kwh / (n_minutes / 60.0)
+    imp_kw = import_kwh / (n_minutes / 60.0)
+    gen_kw = sc_kw + exp_kw
+    demand_kw = sc_kw + imp_kw
+    zeros = pd.Series(0.0, index=idx)
+
+    # Non-zero grid_charge_cost → total_grid_charge_cost_gbp = sum = cost_per_home
+    charge_per_min = grid_charge_cost_per_home_gbp / n_minutes
+    grid_charge_series = pd.Series(charge_per_min, index=idx)
+
+    sim = SimulationResults(
+        generation=pd.Series(gen_kw, index=idx),
+        demand=pd.Series(demand_kw, index=idx),
+        self_consumption=pd.Series(sc_kw, index=idx),
+        battery_charge=zeros.copy(),
+        battery_discharge=zeros.copy(),
+        battery_soc=zeros.copy(),
+        grid_import=pd.Series(imp_kw, index=idx),
+        grid_export=pd.Series(exp_kw, index=idx),
+        import_cost=zeros.copy(),
+        export_revenue=zeros.copy(),       # SEG=0
+        tariff_rate=zeros.copy(),
+        grid_charge_cost=grid_charge_series,  # non-None → cbs_grid_charge > 0
+    )
+    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+    per_home = [sim for _ in range(n_homes)]
+    return FleetResults(per_home_results=per_home, home_configs=homes)
+
+
+# ---------------------------------------------------------------------------
 # Step-3 RED / step-4 GREEN: TestStructuralInvariants — H1 and H2
 # ---------------------------------------------------------------------------
 
