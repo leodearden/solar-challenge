@@ -1007,4 +1007,27 @@ def generate_config_ranking_report(
                 f"| {pareto_flag} |\n"
             )
 
+    # ---- Optional sensitivity section ----------------------------------------
+    # Rendered only when panel is not None.  When panel is None the output is
+    # bit-identical to the two-table form, mirroring generate_finance_report's
+    # additive-optional idiom (economics/cost_recovery/flex_band=None behaviour).
+    if panel is not None:
+        report += "\n## Sensitivity Analysis\n\n"
+        report += f"Rank stability: **{panel.rank_stability:.1%}** "
+        report += f"(fraction of swept values where cheapest config == baseline top)\n\n"
+        report += f"Baseline top config: {panel.baseline_top.pv_kwp:.1f} kWp / "
+        report += f"{panel.baseline_top.battery_kwh:.1f} kWh / "
+        report += f"{panel.baseline_top.inverter_kw:.1f} kW\n"
+
+        for axis in panel.axes:
+            report += f"\n### Axis: {axis.name}\n\n"
+            report += "| Value | Top Config |\n"
+            report += "|------:|-----------|\n"
+            for val, top in zip(axis.values, axis.top_config_per_value):
+                if top is None:
+                    top_str = "—"
+                else:
+                    top_str = f"{top.pv_kwp:.1f} kWp / {top.battery_kwh:.1f} kWh / {top.inverter_kw:.1f} kW"
+                report += f"| {val:.2f} | {top_str} |\n"
+
     return report
