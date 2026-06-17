@@ -2956,6 +2956,42 @@ class TestFinanceConfigValidation:
         fc = FinanceConfig(**self._BASE, inverter_cost_per_kw_gbp=0.0)
         assert fc.inverter_cost_per_kw_gbp == 0.0
 
+    # ---- own_use_rate_pence_per_kwh (must be >= 0) ----
+
+    def test_own_use_rate_negative_raises(self) -> None:
+        """own_use_rate_pence_per_kwh < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, own_use_rate_pence_per_kwh=-1.0)
+
+    def test_own_use_rate_zero_ok(self) -> None:
+        """own_use_rate_pence_per_kwh == 0.0 is valid (zero transfer price allowed)."""
+        fc = FinanceConfig(**self._BASE, own_use_rate_pence_per_kwh=0.0)
+        assert fc.own_use_rate_pence_per_kwh == 0.0
+
+    # ---- retained_cash_floor_per_home_per_year_gbp (must be >= 0) ----
+
+    def test_retained_cash_floor_negative_raises(self) -> None:
+        """retained_cash_floor_per_home_per_year_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, retained_cash_floor_per_home_per_year_gbp=-1.0)
+
+    def test_retained_cash_floor_zero_ok(self) -> None:
+        """retained_cash_floor_per_home_per_year_gbp == 0.0 is valid (no floor allowed)."""
+        fc = FinanceConfig(**self._BASE, retained_cash_floor_per_home_per_year_gbp=0.0)
+        assert fc.retained_cash_floor_per_home_per_year_gbp == 0.0
+
+    # ---- grid_services_income_per_kw_per_year_gbp (must be >= 0) ----
+
+    def test_grid_services_income_negative_raises(self) -> None:
+        """grid_services_income_per_kw_per_year_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, grid_services_income_per_kw_per_year_gbp=-1.0)
+
+    def test_grid_services_income_zero_ok(self) -> None:
+        """grid_services_income_per_kw_per_year_gbp == 0.0 is valid (theta-safe default)."""
+        fc = FinanceConfig(**self._BASE, grid_services_income_per_kw_per_year_gbp=0.0)
+        assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
+
 
 # ---------------------------------------------------------------------------
 # _parse_finance_config tests (step-5)
