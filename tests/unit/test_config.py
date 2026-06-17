@@ -27,6 +27,7 @@ from solar_challenge.config import (
     UniformDistribution,
     WeightedDiscreteDistribution,
     _parse_battery_config,
+    _parse_grid_charge_config,
     _parse_community_config,
     _parse_dispatch_strategy_config,
     _parse_ev_config,
@@ -408,6 +409,16 @@ class TestBatteryGridChargeParsing:
         """grid_charging supplied as a scalar raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="grid_charging must be a mapping"):
             _parse_battery_config({"capacity_kwh": 5.0, "grid_charging": 0.8})
+
+    def test_parse_grid_charge_config_non_mapping_raises_directly(self) -> None:
+        """_parse_grid_charge_config raises ConfigurationError for non-dict input directly."""
+        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping, got str"):
+            _parse_grid_charge_config("not-a-dict")  # type: ignore[arg-type]
+
+    def test_parse_grid_charge_config_list_raises_directly(self) -> None:
+        """_parse_grid_charge_config raises ConfigurationError for list input."""
+        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping, got list"):
+            _parse_grid_charge_config([1, 2])  # type: ignore[arg-type]
 
     def test_yaml_round_trip_grid_charging(self) -> None:
         """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""

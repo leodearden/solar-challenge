@@ -1438,7 +1438,11 @@ def generate_homes_from_distribution(
             bit-identical behaviour for callers that do not pass this kwarg.
         fleet_grid_charging: Optional GridChargeConfig to apply to every home
             that has a battery. When None (default) the battery's grid_charging
-            remains None, preserving bit-identical behaviour.
+            remains None, preserving bit-identical behaviour. Note: if a home's
+            sampled battery capacity is non-positive (or battery is absent), no
+            BatteryConfig is created and fleet_grid_charging is silently dropped
+            for that home — this is expected behaviour (no battery → no grid
+            charging), not an error.
 
     Returns:
         List of HomeConfig objects
