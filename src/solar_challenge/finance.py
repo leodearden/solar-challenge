@@ -154,6 +154,99 @@ class BillDistribution:
 
 
 # ---------------------------------------------------------------------------
+# CostRecoverySolution — solve_cost_recovery_rate output (CR4 §3.1)
+# ---------------------------------------------------------------------------
+
+#: Allowed string values for :attr:`CostRecoverySolution.binding`.
+_BINDING_VALUES: tuple[str, ...] = (
+    "floor",
+    "rate_clamped_zero",
+    "infeasible_above_retail",
+)
+
+
+@dataclass(frozen=True)
+class CostRecoverySolution:
+    """Result of :func:`solve_cost_recovery_rate` — the solved cost-recovery own-use rate.
+
+    The CBS charges householders ``own_use_rate_pence_per_kwh`` for every kWh of
+    CBS-owned solar consumed on-site.  :func:`solve_cost_recovery_rate` finds the
+    minimum rate that keeps project net surplus per home ≥
+    ``FinanceConfig.retained_cash_floor_per_home_per_year_gbp``.
+
+    **W3 primary key**: ``representative_outlay_gbp`` (= outlay.representative.total_outlay_gbp)
+    is the householder annual outlay at the solved rate for the median-outlay home.
+    The discrete-install config sweep (task 64–68) uses this field to rank configs.
+
+    Attributes:
+        own_use_rate_pence_per_kwh: Solved own-use rate (p/kWh, ∈ [0, retail_baseline]).
+        outlay: Full fleet-level BillDistribution at the solved rate (age-0 sim).
+        representative_outlay_gbp: Representative (median-outlay) home's total annual
+            outlay in £.  == outlay.representative.total_outlay_gbp.
+        net_surplus_per_home_per_year_gbp: Project net surplus per home per year at
+            the solved rate (£).  Equals floor to float ε for binding='floor';
+            strictly > floor for 'rate_clamped_zero'; < floor for
+            'infeasible_above_retail'.
+        saving_vs_baseline_gbp: Householder saving vs. no-solar baseline (£)
+            at the solved rate.  == outlay.representative.saving_vs_baseline_gbp.
+        saving_pct: Householder % saving vs. baseline.
+            == outlay.representative.saving_pct.
+        feasible: True when the CBS can meet the retained_cash_floor within
+            [0, retail_baseline_rate].  False only for 'infeasible_above_retail'.
+        binding: One of 'floor', 'rate_clamped_zero', 'infeasible_above_retail':
+            - 'floor': r* ∈ [0, retail] and surplus(r*) == floor to ε.
+            - 'rate_clamped_zero': r* < 0 (project over-delivers at r=0);
+              rate clamped to 0, surplus > floor.
+            - 'infeasible_above_retail': r* > retail; rate clamped to retail,
+              surplus < floor; feasible=False.
+    """
+
+    own_use_rate_pence_per_kwh: float
+    """Solved own-use rate charged by CBS to householders (p/kWh, ≥ 0)."""
+
+    outlay: "BillDistribution"
+    """Fleet bill distribution at the solved rate, computed from an age-0 simulation."""
+
+    representative_outlay_gbp: float
+    """Representative (median-outlay) home's total annual outlay (£, W3 primary key).
+
+    Invariant: representative_outlay_gbp == outlay.representative.total_outlay_gbp.
+    """
+
+    net_surplus_per_home_per_year_gbp: float
+    """Project net surplus per home per year at the solved rate (£/home/year)."""
+
+    saving_vs_baseline_gbp: float
+    """Householder saving vs no-solar baseline at the solved rate (£).
+
+    Invariant: == outlay.representative.saving_vs_baseline_gbp.
+    """
+
+    saving_pct: float
+    """Householder % saving vs baseline at the solved rate.
+
+    Invariant: == outlay.representative.saving_pct.
+    """
+
+    feasible: bool
+    """True when the CBS can meet the retained_cash_floor within [0, retail_baseline_rate]."""
+
+    binding: str
+    """Binding constraint: one of 'floor', 'rate_clamped_zero', 'infeasible_above_retail'."""
+
+    def __post_init__(self) -> None:
+        if self.binding not in _BINDING_VALUES:
+            raise ValueError(
+                f"binding must be one of {_BINDING_VALUES!r}, got {self.binding!r}"
+            )
+        if self.own_use_rate_pence_per_kwh < 0.0:
+            raise ValueError(
+                f"own_use_rate_pence_per_kwh must be >= 0, "
+                f"got {self.own_use_rate_pence_per_kwh!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
 
