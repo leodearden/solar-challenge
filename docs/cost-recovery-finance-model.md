@@ -286,6 +286,7 @@ Synthetic energy inputs (per home, annual):
 | `retail_baseline_rate_pence_per_kwh` | 23 p/kWh |
 | `vat_rate` | 5 % |
 | `grid_services_income_per_kw_per_year_gbp` | £0 (no-flex) |
+| PV degradation rate (`PVConfig.degradation_rate_per_year`) | 0.5 %/yr (0.005, linear; default in `calculate_degradation_factor`) |
 
 ### 7.3 Live Calibration Output (REPORTED — not pinned)
 
@@ -313,7 +314,10 @@ The difference has two sources:
 1. **Multi-year mean, not a single-year snapshot.**  `project_multi_year` builds a
    25-year PCHIP revenue curve and `project_economics` takes the *mean net surplus*
    over all 25 years.  Generation (and therefore self-consumption) peaks in years 1–5
-   and degrades gently; the PCHIP mean surplus at a given rate is slightly higher than
+   and degrades gently (linear PV degradation at 0.5 %/yr, `degradation_rate_per_year=0.005`
+   default in `calculate_degradation_factor`; applied per-home in `_simulate_age` via
+   `h.pv_config.degradation_rate_per_year`, producing the per-year `pv_soh` that shapes
+   the PCHIP curve); the PCHIP mean surplus at a given rate is slightly higher than
    the year-1 point, so the solver can reach the £27/home floor at a *lower* rate than
    the year-1 approximation implies.
 
