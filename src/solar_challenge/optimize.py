@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass, replace
-from typing import Iterator, Optional, Sequence
+from typing import TYPE_CHECKING, Iterator, Optional, Sequence
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.home import HomeConfig
+
+if TYPE_CHECKING:
+    from solar_challenge.finance import CostRecoverySolution
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +64,93 @@ class ConfigPoint:
             raise ValueError(
                 f"inverter_kw must be > 0, got {self.inverter_kw}"
             )
+
+
+# ---------------------------------------------------------------------------
+# ConfigResult — per-config evaluation output (W3 task B, PRD §3.1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ConfigResult:
+    """Full evaluation result for one (ConfigPoint, ScenarioConfig) pair.
+
+    Produced by :func:`run_sweep` (one per grid cell).  Combines the W2
+    cost-recovery solve with baseline economics so the board can rank configs
+    both by householder outlay and by project-economics trade-offs.
+
+    Attributes:
+        config: The install specification for this grid cell.
+        solution: Full :class:`~solar_challenge.finance.CostRecoverySolution`
+            from :func:`~solar_challenge.finance.solve_cost_recovery_rate`.
+        representative_outlay_gbp: Representative (median-outlay) home's total
+            annual outlay at the solved own-use rate (£).
+            == solution.representative_outlay_gbp.
+        solved_own_use_rate_pence_per_kwh: Solved own-use rate charged by the
+            CBS to householders (p/kWh, ≥ 0).
+            == solution.own_use_rate_pence_per_kwh.
+        surplus_at_solved_gbp: Project net surplus per home per year at the
+            solved rate (£/home/year).
+            == solution.net_surplus_per_home_per_year_gbp.
+        feasible: True when the CBS can meet the retained_cash_floor within
+            [0, retail_baseline_rate].
+            == solution.feasible.
+        binding: Binding constraint — one of ``'floor'``,
+            ``'rate_clamped_zero'``, ``'infeasible_above_retail'``.
+            == solution.binding.
+        total_capex_gbp: Total fleet capex (£) from the baseline-15p economics.
+        min_dscr: Minimum DSCR over loan years from the baseline economics.
+            ``float('inf')`` when debt-free.
+        equity_irr: Equity IRR (fraction) from the baseline economics.
+            ``float('nan')`` when undefined.
+        payback_years: Equity payback year (1-based, float) from the baseline
+            economics, or ``None`` if never within the asset life.
+        baseline_outlay_gbp: Representative home's total annual outlay at the
+            *configured* own_use_rate (15 p/kWh) derived from an independent
+            age-0 fleet simulation.  Floor-independent (own_use_rate fixed).
+        baseline_surplus_per_home_gbp: Project net surplus per home per year at
+            own_use_rate=15p (the configured rate).
+            == project_economics.net_surplus_per_home_per_year_gbp.
+    """
+
+    config: ConfigPoint
+    """Install specification for this grid cell."""
+
+    solution: "CostRecoverySolution"
+    """W2 cost-recovery solve result."""
+
+    representative_outlay_gbp: float
+    """Representative home annual outlay at the solved rate (£).  W3 rank key."""
+
+    solved_own_use_rate_pence_per_kwh: float
+    """Solved own-use rate (p/kWh, ≥ 0)."""
+
+    surplus_at_solved_gbp: float
+    """Project net surplus per home per year at the solved rate (£/home/year)."""
+
+    feasible: bool
+    """True when solved within [0, retail_baseline_rate]."""
+
+    binding: str
+    """'floor', 'rate_clamped_zero', or 'infeasible_above_retail'."""
+
+    total_capex_gbp: float
+    """Total fleet capex (£) from baseline-15p project_economics."""
+
+    min_dscr: float
+    """Minimum DSCR over loan years (float('inf') when debt-free)."""
+
+    equity_irr: float
+    """Equity IRR as a fraction (float('nan') when undefined)."""
+
+    payback_years: Optional[float]
+    """First year cumulative equity cashflow ≥ 0 (1-based), or None."""
+
+    baseline_outlay_gbp: float
+    """Representative home annual outlay at own_use_rate=15p from age-0 sim (£)."""
+
+    baseline_surplus_per_home_gbp: float
+    """Project net surplus per home per year at own_use_rate=15p (£/home/year)."""
 
 
 # ---------------------------------------------------------------------------
