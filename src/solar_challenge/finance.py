@@ -671,11 +671,14 @@ def bill_distribution(
     finance: "FinanceConfig",
     simulation_days: int,
 ) -> BillDistribution:
-    """Aggregate per-home bills into a fleet-level BillDistribution.
+    """Aggregate per-home bills into a fleet-level BillDistribution (CR3).
 
     Maps ``householder_bill`` over each home's SummaryStatistics, selects the
-    median-net-bill home as representative, and computes min / mean / median /
-    max via ``pd.Series`` (mirroring ``calculate_fleet_summary``).
+    median-**total-outlay** home as representative, and computes min / mean /
+    median / max via ``pd.Series`` (mirroring ``calculate_fleet_summary``).
+
+    Note: ``BillDistribution.per_home_net_bill_gbp`` retains its name for
+    back-compat (§12-Q4) but now holds per-home ``total_outlay_gbp`` values.
 
     Args:
         summaries: Sequence of per-home SummaryStatistics.  Must contain at
@@ -701,16 +704,18 @@ def bill_distribution(
         )
         for s in summaries
     ]
-    net_bills = [b.net_annual_bill_gbp for b in bills]
-    series = pd.Series(net_bills, dtype=float)
+    # CR3: key distribution on total_outlay_gbp (not the old net_annual_bill_gbp)
+    outlays = [b.total_outlay_gbp for b in bills]
+    series = pd.Series(outlays, dtype=float)
 
     median_val = float(series.median())
-    # Representative: home whose net bill is closest to the median
+    # Representative: home whose total outlay is closest to the median
     rep_idx = int((series - median_val).abs().idxmin())
 
     return BillDistribution(
         representative=bills[rep_idx],
-        per_home_net_bill_gbp=tuple(net_bills),
+        # per_home_net_bill_gbp name retained for back-compat; value = total_outlay_gbp
+        per_home_net_bill_gbp=tuple(outlays),
         min_gbp=float(series.min()),
         mean_gbp=float(series.mean()),
         median_gbp=median_val,
