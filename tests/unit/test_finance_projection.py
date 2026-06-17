@@ -445,6 +445,7 @@ def _make_sim_results(
     import_kwh: float = 12.0,
     discharge_kwh: float = 0.0,
     n_minutes: int = 1440,  # 1 day
+    grid_charge_cost_gbp: float = 0.0,  # CR2: total grid-charge cost to inject (£)
 ) -> "SimulationResults":  # type: ignore[name-defined]
     """Build a minimal SimulationResults with constant power series."""
     import pandas as pd
@@ -461,6 +462,12 @@ def _make_sim_results(
 
     zeros = pd.Series(0.0, index=idx)
 
+    # Optionally inject grid_charge_cost as a constant-per-minute series
+    gc_cost_series: "pd.Series | None" = None
+    if grid_charge_cost_gbp != 0.0:
+        gc_kw = grid_charge_cost_gbp / n_minutes
+        gc_cost_series = pd.Series(gc_kw, index=idx, name="grid_charge_cost_gbp")
+
     return SimulationResults(
         generation=pd.Series(gen_kw, index=idx),
         demand=pd.Series(demand_kw, index=idx),
@@ -473,6 +480,7 @@ def _make_sim_results(
         import_cost=zeros.copy(),
         export_revenue=zeros.copy(),
         tariff_rate=zeros.copy(),
+        grid_charge_cost=gc_cost_series,
     )
 
 
@@ -481,11 +489,14 @@ def _make_fleet_results(
     self_kwh: float = 24.0,
     export_kwh: float = 48.0,
     import_kwh: float = 12.0,
+    grid_charge_cost_gbp: float = 0.0,  # CR2: per-home grid-charge cost to inject (£)
 ) -> "FleetResults":  # type: ignore[name-defined]
     from solar_challenge.fleet import FleetResults
 
     homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [_make_sim_results(self_kwh, export_kwh, import_kwh) for _ in range(n_homes)]
+    per_home = [_make_sim_results(self_kwh, export_kwh, import_kwh,
+                                   grid_charge_cost_gbp=grid_charge_cost_gbp)
+                for _ in range(n_homes)]
     return FleetResults(
         per_home_results=per_home,
         home_configs=homes,
@@ -1005,7 +1016,13 @@ class TestProjectMultiYearRevenue:
                                    export_kwh=export_kwh, import_kwh=import_kwh)
 
     def test_fleet_revenue_at_sampled_age_matches_householder_bill_sum(self) -> None:
-        """fleet_revenue_gbp at age 0 equals sum of per-home householder_bill revenue."""
+        """fleet_revenue_gbp at age 0 equals CBS formula: own_use + seg - cbs_grid_charge_cost.
+
+        CR2 RED test: the old formula used self_consumption_saving_gbp (priced at
+        retail_baseline_rate=30p/kWh); the new formula uses own_use_rate_pence_per_kwh
+        (default 15p/kWh) × fleet_sc + Σ seg_export_income_gbp - Σ total_grid_charge_cost_gbp.
+        These rates differ, so this test fails against the old _simulate_age implementation.
+        """
         from solar_challenge.finance import householder_bill, project_multi_year  # type: ignore[attr-defined]
         from solar_challenge.home import calculate_summary
 
@@ -1014,31 +1031,158 @@ class TestProjectMultiYearRevenue:
         scenario, finance = self._make_revenue_scenario(n_homes=n_homes)
         fr = self._fixed_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
 
-        # Compute expected revenue from householder_bill per home
+        # Compute expected CBS revenue via new formula (PRD §3.2)
         summaries = [calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
                      for r in fr.per_home_results]
-        expected_revenue = sum(
+        fleet_sc_kwh = sum(s.total_self_consumption_kwh for s in summaries)
+        bills = [
             householder_bill(
                 s,
                 annual_self_consumption_kwh=s.total_self_consumption_kwh,
                 finance=finance,
                 simulation_days=s.simulation_days,
-            ).self_consumption_saving_gbp
-            + householder_bill(
+            )
+            for s in summaries
+        ]
+        # New formula (no grid_services since homes have no battery):
+        own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc_kwh / 100.0
+        seg_revenue = sum(b.seg_export_income_gbp for b in bills)
+        cbs_grid_charge_cost = sum(s.total_grid_charge_cost_gbp for s in summaries)
+        expected_revenue = own_use_revenue + seg_revenue - cbs_grid_charge_cost
+
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
+        # At year 0 (a seeded age), the revenue should match the CBS formula
+        assert curve.points[0].fleet_revenue_gbp == pytest.approx(expected_revenue, rel=1e-4)
+
+    def test_grid_services_included_in_fleet_revenue(self) -> None:
+        """fleet_revenue_gbp includes grid_services = rate × Σ max_discharge_kw when rate > 0.
+
+        CR2 RED test: the old _simulate_age has no grid_services term, so this assertion
+        will fail until step-6 adds it.
+        """
+        from solar_challenge.battery import BatteryConfig
+        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+        from solar_challenge.fleet import FleetResults
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.home import HomeConfig
+        from solar_challenge.location import Location
+
+        # Battery-equipped home so max_discharge_kw is available
+        bat_config = BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5)
+        home_with_bat = HomeConfig(
+            pv_config=_make_pv_config(),
+            load_config=_make_load_config(),
+            location=Location.bristol(),
+            battery_config=bat_config,
+        )
+        n_homes = 2
+        homes = [home_with_bat] * n_homes
+        grid_services_rate = 50.0  # £/kW/year
+
+        finance = FinanceConfig(
+            standing_charge_pence_per_day=28.0,
+            asset_life_years=5,
+            own_use_rate_pence_per_kwh=15.0,
+            grid_services_income_per_kw_per_year_gbp=grid_services_rate,
+        )
+        scenario = ScenarioConfig(
+            name="gs-test",
+            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+            description="Grid services test",
+            homes=homes,
+        )
+
+        # Synthetic fleet results with no grid_charge_cost
+        fr_bat = FleetResults(
+            per_home_results=[_make_sim_results(self_kwh=3000.0, export_kwh=500.0, import_kwh=300.0)
+                               for _ in range(n_homes)],
+            home_configs=homes,
+        )
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr_bat)
+
+        # Expected grid_services contribution at age 0
+        total_discharge_kw = n_homes * bat_config.max_discharge_kw
+        expected_gs = grid_services_rate * total_discharge_kw
+        assert curve.points[0].fleet_revenue_gbp >= expected_gs - 1e-6, (
+            f"fleet_revenue_gbp ({curve.points[0].fleet_revenue_gbp:.4f}) should include "
+            f"grid_services ({expected_gs:.4f} = {grid_services_rate} × {total_discharge_kw} kW)"
+        )
+
+    def test_h5_zero_grid_charge_cost_term(self) -> None:
+        """H5 invariant: fleet with total_grid_charge_cost_gbp==0 → cbs_grid_charge_cost==0.
+
+        fleet_revenue_gbp == own_use_revenue + seg_revenue + grid_services (no deduction).
+        """
+        from solar_challenge.finance import householder_bill, project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.home import calculate_summary
+
+        n_homes = 1
+        sc, exp, imp = 2000.0, 800.0, 300.0
+        scenario, finance = self._make_revenue_scenario(n_homes=n_homes)
+        # Injected results have grid_charge_cost=None → total_grid_charge_cost_gbp=0.0
+        fr = _make_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp,
+                                  grid_charge_cost_gbp=0.0)
+
+        summaries = [calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
+                     for r in fr.per_home_results]
+        fleet_sc_kwh = sum(s.total_self_consumption_kwh for s in summaries)
+        bills = [
+            householder_bill(
                 s,
                 annual_self_consumption_kwh=s.total_self_consumption_kwh,
                 finance=finance,
                 simulation_days=s.simulation_days,
-            ).seg_export_income_gbp
+            )
             for s in summaries
-        )
+        ]
+
+        own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc_kwh / 100.0
+        seg_revenue = sum(b.seg_export_income_gbp for b in bills)
+        expected_revenue = own_use_revenue + seg_revenue  # no deduction (cbs_cost==0)
 
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
-        # At year 0 (a seeded age), the revenue should match the injected data
         assert curve.points[0].fleet_revenue_gbp == pytest.approx(expected_revenue, rel=1e-4)
+        # And the cbs_cost is strictly 0 (H5)
+        assert curve.points[0].fleet_revenue_gbp == pytest.approx(
+            own_use_revenue + seg_revenue, rel=1e-4
+        )
+
+    def test_h9_grid_charge_cost_reduces_fleet_revenue(self) -> None:
+        """H9 no-double-count: injecting grid_charge_cost reduces fleet_revenue by exactly
+        Σ total_grid_charge_cost_gbp versus the same fleet with zero grid_charge_cost.
+        """
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+
+        n_homes = 2
+        sc, exp, imp = 3000.0, 1500.0, 500.0
+        per_home_gc_cost = 12.50  # £ per home
+
+        scenario, finance = self._make_revenue_scenario(n_homes=n_homes)
+
+        # Zero grid_charge_cost fleet
+        fr_zero = _make_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp,
+                                       grid_charge_cost_gbp=0.0)
+        # Non-zero grid_charge_cost fleet (same energy, but with cost)
+        fr_gc = _make_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp,
+                                     grid_charge_cost_gbp=per_home_gc_cost)
+
+        curve_zero = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr_zero)
+        curve_gc = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr_gc)
+
+        expected_deduction = n_homes * per_home_gc_cost
+        actual_deduction = curve_zero.points[0].fleet_revenue_gbp - curve_gc.points[0].fleet_revenue_gbp
+
+        assert actual_deduction == pytest.approx(expected_deduction, rel=1e-4), (
+            f"Expected fleet_revenue to be reduced by exactly {expected_deduction:.4f} £ "
+            f"(Σ total_grid_charge_cost_gbp), got {actual_deduction:.4f} £"
+        )
 
     def test_self_consumption_override_yields_different_revenue(self) -> None:
-        """A finance with self_consumption_override produces different fleet_revenue_gbp."""
+        """A finance with self_consumption_override produces different fleet_revenue_gbp.
+
+        Updated for CR2: override changes fleet_sc, which changes own_use_revenue
+        (= own_use_rate × fleet_sc / 100), so the two curves still differ.
+        """
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
         n_homes = 1
@@ -1058,17 +1202,19 @@ class TestProjectMultiYearRevenue:
         )
         curve_over = project_multi_year(scenario_over, finance_over, simulate=lambda fc, s, e: fr)
 
-        # The two revenue values should differ
+        # The two revenue values should differ (different SC → different own_use_revenue)
         assert curve_phys.points[0].fleet_revenue_gbp != pytest.approx(
             curve_over.points[0].fleet_revenue_gbp, rel=1e-3
         )
 
     def test_fleet_revenue_non_negative(self) -> None:
-        """fleet_revenue_gbp is non-negative for all years."""
+        """fleet_revenue_gbp is non-negative for all years (updated for CR2 formula)."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
         scenario, finance = self._make_revenue_scenario(n_homes=1)
-        fr = _make_fleet_results(n_homes=1, self_kwh=2000.0, export_kwh=800.0, import_kwh=300.0)
+        # No grid_charge_cost → CBS deduction is 0 → own_use + seg >= 0 always
+        fr = _make_fleet_results(n_homes=1, self_kwh=2000.0, export_kwh=800.0, import_kwh=300.0,
+                                  grid_charge_cost_gbp=0.0)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         for pt in curve.points:
             assert pt.fleet_revenue_gbp >= 0.0
