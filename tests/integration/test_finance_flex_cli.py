@@ -311,6 +311,63 @@ class TestFinanceFlexCLIBehaviour:
             f"Expected non-zero exit for invalid band, got {result.exit_code}.\n{result.output}"
         )
 
+    def test_invalid_scenario_flex_band_exits_nonzero(
+        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+    ) -> None:
+        """A scenario-level flex_band with an unknown value must exit non-zero.
+
+        This validates the scenario-key rejection path (goes via resolve_flex_band →
+        ValueError → handle_errors → Exit(1)), which is distinct from the typer-enum
+        rejection of an invalid CLI flag.
+        """
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        # Scenario has flex_band: bogus (not low/central/high)
+        scenario_file = _write_scenario(tmp_path / "e_bad", flex_band="bogus")
+        fr = flex_fleet_results
+
+        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
+            runner = CliRunner()
+            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+
+        assert result.exit_code != 0, (
+            f"Expected non-zero exit for invalid scenario flex_band 'bogus', "
+            f"got {result.exit_code}.\n{result.output}"
+        )
+
+    def test_scenario_flex_band_case_insensitive(
+        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+    ) -> None:
+        """Scenario-level flex_band with mixed case (e.g. 'Central') must work.
+
+        The YAML value is normalised to lowercase before being passed to
+        resolve_flex_band, matching the CLI's case-insensitive FlexBand enum.
+        """
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        # Scenario has flex_band: Central (capital C)
+        scenario_file = _write_scenario(tmp_path / "e_case", flex_band="Central")
+        fr = flex_fleet_results
+
+        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
+            runner = CliRunner()
+            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 for scenario flex_band='Central' (case-normalised), "
+            f"got {result.exit_code}.\n{result.output}"
+        )
+        assert "Flexibility Value" in result.output, (
+            f"Expected 'Flexibility Value' in output for case-normalised 'Central':\n{result.output}"
+        )
+        assert "central" in result.output, (
+            f"Expected 'central' band name in output:\n{result.output}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # §E — Named user-observable signal test (step-5 RED driver)
