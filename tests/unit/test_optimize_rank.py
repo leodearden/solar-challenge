@@ -11,7 +11,7 @@ from typing import Optional
 
 import pytest
 
-from solar_challenge.optimize import rank
+from solar_challenge.optimize import feasible_split, rank
 
 
 # ---------------------------------------------------------------------------
@@ -202,3 +202,72 @@ class TestRank:
         assert len(result) == 2
         assert result[0].representative_outlay_gbp == 200.0  # infeasible appears first (cheaper)
         assert result[0].binding == "infeasible_above_retail"
+
+
+# ---------------------------------------------------------------------------
+# TestFeasibleSplit — binding-based partition
+# ---------------------------------------------------------------------------
+
+
+class TestFeasibleSplit:
+    """feasible_split() partitions on binding == 'infeasible_above_retail'."""
+
+    def test_infeasible_list_is_exactly_infeasible_above_retail(self) -> None:
+        """infeasible side == exactly the records with binding='infeasible_above_retail'."""
+        infeas = _make_config_result(binding="infeasible_above_retail", feasible=False)
+        feas = _make_config_result(binding="floor", feasible=True)
+
+        feasible_out, infeasible_out = feasible_split([feas, infeas])
+        assert len(infeasible_out) == 1
+        assert infeasible_out[0].binding == "infeasible_above_retail"
+        assert len(feasible_out) == 1
+        assert feasible_out[0].binding == "floor"
+
+    def test_floor_and_rate_clamped_zero_land_in_feasible(self) -> None:
+        """'floor' and 'rate_clamped_zero' land in feasible side."""
+        floor_rec = _make_config_result(binding="floor", feasible=True, pv_kwp=3.0)
+        clamp_rec = _make_config_result(binding="rate_clamped_zero", feasible=True, pv_kwp=4.0)
+        infeas_rec = _make_config_result(
+            binding="infeasible_above_retail", feasible=False, pv_kwp=5.0
+        )
+
+        feasible_out, infeasible_out = feasible_split([floor_rec, clamp_rec, infeas_rec])
+        assert len(feasible_out) == 2
+        assert len(infeasible_out) == 1
+        bindings = {r.binding for r in feasible_out}
+        assert bindings == {"floor", "rate_clamped_zero"}
+
+    def test_partition_exhaustive_and_disjoint(self) -> None:
+        """len(feasible) + len(infeasible) == len(input); no record in both."""
+        records = [
+            _make_config_result(binding="floor", pv_kwp=1.0),
+            _make_config_result(binding="infeasible_above_retail", pv_kwp=2.0, feasible=False),
+            _make_config_result(binding="rate_clamped_zero", pv_kwp=3.0),
+            _make_config_result(binding="infeasible_above_retail", pv_kwp=4.0, feasible=False),
+        ]
+        feasible_out, infeasible_out = feasible_split(records)
+        assert len(feasible_out) + len(infeasible_out) == len(records)
+        feas_ids = {id(r) for r in feasible_out}
+        infeas_ids = {id(r) for r in infeasible_out}
+        assert feas_ids.isdisjoint(infeas_ids)
+
+    def test_input_order_preserved_within_each_side(self) -> None:
+        """Input order is preserved within both output lists."""
+        a = _make_config_result(binding="floor", pv_kwp=1.0)
+        b = _make_config_result(binding="infeasible_above_retail", pv_kwp=2.0, feasible=False)
+        c = _make_config_result(binding="floor", pv_kwp=3.0)
+        d = _make_config_result(binding="infeasible_above_retail", pv_kwp=4.0, feasible=False)
+
+        feasible_out, infeasible_out = feasible_split([a, b, c, d])
+        assert [r.config.pv_kwp for r in feasible_out] == [1.0, 3.0]
+        assert [r.config.pv_kwp for r in infeasible_out] == [2.0, 4.0]
+
+    def test_binding_predicate_not_bool_field(self) -> None:
+        """Contradictory record (feasible=True, binding='infeasible_above_retail') -> infeasible."""
+        contradictory = _make_config_result(
+            binding="infeasible_above_retail",
+            feasible=True,  # deliberately contradictory
+        )
+        feasible_out, infeasible_out = feasible_split([contradictory])
+        assert len(infeasible_out) == 1
+        assert len(feasible_out) == 0
