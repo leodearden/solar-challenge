@@ -494,6 +494,93 @@ class TestSolveCostRecoveryRateInterior:
         assert sol_high.own_use_rate_pence_per_kwh > sol_low.own_use_rate_pence_per_kwh
         assert sol_high.representative_outlay_gbp > sol_low.representative_outlay_gbp
 
+    def test_outlay_reflects_solved_rate(self) -> None:
+        """Suggestion 5: outlay is computed at the SOLVED rate, not the configured own_use_rate.
+
+        Verifies that bill_distribution received finance_solved (at r*) not the original
+        finance (at r0).  A bug passing original finance would give own_use_payment_gbp
+        proportional to r0 = 15p instead of the solved r*.
+        """
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        scenario, finance, fr, simulate = self._setup_interior()
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+        # For interior regime, solved rate != configured rate
+        assert sol.own_use_rate_pence_per_kwh != pytest.approx(
+            finance.own_use_rate_pence_per_kwh, rel=1e-3
+        ), "Interior test fixture should yield a rate different from r0=15p"
+
+        # Each synthetic home has self_kwh=2000.0 (from _make_sim_results / 365-day full-year sim)
+        # own_use_payment_gbp (ex-VAT) = rate_pence × sc_kwh / 100
+        sc_kwh = 2000.0
+        expected_payment = sol.own_use_rate_pence_per_kwh * sc_kwh / 100.0
+        assert sol.outlay.representative.own_use_payment_gbp == pytest.approx(
+            expected_payment, rel=1e-4
+        )
+
+    def test_h1_cross_check_age_varying_fleet(self) -> None:
+        """Suggestion 2: H1 cross-check with an age-varying (degrading) fleet.
+
+        A simulate that returns lower self_kwh/export at higher ages exercises
+        PCHIP interpolation over non-flat YearPoint nodes.  The affine
+        reconstruction is still exact (each sc_y is fixed per age, recorded in
+        the base curve) so surplus_at(r*) must equal an independent
+        project_multi_year re-sim at the solved rate to float epsilon.
+        """
+        from solar_challenge.finance import (
+            project_economics,
+            project_multi_year,
+            solve_cost_recovery_rate,
+        )
+
+        n_homes = 5
+        scenario = _make_scenario(n_homes=n_homes)
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=2000.0,
+            grant_gbp=0.0,
+            own_use_rate_pence_per_kwh=15.0,
+            retained_cash_floor=100.0,
+            retail_baseline_rate=30.0,
+            n_homes=n_homes,
+        )
+
+        # Age-varying simulate: self_kwh and export_kwh degrade 0.5 % per year.
+        # project_multi_year calls _aged_homes(homes, age), setting
+        # fc.homes[0].pv_config.system_age_years = age, so the factory reads
+        # the correct age for each PCHIP node.
+        def simulate_degrading(
+            fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp"  # type: ignore[name-defined]
+        ) -> "FleetResults":  # type: ignore[name-defined]
+            age = fc.homes[0].pv_config.system_age_years
+            factor = max(0.0, 1.0 - 0.005 * age)
+            return _make_fleet_results(
+                n_homes=n_homes,
+                self_kwh=2000.0 * factor,
+                export_kwh=800.0 * factor,
+                import_kwh=1200.0,
+            )
+
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate_degrading)
+
+        # Expect an interior or clamped-zero solve (not infeasible)
+        assert sol.feasible is True, (
+            f"Expected a feasible solution for interior/clamped-zero; got binding={sol.binding!r}"
+        )
+
+        # Cross-check: re-run project_multi_year at the solved rate; the affine
+        # reconstruction and the full re-sim must agree to float ε.
+        finance_solved = dataclasses.replace(
+            finance,
+            own_use_rate_pence_per_kwh=sol.own_use_rate_pence_per_kwh,
+        )
+        curve_solved = project_multi_year(scenario, finance_solved, simulate=simulate_degrading)
+        econ_solved = project_economics(curve_solved, scenario, finance_solved)
+
+        assert econ_solved.net_surplus_per_home_per_year_gbp == pytest.approx(
+            sol.net_surplus_per_home_per_year_gbp, abs=1e-4
+        )
+
 
 # ---------------------------------------------------------------------------
 # §3.3 — feasibility clamps (step-5 / step-6)
@@ -572,3 +659,146 @@ class TestSolveCostRecoveryRateClamps:
             finance.retail_baseline_rate_pence_per_kwh
         )
         assert sol.net_surplus_per_home_per_year_gbp < finance.retained_cash_floor_per_home_per_year_gbp
+
+    def test_outlay_reflects_retail_rate_when_infeasible(self) -> None:
+        """Suggestion 5 (infeasible case): outlay uses rate=retail, not the configured r0.
+
+        When binding='infeasible_above_retail' the solved rate is clamped to
+        retail_baseline_rate_pence_per_kwh.  If bill_distribution is incorrectly
+        passed the original finance (at r0=15p) the own_use_payment_gbp would be
+        halved relative to the correct value at retail=30p.
+        """
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        n_homes = 5
+        scenario = _make_scenario(n_homes=n_homes)
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=20000.0,
+            grant_gbp=0.0,
+            own_use_rate_pence_per_kwh=15.0,  # configured r0
+            retained_cash_floor=10000.0,
+            retail_baseline_rate=30.0,
+        )
+        fr = _make_fleet_results(
+            n_homes=n_homes,
+            self_kwh=2000.0,
+            export_kwh=800.0,
+            import_kwh=1200.0,
+        )
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+        assert sol.binding == "infeasible_above_retail"
+        assert sol.own_use_rate_pence_per_kwh == pytest.approx(30.0)  # retail
+
+        # Outlay must reflect rate=retail=30p, not the configured r0=15p.
+        # Formula: own_use_payment_gbp = rate_pence × sc_kwh / 100 (ex-VAT).
+        sc_kwh = 2000.0
+        expected_payment_at_retail = 30.0 * sc_kwh / 100.0  # = 600 GBP
+        expected_payment_at_r0 = 15.0 * sc_kwh / 100.0  # = 300 GBP (would be wrong)
+        assert sol.outlay.representative.own_use_payment_gbp == pytest.approx(
+            expected_payment_at_retail, rel=1e-4
+        )
+        assert sol.outlay.representative.own_use_payment_gbp != pytest.approx(
+            expected_payment_at_r0, rel=1e-2
+        )
+
+
+# ---------------------------------------------------------------------------
+# §3.4 — degenerate slope (no self-consumption)
+# ---------------------------------------------------------------------------
+
+
+class TestSolveCostRecoveryRateDegenerate:
+    """Degenerate-slope branch: slope ≈ 0 when fleet self-consumption is zero.
+
+    Both sub-outcomes are tested:
+    * rate_clamped_zero — project is viable even at r=0 (SEG income > opex, no debt)
+    * infeasible_above_retail — project is never viable (no SEG, high capex)
+    """
+
+    def test_degenerate_slope_zero_rate_clamped_zero(self) -> None:
+        """Slope≈0 and s0 ≥ floor=0 → rate_clamped_zero, rate==0, feasible=True.
+
+        With zero self-consumption (slope=0 exactly), the surplus is constant
+        across all rates.  SEG income beats opex; capex fully covered by grant
+        (no debt service).  Since s0 > 0 = floor, the degenerate branch returns
+        rate_clamped_zero.
+        """
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        n_homes = 5
+        # self_kwh=0.0 → fleet_sc=0 → slope=0 exactly
+        fr = _make_fleet_results(
+            n_homes=n_homes,
+            self_kwh=0.0,
+            export_kwh=2800.0,
+            import_kwh=4000.0,
+            export_revenue_gbp_per_year=200.0,  # SEG: 200 × 5 = 1000 GBP/yr fleet
+        )
+        scenario = _make_scenario(n_homes=n_homes)
+        # pv_cost_per_kwp_gbp must be > 0 (FinanceConfig validation); use minimal value.
+        # total_capex = 5 × (4 × 1 + 1000) = 5020; grant=50000 covers all → no debt.
+        # net_surplus = (SEG - opex) / n_homes = (1000 - 655) / 5 = 69 >= 0 = floor.
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1.0,
+            grant_gbp=50000.0,
+            own_use_rate_pence_per_kwh=15.0,
+            retained_cash_floor=0.0,  # minimum allowed (>= 0 validated)
+            retail_baseline_rate=30.0,
+            n_homes=n_homes,
+        )
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+        assert sol.binding == "rate_clamped_zero"
+        assert sol.own_use_rate_pence_per_kwh == pytest.approx(0.0)
+        assert sol.feasible is True
+        assert (
+            sol.net_surplus_per_home_per_year_gbp
+            >= finance.retained_cash_floor_per_home_per_year_gbp
+        )
+
+    def test_degenerate_slope_zero_infeasible(self) -> None:
+        """Slope≈0 and s0 < floor → infeasible_above_retail, feasible=False.
+
+        With zero self-consumption (slope=0 exactly), surplus is constant
+        across all rates.  No SEG income, high capex, positive floor → surplus
+        is deeply negative at every rate → infeasible_above_retail.
+        """
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        n_homes = 5
+        # self_kwh=0.0 → slope=0; export_kwh=0 so SEG revenue is also zero
+        fr = _make_fleet_results(
+            n_homes=n_homes,
+            self_kwh=0.0,
+            export_kwh=0.0,
+            import_kwh=4000.0,
+        )
+        scenario = _make_scenario(n_homes=n_homes)
+        # High capex + no grant → large debt; no revenue → surplus << floor.
+        # total_capex = 5 × (4 × 2000 + 1000) = 45000; financed entirely by debt.
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=2000.0,
+            grant_gbp=0.0,
+            own_use_rate_pence_per_kwh=15.0,
+            retained_cash_floor=50.0,  # positive floor (deeply infeasible)
+            retail_baseline_rate=30.0,
+            n_homes=n_homes,
+        )
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+        assert sol.feasible is False
+        assert sol.binding == "infeasible_above_retail"
+        assert sol.own_use_rate_pence_per_kwh == pytest.approx(
+            finance.retail_baseline_rate_pence_per_kwh
+        )
+        assert (
+            sol.net_surplus_per_home_per_year_gbp
+            < finance.retained_cash_floor_per_home_per_year_gbp
+        )

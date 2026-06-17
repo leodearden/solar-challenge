@@ -1720,6 +1720,31 @@ def solve_cost_recovery_rate(
     5. Compute outlay from a dedicated age-0 fleet sim (per-home granularity
        not available from the multi-year curve).
 
+    **Affine-line precondition** (Suggestion 3 / robustness note):
+
+    Step 2 is exact when ``project_multi_year`` does *not* clamp any year's
+    ``fleet_revenue_gbp`` to zero.  The code stores
+    ``fleet_revenue_gbp = max(0.0, rev_per_year[y])``, so if any year's raw
+    revenue is negative (e.g. in severely loss-making scenarios where CBS
+    grid-charge cost exceeds all income at the configured r0), the base node
+    is clamped and the linear reconstruction diverges from a true re-sim by a
+    bounded error.  In practice this only occurs in scenarios well outside the
+    viable parameter range (surplus at the configured r0 is deeply negative);
+    the solved rate may then be a few pence off the true breakeven.  Callers
+    that need bit-exact results under such conditions should re-simulate at the
+    returned rate.
+
+    **Cost note** (Suggestion 4 / performance):
+
+    ``project_multi_year`` already simulates the fleet at age 0 internally
+    (age 0 is always in the seed-age set) but discards per-home results.
+    Step 5 therefore re-runs an independent age-0 fleet simulation to obtain
+    the per-home ``SummaryStatistics`` needed for ``bill_distribution``.  With
+    the real ``simulate_fleet`` this doubles the age-0 simulation cost per
+    ``solve_cost_recovery_rate`` call.  If this becomes a bottleneck,
+    consider refactoring ``project_multi_year`` to surface the age-0 per-home
+    results so the second simulation can be avoided.
+
     **Clamp / binding convention**:
 
     * ``r* < 0``: ``rate_clamped_zero`` (feasible=True, surplus > floor).
