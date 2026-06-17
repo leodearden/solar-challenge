@@ -334,6 +334,13 @@ def cheapest_feasible(
     winner is always a feasible record even when infeasible records have a
     globally lower outlay.
 
+    .. note::
+        This function shares its name with the :attr:`RankedSweep.cheapest_feasible`
+        dataclass field it logically produces.  The function is the computation;
+        the field stores the result.  Inside :func:`run_sweep` the field is
+        populated directly from the already-ranked feasible list (``ranked_feasible[0].config``)
+        rather than by calling this function, to avoid a redundant sort pass.
+
     Args:
         results: Any sequence of :class:`ConfigResult` objects (may be empty).
 
@@ -769,7 +776,8 @@ def run_sweep(
     feasible_results, infeasible_results = feasible_split(all_results)
     ranked_feasible = rank(feasible_results)
     infeasible_pts = [r.config for r in infeasible_results]
-    cheapest: Optional[ConfigPoint] = cheapest_feasible(all_results)
+    # Derive cheapest from the already-ranked list to avoid redundant O(n log n) work.
+    cheapest: Optional[ConfigPoint] = ranked_feasible[0].config if ranked_feasible else None
 
     # Compute Pareto front over ALL evaluated configs (feasible + infeasible)
     pareto = pareto_baseline(all_results)

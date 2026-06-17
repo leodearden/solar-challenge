@@ -272,6 +272,22 @@ class TestFeasibleSplit:
         assert len(infeasible_out) == 1
         assert len(feasible_out) == 0
 
+    def test_feasible_false_with_non_infeasible_binding_lands_in_feasible(self) -> None:
+        """Complementary coupling pin: feasible=False + non-infeasible binding -> feasible side.
+
+        Proves that the split predicate is SOLELY binding-based, not .feasible-bool-based.
+        Any future binding value that pairs with feasible=False but is not
+        'infeasible_above_retail' will be classified on the feasible side — this
+        test makes that behaviour explicit so it cannot silently diverge.
+        """
+        mismatched = _make_config_result(
+            binding="floor",
+            feasible=False,  # deliberately contradictory: False bool, non-infeasible binding
+        )
+        feasible_out, infeasible_out = feasible_split([mismatched])
+        assert len(feasible_out) == 1
+        assert len(infeasible_out) == 0
+
 
 # ---------------------------------------------------------------------------
 # TestParetoBaseline — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
@@ -413,16 +429,24 @@ class TestCheapestFeasible:
         assert result == more_expensive_feasible.config
 
     def test_tiebreak_consistent_with_rank(self) -> None:
-        """When two cheapest feasible share outlay, the higher-surplus one wins."""
+        """When two cheapest feasible share outlay, the higher-surplus one wins.
+
+        All non-outlay tie-break fields (pv_kwp, battery_kwh, inverter_kw) are
+        identical so that only ``surplus_at_solved_gbp`` (level-2, descending) decides.
+        """
         high_surplus = _make_config_result(
             pv_kwp=4.0,
+            battery_kwh=6.0,
+            inverter_kw=3.6,
             representative_outlay_gbp=400.0,
             surplus_at_solved_gbp=200.0,
             binding="floor",
             feasible=True,
         )
         low_surplus = _make_config_result(
-            pv_kwp=5.0,
+            pv_kwp=4.0,  # same as high_surplus — only surplus now decides
+            battery_kwh=6.0,
+            inverter_kw=3.6,
             representative_outlay_gbp=400.0,
             surplus_at_solved_gbp=50.0,
             binding="floor",
