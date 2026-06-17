@@ -779,29 +779,28 @@ class TestProjectEconomicsIRRPayback:
 
 
 def _make_bill_distribution(multiplier: float = 1.0) -> "BillDistribution":  # type: ignore[name-defined]
-    """Build a synthetic BillDistribution for report tests."""
+    """Build a synthetic BillDistribution for report tests (CR3 contract)."""
     from solar_challenge.finance import BillBreakdown, BillDistribution
 
     rep = BillBreakdown(
         standing_charge_gbp=219.0 * multiplier,
         import_cost_gbp=276.0 * multiplier,
-        vat_gbp=24.75 * multiplier,
-        gross_bill_gbp=519.75 * multiplier,
-        seg_export_income_gbp=73.8 * multiplier,
-        self_consumption_saving_gbp=531.3 * multiplier,
-        baseline_bill_gbp=980.0 * multiplier,
-        net_annual_bill_gbp=445.95 * multiplier,
-        saving_vs_baseline_gbp=534.05 * multiplier,
-        saving_pct=54.5 * multiplier,
+        own_use_payment_gbp=330.0 * multiplier,
+        vat_gbp=41.25 * multiplier,
+        total_outlay_gbp=866.25 * multiplier,
+        self_consumption_saving_gbp=184.80 * multiplier,
+        baseline_bill_gbp=1051.05 * multiplier,
+        saving_vs_baseline_gbp=184.80 * multiplier,
+        saving_pct=17.58 * multiplier,
         self_consumption_fraction=0.55 * multiplier,
     )
     return BillDistribution(
         representative=rep,
-        per_home_net_bill_gbp=(rep.net_annual_bill_gbp,),
-        min_gbp=300.0 * multiplier,
-        mean_gbp=440.0 * multiplier,
-        median_gbp=rep.net_annual_bill_gbp,
-        max_gbp=600.0 * multiplier,
+        per_home_net_bill_gbp=(rep.total_outlay_gbp,),
+        min_gbp=700.0 * multiplier,
+        mean_gbp=850.0 * multiplier,
+        median_gbp=rep.total_outlay_gbp,
+        max_gbp=1000.0 * multiplier,
     )
 
 
