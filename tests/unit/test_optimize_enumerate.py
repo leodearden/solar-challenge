@@ -290,7 +290,7 @@ class TestBatteryHomogenization:
             assert home.battery_config is None
 
     def test_battery_kwh_positive_preserves_existing_battery_fields(self) -> None:
-        """battery_kwh>0 on the home with a battery preserves max_discharge_kw + grid_charging."""
+        """battery_kwh>0 on the home with a battery preserves max_discharge_kw, grid_charging, dispatch_strategy."""
         base = self._make_mixed_battery_base()
         result = enumerate_configs(base, [4.0], [5.0], [3.68])
         _, sc = result[0]
@@ -301,9 +301,11 @@ class TestBatteryHomogenization:
         assert home_with.battery_config.max_discharge_kw == pytest.approx(3.6)
         assert home_with.battery_config.grid_charging is not None
         assert home_with.battery_config.grid_charging.target_soc_fraction == pytest.approx(0.8)
+        # dispatch_strategy carried over from base (None by default in fixture)
+        assert home_with.battery_config.dispatch_strategy is None
 
     def test_battery_kwh_positive_fabricates_battery_for_battery_less_home(self) -> None:
-        """battery_kwh>0 on the home WITHOUT a battery fabricates a BatteryConfig."""
+        """battery_kwh>0 on the home WITHOUT a battery fabricates a BatteryConfig at defaults."""
         base = self._make_mixed_battery_base()
         result = enumerate_configs(base, [4.0], [5.0], [3.68])
         _, sc = result[0]
@@ -312,6 +314,27 @@ class TestBatteryHomogenization:
         assert home_without.battery_config.capacity_kwh == pytest.approx(5.0)
         # Fabricated battery must have the default max_discharge_kw (2.5)
         assert home_without.battery_config.max_discharge_kw == pytest.approx(2.5)
+        # Fabricated battery must have no dispatch/grid-charging overrides (diverse dispatch preserved at None)
+        assert home_without.battery_config.dispatch_strategy is None
+        assert home_without.battery_config.grid_charging is None
+
+    def test_small_positive_battery_kwh_fabricates_not_sentinel(self) -> None:
+        """A small-positive battery_kwh (e.g. 1e-6) is NOT the no-battery sentinel.
+
+        Only exactly 0.0 means no battery; any positive value — however small —
+        triggers fabrication or replacement.  This pins the documented behaviour
+        so a future epsilon-check regression is caught.
+        """
+        base = self._make_mixed_battery_base()
+        tiny = 1e-6
+        result = enumerate_configs(base, [4.0], [tiny], [3.68])
+        _, sc = result[0]
+        # Both homes must have a battery (not None) even though capacity is tiny
+        for home in sc.homes:
+            assert home.battery_config is not None, (
+                f"Expected a battery for battery_kwh={tiny!r} but got None"
+            )
+            assert home.battery_config.capacity_kwh == pytest.approx(tiny)
 
     def test_base_battery_configs_not_mutated(self) -> None:
         """Original battery configs in base.homes are never mutated."""
