@@ -78,7 +78,7 @@ def _make_solution(
 
 
 # ---------------------------------------------------------------------------
-# §B — RED tests for output.py cost-recovery block (step-1)
+# §B — RED tests for output.py cost-recovery block (step-1 / step-3)
 # ---------------------------------------------------------------------------
 
 
@@ -164,3 +164,125 @@ class TestGenerateFinanceReportCostRecoveryBasic:
         assert "cost-recovery" not in report.lower(), (
             f"'Cost-Recovery' heading should not appear without cost_recovery param:\n{report}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §C — RED tests for full board-readable content (step-3)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateFinanceReportCostRecoveryFull:
+    """RED: full board-readable content — distribution table, binding labels."""
+
+    def test_outlay_distribution_renders(self) -> None:
+        """Cost-recovery block must render the householder total-outlay distribution."""
+        from solar_challenge.output import generate_finance_report
+
+        bill = _make_bill_distribution(min_gbp=310.0, mean_gbp=367.5, median_gbp=360.0, max_gbp=430.0)
+        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+
+        report = generate_finance_report(bill, cost_recovery=sol)
+
+        # All four distribution stats should appear in the cost-recovery block
+        assert "310" in report, f"min_gbp=310 not in report:\n{report}"
+        assert "367" in report, f"mean_gbp=367.5 not in report:\n{report}"
+        assert "360" in report, f"median_gbp=360 not in report:\n{report}"
+        assert "430" in report, f"max_gbp=430 not in report:\n{report}"
+
+    def test_representative_outlay_renders(self) -> None:
+        """Cost-recovery block must render the representative_outlay_gbp."""
+        from solar_challenge.output import generate_finance_report
+
+        bill = _make_bill_distribution()
+        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+
+        report = generate_finance_report(bill, cost_recovery=sol)
+
+        # representative_outlay_gbp comes from outlay.representative.total_outlay_gbp = mean_gbp = 367.5
+        assert "367" in report, f"representative_outlay_gbp not in report:\n{report}"
+
+    def test_saving_vs_baseline_renders(self) -> None:
+        """Cost-recovery block must render saving_vs_baseline_gbp."""
+        from solar_challenge.output import generate_finance_report
+
+        bill = _make_bill_distribution()
+        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+        # The _make_solution helper sets saving_vs_baseline_gbp=132.5
+
+        report = generate_finance_report(bill, cost_recovery=sol)
+
+        assert "132" in report, f"saving_vs_baseline not rendered:\n{report}"
+
+    def test_saving_pct_renders(self) -> None:
+        """Cost-recovery block must render saving_pct."""
+        from solar_challenge.output import generate_finance_report
+
+        bill = _make_bill_distribution()
+        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+        # _make_solution sets saving_pct=26.5
+
+        report = generate_finance_report(bill, cost_recovery=sol)
+
+        assert "26.5" in report or "26" in report, f"saving_pct not rendered:\n{report}"
+
+    def test_binding_floor_label_distinct(self) -> None:
+        """binding='floor' must render a 'surplus meets floor' label."""
+        from solar_challenge.output import generate_finance_report
+
+        bill = _make_bill_distribution()
+        sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+
+        report = generate_finance_report(bill, cost_recovery=sol)
+
+        # Should show a human-readable label for 'floor' (surplus meets floor)
+        assert "surplus meets floor" in report.lower(), (
+            f"Expected 'surplus meets floor' label for binding='floor':\n{report}"
+        )
+
+    def test_binding_rate_clamped_zero_label_distinct(self) -> None:
+        """binding='rate_clamped_zero' must render an over-feasible label."""
+        from solar_challenge.output import generate_finance_report
+
+        bill = _make_bill_distribution()
+        sol = _make_solution(own_use_rate=0.0, net_surplus=500.0, feasible=True, binding="rate_clamped_zero")
+
+        report = generate_finance_report(bill, cost_recovery=sol)
+
+        # Should show a human-readable label for 'rate_clamped_zero'
+        assert "over-feasible" in report.lower() or "clamped" in report.lower(), (
+            f"Expected 'over-feasible' or 'clamped' label for binding='rate_clamped_zero':\n{report}"
+        )
+
+    def test_binding_infeasible_above_retail_shows_warning(self) -> None:
+        """binding='infeasible_above_retail' must render an explicit infeasible warning."""
+        from solar_challenge.output import generate_finance_report
+
+        bill = _make_bill_distribution()
+        sol = _make_solution(own_use_rate=30.0, net_surplus=-50.0, feasible=False, binding="infeasible_above_retail")
+
+        report = generate_finance_report(bill, cost_recovery=sol)
+
+        # Should contain an explicit infeasible warning
+        report_lower = report.lower()
+        assert "infeasible" in report_lower or "exceeds retail" in report_lower, (
+            f"Expected infeasible warning for binding='infeasible_above_retail':\n{report}"
+        )
+
+    def test_three_binding_states_produce_distinct_labels(self) -> None:
+        """The three binding states must each produce a distinct human-readable label."""
+        from solar_challenge.output import generate_finance_report
+
+        bill = _make_bill_distribution()
+
+        sol_floor = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
+        sol_clamped = _make_solution(own_use_rate=0.0, net_surplus=500.0, feasible=True, binding="rate_clamped_zero")
+        sol_infeasible = _make_solution(own_use_rate=30.0, net_surplus=-50.0, feasible=False, binding="infeasible_above_retail")
+
+        r_floor = generate_finance_report(bill, cost_recovery=sol_floor)
+        r_clamped = generate_finance_report(bill, cost_recovery=sol_clamped)
+        r_infeasible = generate_finance_report(bill, cost_recovery=sol_infeasible)
+
+        # All three must differ (at minimum in the binding-label section)
+        assert r_floor != r_clamped, "floor and rate_clamped_zero must produce different reports"
+        assert r_floor != r_infeasible, "floor and infeasible_above_retail must produce different reports"
+        assert r_clamped != r_infeasible, "rate_clamped_zero and infeasible_above_retail must produce different reports"
