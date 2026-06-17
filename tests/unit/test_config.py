@@ -3427,6 +3427,69 @@ tariff:
         finally:
             path.unlink()
 
+    def test_fleet_yaml_dispatch_strategy_threaded(self) -> None:
+        """fleet_distribution.dispatch_strategy: tou_optimized threads to all homes via load_fleet_config."""
+        yaml_content = """
+name: Dispatch Strategy Threading Test
+fleet_distribution:
+  n_homes: 4
+  seed: 11
+  pv:
+    capacity_kw: 4.0
+  battery:
+    capacity_kwh: 5.0
+  load:
+    annual_consumption_kwh: 3400
+  dispatch_strategy: tou_optimized
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            fleet = load_fleet_config(path)
+            assert len(fleet.homes) == 4
+            for home in fleet.homes:
+                assert home.dispatch_strategy == "tou_optimized", (
+                    "dispatch_strategy should be threaded from YAML to every home"
+                )
+        finally:
+            path.unlink()
+
+    def test_fleet_yaml_no_dispatch_strategy_defaults_greedy(self) -> None:
+        """fleet YAML without dispatch_strategy key: all homes default to dispatch_strategy='greedy'."""
+        yaml_content = """
+name: Dispatch Strategy Default Guard
+fleet_distribution:
+  n_homes: 4
+  seed: 22
+  pv:
+    capacity_kw: 4.0
+  battery:
+    capacity_kwh: 5.0
+  load:
+    annual_consumption_kwh: 3400
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            fleet = load_fleet_config(path)
+            assert len(fleet.homes) == 4
+            for home in fleet.homes:
+                assert home.dispatch_strategy == "greedy", (
+                    "dispatch_strategy must default to 'greedy' when key is absent"
+                )
+        finally:
+            path.unlink()
+
     def test_theta_calibration_regression_no_tariff_no_grid_charging(self) -> None:
         """θ regression pin: fleet YAML without tariff: or grid_charging is bit-identical (both None).
 
