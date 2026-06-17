@@ -11,7 +11,7 @@ from solar_challenge.home import SimulationResults, SummaryStatistics, calculate
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
-    from solar_challenge.finance import BillDistribution, ProjectEconomics
+    from solar_challenge.finance import BillDistribution, CostRecoverySolution, ProjectEconomics
 
 
 @dataclass(frozen=True)
@@ -669,6 +669,7 @@ def generate_finance_report(
     *,
     scenario_name: str = "",
     economics: Optional["ProjectEconomics"] = None,
+    cost_recovery: Optional["CostRecoverySolution"] = None,
 ) -> str:
     """Generate a markdown finance report from one or two BillDistributions.
 
@@ -691,6 +692,10 @@ def generate_finance_report(
             from :func:`~solar_challenge.finance.project_economics`; when
             provided, a ``## Project Economics`` block is appended after the
             bill block.  ``None`` (default) reproduces the δ output exactly.
+        cost_recovery: Optional :class:`~solar_challenge.finance.CostRecoverySolution`
+            from :func:`~solar_challenge.finance.solve_cost_recovery_rate`; when
+            provided, a ``## Cost-Recovery Analysis`` block is appended (CR5).
+            ``None`` (default) reproduces the existing output exactly.
 
     Returns:
         A markdown-formatted finance report string.
@@ -797,6 +802,19 @@ def generate_finance_report(
 | Min DSCR (loan years) | {dscr_str} |
 | Equity IRR | {irr_str} |
 | Payback | {payback_str} |
+"""
+
+    # ---- Optional cost-recovery block (CR5) ----------------------------------
+    if cost_recovery is not None:
+        report += f"""
+## Cost-Recovery Analysis
+
+| Item | Value |
+|------|-------|
+| Solved Own-Use Rate | {cost_recovery.own_use_rate_pence_per_kwh:.2f} p/kWh |
+| CBS Net Surplus / home / yr | £{cost_recovery.net_surplus_per_home_per_year_gbp:.2f} |
+| Feasible | {"Yes" if cost_recovery.feasible else "No"} |
+| Binding | {cost_recovery.binding} |
 """
 
     return report
