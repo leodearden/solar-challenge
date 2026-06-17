@@ -439,22 +439,23 @@ def _make_fleet_results_interior(n_homes: int = 5) -> "FleetResults":  # type: i
     Uses the interior-regime shape from test_cost_recovery_solve.py:
     high capex (£2000/kWp), no grant, floor=100, retail=30p, sc=2000 kWh/home/yr.
 
-    Uses a 14-day simulation window with proportionally scaled energy so that the
-    per-home annual rates (after finance-layer annualisation from sim_days) are
-    identical to the full-year fixture — at ~24× smaller Series size.
+    Uses a full-year unscaled Series (525600 minutes = 365 days, identical to the
+    proven CR4 fixture in _setup_interior).  With a full-year Series AND the CLI's
+    default full-year window (days=366 ≥ the 360 annualisation threshold) NEITHER
+    the bill-block path NOR solve_cost_recovery_rate's internal sim annualises —
+    both see a true 365-day Series so all paths are mutually consistent and the
+    solve yields binding='floor', feasible=True, net_surplus == floor (£100/home/yr),
+    solved rate ≈ 18.96 p/kWh.
     """
     from solar_challenge.fleet import FleetResults
 
-    # 14-day window: 20160 minutes (~24x smaller than a full leap-safe year)
-    n_minutes = 14 * 24 * 60
-    scale = 14.0 / 365.0
     homes = [_make_home_config() for _ in range(n_homes)]
     per_home = [
         _make_sim_results(
-            self_kwh=round(2000.0 * scale, 4),    # ≈ 76.71 kWh / 14 days
-            export_kwh=round(800.0 * scale, 4),    # ≈ 30.68 kWh / 14 days
-            import_kwh=round(1200.0 * scale, 4),   # ≈ 46.03 kWh / 14 days
-            n_minutes=n_minutes,
+            self_kwh=2000.0,
+            export_kwh=800.0,
+            import_kwh=1200.0,
+            n_minutes=525600,  # 365 * 24 * 60 — full year, no annualisation needed
         )
         for _ in range(n_homes)
     ]
