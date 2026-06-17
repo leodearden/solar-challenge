@@ -120,13 +120,25 @@ class BillDistribution:
 
     Note: ``per_home_net_bill_gbp`` retains its name for back-compat (§12-Q4)
     but now holds per-home ``total_outlay_gbp`` values (CR3 redefinition).
+
+    .. deprecated::
+        ``per_home_net_bill_gbp`` will be renamed to ``per_home_total_outlay_gbp``
+        once the back-compat window closes.  Track this via the §12-Q4 deprecation
+        list and do not add new consumers that depend on the misleading name.
     """
 
     representative: BillBreakdown
     """Representative (median-net-bill) home's full BillBreakdown."""
 
     per_home_net_bill_gbp: tuple[float, ...]
-    """Net annual bill for each home in the fleet (£)."""
+    """Per-home total annual outlay (£).
+
+    .. note::
+        The name is retained for back-compat (§12-Q4); the values are
+        ``total_outlay_gbp`` per home (CR3 redefinition), NOT the old
+        W2 net-annual-bill.  Rename to ``per_home_total_outlay_gbp`` is
+        tracked on the §12-Q4 deprecation list.
+    """
 
     min_gbp: float
     """Minimum net annual bill across the fleet (£)."""
@@ -152,6 +164,78 @@ class BillDistribution:
 #: parameters.
 DEFAULT_SPREADSHEET_SELF_CONSUMPTION: float = 0.70
 
+#: Days used as the annualised year length; all short-period outputs scale to this.
+_ANNUALISATION_DAYS = 365
+#: Simulation periods shorter than this number of days trigger annualisation.
+_SHORT_PERIOD_THRESHOLD = 360
+
+
+# ---------------------------------------------------------------------------
+# _AnnualisedPhysics / _annualise_physics — shared annualisation helper
+# ---------------------------------------------------------------------------
+
+
+class _AnnualisedPhysics(NamedTuple):
+    """Simulation physics quantities scaled to a 365-day annual basis.
+
+    Returned by :func:`_annualise_physics`.  All energy values are in kWh;
+    monetary values are in GBP (£).
+
+    ``sc_kwh`` is taken from ``summary.total_self_consumption_kwh``.
+    :func:`householder_bill` overrides it with its *annual_self_consumption_kwh*
+    parameter, which may differ when the caller supplies an externally-computed
+    self-consumption figure.
+    """
+
+    scale: float
+    """Annualisation multiplier (1.0 when simulation_days ≥ _SHORT_PERIOD_THRESHOLD)."""
+    gen_kwh: float
+    demand_kwh: float
+    sc_kwh: float
+    import_kwh: float
+    import_cost_physics: float
+    export_kwh: float
+    export_rev_physics: float
+
+
+def _annualise_physics(
+    summary: "SummaryStatistics",
+    simulation_days: int,
+) -> _AnnualisedPhysics:
+    """Scale simulation energy/cost figures to a 365-day annual basis.
+
+    When *simulation_days* is below :data:`_SHORT_PERIOD_THRESHOLD` (360),
+    all quantities are multiplied by ``365 / max(simulation_days, 1)``.
+    Otherwise ``scale = 1.0`` and the raw figures are returned unchanged.
+
+    This is the single authoritative annualisation implementation; both
+    :func:`householder_bill` and :func:`_seg_export_income_gbp` delegate to it
+    so the threshold, guard, and formula cannot diverge.
+
+    Args:
+        summary: Per-home simulation output (read-only).
+        simulation_days: Actual simulation length in days.
+
+    Returns:
+        An :class:`_AnnualisedPhysics` namedtuple with ``scale`` and the
+        annualised energy/cost quantities.
+    """
+    if simulation_days < _SHORT_PERIOD_THRESHOLD:
+        scale = _ANNUALISATION_DAYS / max(simulation_days, 1)
+    else:
+        scale = 1.0
+    return _AnnualisedPhysics(
+        scale=scale,
+        gen_kwh=summary.total_generation_kwh * scale,
+        demand_kwh=summary.total_demand_kwh * scale,
+        sc_kwh=summary.total_self_consumption_kwh * scale,
+        import_kwh=summary.total_grid_import_kwh * scale,
+        import_cost_physics=summary.total_import_cost_gbp * scale,
+        export_kwh=summary.total_grid_export_kwh * scale,
+        export_rev_physics=summary.total_export_revenue_gbp * scale,
+    )
+
+
 # ---------------------------------------------------------------------------
 # _seg_export_income_gbp — CBS SEG revenue helper (extracted from W2 model)
 # ---------------------------------------------------------------------------
@@ -170,8 +254,8 @@ def _seg_export_income_gbp(
     to compute ``seg_revenue = Σ _seg_export_income_gbp(s, ...)`` as part of
     the CBS fleet revenue formula (PRD §3.2).
 
-    Replicates the annualisation + physics/override switch from the old
-    householder_bill export path:
+    Delegates annualisation to :func:`_annualise_physics` so the threshold,
+    guard, and formula cannot diverge from :func:`householder_bill`.
 
     * **Physics path** (``finance.self_consumption_override`` is None):
       annualised ``summary.total_export_revenue_gbp``.
@@ -190,28 +274,19 @@ def _seg_export_income_gbp(
     """
     override = finance.self_consumption_override
 
-    # ---- Annualise the physics figures (mirrors householder_bill) -----------
-    if simulation_days < _SHORT_PERIOD_THRESHOLD:
-        scale = _ANNUALISATION_DAYS / max(simulation_days, 1)
-        gen_kwh = summary.total_generation_kwh * scale
-        sc_kwh_physics = summary.total_self_consumption_kwh * scale
-        export_kwh = summary.total_grid_export_kwh * scale
-        export_rev_physics = summary.total_export_revenue_gbp * scale
-    else:
-        gen_kwh = summary.total_generation_kwh
-        sc_kwh_physics = summary.total_self_consumption_kwh
-        export_kwh = summary.total_grid_export_kwh
-        export_rev_physics = summary.total_export_revenue_gbp
+    phys = _annualise_physics(summary, simulation_days)
 
     if override is None:
         # Physics path: annualised SEG revenue from simulation
-        return float(export_rev_physics)
+        return float(phys.export_rev_physics)
     else:
         # Spreadsheet path: recompute from override fraction
-        sc_kwh = override * gen_kwh
-        override_export_kwh = max(gen_kwh - sc_kwh, 0.0)
-        if export_kwh > 0.0:
-            effective_export_rate_pence = (export_rev_physics / export_kwh) * 100.0
+        sc_kwh = override * phys.gen_kwh
+        override_export_kwh = max(phys.gen_kwh - sc_kwh, 0.0)
+        if phys.export_kwh > 0.0:
+            effective_export_rate_pence = (
+                phys.export_rev_physics / phys.export_kwh
+            ) * 100.0
         else:
             effective_export_rate_pence = 0.0
         return float(override_export_kwh * effective_export_rate_pence / 100.0)
@@ -220,9 +295,6 @@ def _seg_export_income_gbp(
 # ---------------------------------------------------------------------------
 # householder_bill
 # ---------------------------------------------------------------------------
-
-_ANNUALISATION_DAYS = 365
-_SHORT_PERIOD_THRESHOLD = 360
 
 
 def householder_bill(
@@ -268,32 +340,25 @@ def householder_bill(
     override = finance.self_consumption_override
 
     # ---- Annualisation (§3.2 / §12) ----------------------------------------
+    phys = _annualise_physics(summary, simulation_days)
     if simulation_days < _SHORT_PERIOD_THRESHOLD:
-        scale = _ANNUALISATION_DAYS / max(simulation_days, 1)
         warnings.warn(
             f"Simulation period is only {simulation_days} days (<360); "
             f"scaling financial outputs to {_ANNUALISATION_DAYS}-day annual basis "
-            f"(scale={scale:.3f}).",
+            f"(scale={phys.scale:.3f}).",
             UserWarning,
             stacklevel=2,
         )
-        # Scale physics energy quantities
-        gen_kwh = summary.total_generation_kwh * scale
-        demand_kwh = summary.total_demand_kwh * scale
-        sc_kwh_physics = annual_self_consumption_kwh * scale
-        import_kwh = summary.total_grid_import_kwh * scale
-        import_cost_physics = summary.total_import_cost_gbp * scale
-        export_kwh = summary.total_grid_export_kwh * scale
-        export_rev_physics = summary.total_export_revenue_gbp * scale
-    else:
-        scale = 1.0
-        gen_kwh = summary.total_generation_kwh
-        demand_kwh = summary.total_demand_kwh
-        sc_kwh_physics = annual_self_consumption_kwh
-        import_kwh = summary.total_grid_import_kwh
-        import_cost_physics = summary.total_import_cost_gbp
-        export_kwh = summary.total_grid_export_kwh
-        export_rev_physics = summary.total_export_revenue_gbp
+    # NOTE: householder_bill takes annual_self_consumption_kwh as a separate parameter
+    # (caller-supplied, may differ from summary.total_self_consumption_kwh when the
+    # caller has an independently-computed self-consumption figure, e.g. fleet_distribution).
+    sc_kwh_physics = annual_self_consumption_kwh * phys.scale
+    gen_kwh = phys.gen_kwh
+    demand_kwh = phys.demand_kwh
+    import_kwh = phys.import_kwh
+    import_cost_physics = phys.import_cost_physics
+    # export_kwh / export_rev_physics not needed here: SEG moved to
+    # _seg_export_income_gbp in CR3; householder_bill no longer computes export income.
 
     # ---- Standing charge (always annualised to 365 days) --------------------
     standing_charge_gbp = standing_pence_per_day * _ANNUALISATION_DAYS / 100.0
