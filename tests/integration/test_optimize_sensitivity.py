@@ -867,3 +867,46 @@ class TestSensitivityPanelGuards:
                 axes={"completely_unknown_knob_xyz": [1.0, 2.0]},
                 simulate=_const_simulate,
             )
+
+
+# ---------------------------------------------------------------------------
+# TestConstSimulateCaching — _const_simulate returns a cached singleton
+# ---------------------------------------------------------------------------
+
+
+class TestConstSimulateCaching:
+    """_const_simulate must return the SAME FleetResults object on every call.
+
+    Caching at module scope eliminates repeated 525,600-row pandas allocation
+    across ~150 config evaluations, driving the full test file from ~386s to
+    well under 30s.
+    """
+
+    def test_same_instance_every_call(self) -> None:
+        """Two calls with identical args return the exact same object (identity)."""
+        a = _const_simulate(None, None, None)
+        b = _const_simulate(None, None, None)
+        assert a is b, (
+            "_const_simulate must return the same cached FleetResults instance; "
+            f"got two different objects (id={id(a)} vs id={id(b)})"
+        )
+
+    def test_same_instance_with_different_args(self) -> None:
+        """Different (ignored) args still return the cached singleton."""
+        a = _const_simulate(None, None, None)
+        b = _const_simulate("dummy_fc", "dummy_scenario", "dummy_end")
+        assert a is b, (
+            "_const_simulate should ignore its args and always return the same instance"
+        )
+
+    def test_singleton_is_fleet_results_with_correct_n_homes(self) -> None:
+        """The singleton is a FleetResults and has exactly _N_HOMES per-home results."""
+        from solar_challenge.fleet import FleetResults
+
+        result = _const_simulate(None, None, None)
+        assert isinstance(result, FleetResults), (
+            f"_const_simulate must return a FleetResults, got {type(result)}"
+        )
+        assert len(result.per_home_results) == _N_HOMES, (
+            f"Expected {_N_HOMES} homes in singleton, got {len(result.per_home_results)}"
+        )
