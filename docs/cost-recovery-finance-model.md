@@ -298,35 +298,42 @@ Synthetic energy inputs (per home, annual):
   Feasible:            True
 ```
 
-### 7.4 Why Rate and Saving Differ from the [FEAS] Targets
+### 7.4 Why the Live Rate Differs from the Single-Year Approximation
 
-The [FEAS] target of ≈15p and saving ≈£324 assume a spreadsheet self-consumption
-fraction of **0.70** (Sensitivity!B7: 5 kWh battery, see §4.1 of
-`docs/finance-spreadsheet-reconciliation.md`).  The synthetic fleet uses injected
-energy aggregates that produce an effective scf of **≈0.346**.  Because the CBS
-earns revenue proportional to self-consumed kWh, a lower scf means fewer kWh
-are billable at the own-use rate, so the solver needs a higher rate per kWh to
-reach the same £30,210 total revenue target.
-
-Wait — the solved rate is **lower** (12.22 p < 15 p) in this calibration run.
-That happens because the synthetic fleet has a high export-to-self ratio: the
-required revenue target (£30,210/yr) divided by fleet_sc (200,000 kWh) gives
-r* ≈ 15.1 p/kWh — but the injected export_revenue is zero (SEG=0 in the
-synthetic), so the solver sees only own-use income and picks 12.22 p based on
-the actual synthetic energy mix.  The arithmetic from the comment in
-`_make_fleet_results_fin_cr6` is:
+A single-year back-of-envelope gives:
 
 ```
 required revenue = opex(13,100) + debt_svc(14,410) + floor×n(2,700) = £30,210/yr
-r*               = 30,210 / (200,000 / 100) = 15.1 p/kWh (from comment)
+r*_approx        = 30,210 / (200,000 / 100) = 15.1 p/kWh
 ```
 
-The gap (15.1 p vs 12.22 p observed) arises because `project_multi_year` uses
-a 25-year PCHIP curve and `project_economics` takes the **mean surplus** over 25
-years divided by n_homes — at year 0 the surplus is computed from the full curve
-rather than a single-year snapshot.  The printed value (12.22 p) is the live,
-code-authoritative result; the 15.1 p shorthand from the comment is a single-year
-approximation.
+The live calibration value is **12.22 p/kWh** — lower than this approximation.
+The difference has two sources:
+
+1. **Multi-year mean, not a single-year snapshot.**  `project_multi_year` builds a
+   25-year PCHIP revenue curve and `project_economics` takes the *mean net surplus*
+   over all 25 years.  Generation (and therefore self-consumption) peaks in years 1–5
+   and degrades gently; the PCHIP mean surplus at a given rate is slightly higher than
+   the year-1 point, so the solver can reach the £27/home floor at a *lower* rate than
+   the year-1 approximation implies.
+
+2. **Synthetic scf ≈ 0.346 ≠ spreadsheet 0.70.**  The [FEAS] target of ≈15p and
+   saving ≈£324 assume the spreadsheet self-consumption fraction of 0.70
+   (Sensitivity!B7: 5 kWh battery; see §4.1 of `docs/finance-spreadsheet-reconciliation.md`).
+   The synthetic fleet uses injected aggregates (self=2,000 kWh, gen=5,775 kWh) that
+   produce scf ≈ 0.346.  The single-year approximation above already uses the correct
+   fleet_sc = 200,000 kWh, so the scf difference does not change the 15.1 p estimate —
+   but it does mean the solved *saving* (≈£226 live vs. ≈£324 target) differs, because
+   saving depends on sc_kwh per home.
+
+**The key structural result is exact and hard-asserted**: `sol.net_surplus_per_home_per_year_gbp == 27.00`
+to float ε (binding = 'floor' — the closed-form affine solve guarantees this regardless
+of the rate value).  The printed rate (12.22 p) and saving (£226) are live, code-authoritative
+figures reported for transparency; no test pins them to specific digits.
+
+> **Note on code line numbers** — The line numbers cited in this document (e.g. line 499,
+> line 1814) are approximate anchors for the current version and will drift as the code
+> evolves.  Use the function names as durable references.
 
 **The key structural result is hard-asserted and exact**: `sol.net_surplus_per_home_per_year_gbp == 27.00` to float ε (binding = 'floor' — the closed-form affine solve guarantees this regardless of the rate value).
 
