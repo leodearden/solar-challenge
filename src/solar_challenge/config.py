@@ -1427,6 +1427,7 @@ def generate_homes_from_distribution(
     *,
     fleet_tariff: Optional[TariffConfig] = None,
     fleet_grid_charging: Optional[GridChargeConfig] = None,
+    fleet_dispatch_strategy: Optional[str] = None,
 ) -> list[HomeConfig]:
     """Generate a list of homes by sampling from distributions.
 
@@ -1443,6 +1444,9 @@ def generate_homes_from_distribution(
             BatteryConfig is created and fleet_grid_charging is silently dropped
             for that home — this is expected behaviour (no battery → no grid
             charging), not an error.
+        fleet_dispatch_strategy: Optional dispatch strategy string to apply to
+            every home. When None (default) or empty, homes use "greedy",
+            preserving bit-identical behaviour for existing callers.
 
     Returns:
         List of HomeConfig objects
@@ -1628,7 +1632,7 @@ def generate_homes_from_distribution(
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=fleet_tariff,
-                dispatch_strategy="greedy",
+                dispatch_strategy=fleet_dispatch_strategy or "greedy",
             )
         )
 
