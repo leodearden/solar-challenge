@@ -135,6 +135,7 @@ class EnergyFlowResult:
     grid_export: float
     grid_import: float
     battery_soc: float  # SOC after this timestep
+    grid_charge: float = 0.0  # informational: kWh stored in battery from grid (sub-set of battery_charge and grid_import)
 
 
 def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:
@@ -294,6 +295,7 @@ def simulate_timestep(
         grid_export=grid_export_kwh,
         grid_import=grid_import_kwh,
         battery_soc=battery_soc,
+        grid_charge=grid_charge_stored_kwh,
     )
 
 
@@ -411,6 +413,7 @@ def simulate_timestep_tou(
         grid_export=grid_export_kwh,
         grid_import=grid_import_kwh,
         battery_soc=battery_soc,
+        grid_charge=grid_charge_stored_kwh,
     )
 
 
