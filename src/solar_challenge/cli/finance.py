@@ -138,8 +138,13 @@ def run(
     finance = _parse_finance_config(raw.get("finance"))
 
     # ---- Resolve flexibility band (CLI flag > scenario key > None) ----------
+    # Scenario-level values are normalised to lowercase to match the CLI's
+    # case-insensitive FlexBand enum behaviour (e.g. "Central" → "central").
+    _raw_band = raw.get("flex_band")
     band_name: Optional[str] = (
-        flex_band.value if flex_band is not None else raw.get("flex_band")
+        flex_band.value
+        if flex_band is not None
+        else (_raw_band.lower() if isinstance(_raw_band, str) else None)
     )
     resolved_flex_band: Optional[FlexibilityValueBand] = (
         resolve_flex_band(band_name) if band_name else None
