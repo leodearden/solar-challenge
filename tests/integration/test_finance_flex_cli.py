@@ -56,18 +56,14 @@ def _make_bill_distribution(
 
 def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
     """Build a minimal HomeConfig for fixture use."""
-    from solar_challenge.config import (
-        BatteryConfig,
-        HomeConfig,
-        LoadConfig,
-        PVConfig,
-    )
+    from solar_challenge.home import HomeConfig
+    from solar_challenge.load import LoadConfig
     from solar_challenge.location import Location
+    from solar_challenge.pv import PVConfig
 
     return HomeConfig(
-        pv=PVConfig(capacity_kw=4.0, azimuth=180, tilt=35),
-        battery=BatteryConfig(capacity_kwh=5.0),
-        load=LoadConfig(annual_consumption_kwh=3500),
+        pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
+        load_config=LoadConfig(annual_consumption_kwh=3500.0),
         location=Location.bristol(),
     )
 
@@ -149,6 +145,7 @@ def _write_scenario(
     if flex_band is not None:
         scenario["flex_band"] = flex_band
 
+    tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / "test_scenario.yaml"
     path.write_text(yaml.dump(scenario))
     return path
@@ -186,4 +183,130 @@ class TestFinanceFlexCLIHelp:
         )
         assert "--flex-band" in result.output, (
             f"--flex-band not found in finance run --help:\n{result.output}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# §D — Behaviour tests (step-3 RED drivers)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceFlexCLIBehaviour:
+    """CLI-level behaviour tests for --flex-band wiring (offline, patched fleet)."""
+
+    def test_flex_band_central_renders_block(
+        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+    ) -> None:
+        """--flex-band central must render the Flexibility Value block with central figures.
+
+        (a) Checks heading token, band name, and a central-specific monetary amount.
+        """
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario_file = _write_scenario(tmp_path / "a")
+        fr = flex_fleet_results
+
+        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
+            runner = CliRunner()
+            result = runner.invoke(
+                app,
+                ["finance", "run", "--flex-band", "central", str(scenario_file)],
+            )
+
+        assert result.exit_code == 0, (
+            f"Exit {result.exit_code}. Output:\n{result.output}"
+        )
+        assert "Flexibility Value" in result.output, (
+            f"Expected 'Flexibility Value' heading in output:\n{result.output}"
+        )
+        assert "central" in result.output, (
+            f"Expected 'central' band name in output:\n{result.output}"
+        )
+        # Central band: time_shift_gbp = 250.0
+        assert "£250" in result.output or "250" in result.output, (
+            f"Expected central time-shift figure in output:\n{result.output}"
+        )
+
+    def test_flex_band_cli_flag_overrides_scenario_key(
+        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+    ) -> None:
+        """CLI --flex-band flag must take precedence over scenario-level flex_band key.
+
+        (b) Scenario says 'low'; CLI says 'high' → high wins.
+        """
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        # Scenario has flex_band: low
+        scenario_file = _write_scenario(tmp_path / "b", flex_band="low")
+        fr = flex_fleet_results
+
+        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
+            runner = CliRunner()
+            result = runner.invoke(
+                app,
+                ["finance", "run", "--flex-band", "high", str(scenario_file)],
+            )
+
+        assert result.exit_code == 0, (
+            f"Exit {result.exit_code}. Output:\n{result.output}"
+        )
+        # High band: time_shift_gbp = 330.0
+        assert "£330" in result.output or "330" in result.output, (
+            f"Expected high time-shift '£330' in output:\n{result.output}"
+        )
+        # Low band: time_shift_gbp = 100.0 — must NOT appear
+        assert "£100" not in result.output, (
+            f"Low band '£100' should NOT appear when CLI flag='high':\n{result.output}"
+        )
+
+    def test_no_flex_band_omits_block(
+        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+    ) -> None:
+        """Default (no --flex-band, no scenario flex_band key) must omit the flex block.
+
+        (c) Additive default: the block is absent when neither source provides a band.
+        """
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        # No flex_band key in scenario, no CLI flag
+        scenario_file = _write_scenario(tmp_path / "c")
+        fr = flex_fleet_results
+
+        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
+            runner = CliRunner()
+            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+
+        assert result.exit_code == 0, (
+            f"Exit {result.exit_code}. Output:\n{result.output}"
+        )
+        assert "Flexibility Value" not in result.output, (
+            f"'Flexibility Value' should NOT appear when no band is set:\n{result.output}"
+        )
+
+    def test_invalid_flex_band_exits_nonzero(
+        self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
+    ) -> None:
+        """--flex-band bogus must exit with a non-zero code.
+
+        (d) FlexBand enum gives typer-native rejection; CliRunner must report exit != 0.
+        """
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario_file = _write_scenario(tmp_path / "d")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["finance", "run", "--flex-band", "bogus", str(scenario_file)],
+        )
+
+        assert result.exit_code != 0, (
+            f"Expected non-zero exit for invalid band, got {result.exit_code}.\n{result.output}"
         )
