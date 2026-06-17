@@ -54,6 +54,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, calculate_degradation_factor
+from solar_challenge.tariff import TariffConfig
 
 
 class TestSimulationPeriod:
@@ -3296,3 +3297,64 @@ class TestScenarioFinance:
             assert fc.loan_term_years == 15
         finally:
             path.unlink()
+
+
+class TestGenerateHomesFromDistributionFlex:
+    """Tests for fleet_tariff and fleet_grid_charging threading in generate_homes_from_distribution."""
+
+    def _base_config(self) -> FleetDistributionConfig:
+        """A small fixed fleet with a battery on every home (capacity_kwh fixed value)."""
+        return FleetDistributionConfig(
+            n_homes=5,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            battery=BatteryDistributionConfig(capacity_kwh=5.0),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+    def test_fleet_tariff_threaded_to_all_homes(self) -> None:
+        """fleet_tariff=TariffConfig.economy_7() sets tariff_config on every home."""
+        tariff = TariffConfig.economy_7()
+        homes = generate_homes_from_distribution(
+            self._base_config(), Location.bristol(), fleet_tariff=tariff
+        )
+        assert len(homes) == 5
+        for home in homes:
+            assert home.tariff_config is not None
+            assert home.tariff_config == tariff
+
+    def test_fleet_grid_charging_threaded_to_all_battery_homes(self) -> None:
+        """fleet_grid_charging=GridChargeConfig(...) threads grid_charging to every battery home."""
+        gc = GridChargeConfig(target_soc_fraction=0.9)
+        homes = generate_homes_from_distribution(
+            self._base_config(), Location.bristol(), fleet_grid_charging=gc
+        )
+        for home in homes:
+            assert home.battery_config is not None  # all homes have batteries
+            assert home.battery_config.grid_charging is not None
+            assert home.battery_config.grid_charging.target_soc_fraction == 0.9
+
+    def test_both_fleet_tariff_and_grid_charging_threaded(self) -> None:
+        """Both fleet_tariff and fleet_grid_charging are threaded simultaneously."""
+        tariff = TariffConfig.economy_7()
+        gc = GridChargeConfig(target_soc_fraction=0.85)
+        homes = generate_homes_from_distribution(
+            self._base_config(),
+            Location.bristol(),
+            fleet_tariff=tariff,
+            fleet_grid_charging=gc,
+        )
+        for home in homes:
+            assert home.tariff_config is not None
+            assert home.tariff_config == tariff
+            assert home.battery_config is not None
+            assert home.battery_config.grid_charging is not None
+            assert home.battery_config.grid_charging.target_soc_fraction == 0.85
+
+    def test_calibration_guard_no_new_kwargs(self) -> None:
+        """No new kwargs: tariff_config=None and grid_charging=None on every home (bit-identical)."""
+        homes = generate_homes_from_distribution(self._base_config(), Location.bristol())
+        for home in homes:
+            assert home.tariff_config is None
+            assert home.battery_config is not None
+            assert home.battery_config.grid_charging is None
