@@ -445,3 +445,47 @@ class TestStructuralInvariants:
         assert econ_solved.net_surplus_per_home_per_year_gbp == pytest.approx(
             sol.net_surplus_per_home_per_year_gbp, abs=1e-6
         )
+
+    def test_h2_capex_monotone_on_fin_fleet(self) -> None:
+        """H2: higher capex → strictly higher solved own_use_rate AND representative_outlay.
+
+        Both configs use the same injected energy mix (SAME fleet) over the SAME
+        scenario — only capex differs — so the strict monotonicity comes from the
+        affine solve's capex→debt→required-own-use→outlay coupling.
+
+        Tuned so BOTH configs stay in the interior 'floor' regime (r* ∈ (0, retail)).
+        RED until step-6 tunes the fixture pair.
+        """
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        scenario, _, simulate = self._build_interior()
+
+        # Low-capex config (interior, low rate)
+        finance_low = _make_finance_interior_cr6(
+            pv_cost_per_kwp=1000.0,
+            grant_gbp=0.0,
+            retained_cash_floor=50.0,
+            retail_rate=30.0,
+        )
+        # High-capex config (SAME scenario+fr, still interior, higher rate)
+        finance_high = _make_finance_interior_cr6(
+            pv_cost_per_kwp=2000.0,
+            grant_gbp=0.0,
+            retained_cash_floor=50.0,
+            retail_rate=30.0,
+        )
+
+        sol_low = solve_cost_recovery_rate(scenario, finance_low, simulate=simulate)
+        sol_high = solve_cost_recovery_rate(scenario, finance_high, simulate=simulate)
+
+        # H2 hard assertions: capex → rate (strictly higher) AND outlay (strictly higher)
+        assert sol_high.own_use_rate_pence_per_kwh > sol_low.own_use_rate_pence_per_kwh, (
+            f"H2: higher capex must yield strictly higher rate; "
+            f"low={sol_low.own_use_rate_pence_per_kwh:.4f}, "
+            f"high={sol_high.own_use_rate_pence_per_kwh:.4f}"
+        )
+        assert sol_high.representative_outlay_gbp > sol_low.representative_outlay_gbp, (
+            f"H2: higher capex must yield strictly higher outlay; "
+            f"low=£{sol_low.representative_outlay_gbp:.2f}, "
+            f"high=£{sol_high.representative_outlay_gbp:.2f}"
+        )
