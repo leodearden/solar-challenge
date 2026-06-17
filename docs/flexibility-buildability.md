@@ -99,8 +99,22 @@ The detailed buildability model, scenario-by-scenario breakdown, aggregator mark
 survey, and G99/G100 compliance checklist are in the external consulting document:
 
 > `2026-06-16-flexibility-value-buildability-model.md`
-> (at `/home/leo/mission-control/consulting/solar-challenge/`; not git-tracked)
+> **Author-local; not committed to this repository.**
+> Location on the original author's workstation:
+> `/home/leo/mission-control/consulting/solar-challenge/`
 
-The banded figures in §1 above are transcribed from §1.1/§1.4 of that document.
-The prerequisites and risk rating in §2–§3 derive from §1.3/§2/§5 of that document
-and the deployment-readiness survey §9 (2026-06-15).
+This document is a consulting working file and is intentionally outside the repo.
+Readers cloning from a fresh checkout cannot resolve this path — that is by design.
+The in-repo provenance chain is complete without it:
+
+- **Banded figures** (§1) → transcribed verbatim into
+  `src/solar_challenge/flex.py` `FLEX_VALUE_BANDS`, which is the canonical
+  in-repo single source of truth.  Clone the repo and read `flex.py` — no
+  external file is required to verify or reproduce the numbers.
+- **Prerequisites and risk rating** (§2–§3) → distilled into this note from
+  consulting §1.3/§2/§5 and the deployment-readiness survey §9 (2026-06-15);
+  both are summarised in full here, so no external document is needed to
+  understand or audit the assessments.
+
+The consulting document is cited by filename (matching the convention used in
+`flex.py:5` and `flex.py:98`) for audit-trail completeness only.
