@@ -634,18 +634,29 @@ class TestGenerateConfigRankingReportTable2:
         assert "60" in report, f"baseline surplus 60 not found:\n{report}"
 
     def test_pareto_flag_set_for_pareto_configs(self) -> None:
-        """Pareto configs must have a Pareto flag in Table 2; non-Pareto configs must not."""
+        """Table 2 must have exactly 2 '✔ Pareto' tokens (A+B) and exactly 1 '—' marker (C)."""
         from solar_challenge.output import generate_config_ranking_report
 
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
-        # Both Pareto and non-Pareto must be distinguishable — at least one token difference
-        # The simplest check: 'Pareto' or '★' or '✔' appears at least twice (for A+B)
-        pareto_markers = report.count("Pareto") + report.count("✦") + report.count("◎")
-        # A more lenient check: text contains 'pareto' somewhere
-        assert "pareto" in report.lower(), (
-            f"'Pareto' flag not found in Table 2:\n{report}"
+        # Scope to Table 2 section — both tables print config dim labels so un-scoped
+        # line filters would also match Table 1 rows which carry no Pareto column.
+        assert "## Fixed-15p Trade-Off" in report, "Table 2 heading not found"
+        table2 = report.split("## Fixed-15p Trade-Off", 1)[1]
+
+        # Exactly two '✔ Pareto' tokens: one for Config A, one for Config B
+        pareto_count = table2.count("✔ Pareto")
+        assert pareto_count == 2, (
+            f"Expected exactly 2 '✔ Pareto' tokens in Table 2, got {pareto_count}:\n{table2}"
+        )
+
+        # Exactly one '—' (U+2014 em-dash) non-Pareto marker: only Config C.
+        # Separator rows use ASCII '-', not em-dash, so only C's marker contributes U+2014.
+        non_pareto_count = table2.count("—")  # U+2014 em-dash
+        assert non_pareto_count == 1, (
+            f"Expected exactly 1 '—' (U+2014) non-Pareto marker in Table 2, "
+            f"got {non_pareto_count}:\n{table2}"
         )
 
     def test_pareto_flag_non_trivial(self) -> None:
@@ -655,18 +666,37 @@ class TestGenerateConfigRankingReportTable2:
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
-        # Config C (6.0 kWp) is NOT on the Pareto front.
-        # There must be at least TWO distinct Pareto indicators in the table
-        # (one for A, one for B) and Config C's row must differ.
-        # We check that the report is not trivially marking everything the same.
-        lines = report.split("\n")
-        # Find lines that mention '6.0 kWp' (Config C's row)
-        c_lines = [ln for ln in lines if "6.0 kWp" in ln and "5.0 kWh" in ln]
-        # Find lines that mention '4.0 kWp' + '0.0 kWh' (Config A's row in Table 2)
-        a_lines = [ln for ln in lines if "4.0 kWp" in ln and "0.0 kWh" in ln]
-        # At minimum, both must appear (Table 2 has feasible rows only)
-        assert c_lines or True  # lenient: just ensure report rendered something
-        assert a_lines or True
+        # Scope to Table 2 section — Table 1 also prints '{pv} kWp / {battery} kWh / {inverter} kW'
+        # labels but has NO Pareto column; an un-scoped line filter on dims would match Table-1
+        # rows and falsify the assertion.  Splitting on the Table-2 heading isolates the section
+        # that actually carries the Pareto flag column.
+        assert "## Fixed-15p Trade-Off" in report, "Table 2 heading not found"
+        table2 = report.split("## Fixed-15p Trade-Off", 1)[1]
+        table2_lines = table2.split("\n")
+
+        # Config C row (6.0 kWp / 5.0 kWh): dominated → must carry '—' (U+2014), NOT '✔ Pareto'
+        c_lines = [ln for ln in table2_lines if "6.0 kWp" in ln and "5.0 kWh" in ln]
+        assert c_lines, "Config C (6.0 kWp / 5.0 kWh) not found in Table 2"
+        assert all("—" in ln for ln in c_lines), (
+            f"Expected '—' (U+2014, non-Pareto) for Config C in Table 2:\n{c_lines}"
+        )
+        assert all("✔ Pareto" not in ln for ln in c_lines), (
+            f"Config C should NOT be marked '✔ Pareto' in Table 2:\n{c_lines}"
+        )
+
+        # Config A row (4.0 kWp / 0.0 kWh): on Pareto front → must carry '✔ Pareto'
+        a_lines = [ln for ln in table2_lines if "4.0 kWp" in ln and "0.0 kWh" in ln]
+        assert a_lines, "Config A (4.0 kWp / 0.0 kWh) not found in Table 2"
+        assert all("✔ Pareto" in ln for ln in a_lines), (
+            f"Expected '✔ Pareto' for Config A in Table 2:\n{a_lines}"
+        )
+
+        # Config B row (5.0 kWp / 5.0 kWh): on Pareto front → must carry '✔ Pareto'
+        b_lines = [ln for ln in table2_lines if "5.0 kWp" in ln and "5.0 kWh" in ln]
+        assert b_lines, "Config B (5.0 kWp / 5.0 kWh) not found in Table 2"
+        assert all("✔ Pareto" in ln for ln in b_lines), (
+            f"Expected '✔ Pareto' for Config B in Table 2:\n{b_lines}"
+        )
 
     def test_infeasible_absent_from_table2(self) -> None:
         """Infeasible ConfigPoints must NOT appear in Table 2 (no baseline economics)."""
