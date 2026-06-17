@@ -5,7 +5,8 @@ import itertools
 
 import pytest
 
-from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import FinanceConfig, GridChargeConfig, ScenarioConfig, SimulationPeriod
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.optimize import ConfigPoint, enumerate_configs
@@ -252,3 +253,73 @@ class TestPvInverterHomogenization:
         for i, home in enumerate(base.homes):
             assert home.pv_config.capacity_kw == pytest.approx(orig_pv_capacities[i])
             assert home.pv_config.inverter_capacity_kw == orig_inverter_caps[i]
+
+
+class TestBatteryHomogenization:
+    """Tests for battery homogenization in _apply_install / enumerate_configs."""
+
+    def _make_mixed_battery_base(self) -> ScenarioConfig:
+        """Fleet with one home that HAS a non-default battery and one without."""
+        battery = BatteryConfig(
+            capacity_kwh=7.0,
+            max_discharge_kw=3.6,          # non-default
+            grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+        )
+        home_with_battery = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000, household_occupants=2),
+            battery_config=battery,
+        )
+        home_without_battery = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=2500, household_occupants=1),
+            battery_config=None,
+        )
+        return ScenarioConfig(
+            name="mixed-battery",
+            period=SimulationPeriod("2024-01-01", "2024-12-31"),
+            homes=[home_with_battery, home_without_battery],
+        )
+
+    def test_battery_kwh_zero_sets_all_battery_config_to_none(self) -> None:
+        """battery_kwh==0.0 → every home has battery_config is None."""
+        base = self._make_mixed_battery_base()
+        result = enumerate_configs(base, [4.0], [0.0], [3.68])
+        _, sc = result[0]
+        for home in sc.homes:
+            assert home.battery_config is None
+
+    def test_battery_kwh_positive_preserves_existing_battery_fields(self) -> None:
+        """battery_kwh>0 on the home with a battery preserves max_discharge_kw + grid_charging."""
+        base = self._make_mixed_battery_base()
+        result = enumerate_configs(base, [4.0], [5.0], [3.68])
+        _, sc = result[0]
+        home_with = sc.homes[0]  # was home_with_battery
+        assert home_with.battery_config is not None
+        assert home_with.battery_config.capacity_kwh == pytest.approx(5.0)
+        # Non-default base fields must be preserved
+        assert home_with.battery_config.max_discharge_kw == pytest.approx(3.6)
+        assert home_with.battery_config.grid_charging is not None
+        assert home_with.battery_config.grid_charging.target_soc_fraction == pytest.approx(0.8)
+
+    def test_battery_kwh_positive_fabricates_battery_for_battery_less_home(self) -> None:
+        """battery_kwh>0 on the home WITHOUT a battery fabricates a BatteryConfig."""
+        base = self._make_mixed_battery_base()
+        result = enumerate_configs(base, [4.0], [5.0], [3.68])
+        _, sc = result[0]
+        home_without = sc.homes[1]  # was home_without_battery
+        assert home_without.battery_config is not None
+        assert home_without.battery_config.capacity_kwh == pytest.approx(5.0)
+        # Fabricated battery must have the default max_discharge_kw (2.5)
+        assert home_without.battery_config.max_discharge_kw == pytest.approx(2.5)
+
+    def test_base_battery_configs_not_mutated(self) -> None:
+        """Original battery configs in base.homes are never mutated."""
+        base = self._make_mixed_battery_base()
+        orig_cap = base.homes[0].battery_config
+        assert orig_cap is not None
+        _ = enumerate_configs(base, [4.0, 5.0], [0.0, 5.0], [3.68])
+        # Battery on home_with_battery must remain unchanged
+        assert base.homes[0].battery_config is orig_cap
+        assert base.homes[0].battery_config.capacity_kwh == pytest.approx(7.0)
+        assert base.homes[1].battery_config is None
