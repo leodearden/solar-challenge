@@ -22,10 +22,12 @@ from solar_challenge.config import (
 )
 from solar_challenge.finance import (
     DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
+    CostRecoverySolution,
     ProjectEconomics,
     bill_distribution,
     project_economics,
     project_multi_year,
+    solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.home import calculate_summary
@@ -172,10 +174,9 @@ def run(
         )
         dist_spreadsheet = bill_distribution(summaries, finance_spreadsheet, days)
 
-    # ---- Project economics (optional) ---------------------------------------
-    economics_result: Optional[ProjectEconomics] = None
-    if project:
-        print_info("Computing project-level economics (DSCR/IRR/payback)…")
+    # ---- Build shared ScenarioConfig (used by --project and/or --cost-recovery) ---
+    econ_scenario: Optional[ScenarioConfig] = None
+    if project or cost_recovery:
         econ_scenario = ScenarioConfig(
             name=raw.get("name", str(scenario)),
             period=SimulationPeriod(
@@ -185,9 +186,24 @@ def run(
             homes=list(fleet_config.homes),
             location=loc,
             finance=finance,
+            # Thread seg_tariff_pence_per_kwh so solve_cost_recovery_rate prices SEG correctly
+            seg_tariff_pence_per_kwh=seg_rate if seg_rate is not None else 0.0,
         )
+
+    # ---- Project economics (optional) ---------------------------------------
+    economics_result: Optional[ProjectEconomics] = None
+    if project:
+        assert econ_scenario is not None
+        print_info("Computing project-level economics (DSCR/IRR/payback)…")
         curve = project_multi_year(econ_scenario, finance)
         economics_result = project_economics(curve, econ_scenario, finance)
+
+    # ---- Cost-recovery solve (optional) ------------------------------------
+    cost_recovery_result: Optional[CostRecoverySolution] = None
+    if cost_recovery:
+        assert econ_scenario is not None
+        print_info("Solving cost-recovery own-use rate…")
+        cost_recovery_result = solve_cost_recovery_rate(econ_scenario, finance)
 
     # ---- Render report ------------------------------------------------------
     if assumptions == AssumptionMode.physics:
@@ -196,6 +212,7 @@ def run(
             dist_physics,
             scenario_name=raw.get("name", str(scenario)),
             economics=economics_result,
+            cost_recovery=cost_recovery_result,
         )
     elif assumptions == AssumptionMode.spreadsheet:
         assert dist_spreadsheet is not None
@@ -203,6 +220,7 @@ def run(
             dist_spreadsheet,
             scenario_name=raw.get("name", str(scenario)),
             economics=economics_result,
+            cost_recovery=cost_recovery_result,
         )
     else:  # both
         assert dist_physics is not None
@@ -212,6 +230,7 @@ def run(
             bill_spreadsheet=dist_spreadsheet,
             scenario_name=raw.get("name", str(scenario)),
             economics=economics_result,
+            cost_recovery=cost_recovery_result,
         )
 
     console.print(report)
