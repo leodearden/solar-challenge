@@ -27,6 +27,7 @@ from solar_challenge.config import (
     UniformDistribution,
     WeightedDiscreteDistribution,
     _parse_battery_config,
+    _parse_grid_charge_config,
     _parse_community_config,
     _parse_dispatch_strategy_config,
     _parse_ev_config,
@@ -54,6 +55,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, calculate_degradation_factor
+from solar_challenge.tariff import TariffConfig
 
 
 class TestSimulationPeriod:
@@ -407,6 +409,16 @@ class TestBatteryGridChargeParsing:
         """grid_charging supplied as a scalar raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="grid_charging must be a mapping"):
             _parse_battery_config({"capacity_kwh": 5.0, "grid_charging": 0.8})
+
+    def test_parse_grid_charge_config_non_mapping_raises_directly(self) -> None:
+        """_parse_grid_charge_config raises ConfigurationError for non-dict input directly."""
+        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping, got str"):
+            _parse_grid_charge_config("not-a-dict")  # type: ignore[arg-type]
+
+    def test_parse_grid_charge_config_list_raises_directly(self) -> None:
+        """_parse_grid_charge_config raises ConfigurationError for list input."""
+        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping, got list"):
+            _parse_grid_charge_config([1, 2])  # type: ignore[arg-type]
 
     def test_yaml_round_trip_grid_charging(self) -> None:
         """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""
@@ -3294,5 +3306,157 @@ class TestScenarioFinance:
             assert fc.grid_services_income_per_kw_per_year_gbp == 8.0
             # Un-overridden fields use documented defaults
             assert fc.loan_term_years == 15
+        finally:
+            path.unlink()
+
+
+class TestGenerateHomesFromDistributionFlex:
+    """Tests for fleet_tariff and fleet_grid_charging threading in generate_homes_from_distribution."""
+
+    def _base_config(self) -> FleetDistributionConfig:
+        """A small fixed fleet with a battery on every home (capacity_kwh fixed value)."""
+        return FleetDistributionConfig(
+            n_homes=5,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            battery=BatteryDistributionConfig(capacity_kwh=5.0),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+    def test_fleet_tariff_threaded_to_all_homes(self) -> None:
+        """fleet_tariff=TariffConfig.economy_7() sets tariff_config on every home."""
+        tariff = TariffConfig.economy_7()
+        homes = generate_homes_from_distribution(
+            self._base_config(), Location.bristol(), fleet_tariff=tariff
+        )
+        assert len(homes) == 5
+        for home in homes:
+            assert home.tariff_config is not None
+            assert home.tariff_config == tariff
+
+    def test_fleet_grid_charging_threaded_to_all_battery_homes(self) -> None:
+        """fleet_grid_charging=GridChargeConfig(...) threads grid_charging to every battery home."""
+        gc = GridChargeConfig(target_soc_fraction=0.9)
+        homes = generate_homes_from_distribution(
+            self._base_config(), Location.bristol(), fleet_grid_charging=gc
+        )
+        for home in homes:
+            assert home.battery_config is not None  # all homes have batteries
+            assert home.battery_config.grid_charging is not None
+            assert home.battery_config.grid_charging.target_soc_fraction == 0.9
+
+    def test_both_fleet_tariff_and_grid_charging_threaded(self) -> None:
+        """Both fleet_tariff and fleet_grid_charging are threaded simultaneously."""
+        tariff = TariffConfig.economy_7()
+        gc = GridChargeConfig(target_soc_fraction=0.85)
+        homes = generate_homes_from_distribution(
+            self._base_config(),
+            Location.bristol(),
+            fleet_tariff=tariff,
+            fleet_grid_charging=gc,
+        )
+        for home in homes:
+            assert home.tariff_config is not None
+            assert home.tariff_config == tariff
+            assert home.battery_config is not None
+            assert home.battery_config.grid_charging is not None
+            assert home.battery_config.grid_charging.target_soc_fraction == 0.85
+
+    def test_calibration_guard_no_new_kwargs(self) -> None:
+        """No new kwargs: tariff_config=None and grid_charging=None on every home (bit-identical)."""
+        homes = generate_homes_from_distribution(self._base_config(), Location.bristol())
+        for home in homes:
+            assert home.tariff_config is None
+            assert home.battery_config is not None
+            assert home.battery_config.grid_charging is None
+
+
+class TestLoadFleetConfigFlexThreading:
+    """Tests for YAML tariff + grid_charging threading through load_fleet_config."""
+
+    def test_fleet_yaml_tariff_and_grid_charging_threaded(self) -> None:
+        """A fleet YAML with top-level tariff: and battery.grid_charging: threads both to all homes."""
+        yaml_content = """
+name: Flex Threading Test
+fleet_distribution:
+  n_homes: 4
+  seed: 7
+  pv:
+    capacity_kw: 4.0
+  battery:
+    capacity_kwh: 5.0
+    grid_charging:
+      target_soc_fraction: 0.9
+  load:
+    annual_consumption_kwh: 3400
+tariff:
+  type: economy_7
+  off_peak_rate: 0.09
+  peak_rate: 0.25
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            fleet = load_fleet_config(path)
+            assert len(fleet.homes) == 4
+            for home in fleet.homes:
+                assert home.tariff_config is not None, "tariff_config should be threaded"
+                assert home.battery_config is not None, "all homes should have batteries"
+                assert home.battery_config.grid_charging is not None, "grid_charging should be threaded"
+                assert home.battery_config.grid_charging.target_soc_fraction == 0.9
+        finally:
+            path.unlink()
+
+    def test_theta_calibration_regression_no_tariff_no_grid_charging(self) -> None:
+        """θ regression pin: fleet YAML without tariff: or grid_charging is bit-identical (both None).
+
+        Mirrors the shape of scenarios/bristol-fin-calibration.yaml (fleet_distribution +
+        battery + seg + finance, no top-level tariff:, no battery.grid_charging).  Asserts
+        that load_fleet_config produces tariff_config=None and battery.grid_charging=None on
+        every home — i.e. the β threading is disjoint from _parse_finance_config.
+        """
+        yaml_content = """
+name: Theta Calibration Guard
+fleet_distribution:
+  n_homes: 4
+  seed: 99
+  pv:
+    capacity_kw: 4.0
+  battery:
+    capacity_kwh: 5.0
+  load:
+    annual_consumption_kwh: 3400
+seg:
+  rate_pence_per_kwh: 15.0
+finance:
+  loan_term_years: 15
+  loan_rate: 0.05
+  equity_share: 0.20
+  capex_per_home_gbp: 3000
+  standing_charge_pence_per_day: 60.0
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            fleet = load_fleet_config(path)
+            assert len(fleet.homes) == 4
+            for home in fleet.homes:
+                assert home.tariff_config is None, (
+                    "tariff_config must be None when no top-level tariff: key is present"
+                )
+                assert home.battery_config is not None
+                assert home.battery_config.grid_charging is None, (
+                    "grid_charging must be None when no battery.grid_charging key is present"
+                )
         finally:
             path.unlink()

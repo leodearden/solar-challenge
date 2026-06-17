@@ -748,6 +748,27 @@ def _parse_pv_config(data: dict[str, Any]) -> PVConfig:
     )
 
 
+def _parse_grid_charge_config(data: Optional[dict[str, Any]]) -> Optional[GridChargeConfig]:
+    """Parse grid-charging configuration from a dict or None.
+
+    Args:
+        data: grid_charging mapping (e.g. ``{'target_soc_fraction': 0.9}``) or None.
+
+    Returns:
+        GridChargeConfig if data is a non-None mapping, else None.
+
+    Raises:
+        ConfigurationError: If data is present but not a mapping.
+    """
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigurationError(
+            f"grid_charging must be a mapping, got {type(data).__name__}"
+        )
+    return GridChargeConfig(target_soc_fraction=data.get("target_soc_fraction", 0.9))
+
+
 def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryConfig]:
     """Parse battery configuration from config data."""
     if data is None:
@@ -759,16 +780,7 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
         dispatch_strategy = _parse_dispatch_strategy_config(data["dispatch_strategy"])
 
     # Parse grid-charging config if present
-    grid_charging = None
-    if "grid_charging" in data and data["grid_charging"] is not None:
-        gc = data["grid_charging"]
-        if not isinstance(gc, dict):
-            raise ConfigurationError(
-                f"grid_charging must be a mapping, got {type(gc).__name__}"
-            )
-        grid_charging = GridChargeConfig(
-            target_soc_fraction=gc.get("target_soc_fraction", 0.9)
-        )
+    grid_charging = _parse_grid_charge_config(data.get("grid_charging"))
 
     return BatteryConfig(
         capacity_kwh=data.get("capacity_kwh", 5.0),
@@ -1412,12 +1424,25 @@ class _DistributionSampler:
 def generate_homes_from_distribution(
     config: FleetDistributionConfig,
     location: Location,
+    *,
+    fleet_tariff: Optional[TariffConfig] = None,
+    fleet_grid_charging: Optional[GridChargeConfig] = None,
 ) -> list[HomeConfig]:
     """Generate a list of homes by sampling from distributions.
 
     Args:
         config: Fleet distribution configuration
         location: Location for all homes
+        fleet_tariff: Optional TariffConfig to apply to every home. When None
+            (default) homes are generated with tariff_config=None, preserving
+            bit-identical behaviour for callers that do not pass this kwarg.
+        fleet_grid_charging: Optional GridChargeConfig to apply to every home
+            that has a battery. When None (default) the battery's grid_charging
+            remains None, preserving bit-identical behaviour. Note: if a home's
+            sampled battery capacity is non-positive (or battery is absent), no
+            BatteryConfig is created and fleet_grid_charging is silently dropped
+            for that home — this is expected behaviour (no battery → no grid
+            charging), not an error.
 
     Returns:
         List of HomeConfig objects
@@ -1520,6 +1545,7 @@ def generate_homes_from_distribution(
                     capacity_kwh=battery_capacity,
                     max_charge_kw=charge_kw if charge_kw is not None else 2.5,
                     max_discharge_kw=discharge_kw if discharge_kw is not None else 2.5,
+                    grid_charging=fleet_grid_charging,
                 )
 
         # Sample load parameters
@@ -1601,7 +1627,7 @@ def generate_homes_from_distribution(
                 ev_config=ev_config,
                 location=location,
                 name=f"Home {i + 1}",
-                tariff_config=None,
+                tariff_config=fleet_tariff,
                 dispatch_strategy="greedy",
             )
         )
@@ -2012,7 +2038,22 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     # Check for fleet_distribution (new format)
     if "fleet_distribution" in config:
         dist_config = _parse_fleet_distribution_config(config["fleet_distribution"])
-        homes = generate_homes_from_distribution(dist_config, location)
+        # Thread scenario-level tariff and fleet battery grid_charging (Seam 1, §9.1).
+        # _parse_tariff_config returns None when the key is absent → calibration-safe.
+        fleet_tariff = _parse_tariff_config(config.get("tariff"))
+        # grid_charging lives under fleet_distribution.battery.grid_charging
+        battery_data = config["fleet_distribution"].get("battery")
+        fleet_grid_charging = (
+            _parse_grid_charge_config(battery_data.get("grid_charging"))
+            if isinstance(battery_data, dict)
+            else None
+        )
+        homes = generate_homes_from_distribution(
+            dist_config,
+            location,
+            fleet_tariff=fleet_tariff,
+            fleet_grid_charging=fleet_grid_charging,
+        )
     elif "homes" in config:
         # Explicit homes list (original format)
         homes_data = config["homes"]
