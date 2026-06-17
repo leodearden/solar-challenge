@@ -788,3 +788,82 @@ class TestRetainedFloorAxis:
         assert original_floors == after_floors, (
             "base_configs finance.retained_cash_floor was mutated (should be immutable)"
         )
+
+
+# ---------------------------------------------------------------------------
+# step-11: TestSensitivityPanelGuards — ValueError on bad inputs
+# ---------------------------------------------------------------------------
+
+
+class TestSensitivityPanelGuards:
+    """sensitivity_panel raises ValueError on empty inputs and all-infeasible baseline."""
+
+    def _base_configs(self):  # type: ignore[no-untyped-def]
+        """Return a valid minimal base_configs list (one no-battery config)."""
+        from solar_challenge.optimize import enumerate_configs
+
+        scenario = _make_scenario(n_homes=_N_HOMES, finance=_interior_finance())
+        return enumerate_configs(
+            scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6]
+        )
+
+    def test_empty_base_configs_raises(self) -> None:
+        """Empty base_configs raises ValueError."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        with pytest.raises(ValueError, match="base_configs"):
+            sensitivity_panel(
+                [],
+                axes={"battery_cost_per_kwh_gbp": [250.0]},
+                simulate=_const_simulate,
+            )
+
+    def test_empty_axes_raises(self) -> None:
+        """Empty axes mapping raises ValueError."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs = self._base_configs()
+        with pytest.raises(ValueError, match="axes"):
+            sensitivity_panel(
+                base_configs,
+                axes={},
+                simulate=_const_simulate,
+            )
+
+    def test_empty_axis_values_raises(self) -> None:
+        """An axis with an empty values sequence raises ValueError."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs = self._base_configs()
+        with pytest.raises(ValueError):
+            sensitivity_panel(
+                base_configs,
+                axes={"battery_cost_per_kwh_gbp": []},
+                simulate=_const_simulate,
+            )
+
+    def test_all_infeasible_baseline_raises(self) -> None:
+        """A baseline with no feasible config raises ValueError (cheapest_feasible is None)."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs = self._base_configs()
+        # Use a floor so high that no config is feasible at baseline
+        with pytest.raises(ValueError, match="baseline"):
+            sensitivity_panel(
+                base_configs,
+                axes={"battery_cost_per_kwh_gbp": [250.0]},
+                retained_cash_floor_gbp=9_999_999.0,
+                simulate=_const_simulate,
+            )
+
+    def test_unknown_knob_propagates_value_error(self) -> None:
+        """Unknown knob name in axes raises ValueError (propagated from _build_axis_configs)."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs = self._base_configs()
+        with pytest.raises(ValueError, match="Unknown sensitivity knob"):
+            sensitivity_panel(
+                base_configs,
+                axes={"completely_unknown_knob_xyz": [1.0, 2.0]},
+                simulate=_const_simulate,
+            )
