@@ -250,41 +250,77 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
 
 def test_unset_grid_services_is_theta_safe_noop() -> None:
-    """FinanceConfig default (grid_services_income_per_kw_per_year_gbp omitted)
-    must be bit-identical to explicit 0.0 on project surplus.
+    """Omitting grid_services_income_per_kw_per_year_gbp (via both the production
+    parser default and the FinanceConfig dataclass default) must be bit-identical
+    to explicit 0.0 on project surplus.
 
     Encodes the seam's θ-safe contract: the additive default is a true no-op,
     so existing non-flex economics and the θ calibration are unperturbed.
+
+    Non-tautological: finance_base (from the board YAML) carries 12.0, so the
+    two omitted-path configs (finance_omitted, finance_dataclass_default) must
+    resolve to 0.0 via their respective defaults — not 12.0 — to pass.  A future
+    change that shifts config.py:1712 parser fallback OR config.py:534 dataclass
+    default away from 0.0 would be caught here.
     """
-    from solar_challenge.config import FinanceConfig  # type: ignore[attr-defined]
+    from solar_challenge.config import (  # type: ignore[attr-defined]
+        FinanceConfig,
+        _parse_finance_config,
+        load_config,
+    )
 
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
     simulate = _constant_simulate(fr)
 
-    # Construct via replace with explicit 0.0
+    # Sanity: finance_base (board YAML) carries 12.0, not 0.0 — confirms the
+    # omitted paths below are genuinely different from finance_base.
+    assert finance_base.grid_services_income_per_kw_per_year_gbp == pytest.approx(12.0)
+
+    # Baseline: explicit 0.0 via dataclasses.replace.
     finance_explicit_zero = dataclasses.replace(
         finance_base, grid_services_income_per_kw_per_year_gbp=0.0
     )
-
-    # Construct a fresh FinanceConfig using the base's fields, omitting grid_services
-    # (relies on FinanceConfig's default of 0.0)
-    finance_default = dataclasses.replace(
-        finance_base, grid_services_income_per_kw_per_year_gbp=0.0
-    )
-
-    # Both must be identical
-    assert finance_default.grid_services_income_per_kw_per_year_gbp == 0.0
-    assert finance_explicit_zero.grid_services_income_per_kw_per_year_gbp == 0.0
-
-    surplus_default = _surplus_at(scenario, finance_default, simulate)
     surplus_explicit = _surplus_at(scenario, finance_explicit_zero, simulate)
 
-    # Bit-identical (== not approx) — exact float equality required
-    assert surplus_default == surplus_explicit, (
-        f"Default (0.0) must be bit-identical to explicit 0.0; "
-        f"default={surplus_default}, explicit={surplus_explicit}"
+    # Path 1 — production-parser omitted path: pop the key from the finance dict
+    # and drive _parse_finance_config's data.get(..., 0.0) fallback (config.py:1712).
+    cfg = load_config(SCENARIO)
+    finance_dict = dict(cfg["finance"])
+    finance_dict.pop("grid_services_income_per_kw_per_year_gbp")
+    assert "grid_services_income_per_kw_per_year_gbp" not in finance_dict, (
+        "Key must be absent so the parser fallback fires"
+    )
+    finance_omitted = _parse_finance_config(finance_dict)
+    assert finance_omitted is not None
+    assert finance_omitted.grid_services_income_per_kw_per_year_gbp == 0.0, (
+        "Parser fallback (config.py:1712) must resolve to 0.0 when key is absent"
+    )
+
+    # Path 2 — FinanceConfig dataclass default path: reconstruct from finance_base's
+    # fields but omit the grid-services key so the dataclass default (config.py:534) fires.
+    kwargs = {
+        f.name: getattr(finance_base, f.name)
+        for f in dataclasses.fields(finance_base)
+        if f.name != "grid_services_income_per_kw_per_year_gbp"
+    }
+    finance_dataclass_default = FinanceConfig(**kwargs)
+    assert finance_dataclass_default.grid_services_income_per_kw_per_year_gbp == 0.0, (
+        "Dataclass default (config.py:534) must be 0.0"
+    )
+
+    # Both omitted paths must yield project surplus bit-identical to explicit 0.0.
+    surplus_omitted = _surplus_at(scenario, finance_omitted, simulate)
+    surplus_dataclass = _surplus_at(scenario, finance_dataclass_default, simulate)
+
+    assert surplus_omitted == surplus_explicit, (
+        f"Parser-omitted path must be bit-identical to explicit 0.0; "
+        f"omitted={surplus_omitted}, explicit={surplus_explicit}"
+    )
+    assert surplus_dataclass == surplus_explicit, (
+        f"Dataclass-default path must be bit-identical to explicit 0.0; "
+        f"dataclass_default={surplus_dataclass}, explicit={surplus_explicit}"
     )
 
 
