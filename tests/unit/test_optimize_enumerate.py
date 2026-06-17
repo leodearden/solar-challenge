@@ -1,10 +1,46 @@
 """Tests for optimize.enumerate_configs and ConfigPoint."""
 
 import dataclasses
+import itertools
 
 import pytest
 
-from solar_challenge.optimize import ConfigPoint
+from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+from solar_challenge.home import HomeConfig
+from solar_challenge.load import LoadConfig
+from solar_challenge.optimize import ConfigPoint, enumerate_configs
+from solar_challenge.pv import PVConfig
+
+
+# ---------------------------------------------------------------------------
+# Shared fixtures
+# ---------------------------------------------------------------------------
+
+def _make_fleet_base(n_homes: int = 3) -> ScenarioConfig:
+    """Build a minimal synthetic fleet ScenarioConfig with distinct LoadConfigs."""
+    finance = FinanceConfig(
+        standing_charge_pence_per_day=60.0,
+        own_use_rate_pence_per_kwh=18.5,
+        retained_cash_floor_per_home_per_year_gbp=50.0,
+        grid_services_income_per_kw_per_year_gbp=12.0,
+    )
+    homes = [
+        HomeConfig(
+            pv_config=PVConfig(capacity_kw=float(3 + i)),
+            load_config=LoadConfig(
+                annual_consumption_kwh=2800.0 + 400.0 * i,
+                household_occupants=1 + i,
+            ),
+        )
+        for i in range(n_homes)
+    ]
+    return ScenarioConfig(
+        name="test-fleet",
+        period=SimulationPeriod("2024-01-01", "2024-12-31"),
+        homes=homes,
+        seg_tariff_pence_per_kwh=7.5,
+        finance=finance,
+    )
 
 
 class TestConfigPoint:
@@ -52,3 +88,94 @@ class TestConfigPoint:
         """inverter_kw<0 raises ValueError."""
         with pytest.raises(ValueError, match="inverter_kw"):
             ConfigPoint(pv_kwp=4.0, battery_kwh=5.0, inverter_kw=-3.68)
+
+
+class TestEnumerateContract:
+    """Contract tests for enumerate_configs (ordering, count, field preservation)."""
+
+    def test_returns_eight_combos_for_2x2x2_grid(self) -> None:
+        """enumerate_configs([4,5],[0,5],[3.68,5]) returns exactly 8 pairs."""
+        base = _make_fleet_base(3)
+        result = enumerate_configs(base, [4.0, 5.0], [0.0, 5.0], [3.68, 5.0])
+        assert len(result) == 8
+
+    def test_result_is_list_of_config_point_scenario_pairs(self) -> None:
+        """Each element is a (ConfigPoint, ScenarioConfig) tuple."""
+        base = _make_fleet_base(3)
+        result = enumerate_configs(base, [4.0, 5.0], [0.0, 5.0], [3.68, 5.0])
+        for cp, sc in result:
+            assert isinstance(cp, ConfigPoint)
+            assert isinstance(sc, ScenarioConfig)
+
+    def test_config_point_ordering_is_pv_battery_inverter(self) -> None:
+        """ConfigPoints follow itertools.product(pv, battery, inverter) order."""
+        base = _make_fleet_base(2)
+        pv_vals = [4.0, 5.0]
+        batt_vals = [0.0, 5.0]
+        inv_vals = [3.68, 5.0]
+        result = enumerate_configs(base, pv_vals, batt_vals, inv_vals)
+        expected_points = [
+            ConfigPoint(pv_kwp=p, battery_kwh=b, inverter_kw=i)
+            for p, b, i in itertools.product(pv_vals, batt_vals, inv_vals)
+        ]
+        actual_points = [cp for cp, _ in result]
+        assert actual_points == expected_points
+
+    def test_each_scenario_has_same_number_of_homes_as_base(self) -> None:
+        """Every returned scenario contains exactly as many homes as the base."""
+        n = 3
+        base = _make_fleet_base(n)
+        result = enumerate_configs(base, [4.0, 5.0], [0.0, 5.0], [3.68, 5.0])
+        for _, sc in result:
+            assert len(sc.homes) == n
+
+    def test_finance_config_preserved_with_cost_recovery_knobs(self) -> None:
+        """FinanceConfig — including cost-recovery knobs — is preserved unchanged."""
+        base = _make_fleet_base(2)
+        result = enumerate_configs(base, [4.0], [5.0], [3.68])
+        _, sc = result[0]
+        assert sc.finance is not None
+        assert sc.finance.own_use_rate_pence_per_kwh == pytest.approx(18.5)
+        assert sc.finance.retained_cash_floor_per_home_per_year_gbp == pytest.approx(50.0)
+        assert sc.finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(12.0)
+
+    def test_scenario_level_fields_preserved(self) -> None:
+        """name, period, seg_tariff_pence_per_kwh are preserved in every scenario."""
+        base = _make_fleet_base(2)
+        result = enumerate_configs(base, [4.0, 5.0], [0.0], [3.68])
+        for _, sc in result:
+            assert sc.name == "test-fleet"
+            assert sc.period.start_date == "2024-01-01"
+            assert sc.seg_tariff_pence_per_kwh == pytest.approx(7.5)
+
+    def test_empty_pv_list_raises(self) -> None:
+        """Empty pv_kwp sequence raises ValueError."""
+        base = _make_fleet_base(2)
+        with pytest.raises(ValueError, match="pv_kwp"):
+            enumerate_configs(base, [], [5.0], [3.68])
+
+    def test_empty_battery_list_raises(self) -> None:
+        """Empty battery_kwh sequence raises ValueError."""
+        base = _make_fleet_base(2)
+        with pytest.raises(ValueError, match="battery_kwh"):
+            enumerate_configs(base, [4.0], [], [3.68])
+
+    def test_empty_inverter_list_raises(self) -> None:
+        """Empty inverter_kw sequence raises ValueError."""
+        base = _make_fleet_base(2)
+        with pytest.raises(ValueError, match="inverter_kw"):
+            enumerate_configs(base, [4.0], [5.0], [])
+
+    def test_single_home_base_raises(self) -> None:
+        """A single-home base (home= not homes=) raises ValueError."""
+        single_home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000),
+        )
+        base_single = ScenarioConfig(
+            name="single",
+            period=SimulationPeriod("2024-01-01", "2024-12-31"),
+            home=single_home,
+        )
+        with pytest.raises(ValueError, match="fleet"):
+            enumerate_configs(base_single, [4.0], [5.0], [3.68])
