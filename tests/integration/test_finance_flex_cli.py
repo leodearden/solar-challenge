@@ -310,3 +310,43 @@ class TestFinanceFlexCLIBehaviour:
         assert result.exit_code != 0, (
             f"Expected non-zero exit for invalid band, got {result.exit_code}.\n{result.output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §E — Named user-observable signal test (step-5 RED driver)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceFlexNamedScenario:
+    """finance run scenarios/bristol-phase1-flex.yaml renders the central flex block.
+
+    This is the named user-observable signal: the board scenario must show the
+    Flexibility Value section by default (no --flex-band flag needed) once
+    scenarios/bristol-phase1-flex.yaml carries a flex_band: central key.
+    """
+
+    def test_bristol_flex_scenario_renders_central_block(
+        self, tmp_path: "Path"  # type: ignore[name-defined]
+    ) -> None:
+        """finance run scenarios/bristol-phase1-flex.yaml → Flexibility Value block with 'central'."""
+        from pathlib import Path
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
+        fr = _make_fleet_results()
+
+        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
+            runner = CliRunner()
+            result = runner.invoke(app, ["finance", "run", str(scenario_path)])
+
+        assert result.exit_code == 0, (
+            f"Exit {result.exit_code}. Output:\n{result.output}"
+        )
+        assert "Flexibility Value" in result.output, (
+            f"Expected 'Flexibility Value' heading in output (scenario default):\n{result.output}"
+        )
+        assert "central" in result.output, (
+            f"Expected 'central' band name in output (scenario default):\n{result.output}"
+        )
