@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Output and reporting functions for simulation results."""
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
@@ -779,10 +780,8 @@ def generate_finance_report(
 
     # ---- Optional project-economics block (η) --------------------------------
     if economics is not None:
-        import math as _math
-
         # Format IRR: NaN → "n/a"
-        if _math.isnan(economics.equity_irr):
+        if math.isnan(economics.equity_irr):
             irr_str = "n/a"
         else:
             irr_str = f"{economics.equity_irr:.1%}"
@@ -794,7 +793,7 @@ def generate_finance_report(
         )
 
         # Format min DSCR: inf → "∞"
-        if _math.isinf(economics.min_dscr):
+        if math.isinf(economics.min_dscr):
             dscr_str = "∞"
         else:
             dscr_str = f"{economics.min_dscr:.2f}×"
@@ -886,14 +885,12 @@ _BINDING_LABELS: Mapping[str, str] = {
 
 def _fmt_dscr(val: float) -> str:
     """Format DSCR: inf → '∞', otherwise '{val:.2f}×'."""
-    import math as _math
-    return "∞" if _math.isinf(val) else f"{val:.2f}×"
+    return "∞" if math.isinf(val) else f"{val:.2f}×"
 
 
 def _fmt_irr(val: float) -> str:
     """Format IRR: NaN → 'n/a', otherwise '{val:.1%}'."""
-    import math as _math
-    return "n/a" if _math.isnan(val) else f"{val:.1%}"
+    return "n/a" if math.isnan(val) else f"{val:.1%}"
 
 
 def _fmt_payback(val: "Optional[float]") -> str:

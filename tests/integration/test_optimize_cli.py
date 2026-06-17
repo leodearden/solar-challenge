@@ -989,22 +989,24 @@ class TestOptimizeCLIE2EFast:
     on that symbol makes the entire pipeline deterministic.
     """
 
-    def test_optimize_configs_exits_zero(
-        self,
+    @staticmethod
+    def _run_standard_sweep(
         tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
-    ) -> None:
-        """`optimize configs <scenario> --pv 4 --battery 0,5 --inverter 5 --sensitivity grid_services` must exit 0."""
+        fleet_results: "FleetResults",  # type: ignore[name-defined]
+    ) -> "object":
+        """Invoke `optimize configs` with the standard smoke-test argv; return CliRunner result.
+
+        All assertions that use the same CLI invocation share this helper to
+        avoid re-running the patched fleet simulator once per assertion.
+        """
         from unittest.mock import patch
         from typer.testing import CliRunner
         from solar_challenge.cli.main import app
 
         scenario_file = _write_optimize_scenario(tmp_path)
-        fr = optimize_fleet_results
-
-        with patch("solar_challenge.fleet.simulate_fleet", return_value=fr):
+        with patch("solar_challenge.fleet.simulate_fleet", return_value=fleet_results):
             runner = CliRunner()
-            result = runner.invoke(
+            return runner.invoke(
                 app,
                 [
                     "optimize", "configs", str(scenario_file),
@@ -1014,171 +1016,41 @@ class TestOptimizeCLIE2EFast:
                     "--sensitivity", "grid_services",
                 ],
             )
+
+    def test_optimize_configs_standard_sweep_output(
+        self,
+        tmp_path: "Path",
+        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
+    ) -> None:
+        """Standard sweep must exit 0 and produce all expected report tokens.
+
+        Invokes `optimize configs` once and asserts the union of wiring signals
+        (exit code, both table headings using exact strings, sensitivity heading,
+        recommendation marker, and rate token) to avoid re-running the patched
+        CLI once per assertion.
+        """
+        result = self._run_standard_sweep(tmp_path, optimize_fleet_results)
 
         assert result.exit_code == 0, (
             f"Expected exit 0 from 'optimize configs'; got {result.exit_code}.\n"
             f"Output:\n{result.output}"
         )
-
-    def test_optimize_configs_has_cost_recovery_rank_heading(
-        self,
-        tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
-    ) -> None:
-        """Output must contain the cost-recovery rank table heading."""
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
-        scenario_file = _write_optimize_scenario(tmp_path)
-        fr = optimize_fleet_results
-
-        with patch("solar_challenge.fleet.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                [
-                    "optimize", "configs", str(scenario_file),
-                    "--pv", "4",
-                    "--battery", "0,5",
-                    "--inverter", "5",
-                    "--sensitivity", "grid_services",
-                ],
-            )
-
-        assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
         assert "cost-recovery rank" in result.output.lower(), (
             f"Expected cost-recovery rank heading in output:\n{result.output}"
         )
-
-    def test_optimize_configs_has_fixed15p_tradeoff_heading(
-        self,
-        tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
-    ) -> None:
-        """Output must contain the fixed-15p trade-off table heading."""
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
-        scenario_file = _write_optimize_scenario(tmp_path)
-        fr = optimize_fleet_results
-
-        with patch("solar_challenge.fleet.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                [
-                    "optimize", "configs", str(scenario_file),
-                    "--pv", "4",
-                    "--battery", "0,5",
-                    "--inverter", "5",
-                    "--sensitivity", "grid_services",
-                ],
-            )
-
-        assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
-        assert (
-            "fixed-15p" in result.output.lower()
-            or "trade-off" in result.output.lower()
-            or "trade‑off" in result.output.lower()
-            or "baseline" in result.output.lower()
-        ), (
-            f"Expected fixed-15p trade-off heading in output:\n{result.output}"
+        # Exact heading — guards against regressions that drop the section.
+        assert "## Fixed-15p Trade-Off" in result.output, (
+            f"Expected '## Fixed-15p Trade-Off' heading in output:\n{result.output}"
         )
-
-    def test_optimize_configs_has_sensitivity_heading(
-        self,
-        tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
-    ) -> None:
-        """Output must contain the sensitivity section heading when --sensitivity is set."""
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
-        scenario_file = _write_optimize_scenario(tmp_path)
-        fr = optimize_fleet_results
-
-        with patch("solar_challenge.fleet.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                [
-                    "optimize", "configs", str(scenario_file),
-                    "--pv", "4",
-                    "--battery", "0,5",
-                    "--inverter", "5",
-                    "--sensitivity", "grid_services",
-                ],
-            )
-
-        assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
         assert "sensitivity" in result.output.lower(), (
             f"Expected sensitivity section heading in output:\n{result.output}"
         )
-
-    def test_optimize_configs_has_recommendation_marker(
-        self,
-        tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
-    ) -> None:
-        """Output must contain the RECOMMENDATION marker for the cheapest feasible config."""
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
-        scenario_file = _write_optimize_scenario(tmp_path)
-        fr = optimize_fleet_results
-
-        with patch("solar_challenge.fleet.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                [
-                    "optimize", "configs", str(scenario_file),
-                    "--pv", "4",
-                    "--battery", "0,5",
-                    "--inverter", "5",
-                    "--sensitivity", "grid_services",
-                ],
-            )
-
-        assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
         assert (
             "recommendation" in result.output.lower()
             or "★" in result.output
         ), (
             f"Expected RECOMMENDATION marker in output:\n{result.output}"
         )
-
-    def test_optimize_configs_has_pkwh_token(
-        self,
-        tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
-    ) -> None:
-        """Output must contain a 'p/kWh' solved-rate token."""
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
-        scenario_file = _write_optimize_scenario(tmp_path)
-        fr = optimize_fleet_results
-
-        with patch("solar_challenge.fleet.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                [
-                    "optimize", "configs", str(scenario_file),
-                    "--pv", "4",
-                    "--battery", "0,5",
-                    "--inverter", "5",
-                    "--sensitivity", "grid_services",
-                ],
-            )
-
-        assert result.exit_code == 0, f"Exit {result.exit_code}:\n{result.output}"
         assert "p/kWh" in result.output, (
             f"Expected 'p/kWh' solved-rate token in output:\n{result.output}"
         )
@@ -1301,11 +1173,6 @@ class TestOptimizeCLISlowE2E:
         assert "cost-recovery rank" in result.output.lower(), (
             f"Expected cost-recovery rank heading in real-PVGIS output:\n{result.output}"
         )
-        assert (
-            "fixed-15p" in result.output.lower()
-            or "trade-off" in result.output.lower()
-            or "trade‑off" in result.output.lower()
-            or "baseline" in result.output.lower()
-        ), (
-            f"Expected fixed-15p trade-off heading in real-PVGIS output:\n{result.output}"
+        assert "## Fixed-15p Trade-Off" in result.output, (
+            f"Expected '## Fixed-15p Trade-Off' heading in real-PVGIS output:\n{result.output}"
         )

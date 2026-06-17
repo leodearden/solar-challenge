@@ -243,11 +243,26 @@ def configs(
     days = (end_date - start_date).days + 1
     n_homes = len(fleet_config.homes)
 
+    n_configs = len(pv_list) * len(battery_list) * len(inverter_list)
     print_info(
         f"Sweeping {len(pv_list)}×{len(battery_list)}×{len(inverter_list)} "
-        f"={len(pv_list)*len(battery_list)*len(inverter_list)} configs "
+        f"={n_configs} configs "
         f"over {n_homes} homes for {days} days…"
     )
+
+    # Warn when the estimated work is large. Each config may require up to 3
+    # fleet simulations (age-0 baseline + two cost-recovery solves), so a
+    # full-year default run of 72 configs × 100 homes can take tens of minutes.
+    # Threshold: 100,000 home-days ≈ 10 configs × 100 homes × 100 days.
+    # The default sweep (72 × 100 × 365 ≈ 2.6M) well exceeds this.
+    _LARGE_SWEEP_THRESHOLD = 100_000
+    if n_configs * n_homes * days > _LARGE_SWEEP_THRESHOLD:
+        print_info(
+            f"⚠  Large sweep: {n_configs} config(s) × {n_homes} home(s) × {days} day(s) "
+            f"≈ {n_configs * n_homes * days:,} home-days. "
+            "For exploratory runs, use --start / --end to limit the simulation window "
+            "(e.g. --start 2024-01-01 --end 2024-01-07)."
+        )
 
     # ---- Build base ScenarioConfig ------------------------------------------
     base = ScenarioConfig(
