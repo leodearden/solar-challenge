@@ -563,7 +563,13 @@ class TestOverrideExactValues:
         assert bill.import_cost_gbp == pytest.approx(expected_import_cost, rel=1e-5)
 
     def test_override_zero_export_kwh_fallback(self) -> None:
-        """When total_grid_export_kwh==0, effective export rate falls back to 0.0."""
+        """Override path with zero physics export: total_outlay must still be positive.
+
+        CR3: The householder has no SEG field; the export-rate fallback logic
+        is irrelevant to the householder bill (it moved to _seg_export_income_gbp
+        for CBS-revenue use).  Assert the bill computes without error and yields
+        a sensible total_outlay.
+        """
         from solar_challenge.finance import householder_bill
 
         # Summary where physics export is zero (no surplus)
@@ -582,8 +588,9 @@ class TestOverrideExactValues:
             finance=finance,
             simulation_days=365,
         )
-        # export_rate fallback = 0.0, so seg_export_income = 0 regardless of export kWh
-        assert bill.seg_export_income_gbp == pytest.approx(0.0, abs=1e-9)
+        # CR3: no seg_export_income_gbp on the bill; total_outlay must be positive
+        assert bill.total_outlay_gbp > 0.0
+        assert not hasattr(bill, "seg_export_income_gbp")
 
 
 # ---------------------------------------------------------------------------
