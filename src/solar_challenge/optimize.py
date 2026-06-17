@@ -12,9 +12,10 @@ RankedSweep           — aggregated sweep output (ranked feasible configs + inf
 enumerate_configs     — cartesian-product enumerator → eager list (small grids)
 iter_configs          — generator variant of enumerate_configs (large grids / streaming)
 run_sweep             — drive all configs through W2 cost-recovery + rank by outlay
-_rank_feasible        — pure sort helper (tie-break key)
-_split_infeasible     — split ConfigResults into feasible/infeasible lists
-_pareto_baseline      — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
+rank                  — pure sort over any ConfigResult sequence (5-key ascending)
+feasible_split        — partition ConfigResults by binding=='infeasible_above_retail'
+pareto_baseline       — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
+cheapest_feasible     — ConfigPoint with lowest outlay among feasible results, or None
 """
 
 from __future__ import annotations
@@ -306,6 +307,55 @@ def enumerate_configs(
 
 
 # ---------------------------------------------------------------------------
+# Public pure helpers (W3 task C)
+# ---------------------------------------------------------------------------
+
+__all__ = [
+    "ConfigPoint",
+    "ConfigResult",
+    "RankedSweep",
+    "enumerate_configs",
+    "iter_configs",
+    "run_sweep",
+    "rank",
+]
+
+
+def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
+    """Sort ConfigResults by the W3 rank key (pure, stable, no filtering).
+
+    Sort key (five levels, all applied for determinism):
+
+    1. ``representative_outlay_gbp`` ascending — cheapest householder outlay first.
+    2. ``surplus_at_solved_gbp`` **descending** — higher project surplus preferred on tie.
+    3. ``config.pv_kwp`` ascending.
+    4. ``config.battery_kwh`` ascending.
+    5. ``config.inverter_kw`` ascending.
+
+    Infeasible-binding records (``binding == 'infeasible_above_retail'``) are NOT
+    filtered; they appear in the output at their natural sort position.  Use
+    :func:`feasible_split` before calling ``rank`` when only feasible results are
+    needed.
+
+    Args:
+        results: Any sequence of :class:`ConfigResult` objects (may be empty).
+
+    Returns:
+        New list sorted by the rank key.  The input sequence is not modified.
+    """
+    return sorted(
+        results,
+        key=lambda r: (
+            r.representative_outlay_gbp,
+            -r.surplus_at_solved_gbp,
+            r.config.pv_kwp,
+            r.config.battery_kwh,
+            r.config.inverter_kw,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
@@ -471,32 +521,8 @@ def _split_infeasible(
 
 
 def _rank_feasible(feasible: List[ConfigResult]) -> List[ConfigResult]:
-    """Sort feasible ConfigResults by the W3 rank key (ascending).
-
-    Sort key (all five levels applied for determinism):
-
-    1. ``representative_outlay_gbp`` ascending (primary — cheapest for householder)
-    2. ``surplus_at_solved_gbp`` **descending** (higher surplus preferred on tie)
-    3. ``config.pv_kwp`` ascending
-    4. ``config.battery_kwh`` ascending
-    5. ``config.inverter_kw`` ascending
-
-    Args:
-        feasible: Feasible ConfigResults (binding != 'infeasible_above_retail').
-
-    Returns:
-        New list sorted by the rank key.  The input list is not modified.
-    """
-    return sorted(
-        feasible,
-        key=lambda r: (
-            r.representative_outlay_gbp,
-            -r.surplus_at_solved_gbp,
-            r.config.pv_kwp,
-            r.config.battery_kwh,
-            r.config.inverter_kw,
-        ),
-    )
+    """Delegate to public :func:`rank` (single source of truth)."""
+    return rank(feasible)
 
 
 def _pareto_baseline(results: List[ConfigResult]) -> tuple[ConfigPoint, ...]:
