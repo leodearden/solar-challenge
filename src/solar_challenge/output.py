@@ -704,7 +704,7 @@ def generate_finance_report(
     rep = bill_physics.representative
 
     if bill_spreadsheet is None:
-        # ---- Physics-only path -------------------------------------------
+        # ---- Physics-only path (CR3: own-use payment + total outlay; no SEG) --
         report = f"""{title}
 
 ## Householder Bill (Physics Assumptions)
@@ -713,16 +713,15 @@ def generate_finance_report(
 |-----------|-------|
 | Standing Charge | £{rep.standing_charge_gbp:.2f} |
 | Import Cost | £{rep.import_cost_gbp:.2f} |
+| Own-Use Payment | £{rep.own_use_payment_gbp:.2f} |
 | VAT | £{rep.vat_gbp:.2f} |
-| Gross Bill | £{rep.gross_bill_gbp:.2f} |
-| SEG Export Income | −£{rep.seg_export_income_gbp:.2f} |
-| Net Annual Bill | £{rep.net_annual_bill_gbp:.2f} |
+| **Total Outlay** | **£{rep.total_outlay_gbp:.2f}** |
 | Self-Consumption Saving | £{rep.self_consumption_saving_gbp:.2f} |
 | Baseline Bill (no solar) | £{rep.baseline_bill_gbp:.2f} |
 | Saving vs Baseline | £{rep.saving_vs_baseline_gbp:.2f} ({rep.saving_pct:.1f}%) |
 | Self-Consumption Fraction | {rep.self_consumption_fraction:.1%} |
 
-## Per-Home Bill Distribution (Net Annual Bill, £)
+## Per-Home Bill Distribution (Total Annual Outlay, £)
 
 | Metric | Value |
 |--------|-------|
@@ -732,7 +731,7 @@ def generate_finance_report(
 | Max | £{bill_physics.max_gbp:.2f} |
 """
     else:
-        # ---- Physics vs Spreadsheet side-by-side -------------------------
+        # ---- Physics vs Spreadsheet side-by-side (CR3) --------------------
         rep_s = bill_spreadsheet.representative
         report = f"""{title}
 
@@ -742,16 +741,15 @@ def generate_finance_report(
 |-----------|---------|-------------|
 | Standing Charge | £{rep.standing_charge_gbp:.2f} | £{rep_s.standing_charge_gbp:.2f} |
 | Import Cost | £{rep.import_cost_gbp:.2f} | £{rep_s.import_cost_gbp:.2f} |
+| Own-Use Payment | £{rep.own_use_payment_gbp:.2f} | £{rep_s.own_use_payment_gbp:.2f} |
 | VAT | £{rep.vat_gbp:.2f} | £{rep_s.vat_gbp:.2f} |
-| Gross Bill | £{rep.gross_bill_gbp:.2f} | £{rep_s.gross_bill_gbp:.2f} |
-| SEG Export Income | −£{rep.seg_export_income_gbp:.2f} | −£{rep_s.seg_export_income_gbp:.2f} |
-| Net Annual Bill | £{rep.net_annual_bill_gbp:.2f} | £{rep_s.net_annual_bill_gbp:.2f} |
+| **Total Outlay** | **£{rep.total_outlay_gbp:.2f}** | **£{rep_s.total_outlay_gbp:.2f}** |
 | Self-Consumption Saving | £{rep.self_consumption_saving_gbp:.2f} | £{rep_s.self_consumption_saving_gbp:.2f} |
 | Baseline Bill (no solar) | £{rep.baseline_bill_gbp:.2f} | £{rep_s.baseline_bill_gbp:.2f} |
 | Saving vs Baseline | £{rep.saving_vs_baseline_gbp:.2f} ({rep.saving_pct:.1f}%) | £{rep_s.saving_vs_baseline_gbp:.2f} ({rep_s.saving_pct:.1f}%) |
 | Self-Consumption Fraction | {rep.self_consumption_fraction:.1%} | {rep_s.self_consumption_fraction:.1%} |
 
-## Per-Home Bill Distribution (Net Annual Bill, £)
+## Per-Home Bill Distribution (Total Annual Outlay, £)
 
 | Metric | Physics | Spreadsheet |
 |--------|---------|-------------|

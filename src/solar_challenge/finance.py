@@ -37,17 +37,25 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class BillBreakdown:
-    """Per-householder annual bill broken into component line items.
+    """Per-householder annual cost-recovery outlay broken into component line items (CR3).
 
-    Definitional invariants (§8):
-      vat_gbp           = vat_rate × (import_cost_gbp + standing_charge_gbp)
-      gross_bill_gbp    = (import_cost_gbp + standing_charge_gbp) × (1 + vat_rate)
-      net_annual_bill_gbp = gross_bill_gbp − seg_export_income_gbp
+    The CBS owns the PV/battery assets and the export MPAN.  The householder
+    pays the CBS an own-use rate for self-consumed solar, pays retail for grid
+    import, and pays the standing charge.  No SEG credit flows to the householder.
 
-    SEG export revenue is zero-rated (no VAT).
-    Savings and baseline are valued VAT-inclusive at the retail baseline rate.
+    Definitional invariants (§3.1):
+      own_use_payment_gbp      = own_use_rate_pence_per_kwh × self_consumed_kwh / 100
+      vat_gbp                  = vat_rate × (import_cost_gbp + standing_charge_gbp
+                                             + own_use_payment_gbp)
+      total_outlay_gbp         = (import_cost_gbp + standing_charge_gbp
+                                  + own_use_payment_gbp) × (1 + vat_rate)
+      self_consumption_saving_gbp = self_consumed_kwh × (retail − own_use_rate)
+                                    × (1 + vat_rate) / 100
+      saving_vs_baseline_gbp   = baseline_bill_gbp − total_outlay_gbp
 
-    All fields are floats in GBP (£).
+    All monetary values are in GBP (£).  The H3 board identity holds when
+    import is retail-priced and import_kwh == demand − sc:
+      saving_vs_baseline == self_consumed × (retail − own_use) × (1+vat) / 100
     """
 
     standing_charge_gbp: float
@@ -56,26 +64,39 @@ class BillBreakdown:
     import_cost_gbp: float
     """Cost of electricity imported from the grid (£, ex-VAT)."""
 
+    own_use_payment_gbp: float
+    """CBS own-use transfer payment for self-consumed solar (£, ex-VAT).
+
+    Computed as own_use_rate_pence_per_kwh × self_consumed_kwh / 100.
+    This is the community-benefit-society transfer price for CBS-owned solar
+    consumed on-site; it is NOT SEG and does not involve the export MPAN.
+    """
+
     vat_gbp: float
-    """VAT on import cost + standing charge at the scenario VAT rate (£)."""
+    """VAT on (import + standing + own_use_payment) at the scenario VAT rate (£)."""
 
-    gross_bill_gbp: float
-    """Total retail bill before SEG export income: (import + standing) × (1 + vat) (£)."""
+    total_outlay_gbp: float
+    """Total annual householder outlay (headline): (import + standing + own_use) × (1+vat) (£).
 
-    seg_export_income_gbp: float
-    """SEG export revenue (£); zero-rated, no VAT deducted."""
+    Replaces net_annual_bill_gbp from the old W2 model.  No SEG deduction.
+    """
 
     self_consumption_saving_gbp: float
-    """Value of self-consumed solar at the VAT-inclusive retail baseline rate (£)."""
+    """Value of solar used on-site relative to full retail purchase (£, VAT-inclusive).
+
+    = self_consumed × (retail_rate − own_use_rate) × (1 + vat_rate) / 100.
+    Represents the retail↔own-use price gap benefit, not the full avoided-retail value.
+    Zero when own_use_rate == retail_rate.
+    """
 
     baseline_bill_gbp: float
-    """Hypothetical annual bill without any solar / battery system (£, VAT-inclusive)."""
+    """Hypothetical annual bill without any solar / battery system (£, VAT-inclusive).
 
-    net_annual_bill_gbp: float
-    """Net annual bill after deducting SEG export income: gross_bill − seg_export_income (£)."""
+    All demand priced at the retail baseline rate; standing charge added.
+    """
 
     saving_vs_baseline_gbp: float
-    """Saving compared to the no-solar baseline: baseline − net_annual_bill (£)."""
+    """Saving compared to the no-solar baseline: baseline_bill − total_outlay (£)."""
 
     saving_pct: float
     """Percentage saving vs baseline: 100 × saving_vs_baseline / baseline."""
@@ -93,16 +114,31 @@ class BillBreakdown:
 class BillDistribution:
     """Fleet-wide distribution of per-home annual bills.
 
-    ``representative`` is the BillBreakdown of the home whose net_annual_bill_gbp
-    is closest to the median (median-net-bill home).  Per-home net bills are
-    stored as an immutable tuple so the dataclass remains hashable.
+    ``representative`` is the BillBreakdown of the home whose total_outlay_gbp
+    is closest to the median (median-total-outlay home).  Per-home outlay values
+    are stored as an immutable tuple so the dataclass remains hashable.
+
+    Note: ``per_home_net_bill_gbp`` retains its name for back-compat (§12-Q4)
+    but now holds per-home ``total_outlay_gbp`` values (CR3 redefinition).
+
+    .. deprecated::
+        ``per_home_net_bill_gbp`` will be renamed to ``per_home_total_outlay_gbp``
+        once the back-compat window closes.  Track this via the §12-Q4 deprecation
+        list and do not add new consumers that depend on the misleading name.
     """
 
     representative: BillBreakdown
     """Representative (median-net-bill) home's full BillBreakdown."""
 
     per_home_net_bill_gbp: tuple[float, ...]
-    """Net annual bill for each home in the fleet (£)."""
+    """Per-home total annual outlay (£).
+
+    .. note::
+        The name is retained for back-compat (§12-Q4); the values are
+        ``total_outlay_gbp`` per home (CR3 redefinition), NOT the old
+        W2 net-annual-bill.  Rename to ``per_home_total_outlay_gbp`` is
+        tracked on the §12-Q4 deprecation list.
+    """
 
     min_gbp: float
     """Minimum net annual bill across the fleet (£)."""
@@ -128,12 +164,137 @@ class BillDistribution:
 #: parameters.
 DEFAULT_SPREADSHEET_SELF_CONSUMPTION: float = 0.70
 
+#: Days used as the annualised year length; all short-period outputs scale to this.
+_ANNUALISATION_DAYS = 365
+#: Simulation periods shorter than this number of days trigger annualisation.
+_SHORT_PERIOD_THRESHOLD = 360
+
+
+# ---------------------------------------------------------------------------
+# _AnnualisedPhysics / _annualise_physics — shared annualisation helper
+# ---------------------------------------------------------------------------
+
+
+class _AnnualisedPhysics(NamedTuple):
+    """Simulation physics quantities scaled to a 365-day annual basis.
+
+    Returned by :func:`_annualise_physics`.  All energy values are in kWh;
+    monetary values are in GBP (£).
+
+    ``sc_kwh`` is taken from ``summary.total_self_consumption_kwh``.
+    :func:`householder_bill` overrides it with its *annual_self_consumption_kwh*
+    parameter, which may differ when the caller supplies an externally-computed
+    self-consumption figure.
+    """
+
+    scale: float
+    """Annualisation multiplier (1.0 when simulation_days ≥ _SHORT_PERIOD_THRESHOLD)."""
+    gen_kwh: float
+    demand_kwh: float
+    sc_kwh: float
+    import_kwh: float
+    import_cost_physics: float
+    export_kwh: float
+    export_rev_physics: float
+
+
+def _annualise_physics(
+    summary: "SummaryStatistics",
+    simulation_days: int,
+) -> _AnnualisedPhysics:
+    """Scale simulation energy/cost figures to a 365-day annual basis.
+
+    When *simulation_days* is below :data:`_SHORT_PERIOD_THRESHOLD` (360),
+    all quantities are multiplied by ``365 / max(simulation_days, 1)``.
+    Otherwise ``scale = 1.0`` and the raw figures are returned unchanged.
+
+    This is the single authoritative annualisation implementation; both
+    :func:`householder_bill` and :func:`_seg_export_income_gbp` delegate to it
+    so the threshold, guard, and formula cannot diverge.
+
+    Args:
+        summary: Per-home simulation output (read-only).
+        simulation_days: Actual simulation length in days.
+
+    Returns:
+        An :class:`_AnnualisedPhysics` namedtuple with ``scale`` and the
+        annualised energy/cost quantities.
+    """
+    if simulation_days < _SHORT_PERIOD_THRESHOLD:
+        scale = _ANNUALISATION_DAYS / max(simulation_days, 1)
+    else:
+        scale = 1.0
+    return _AnnualisedPhysics(
+        scale=scale,
+        gen_kwh=summary.total_generation_kwh * scale,
+        demand_kwh=summary.total_demand_kwh * scale,
+        sc_kwh=summary.total_self_consumption_kwh * scale,
+        import_kwh=summary.total_grid_import_kwh * scale,
+        import_cost_physics=summary.total_import_cost_gbp * scale,
+        export_kwh=summary.total_grid_export_kwh * scale,
+        export_rev_physics=summary.total_export_revenue_gbp * scale,
+    )
+
+
+# ---------------------------------------------------------------------------
+# _seg_export_income_gbp — CBS SEG revenue helper (extracted from W2 model)
+# ---------------------------------------------------------------------------
+
+
+def _seg_export_income_gbp(
+    summary: "SummaryStatistics",
+    finance: "FinanceConfig",
+    simulation_days: int,
+) -> float:
+    """Compute the SEG export income for a single home (CBS-revenue side).
+
+    This is the export-income logic that was removed from the householder bill
+    in CR3 (the CBS owns the export MPAN, so export revenue flows to the CBS,
+    not the householder).  It is used by :func:`project_multi_year._simulate_age`
+    to compute ``seg_revenue = Σ _seg_export_income_gbp(s, ...)`` as part of
+    the CBS fleet revenue formula (PRD §3.2).
+
+    Delegates annualisation to :func:`_annualise_physics` so the threshold,
+    guard, and formula cannot diverge from :func:`householder_bill`.
+
+    * **Physics path** (``finance.self_consumption_override`` is None):
+      annualised ``summary.total_export_revenue_gbp``.
+    * **Override path**: re-compute override export kWh from the override
+      self-consumption fraction; price at the effective export rate derived
+      from the physics figures (falls back to 0.0 if physics export kWh == 0).
+
+    Args:
+        summary: Per-home simulation output (read-only).
+        finance: FinanceConfig with tariff + assumption parameters.
+        simulation_days: Actual simulation length in days; triggers
+            annualisation to 365 days when < 360.
+
+    Returns:
+        SEG export income in GBP (£), annualised to a 365-day year.
+    """
+    override = finance.self_consumption_override
+
+    phys = _annualise_physics(summary, simulation_days)
+
+    if override is None:
+        # Physics path: annualised SEG revenue from simulation
+        return float(phys.export_rev_physics)
+    else:
+        # Spreadsheet path: recompute from override fraction
+        sc_kwh = override * phys.gen_kwh
+        override_export_kwh = max(phys.gen_kwh - sc_kwh, 0.0)
+        if phys.export_kwh > 0.0:
+            effective_export_rate_pence = (
+                phys.export_rev_physics / phys.export_kwh
+            ) * 100.0
+        else:
+            effective_export_rate_pence = 0.0
+        return float(override_export_kwh * effective_export_rate_pence / 100.0)
+
+
 # ---------------------------------------------------------------------------
 # householder_bill
 # ---------------------------------------------------------------------------
-
-_ANNUALISATION_DAYS = 365
-_SHORT_PERIOD_THRESHOLD = 360
 
 
 def householder_bill(
@@ -142,13 +303,23 @@ def householder_bill(
     finance: "FinanceConfig",
     simulation_days: int,
 ) -> BillBreakdown:
-    """Compute a per-householder annual bill from simulation outputs.
+    """Compute a per-householder annual cost-recovery outlay from simulation outputs.
 
-    Implements the §8 definitional invariants:
+    Implements the CR3 (§3.1) definitional invariants:
 
-    * ``vat_gbp = vat_rate × (import_cost_gbp + standing_charge_gbp)``
-    * ``gross_bill_gbp = (import_cost_gbp + standing_charge_gbp) × (1 + vat_rate)``
-    * ``net_annual_bill_gbp = gross_bill_gbp − seg_export_income_gbp``
+    * ``own_use_payment_gbp = own_use_rate × sc_kwh / 100``
+    * ``vat_gbp = vat_rate × (import_cost_gbp + standing_charge_gbp + own_use_payment_gbp)``
+    * ``total_outlay_gbp = (import_cost_gbp + standing_charge_gbp + own_use_payment_gbp)
+      × (1 + vat_rate)``
+    * ``self_consumption_saving_gbp = sc_kwh × (retail − own_use_rate) × (1+vat) / 100``
+    * ``saving_vs_baseline_gbp = baseline_bill_gbp − total_outlay_gbp``
+
+    The CBS owns the assets and the export MPAN; the householder receives no SEG
+    credit.  SEG export income flows to the CBS revenue calculation in
+    :func:`_seg_export_income_gbp` / :func:`project_multi_year` instead.
+
+    H3 board identity (holds when import is retail-priced, import_kwh = demand − sc):
+      saving_vs_baseline == sc × (retail − own_use) × (1+vat) / 100
 
     Args:
         summary: Per-home simulation output (read-only).
@@ -164,36 +335,30 @@ def householder_bill(
     """
     vat_rate = finance.vat_rate
     retail_rate_pence = finance.retail_baseline_rate_pence_per_kwh
+    own_use_rate_pence = finance.own_use_rate_pence_per_kwh
     standing_pence_per_day = finance.standing_charge_pence_per_day
     override = finance.self_consumption_override
 
     # ---- Annualisation (§3.2 / §12) ----------------------------------------
+    phys = _annualise_physics(summary, simulation_days)
     if simulation_days < _SHORT_PERIOD_THRESHOLD:
-        scale = _ANNUALISATION_DAYS / max(simulation_days, 1)
         warnings.warn(
             f"Simulation period is only {simulation_days} days (<360); "
             f"scaling financial outputs to {_ANNUALISATION_DAYS}-day annual basis "
-            f"(scale={scale:.3f}).",
+            f"(scale={phys.scale:.3f}).",
             UserWarning,
             stacklevel=2,
         )
-        # Scale physics energy quantities
-        gen_kwh = summary.total_generation_kwh * scale
-        demand_kwh = summary.total_demand_kwh * scale
-        sc_kwh_physics = annual_self_consumption_kwh * scale
-        import_kwh = summary.total_grid_import_kwh * scale
-        export_kwh = summary.total_grid_export_kwh * scale
-        import_cost_physics = summary.total_import_cost_gbp * scale
-        export_rev_physics = summary.total_export_revenue_gbp * scale
-    else:
-        scale = 1.0
-        gen_kwh = summary.total_generation_kwh
-        demand_kwh = summary.total_demand_kwh
-        sc_kwh_physics = annual_self_consumption_kwh
-        import_kwh = summary.total_grid_import_kwh
-        export_kwh = summary.total_grid_export_kwh
-        import_cost_physics = summary.total_import_cost_gbp
-        export_rev_physics = summary.total_export_revenue_gbp
+    # NOTE: householder_bill takes annual_self_consumption_kwh as a separate parameter
+    # (caller-supplied, may differ from summary.total_self_consumption_kwh when the
+    # caller has an independently-computed self-consumption figure, e.g. fleet_distribution).
+    sc_kwh_physics = annual_self_consumption_kwh * phys.scale
+    gen_kwh = phys.gen_kwh
+    demand_kwh = phys.demand_kwh
+    import_kwh = phys.import_kwh
+    import_cost_physics = phys.import_cost_physics
+    # export_kwh / export_rev_physics not needed here: SEG moved to
+    # _seg_export_income_gbp in CR3; householder_bill no longer computes export income.
 
     # ---- Standing charge (always annualised to 365 days) --------------------
     standing_charge_gbp = standing_pence_per_day * _ANNUALISATION_DAYS / 100.0
@@ -202,7 +367,6 @@ def householder_bill(
     if override is None:
         # Physics path: use simulation figures directly
         import_cost_gbp = import_cost_physics
-        seg_export_income_gbp = export_rev_physics
         sc_kwh = sc_kwh_physics
 
         # Missing-tariff fallback (§3.2 robustness).  Homes generated from a
@@ -228,43 +392,40 @@ def householder_bill(
         # Spreadsheet path: override the self-consumption fraction
         sc_kwh = override * gen_kwh
 
-        # Recompute export_kwh from the override fraction
-        # export = generation - self_consumption (energy balance at home boundary)
-        override_export_kwh = max(gen_kwh - sc_kwh, 0.0)
-
-        # Effective import / export unit rates from physics (fall back if zero)
+        # Effective import unit rate from physics (fall back to retail if zero physics import)
         if import_kwh > 0.0:
             effective_import_rate_pence = (import_cost_physics / import_kwh) * 100.0
         else:
             effective_import_rate_pence = retail_rate_pence
 
-        if export_kwh > 0.0:
-            effective_export_rate_pence = (export_rev_physics / export_kwh) * 100.0
-        else:
-            effective_export_rate_pence = 0.0
-
         # Recompute import: demand minus self-consumed solar
         override_import_kwh = max(demand_kwh - sc_kwh, 0.0)
         import_cost_gbp = override_import_kwh * effective_import_rate_pence / 100.0
-        seg_export_income_gbp = override_export_kwh * effective_export_rate_pence / 100.0
 
-    # ---- VAT line (applies to import + standing) ----------------------------
-    vat_gbp = vat_rate * (import_cost_gbp + standing_charge_gbp)
-    gross_bill_gbp = (import_cost_gbp + standing_charge_gbp) * (1.0 + vat_rate)
+    # ---- Own-use payment (NEW in CR3): own_use_rate × sc_kwh / 100 ----------
+    own_use_payment_gbp = own_use_rate_pence * sc_kwh / 100.0
 
-    # ---- Net annual bill ----------------------------------------------------
-    net_annual_bill_gbp = gross_bill_gbp - seg_export_income_gbp
+    # ---- VAT line (applies to import + standing + own_use_payment) ----------
+    vat_gbp = vat_rate * (import_cost_gbp + standing_charge_gbp + own_use_payment_gbp)
 
-    # ---- Self-consumption saving (VAT-inclusive at retail baseline) ----------
-    self_consumption_saving_gbp = sc_kwh * retail_rate_pence * (1.0 + vat_rate) / 100.0
+    # ---- Total outlay (headline, replaces net_annual_bill_gbp) ---------------
+    total_outlay_gbp = (
+        import_cost_gbp + standing_charge_gbp + own_use_payment_gbp
+    ) * (1.0 + vat_rate)
+
+    # ---- Self-consumption saving (REDEFINED): sc × (retail − own_use) × (1+vat)/100 --
+    self_consumption_saving_gbp = (
+        sc_kwh * (retail_rate_pence - own_use_rate_pence) * (1.0 + vat_rate) / 100.0
+    )
 
     # ---- Baseline bill (no solar / no battery, VAT-inclusive) ---------------
     baseline_bill_gbp = (
-        demand_kwh * retail_rate_pence / 100.0 + standing_pence_per_day * _ANNUALISATION_DAYS / 100.0
+        demand_kwh * retail_rate_pence / 100.0
+        + standing_pence_per_day * _ANNUALISATION_DAYS / 100.0
     ) * (1.0 + vat_rate)
 
     # ---- Saving vs baseline -------------------------------------------------
-    saving_vs_baseline_gbp = baseline_bill_gbp - net_annual_bill_gbp
+    saving_vs_baseline_gbp = baseline_bill_gbp - total_outlay_gbp
     saving_pct = (
         (saving_vs_baseline_gbp / baseline_bill_gbp) * 100.0
         if baseline_bill_gbp != 0.0
@@ -277,12 +438,11 @@ def householder_bill(
     return BillBreakdown(
         standing_charge_gbp=float(standing_charge_gbp),
         import_cost_gbp=float(import_cost_gbp),
+        own_use_payment_gbp=float(own_use_payment_gbp),
         vat_gbp=float(vat_gbp),
-        gross_bill_gbp=float(gross_bill_gbp),
-        seg_export_income_gbp=float(seg_export_income_gbp),
+        total_outlay_gbp=float(total_outlay_gbp),
         self_consumption_saving_gbp=float(self_consumption_saving_gbp),
         baseline_bill_gbp=float(baseline_bill_gbp),
-        net_annual_bill_gbp=float(net_annual_bill_gbp),
         saving_vs_baseline_gbp=float(saving_vs_baseline_gbp),
         saving_pct=float(saving_pct),
         self_consumption_fraction=float(self_consumption_fraction),
@@ -641,11 +801,14 @@ def bill_distribution(
     finance: "FinanceConfig",
     simulation_days: int,
 ) -> BillDistribution:
-    """Aggregate per-home bills into a fleet-level BillDistribution.
+    """Aggregate per-home bills into a fleet-level BillDistribution (CR3).
 
     Maps ``householder_bill`` over each home's SummaryStatistics, selects the
-    median-net-bill home as representative, and computes min / mean / median /
-    max via ``pd.Series`` (mirroring ``calculate_fleet_summary``).
+    median-**total-outlay** home as representative, and computes min / mean /
+    median / max via ``pd.Series`` (mirroring ``calculate_fleet_summary``).
+
+    Note: ``BillDistribution.per_home_net_bill_gbp`` retains its name for
+    back-compat (§12-Q4) but now holds per-home ``total_outlay_gbp`` values.
 
     Args:
         summaries: Sequence of per-home SummaryStatistics.  Must contain at
@@ -671,16 +834,18 @@ def bill_distribution(
         )
         for s in summaries
     ]
-    net_bills = [b.net_annual_bill_gbp for b in bills]
-    series = pd.Series(net_bills, dtype=float)
+    # CR3: key distribution on total_outlay_gbp (not the old net_annual_bill_gbp)
+    outlays = [b.total_outlay_gbp for b in bills]
+    series = pd.Series(outlays, dtype=float)
 
     median_val = float(series.median())
-    # Representative: home whose net bill is closest to the median
+    # Representative: home whose total outlay is closest to the median
     rep_idx = int((series - median_val).abs().idxmin())
 
     return BillDistribution(
         representative=bills[rep_idx],
-        per_home_net_bill_gbp=tuple(net_bills),
+        # per_home_net_bill_gbp name retained for back-compat; value = total_outlay_gbp
+        per_home_net_bill_gbp=tuple(outlays),
         min_gbp=float(series.min()),
         mean_gbp=float(series.mean()),
         median_gbp=median_val,
@@ -866,23 +1031,18 @@ def project_multi_year(
 
         # CBS fleet revenue (PRD §3.2):
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
-        #   seg_revenue     = Σ bill.seg_export_income_gbp
+        #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)
         #   grid_services   = grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw
         #   cbs_grid_charge = Σ summary.total_grid_charge_cost_gbp
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services − cbs_grid_charge
-        # householder_bill is still called for seg_export_income_gbp (honours
-        # self_consumption_override and seg scaling automatically).
-        bills = [
-            householder_bill(
-                s,
-                annual_self_consumption_kwh=s.total_self_consumption_kwh,
-                finance=finance,
-                simulation_days=s.simulation_days,
-            )
-            for s in per_home_summaries
-        ]
+        # CR3: SEG revenue is extracted via _seg_export_income_gbp (honours
+        # self_consumption_override and seg scaling automatically); householder_bill
+        # is no longer called here since seg_export_income_gbp was removed from it.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc / 100.0
-        seg_revenue = sum(b.seg_export_income_gbp for b in bills)
+        seg_revenue = sum(
+            _seg_export_income_gbp(s, finance, s.simulation_days)
+            for s in per_home_summaries
+        )
         grid_services = finance.grid_services_income_per_kw_per_year_gbp * sum(
             h.battery_config.max_discharge_kw
             for h in homes
