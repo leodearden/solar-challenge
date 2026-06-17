@@ -4,6 +4,8 @@ Canonical numbers from consulting model §1.1/§1.4 and PRD §6
 (all £/battery-home/yr unless noted).
 """
 
+import dataclasses
+
 import pytest
 from solar_challenge.flex import (
     FlexibilityValueBand,
@@ -42,61 +44,31 @@ class TestFlexibilityValueBand:
         assert band.total_gbp == pytest.approx(120.0)
         assert band.provenance == "consulting §1.1"
 
-    def test_stores_name(self):
-        """name field is stored exactly."""
-        band = self._make_band(name="central")
-        assert band.name == "central"
-
-    def test_stores_time_shift_gbp(self):
-        """time_shift_gbp is stored exactly."""
-        band = self._make_band(time_shift_gbp=250.0)
-        assert band.time_shift_gbp == pytest.approx(250.0)
-
-    def test_stores_grid_services_per_home_gbp(self):
-        """grid_services_per_home_gbp is stored exactly."""
-        band = self._make_band(grid_services_per_home_gbp=30.0)
-        assert band.grid_services_per_home_gbp == pytest.approx(30.0)
-
-    def test_stores_grid_services_per_kw_gbp(self):
-        """grid_services_per_kw_gbp is stored exactly."""
-        band = self._make_band(grid_services_per_kw_gbp=12.0)
-        assert band.grid_services_per_kw_gbp == pytest.approx(12.0)
-
-    def test_stores_total_gbp(self):
-        """total_gbp is stored exactly."""
-        band = self._make_band(total_gbp=280.0)
-        assert band.total_gbp == pytest.approx(280.0)
-
-    def test_stores_provenance(self):
-        """provenance is stored exactly."""
-        band = self._make_band(provenance="PRD §6")
-        assert band.provenance == "PRD §6"
-
     # --- immutability (frozen=True) ---
 
     def test_name_is_immutable(self):
-        """Assigning name raises (frozen dataclass)."""
+        """Assigning name raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
-        with pytest.raises(Exception):
-            band.name = "other"  # type: ignore
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            band.name = "other"  # noqa: no assignment to frozen field
 
     def test_time_shift_gbp_is_immutable(self):
-        """Assigning time_shift_gbp raises (frozen dataclass)."""
+        """Assigning time_shift_gbp raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
-        with pytest.raises(Exception):
-            band.time_shift_gbp = 999.0  # type: ignore
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            band.time_shift_gbp = 999.0  # noqa: no assignment to frozen field
 
     def test_grid_services_per_kw_gbp_is_immutable(self):
-        """Assigning grid_services_per_kw_gbp raises (frozen dataclass)."""
+        """Assigning grid_services_per_kw_gbp raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
-        with pytest.raises(Exception):
-            band.grid_services_per_kw_gbp = 0.0  # type: ignore
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            band.grid_services_per_kw_gbp = 0.0  # noqa: no assignment to frozen field
 
     def test_total_gbp_is_immutable(self):
-        """Assigning total_gbp raises (frozen dataclass)."""
+        """Assigning total_gbp raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
-        with pytest.raises(Exception):
-            band.total_gbp = 0.0  # type: ignore
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            band.total_gbp = 0.0  # noqa: no assignment to frozen field
 
     # --- validation: negative monetary fields ---
 
@@ -185,71 +157,26 @@ class TestFlexValueBands:
                 f"FLEX_VALUE_BANDS['{key}'] is not a FlexibilityValueBand"
             )
 
-    # --- Low band canonical values (consulting §1.1 + PRD §6) ---
+    # --- Per-band canonical values (consulting §1.1 + PRD §6) ---
 
-    def test_low_time_shift_gbp(self):
-        """Low band time_shift_gbp is £100/home/yr."""
-        assert FLEX_VALUE_BANDS["low"].time_shift_gbp == pytest.approx(100.0)
+    @pytest.mark.parametrize("band,expected", [
+        ("low",     {"time_shift_gbp": 100.0, "grid_services_per_home_gbp":   4.0, "grid_services_per_kw_gbp":  1.5, "total_gbp": 120.0}),  # noqa: E241
+        ("central", {"time_shift_gbp": 250.0, "grid_services_per_home_gbp":  30.0, "grid_services_per_kw_gbp": 12.0, "total_gbp": 280.0}),  # noqa: E241
+        ("high",    {"time_shift_gbp": 330.0, "grid_services_per_home_gbp": 120.0, "grid_services_per_kw_gbp": 48.0, "total_gbp": 450.0}),  # noqa: E241
+    ])
+    def test_band_canonical_values(self, band: str, expected: dict[str, float]) -> None:
+        """Canonical monetary fields for each band match consulting §1.1 + PRD §6."""
+        fb = FLEX_VALUE_BANDS[band]
+        for field, value in expected.items():
+            assert getattr(fb, field) == pytest.approx(value), f"{band}.{field}"
+        assert fb.provenance  # non-empty provenance string
 
-    def test_low_grid_services_per_home_gbp(self):
-        """Low band grid_services_per_home_gbp is £4/home/yr."""
-        assert FLEX_VALUE_BANDS["low"].grid_services_per_home_gbp == pytest.approx(4.0)
-
-    def test_low_grid_services_per_kw_gbp(self):
-        """Low band grid_services_per_kw_gbp is £1.5/kW/yr (PRD §6)."""
-        assert FLEX_VALUE_BANDS["low"].grid_services_per_kw_gbp == pytest.approx(1.5)
-
-    def test_low_total_gbp(self):
-        """Low band headline total is £120/home/yr (consulting §1.1)."""
-        assert FLEX_VALUE_BANDS["low"].total_gbp == pytest.approx(120.0)
-
-    def test_low_provenance_non_empty(self):
-        """Low band has non-empty provenance string."""
-        assert FLEX_VALUE_BANDS["low"].provenance
-
-    # --- Central band canonical values ---
-
-    def test_central_time_shift_gbp(self):
-        """Central band time_shift_gbp is £250/home/yr."""
-        assert FLEX_VALUE_BANDS["central"].time_shift_gbp == pytest.approx(250.0)
-
-    def test_central_grid_services_per_home_gbp(self):
-        """Central band grid_services_per_home_gbp is £30/home/yr."""
-        assert FLEX_VALUE_BANDS["central"].grid_services_per_home_gbp == pytest.approx(30.0)
-
-    def test_central_grid_services_per_kw_gbp(self):
-        """Central band grid_services_per_kw_gbp is exactly £12.0/kW/yr (PRD §6 pinned signal)."""
-        assert FLEX_VALUE_BANDS["central"].grid_services_per_kw_gbp == pytest.approx(12.0)
-
-    def test_central_total_gbp(self):
-        """Central band headline total is £280/home/yr (consulting §1.1)."""
-        assert FLEX_VALUE_BANDS["central"].total_gbp == pytest.approx(280.0)
-
-    def test_central_provenance_non_empty(self):
-        """Central band has non-empty provenance string."""
-        assert FLEX_VALUE_BANDS["central"].provenance
-
-    # --- High band canonical values ---
-
-    def test_high_time_shift_gbp(self):
-        """High band time_shift_gbp is £330/home/yr."""
-        assert FLEX_VALUE_BANDS["high"].time_shift_gbp == pytest.approx(330.0)
-
-    def test_high_grid_services_per_home_gbp(self):
-        """High band grid_services_per_home_gbp is £120/home/yr."""
-        assert FLEX_VALUE_BANDS["high"].grid_services_per_home_gbp == pytest.approx(120.0)
-
-    def test_high_grid_services_per_kw_gbp(self):
-        """High band grid_services_per_kw_gbp is £48.0/kW/yr (PRD §6)."""
-        assert FLEX_VALUE_BANDS["high"].grid_services_per_kw_gbp == pytest.approx(48.0)
-
-    def test_high_total_gbp(self):
-        """High band headline total is £450/home/yr (consulting §1.1)."""
-        assert FLEX_VALUE_BANDS["high"].total_gbp == pytest.approx(450.0)
-
-    def test_high_provenance_non_empty(self):
-        """High band has non-empty provenance string."""
-        assert FLEX_VALUE_BANDS["high"].provenance
+    def test_total_gbp_not_less_than_time_shift(self) -> None:
+        """total_gbp >= time_shift_gbp for every band (grid services always add value)."""
+        for band, fb in FLEX_VALUE_BANDS.items():
+            assert fb.total_gbp >= fb.time_shift_gbp, (
+                f"{band}: total_gbp ({fb.total_gbp}) < time_shift_gbp ({fb.time_shift_gbp})"
+            )
 
 
 class TestResolveGridServicesBand:

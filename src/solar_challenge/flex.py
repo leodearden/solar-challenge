@@ -14,10 +14,11 @@ The two revenue streams modelled here are:
 
 Three uncertainty bands (Low / Central / High) bound the plausible range for
 a 2-kW-ish domestic battery in the Bristol context.  The ``total_gbp`` headline
-figure is the *documented* increment quoted in the consulting model — it is NOT
-the arithmetic sum of the two streams, because arbitrage and self-consumption
-contend for the same battery capacity (consulting §1.1 warns against simple
-column-maxima addition).
+figure is the *documented* increment quoted in the consulting model — it is
+*not necessarily* the arithmetic sum of the two streams, because arbitrage and
+self-consumption contend for the same battery capacity (consulting §1.1 warns
+against simple column-maxima addition). The contention is material only for
+the low band (100 + 4 = 104 ≠ 120); central and high happen to sum exactly.
 """
 
 from dataclasses import dataclass
@@ -46,8 +47,11 @@ class FlexibilityValueBand:
         grid_services_per_kw_gbp: Grid-services rate in £/kW-discharge/yr
             (PRD §6; rate × 2.5 ≈ per_home within the doc's banding tolerance).
         total_gbp: Documented headline total increment in £/home/yr
-            (consulting §1.1).  **Not** the arithmetic sum of the two streams —
-            see consulting §1.1 caveat on capacity contention.
+            (consulting §1.1).  Not necessarily the arithmetic sum of the two
+            streams — consulting §1.1 warns against simple column-maxima
+            addition due to capacity contention.  The adjustment is material
+            only for the low band (100 + 4 = 104 ≠ 120); central and high
+            happen to sum exactly.
         provenance: Source reference for the numbers in this band, e.g.
             ``"consulting §1.1 + PRD §6"``.
     """
@@ -97,10 +101,11 @@ _PROVENANCE = "consulting 2026-06-16-flexibility-value-buildability-model.md §1
 # Numbers from consulting §1.1 (time-shift, grid-services per-home, headline total)
 # and PRD §6 (grid-services per-kW rate).
 #
-# NOTE: total_gbp is the DOCUMENTED HEADLINE INCREMENT, NOT the arithmetic sum of
-# time_shift_gbp + grid_services_per_home_gbp.  Consulting §1.1 warns: "Do not
-# simply add the column maxima — arbitrage and self-consumption contend for the
-# same battery capacity."  Example: low band 100+4=104 ≠ 120 (documented total).
+# NOTE: total_gbp is the DOCUMENTED HEADLINE INCREMENT, not necessarily the
+# arithmetic sum of time_shift_gbp + grid_services_per_home_gbp.  Consulting
+# §1.1 warns against simple column-maxima addition due to capacity contention.
+# The adjustment is material only for the low band (100+4=104 ≠ 120); central
+# (250+30=280) and high (330+120=450) happen to sum exactly.
 #
 # Per-home ↔ per-kW cross-check (rate × 2.5 ≈ per-home, within ±£1.0):
 #   low:     1.5 × 2.5 = 3.75 ≈ 4  (doc rounds to ~1.5)
