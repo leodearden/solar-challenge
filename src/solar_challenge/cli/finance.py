@@ -177,7 +177,7 @@ def run(
     # ---- Build shared ScenarioConfig (used by --project and/or --cost-recovery) ---
     econ_scenario: Optional[ScenarioConfig] = None
     if project or cost_recovery:
-        econ_scenario = ScenarioConfig(
+        _base = ScenarioConfig(
             name=raw.get("name", str(scenario)),
             period=SimulationPeriod(
                 start_date=start,
@@ -186,9 +186,14 @@ def run(
             homes=list(fleet_config.homes),
             location=loc,
             finance=finance,
-            # Thread seg_tariff_pence_per_kwh so solve_cost_recovery_rate prices SEG correctly
-            seg_tariff_pence_per_kwh=seg_rate if seg_rate is not None else 0.0,
         )
+        if cost_recovery and seg_rate is not None:
+            # Thread seg_tariff_pence_per_kwh only when --cost-recovery is active so that
+            # --project-only output is unchanged from pre-CR5 behaviour (avoids silently
+            # changing project_multi_year SEG revenue for existing --project callers).
+            econ_scenario = dataclasses.replace(_base, seg_tariff_pence_per_kwh=seg_rate)
+        else:
+            econ_scenario = _base
 
     # ---- Project economics (optional) ---------------------------------------
     economics_result: Optional[ProjectEconomics] = None
