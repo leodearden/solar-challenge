@@ -693,3 +693,113 @@ class TestFlexLowersSolvedRate:
             f"flat={sol_flat.own_use_rate_pence_per_kwh:.4f}, "
             f"arb={sol_arb.own_use_rate_pence_per_kwh:.4f}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Step-9 RED / step-10 GREEN: TestThetaStaysGreen + TestPhysicsReconciliationColumn
+# ---------------------------------------------------------------------------
+
+
+class TestThetaStaysGreen:
+    """In-file θ-isolation smoke: spreadsheet→economics path unchanged by CR6.
+
+    CR6 adds no src/ changes, so the θ (task/48) spreadsheet calibration
+    gate should be untouched. This cheap in-file guard re-verifies:
+    - total_capex_gbp == £775,000 (Capital_Stack!B6) to abs=1.0
+    - min_dscr ≥ 1.20 (covenant floor)
+    NOT a duplication of θ: no new physics path here, just the spreadsheet column.
+    RED until wired in step-10 (currently stubs reference θ helpers that need import).
+    """
+
+    def _build_theta_econ(self) -> "ProjectEconomics":  # type: ignore[name-defined]
+        """Build [FIN]-assumption ProjectEconomics via spreadsheet_revenue_curve."""
+        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
+
+        curve = spreadsheet_revenue_curve(
+            n_homes=100,
+            pv_kwp=_FIN_GOLDEN["inp_kWp"],
+            kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
+            self_consumption_fraction=_FIN_SCF,
+            own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
+            export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
+            asset_life_years=25,
+        )
+        scenario = _make_scenario_fin_cr6(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        finance = _make_finance_fin_cr6()
+        return project_economics(curve, scenario, finance)
+
+    def test_spreadsheet_path_capex_and_dscr_unchanged(self) -> None:
+        """θ-isolation: capex==£775k (Capital_Stack!B6) and min_dscr≥1.20 still hold.
+
+        Verifies CR6 leaves the spreadsheet→economics path untouched.
+        capex check: 100 × (5.5×£1000 + £1000 + 5kWh×£250) = £775,000.
+        dscr check: covenant floor (not the exact spreadsheet digit-match).
+        """
+        econ = self._build_theta_econ()
+
+        assert econ.total_capex_gbp == pytest.approx(
+            _FIN_GOLDEN["capital_stack_b6"], abs=1.0
+        ), (
+            f"θ-isolation: capex expected £{_FIN_GOLDEN['capital_stack_b6']:,.0f}, "
+            f"got £{econ.total_capex_gbp:,.2f}"
+        )
+        assert econ.min_dscr >= 1.20, (
+            f"θ-isolation: min_dscr={econ.min_dscr:.4f} below covenant floor 1.20"
+        )
+
+
+@pytest.mark.slow
+class TestPhysicsReconciliationColumn:
+    """Real-PVGIS physics column — REPORTED, not asserted == spreadsheet (step-9 RED / step-10 GREEN).
+
+    Runs a 2-home, 3-day fleet simulation via real simulate_fleet to document
+    the physics-vs-assumption self-consumption gap that motivates 'reported not pinned'.
+    Mirrors θ's TestCalibrationPhysicsColumn.
+    Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
+    """
+
+    def test_physics_path_reported(self) -> None:
+        """Physics path: valid CostRecoverySolution returned; rate/saving/surplus printed.
+
+        Hard-asserts ONLY structural properties (not physics-path rate == anything):
+        - CostRecoverySolution is returned (no exception)
+        - sol.feasible is a bool
+        - sol.binding in {'floor', 'rate_clamped_zero', 'infeasible_above_retail'}
+
+        REPORTS (printed, NOT pinned): physics-path solved rate, saving, surplus.
+        Motivates 'reported not pinned' — physics scf (≈20–35%) ≠ sheet 0.70.
+        """
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+        from solar_challenge.finance import CostRecoverySolution, solve_cost_recovery_rate
+
+        # 2-home fleet, 3-day window, 5.5kWp+5kWh (real simulate_fleet via default simulate=None)
+        homes = [_make_home_config_fin_cr6(pv_kwp=5.5, battery_kwh=5.0)] * 2
+        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
+        scenario = ScenarioConfig(
+            name="CR6-Physics-Test",
+            period=period,
+            homes=homes,
+        )
+        finance = _make_finance_fin_cr6()
+
+        # Real physics simulation (simulate=None → real simulate_fleet)
+        sol = solve_cost_recovery_rate(scenario, finance)  # type: ignore[call-arg]
+
+        # STRUCTURAL assertions only
+        assert isinstance(sol, CostRecoverySolution)
+        assert isinstance(sol.feasible, bool)
+        assert sol.binding in ("floor", "rate_clamped_zero", "infeasible_above_retail"), (
+            f"Unexpected binding value: {sol.binding!r}"
+        )
+
+        # REPORT (printed, NOT asserted as equal to anything)
+        print(
+            f"\n[PHYSICS RECONCILIATION REPORT] (2 homes, 3-day window)"
+            f"\n  Physics-path solved rate: {sol.own_use_rate_pence_per_kwh:.2f} p/kWh"
+            f"  (synthetic ≈15p; gap = physics scf << 0.70)"
+            f"\n  Physics saving vs baseline: £{sol.saving_vs_baseline_gbp:.0f}"
+            f"\n  Net surplus/home/yr: £{sol.net_surplus_per_home_per_year_gbp:.2f}"
+            f"\n  Binding: {sol.binding}, Feasible: {sol.feasible}"
+            f"\n  [Reported not pinned: physics scf ≠ 0.70/sheet — see §3.3 of"
+            f" docs/finance-spreadsheet-reconciliation.md for rationale]"
+        )
