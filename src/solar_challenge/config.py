@@ -2052,11 +2052,15 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
             if isinstance(battery_data, dict)
             else None
         )
+        # dispatch_strategy lives directly under fleet_distribution (raw-dict read,
+        # mirroring the fleet_grid_charging seam above — not added to FleetDistributionConfig).
+        fleet_dispatch_strategy = config["fleet_distribution"].get("dispatch_strategy")
         homes = generate_homes_from_distribution(
             dist_config,
             location,
             fleet_tariff=fleet_tariff,
             fleet_grid_charging=fleet_grid_charging,
+            fleet_dispatch_strategy=fleet_dispatch_strategy,
         )
     elif "homes" in config:
         # Explicit homes list (original format)
