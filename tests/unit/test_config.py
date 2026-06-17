@@ -2720,6 +2720,21 @@ class TestFinanceConfig:
         fc = FinanceConfig(standing_charge_pence_per_day=60.0)
         assert fc.inverter_cost_per_kw_gbp == 0.0
 
+    def test_defaults_own_use_rate_pence_per_kwh(self) -> None:
+        """Default own_use_rate_pence_per_kwh is 15.0 (CBS transfer price)."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.own_use_rate_pence_per_kwh == 15.0
+
+    def test_defaults_retained_cash_floor_per_home_per_year_gbp(self) -> None:
+        """Default retained_cash_floor_per_home_per_year_gbp is 27.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.retained_cash_floor_per_home_per_year_gbp == 27.0
+
+    def test_defaults_grid_services_income_per_kw_per_year_gbp(self) -> None:
+        """Default grid_services_income_per_kw_per_year_gbp is 0.0 (theta-safe seam)."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
+
     def test_frozen_raises_on_assignment(self) -> None:
         """FinanceConfig is frozen: attribute assignment raises FrozenInstanceError."""
         import dataclasses
@@ -2750,6 +2765,9 @@ class TestFinanceConfig:
             loan_rate=0.06,
             opex_per_home_per_year_gbp=150.0,
             asset_life_years=25,
+            own_use_rate_pence_per_kwh=12.0,
+            retained_cash_floor_per_home_per_year_gbp=30.0,
+            grid_services_income_per_kw_per_year_gbp=5.0,
         )
         assert fc.standing_charge_pence_per_day == 75.0
         assert fc.vat_rate == 0.20
@@ -2765,6 +2783,9 @@ class TestFinanceConfig:
         assert fc.loan_rate == 0.06
         assert fc.opex_per_home_per_year_gbp == 150.0
         assert fc.asset_life_years == 25
+        assert fc.own_use_rate_pence_per_kwh == 12.0
+        assert fc.retained_cash_floor_per_home_per_year_gbp == 30.0
+        assert fc.grid_services_income_per_kw_per_year_gbp == 5.0
 
 
 # ---------------------------------------------------------------------------
