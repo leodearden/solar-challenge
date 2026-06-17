@@ -4,15 +4,15 @@
 This module provides the homogeneous-install config enumerator that is the
 foundation of the W3 cost-recovery sweep (PRD §3.1/§3.2/§10-A/§10-B).
 
-Exported symbols
-----------------
+Public API
+----------
 ConfigPoint           — frozen (pv_kwp, battery_kwh, inverter_kw) value object
 ConfigResult          — per-config evaluation result (cost-recovery + baseline economics)
 RankedSweep           — aggregated sweep output (ranked feasible configs + infeasible set)
 enumerate_configs     — cartesian-product enumerator → eager list (small grids)
 iter_configs          — generator variant of enumerate_configs (large grids / streaming)
 run_sweep             — drive all configs through W2 cost-recovery + rank by outlay
-rank                  — pure sort over any ConfigResult sequence (5-key ascending)
+rank                  — pure stable sort over any ConfigResult sequence (5-key ascending)
 feasible_split        — partition ConfigResults by binding=='infeasible_above_retail'
 pareto_baseline       — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
 cheapest_feasible     — ConfigPoint with lowest outlay among feasible results, or None
@@ -320,7 +320,30 @@ __all__ = [
     "rank",
     "feasible_split",
     "pareto_baseline",
+    "cheapest_feasible",
 ]
+
+
+def cheapest_feasible(
+    results: Sequence["ConfigResult"],
+) -> "Optional[ConfigPoint]":
+    """Return the :class:`ConfigPoint` with the lowest ``representative_outlay_gbp``
+    among feasible results, or ``None`` when no feasible result exists.
+
+    Uses :func:`feasible_split` to partition then :func:`rank` to sort; the
+    winner is always a feasible record even when infeasible records have a
+    globally lower outlay.
+
+    Args:
+        results: Any sequence of :class:`ConfigResult` objects (may be empty).
+
+    Returns:
+        :class:`ConfigPoint` of ``rank(feasible)[0]``, or ``None`` when the
+        feasible list is empty.
+    """
+    feasible, _ = feasible_split(results)
+    ranked = rank(feasible)
+    return ranked[0].config if ranked else None
 
 
 def pareto_baseline(
@@ -742,16 +765,14 @@ def run_sweep(
         for point, scenario in configs
     ]
 
-    # Split into feasible / infeasible and rank
-    feasible, infeasible_pts = _split_infeasible(all_results)
-    ranked_feasible = _rank_feasible(feasible)
+    # Split, rank, and derive cheapest using the public pure helpers
+    feasible_results, infeasible_results = feasible_split(all_results)
+    ranked_feasible = rank(feasible_results)
+    infeasible_pts = [r.config for r in infeasible_results]
+    cheapest: Optional[ConfigPoint] = cheapest_feasible(all_results)
 
-    cheapest: Optional[ConfigPoint] = (
-        ranked_feasible[0].config if ranked_feasible else None
-    )
-
-    # Compute Pareto front over ALL evaluated configs
-    pareto = _pareto_baseline(all_results)
+    # Compute Pareto front over ALL evaluated configs (feasible + infeasible)
+    pareto = pareto_baseline(all_results)
 
     # Determine the effective retained-cash floor to echo.
     # When no global override is given, we read the floor from the FIRST config's
