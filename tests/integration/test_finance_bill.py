@@ -632,7 +632,11 @@ class TestBillDistribution:
         assert len(dist.per_home_net_bill_gbp) == len(summaries)
 
     def test_per_home_bills_match_individual(self) -> None:
-        """per_home_net_bill_gbp[i] must equal householder_bill(summaries[i]).net_annual_bill_gbp."""
+        """per_home_net_bill_gbp[i] must equal householder_bill(summaries[i]).total_outlay_gbp.
+
+        CR3: per_home_net_bill_gbp name retained (back-compat §12-Q4), value
+        redefined to per-home total_outlay_gbp.
+        """
         from solar_challenge.finance import bill_distribution, householder_bill
 
         summaries = self._make_fleet()
@@ -646,10 +650,10 @@ class TestBillDistribution:
                 finance=finance,
                 simulation_days=365,
             )
-            assert dist.per_home_net_bill_gbp[i] == pytest.approx(expected_bill.net_annual_bill_gbp)
+            assert dist.per_home_net_bill_gbp[i] == pytest.approx(expected_bill.total_outlay_gbp)
 
-    def test_stats_match_net_bills(self) -> None:
-        """min/mean/median/max must match pd.Series stats of per_home_net_bill_gbp."""
+    def test_stats_match_total_outlay(self) -> None:
+        """min/mean/median/max must match pd.Series stats of per-home total_outlay values."""
         import pandas as pd
         from solar_challenge.finance import bill_distribution
 
@@ -657,24 +661,25 @@ class TestBillDistribution:
         finance = _make_finance()
         dist = bill_distribution(summaries, finance, 365)
 
+        # per_home_net_bill_gbp now holds per-home total_outlay values (CR3)
         series = pd.Series(list(dist.per_home_net_bill_gbp))
         assert dist.min_gbp == pytest.approx(float(series.min()))
         assert dist.mean_gbp == pytest.approx(float(series.mean()))
         assert dist.median_gbp == pytest.approx(float(series.median()))
         assert dist.max_gbp == pytest.approx(float(series.max()))
 
-    def test_representative_is_median_home(self) -> None:
-        """representative must be the BillBreakdown of the median-net-bill home."""
+    def test_representative_is_median_outlay_home(self) -> None:
+        """representative must be the BillBreakdown of the median-total_outlay home (CR3)."""
         from solar_challenge.finance import bill_distribution, householder_bill
 
         summaries = self._make_fleet()
         finance = _make_finance()
         dist = bill_distribution(summaries, finance, 365)
 
-        # Find the median home index manually
+        # Find the median-total_outlay home index manually
         import pandas as pd
-        net_bills = list(dist.per_home_net_bill_gbp)
-        series = pd.Series(net_bills)
+        outlay_vals = list(dist.per_home_net_bill_gbp)  # now holds total_outlay_gbp
+        series = pd.Series(outlay_vals)
         median_val = float(series.median())
         rep_idx = int((series - median_val).abs().idxmin())
 
@@ -684,8 +689,9 @@ class TestBillDistribution:
             finance=finance,
             simulation_days=365,
         )
-        assert dist.representative.net_annual_bill_gbp == pytest.approx(
-            expected_rep.net_annual_bill_gbp
+        # CR3: representative keyed on total_outlay_gbp
+        assert dist.representative.total_outlay_gbp == pytest.approx(
+            expected_rep.total_outlay_gbp
         )
 
     def test_single_home_fleet(self) -> None:
@@ -697,12 +703,13 @@ class TestBillDistribution:
         dist = bill_distribution([summary], finance, 365)
 
         assert len(dist.per_home_net_bill_gbp) == 1
-        net = dist.per_home_net_bill_gbp[0]
-        assert dist.representative.net_annual_bill_gbp == pytest.approx(net)
-        assert dist.min_gbp == pytest.approx(net)
-        assert dist.mean_gbp == pytest.approx(net)
-        assert dist.median_gbp == pytest.approx(net)
-        assert dist.max_gbp == pytest.approx(net)
+        outlay = dist.per_home_net_bill_gbp[0]
+        # CR3: per_home_net_bill_gbp holds total_outlay_gbp values
+        assert dist.representative.total_outlay_gbp == pytest.approx(outlay)
+        assert dist.min_gbp == pytest.approx(outlay)
+        assert dist.mean_gbp == pytest.approx(outlay)
+        assert dist.median_gbp == pytest.approx(outlay)
+        assert dist.max_gbp == pytest.approx(outlay)
 
     def test_per_home_net_bill_is_tuple(self) -> None:
         """per_home_net_bill_gbp must be a tuple (immutable)."""
