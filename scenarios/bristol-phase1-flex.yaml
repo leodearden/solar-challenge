@@ -15,6 +15,9 @@
 # separately.  use_stochastic:false + seed:42 give a deterministic fleet.
 
 name: Bristol Phase 1 Flex
+# Render the flexibility-value block at the central uncertainty estimate by default.
+# Override per-run with: solar-challenge finance run ... --flex-band high
+flex_band: central
 
 location:
   latitude: 51.45
