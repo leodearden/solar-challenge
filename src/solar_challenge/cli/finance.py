@@ -83,6 +83,17 @@ def run(
             help="Compute project-level economics (DSCR/IRR/payback) and append to report",
         ),
     ] = False,
+    cost_recovery: Annotated[
+        bool,
+        typer.Option(
+            "--cost-recovery/--no-cost-recovery",
+            help=(
+                "Solve the cost-recovery own-use rate and append a ## Cost-Recovery Analysis "
+                "block with the solved rate, householder outlay distribution, "
+                "CBS surplus vs floor, and feasibility"
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Run a householder bill analysis for a fleet scenario.
 
