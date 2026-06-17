@@ -136,6 +136,14 @@ def run(
     # ---- Load raw config + finance block ------------------------------------
     raw = load_config(scenario)
     finance = _parse_finance_config(raw.get("finance"))
+
+    # ---- Resolve flexibility band (CLI flag > scenario key > None) ----------
+    band_name: Optional[str] = (
+        flex_band.value if flex_band is not None else raw.get("flex_band")
+    )
+    resolved_flex_band: Optional[FlexibilityValueBand] = (
+        resolve_flex_band(band_name) if band_name else None
+    )
     if finance is None:
         raise ConfigurationError(
             "No 'finance:' block found in the scenario file. "
@@ -239,6 +247,8 @@ def run(
             scenario_name=raw.get("name", str(scenario)),
             economics=economics_result,
             cost_recovery=cost_recovery_result,
+            flex_band=resolved_flex_band,
+            flex_band_name=band_name or "",
         )
     elif assumptions == AssumptionMode.spreadsheet:
         assert dist_spreadsheet is not None
@@ -247,6 +257,8 @@ def run(
             scenario_name=raw.get("name", str(scenario)),
             economics=economics_result,
             cost_recovery=cost_recovery_result,
+            flex_band=resolved_flex_band,
+            flex_band_name=band_name or "",
         )
     else:  # both
         assert dist_physics is not None
@@ -257,6 +269,8 @@ def run(
             scenario_name=raw.get("name", str(scenario)),
             economics=economics_result,
             cost_recovery=cost_recovery_result,
+            flex_band=resolved_flex_band,
+            flex_band_name=band_name or "",
         )
 
     console.print(report)
