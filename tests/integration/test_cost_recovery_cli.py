@@ -581,9 +581,9 @@ class TestFinanceCLICostRecoveryE2EFast:
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         output = result.output.lower()
-        # Interior regime → binding='floor' → "surplus meets floor"
-        assert "surplus meets floor" in output or "feasib" in output, (
-            f"Expected feasibility indicator in output:\n{result.output}"
+        # Interior regime → binding='floor' → "surplus meets floor" (strict pin; see step-9 design decision)
+        assert "surplus meets floor" in output, (
+            f"Expected 'surplus meets floor' in output (interior regime must bind at floor):\n{result.output}"
         )
 
     def test_no_cost_recovery_omits_block(
