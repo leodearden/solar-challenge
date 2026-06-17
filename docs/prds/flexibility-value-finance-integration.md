@@ -20,7 +20,7 @@ The flexibility value has two physically-distinct parts, and this PRD treats the
 
 **User-observable surfaces when this lands:**
 - A user runs `solar-challenge finance` on the new **board scenario** (fleet on Economy-7 + grid-charging) and sees a battery home's **net annual bill is lower** than the same home with arbitrage off, by a per-battery-home **time-shift saving that lands in the £100–330 research band** — reported alongside the banded grid-services figure.
-- Setting the **grid-services band** (Low/Central/High) on the scenario's finance config **moves the project surplus** (W2's consuming math) by `n_battery_homes × band£`; the default leaves existing economics and the θ calibration **bit-identical**.
+- Setting the **grid-services band** (Low/Central/High) on the scenario's finance config **moves the project surplus** (W2's consuming math) by `Σ battery max_discharge_kw × band(£/kW)`; the default leaves existing economics and the θ calibration **bit-identical**.
 - W3's ranking (min householder bill) now **orders configs by per-config arbitrage benefit** — a 10 kWh battery out-arbitrages a 5 kWh one — because the time-shift lands in the bill it ranks on.
 - A committed **buildability/risk note** in `docs/` records the prerequisites (P483 aggregator, MID asset meters, NGED CMZ confirmation, G99/G100) and the one HIGH risk, traceable from the value model.
 
@@ -39,7 +39,7 @@ The flexibility value has two physically-distinct parts, and this PRD treats the
 
 **Time-shift = physics, surfaced at fleet scale.** Thread a fleet-wide TOU tariff + grid-charging onto distribution-generated homes (the only substrate gap), then ship a board scenario where the arbitrage saving appears in the householder bill. The mechanism is already wired end-to-end at the single-home/timestep level; W1 lifts it to the fleet and the board surface.
 
-**Grid-services = a banded parameter W1 fills into W2's field.** W1 owns a `flex.py` value-model that holds the canonical Low/Central/High decomposition and resolves a band → grid-services £/battery-home/yr. W2's amendment owns the `FinanceConfig` field and the math that consumes it.
+**Grid-services = a banded £/kW parameter W1 fills into W2's field.** W1 owns a `flex.py` value-model that holds the canonical Low/Central/High decomposition and resolves a band → grid-services **£/kW of battery discharge power/yr** (firm flex capacity is a power product). W2's amendment owns the `FinanceConfig` field (`grid_services_income_per_kw_per_year_gbp`) and the math that consumes it (`Σ max_discharge_kw × £/kW`).
 
 **Valuation/split stays with W2.** How the time-shift value is split between deeper householder savings and project surplus (the own-use-rate cost-recovery solve), and the correction of the self-consumption-inflation in `project_multi_year`'s `fleet_revenue` (§9), are **W2's consuming-math** — coordinated, not in W1's scope. W1 surfaces the physics and supplies the parameter values.
 
@@ -57,15 +57,15 @@ The brief flagged "one parameter vs physics + parameter" as a real fork. Resolve
 ## 5. Pre-conditions for activating
 
 - **Landed (verified):** the arbitrage dispatch path (`dispatch.py`/`flow.py`, tasks #23–#29), TOU tariffs (`tariff.py`), per-timestep TOU import pricing (`home.py`), and the W2 base financial layer (`finance.py`; `householder_bill`, `project_multi_year`, `project_economics`).
-- **Blocked-on-consumer (out-of-batch dependency):** task **δ** (grid-services parameter → economics) depends on the **W2 cost-recovery amendment** exposing the `FinanceConfig` **grid-services** field + wiring it into the economics. The amendment (`docs/prds/cost-recovery-householder-billing.md`) defines the field; it first landed (`2e39a03`) with a *per-kWh full-flex* shape that conflicted with this PRD's A3 split and was **reconciled** (`e791214`, Leo 2026-06-17) to `grid_services_income_per_battery_home_gbp` (per-home, grid-services only) with the time-shift left to W1 physics (§8). δ is queued behind the W2 amendment's **CR1** task (the field) reaching `done`/merged — do not queue δ before it lands.
+- **Blocked-on-consumer (out-of-batch dependency):** task **δ** (grid-services parameter → economics) depends on the **W2 cost-recovery amendment** exposing the `FinanceConfig` grid-services field. The amendment (`docs/prds/cost-recovery-householder-billing.md`) defines it as `grid_services_income_per_kw_per_year_gbp: float = 0.0` (per kW of battery discharge power; reconciled with this PRD across `e791214` + the per-kW refinement, Leo 2026-06-17). δ is queued behind the W2 amendment's **CR1** task reaching `done`/merged — do not queue δ before it lands.
 - **Calibration guard (META):** β threads a fleet tariff **only when the scenario specifies one**; the θ calibration scenario (`bristol-fin-calibration.yaml`, no `tariff:` block) and all existing finance YAMLs are unchanged. The δ grid-services field defaults `0.0`. θ/#48 stays green.
 
 ---
 
 ## 6. Resolved design decisions
 
-1. **Time-shift is physics; grid-services is a parameter.** No `FinanceConfig` field for time-shift. The W2-owned field holds **grid-services income only** (~£30 central), **not** the full £280 — communicated to the W2 session via fused-memory.
-2. **Grid-services bands (net of aggregator share), £/battery-home/yr:** Low **4** / Central **30** / High **120** (consulting §1.1/§1.4). Modelled as base (~£15–25 gross DFS + partial local flex) + upside (~£40–50 gross with a confirmed active Bristol CMZ) **via a partnered aggregator — not self-VLP** (not viable at 100 homes). Never assert above the High case; DNO local flex is **£0 outside an active NGED constraint zone**.
+1. **Time-shift is physics; grid-services is a parameter.** No `FinanceConfig` field for time-shift. The W2-owned field holds **grid-services income only** (~£12/kW ≈ £30/battery-home central), **not** the full £280 — communicated to the W2 session via fused-memory.
+2. **Grid-services field basis = per kW of battery discharge power** (firm flex capacity is a *power* product; the physical quantity is in the sim, only the £/kW price is exogenous — symmetric with time-shift). The net bands (consulting §1.1/§1.4) are **£/battery-home/yr** Low **4** / Central **30** / High **120**; per kW of the ~2.5 kW representative discharge power that is **£/kW/yr** Low ~**1.5** / Central ~**12** / High ~**48**, net of aggregator share — the value W1 resolves into the field. CBS revenue = `Σ max_discharge_kw × £/kW`, giving W3 per-config grid-services sensitivity. Modelled as base (~£15–25 gross DFS + partial local flex) + upside (~£40–50 gross with a confirmed active Bristol CMZ) **via a partnered aggregator — not self-VLP** (not viable at 100 homes). Never assert above the High case; DNO local flex is **£0 outside an active NGED constraint zone**. *(per-kW basis: Leo, 2026-06-17.)*
 3. **Time-shift expected band (for validating the physics, not a parameter):** Low ~**100** / Central ~**250** / High ~**330**. The board scenario's per-battery-home arbitrage saving is asserted to fall **within** this band — a band-membership sanity check, **never** a point estimate (§9, G6).
 4. **Canonical board tariff = Economy-7** (off-peak 0.09 / peak 0.25 £/kWh, 00:30–07:30), matching `bristol-arbitrage.yaml`. The tariff choice is now load-bearing (it sets the spread that bounds the time-shift), so it is pinned here for reproducibility.
 5. **Central is the headline case for Friday.** The board scenario defaults to Central; Low/High are selectable for sensitivity.
@@ -87,7 +87,7 @@ The brief flagged "one parameter vs physics + parameter" as a real fork. Resolve
 
 | Other PRD / task | Direction | Seam mechanism | Owner | Status |
 |---|---|---|---|---|
-| **W2** `docs/prds/cost-recovery-householder-billing.md` (the cost-recovery amendment) | W1 **produces → W2 consumes** | `FinanceConfig` **grid-services** field — proposed `grid_services_income_per_battery_home_gbp: float = 0.0` (additive, default 0.0, θ-safe); W1 fills Low 4 / Central 30 / High 120 | **W2 owns** the field + the consuming economics/bill math + the surplus-side valuation/split + the self-consumption-inflation fix. **W1 fills** the values + supplies the physics method (fleet TOU+grid-charging) + buildability | **conflict caught + reconciled (Leo, 2026-06-17):** the amendment first landed (`2e39a03`) with a *per-kWh, full-flex* field; it was **reconciled** (`e791214`) to `grid_services_income_per_battery_home_gbp: float = 0.0` (per-home, grid-services only, θ-safe), with the time-shift left to W1 physics. δ depends on the W2 amendment's task **CR1** (which defines the field) landing |
+| **W2** `docs/prds/cost-recovery-householder-billing.md` (the cost-recovery amendment) | W1 **produces → W2 consumes** | `FinanceConfig` **grid-services** field `grid_services_income_per_kw_per_year_gbp: float = 0.0` (per kW of battery power, additive, default 0.0, θ-safe); W1 fills Low ~1.5 / Central ~12 / High ~48 £/kW | **W2 owns** the field + the consuming economics/bill math + the surplus-side valuation/split + the self-consumption-inflation fix. **W1 fills** the values + supplies the physics method (fleet TOU+grid-charging) + buildability | **conflict caught + reconciled (Leo, 2026-06-17):** the amendment first landed (`2e39a03`) per-kWh full-flex; reconciled (`e791214`) to grid-services-only, then refined to the **per-kW-of-battery-power** basis (`Σ max_discharge_kw × £/kW`), time-shift left to W1 physics. δ depends on the W2 amendment's **CR1** (which defines the field) landing |
 | **W2** `finance.py` `householder_bill` / `home.py` import pricing | W1 **consumes (read-only)** | Time-shift reaches `import_cost → net_annual_bill` via the already-landed TOU import pricing | W2 owns the functions; W1 only enables the fleet to exercise them (β/γ) | landed; no W2 change required for the time-shift→bill path |
 | **W3** `docs/prds/discrete-install-config-sweep.md` | W1 **produces → W3 consumes** | W3 ranks on **min householder bill**, which now reflects per-config arbitrage (via the board scenario's TOU+grid-charging) | **W3 consumes passively**; W3 must run on the TOU+grid-charging fleet scenario to capture per-config time-shift (a **W3 coordination item** when W3 resumes) | W3 authored 2026-06-16, queue-gated on W2; **add W1 board scenario to W3's pre-conditions** |
 | Consulting model `2026-06-16-flexibility-value-buildability-model.md` | W1 **references** | Provenance for the bands + the buildability assessment (ε) | the consulting doc (read-only reference) | landed |
@@ -108,8 +108,8 @@ generate_homes_from_distribution(dist_config, location, *, fleet_tariff=None, fl
 - **Invariant (calibration-safe):** when neither is provided, behaviour is **bit-identical** to today (`tariff_config=None`). θ/#48 and every existing fleet YAML are unchanged.
 
 **Seam 2 — grid-services parameter (δ ↔ W2).**
-- W2 adds `FinanceConfig.grid_services_income_per_battery_home_gbp: float = 0.0` (final name W2's call; W1 references the agreed name). W1's `flex.resolve_grid_services_band(band: "low"|"central"|"high") -> float` returns 4/30/120.
-- **Invariant:** default `0.0` → economics bit-identical to non-flex runs. Additive: the field enters project revenue (or the own-use-rate solve) as `n_battery_homes × field` — **W2's math**.
+- W2 adds `FinanceConfig.grid_services_income_per_kw_per_year_gbp: float = 0.0` (final name W2's call; W1 references the agreed name). W1's `flex.resolve_grid_services_band(band: "low"|"central"|"high") -> float` returns the £/kW rate ~1.5/12/48.
+- **Invariant:** default `0.0` → economics bit-identical to non-flex runs. Additive: the field enters project revenue (or the own-use-rate solve) as `Σ max_discharge_kw × field` — **W2's math**.
 
 **Seam 3 — time-shift physics → bill (γ, read-only on W2).**
 - With the board scenario (TOU + grid-charging), `householder_bill(...).import_cost_gbp` (hence `net_annual_bill_gbp`) is **lower** than the arbitrage-off baseline. No W2 code change.
@@ -122,7 +122,7 @@ generate_homes_from_distribution(dist_config, location, *, fleet_tariff=None, fl
 | Fleet inherits TOU tariff | scenario sets `tariff: economy_7` + `battery.grid_charging` | every generated home has `tariff_config != None` + grid-charging; a fleet run's `total_import_cost_gbp` reflects TOU rates | producer (β) |
 | Fleet tariff absent ⇒ unchanged | scenario with **no** `tariff:` | generated homes `tariff_config is None`; fleet run bit-identical to pre-β | producer (β) — **θ guard** |
 | Time-shift in the bill | board scenario, arbitrage ON vs OFF (grid_charging toggled) | battery home `net_annual_bill_gbp(ON) < (OFF)`; per-battery-home delta ∈ **[£100, £330]** (annualised) | producer (γ) / consumer (W3 bill) |
-| Grid-services moves surplus | board scenario, grid-services band ∈ {low,central,high} | project surplus rises by ≈ `n_battery × {4,30,120}`; band selectable, moves the number | consumer (δ↔W2) — **blocked on W2 amendment** |
+| Grid-services moves surplus | board scenario, grid-services band ∈ {low,central,high} | project surplus rises by ≈ `Σ max_discharge_kw × {1.5,12,48}`; band selectable, moves the number | consumer (δ↔W2) — **blocked on W2 amendment** |
 | Grid-services default ⇒ θ-safe | field unset / `0.0` | economics + θ calibration bit-identical | consumer (δ↔W2) |
 | Battery vs no-battery flex increment | one battery home, one no-battery home | they differ by the flex increment (time-shift in bill + grid-services on battery home only) | integration (γ+δ) |
 
@@ -137,8 +137,8 @@ generate_homes_from_distribution(dist_config, location, *, fleet_tariff=None, fl
 Greek labels are intra-batch; task IDs assigned at decompose. **B+H phasing:** α/β are foundation; γ/δ are the vertical-slice integration gates; ε is the companion assessment.
 
 - **α — `flex.py` value-model module** · *modules:* `src/solar_challenge/flex.py` (new), `tests/unit/test_flex.py` · *intermediate (unlocks γ, δ, ε).*
-  - Frozen dataclass(es) holding the canonical Low/Central/High decomposition (time-shift band + grid-services band + totals + provenance refs) and `resolve_grid_services_band(band) -> float`.
-  - **Signal:** unit test — `resolve_grid_services_band("central") == 30.0`; the three bands expose the documented time-shift + grid-services components; totals match the consulting §1.1 table (within the doc's banding).
+  - Frozen dataclass(es) holding the canonical Low/Central/High decomposition (time-shift band + grid-services band, both per-home for provenance + the per-kW grid-services rate + totals + provenance refs) and `resolve_grid_services_band(band) -> float` returning the **£/kW** rate.
+  - **Signal:** unit test — `resolve_grid_services_band("central") ≈ 12.0` (£/kW); the three bands expose the documented time-shift + grid-services components; per-home totals (×2.5 kW) match the consulting §1.1 table (within the doc's banding).
   - **Unlocks:** γ (time-shift expected band), δ (grid-services value), ε (decomposition for the note).
 
 - **β — fleet-wide TOU-tariff threading** · *modules:* `src/solar_challenge/config.py` (`generate_homes_from_distribution` + scenario parse), `tests/unit/test_config.py` · *intermediate (unlocks γ).*
@@ -152,7 +152,7 @@ Greek labels are intra-batch; task IDs assigned at decompose. **B+H phasing:** �
 
 - **δ — grid-services parameter → economics (seam gate)** · *modules:* `scenarios/bristol-phase1-flex.yaml` (finance block), `tests/integration/test_flex_grid_services.py` (new) · *leaf · prereqs: α, **W2 cost-recovery amendment (out-of-batch)**.*
   - Set the resolved grid-services band on the board scenario's `finance` config (W2's field). 
-  - **Signal:** integration test — selecting band ∈ {low,central,high} moves the project surplus by ≈ `n_battery × {4,30,120}`; default/unset leaves economics + θ bit-identical; a battery home and a no-battery home differ by the flex increment.
+  - **Signal:** integration test — selecting band ∈ {low,central,high} moves the project surplus by ≈ `Σ max_discharge_kw × {1.5,12,48}`; default/unset leaves economics + θ bit-identical; a battery home and a no-battery home differ by the flex increment.
   - **Blocked-on-consumer** until the W2 amendment lands the field; the field name is the agreed seam (§8).
 
 - **ε — buildability/risk note** · *modules:* `docs/flexibility-buildability.md` (new) · *leaf · prereqs: α.*
@@ -174,8 +174,9 @@ Per-leaf G3+G6 bindings; any FAIL blocks queueing.
 - **β (fleet-tariff threading):**
   - `generate_homes_from_distribution` tariff seam → **PASS** producer-in-batch (β itself); calibration-safe invariant pinned by a θ regression test.
 - **δ (grid-services parameter):**
-  - `FinanceConfig.grid_services_income_per_battery_home_gbp` → **FAIL until W2 amendment lands** (`producer-absent` today). Resolution (G3-b): queue **upstream** of δ as the W2 cost-recovery amendment task; wire the dep; do not queue δ before it merges.
-  - grid-services values 4/30/120 → **PASS** within consulting §1.1/§1.4 bounds; never above the High case.
+  - `FinanceConfig.grid_services_income_per_kw_per_year_gbp` → **FAIL until W2 amendment lands** (`producer-absent` today). Resolution (G3-b): queue **upstream** of δ as the W2 cost-recovery amendment task (CR1); wire the dep; do not queue δ before it merges.
+  - `home.battery_config.max_discharge_kw` (the per-kW multiplier) → **PASS** `grep:config.py:2160` (real field, default 2.5).
+  - grid-services £/kW values ~1.5/12/48 (= net per-home 4/30/120 ÷ ~2.5 kW) → **PASS** within consulting §1.1/§1.4 bounds; never above the High case.
 - **α (value-model):** pure constants + resolver, no novel substrate → **G3 N/A**; values bounded by the consulting doc.
 - **ε (buildability note):** documentation deliverable; prerequisites cite the consulting §1.3/§2/§5 + survey §9 → **PASS** (assessed, not built).
 
@@ -183,7 +184,7 @@ Per-leaf G3+G6 bindings; any FAIL blocks queueing.
 
 ## 12. Open questions (tactical — deferred)
 
-1. **`FinanceConfig` field name — reconciled.** The W2 amendment was updated (`e791214`) to `grid_services_income_per_battery_home_gbp` (per-home, grid-services-only, default 0.0); both PRDs now agree. δ depends on the W2 amendment's **CR1** task landing the field (a tracked prerequisite, not an open design question).
+1. **`FinanceConfig` field name — reconciled.** The W2 amendment defines `grid_services_income_per_kw_per_year_gbp` (per kW of battery power, grid-services-only, default 0.0); both PRDs now agree. δ depends on the W2 amendment's **CR1** task landing the field (a tracked prerequisite, not an open design question).
 2. **Board scenario period / runtime.** Full PVGIS year is slow; the time-shift figure may use a representative window + `householder_bill` annualisation (the < 360-day path exists). **Suggested:** deterministic short window + annualisation for the test; full-year for the board artifact. Decide during γ.
 3. **Band-selection surface.** `flex.resolve_grid_services_band` + a scenario `finance` value is the minimum; a `--flex-band` CLI option is a nice-to-have. **Suggested:** scenario-level for Friday; CLI later. Decide during δ.
 4. **Round-trip / self-consumption-inflation correction.** A W2 follow-up (§9). **Suggested:** file against W2 after Friday; W1 reports band-membership only. Decide with the W2 session.
