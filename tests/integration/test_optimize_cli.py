@@ -314,3 +314,230 @@ def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
     path = tmp_path / "optimize_scenario.yaml"
     path.write_text(yaml.dump(scenario))
     return path
+
+
+# ---------------------------------------------------------------------------
+# §C — RED tests for generate_config_ranking_report Table (1) (step-1)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateConfigRankingReportTable1:
+    """RED: generate_config_ranking_report renders the COST-RECOVERY RANK table."""
+
+    def _make_sweep_two_feasible(self) -> "RankedSweep":  # type: ignore[name-defined]
+        """Build a RankedSweep with two feasible configs and one infeasible."""
+        from solar_challenge.optimize import ConfigPoint
+
+        # Config 1 (cheapest, RECOMMENDATION): 4 kWp, no battery, solved @ 12.5p
+        r1 = _make_config_result(
+            pv_kwp=4.0,
+            battery_kwh=0.0,
+            inverter_kw=5.0,
+            own_use_rate=12.5,
+            net_surplus=35.0,
+            feasible=True,
+            binding="floor",
+            total_capex=48_000.0,
+            min_dscr=float("inf"),
+            equity_irr=0.09,
+            payback_years=11.0,
+            baseline_outlay=375.0,
+            baseline_surplus=40.0,
+            outlay_min=300.0,
+            outlay_mean=345.0,
+            outlay_median=350.0,
+            outlay_max=400.0,
+        )
+        # Config 2 (second cheapest): 5 kWp, 5 kWh battery
+        r2 = _make_config_result(
+            pv_kwp=5.0,
+            battery_kwh=5.0,
+            inverter_kw=5.0,
+            own_use_rate=18.75,
+            net_surplus=27.0,
+            feasible=True,
+            binding="floor",
+            total_capex=72_000.0,
+            min_dscr=1.45,
+            equity_irr=0.07,
+            payback_years=14.5,
+            baseline_outlay=410.0,
+            baseline_surplus=55.0,
+            outlay_min=325.0,
+            outlay_mean=368.0,
+            outlay_median=370.0,
+            outlay_max=420.0,
+        )
+        # Infeasible: 6 kWp, 10 kWh — ConfigPoint only in RankedSweep
+        infeasible_pt = ConfigPoint(pv_kwp=6.0, battery_kwh=10.0, inverter_kw=5.0)
+        return _make_ranked_sweep(
+            results=(r1, r2),
+            infeasible=(infeasible_pt,),
+            pareto=(r1.config,),
+            floor=35.0,
+        )
+
+    def test_cost_recovery_rank_heading_present(self) -> None:
+        """Report must contain a cost-recovery rank heading."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        assert "cost-recovery rank" in report.lower(), (
+            f"Expected 'Cost-Recovery Rank' heading in report:\n{report}"
+        )
+
+    def test_solved_own_use_rate_formatted(self) -> None:
+        """Each config's solved own-use rate must appear as 'XX.XX p/kWh'."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        # Config 1: 12.50 p/kWh  Config 2: 18.75 p/kWh
+        assert "12.50" in report, f"12.50 p/kWh not found:\n{report}"
+        assert "18.75" in report, f"18.75 p/kWh not found:\n{report}"
+        assert "p/kWh" in report, f"'p/kWh' token not found:\n{report}"
+
+    def test_outlay_distribution_values(self) -> None:
+        """Report must show min/mean/median/max outlay for each config."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        # Config 1 outlay distribution: 300 / 345 / 350 / 400
+        assert "300" in report, f"min outlay 300 not found:\n{report}"
+        assert "345" in report, f"mean outlay 345 not found:\n{report}"
+        assert "350" in report, f"median outlay 350 not found:\n{report}"
+        assert "400" in report, f"max outlay 400 not found:\n{report}"
+
+    def test_cbs_surplus_rendered(self) -> None:
+        """Report must show the CBS surplus at the solved rate for each config."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        # Config 1 surplus: 35.00  Config 2 surplus: 27.00
+        assert "35.00" in report or "35" in report, (
+            f"surplus 35 not found:\n{report}"
+        )
+        assert "27.00" in report or "27" in report, (
+            f"surplus 27 not found:\n{report}"
+        )
+
+    def test_feasibility_binding_label_present(self) -> None:
+        """Report must show the human-readable binding/feasibility label."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        # Both configs are binding='floor'
+        assert "Surplus meets floor" in report or "surplus meets floor" in report.lower(), (
+            f"'Surplus meets floor' label not found:\n{report}"
+        )
+
+    def test_total_capex_rendered(self) -> None:
+        """Report must show total_capex_gbp for each feasible config."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        # Config 1: £48,000  Config 2: £72,000
+        assert "48" in report, f"48k capex not found:\n{report}"
+        assert "72" in report, f"72k capex not found:\n{report}"
+
+    def test_min_dscr_inf_shown_as_infinity_symbol(self) -> None:
+        """min_dscr=inf must be rendered as '∞'."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        assert "∞" in report, f"'∞' symbol for inf DSCR not found:\n{report}"
+
+    def test_equity_irr_formatted_as_percent(self) -> None:
+        """equity_irr must be rendered as a percentage (e.g. '9.0%' or '7.0%')."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        assert "9.0%" in report or "9%" in report, (
+            f"equity IRR 9% not found:\n{report}"
+        )
+        assert "7.0%" in report or "7%" in report, (
+            f"equity IRR 7% not found:\n{report}"
+        )
+
+    def test_payback_none_shown_as_dash(self) -> None:
+        """payback_years=None must render as '—'."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        from solar_challenge.optimize import ConfigPoint
+
+        # Build a config with payback=None
+        r_no_payback = _make_config_result(
+            pv_kwp=3.0, battery_kwh=0.0, inverter_kw=5.0,
+            payback_years=None,
+            own_use_rate=10.0,
+        )
+        sweep = _make_ranked_sweep(results=(r_no_payback,))
+        report = generate_config_ranking_report(sweep)
+
+        assert "—" in report, f"'—' for None payback not found:\n{report}"
+
+    def test_nan_irr_shown_as_na(self) -> None:
+        """equity_irr=NaN must render as 'n/a'."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        r_nan_irr = _make_config_result(
+            pv_kwp=3.0, battery_kwh=0.0, inverter_kw=5.0,
+            equity_irr=float("nan"),
+            own_use_rate=10.0,
+        )
+        sweep = _make_ranked_sweep(results=(r_nan_irr,))
+        report = generate_config_ranking_report(sweep)
+
+        assert "n/a" in report, f"'n/a' for NaN IRR not found:\n{report}"
+
+    def test_recommendation_marker_on_cheapest(self) -> None:
+        """The cheapest feasible config (results[0]) must be flagged as RECOMMENDATION."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        assert "RECOMMENDATION" in report.upper() or "★" in report or "recommended" in report.lower(), (
+            f"RECOMMENDATION marker not found:\n{report}"
+        )
+
+    def test_infeasible_section_lists_config_dims(self) -> None:
+        """Infeasible ConfigPoints must appear in a separate section by their dims."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        ranked = self._make_sweep_two_feasible()
+        report = generate_config_ranking_report(ranked)
+
+        # Infeasible config: 6.0 kWp, 10.0 kWh, 5.0 kW
+        assert "6.0" in report, f"infeasible pv_kwp=6.0 not found:\n{report}"
+        assert "10.0" in report, f"infeasible battery_kwh=10.0 not found:\n{report}"
+        # Some 'infeasible' heading
+        assert "infeasible" in report.lower(), (
+            f"No infeasible section heading:\n{report}"
+        )
+
+    def test_empty_infeasible_no_infeasible_section(self) -> None:
+        """When there are no infeasible configs, the infeasible section is omitted."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        r = _make_config_result()
+        sweep = _make_ranked_sweep(results=(r,), infeasible=())
+        report = generate_config_ranking_report(sweep)
+
+        # No 'infeasible configuration' heading needed when empty
+        assert "cost-recovery rank" in report.lower()
