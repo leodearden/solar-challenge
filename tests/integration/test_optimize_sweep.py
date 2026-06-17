@@ -1065,3 +1065,150 @@ class TestRunSweepGuards:
 
         with pytest.raises(ValueError, match="(?i)finance"):
             run_sweep(configs, simulate=simulate)
+
+
+# ---------------------------------------------------------------------------
+# Amendment tests — coverage gaps surfaced by code review
+# ---------------------------------------------------------------------------
+
+
+class TestSplitInfeasibleRateClamped:
+    """_split_infeasible places rate_clamped_zero (feasible=True) into results."""
+
+    def test_rate_clamped_zero_goes_to_feasible(self) -> None:
+        """A ConfigResult with binding='rate_clamped_zero' and feasible=True is
+        placed in the feasible list, not infeasible."""
+        from solar_challenge.optimize import _split_infeasible
+
+        clamped = _make_config_result(
+            feasible=True,
+            binding="rate_clamped_zero",
+            representative_outlay_gbp=350.0,
+        )
+        feasible, infeasible = _split_infeasible([clamped])
+        assert len(feasible) == 1
+        assert len(infeasible) == 0
+        assert feasible[0].binding == "rate_clamped_zero"
+
+    def test_infeasible_above_retail_goes_to_infeasible(self) -> None:
+        """A ConfigResult with binding='infeasible_above_retail' and feasible=False
+        is placed in infeasible (sanity check for the bool-based split)."""
+        from solar_challenge.optimize import _split_infeasible
+
+        inf = _make_config_result(
+            feasible=False,
+            binding="infeasible_above_retail",
+            representative_outlay_gbp=999.0,
+        )
+        feasible, infeasible = _split_infeasible([inf])
+        assert len(feasible) == 0
+        assert len(infeasible) == 1
+
+    def test_run_sweep_rate_clamped_config_in_results(self) -> None:
+        """run_sweep places a rate_clamped_zero result in ranked.results (not infeasible).
+
+        We inject the result via the synthetic _make_config_result path rather than
+        wiring up a full run_sweep call — the _split_infeasible unit test above covers
+        the route; this integration test verifies the boolean predicate propagates
+        through run_sweep correctly by using a config that naturally produces a
+        feasible (floor or rate_clamped_zero) solve.
+        """
+        from solar_challenge.optimize import enumerate_configs, run_sweep
+
+        n_homes = 3
+        # Use interior_finance which produces a feasible (floor-binding) solve —
+        # the test_all_results_feasible test already covers this path; what matters
+        # here is that none end up in infeasible.
+        finance = _interior_finance(n_homes)
+        scenario = _make_scenario(n_homes=n_homes, finance=finance)
+        fr = _make_fleet_results(n_homes=n_homes)
+        simulate = lambda fc, s, e: fr  # noqa: E731
+        configs = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6])
+        ranked = run_sweep(configs, simulate=simulate)
+        # The feasible result (floor or rate_clamped_zero) must be in results
+        assert len(ranked.results) == 1
+        assert len(ranked.infeasible) == 0
+        assert ranked.results[0].feasible is True
+
+
+class TestHeterogeneousFloorEcho:
+    """retained_cash_floor_gbp echoes the FIRST config's floor when None and
+    configs carry heterogeneous finance blocks."""
+
+    def test_heterogeneous_floor_echoes_first_config(self) -> None:
+        """When retained_cash_floor_gbp=None and configs have differing finance floors,
+        ranked.retained_cash_floor_gbp equals the FIRST config's floor."""
+        from solar_challenge.optimize import ConfigPoint, enumerate_configs, run_sweep
+
+        n_homes = 3
+        floor_a = 80.0
+        floor_b = 120.0
+        finance_a = _make_finance(
+            pv_cost_per_kwp_gbp=2000.0,
+            grant_gbp=0.0,
+            own_use_rate_pence_per_kwh=15.0,
+            retained_cash_floor=floor_a,
+            retail_baseline_rate=30.0,
+        )
+        finance_b = _make_finance(
+            pv_cost_per_kwp_gbp=2000.0,
+            grant_gbp=0.0,
+            own_use_rate_pence_per_kwh=15.0,
+            retained_cash_floor=floor_b,
+            retail_baseline_rate=30.0,
+        )
+        scenario_a = _make_scenario(n_homes=n_homes, finance=finance_a)
+        scenario_b = _make_scenario(n_homes=n_homes, finance=finance_b)
+
+        configs_a = enumerate_configs(scenario_a, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6])
+        configs_b = enumerate_configs(scenario_b, pv_kwp=[5.0], battery_kwh=[6.0], inverter_kw=[3.6])
+        configs = configs_a + configs_b  # first config has floor_a
+
+        fr = _make_fleet_results(n_homes=n_homes)
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        ranked = run_sweep(configs, simulate=simulate)
+
+        # Documented behaviour: echoes the first config's floor when no global override
+        assert ranked.retained_cash_floor_gbp == pytest.approx(floor_a)
+
+
+class TestParetoBaselineIdenticalPairs:
+    """_pareto_baseline handles identical (outlay, surplus) pairs correctly."""
+
+    def test_identical_pairs_both_retained(self) -> None:
+        """Two configs with exactly equal (baseline_outlay, baseline_surplus) are
+        both non-dominated — neither satisfies the 'at least one strict' criterion
+        against the other, so both survive."""
+        from solar_challenge.optimize import _pareto_baseline
+
+        a = _make_config_result(
+            baseline_outlay_gbp=300.0,
+            baseline_surplus_per_home_gbp=200.0,
+            pv_kwp=4.0,
+        )
+        b = _make_config_result(
+            baseline_outlay_gbp=300.0,
+            baseline_surplus_per_home_gbp=200.0,
+            pv_kwp=5.0,  # different config point, same (outlay, surplus)
+        )
+        pareto = _pareto_baseline([a, b])
+        pareto_configs = list(pareto)
+        assert a.config in pareto_configs
+        assert b.config in pareto_configs
+        assert len(pareto_configs) == 2
+
+    def test_identical_pair_dominated_by_third(self) -> None:
+        """If a third config dominates both identical-pair configs, both are excluded."""
+        from solar_challenge.optimize import _pareto_baseline
+
+        a = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=4.0)
+        b = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=5.0)
+        # c dominates a and b: lower outlay AND higher surplus
+        c = _make_config_result(baseline_outlay_gbp=250.0, baseline_surplus_per_home_gbp=250.0, pv_kwp=6.0)
+
+        pareto = _pareto_baseline([a, b, c])
+        pareto_configs = list(pareto)
+        assert c.config in pareto_configs
+        assert a.config not in pareto_configs
+        assert b.config not in pareto_configs

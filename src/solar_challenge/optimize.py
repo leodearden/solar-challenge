@@ -408,20 +408,12 @@ def _age0_baseline_outlay(
         Representative home's total annual outlay (£).
     """
     # Lazy imports to avoid import cycles and heavy pvlib stack at module level
-    from solar_challenge.finance import bill_distribution
+    from solar_challenge.finance import _resolve_homes, bill_distribution
     from solar_challenge.fleet import FleetConfig
     from solar_challenge.home import calculate_summary
 
-    # Resolve homes (support both .homes list and single .home)
-    homes: List[HomeConfig] = (
-        list(scenario.homes)
-        if scenario.homes
-        else ([scenario.home] if scenario.home is not None else [])
-    )
-    if not homes:
-        raise ValueError(
-            "_age0_baseline_outlay: scenario must have at least one home"
-        )
+    # Reuse finance._resolve_homes so homes-resolution semantics stay in one place
+    homes: List[HomeConfig] = _resolve_homes(scenario)
 
     # Age all PV to system_age_years=0.0 (battery left unchanged for age-0 baseline)
     aged_homes = [
@@ -455,20 +447,26 @@ def _split_infeasible(
 ) -> tuple[List[ConfigResult], List[ConfigPoint]]:
     """Split evaluated ConfigResults into feasible list and infeasible ConfigPoints.
 
+    Splits on the :attr:`ConfigResult.feasible` boolean rather than the
+    ``binding`` string so that any future ``binding`` value with ``feasible=False``
+    is correctly classified without a string-match change.
+
     Args:
         results: All evaluated ConfigResults from :func:`_evaluate_config`.
 
     Returns:
         ``(feasible_list, infeasible_points)`` where *infeasible_points* preserves
-        the input order of configs with ``binding == 'infeasible_above_retail'``.
+        the input order of configs whose ``feasible`` field is ``False``.
     """
     feasible: List[ConfigResult] = []
     infeasible: List[ConfigPoint] = []
     for r in results:
-        if r.binding == "infeasible_above_retail":
-            infeasible.append(r.config)
-        else:
+        if r.feasible:
             feasible.append(r)
+        else:
+            # binding should be 'infeasible_above_retail' when feasible=False;
+            # splitting on the bool guards against future binding strings.
+            infeasible.append(r.config)
     return feasible, infeasible
 
 
@@ -658,7 +656,10 @@ def run_sweep(
         retained_cash_floor_gbp: When not None, overrides each scenario's
             ``finance.retained_cash_floor_per_home_per_year_gbp`` before the
             solve.  The baseline (outlay, surplus) pair is floor-independent
-            (own_use_rate stays fixed at 15 p/kWh).
+            (own_use_rate stays fixed at 15 p/kWh).  When None, the echoed
+            ``RankedSweep.retained_cash_floor_gbp`` comes from the **first**
+            config's finance block; the caller is responsible for ensuring a
+            homogeneous fleet when that field is used for reporting.
         simulate: Optional injected fleet simulator for offline testing.
             Defaults to :func:`~solar_challenge.fleet.simulate_fleet`.
 
@@ -668,6 +669,17 @@ def run_sweep(
 
     Raises:
         ValueError: When *configs* is empty or any scenario's ``finance`` is None.
+
+    .. note::
+        **Simulation cost** — each config triggers up to three independent fleet
+        simulations per call to :func:`_evaluate_config`: one inside
+        :func:`~solar_challenge.finance.solve_cost_recovery_rate` (which
+        internally calls :func:`~solar_challenge.finance.project_multi_year` at
+        the solved rate), one explicit :func:`~solar_challenge.finance.project_multi_year`
+        call at the baseline rate (15 p/kWh), and one age-0 baseline outlay
+        simulation.  With the real ``simulate_fleet`` (ProcessPoolExecutor over
+        a 100-home fleet) this is substantial: size grids conservatively or use
+        an injected *simulate* for offline sweeps.
     """
     if not configs:
         raise ValueError(
@@ -701,12 +713,15 @@ def run_sweep(
     # Compute Pareto front over ALL evaluated configs
     pareto = _pareto_baseline(all_results)
 
-    # Determine the effective retained-cash floor to echo
+    # Determine the effective retained-cash floor to echo.
+    # When no global override is given, we read the floor from the FIRST config's
+    # finance block.  This is a documented homogeneity assumption: callers with
+    # heterogeneous finance blocks should pass retained_cash_floor_gbp explicitly
+    # to get a well-defined reported floor (see run_sweep docstring).
     effective_floor: float
     if retained_cash_floor_gbp is not None:
         effective_floor = retained_cash_floor_gbp
     else:
-        # All configs share the same scenario.finance (from enumerate_configs base)
         first_finance = configs[0][1].finance
         if first_finance is not None:
             effective_floor = first_finance.retained_cash_floor_per_home_per_year_gbp
