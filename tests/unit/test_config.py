@@ -3358,3 +3358,45 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.tariff_config is None
             assert home.battery_config is not None
             assert home.battery_config.grid_charging is None
+
+
+class TestLoadFleetConfigFlexThreading:
+    """Tests for YAML tariff + grid_charging threading through load_fleet_config."""
+
+    def test_fleet_yaml_tariff_and_grid_charging_threaded(self) -> None:
+        """A fleet YAML with top-level tariff: and battery.grid_charging: threads both to all homes."""
+        yaml_content = """
+name: Flex Threading Test
+fleet_distribution:
+  n_homes: 4
+  seed: 7
+  pv:
+    capacity_kw: 4.0
+  battery:
+    capacity_kwh: 5.0
+    grid_charging:
+      target_soc_fraction: 0.9
+  load:
+    annual_consumption_kwh: 3400
+tariff:
+  type: economy_7
+  off_peak_rate: 0.09
+  peak_rate: 0.25
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            fleet = load_fleet_config(path)
+            assert len(fleet.homes) == 4
+            for home in fleet.homes:
+                assert home.tariff_config is not None, "tariff_config should be threaded"
+                assert home.battery_config is not None, "all homes should have batteries"
+                assert home.battery_config.grid_charging is not None, "grid_charging should be threaded"
+                assert home.battery_config.grid_charging.target_soc_fraction == 0.9
+        finally:
+            path.unlink()
