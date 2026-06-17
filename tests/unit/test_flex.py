@@ -250,3 +250,95 @@ class TestFlexValueBands:
     def test_high_provenance_non_empty(self):
         """High band has non-empty provenance string."""
         assert FLEX_VALUE_BANDS["high"].provenance
+
+
+class TestResolveGridServicesBand:
+    """Test resolve_grid_services_band and resolve_flex_band resolvers.
+
+    Pinned signal: resolve_grid_services_band("central") == 12.0 (PRD §6).
+    Per-home cross-check: rate × 2.5 ≈ per-home within ±£1.0 (consulting §1.1 banding).
+    """
+
+    # --- resolve_grid_services_band return type and pinned values ---
+
+    def test_returns_float(self):
+        """resolve_grid_services_band returns a float."""
+        result = resolve_grid_services_band("central")
+        assert isinstance(result, float)
+
+    def test_central_pinned_signal(self):
+        """Central band returns exactly £12.0/kW/yr — the PRD §6 pinned signal."""
+        assert resolve_grid_services_band("central") == pytest.approx(12.0)
+
+    def test_low_rate(self):
+        """Low band returns £1.5/kW/yr (PRD §6)."""
+        assert resolve_grid_services_band("low") == pytest.approx(1.5)
+
+    def test_high_rate(self):
+        """High band returns £48.0/kW/yr (PRD §6)."""
+        assert resolve_grid_services_band("high") == pytest.approx(48.0)
+
+    def test_each_band_matches_flex_value_bands(self):
+        """resolve_grid_services_band(band) equals FLEX_VALUE_BANDS[band].grid_services_per_kw_gbp."""
+        for band in ("low", "central", "high"):
+            assert resolve_grid_services_band(band) == pytest.approx(
+                FLEX_VALUE_BANDS[band].grid_services_per_kw_gbp
+            ), f"Mismatch for band '{band}'"
+
+    # --- per-home cross-check: rate × 2.5 ≈ per-home within ±£1.0 ---
+
+    def test_low_per_home_cross_check(self):
+        """Low: rate × REPRESENTATIVE_DISCHARGE_POWER_KW ≈ grid_services_per_home_gbp (±£1.0)."""
+        rate = resolve_grid_services_band("low")
+        per_home = FLEX_VALUE_BANDS["low"].grid_services_per_home_gbp
+        assert rate * REPRESENTATIVE_DISCHARGE_POWER_KW == pytest.approx(per_home, abs=1.0)
+
+    def test_central_per_home_cross_check(self):
+        """Central: rate × REPRESENTATIVE_DISCHARGE_POWER_KW ≈ grid_services_per_home_gbp (exact)."""
+        rate = resolve_grid_services_band("central")
+        per_home = FLEX_VALUE_BANDS["central"].grid_services_per_home_gbp
+        assert rate * REPRESENTATIVE_DISCHARGE_POWER_KW == pytest.approx(per_home, abs=1.0)
+
+    def test_high_per_home_cross_check(self):
+        """High: rate × REPRESENTATIVE_DISCHARGE_POWER_KW ≈ grid_services_per_home_gbp (exact)."""
+        rate = resolve_grid_services_band("high")
+        per_home = FLEX_VALUE_BANDS["high"].grid_services_per_home_gbp
+        assert rate * REPRESENTATIVE_DISCHARGE_POWER_KW == pytest.approx(per_home, abs=1.0)
+
+    # --- unknown band raises ValueError ---
+
+    def test_unknown_band_raises_value_error(self):
+        """Unknown band name raises ValueError."""
+        with pytest.raises(ValueError):
+            resolve_grid_services_band("ultra")
+
+    def test_unknown_band_error_mentions_band(self):
+        """ValueError message mentions the unknown band name."""
+        with pytest.raises(ValueError, match="ultra"):
+            resolve_grid_services_band("ultra")
+
+    def test_unknown_band_error_lists_available(self):
+        """ValueError message lists available band names."""
+        with pytest.raises(ValueError, match="central"):
+            resolve_grid_services_band("bogus")
+
+    # --- resolve_flex_band ---
+
+    def test_resolve_flex_band_returns_flex_value_band(self):
+        """resolve_flex_band returns a FlexibilityValueBand instance."""
+        result = resolve_flex_band("central")
+        assert isinstance(result, FlexibilityValueBand)
+
+    def test_resolve_flex_band_central(self):
+        """resolve_flex_band('central') returns the central preset."""
+        assert resolve_flex_band("central") == FLEX_VALUE_BANDS["central"]
+
+    def test_resolve_flex_band_all_bands(self):
+        """resolve_flex_band resolves every band key to its preset."""
+        for band, expected in FLEX_VALUE_BANDS.items():
+            assert resolve_flex_band(band) == expected
+
+    def test_resolve_flex_band_unknown_raises(self):
+        """resolve_flex_band raises ValueError on unknown band."""
+        with pytest.raises(ValueError, match="unknown_band"):
+            resolve_flex_band("unknown_band")
