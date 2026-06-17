@@ -540,13 +540,16 @@ def sensitivity_panel(
 
     # -----------------------------------------------------------------------
     # OAT loop
-    # NOTE: each (axis, value) point re-runs the full run_sweep independently.
-    # A future optimisation could short-circuit a value that equals the
-    # baseline knob level by reusing the already-computed `base` sweep, or
-    # memoize run_sweep results keyed by (name, value).  This is acceptable
-    # overhead in the current offline-simulate use case; revisit if
-    # sensitivity_panel is called under a real ProcessPoolExecutor simulator.
+    # Optimisations to avoid redundant run_sweep calls:
+    #   1. Floor-baseline short-circuit: when the floor axis sweeps a value
+    #      equal to the panel-level floor, the call would be identical to the
+    #      already-computed `base` sweep — reuse it directly.
+    #   2. Result cache: keyed by (axis_name, value); base_configs, the panel
+    #      floor, and simulate are all constant within this function call, so
+    #      (name, v) uniquely identifies the sweep.  Identical repeated values
+    #      across axes (e.g. two axes both sweeping 0.0) avoid re-simulation.
     # -----------------------------------------------------------------------
+    _sweep_cache: dict[tuple[str, float], RankedSweep] = {}
     axis_list: List[SensitivityAxis] = []
     total = 0
     stable = 0
@@ -557,10 +560,20 @@ def sensitivity_panel(
         tops_per_value: List[Optional[ConfigPoint]] = []
 
         for v in vals_list:
+            cache_key = (name, v)
+            if cache_key in _sweep_cache:
+                ranked = _sweep_cache[cache_key]
             # Special-case: floor axis must go through run_sweep's override to
             # avoid panel-floor clobber / double-apply.
-            if name == "retained_cash_floor_per_home_per_year_gbp":
-                ranked = run_sweep(base_configs, retained_cash_floor_gbp=v, simulate=simulate)
+            elif name == "retained_cash_floor_per_home_per_year_gbp":
+                # Short-circuit: same floor value as the panel baseline.
+                if v == retained_cash_floor_gbp:
+                    ranked = base
+                else:
+                    ranked = run_sweep(
+                        base_configs, retained_cash_floor_gbp=v, simulate=simulate
+                    )
+                _sweep_cache[cache_key] = ranked
             else:
                 axis_cfgs = _build_axis_configs(base_configs, name, v)
                 ranked = run_sweep(
@@ -568,6 +581,7 @@ def sensitivity_panel(
                     retained_cash_floor_gbp=retained_cash_floor_gbp,
                     simulate=simulate,
                 )
+                _sweep_cache[cache_key] = ranked
 
             rankings_per_value.append(tuple(r.config for r in ranked.results))
             top = ranked.cheapest_feasible
