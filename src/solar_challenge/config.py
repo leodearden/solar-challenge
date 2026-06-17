@@ -1666,6 +1666,15 @@ def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceCon
                 data.get("opex_per_home_per_year_gbp", 131.0)
             ),
             asset_life_years=int(data.get("asset_life_years", 25)),
+            own_use_rate_pence_per_kwh=float(
+                data.get("own_use_rate_pence_per_kwh", 15.0)
+            ),
+            retained_cash_floor_per_home_per_year_gbp=float(
+                data.get("retained_cash_floor_per_home_per_year_gbp", 27.0)
+            ),
+            grid_services_income_per_kw_per_year_gbp=float(
+                data.get("grid_services_income_per_kw_per_year_gbp", 0.0)
+            ),
         )
     except (ValueError, TypeError) as exc:
         raise ConfigurationError(
