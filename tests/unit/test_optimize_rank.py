@@ -307,15 +307,15 @@ class TestParetoBaseline:
 
     def test_all_non_dominated_input_all_returned(self) -> None:
         """When no point is dominated, the full set is returned."""
+        # Each step: higher outlay AND higher surplus → incomparable (lower outlay ↔ lower surplus)
         records = [
             _make_config_result(
                 pv_kwp=float(i + 1),
                 baseline_outlay_gbp=float(100 + i * 100),
-                baseline_surplus_per_home_gbp=float(200 - i * 40),
+                baseline_surplus_per_home_gbp=float(50 + i * 50),
             )
             for i in range(4)
         ]
-        # Construct so each step trades off: higher outlay, lower surplus — all incomparable
         front = pareto_baseline(records)
         assert len(front) == 4
 
@@ -350,17 +350,16 @@ class TestParetoBaseline:
 
     def test_output_sorted_by_baseline_outlay_ascending(self) -> None:
         """Output is sorted by baseline_outlay_gbp ascending."""
+        # Submit in reverse outlay order; all incomparable (higher outlay → higher surplus)
         records = [
             _make_config_result(
                 pv_kwp=float(i + 1),
-                baseline_outlay_gbp=float(500 - i * 100),
-                baseline_surplus_per_home_gbp=float(i * 50),
+                baseline_outlay_gbp=float(400 - i * 100),  # 400, 300, 200, 100
+                baseline_surplus_per_home_gbp=float(200 - i * 50),  # 200, 150, 100, 50
             )
             for i in range(4)
         ]
         front = pareto_baseline(records)
-        outlays = [cp.pv_kwp for cp in front]  # pv_kwp encodes position here
-        # verify the outlay values are ascending by extracting from matching records
         result_map = {r.config: r for r in records}
         front_outlays = [result_map[cp].baseline_outlay_gbp for cp in front]
         assert front_outlays == sorted(front_outlays)

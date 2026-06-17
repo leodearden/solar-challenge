@@ -319,7 +319,57 @@ __all__ = [
     "run_sweep",
     "rank",
     "feasible_split",
+    "pareto_baseline",
 ]
+
+
+def pareto_baseline(
+    results: Sequence["ConfigResult"],
+) -> "tuple[ConfigPoint, ...]":
+    """Compute the non-dominated set on the (baseline_outlay ↓, baseline_surplus ↑) plane.
+
+    A result *A* dominates result *B* when
+    ``A.baseline_outlay_gbp <= B.baseline_outlay_gbp`` **and**
+    ``A.baseline_surplus_per_home_gbp >= B.baseline_surplus_per_home_gbp``
+    with at least one strict inequality.
+
+    Computes over **all** supplied configs (feasible and infeasible); infeasible
+    configs are included when their (outlay, surplus) pair is non-dominated.
+
+    The non-dominated :class:`ConfigPoint` objects are returned sorted by
+    ``baseline_outlay_gbp`` ascending (ties broken by surplus descending) for
+    reproducibility.
+
+    Args:
+        results: Any sequence of :class:`ConfigResult` objects (may be empty).
+
+    Returns:
+        Non-dominated :class:`ConfigPoint` objects sorted by baseline_outlay ascending.
+    """
+    non_dominated: List[ConfigResult] = []
+    for cand in results:
+        dominated = False
+        for other in results:
+            if other is cand:
+                continue
+            better_or_equal_outlay = other.baseline_outlay_gbp <= cand.baseline_outlay_gbp
+            better_or_equal_surplus = (
+                other.baseline_surplus_per_home_gbp >= cand.baseline_surplus_per_home_gbp
+            )
+            strictly_better = (
+                other.baseline_outlay_gbp < cand.baseline_outlay_gbp
+                or other.baseline_surplus_per_home_gbp > cand.baseline_surplus_per_home_gbp
+            )
+            if better_or_equal_outlay and better_or_equal_surplus and strictly_better:
+                dominated = True
+                break
+        if not dominated:
+            non_dominated.append(cand)
+
+    non_dominated.sort(
+        key=lambda r: (r.baseline_outlay_gbp, -r.baseline_surplus_per_home_gbp)
+    )
+    return tuple(r.config for r in non_dominated)
 
 
 def feasible_split(
@@ -536,54 +586,8 @@ def _rank_feasible(feasible: List[ConfigResult]) -> List[ConfigResult]:
 
 
 def _pareto_baseline(results: List[ConfigResult]) -> tuple[ConfigPoint, ...]:
-    """Compute the non-dominated set on the (baseline_outlay ↓, baseline_surplus ↑) plane.
-
-    A result *A* dominates result *B* when
-    ``A.baseline_outlay_gbp <= B.baseline_outlay_gbp`` **and**
-    ``A.baseline_surplus_per_home_gbp >= B.baseline_surplus_per_home_gbp``
-    with at least one strict inequality.
-
-    The non-dominated :class:`ConfigPoint` objects are returned sorted by
-    ``baseline_outlay_gbp`` ascending (ties broken by surplus descending) for
-    reproducibility.
-
-    Computes over **all** evaluated configs (feasible and infeasible); infeasible
-    configs are included when their (outlay, surplus) pair is non-dominated.
-
-    Args:
-        results: All evaluated ConfigResults (feasible + infeasible).
-
-    Returns:
-        Non-dominated ConfigPoints sorted by baseline_outlay ascending.
-    """
-    non_dominated: List[ConfigResult] = []
-    for cand in results:
-        dominated = False
-        for other in results:
-            if other is cand:
-                continue
-            # other dominates cand if: outlay ≤ and surplus ≥ with at least one strict
-            better_or_equal_outlay = (
-                other.baseline_outlay_gbp <= cand.baseline_outlay_gbp
-            )
-            better_or_equal_surplus = (
-                other.baseline_surplus_per_home_gbp >= cand.baseline_surplus_per_home_gbp
-            )
-            strictly_better = (
-                other.baseline_outlay_gbp < cand.baseline_outlay_gbp
-                or other.baseline_surplus_per_home_gbp > cand.baseline_surplus_per_home_gbp
-            )
-            if better_or_equal_outlay and better_or_equal_surplus and strictly_better:
-                dominated = True
-                break
-        if not dominated:
-            non_dominated.append(cand)
-
-    # Sort by baseline_outlay ascending, then surplus descending for determinism
-    non_dominated.sort(
-        key=lambda r: (r.baseline_outlay_gbp, -r.baseline_surplus_per_home_gbp)
-    )
-    return tuple(r.config for r in non_dominated)
+    """Delegate to public :func:`pareto_baseline` (single source of truth)."""
+    return pareto_baseline(results)
 
 
 def _evaluate_config(
