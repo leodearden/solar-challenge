@@ -7,7 +7,7 @@ project_multi_year → project_economics.mean_fleet_surplus_per_year_gbp.
 
 Step-1 (RED) → Step-2 (GREEN): field-fill assertion on the YAML literal.
 Steps 3–6 (GREEN on arrival): seam-verification that the consuming math
-(W2-CR2, finance.py:1139) propagates the band value into project surplus.
+(W2-CR2, project_multi_year._simulate_age) propagates the band value into project surplus.
 """
 from __future__ import annotations
 
@@ -201,7 +201,6 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
     Additionally asserts strict monotonicity: surplus(low) < surplus(central) < surplus(high).
     """
-    from solar_challenge.config import FinanceConfig  # type: ignore[attr-defined]
     from solar_challenge.flex import resolve_grid_services_band
 
     scenario, finance_base = _board_econ_scenario()
@@ -260,8 +259,9 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     Non-tautological: finance_base (from the board YAML) carries 12.0, so the
     two omitted-path configs (finance_omitted, finance_dataclass_default) must
     resolve to 0.0 via their respective defaults — not 12.0 — to pass.  A future
-    change that shifts config.py:1712 parser fallback OR config.py:534 dataclass
-    default away from 0.0 would be caught here.
+    change that shifts _parse_finance_config's data.get fallback OR
+    FinanceConfig's grid_services_income_per_kw_per_year_gbp field default
+    away from 0.0 would be caught here.
     """
     from solar_challenge.config import (  # type: ignore[attr-defined]
         FinanceConfig,
@@ -285,7 +285,7 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     surplus_explicit = _surplus_at(scenario, finance_explicit_zero, simulate)
 
     # Path 1 — production-parser omitted path: pop the key from the finance dict
-    # and drive _parse_finance_config's data.get(..., 0.0) fallback (config.py:1712).
+    # and drive _parse_finance_config's data.get(..., 0.0) fallback.
     cfg = load_config(SCENARIO)
     finance_dict = dict(cfg["finance"])
     finance_dict.pop("grid_services_income_per_kw_per_year_gbp")
@@ -295,11 +295,11 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     finance_omitted = _parse_finance_config(finance_dict)
     assert finance_omitted is not None
     assert finance_omitted.grid_services_income_per_kw_per_year_gbp == 0.0, (
-        "Parser fallback (config.py:1712) must resolve to 0.0 when key is absent"
+        "_parse_finance_config's data.get fallback must resolve to 0.0 when key is absent"
     )
 
     # Path 2 — FinanceConfig dataclass default path: reconstruct from finance_base's
-    # fields but omit the grid-services key so the dataclass default (config.py:534) fires.
+    # fields but omit the grid-services key so the FinanceConfig field default fires.
     kwargs = {
         f.name: getattr(finance_base, f.name)
         for f in dataclasses.fields(finance_base)
@@ -307,7 +307,7 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     }
     finance_dataclass_default = FinanceConfig(**kwargs)
     assert finance_dataclass_default.grid_services_income_per_kw_per_year_gbp == 0.0, (
-        "Dataclass default (config.py:534) must be 0.0"
+        "FinanceConfig field default must be 0.0"
     )
 
     # Both omitted paths must yield project surplus bit-identical to explicit 0.0.
@@ -337,11 +337,9 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     """
     from solar_challenge.battery import BatteryConfig  # type: ignore[attr-defined]
     from solar_challenge.config import (  # type: ignore[attr-defined]
-        FinanceConfig,
         ScenarioConfig,
         SimulationPeriod,
     )
-    from solar_challenge.fleet import FleetResults
     from solar_challenge.flex import resolve_grid_services_band
     from solar_challenge.home import HomeConfig
     from solar_challenge.load import LoadConfig
