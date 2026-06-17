@@ -29,6 +29,7 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
+from solar_challenge.flex import FlexibilityValueBand, resolve_flex_band
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
@@ -43,6 +44,14 @@ class AssumptionMode(str, enum.Enum):
     physics = "physics"
     spreadsheet = "spreadsheet"
     both = "both"
+
+
+class FlexBand(str, enum.Enum):
+    """Flexibility-value uncertainty band for the finance report block."""
+
+    low = "low"
+    central = "central"
+    high = "high"
 
 
 @app.command()
@@ -96,6 +105,18 @@ def run(
             ),
         ),
     ] = False,
+    flex_band: Annotated[
+        Optional[FlexBand],
+        typer.Option(
+            "--flex-band",
+            help=(
+                "Render the flexibility-value (time-shift / grid-services) block for the "
+                "given uncertainty band {low,central,high}; overrides a scenario-level "
+                "flex_band key."
+            ),
+            case_sensitive=False,
+        ),
+    ] = None,
 ) -> None:
     """Run a householder bill analysis for a fleet scenario.
 
