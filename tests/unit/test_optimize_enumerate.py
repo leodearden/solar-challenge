@@ -179,3 +179,76 @@ class TestEnumerateContract:
         )
         with pytest.raises(ValueError, match="fleet"):
             enumerate_configs(base_single, [4.0], [5.0], [3.68])
+
+
+class TestPvInverterHomogenization:
+    """Tests that PV and inverter are homogenized; load and dispatch are preserved."""
+
+    def _make_diverse_base(self) -> ScenarioConfig:
+        """Fleet with 3 homes: distinct PV sizes, loads, and dispatch strategies."""
+        homes = [
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=3.0),
+                load_config=LoadConfig(annual_consumption_kwh=2000, household_occupants=1),
+                dispatch_strategy="greedy",
+            ),
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=5.0),
+                load_config=LoadConfig(annual_consumption_kwh=3500, household_occupants=3),
+                dispatch_strategy="tou_optimized",
+            ),
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=6.5, inverter_capacity_kw=5.0),
+                load_config=LoadConfig(annual_consumption_kwh=4200, household_occupants=4),
+                dispatch_strategy="greedy",
+            ),
+        ]
+        return ScenarioConfig(
+            name="diverse",
+            period=SimulationPeriod("2024-06-01", "2024-06-30"),
+            homes=homes,
+        )
+
+    def test_all_homes_get_homogenized_pv_capacity(self) -> None:
+        """Every home has pv_config.capacity_kw == pv_kwp after enumeration."""
+        base = self._make_diverse_base()
+        result = enumerate_configs(base, [4.0, 5.0], [0.0], [3.68])
+        for cp, sc in result:
+            for home in sc.homes:
+                assert home.pv_config.capacity_kw == pytest.approx(cp.pv_kwp)
+
+    def test_all_homes_get_homogenized_inverter_capacity(self) -> None:
+        """Every home has pv_config.inverter_capacity_kw == inverter_kw."""
+        base = self._make_diverse_base()
+        result = enumerate_configs(base, [4.0], [0.0], [3.68, 5.0])
+        for cp, sc in result:
+            for home in sc.homes:
+                assert home.pv_config.inverter_capacity_kw == pytest.approx(cp.inverter_kw)
+
+    def test_load_config_diversity_preserved(self) -> None:
+        """Homes still have distinct LoadConfigs (occupancy/consumption unchanged)."""
+        base = self._make_diverse_base()
+        result = enumerate_configs(base, [4.0], [0.0], [3.68])
+        _, sc = result[0]
+        annual_consumptions = [h.load_config.annual_consumption_kwh for h in sc.homes]
+        assert len(set(annual_consumptions)) > 1, "Loads should still differ"
+        for orig, updated in zip(base.homes, sc.homes):
+            assert orig.load_config == updated.load_config
+
+    def test_dispatch_strategy_preserved(self) -> None:
+        """HomeConfig.dispatch_strategy is unchanged per home."""
+        base = self._make_diverse_base()
+        result = enumerate_configs(base, [4.0], [0.0], [3.68])
+        _, sc = result[0]
+        for orig, updated in zip(base.homes, sc.homes):
+            assert orig.dispatch_strategy == updated.dispatch_strategy
+
+    def test_base_scenario_and_homes_not_mutated(self) -> None:
+        """Base ScenarioConfig and its HomeConfig/PVConfig objects are never mutated."""
+        base = self._make_diverse_base()
+        orig_pv_capacities = [h.pv_config.capacity_kw for h in base.homes]
+        orig_inverter_caps = [h.pv_config.inverter_capacity_kw for h in base.homes]
+        _ = enumerate_configs(base, [4.0, 5.0], [0.0, 5.0], [3.68, 5.0])
+        for i, home in enumerate(base.homes):
+            assert home.pv_config.capacity_kw == pytest.approx(orig_pv_capacities[i])
+            assert home.pv_config.inverter_capacity_kw == orig_inverter_caps[i]
