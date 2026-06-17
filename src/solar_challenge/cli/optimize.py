@@ -270,6 +270,24 @@ def configs(
     print_info("Solving cost-recovery rates…")
     ranked = run_sweep(all_configs, retained_cash_floor_gbp=retained_floor)
 
+    # Report sweep summary so the user knows what to expect in the report.
+    n_feasible = len(ranked.results)
+    n_infeasible = len(ranked.infeasible)
+    if n_feasible:
+        print_info(
+            f"Sweep complete: {n_feasible} feasible config(s), "
+            f"{n_infeasible} infeasible config(s)."
+        )
+    else:
+        # Graceful no-feasible case: the report still renders Table 1 with an
+        # empty rank and infeasible list.  sensitivity_panel is NOT called
+        # (it requires a feasible baseline) — see the guard below.
+        print_info(
+            f"No feasible configurations found "
+            f"({n_infeasible} config(s) exceeded the retail rate). "
+            "Check the finance block or try lower capex / higher grid-services values."
+        )
+
     # ---- Optional sensitivity panel ----------------------------------------
     panel = None
     if sensitivity_axes and ranked.cheapest_feasible is not None:
@@ -287,6 +305,13 @@ def configs(
         except ValueError as exc:
             # Gracefully skip panel if no feasible baseline (rather than crashing)
             print_info(f"Sensitivity panel skipped: {exc}")
+    elif sensitivity_axes and ranked.cheapest_feasible is None:
+        # Explicit user message when axes were requested but there is no feasible
+        # baseline — sensitivity_panel would raise immediately, so we skip it.
+        print_info(
+            "Sensitivity panel skipped: no feasible baseline config found "
+            "(sensitivity requires at least one feasible config)."
+        )
 
     # ---- Render report ------------------------------------------------------
     report = generate_config_ranking_report(ranked, panel)
