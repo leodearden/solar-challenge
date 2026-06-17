@@ -1237,7 +1237,12 @@ class TestSimulateHomeGridChargeCost:
         night_weather_for_gc: pd.DataFrame,
         economy7_tariff_config: TariffConfig,
     ) -> None:
-        """(c-ii) grid_charge_cost per-timestep equals grid_charge kWh × off-peak rate."""
+        """(c-ii) grid_charge_cost only occurs at off-peak rate timesteps.
+
+        Verifies the pricing relationship rather than just non-negativity.
+        A regression pricing at peak rate (0.25 £/kWh instead of 0.09) or
+        multiplying by the wrong rate series would fail this test.
+        """
         results = simulate_home(
             tou_grid_charge_home_config,
             start_date=pd.Timestamp("2024-06-21"),
@@ -1246,11 +1251,78 @@ class TestSimulateHomeGridChargeCost:
             weather_data=night_weather_for_gc,
         )
         assert results.grid_charge_cost is not None
-        # During off-peak hours (00:30–07:30), rate == 0.09 £/kWh.
-        # grid_charge_cost per timestep = grid_charge_kwh × rate (off-peak)
-        # Verify no timestep has a negative cost
-        assert (results.grid_charge_cost >= 0.0).all(), (
-            "All grid_charge_cost values must be non-negative"
+
+        import numpy as np
+
+        off_peak_rate = 0.09  # £/kWh (Economy 7 off-peak rate)
+        rates = results.tariff_rate.to_numpy()
+        costs = results.grid_charge_cost.to_numpy()
+
+        # (1) At peak-rate timesteps (rate > off_peak_rate), no grid-charging cost must appear
+        # (grid charging is only dispatched during cheap off-peak windows)
+        peak_mask = rates > off_peak_rate  # Economy7 peak rate == 0.25, off-peak == 0.09
+        np.testing.assert_allclose(
+            costs[peak_mask],
+            0.0,
+            atol=1e-10,
+            err_msg="Grid-charging cost must be zero at peak-rate (0.25 £/kWh) timesteps",
+        )
+
+        # (2) All non-zero costs must correspond to off-peak rate timesteps
+        # (catches: wrong rate series applied, or peak-rate used instead of off-peak)
+        nonzero_cost_mask = costs > 0.0
+        assert nonzero_cost_mask.any(), (
+            "Some grid-charging cost must have been incurred during off-peak window"
+        )
+        np.testing.assert_allclose(
+            rates[nonzero_cost_mask],
+            off_peak_rate,
+            rtol=1e-9,
+            err_msg="All non-zero grid-charging costs must be at the off-peak rate (0.09 £/kWh)",
+        )
+
+    def test_grid_charge_cost_numerical_pricing_formula(
+        self,
+        tou_grid_charge_home_config: HomeConfig,
+        night_weather_for_gc: pd.DataFrame,
+    ) -> None:
+        """Per-timestep grid_charge_cost == battery_charge_kWh × rate in a zero-PV scenario.
+
+        In the zero-PV (night-only) scenario battery_charge == grid_charge because no
+        PV is available to top up the battery.  This lets us verify the production line
+        ``grid_charge_costs = [r.grid_charge * rate …]`` numerically by recomputing the
+        expected cost from ``results.battery_charge`` (kW) and ``results.tariff_rate``
+        (£/kWh):
+
+            expected[i] = battery_charge_kW[i] / 60 × tariff_rate[i]
+
+        A bug substituting r.grid_import for r.grid_charge (which exceeds battery_charge
+        when household demand also draws from the grid), or using the wrong rate series,
+        would show up here as a per-timestep mismatch.
+        """
+        import numpy as np
+
+        results = simulate_home(
+            tou_grid_charge_home_config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            validate_balance=True,
+            weather_data=night_weather_for_gc,
+        )
+        assert results.grid_charge_cost is not None
+
+        # In zero-PV scenario: PV charge contribution = 0, so battery_charge == grid_charge.
+        # results.battery_charge is in kW; dividing by 60 gives kWh/timestep.
+        expected_gc_cost = results.battery_charge / 60.0 * results.tariff_rate
+
+        np.testing.assert_allclose(
+            results.grid_charge_cost.to_numpy(),
+            expected_gc_cost.to_numpy(),
+            rtol=1e-9,
+            err_msg=(
+                "grid_charge_cost per-timestep should equal "
+                "battery_charge_kW / 60 × tariff_rate in zero-PV scenario"
+            ),
         )
 
     def test_flat_no_grid_charging_produces_zero_cost(

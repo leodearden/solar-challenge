@@ -462,11 +462,14 @@ def _make_sim_results(
 
     zeros = pd.Series(0.0, index=idx)
 
-    # Optionally inject grid_charge_cost as a constant-per-minute series
+    # Optionally inject grid_charge_cost as a constant-per-minute series.
+    # NOTE: this bypasses the production grid_charge×rate path intentionally —
+    # finance-layer tests need to control the cost total without re-running the
+    # dispatch simulation.  gc_cost_per_min_gbp is cost-per-minute (£/min), not kW.
     gc_cost_series: "pd.Series | None" = None
     if grid_charge_cost_gbp != 0.0:
-        gc_kw = grid_charge_cost_gbp / n_minutes
-        gc_cost_series = pd.Series(gc_kw, index=idx, name="grid_charge_cost_gbp")
+        gc_cost_per_min_gbp = grid_charge_cost_gbp / n_minutes
+        gc_cost_series = pd.Series(gc_cost_per_min_gbp, index=idx, name="grid_charge_cost_gbp")
 
     return SimulationResults(
         generation=pd.Series(gen_kw, index=idx),
