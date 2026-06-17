@@ -404,6 +404,77 @@ class SensitivityPanel:
             )
 
 
+# ---------------------------------------------------------------------------
+# OAT private helper (W3 task D)
+# ---------------------------------------------------------------------------
+
+def _build_axis_configs(
+    base_configs: "List[tuple[ConfigPoint, ScenarioConfig]]",
+    name: str,
+    value: float,
+) -> "List[tuple[ConfigPoint, ScenarioConfig]]":
+    """Return new (ConfigPoint, ScenarioConfig) pairs with a single numeric knob replaced.
+
+    Routing rules (in priority order):
+
+    1. *name* is a field of :class:`~solar_challenge.config.FinanceConfig` →
+       ``dataclasses.replace(scenario.finance, **{name: value})``.
+       Raises :exc:`ValueError` if ``scenario.finance is None``.
+    2. *name* in ``{'seg', 'seg_tariff_pence_per_kwh'}`` →
+       ``dataclasses.replace(scenario, seg_tariff_pence_per_kwh=value)``.
+    3. *name* in ``{'degradation', 'degradation_rate_per_year'}`` →
+       per-home ``dataclasses.replace(home.pv_config, degradation_rate_per_year=value)``.
+    4. Otherwise → :exc:`ValueError` listing the supported knob names.
+
+    :class:`ConfigPoint` objects are reused unchanged (identity preserved).
+
+    Args:
+        base_configs: Original (ConfigPoint, ScenarioConfig) pairs.
+        name: Knob name to sweep.
+        value: Numeric value to apply.
+
+    Returns:
+        New list of (ConfigPoint, ScenarioConfig) pairs with the knob replaced.
+
+    Raises:
+        ValueError: If *name* is unknown, or if a FinanceConfig knob is
+            requested but ``scenario.finance is None``.
+    """
+    from solar_challenge.pv import PVConfig  # lazy to avoid heavy import at module level
+
+    finance_field_names = {f.name for f in dc_fields(FinanceConfig)}
+
+    result: "List[tuple[ConfigPoint, ScenarioConfig]]" = []
+    for point, scenario in base_configs:
+        if name in finance_field_names:
+            if scenario.finance is None:
+                raise ValueError(
+                    f"Cannot set finance knob '{name}': scenario.finance is None"
+                )
+            new_finance = replace(scenario.finance, **{name: value})  # type: ignore[arg-type]
+            new_scenario = replace(scenario, finance=new_finance)
+        elif name in ("seg", "seg_tariff_pence_per_kwh"):
+            new_scenario = replace(scenario, seg_tariff_pence_per_kwh=value)
+        elif name in ("degradation", "degradation_rate_per_year"):
+            new_homes = [
+                replace(h, pv_config=replace(h.pv_config, degradation_rate_per_year=value))
+                for h in scenario.homes
+            ]
+            new_scenario = replace(scenario, homes=new_homes)
+        else:
+            supported = sorted(finance_field_names) + [
+                "seg",
+                "seg_tariff_pence_per_kwh",
+                "degradation",
+                "degradation_rate_per_year",
+            ]
+            raise ValueError(
+                f"Unknown sensitivity knob '{name}'. Supported knobs: {supported}"
+            )
+        result.append((point, new_scenario))
+    return result
+
+
 def cheapest_feasible(
     results: Sequence["ConfigResult"],
 ) -> "Optional[ConfigPoint]":
