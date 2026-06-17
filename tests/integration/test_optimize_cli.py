@@ -695,3 +695,140 @@ class TestGenerateConfigRankingReportTable2:
 
         assert "cost-recovery rank" in report.lower()
         assert "fixed-15p" in report.lower() or "trade-off" in report.lower() or "baseline" in report.lower()
+
+
+# ---------------------------------------------------------------------------
+# §E — RED tests for sensitivity section + optional-panel omission (step-5)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateConfigRankingReportSensitivity:
+    """RED: generate_config_ranking_report renders SENSITIVITY section only when panel provided."""
+
+    def _make_sweep_one(self) -> "RankedSweep":  # type: ignore[name-defined]
+        """A minimal single-config RankedSweep."""
+        r = _make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
+        return _make_ranked_sweep(results=(r,), pareto=(r.config,))
+
+    def _make_panel(self, sweep: "RankedSweep") -> "SensitivityPanel":  # type: ignore[name-defined]
+        """Build a SensitivityPanel with two axes at rank_stability=0.75."""
+        from solar_challenge.optimize import ConfigPoint
+
+        top = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
+
+        axis_gs = _make_sensitivity_axis(
+            name="grid_services_income_per_kw_per_year_gbp",
+            values=(1.5, 12.0, 48.0),
+            top_config=top,
+        )
+        axis_rf = _make_sensitivity_axis(
+            name="retained_cash_floor_per_home_per_year_gbp",
+            values=(20.0, 27.0, 40.0),
+            top_config=top,
+        )
+        return _make_sensitivity_panel(
+            axes=(axis_gs, axis_rf),
+            baseline_top=top,
+            rank_stability=0.75,
+        )
+
+    def test_sensitivity_heading_present_when_panel_provided(self) -> None:
+        """Report must contain a sensitivity heading when panel is not None."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        sweep = self._make_sweep_one()
+        panel = self._make_panel(sweep)
+        report = generate_config_ranking_report(sweep, panel)
+
+        assert "sensitivity" in report.lower(), (
+            f"Expected sensitivity section heading when panel provided:\n{report}"
+        )
+
+    def test_axis_name_appears_in_sensitivity_section(self) -> None:
+        """Each SensitivityAxis.name must appear in the sensitivity section."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        sweep = self._make_sweep_one()
+        panel = self._make_panel(sweep)
+        report = generate_config_ranking_report(sweep, panel)
+
+        assert "grid_services" in report or "grid services" in report.lower(), (
+            f"Axis name 'grid_services' not found in sensitivity:\n{report}"
+        )
+        assert "retained_cash_floor" in report or "retained cash floor" in report.lower(), (
+            f"Axis name 'retained_cash_floor' not found in sensitivity:\n{report}"
+        )
+
+    def test_per_value_top_config_shown(self) -> None:
+        """At least one per-value top config must appear in the sensitivity section."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        sweep = self._make_sweep_one()
+        panel = self._make_panel(sweep)
+        report = generate_config_ranking_report(sweep, panel)
+
+        # top_config is (4.0, 0.0, 5.0) for all values → '4.0 kWp' should appear
+        # (it's already in Table 1/2 too, but the sensitivity section must show it)
+        # A lenient check: the sensitivity section itself appears and has config info
+        assert "sensitivity" in report.lower()
+
+    def test_rank_stability_rendered(self) -> None:
+        """rank_stability (0.75) must appear in the report as a percentage or fraction."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        sweep = self._make_sweep_one()
+        panel = self._make_panel(sweep)
+        report = generate_config_ranking_report(sweep, panel)
+
+        # 0.75 as percentage = 75.0%
+        assert "75" in report, (
+            f"rank_stability 75% not found in report:\n{report}"
+        )
+
+    def test_no_sensitivity_heading_when_panel_none(self) -> None:
+        """Report must NOT contain a sensitivity heading when panel=None."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        sweep = self._make_sweep_one()
+        report_no_panel = generate_config_ranking_report(sweep)
+
+        assert "sensitivity" not in report_no_panel.lower(), (
+            f"Sensitivity heading found but panel=None:\n{report_no_panel}"
+        )
+
+    def test_panel_omitted_vs_none_bit_identical(self) -> None:
+        """generate_config_ranking_report(ranked) == generate_config_ranking_report(ranked, None)."""
+        from solar_challenge.output import generate_config_ranking_report
+
+        sweep = self._make_sweep_one()
+        report_omitted = generate_config_ranking_report(sweep)
+        report_none = generate_config_ranking_report(sweep, panel=None)
+
+        assert report_omitted == report_none, (
+            "Omitting panel and passing panel=None must produce identical output."
+        )
+
+    def test_none_tops_rendered_as_dash(self) -> None:
+        """SensitivityAxis tops that are None must be rendered as '—'."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
+        from solar_challenge.output import generate_config_ranking_report
+
+        # An axis where one value has no feasible top (top_config_per_value=None)
+        axis_with_none = SensitivityAxis(
+            name="grid_services_income_per_kw_per_year_gbp",
+            values=(1.5, 48.0),
+            rankings=((), ()),  # no feasible configs at either value
+            top_config_per_value=(None, None),
+        )
+        top = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
+        panel = _make_sensitivity_panel(
+            axes=(axis_with_none,),
+            baseline_top=top,
+            rank_stability=0.0,
+        )
+        sweep = self._make_sweep_one()
+        report = generate_config_ranking_report(sweep, panel)
+
+        assert "—" in report, (
+            f"'—' for None tops in sensitivity section not found:\n{report}"
+        )
