@@ -22,10 +22,12 @@ from solar_challenge.config import (
 )
 from solar_challenge.finance import (
     DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
+    CostRecoverySolution,
     ProjectEconomics,
     bill_distribution,
     project_economics,
     project_multi_year,
+    solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.home import calculate_summary
@@ -81,6 +83,17 @@ def run(
         typer.Option(
             "--project/--no-project",
             help="Compute project-level economics (DSCR/IRR/payback) and append to report",
+        ),
+    ] = False,
+    cost_recovery: Annotated[
+        bool,
+        typer.Option(
+            "--cost-recovery/--no-cost-recovery",
+            help=(
+                "Solve the cost-recovery own-use rate and append a ## Cost-Recovery Analysis "
+                "block with the solved rate, householder outlay distribution, "
+                "CBS surplus vs floor, and feasibility"
+            ),
         ),
     ] = False,
 ) -> None:
@@ -161,11 +174,10 @@ def run(
         )
         dist_spreadsheet = bill_distribution(summaries, finance_spreadsheet, days)
 
-    # ---- Project economics (optional) ---------------------------------------
-    economics_result: Optional[ProjectEconomics] = None
-    if project:
-        print_info("Computing project-level economics (DSCR/IRR/payback)…")
-        econ_scenario = ScenarioConfig(
+    # ---- Build shared ScenarioConfig (used by --project and/or --cost-recovery) ---
+    econ_scenario: Optional[ScenarioConfig] = None
+    if project or cost_recovery:
+        _base = ScenarioConfig(
             name=raw.get("name", str(scenario)),
             period=SimulationPeriod(
                 start_date=start,
@@ -175,8 +187,28 @@ def run(
             location=loc,
             finance=finance,
         )
+        if cost_recovery and seg_rate is not None:
+            # Thread seg_tariff_pence_per_kwh only when --cost-recovery is active so that
+            # --project-only output is unchanged from pre-CR5 behaviour (avoids silently
+            # changing project_multi_year SEG revenue for existing --project callers).
+            econ_scenario = dataclasses.replace(_base, seg_tariff_pence_per_kwh=seg_rate)
+        else:
+            econ_scenario = _base
+
+    # ---- Project economics (optional) ---------------------------------------
+    economics_result: Optional[ProjectEconomics] = None
+    if project:
+        assert econ_scenario is not None
+        print_info("Computing project-level economics (DSCR/IRR/payback)…")
         curve = project_multi_year(econ_scenario, finance)
         economics_result = project_economics(curve, econ_scenario, finance)
+
+    # ---- Cost-recovery solve (optional) ------------------------------------
+    cost_recovery_result: Optional[CostRecoverySolution] = None
+    if cost_recovery:
+        assert econ_scenario is not None
+        print_info("Solving cost-recovery own-use rate…")
+        cost_recovery_result = solve_cost_recovery_rate(econ_scenario, finance)
 
     # ---- Render report ------------------------------------------------------
     if assumptions == AssumptionMode.physics:
@@ -185,6 +217,7 @@ def run(
             dist_physics,
             scenario_name=raw.get("name", str(scenario)),
             economics=economics_result,
+            cost_recovery=cost_recovery_result,
         )
     elif assumptions == AssumptionMode.spreadsheet:
         assert dist_spreadsheet is not None
@@ -192,6 +225,7 @@ def run(
             dist_spreadsheet,
             scenario_name=raw.get("name", str(scenario)),
             economics=economics_result,
+            cost_recovery=cost_recovery_result,
         )
     else:  # both
         assert dist_physics is not None
@@ -201,6 +235,7 @@ def run(
             bill_spreadsheet=dist_spreadsheet,
             scenario_name=raw.get("name", str(scenario)),
             economics=economics_result,
+            cost_recovery=cost_recovery_result,
         )
 
     console.print(report)

@@ -54,3 +54,7 @@ fleet_distribution:
 # standing_charge_pence_per_day is required; all other fields use FinanceConfig defaults.
 finance:
   standing_charge_pence_per_day: 60.0  # Typical UK electricity standing charge
+  # Cost-recovery levers (§W2-CR, [FIN]/[FEAS] baseline — equal to FinanceConfig defaults):
+  own_use_rate_pence_per_kwh: 15.0           # CBS own-use charge (p/kWh) — the lever solved by --cost-recovery
+  retained_cash_floor_per_home_per_year_gbp: 27.0  # Minimum CBS net surplus per home/year (£)
+  grid_services_income_per_kw_per_year_gbp: 0.0    # Grid-services topper (£/kWp/yr); 0 until W1 flex is live

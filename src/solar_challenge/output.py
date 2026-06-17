@@ -11,7 +11,7 @@ from solar_challenge.home import SimulationResults, SummaryStatistics, calculate
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
-    from solar_challenge.finance import BillDistribution, ProjectEconomics
+    from solar_challenge.finance import BillDistribution, CostRecoverySolution, ProjectEconomics
 
 
 @dataclass(frozen=True)
@@ -669,6 +669,7 @@ def generate_finance_report(
     *,
     scenario_name: str = "",
     economics: Optional["ProjectEconomics"] = None,
+    cost_recovery: Optional["CostRecoverySolution"] = None,
 ) -> str:
     """Generate a markdown finance report from one or two BillDistributions.
 
@@ -691,6 +692,10 @@ def generate_finance_report(
             from :func:`~solar_challenge.finance.project_economics`; when
             provided, a ``## Project Economics`` block is appended after the
             bill block.  ``None`` (default) reproduces the δ output exactly.
+        cost_recovery: Optional :class:`~solar_challenge.finance.CostRecoverySolution`
+            from :func:`~solar_challenge.finance.solve_cost_recovery_rate`; when
+            provided, a ``## Cost-Recovery Analysis`` block is appended (CR5).
+            ``None`` (default) reproduces the existing output exactly.
 
     Returns:
         A markdown-formatted finance report string.
@@ -797,6 +802,38 @@ def generate_finance_report(
 | Min DSCR (loan years) | {dscr_str} |
 | Equity IRR | {irr_str} |
 | Payback | {payback_str} |
+"""
+
+    # ---- Optional cost-recovery block (CR5) ----------------------------------
+    if cost_recovery is not None:
+        # Human-readable binding/feasibility label
+        if cost_recovery.binding == "floor":
+            binding_label = "✔ Surplus meets floor"
+        elif cost_recovery.binding == "rate_clamped_zero":
+            binding_label = "✔ Over-feasible (rate clamped to 0, surplus > floor)"
+        else:  # infeasible_above_retail
+            binding_label = "✘ INFEASIBLE: required rate exceeds retail"
+
+        cr = cost_recovery
+        report += f"""
+## Cost-Recovery Analysis
+
+| Item | Value |
+|------|-------|
+| Solved Own-Use Rate | {cr.own_use_rate_pence_per_kwh:.2f} p/kWh |
+| Representative Householder Outlay | £{cr.representative_outlay_gbp:.2f} |
+| Saving vs Baseline | £{cr.saving_vs_baseline_gbp:.2f} ({cr.saving_pct:.1f}%) |
+| CBS Net Surplus / home / yr | £{cr.net_surplus_per_home_per_year_gbp:.2f} |
+| Feasibility | {binding_label} |
+
+## Per-Home Total Outlay at Solved Rate (£)
+
+| Metric | Value |
+|--------|-------|
+| Min | £{cr.outlay.min_gbp:.2f} |
+| Mean | £{cr.outlay.mean_gbp:.2f} |
+| Median | £{cr.outlay.median_gbp:.2f} |
+| Max | £{cr.outlay.max_gbp:.2f} |
 """
 
     return report
