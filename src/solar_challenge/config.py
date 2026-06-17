@@ -580,6 +580,21 @@ class FinanceConfig:
             raise ConfigurationError(
                 f"inverter_cost_per_kw_gbp must be >= 0, got {self.inverter_cost_per_kw_gbp}"
             )
+        # Cost-recovery fields: zero allowed, negative rejected
+        if self.own_use_rate_pence_per_kwh < 0.0:
+            raise ConfigurationError(
+                f"own_use_rate_pence_per_kwh must be >= 0, got {self.own_use_rate_pence_per_kwh}"
+            )
+        if self.retained_cash_floor_per_home_per_year_gbp < 0.0:
+            raise ConfigurationError(
+                "retained_cash_floor_per_home_per_year_gbp must be >= 0, "
+                f"got {self.retained_cash_floor_per_home_per_year_gbp}"
+            )
+        if self.grid_services_income_per_kw_per_year_gbp < 0.0:
+            raise ConfigurationError(
+                "grid_services_income_per_kw_per_year_gbp must be >= 0, "
+                f"got {self.grid_services_income_per_kw_per_year_gbp}"
+            )
 
 
 @dataclass
