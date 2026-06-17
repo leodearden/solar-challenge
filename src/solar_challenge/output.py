@@ -12,6 +12,7 @@ from solar_challenge.home import SimulationResults, SummaryStatistics, calculate
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
     from solar_challenge.finance import BillDistribution, CostRecoverySolution, ProjectEconomics
+    from solar_challenge.flex import FlexibilityValueBand
 
 
 @dataclass(frozen=True)
@@ -670,6 +671,8 @@ def generate_finance_report(
     scenario_name: str = "",
     economics: Optional["ProjectEconomics"] = None,
     cost_recovery: Optional["CostRecoverySolution"] = None,
+    flex_band: Optional["FlexibilityValueBand"] = None,
+    flex_band_name: str = "",
 ) -> str:
     """Generate a markdown finance report from one or two BillDistributions.
 
@@ -696,6 +699,15 @@ def generate_finance_report(
             from :func:`~solar_challenge.finance.solve_cost_recovery_rate`; when
             provided, a ``## Cost-Recovery Analysis`` block is appended (CR5).
             ``None`` (default) reproduces the existing output exactly.
+        flex_band: Optional :class:`~solar_challenge.flex.FlexibilityValueBand`
+            from :func:`~solar_challenge.flex.resolve_flex_band`; when provided,
+            a ``## Flexibility Value (per battery home)`` block is appended
+            showing the per-battery-home time-shift saving and grid-services
+            figures for the named band (W1 γ).  ``None`` (default) reproduces
+            the existing output exactly (additive; bit-identical default).
+        flex_band_name: Optional human-readable label for the flexibility band
+            (e.g. ``"central"``); used in the report header.  Ignored when
+            ``flex_band`` is ``None``.
 
     Returns:
         A markdown-formatted finance report string.
@@ -834,6 +846,26 @@ def generate_finance_report(
 | Mean | £{cr.outlay.mean_gbp:.2f} |
 | Median | £{cr.outlay.median_gbp:.2f} |
 | Max | £{cr.outlay.max_gbp:.2f} |
+"""
+
+    # ---- Optional flexibility-value block (W1 γ) ----------------------------
+    if flex_band is not None:
+        band_label = flex_band_name if flex_band_name else "—"
+        report += f"""
+## Flexibility Value (per battery home)
+
+Band: **{band_label}**
+
+| Revenue Stream | Per Home / yr | Per kW / yr |
+|----------------|---------------|-------------|
+| Time-shift (arbitrage) | £{flex_band.time_shift_gbp:.0f} | — |
+| Grid services (firm flex) | £{flex_band.grid_services_per_home_gbp:.0f} | £{flex_band.grid_services_per_kw_gbp:.1f}/kW |
+| **Headline total** | **£{flex_band.total_gbp:.0f}** | — |
+
+*Figures from consulting model §1.1/§1.4; band = {band_label}.
+Time-shift basis: net import-cost reduction (off-peak charge cost captured in
+grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-discharge/yr
+(PRD §6).*
 """
 
     return report
