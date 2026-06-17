@@ -2720,6 +2720,21 @@ class TestFinanceConfig:
         fc = FinanceConfig(standing_charge_pence_per_day=60.0)
         assert fc.inverter_cost_per_kw_gbp == 0.0
 
+    def test_defaults_own_use_rate_pence_per_kwh(self) -> None:
+        """Default own_use_rate_pence_per_kwh is 15.0 (CBS transfer price)."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.own_use_rate_pence_per_kwh == 15.0
+
+    def test_defaults_retained_cash_floor_per_home_per_year_gbp(self) -> None:
+        """Default retained_cash_floor_per_home_per_year_gbp is 27.0."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.retained_cash_floor_per_home_per_year_gbp == 27.0
+
+    def test_defaults_grid_services_income_per_kw_per_year_gbp(self) -> None:
+        """Default grid_services_income_per_kw_per_year_gbp is 0.0 (theta-safe seam)."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
+
     def test_frozen_raises_on_assignment(self) -> None:
         """FinanceConfig is frozen: attribute assignment raises FrozenInstanceError."""
         import dataclasses
@@ -2750,6 +2765,9 @@ class TestFinanceConfig:
             loan_rate=0.06,
             opex_per_home_per_year_gbp=150.0,
             asset_life_years=25,
+            own_use_rate_pence_per_kwh=12.0,
+            retained_cash_floor_per_home_per_year_gbp=30.0,
+            grid_services_income_per_kw_per_year_gbp=5.0,
         )
         assert fc.standing_charge_pence_per_day == 75.0
         assert fc.vat_rate == 0.20
@@ -2765,6 +2783,9 @@ class TestFinanceConfig:
         assert fc.loan_rate == 0.06
         assert fc.opex_per_home_per_year_gbp == 150.0
         assert fc.asset_life_years == 25
+        assert fc.own_use_rate_pence_per_kwh == 12.0
+        assert fc.retained_cash_floor_per_home_per_year_gbp == 30.0
+        assert fc.grid_services_income_per_kw_per_year_gbp == 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -2935,6 +2956,42 @@ class TestFinanceConfigValidation:
         fc = FinanceConfig(**self._BASE, inverter_cost_per_kw_gbp=0.0)
         assert fc.inverter_cost_per_kw_gbp == 0.0
 
+    # ---- own_use_rate_pence_per_kwh (must be >= 0) ----
+
+    def test_own_use_rate_negative_raises(self) -> None:
+        """own_use_rate_pence_per_kwh < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, own_use_rate_pence_per_kwh=-1.0)
+
+    def test_own_use_rate_zero_ok(self) -> None:
+        """own_use_rate_pence_per_kwh == 0.0 is valid (zero transfer price allowed)."""
+        fc = FinanceConfig(**self._BASE, own_use_rate_pence_per_kwh=0.0)
+        assert fc.own_use_rate_pence_per_kwh == 0.0
+
+    # ---- retained_cash_floor_per_home_per_year_gbp (must be >= 0) ----
+
+    def test_retained_cash_floor_negative_raises(self) -> None:
+        """retained_cash_floor_per_home_per_year_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, retained_cash_floor_per_home_per_year_gbp=-1.0)
+
+    def test_retained_cash_floor_zero_ok(self) -> None:
+        """retained_cash_floor_per_home_per_year_gbp == 0.0 is valid (no floor allowed)."""
+        fc = FinanceConfig(**self._BASE, retained_cash_floor_per_home_per_year_gbp=0.0)
+        assert fc.retained_cash_floor_per_home_per_year_gbp == 0.0
+
+    # ---- grid_services_income_per_kw_per_year_gbp (must be >= 0) ----
+
+    def test_grid_services_income_negative_raises(self) -> None:
+        """grid_services_income_per_kw_per_year_gbp < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, grid_services_income_per_kw_per_year_gbp=-1.0)
+
+    def test_grid_services_income_zero_ok(self) -> None:
+        """grid_services_income_per_kw_per_year_gbp == 0.0 is valid (theta-safe default)."""
+        fc = FinanceConfig(**self._BASE, grid_services_income_per_kw_per_year_gbp=0.0)
+        assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
+
 
 # ---------------------------------------------------------------------------
 # _parse_finance_config tests (step-5)
@@ -2966,6 +3023,9 @@ class TestFinanceConfigParsing:
         assert result.loan_rate == 0.07
         assert result.opex_per_home_per_year_gbp == 131.0
         assert result.asset_life_years == 25
+        assert result.own_use_rate_pence_per_kwh == 15.0
+        assert result.retained_cash_floor_per_home_per_year_gbp == 27.0
+        assert result.grid_services_income_per_kw_per_year_gbp == 0.0
 
     def test_full_dict_round_trips(self) -> None:
         """All fields supplied in the dict are reflected on the returned FinanceConfig."""
@@ -2984,6 +3044,9 @@ class TestFinanceConfigParsing:
             "loan_rate": 0.065,
             "opex_per_home_per_year_gbp": 140.0,
             "asset_life_years": 25,
+            "own_use_rate_pence_per_kwh": 12.0,
+            "retained_cash_floor_per_home_per_year_gbp": 30.0,
+            "grid_services_income_per_kw_per_year_gbp": 5.0,
         }
         result = _parse_finance_config(data)
         assert result is not None
@@ -3001,6 +3064,9 @@ class TestFinanceConfigParsing:
         assert result.loan_rate == 0.065
         assert result.opex_per_home_per_year_gbp == 140.0
         assert result.asset_life_years == 25
+        assert result.own_use_rate_pence_per_kwh == 12.0
+        assert result.retained_cash_floor_per_home_per_year_gbp == 30.0
+        assert result.grid_services_income_per_kw_per_year_gbp == 5.0
 
     def test_inverter_cost_omission_defaults_zero(self) -> None:
         """Parser with no inverter_cost_per_kw_gbp key returns 0.0 (acceptance guard)."""
@@ -3063,6 +3129,33 @@ class TestFinanceConfigParsing:
         with pytest.raises(ConfigurationError, match="non-numeric"):
             _parse_finance_config(
                 {"standing_charge_pence_per_day": 60.0, "vat_rate": "not-a-number"}
+            )
+
+    def test_negative_own_use_rate_propagates_configuration_error(self) -> None:
+        """negative own_use_rate_pence_per_kwh in dict raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, "own_use_rate_pence_per_kwh": -1.0}
+            )
+
+    def test_negative_retained_cash_floor_propagates_configuration_error(self) -> None:
+        """negative retained_cash_floor_per_home_per_year_gbp in dict raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config(
+                {
+                    "standing_charge_pence_per_day": 60.0,
+                    "retained_cash_floor_per_home_per_year_gbp": -1.0,
+                }
+            )
+
+    def test_negative_grid_services_income_propagates_configuration_error(self) -> None:
+        """negative grid_services_income_per_kw_per_year_gbp in dict raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config(
+                {
+                    "standing_charge_pence_per_day": 60.0,
+                    "grid_services_income_per_kw_per_year_gbp": -1.0,
+                }
             )
 
 
@@ -3162,5 +3255,44 @@ class TestScenarioFinance:
             scenarios = load_scenarios(path)
             assert len(scenarios) == 1
             assert scenarios[0].finance is None
+        finally:
+            path.unlink()
+
+    def test_load_scenarios_with_cost_recovery_fields_round_trip(self) -> None:
+        """YAML finance: block with the three cost-recovery keys round-trips into FinanceConfig."""
+        yaml_content = (
+            "name: Cost Recovery Test\n"
+            "period:\n"
+            "  start_date: '2024-01-01'\n"
+            "  end_date: '2024-01-07'\n"
+            "home:\n"
+            "  pv:\n"
+            "    capacity_kw: 4.0\n"
+            "  load:\n"
+            "    annual_consumption_kwh: 3400\n"
+            "finance:\n"
+            "  standing_charge_pence_per_day: 65.0\n"
+            "  own_use_rate_pence_per_kwh: 12.5\n"
+            "  retained_cash_floor_per_home_per_year_gbp: 30.0\n"
+            "  grid_services_income_per_kw_per_year_gbp: 8.0\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            scenarios = load_scenarios(path)
+            assert len(scenarios) == 1
+            fc = scenarios[0].finance
+            assert fc is not None
+            assert isinstance(fc, FinanceConfig)
+            assert fc.own_use_rate_pence_per_kwh == 12.5
+            assert fc.retained_cash_floor_per_home_per_year_gbp == 30.0
+            assert fc.grid_services_income_per_kw_per_year_gbp == 8.0
+            # Un-overridden fields use documented defaults
+            assert fc.loan_term_years == 15
         finally:
             path.unlink()

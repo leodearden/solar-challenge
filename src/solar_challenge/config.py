@@ -500,6 +500,13 @@ class FinanceConfig:
         loan_rate: Annual loan interest rate as a fraction (default 0.07).
         opex_per_home_per_year_gbp: Annual operating cost per home (default 131.0).
         asset_life_years: Useful life of the asset in years (default 25).
+        own_use_rate_pence_per_kwh: CBS transfer price for self-consumed CBS-owned solar
+            (default 15.0 p/kWh; 0 permitted).
+        retained_cash_floor_per_home_per_year_gbp: Board-set minimum retained CBS
+            surplus per home per year in GBP (default 27.0; 0 permitted).
+        grid_services_income_per_kw_per_year_gbp: Exogenous DFS/DNO grid-services income
+            per kW of installed battery discharge power per year, net of aggregator share
+            (default 0.0; W1 cross-PRD seam — W1-delta fills the value cross-batch).
     """
 
     standing_charge_pence_per_day: float
@@ -516,6 +523,9 @@ class FinanceConfig:
     loan_rate: float = 0.07
     opex_per_home_per_year_gbp: float = 131.0
     asset_life_years: int = 25
+    own_use_rate_pence_per_kwh: float = 15.0
+    retained_cash_floor_per_home_per_year_gbp: float = 27.0
+    grid_services_income_per_kw_per_year_gbp: float = 0.0
 
     def __post_init__(self) -> None:
         """Validate financial parameters, raising ConfigurationError on violation."""
@@ -569,6 +579,21 @@ class FinanceConfig:
         if self.inverter_cost_per_kw_gbp < 0.0:
             raise ConfigurationError(
                 f"inverter_cost_per_kw_gbp must be >= 0, got {self.inverter_cost_per_kw_gbp}"
+            )
+        # Cost-recovery fields: zero allowed, negative rejected
+        if self.own_use_rate_pence_per_kwh < 0.0:
+            raise ConfigurationError(
+                f"own_use_rate_pence_per_kwh must be >= 0, got {self.own_use_rate_pence_per_kwh}"
+            )
+        if self.retained_cash_floor_per_home_per_year_gbp < 0.0:
+            raise ConfigurationError(
+                "retained_cash_floor_per_home_per_year_gbp must be >= 0, "
+                f"got {self.retained_cash_floor_per_home_per_year_gbp}"
+            )
+        if self.grid_services_income_per_kw_per_year_gbp < 0.0:
+            raise ConfigurationError(
+                "grid_services_income_per_kw_per_year_gbp must be >= 0, "
+                f"got {self.grid_services_income_per_kw_per_year_gbp}"
             )
 
 
@@ -1641,6 +1666,15 @@ def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceCon
                 data.get("opex_per_home_per_year_gbp", 131.0)
             ),
             asset_life_years=int(data.get("asset_life_years", 25)),
+            own_use_rate_pence_per_kwh=float(
+                data.get("own_use_rate_pence_per_kwh", 15.0)
+            ),
+            retained_cash_floor_per_home_per_year_gbp=float(
+                data.get("retained_cash_floor_per_home_per_year_gbp", 27.0)
+            ),
+            grid_services_income_per_kw_per_year_gbp=float(
+                data.get("grid_services_income_per_kw_per_year_gbp", 0.0)
+            ),
         )
     except (ValueError, TypeError) as exc:
         raise ConfigurationError(
