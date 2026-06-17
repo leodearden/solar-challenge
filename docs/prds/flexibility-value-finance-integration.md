@@ -22,7 +22,7 @@ The flexibility value has two physically-distinct parts, and this PRD treats the
 - A user runs `solar-challenge finance` on the new **board scenario** (fleet on Economy-7 + grid-charging) and sees a battery home's **net annual bill is lower** than the same home with arbitrage off, by a per-battery-home **time-shift saving that lands in the £100–330 research band** — reported alongside the banded grid-services figure.
 - Setting the **grid-services band** (Low/Central/High) on the scenario's finance config **moves the project surplus** (W2's consuming math) by `Σ battery max_discharge_kw × band(£/kW)`; the default leaves existing economics and the θ calibration **bit-identical**.
 - W3's ranking (min householder bill) now **orders configs by per-config arbitrage benefit** — a 10 kWh battery out-arbitrages a 5 kWh one — because the time-shift lands in the bill it ranks on.
-- A committed **buildability/risk note** in `docs/` records the prerequisites (P483 aggregator, MID asset meters, NGED CMZ confirmation, G99/G100) and the one HIGH risk, traceable from the value model.
+- A committed **buildability/risk note** in `docs/` records the prerequisites (P483 aggregator, MID asset meters, NGED CMZ confirmation, G99/G100) and the one HIGH risk, traceable from the value model: [docs/flexibility-buildability.md](../flexibility-buildability.md).
 
 ---
 
@@ -155,7 +155,7 @@ Greek labels are intra-batch; task IDs assigned at decompose. **B+H phasing:** �
   - **Signal:** integration test — selecting band ∈ {low,central,high} moves the project surplus by ≈ `Σ max_discharge_kw × {1.5,12,48}`; default/unset leaves economics + θ bit-identical; a battery home and a no-battery home differ by the flex increment.
   - **Blocked-on-consumer** until the W2 amendment lands the field; the field name is the agreed seam (§8).
 
-- **ε — buildability/risk note** · *modules:* `docs/flexibility-buildability.md` (new) · *leaf · prereqs: α.*
+- **ε — buildability/risk note** · *modules:* [`docs/flexibility-buildability.md`](../flexibility-buildability.md) · *leaf · prereqs: α.*
   - Short note: the banded value model summary; prerequisites (**P483-capable aggregator**, **MID asset meters** EM530/EM540, **NGED CMZ confirmation** email, **G99/G100** compliance — the one HIGH risk); reference to the full consulting doc; the out-of-scope items (§7).
   - **Signal:** doc committed at the path, lists the 4 prerequisites + the HIGH risk rating, and is linked from this PRD and `flex.py`'s module docstring.
 
