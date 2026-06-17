@@ -331,3 +331,250 @@ class TestFinanceCLICostRecoveryHelp:
         assert any(kw in output for kw in ("cost-recovery", "own-use", "solve", "solved")), (
             f"Expected cost-recovery flag help text to mention solved rate:\n{result.output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §E — Helpers for fast patched CLI tests (adapted from test_cost_recovery_solve.py)
+# ---------------------------------------------------------------------------
+
+
+def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
+    from solar_challenge.pv import PVConfig
+    return PVConfig(
+        capacity_kw=4.0,
+        azimuth=180.0,
+        tilt=35.0,
+        system_age_years=system_age_years,
+        degradation_rate_per_year=0.005,
+    )
+
+
+def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
+    from solar_challenge.load import LoadConfig
+    return LoadConfig(annual_consumption_kwh=3500.0)
+
+
+def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
+    from solar_challenge.home import HomeConfig
+    from solar_challenge.location import Location
+    return HomeConfig(
+        pv_config=_make_pv_config(),
+        load_config=_make_load_config(),
+        location=Location.bristol(),
+    )
+
+
+def _make_sim_results(
+    self_kwh: float = 2000.0,
+    export_kwh: float = 800.0,
+    import_kwh: float = 1200.0,
+    n_minutes: int = 525600,
+) -> "SimulationResults":  # type: ignore[name-defined]
+    import pandas as pd
+    from solar_challenge.home import SimulationResults
+
+    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
+    sc_kw = self_kwh / (n_minutes / 60.0)
+    exp_kw = export_kwh / (n_minutes / 60.0)
+    imp_kw = import_kwh / (n_minutes / 60.0)
+    gen_kw = sc_kw + exp_kw
+    demand_kw = sc_kw + imp_kw
+    zeros = pd.Series(0.0, index=idx)
+    return SimulationResults(
+        generation=pd.Series(gen_kw, index=idx),
+        demand=pd.Series(demand_kw, index=idx),
+        self_consumption=pd.Series(sc_kw, index=idx),
+        battery_charge=zeros.copy(),
+        battery_discharge=zeros.copy(),
+        battery_soc=zeros.copy(),
+        grid_import=pd.Series(imp_kw, index=idx),
+        grid_export=pd.Series(exp_kw, index=idx),
+        import_cost=zeros.copy(),
+        export_revenue=zeros.copy(),
+        tariff_rate=zeros.copy(),
+        grid_charge_cost=None,
+    )
+
+
+def _make_fleet_results_interior(n_homes: int = 5) -> "FleetResults":  # type: ignore[name-defined]
+    """Build a FleetResults that yields binding='floor', feasible=True when solved.
+
+    Uses the interior-regime shape from test_cost_recovery_solve.py:
+    high capex (£2000/kWp), no grant, floor=100, retail=30p, sc=2000 kWh/home/yr.
+    """
+    from solar_challenge.fleet import FleetResults
+
+    homes = [_make_home_config() for _ in range(n_homes)]
+    per_home = [_make_sim_results() for _ in range(n_homes)]
+    return FleetResults(per_home_results=per_home, home_configs=homes)
+
+
+def _write_interior_scenario(tmp_path: "Path", n_homes: int = 5) -> "Path":  # type: ignore[name-defined]
+    """Write a minimal interior-regime scenario YAML to tmp_path."""
+    import yaml
+    scenario = {
+        "name": "CR5 CLI Test",
+        "location": {
+            "latitude": 51.45,
+            "longitude": -2.58,
+            "timezone": "Europe/London",
+        },
+        "fleet_distribution": {
+            "n_homes": n_homes,
+            "seed": 42,
+            "pv": {"capacity_kw": 4.0, "azimuth": 180, "tilt": 35},
+            "battery": {"capacity_kwh": None},
+            "load": {"annual_consumption_kwh": 3500},
+        },
+        "finance": {
+            "standing_charge_pence_per_day": 28.0,
+            # Interior-regime cost-recovery params: high capex, no grant, floor=100, retail=30p
+            "pv_cost_per_kwp_gbp": 2000.0,
+            "grant_gbp": 0.0,
+            "own_use_rate_pence_per_kwh": 15.0,
+            "retained_cash_floor_per_home_per_year_gbp": 100.0,
+            "retail_baseline_rate_pence_per_kwh": 30.0,
+            "asset_life_years": 25,
+            "vat_rate": 0.05,
+        },
+    }
+    path = tmp_path / "interior_scenario.yaml"
+    path.write_text(yaml.dump(scenario))
+    return path
+
+
+# ---------------------------------------------------------------------------
+# §F — RED end-to-end CLI tests (step-7)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceCLICostRecoveryE2EFast:
+    """Fast patched end-to-end tests for --cost-recovery flag wiring."""
+
+    def test_cost_recovery_flag_renders_block(self, tmp_path: "Path") -> None:  # type: ignore[name-defined]
+        """--cost-recovery must render the cost-recovery block in the output."""
+        from pathlib import Path
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario_file = _write_interior_scenario(tmp_path)
+        fr = _make_fleet_results_interior()
+
+        with (
+            patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr),
+            patch("solar_challenge.fleet.simulate_fleet", return_value=fr),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(app, ["finance", "run", "--cost-recovery", str(scenario_file)])
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        output = result.output.lower()
+        assert "cost-recovery" in output, (
+            f"Expected cost-recovery block in output:\n{result.output}"
+        )
+
+    def test_cost_recovery_flag_shows_solved_rate(self, tmp_path: "Path") -> None:  # type: ignore[name-defined]
+        """--cost-recovery output must contain the solved own-use rate."""
+        from pathlib import Path
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario_file = _write_interior_scenario(tmp_path)
+        fr = _make_fleet_results_interior()
+
+        with (
+            patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr),
+            patch("solar_challenge.fleet.simulate_fleet", return_value=fr),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(app, ["finance", "run", "--cost-recovery", str(scenario_file)])
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        # The solved rate should appear (format: "X.XX p/kWh")
+        assert "p/kwh" in result.output.lower() or "p/kwh" in result.output, (
+            f"Expected 'p/kWh' in cost-recovery output:\n{result.output}"
+        )
+
+    def test_cost_recovery_flag_shows_feasible(self, tmp_path: "Path") -> None:  # type: ignore[name-defined]
+        """--cost-recovery output must contain feasibility indicator for interior regime."""
+        from pathlib import Path
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario_file = _write_interior_scenario(tmp_path)
+        fr = _make_fleet_results_interior()
+
+        with (
+            patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr),
+            patch("solar_challenge.fleet.simulate_fleet", return_value=fr),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(app, ["finance", "run", "--cost-recovery", str(scenario_file)])
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        output = result.output.lower()
+        # Interior regime → binding='floor' → "surplus meets floor"
+        assert "surplus meets floor" in output or "feasib" in output, (
+            f"Expected feasibility indicator in output:\n{result.output}"
+        )
+
+    def test_no_cost_recovery_omits_block(self, tmp_path: "Path") -> None:  # type: ignore[name-defined]
+        """--no-cost-recovery (default) must NOT render the cost-recovery block."""
+        from pathlib import Path
+        from unittest.mock import patch
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario_file = _write_interior_scenario(tmp_path)
+        fr = _make_fleet_results_interior()
+
+        with (
+            patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr),
+            patch("solar_challenge.fleet.simulate_fleet", return_value=fr),
+        ):
+            runner = CliRunner()
+            # Invoke WITHOUT --cost-recovery (default is --no-cost-recovery)
+            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        assert "cost-recovery analysis" not in result.output.lower(), (
+            f"'Cost-Recovery Analysis' should NOT appear without --cost-recovery:\n{result.output}"
+        )
+
+
+@pytest.mark.slow
+class TestFinanceCLICostRecoverySlowE2E:
+    """Slow real-PVGIS end-to-end test (H8 board signal)."""
+
+    def test_cost_recovery_bristol_short_window(self) -> None:
+        """E2E: `finance run --cost-recovery scenarios/bristol-phase1.yaml` exits 0 with CR block."""
+        from pathlib import Path
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        scenario = Path("scenarios/bristol-phase1.yaml")
+        if not scenario.exists():
+            pytest.skip("bristol-phase1.yaml not found")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "finance",
+                "run",
+                str(scenario),
+                "--cost-recovery",
+                "--start", "2024-01-01",
+                "--end", "2024-01-03",
+            ],
+        )
+        assert result.exit_code == 0, (
+            f"Exit {result.exit_code}. Output:\n{result.output}"
+        )
+        output = result.output.lower()
+        assert "cost-recovery" in output, (
+            f"Expected cost-recovery block headings in output:\n{result.output}"
+        )
