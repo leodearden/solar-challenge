@@ -347,3 +347,114 @@ class TestSensitivityDataclasses:
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         with pytest.raises(ValueError, match="axes"):
             SensitivityPanel(axes=(), baseline_top=pt, rank_stability=1.0)
+
+
+# ---------------------------------------------------------------------------
+# step-3: TestBuildAxisConfigs (RED — _build_axis_configs doesn't exist yet)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildAxisConfigs:
+    """Unit tests for _build_axis_configs: pure routing, no run_sweep calls."""
+
+    def _base_configs(self, finance: "Optional[FinanceConfig]" = None):  # type: ignore[no-untyped-def]
+        """Return a minimal base_configs list: one (ConfigPoint, ScenarioConfig) pair."""
+        from solar_challenge.optimize import ConfigPoint, enumerate_configs
+
+        scenario = _make_scenario(n_homes=2, finance=finance or _interior_finance())
+        return enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6])
+
+    def test_finance_field_battery_cost_replaced(self) -> None:
+        """battery_cost_per_kwh_gbp is replaced on every pair's scenario.finance."""
+        from solar_challenge.optimize import _build_axis_configs
+
+        base = self._base_configs()
+        result = _build_axis_configs(base, "battery_cost_per_kwh_gbp", 999.0)
+
+        assert len(result) == len(base)
+        for (orig_pt, orig_sc), (new_pt, new_sc) in zip(base, result):
+            assert new_pt is orig_pt, "ConfigPoint must be reused unchanged"
+            assert new_sc.finance is not None
+            assert new_sc.finance.battery_cost_per_kwh_gbp == pytest.approx(999.0)
+            # Other finance fields must be preserved
+            assert new_sc.finance.pv_cost_per_kwp_gbp == pytest.approx(
+                orig_sc.finance.pv_cost_per_kwp_gbp  # type: ignore[union-attr]
+            )
+
+    def test_finance_field_grid_services_replaced(self) -> None:
+        """grid_services_income_per_kw_per_year_gbp is replaced on every pair."""
+        from solar_challenge.optimize import _build_axis_configs
+
+        base = self._base_configs()
+        result = _build_axis_configs(base, "grid_services_income_per_kw_per_year_gbp", 42.0)
+
+        for _, new_sc in result:
+            assert new_sc.finance is not None
+            assert new_sc.finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(42.0)
+
+    def test_seg_alias_replaced(self) -> None:
+        """'seg' alias replaces ScenarioConfig.seg_tariff_pence_per_kwh."""
+        from solar_challenge.optimize import _build_axis_configs
+
+        base = self._base_configs()
+        result = _build_axis_configs(base, "seg", 7.5)
+
+        for (_, orig_sc), (_, new_sc) in zip(base, result):
+            assert new_sc.seg_tariff_pence_per_kwh == pytest.approx(7.5)
+            # Finance block is unchanged
+            assert new_sc.finance is orig_sc.finance
+
+    def test_seg_tariff_full_name_replaced(self) -> None:
+        """'seg_tariff_pence_per_kwh' replaces ScenarioConfig.seg_tariff_pence_per_kwh."""
+        from solar_challenge.optimize import _build_axis_configs
+
+        base = self._base_configs()
+        result = _build_axis_configs(base, "seg_tariff_pence_per_kwh", 9.0)
+
+        for _, new_sc in result:
+            assert new_sc.seg_tariff_pence_per_kwh == pytest.approx(9.0)
+
+    def test_degradation_alias_replaced(self) -> None:
+        """'degradation' alias replaces degradation_rate_per_year on every home."""
+        from solar_challenge.optimize import _build_axis_configs
+
+        base = self._base_configs()
+        result = _build_axis_configs(base, "degradation", 0.01)
+
+        for _, new_sc in result:
+            for home in new_sc.homes:
+                assert home.pv_config.degradation_rate_per_year == pytest.approx(0.01)
+
+    def test_degradation_full_name_replaced(self) -> None:
+        """'degradation_rate_per_year' replaces degradation on every home."""
+        from solar_challenge.optimize import _build_axis_configs
+
+        base = self._base_configs()
+        result = _build_axis_configs(base, "degradation_rate_per_year", 0.02)
+
+        for _, new_sc in result:
+            for home in new_sc.homes:
+                assert home.pv_config.degradation_rate_per_year == pytest.approx(0.02)
+
+    def test_unknown_knob_raises_value_error(self) -> None:
+        """An unrecognised knob name raises ValueError."""
+        from solar_challenge.optimize import _build_axis_configs
+
+        base = self._base_configs()
+        with pytest.raises(ValueError, match="Unknown sensitivity knob"):
+            _build_axis_configs(base, "nonexistent_knob_xyz", 1.0)
+
+    def test_none_finance_raises_for_finance_knob(self) -> None:
+        """scenario.finance is None raises ValueError for a FinanceConfig knob."""
+        from solar_challenge.optimize import _build_axis_configs
+
+        # Build base_configs where the scenario has NO finance block
+        base = self._base_configs(finance=None)
+        # Manually clear finance on the scenarios
+        import dataclasses as dc
+        cleared = [
+            (pt, dc.replace(sc, finance=None))
+            for pt, sc in base
+        ]
+        with pytest.raises(ValueError, match="finance"):
+            _build_axis_configs(cleared, "battery_cost_per_kwh_gbp", 999.0)
