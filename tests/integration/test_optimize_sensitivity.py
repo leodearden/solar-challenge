@@ -458,3 +458,90 @@ class TestBuildAxisConfigs:
         ]
         with pytest.raises(ValueError, match="finance"):
             _build_axis_configs(cleared, "battery_cost_per_kwh_gbp", 999.0)
+
+
+# ---------------------------------------------------------------------------
+# step-5: TestSensitivityPanelStructure (RED — sensitivity_panel not yet impl)
+# ---------------------------------------------------------------------------
+
+
+class TestSensitivityPanelStructure:
+    """Structural invariants of sensitivity_panel output."""
+
+    def _setup(self):  # type: ignore[no-untyped-def]
+        """Return (base_configs, simulate) for a 2-config grid."""
+        from solar_challenge.optimize import enumerate_configs
+
+        finance = _interior_finance()  # grid_services=0, baseline Config A on top
+        scenario = _make_scenario(n_homes=_N_HOMES, finance=finance)
+        base_configs = enumerate_configs(
+            scenario,
+            pv_kwp=[4.0],
+            battery_kwh=[0.0, 6.0],
+            inverter_kw=[3.6],
+        )
+        return base_configs, _const_simulate
+
+    def test_one_axis_length(self) -> None:
+        """Panel has exactly one SensitivityAxis when one axis is swept."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs, simulate = self._setup()
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0, 48.0]},
+            simulate=simulate,
+        )
+        assert len(panel.axes) == 1
+
+    def test_axis_values_preserved(self) -> None:
+        """SensitivityAxis.values equals the input sequence as a float tuple."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs, simulate = self._setup()
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0, 48.0]},
+            simulate=simulate,
+        )
+        assert panel.axes[0].values == (0.0, 12.0, 48.0)
+
+    def test_rankings_and_tops_have_correct_length(self) -> None:
+        """rankings and top_config_per_value both have length == len(values)."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs, simulate = self._setup()
+        n_values = 3
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0, 48.0]},
+            simulate=simulate,
+        )
+        axis = panel.axes[0]
+        assert len(axis.rankings) == n_values
+        assert len(axis.top_config_per_value) == n_values
+
+    def test_baseline_top_equals_run_sweep_cheapest_feasible(self) -> None:
+        """panel.baseline_top == run_sweep(base_configs, simulate=...).cheapest_feasible."""
+        from solar_challenge.optimize import run_sweep, sensitivity_panel
+
+        base_configs, simulate = self._setup()
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0]},
+            simulate=simulate,
+        )
+        baseline = run_sweep(base_configs, simulate=simulate)
+        assert panel.baseline_top == baseline.cheapest_feasible
+
+    def test_rank_stability_in_range(self) -> None:
+        """panel.rank_stability is in [0.0, 1.0]."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs, simulate = self._setup()
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0, 48.0]},
+            simulate=simulate,
+        )
+        assert 0.0 <= panel.rank_stability <= 1.0
