@@ -312,16 +312,25 @@ def _make_interior_fleet_cr6(
 ) -> "FleetResults":  # type: ignore[name-defined]
     """Build a small synthetic FleetResults tuned to the interior 'floor' regime.
 
-    Interior guarantee: surplus(r=0) < floor < surplus(r=retail).
-    With n_homes=5, self_kwh=2000, and _make_finance_interior_cr6():
-      fleet_sc = 5×2000 = 10,000 kWh
-      At r=0: fleet_rev=0, surplus=(0−opex−debt)/5 << floor
-      At r=retail: fleet_rev=retail×10000/100, surplus >> floor
-    Hence r* is strictly interior.
+    Interior guarantee (with _make_finance_interior_cr6 defaults):
+      fleet_sc = n_homes × self_kwh = 5 × 2000 = 10,000 kWh
+      capex = 5 × (5.5×£2000 + £1000 + 5×£250) = 5 × £13,250 = £66,250
+      debt = 66250 × 0.25 = £16,562.50; debt_svc ≈ £1,820/yr
+      opex = 5 × £131 = £655/yr; total_costs ≈ £2,475/yr
+      required_revenue = 2475 + 50×5 = £2,725/yr
+      r* = (2725 − 0) / (10000/100) = £2,725 / 100 = 27.25p
+      BUT retail=30p → interior: 0 < 27.25 < 30 ✓
 
-    Implementation added in step-4 GREEN (stub → NotImplementedError).
+    No-flex: grid_charge_cost=None, export_revenue=0.
     """
-    raise NotImplementedError("implement in step-4")
+    from solar_challenge.fleet import FleetResults
+
+    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+    per_home = [
+        _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
+        for _ in range(n_homes)
+    ]
+    return FleetResults(per_home_results=per_home, home_configs=homes)
 
 
 def _make_finance_interior_cr6(
@@ -332,12 +341,35 @@ def _make_finance_interior_cr6(
 ) -> "FinanceConfig":  # type: ignore[name-defined]
     """Build an interior-regime FinanceConfig for H1/H2 structural invariant tests.
 
-    Interior regime guaranteed by: high capex (no grant) + small fleet →
-    surplus(r=0) = (0−opex−debt)/n < floor, surplus(r=retail) > floor.
+    Interior regime guaranteed by: high capex (no grant) + moderate floor →
+    surplus(r=0) < floor AND surplus(r=retail=30p) > floor.
 
-    Implementation added in step-4 GREEN (stub → NotImplementedError).
+    With n=5 homes, self=2000kWh:
+      fleet_sc = 10,000 kWh
+      At r=0: surplus = (0−opex−debt)/5 ≈ (0−655−1820)/5 ≈ −495/home << floor=50
+      At r=retail=30p: surplus = (30×10000/100−2475)/5 ≈ (3000−2475)/5 ≈ 105/home >> floor=50
+    ∴ interior ✓
     """
-    raise NotImplementedError("implement in step-4")
+    from solar_challenge.config import FinanceConfig
+
+    return FinanceConfig(
+        standing_charge_pence_per_day=60.0,
+        pv_cost_per_kwp_gbp=pv_cost_per_kwp,
+        roof_fit_cost_gbp=1000.0,
+        battery_cost_per_kwh_gbp=250.0,
+        inverter_cost_per_kw_gbp=0.0,
+        grant_gbp=grant_gbp,
+        equity_fraction=0.75,
+        loan_term_years=15,
+        loan_rate=0.07,
+        opex_per_home_per_year_gbp=131.0,
+        asset_life_years=25,
+        own_use_rate_pence_per_kwh=15.0,
+        retained_cash_floor_per_home_per_year_gbp=retained_cash_floor,
+        retail_baseline_rate_pence_per_kwh=retail_rate,
+        vat_rate=0.05,
+        grid_services_income_per_kw_per_year_gbp=0.0,
+    )
 
 
 class TestStructuralInvariants:
