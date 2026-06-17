@@ -80,10 +80,13 @@ fleet_distribution:
   dispatch_strategy: tou_optimized
 
 # Financial parameters matching bristol-phase1.yaml baseline.
-# grid_services_income_per_kw_per_year_gbp is 0.0 by default here;
-# the W1 δ task (task 55) adds the grid-services value on top.
+# grid_services_income_per_kw_per_year_gbp: Central band from
+#   flex.resolve_grid_services_band("central") == £12.0/kW/yr,
+#   matching this scenario's flex_band: central (default Central for the board).
+#   Units: per kW of battery max_discharge_kw (Σ across all battery homes).
+#   Source: W1 δ (task 55) — seam gate proving band → project surplus.
 finance:
   standing_charge_pence_per_day: 60.0
   own_use_rate_pence_per_kwh: 15.0
   retained_cash_floor_per_home_per_year_gbp: 27.0
-  grid_services_income_per_kw_per_year_gbp: 0.0
+  grid_services_income_per_kw_per_year_gbp: 12.0
