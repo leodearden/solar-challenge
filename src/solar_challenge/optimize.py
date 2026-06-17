@@ -14,13 +14,11 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Sequence
+from typing import Optional, Sequence
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.home import HomeConfig
-
-if TYPE_CHECKING:
-    from solar_challenge.battery import BatteryConfig
 
 
 # ---------------------------------------------------------------------------
@@ -119,24 +117,47 @@ def enumerate_configs(
 # ---------------------------------------------------------------------------
 
 def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
-    """Return a new :class:`~solar_challenge.home.HomeConfig` with the PV and
-    inverter capacities from *point* applied homogeneously.
+    """Return a new :class:`~solar_challenge.home.HomeConfig` with the PV,
+    inverter, and battery install from *point* applied homogeneously.
 
-    ``load_config`` and ``dispatch_strategy`` are left untouched so load/occupancy
-    diversity and the board dispatch strategy are preserved (PRD §3.2, W-H2).
-    Battery logic is applied by the same function (see step-8); at this stage
-    only PV + inverter are set.
+    *PV/inverter*: ``pv_config.capacity_kw`` and ``pv_config.inverter_capacity_kw``
+    are set to *point.pv_kwp* and *point.inverter_kw* respectively.
+
+    *Battery*:
+
+    - ``point.battery_kwh == 0.0`` → ``battery_config = None`` (no battery).
+    - ``point.battery_kwh > 0`` and the home already has a battery →
+      ``dataclasses.replace(home.battery_config, capacity_kwh=point.battery_kwh)``
+      preserving ``max_discharge_kw``, ``grid_charging``, ``dispatch_strategy``,
+      ``efficiency``, and all other base fields (PRD §3.2 / design decision 2).
+    - ``point.battery_kwh > 0`` and the home has NO battery → a fresh
+      :class:`~solar_challenge.battery.BatteryConfig` is FABRICATED at defaults
+      (``max_discharge_kw=2.5``).  This is the intentional divergence from
+      ``apply_fleet_overlay`` (which never fabricates a battery).
+
+    ``load_config`` and ``HomeConfig.dispatch_strategy`` are left untouched so
+    load/occupancy diversity and the board dispatch strategy are preserved
+    (PRD §3.2, W-H2).
 
     Args:
         home: Original (frozen) home configuration.
         point: Install specification for this grid cell.
 
     Returns:
-        A fresh :class:`~solar_challenge.home.HomeConfig` with updated PV config.
+        A fresh :class:`~solar_challenge.home.HomeConfig` with updated install.
     """
     new_pv = replace(
         home.pv_config,
         capacity_kw=point.pv_kwp,
         inverter_capacity_kw=point.inverter_kw,
     )
-    return replace(home, pv_config=new_pv)
+
+    new_battery: Optional[BatteryConfig]
+    if point.battery_kwh == 0.0:
+        new_battery = None
+    elif home.battery_config is not None:
+        new_battery = replace(home.battery_config, capacity_kwh=point.battery_kwh)
+    else:
+        new_battery = BatteryConfig(capacity_kwh=point.battery_kwh)
+
+    return replace(home, pv_config=new_pv, battery_config=new_battery)
