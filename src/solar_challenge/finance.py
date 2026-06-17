@@ -1679,3 +1679,165 @@ def spreadsheet_revenue_curve(
         sampled_ages=(0,),          # analytic; no simulation nodes
         interp_error_estimate=0.0,  # exact; no interpolation
     )
+
+
+# ---------------------------------------------------------------------------
+# solve_cost_recovery_rate — CR4 near-closed-form own-use-rate solve
+# ---------------------------------------------------------------------------
+
+#: Minimum absolute slope (kWh-weighted / pence) below which we treat the
+#: project as having no self-consumption and fall through to the degenerate branch.
+_SLOPE_EPS: float = 1e-9
+
+
+def solve_cost_recovery_rate(
+    scenario: "ScenarioConfig",
+    finance: "FinanceConfig",
+    *,
+    simulate: Optional[Callable[["FleetConfig", pd.Timestamp, pd.Timestamp], "FleetResults"]] = None,
+) -> "CostRecoverySolution":
+    """Find the minimum CBS own-use rate that meets the retained-cash floor.
+
+    The CBS charges householders ``own_use_rate_pence_per_kwh`` p/kWh for every
+    kWh of CBS-owned solar consumed on-site.  This function finds the lowest such
+    rate *r** such that ``project_economics.net_surplus_per_home_per_year_gbp ≥
+    finance.retained_cash_floor_per_home_per_year_gbp``.
+
+    **Mechanism** (no re-sim per trial rate):
+
+    ``net_surplus_per_home_per_year_gbp`` is *exactly affine* in *r*:
+    ``fleet_revenue_y = r × fleet_sc_y / 100 + C_y`` where *C_y* is
+    rate-independent.  PCHIP interpolation is a linear operator on node values;
+    ``project_economics`` is affine in per-year revenue.  Hence two trial rates
+    (r=0, r=retail) recover the exact affine line, and the solve is closed-form:
+
+    1. Run ``project_multi_year`` **once** at the configured rate ``r0`` → base curve.
+    2. ``surplus_at(r)`` rebuilds each ``YearPoint``'s ``fleet_revenue_gbp`` via
+       ``dataclasses.replace``: ``rev_y' = rev_y + (r - r0)/100 × sc_y``.
+    3. Compute ``s0 = surplus_at(0)``, ``s_ret = surplus_at(retail)``,
+       ``slope = (s_ret - s0) / retail``.
+    4. Solve ``r* = (floor - s0) / slope``; clamp to [0, retail]; set *binding*.
+    5. Compute outlay from a dedicated age-0 fleet sim (per-home granularity
+       not available from the multi-year curve).
+
+    **Clamp / binding convention**:
+
+    * ``r* < 0``: ``rate_clamped_zero`` (feasible=True, surplus > floor).
+    * ``0 ≤ r* ≤ retail``: ``floor`` (feasible=True, surplus ≈ floor to float ε).
+    * ``r* > retail``: ``infeasible_above_retail`` (feasible=False, rate=retail,
+      surplus < floor).
+    * Degenerate (slope ≈ 0, no self-consumption): if ``s0 ≥ floor`` →
+      ``rate_clamped_zero``; else → ``infeasible_above_retail``.
+
+    Args:
+        scenario: ScenarioConfig with homes, period, and location.
+        finance: FinanceConfig with cost-recovery fields populated (CR1).
+        simulate: Optional inject for testing.  Defaults to None → lazy import
+            ``fleet.simulate_fleet``.  Signature must match
+            ``(FleetConfig, pd.Timestamp, pd.Timestamp) → FleetResults``.
+
+    Returns:
+        A :class:`CostRecoverySolution` with the solved rate and outlay.
+    """
+    # ---- Lazy import (mirrors project_multi_year) ----------------------------
+    if simulate is None:
+        from solar_challenge.fleet import simulate_fleet as _simulate_fleet
+        simulate = _simulate_fleet
+
+    # ---- Resolve homes + time axes (mirrors project_multi_year) --------------
+    homes = _resolve_homes(scenario)
+
+    tz: str
+    if scenario.location is not None:
+        tz = scenario.location.timezone
+    else:
+        tz = homes[0].location.timezone
+
+    start_ts = scenario.period.get_start_timestamp(tz)
+    end_ts = scenario.period.get_end_timestamp(tz)
+
+    # ---- (1) Base curve at the configured r0 ---------------------------------
+    r0 = finance.own_use_rate_pence_per_kwh
+    base_curve = project_multi_year(scenario, finance, simulate=simulate)
+
+    # ---- (2) surplus_at(r): rebuild YearPoints with rate-shifted revenue -----
+    def surplus_at(r: float) -> float:
+        """Return net_surplus_per_home_per_year at trial rate r (p/kWh)."""
+        new_points = tuple(
+            dataclasses.replace(
+                yp,
+                fleet_revenue_gbp=yp.fleet_revenue_gbp
+                + (r - r0) / 100.0 * yp.fleet_self_consumption_kwh,
+            )
+            for yp in base_curve.points
+        )
+        rate_curve = dataclasses.replace(base_curve, points=new_points)
+        # finance passed to project_economics can be the original; capex/debt
+        # are rate-independent.  Surplus formula uses curve.points[y].fleet_revenue_gbp.
+        return project_economics(rate_curve, scenario, finance).net_surplus_per_home_per_year_gbp
+
+    # ---- (3) Two-point fit to recover the affine line ------------------------
+    retail = finance.retail_baseline_rate_pence_per_kwh
+    floor = finance.retained_cash_floor_per_home_per_year_gbp
+
+    s0 = surplus_at(0.0)
+    s_ret = surplus_at(retail)
+    slope = (s_ret - s0) / retail  # retail > 0 (validated in FinanceConfig)
+
+    # ---- (4) Solve + clamp ---------------------------------------------------
+    if abs(slope) > _SLOPE_EPS:
+        r_star = (floor - s0) / slope
+        if r_star < 0.0:
+            rate = 0.0
+            binding = "rate_clamped_zero"
+            feasible = True
+        elif r_star <= retail:
+            rate = r_star
+            binding = "floor"
+            feasible = True
+        else:
+            rate = retail
+            binding = "infeasible_above_retail"
+            feasible = False
+    else:
+        # Degenerate: near-zero self-consumption → surplus is constant
+        if s0 >= floor:
+            rate = 0.0
+            binding = "rate_clamped_zero"
+            feasible = True
+        else:
+            rate = retail
+            binding = "infeasible_above_retail"
+            feasible = False
+
+    # ---- (5) Net surplus at the clamped/solved rate --------------------------
+    net_surplus = surplus_at(rate)
+
+    # ---- (6) Age-0 outlay BillDistribution -----------------------------------
+    from solar_challenge.fleet import FleetConfig
+    from solar_challenge.home import calculate_summary
+
+    aged0 = _aged_homes(homes, 0)
+    fleet_cfg = FleetConfig(homes=aged0, name="cr4-solve-age0")
+    fr_age0 = simulate(fleet_cfg, start_ts, end_ts)
+
+    summaries = [
+        calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
+        for r in fr_age0.per_home_results
+    ]
+    sim_days = summaries[0].simulation_days
+    finance_solved = dataclasses.replace(finance, own_use_rate_pence_per_kwh=rate)
+    outlay = bill_distribution(summaries, finance_solved, sim_days)
+
+    # ---- (7) Assemble result -------------------------------------------------
+    rep = outlay.representative
+    return CostRecoverySolution(
+        own_use_rate_pence_per_kwh=rate,
+        outlay=outlay,
+        representative_outlay_gbp=rep.total_outlay_gbp,
+        net_surplus_per_home_per_year_gbp=net_surplus,
+        saving_vs_baseline_gbp=rep.saving_vs_baseline_gbp,
+        saving_pct=rep.saving_pct,
+        feasible=feasible,
+        binding=binding,
+    )

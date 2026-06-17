@@ -219,9 +219,19 @@ def _make_sim_results(
     self_kwh: float = 2000.0,
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
+    export_revenue_gbp_per_year: float = 0.0,
     n_minutes: int = 525600,  # 365 days
 ) -> "SimulationResults":  # type: ignore[name-defined]
-    """Build a minimal SimulationResults with constant power series (annual-scale)."""
+    """Build a minimal SimulationResults with constant power series (annual-scale).
+
+    Args:
+        self_kwh: Annual self-consumed solar energy (kWh).
+        export_kwh: Annual grid export energy (kWh).
+        import_kwh: Annual grid import energy (kWh).
+        export_revenue_gbp_per_year: Annual SEG export revenue (£/yr).
+            Non-zero values allow ``_seg_export_income_gbp`` to see real SEG income.
+        n_minutes: Simulation length in minutes (default 525600 = 365 days).
+    """
     import pandas as pd
     from solar_challenge.home import SimulationResults
 
@@ -233,6 +243,10 @@ def _make_sim_results(
     demand_kw = sc_kw + imp_kw
     zeros = pd.Series(0.0, index=idx)
 
+    # export_revenue is monetary (£/minute); sum() = total GBP over the period.
+    exp_rev_per_min = export_revenue_gbp_per_year / n_minutes if n_minutes > 0 else 0.0
+    export_revenue_series = pd.Series(exp_rev_per_min, index=idx)
+
     return SimulationResults(
         generation=pd.Series(gen_kw, index=idx),
         demand=pd.Series(demand_kw, index=idx),
@@ -243,7 +257,7 @@ def _make_sim_results(
         grid_import=pd.Series(imp_kw, index=idx),
         grid_export=pd.Series(exp_kw, index=idx),
         import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),
+        export_revenue=export_revenue_series,
         tariff_rate=zeros.copy(),
         grid_charge_cost=None,
     )
@@ -254,11 +268,16 @@ def _make_fleet_results(
     self_kwh: float = 2000.0,
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
+    export_revenue_gbp_per_year: float = 0.0,
 ) -> "FleetResults":  # type: ignore[name-defined]
     from solar_challenge.fleet import FleetResults
 
     homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [_make_sim_results(self_kwh, export_kwh, import_kwh) for _ in range(n_homes)]
+    per_home = [
+        _make_sim_results(self_kwh, export_kwh, import_kwh,
+                          export_revenue_gbp_per_year=export_revenue_gbp_per_year)
+        for _ in range(n_homes)
+    ]
     return FleetResults(
         per_home_results=per_home,
         home_configs=homes,
@@ -485,25 +504,33 @@ class TestSolveCostRecoveryRateClamps:
     """Clamp and feasibility regimes: rate_clamped_zero and infeasible_above_retail."""
 
     def test_over_feasible_binding_rate_clamped_zero(self) -> None:
-        """Over-feasible: surplus(0) > floor → binding='rate_clamped_zero', rate==0, feasible=True."""
+        """Over-feasible: surplus(0) > floor → binding='rate_clamped_zero', rate==0, feasible=True.
+
+        Set-up: zero capex (grant >= capex) + large SEG income (via export_revenue_gbp_per_year)
+        ensures fleet_revenue(r=0) = SEG > fleet_opex + floor×n_homes, so surplus(r=0) > floor
+        without needing any own-use payment.
+        """
         from solar_challenge.finance import solve_cost_recovery_rate
 
         n_homes = 5
+        # fleet_opex = 131 × 5 = 655 GBP/yr; floor×n_homes = 10 × 5 = 50 GBP/yr
+        # Need SEG > 705 GBP/yr → set export_revenue_gbp_per_year=200/home → 1000/fleet >> 705
         scenario = _make_scenario(n_homes=n_homes)
-        # Very low capex + large grant → surplus(0) >> floor
         finance = _make_finance(
             pv_cost_per_kwp_gbp=200.0,
-            grant_gbp=50000.0,
+            grant_gbp=50000.0,   # grants cover all capex → zero financed
             own_use_rate_pence_per_kwh=15.0,
-            retained_cash_floor=10.0,   # easy target: surplus(r=0) > 10 £/home/yr
+            retained_cash_floor=10.0,
             retail_baseline_rate=30.0,
             n_homes=n_homes,
         )
+        # SEG income = 200 GBP/yr per home → 1000 GBP/yr fleet, beats opex+floor=705
         fr = _make_fleet_results(
             n_homes=n_homes,
             self_kwh=2000.0,
             export_kwh=800.0,
             import_kwh=1200.0,
+            export_revenue_gbp_per_year=200.0,
         )
         simulate = lambda fc, s, e: fr  # noqa: E731
 
