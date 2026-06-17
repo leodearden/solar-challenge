@@ -16,13 +16,16 @@ rank                  — pure stable sort over any ConfigResult sequence (5-key
 feasible_split        — partition ConfigResults by binding=='infeasible_above_retail'
 pareto_baseline       — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
 cheapest_feasible     — ConfigPoint with lowest outlay among feasible results, or None
+SensitivityAxis       — one OAT axis: name, swept values, per-value rankings + top configs
+SensitivityPanel      — aggregated OAT output (axes, baseline_top, rank_stability scalar)
+sensitivity_panel     — OAT assumption sensitivity over the W3 cost-recovery rank
 """
 
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Sequence
+from dataclasses import dataclass, fields as dc_fields, replace
+from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import FinanceConfig, ScenarioConfig
@@ -321,7 +324,84 @@ __all__ = [
     "feasible_split",
     "pareto_baseline",
     "cheapest_feasible",
+    "SensitivityAxis",
+    "SensitivityPanel",
+    "sensitivity_panel",
 ]
+
+
+# ---------------------------------------------------------------------------
+# OAT sensitivity dataclasses (W3 task D)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SensitivityAxis:
+    """One one-at-a-time (OAT) sensitivity axis.
+
+    Records the sweep of a single numeric knob over a range of values and
+    the resulting per-value ConfigPoint rankings and cheapest-feasible tops.
+
+    Attributes:
+        name: Knob name (a FinanceConfig field name, or a supported alias
+            such as ``'seg'`` / ``'degradation'``).
+        values: Swept values for this axis (non-empty).
+        rankings: Per-value tuple of feasible ConfigPoints in ascending
+            outlay order (i.e. ``run_sweep(...).results`` mapped to configs).
+            Infeasible configs are absent.  Length == len(values).
+        top_config_per_value: Cheapest-feasible ConfigPoint at each swept
+            value, or ``None`` when every config is infeasible at that value.
+            Length == len(values).
+    """
+
+    name: str
+    values: "tuple[float, ...]"
+    rankings: "tuple[tuple[ConfigPoint, ...], ...]"
+    top_config_per_value: "tuple[Optional[ConfigPoint], ...]"
+
+    def __post_init__(self) -> None:
+        if not self.values:
+            raise ValueError(
+                f"SensitivityAxis '{self.name}': values must not be empty"
+            )
+        if len(self.values) != len(self.rankings):
+            raise ValueError(
+                f"SensitivityAxis '{self.name}': "
+                f"len(values)={len(self.values)} != len(rankings)={len(self.rankings)}"
+            )
+        if len(self.values) != len(self.top_config_per_value):
+            raise ValueError(
+                f"SensitivityAxis '{self.name}': "
+                f"len(values)={len(self.values)} != "
+                f"len(top_config_per_value)={len(self.top_config_per_value)}"
+            )
+
+
+@dataclass(frozen=True)
+class SensitivityPanel:
+    """Aggregated OAT sensitivity output over all axes.
+
+    Attributes:
+        axes: One :class:`SensitivityAxis` per swept knob (non-empty).
+        baseline_top: The cheapest-feasible :class:`ConfigPoint` from the
+            baseline ``run_sweep`` (at the panel's own ``retained_cash_floor_gbp``
+            and the scenarios' original finance/tariff values).
+        rank_stability: Fraction of (axis, value) points for which
+            ``cheapest_feasible == baseline_top``; ``None`` tops count as
+            unstable.  In [0, 1].
+    """
+
+    axes: "tuple[SensitivityAxis, ...]"
+    baseline_top: ConfigPoint
+    rank_stability: float
+
+    def __post_init__(self) -> None:
+        if not self.axes:
+            raise ValueError("SensitivityPanel.axes must not be empty")
+        if not (0.0 <= self.rank_stability <= 1.0):
+            raise ValueError(
+                f"SensitivityPanel.rank_stability must be in [0, 1], "
+                f"got {self.rank_stability}"
+            )
 
 
 def cheapest_feasible(
