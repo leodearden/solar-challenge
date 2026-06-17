@@ -11,7 +11,7 @@ from typing import Optional
 
 import pytest
 
-from solar_challenge.optimize import feasible_split, pareto_baseline, rank
+from solar_challenge.optimize import cheapest_feasible, feasible_split, pareto_baseline, rank
 
 
 # ---------------------------------------------------------------------------
@@ -363,3 +363,70 @@ class TestParetoBaseline:
         result_map = {r.config: r for r in records}
         front_outlays = [result_map[cp].baseline_outlay_gbp for cp in front]
         assert front_outlays == sorted(front_outlays)
+
+
+# ---------------------------------------------------------------------------
+# TestCheapestFeasible — lowest-outlay feasible config, or None
+# ---------------------------------------------------------------------------
+
+
+class TestCheapestFeasible:
+    """cheapest_feasible() returns ConfigPoint of lowest-outlay feasible result."""
+
+    def test_returns_lowest_outlay_feasible_config(self) -> None:
+        """Returns the ConfigPoint of the feasible record with lowest outlay."""
+        cheap = _make_config_result(
+            pv_kwp=4.0, representative_outlay_gbp=300.0, binding="floor", feasible=True
+        )
+        pricey = _make_config_result(
+            pv_kwp=5.0, representative_outlay_gbp=500.0, binding="floor", feasible=True
+        )
+        result = cheapest_feasible([pricey, cheap])
+        assert result == cheap.config
+
+    def test_returns_none_for_all_infeasible(self) -> None:
+        """Returns None when all records have binding='infeasible_above_retail'."""
+        infeas = _make_config_result(
+            binding="infeasible_above_retail", feasible=False, representative_outlay_gbp=200.0
+        )
+        assert cheapest_feasible([infeas]) is None
+
+    def test_returns_none_for_empty_input(self) -> None:
+        """Returns None for an empty input sequence."""
+        assert cheapest_feasible([]) is None
+
+    def test_cheaper_infeasible_is_ignored(self) -> None:
+        """An infeasible record with a lower outlay does not win over a feasible record."""
+        cheaper_infeasible = _make_config_result(
+            pv_kwp=4.0,
+            representative_outlay_gbp=100.0,
+            binding="infeasible_above_retail",
+            feasible=False,
+        )
+        more_expensive_feasible = _make_config_result(
+            pv_kwp=5.0,
+            representative_outlay_gbp=300.0,
+            binding="floor",
+            feasible=True,
+        )
+        result = cheapest_feasible([cheaper_infeasible, more_expensive_feasible])
+        assert result == more_expensive_feasible.config
+
+    def test_tiebreak_consistent_with_rank(self) -> None:
+        """When two cheapest feasible share outlay, the higher-surplus one wins."""
+        high_surplus = _make_config_result(
+            pv_kwp=4.0,
+            representative_outlay_gbp=400.0,
+            surplus_at_solved_gbp=200.0,
+            binding="floor",
+            feasible=True,
+        )
+        low_surplus = _make_config_result(
+            pv_kwp=5.0,
+            representative_outlay_gbp=400.0,
+            surplus_at_solved_gbp=50.0,
+            binding="floor",
+            feasible=True,
+        )
+        result = cheapest_feasible([low_surplus, high_surplus])
+        assert result == high_surplus.config
