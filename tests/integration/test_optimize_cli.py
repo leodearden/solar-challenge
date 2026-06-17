@@ -832,3 +832,103 @@ class TestGenerateConfigRankingReportSensitivity:
         assert "—" in report, (
             f"'—' for None tops in sensitivity section not found:\n{report}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §F — RED tests for CLI registration + help (step-7)
+# ---------------------------------------------------------------------------
+
+
+class TestOptimizeCLIHelp:
+    """RED: `optimize configs --help` exits 0 and lists required flags."""
+
+    def test_optimize_help_shows_configs_command(self) -> None:
+        """`optimize --help` must list the 'configs' subcommand."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["optimize", "--help"])
+        assert result.exit_code == 0, (
+            f"Expected exit 0 for 'optimize --help':\n{result.output}"
+        )
+        assert "configs" in result.output.lower(), (
+            f"Expected 'configs' subcommand in 'optimize --help':\n{result.output}"
+        )
+
+    def test_optimize_configs_help_exits_zero(self) -> None:
+        """`optimize configs --help` must exit 0."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["optimize", "configs", "--help"])
+        assert result.exit_code == 0, (
+            f"Expected exit 0 for 'optimize configs --help':\n{result.output}"
+        )
+
+    def test_pv_flag_in_help(self) -> None:
+        """`optimize configs --help` must show --pv flag."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["optimize", "configs", "--help"])
+        assert "--pv" in result.output, (
+            f"Expected '--pv' flag in help:\n{result.output}"
+        )
+
+    def test_battery_flag_in_help(self) -> None:
+        """`optimize configs --help` must show --battery flag."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["optimize", "configs", "--help"])
+        assert "--battery" in result.output, (
+            f"Expected '--battery' flag in help:\n{result.output}"
+        )
+
+    def test_inverter_flag_in_help(self) -> None:
+        """`optimize configs --help` must show --inverter flag."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["optimize", "configs", "--help"])
+        assert "--inverter" in result.output, (
+            f"Expected '--inverter' flag in help:\n{result.output}"
+        )
+
+    def test_retained_floor_flag_in_help(self) -> None:
+        """`optimize configs --help` must show --retained-floor flag."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["optimize", "configs", "--help"])
+        assert "--retained-floor" in result.output, (
+            f"Expected '--retained-floor' flag in help:\n{result.output}"
+        )
+
+    def test_grid_services_kw_flag_in_help(self) -> None:
+        """`optimize configs --help` must show --grid-services-kw flag."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["optimize", "configs", "--help"])
+        assert "--grid-services-kw" in result.output, (
+            f"Expected '--grid-services-kw' flag in help:\n{result.output}"
+        )
+
+    def test_sensitivity_flag_in_help(self) -> None:
+        """`optimize configs --help` must show --sensitivity flag."""
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["optimize", "configs", "--help"])
+        assert "--sensitivity" in result.output, (
+            f"Expected '--sensitivity' flag in help:\n{result.output}"
+        )
