@@ -489,3 +489,111 @@ class TestStructuralInvariants:
             f"low=£{sol_low.representative_outlay_gbp:.2f}, "
             f"high=£{sol_high.representative_outlay_gbp:.2f}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Step-7 RED / step-8 GREEN: TestFlexLowersSolvedRate
+# ---------------------------------------------------------------------------
+
+
+class TestFlexLowersSolvedRate:
+    """Directional asserts: flex revenue ⟹ strictly lower solved own-use rate.
+
+    Two independent flex channels:
+    (a) grid-services income (exogenous £/kW/yr): adding grid_services lowers r*.
+    (b) arbitrage/time-shift (endogenous physics): elevated sc minus CBS grid-charge
+        cost lowers r* relative to flat-rate fleet.
+
+    Both are demonstrated on the SAME interior fleet.
+    RED until both channels are tuned in step-8.
+    """
+
+    def _build_base_interior(self) -> tuple:
+        """Base interior fleet (no flex, same fleet used for both directional tests)."""
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+
+        n_homes = 5
+        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+        scenario = ScenarioConfig(name="CR6-Flex-Base", period=period, homes=homes)
+        return scenario, n_homes
+
+    def test_grid_services_lowers_solved_rate(self) -> None:
+        """(a) Grid-services: r0 (no services) > r1 (Central services > 0).
+
+        More exogenous revenue ⟹ lower required own-use rate (affine monotone).
+        Both solve at grid_services=0 and grid_services=Central use SAME energy mix.
+        RED until magnitudes tuned in step-8.
+        """
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        scenario, n_homes = self._build_base_interior()
+        fr = _make_interior_fleet_cr6(n_homes=n_homes)
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        # No grid-services (baseline)
+        finance_no_gs = _make_finance_interior_cr6(
+            retained_cash_floor=50.0,
+            pv_cost_per_kwp=2000.0,
+            grant_gbp=0.0,
+            retail_rate=30.0,
+        )
+        # Central grid-services value (non-zero, > 0 → lowers r*)
+        # grid_services_income is computed as: income × Σ battery.max_discharge_kw
+        # Each 5kWh BatteryConfig has max_discharge_kw = 2.5 (default)
+        # → total = 5 × 2.5 = 12.5 kW; with income=100 → £1250/yr
+        finance_with_gs = _make_finance_flex_cr6(
+            grid_services=100.0,
+            retained_cash_floor=50.0,
+            pv_cost_per_kwp=2000.0,
+            grant_gbp=0.0,
+            retail_rate=30.0,
+        )
+
+        sol0 = solve_cost_recovery_rate(scenario, finance_no_gs, simulate=simulate)
+        sol1 = solve_cost_recovery_rate(scenario, finance_with_gs, simulate=simulate)
+
+        assert sol1.own_use_rate_pence_per_kwh < sol0.own_use_rate_pence_per_kwh, (
+            f"Grid-services must lower solved rate: "
+            f"r0={sol0.own_use_rate_pence_per_kwh:.4f}, r1={sol1.own_use_rate_pence_per_kwh:.4f}"
+        )
+
+    def test_arbitrage_lowers_solved_rate(self) -> None:
+        """(b) Arbitrage/time-shift: arbitrage-on fleet gives lower r* than flat-rate fleet.
+
+        'Arbitrage-on' is modelled by an elevated self_kwh and a non-zero
+        CBS grid-charge cost (cbs_grid_charge_cost > 0 → from a non-None grid_charge_cost
+        series in SimulationResults). The net uplift (extra_sc × own_use − grid_charge)
+        exceeds zero so the CBS earns more net revenue, requiring a lower solved r*.
+
+        RED until the arbitrage-on synthetic aggregates are tuned in step-8.
+        """
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        scenario, n_homes = self._build_base_interior()
+
+        # Flat-rate fleet (baseline): grid_charge_cost=None → cbs_grid_charge=0
+        fr_flat = _make_interior_fleet_cr6(n_homes=n_homes, self_kwh=2000.0)
+        simulate_flat = lambda fc, s, e: fr_flat  # noqa: E731
+
+        # Arbitrage-on fleet: elevated sc + CBS grid-charge cost (time-shift economics)
+        # Net benefit = (uplift_sc × r) / 100 − grid_charge_cost
+        # We need net_benefit > 0 at r=retail → uplift_sc × retail/100 > grid_charge/home
+        fr_arb = _make_arbitrage_fleet_cr6(n_homes=n_homes)
+        simulate_arb = lambda fc, s, e: fr_arb  # noqa: E731
+
+        finance = _make_finance_interior_cr6(
+            retained_cash_floor=50.0,
+            pv_cost_per_kwp=2000.0,
+            grant_gbp=0.0,
+            retail_rate=30.0,
+        )
+
+        sol_flat = solve_cost_recovery_rate(scenario, finance, simulate=simulate_flat)
+        sol_arb = solve_cost_recovery_rate(scenario, finance, simulate=simulate_arb)
+
+        assert sol_arb.own_use_rate_pence_per_kwh < sol_flat.own_use_rate_pence_per_kwh, (
+            f"Arbitrage/time-shift must lower solved rate: "
+            f"flat={sol_flat.own_use_rate_pence_per_kwh:.4f}, "
+            f"arb={sol_arb.own_use_rate_pence_per_kwh:.4f}"
+        )
