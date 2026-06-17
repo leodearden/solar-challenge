@@ -545,3 +545,246 @@ class TestSensitivityPanelStructure:
             simulate=simulate,
         )
         assert 0.0 <= panel.rank_stability <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# step-7: TestWH4Coupling — W-H4 user-observable rank-flip signal
+# ---------------------------------------------------------------------------
+
+
+class TestWH4Coupling:
+    """W-H4: capex/grid-services knobs move the rank under a constant simulate.
+
+    Setup: 2-config grid (no-battery A vs with-battery B).  Base finance has
+    grid_services_income=100 GBP/kW/yr, which makes B the cheaper config at
+    baseline (income > extra capex).  Then:
+      - battery_cost axis [250→10000]: B's extra capex explodes → B becomes
+        infeasible → top flips from B to A.
+      - grid_services axis [0→200]: B's income collapses at 0 (A on top) or
+        surges at 200 (B clearly on top), demonstrating the knob matters.
+    """
+
+    _BATT_COST_LOW = 250.0    # baseline: B feasible and cheap
+    _BATT_COST_HIGH = 10000.0  # B capex ≈ 300 k£ → infeasible
+    _GS_ZERO = 0.0            # no income → A on top
+    _GS_HIGH = 200.0          # huge income → B clearly on top
+
+    def _setup(self):  # type: ignore[no-untyped-def]
+        """Return (base_configs, pt_A, pt_B) for the W-H4 coupling test."""
+        from solar_challenge.optimize import ConfigPoint, enumerate_configs
+
+        # Finance with grid_services=100 makes B cheaper at baseline
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1200.0,
+            grant_gbp=5000.0,
+            retained_cash_floor=50.0,
+            retail_baseline_rate=30.0,
+            battery_cost_per_kwh_gbp=self._BATT_COST_LOW,
+            grid_services_income=100.0,
+        )
+        scenario = _make_scenario(n_homes=_N_HOMES, finance=finance)
+        base_configs = enumerate_configs(
+            scenario,
+            pv_kwp=[4.0],
+            battery_kwh=[0.0, 6.0],
+            inverter_kw=[3.6],
+        )
+        pt_a = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        pt_b = ConfigPoint(pv_kwp=4.0, battery_kwh=6.0, inverter_kw=3.6)
+        return base_configs, pt_a, pt_b
+
+    def test_baseline_top_is_battery_config(self) -> None:
+        """With grid_services=100, Config B (battery) is cheaper → baseline_top==B."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs, pt_a, pt_b = self._setup()
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"battery_cost_per_kwh_gbp": [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
+            simulate=_const_simulate,
+        )
+        assert panel.baseline_top == pt_b, (
+            f"Expected battery config B as baseline_top, got {panel.baseline_top}"
+        )
+
+    def test_battery_cost_high_makes_battery_infeasible(self) -> None:
+        """At high battery_cost, B is infeasible: absent from rankings and top flips to A."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs, pt_a, pt_b = self._setup()
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"battery_cost_per_kwh_gbp": [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
+            simulate=_const_simulate,
+        )
+        batt_axis = panel.axes[0]
+        assert batt_axis.name == "battery_cost_per_kwh_gbp"
+
+        # At low cost (idx 0): B is on top (same as baseline)
+        assert batt_axis.top_config_per_value[0] == pt_b
+
+        # At high cost (idx 1): B is infeasible → absent from feasible rankings
+        assert pt_b not in batt_axis.rankings[1], (
+            "Battery config B should be absent from feasible rankings at high battery_cost"
+        )
+        # Top flips to A (or is None if both somehow infeasible, but A must be feasible)
+        assert batt_axis.top_config_per_value[1] == pt_a, (
+            f"Expected Config A as top at high battery_cost, got {batt_axis.top_config_per_value[1]}"
+        )
+
+    def test_grid_services_flip(self) -> None:
+        """At grid_services=0 A is on top; at grid_services=200 B is on top."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs, pt_a, pt_b = self._setup()
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"grid_services_income_per_kw_per_year_gbp": [self._GS_ZERO, self._GS_HIGH]},
+            simulate=_const_simulate,
+        )
+        gs_axis = panel.axes[0]
+        assert gs_axis.name == "grid_services_income_per_kw_per_year_gbp"
+
+        # At 0 grid_services: no income for B → A is cheaper (lower capex)
+        assert gs_axis.top_config_per_value[0] == pt_a, (
+            f"Expected A on top at gs=0, got {gs_axis.top_config_per_value[0]}"
+        )
+
+        # At high grid_services: B gets large income → B is cheaper
+        assert gs_axis.top_config_per_value[1] == pt_b, (
+            f"Expected B on top at gs={self._GS_HIGH}, got {gs_axis.top_config_per_value[1]}"
+        )
+
+    def test_rank_stability_less_than_one_with_flips(self) -> None:
+        """Both axes together produce rank_stability < 1 due to flips."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs, pt_a, pt_b = self._setup()
+        panel = sensitivity_panel(
+            base_configs,
+            axes={
+                "battery_cost_per_kwh_gbp": [self._BATT_COST_LOW, self._BATT_COST_HIGH],
+                "grid_services_income_per_kw_per_year_gbp": [self._GS_ZERO, self._GS_HIGH],
+            },
+            simulate=_const_simulate,
+        )
+        # battery_cost: [stable(B=B), unstable(A≠B)] + grid_services: [unstable(A≠B), stable(B=B)]
+        # = 2 stable / 4 total = 0.5
+        assert panel.rank_stability < 1.0, (
+            f"rank_stability should be < 1.0 due to flips, got {panel.rank_stability}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# step-9: TestRetainedFloorAxis — floor axis uses run_sweep's first-class override
+# ---------------------------------------------------------------------------
+
+
+class TestRetainedFloorAxis:
+    """The retained_cash_floor axis is routed through run_sweep's retained_cash_floor_gbp
+    parameter (not via finance replace), and None tops at a high floor don't crash.
+    """
+
+    def _setup(self):  # type: ignore[no-untyped-def]
+        """Return base_configs for a 2-config no-battery / with-battery grid."""
+        from solar_challenge.optimize import enumerate_configs
+
+        finance = _make_finance(
+            retained_cash_floor=50.0,
+            grid_services_income=0.0,
+        )
+        scenario = _make_scenario(n_homes=_N_HOMES, finance=finance)
+        base_configs = enumerate_configs(
+            scenario,
+            pv_kwp=[4.0],
+            battery_kwh=[0.0],
+            inverter_kw=[3.6],
+        )
+        return base_configs
+
+    def test_floor_axis_per_value_matches_run_sweep(self) -> None:
+        """Per-value rankings/tops match run_sweep called with the same floor override."""
+        from solar_challenge.optimize import run_sweep, sensitivity_panel
+
+        base_configs = self._setup()
+        floor_low = 50.0
+        floor_high = 500.0  # feasible at this level but different from baseline
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"retained_cash_floor_per_home_per_year_gbp": [floor_low, floor_high]},
+            simulate=_const_simulate,
+        )
+
+        axis = panel.axes[0]
+        assert axis.name == "retained_cash_floor_per_home_per_year_gbp"
+        assert axis.values == (floor_low, floor_high)
+
+        # Verify per-value results match direct run_sweep calls
+        for i, v in enumerate([floor_low, floor_high]):
+            expected = run_sweep(base_configs, retained_cash_floor_gbp=v, simulate=_const_simulate)
+            expected_ranking = tuple(r.config for r in expected.results)
+            assert axis.rankings[i] == expected_ranking, (
+                f"rankings[{i}] mismatch at floor={v}: "
+                f"got {axis.rankings[i]}, expected {expected_ranking}"
+            )
+            assert axis.top_config_per_value[i] == expected.cheapest_feasible, (
+                f"top_config_per_value[{i}] mismatch at floor={v}"
+            )
+
+    def test_floor_axis_very_high_yields_none_top(self) -> None:
+        """A sufficiently high floor makes all configs infeasible → None top, no crash."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs = self._setup()
+        # 9,999,999 GBP floor is far above any solved rate — all infeasible
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"retained_cash_floor_per_home_per_year_gbp": [50.0, 9_999_999.0]},
+            simulate=_const_simulate,
+        )
+
+        axis = panel.axes[0]
+        # At floor=50 the config is feasible → non-None top
+        assert axis.top_config_per_value[0] is not None
+        # At very high floor: all infeasible → None top
+        assert axis.top_config_per_value[1] is None
+
+    def test_none_top_counts_as_unstable(self) -> None:
+        """A None top at a swept value counts as unstable in rank_stability."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs = self._setup()
+        panel = sensitivity_panel(
+            base_configs,
+            axes={"retained_cash_floor_per_home_per_year_gbp": [50.0, 9_999_999.0]},
+            simulate=_const_simulate,
+        )
+        # baseline_top is the config at panel_floor (None here) — run_sweep at baseline floor
+        # The low-floor value should match baseline_top if they share the floor.
+        # The high-floor value is None → unstable.
+        # At minimum rank_stability < 1.0 because of the None top
+        assert panel.rank_stability < 1.0, (
+            f"Expected rank_stability < 1.0 with a None top, got {panel.rank_stability}"
+        )
+
+    def test_floor_axis_does_not_mutate_finance_in_base_configs(self) -> None:
+        """After sensitivity_panel, base_configs scenarios still have original finance."""
+        from solar_challenge.optimize import sensitivity_panel
+
+        base_configs = self._setup()
+        original_floors = [
+            sc.finance.retained_cash_floor_per_home_per_year_gbp  # type: ignore[union-attr]
+            for _, sc in base_configs
+        ]
+        sensitivity_panel(
+            base_configs,
+            axes={"retained_cash_floor_per_home_per_year_gbp": [50.0, 500.0]},
+            simulate=_const_simulate,
+        )
+        after_floors = [
+            sc.finance.retained_cash_floor_per_home_per_year_gbp  # type: ignore[union-attr]
+            for _, sc in base_configs
+        ]
+        assert original_floors == after_floors, (
+            "base_configs finance.retained_cash_floor was mutated (should be immutable)"
+        )
