@@ -127,19 +127,25 @@ def configs(
         ),
     ] = "retained_floor,grid_services",
     start: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--start",
-            help="Simulation start date (YYYY-MM-DD)",
+            help=(
+                "Simulation start date (YYYY-MM-DD).  Overrides the scenario 'period' "
+                "block if present; defaults to the scenario period start or 2024-01-01."
+            ),
         ),
-    ] = "2024-01-01",
+    ] = None,
     end: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--end",
-            help="Simulation end date (YYYY-MM-DD)",
+            help=(
+                "Simulation end date (YYYY-MM-DD).  Overrides the scenario 'period' "
+                "block if present; defaults to the scenario period end or 2024-12-31."
+            ),
         ),
-    ] = "2024-12-31",
+    ] = None,
 ) -> None:
     """Run a W3 discrete install-config sweep and produce a board-readable ranking report.
 
@@ -150,6 +156,8 @@ def configs(
 
     When --sensitivity is non-empty, a one-at-a-time (OAT) sensitivity panel
     is appended showing which cost assumptions most affect the top-ranked config.
+    The panel is skipped gracefully when the baseline sweep yields no feasible
+    config (sensitivity_panel raises ValueError for an empty feasible baseline).
 
     Example::
 
@@ -224,10 +232,14 @@ def configs(
         ]
         fleet_config = dataclasses.replace(fleet_config, homes=homes_with_seg)
 
-    # ---- Parse dates --------------------------------------------------------
+    # ---- Resolve start/end: CLI args override scenario period; fall back to
+    #      2024-01-01 / 2024-12-31 when neither is present. ---------------
     loc = fleet_config.homes[0].location
-    start_date = pd.Timestamp(start, tz=loc.timezone)
-    end_date = pd.Timestamp(end, tz=loc.timezone)
+    _scenario_period: dict[str, str] = raw.get("period", {}) or {}
+    _start_str = start or _scenario_period.get("start_date", "2024-01-01")
+    _end_str = end or _scenario_period.get("end_date", "2024-12-31")
+    start_date = pd.Timestamp(_start_str, tz=loc.timezone)
+    end_date = pd.Timestamp(_end_str, tz=loc.timezone)
     days = (end_date - start_date).days + 1
     n_homes = len(fleet_config.homes)
 
@@ -241,8 +253,8 @@ def configs(
     base = ScenarioConfig(
         name=raw.get("name", str(scenario)),
         period=SimulationPeriod(
-            start_date=start,
-            end_date=end,
+            start_date=_start_str,
+            end_date=_end_str,
         ),
         homes=list(fleet_config.homes),
         location=loc,
