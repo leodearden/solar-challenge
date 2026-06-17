@@ -1,0 +1,86 @@
+# Bristol Phase 1 Flex — Board Fleet Scenario (W1 γ)
+#
+# Board-presentation fleet with Economy-7 grid-charging arbitrage.
+# Every battery home pre-charges overnight at the off-peak rate (0.09 £/kWh,
+# 00:30–07:30) and discharges into the evening peak (0.25 £/kWh), producing a
+# well-defined per-battery-home time-shift saving.
+#
+# Economy-7 spread: 0.25 − 0.09 = 0.16 £/kWh
+# Usable capacity:  ~4 kWh (5 kWh nameplate × ~80% usable fraction)
+# Annual time-shift saving (net): ~£226/home/yr (sensitivity ~£164–285)
+#   → well inside the [£100, £330] PRD §11 PASS band
+#
+# Battery is FIXED at 5 kWh / 2.5 kW for every home (not a pool), so the
+# per-battery-home time-shift is well-defined.  W3 sweeps battery size
+# separately.  use_stochastic:false + seed:42 give a deterministic fleet.
+
+name: Bristol Phase 1 Flex
+
+location:
+  latitude: 51.45
+  longitude: -2.58
+  timezone: Europe/London
+  altitude: 11.0
+  name: Bristol, UK
+
+# Full calendar year — board artifact showing the annual time-shift value.
+# Integration tests use a single injected winter day and annualise × 365.
+period:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+
+# Smart Export Guarantee: match bristol-phase1.yaml Octopus rate
+seg:
+  rate_pence_per_kwh: 4.1
+
+# Economy-7 tariff (matching bristol-arbitrage.yaml)
+# Off-peak 00:30–07:30 at 0.09 £/kWh; peak 0.25 £/kWh all other hours
+tariff:
+  type: economy_7
+  off_peak_rate: 0.09
+  peak_rate: 0.25
+  off_peak_start: "00:30"
+  off_peak_end: "07:30"
+
+fleet_distribution:
+  n_homes: 100
+  seed: 42
+
+  pv:
+    capacity_kw:
+      type: shuffled_pool
+      values: [3.0, 4.0, 5.0, 6.0]
+      counts: [20, 40, 30, 10]
+    azimuth: 180
+    tilt: 35
+
+  # Fixed 5 kWh / 2.5 kW battery for every home.
+  # Grid charging target SOC 90% — fills the battery overnight at off-peak rate.
+  battery:
+    capacity_kwh: 5.0
+    max_charge_kw: 2.5
+    max_discharge_kw: 2.5
+    grid_charging:
+      target_soc_fraction: 0.9
+
+  load:
+    annual_consumption_kwh:
+      type: normal
+      mean: 3400
+      std: 800
+      min: 2000
+      max: 6000
+    use_stochastic: false
+
+  # TOU-optimised dispatch: routes through the grid-charging controller
+  # (simulate_timestep_tou + compute_grid_charge_power_kw in flow.py).
+  dispatch_strategy: tou_optimized
+
+# Financial parameters matching bristol-phase1.yaml baseline.
+# grid_services_income_per_kw_per_year_gbp is 0.0 by default here;
+# the W1 δ task (task 55) adds the grid-services value on top.
+finance:
+  standing_charge_pence_per_day: 60.0
+  own_use_rate_pence_per_kwh: 15.0
+  retained_cash_floor_per_home_per_year_gbp: 27.0
+  grid_services_income_per_kw_per_year_gbp: 0.0
