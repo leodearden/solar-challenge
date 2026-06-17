@@ -3400,3 +3400,52 @@ tariff:
                 assert home.battery_config.grid_charging.target_soc_fraction == 0.9
         finally:
             path.unlink()
+
+    def test_theta_calibration_regression_no_tariff_no_grid_charging(self) -> None:
+        """θ regression pin: fleet YAML without tariff: or grid_charging is bit-identical (both None).
+
+        Mirrors the shape of scenarios/bristol-fin-calibration.yaml (fleet_distribution +
+        battery + seg + finance, no top-level tariff:, no battery.grid_charging).  Asserts
+        that load_fleet_config produces tariff_config=None and battery.grid_charging=None on
+        every home — i.e. the β threading is disjoint from _parse_finance_config.
+        """
+        yaml_content = """
+name: Theta Calibration Guard
+fleet_distribution:
+  n_homes: 4
+  seed: 99
+  pv:
+    capacity_kw: 4.0
+  battery:
+    capacity_kwh: 5.0
+  load:
+    annual_consumption_kwh: 3400
+seg:
+  rate_pence_per_kwh: 15.0
+finance:
+  loan_term_years: 15
+  loan_rate: 0.05
+  equity_share: 0.20
+  capex_per_home_gbp: 3000
+  standing_charge_pence_per_day: 60.0
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            fleet = load_fleet_config(path)
+            assert len(fleet.homes) == 4
+            for home in fleet.homes:
+                assert home.tariff_config is None, (
+                    "tariff_config must be None when no top-level tariff: key is present"
+                )
+                assert home.battery_config is not None
+                assert home.battery_config.grid_charging is None, (
+                    "grid_charging must be None when no battery.grid_charging key is present"
+                )
+        finally:
+            path.unlink()
