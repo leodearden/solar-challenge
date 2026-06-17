@@ -7,6 +7,7 @@ scenario definitions, and parameter sweep functionality.
 
 import json
 import random
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Literal, Optional, Union, cast
@@ -38,6 +39,11 @@ class ConfigurationError(Exception):
     """Raised when configuration file is invalid."""
 
     pass
+
+
+#: Dispatch strategy names recognised by the simulation engine.
+#: Used to validate fleet_distribution.dispatch_strategy in YAML configs.
+_VALID_DISPATCH_STRATEGIES: frozenset[str] = frozenset({"greedy", "tou_optimized"})
 
 
 # --- Distribution Types for Fleet Generation ---
@@ -1427,6 +1433,7 @@ def generate_homes_from_distribution(
     *,
     fleet_tariff: Optional[TariffConfig] = None,
     fleet_grid_charging: Optional[GridChargeConfig] = None,
+    fleet_dispatch_strategy: Optional[str] = None,
 ) -> list[HomeConfig]:
     """Generate a list of homes by sampling from distributions.
 
@@ -1443,6 +1450,9 @@ def generate_homes_from_distribution(
             BatteryConfig is created and fleet_grid_charging is silently dropped
             for that home — this is expected behaviour (no battery → no grid
             charging), not an error.
+        fleet_dispatch_strategy: Optional dispatch strategy string to apply to
+            every home. When None (default) or empty, homes use "greedy",
+            preserving bit-identical behaviour for existing callers.
 
     Returns:
         List of HomeConfig objects
@@ -1628,7 +1638,7 @@ def generate_homes_from_distribution(
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=fleet_tariff,
-                dispatch_strategy="greedy",
+                dispatch_strategy=fleet_dispatch_strategy or "greedy",
             )
         )
 
@@ -2048,11 +2058,30 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
             if isinstance(battery_data, dict)
             else None
         )
+        # dispatch_strategy lives directly under fleet_distribution (raw-dict read,
+        # mirroring the fleet_grid_charging seam above — not added to FleetDistributionConfig).
+        fleet_dispatch_strategy = config["fleet_distribution"].get("dispatch_strategy")
+        if fleet_dispatch_strategy and fleet_dispatch_strategy not in _VALID_DISPATCH_STRATEGIES:
+            raise ConfigurationError(
+                f"Invalid fleet_distribution.dispatch_strategy "
+                f"{fleet_dispatch_strategy!r}; valid values: "
+                f"{sorted(_VALID_DISPATCH_STRATEGIES)}"
+            )
+        if fleet_dispatch_strategy == "tou_optimized" and fleet_tariff is None:
+            warnings.warn(
+                "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff "
+                "is configured; homes will fall back to self-consumption dispatch at "
+                "simulation time. Add a top-level 'tariff:' key to the fleet YAML to "
+                "enable Economy-7 grid-charging.",
+                UserWarning,
+                stacklevel=2,
+            )
         homes = generate_homes_from_distribution(
             dist_config,
             location,
             fleet_tariff=fleet_tariff,
             fleet_grid_charging=fleet_grid_charging,
+            fleet_dispatch_strategy=fleet_dispatch_strategy,
         )
     elif "homes" in config:
         # Explicit homes list (original format)
