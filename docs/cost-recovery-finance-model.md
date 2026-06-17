@@ -102,7 +102,7 @@ standing_charge_gbp = 60 × 365 / 100    = £219.00/yr
 own_use_payment_gbp = 12.22 × 2,000 / 100 = £244.40/yr  (at solved rate)
 vat_gbp             = 0.05 × (322 + 219 + 244.40) = £39.27/yr
 total_outlay_gbp    = (322 + 219 + 244.40) × 1.05 ≈ £824.67/yr
-baseline_bill_gbp   = ((2000+1400) × 23/100 + 219) × 1.05 ≈ £1,051.50/yr
+baseline_bill_gbp   = ((2000+1400) × 23/100 + 219) × 1.05 ≈ £1,051.05/yr
 saving_vs_baseline  ≈ £226/yr             (REPORTED; not pinned — see §7)
 ```
 
