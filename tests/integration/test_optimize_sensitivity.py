@@ -184,15 +184,27 @@ def _interior_finance() -> "FinanceConfig":  # type: ignore[name-defined]
     )
 
 
+# Build the constant FleetResults ONCE at module scope so that _const_simulate
+# returns the same object on every call.  This eliminates repeated allocation
+# of ~5×525,600-row pandas Series across ~150 config evaluations in the suite,
+# driving the full file runtime from ~386s to well under 30s.
+# NOTE: keep the 365-day 1-minute index (525,600 rows) — calculate_summary
+# hardcodes minutes_to_hours=1/60 and derives sim_days from the index span,
+# so coarsening resolution would silently scale every kWh total by 60× and
+# break the tuned W-H4 coupling constants.
+_CONST_FLEET_RESULTS: "FleetResults" = _make_fleet_results(n_homes=_N_HOMES)  # type: ignore[name-defined]
+
+
 def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
-    """Constant simulate: same FleetResults regardless of config.
+    """Constant simulate: same FleetResults singleton regardless of config.
 
     Isolates capex/grid-services coupling from simulation outputs — the finance
     model computes battery-capex and grid-services income from the SCENARIO's
     homes (not from the FleetResults), so sweeping those knobs has full effect
-    even under a constant simulate.
+    even under a constant simulate.  The singleton is built once at module
+    import time; args are intentionally ignored.
     """
-    return _make_fleet_results(n_homes=_N_HOMES)
+    return _CONST_FLEET_RESULTS
 
 
 # ---------------------------------------------------------------------------
