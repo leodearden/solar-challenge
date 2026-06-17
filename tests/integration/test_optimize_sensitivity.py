@@ -23,21 +23,6 @@ import pytest
 _N_HOMES = 5  # default fleet size for all sensitivity tests
 
 
-def _make_pv_config(
-    capacity_kw: float = 4.0,
-    system_age_years: float = 0.0,
-) -> "PVConfig":  # type: ignore[name-defined]
-    from solar_challenge.pv import PVConfig
-
-    return PVConfig(
-        capacity_kw=capacity_kw,
-        azimuth=180.0,
-        tilt=35.0,
-        system_age_years=system_age_years,
-        degradation_rate_per_year=0.005,
-    )
-
-
 def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
     from solar_challenge.load import LoadConfig
 
@@ -682,8 +667,8 @@ class TestWH4Coupling:
         )
         # battery_cost: [stable(B=B), unstable(A≠B)] + grid_services: [unstable(A≠B), stable(B=B)]
         # = 2 stable / 4 total = 0.5
-        assert panel.rank_stability < 1.0, (
-            f"rank_stability should be < 1.0 due to flips, got {panel.rank_stability}"
+        assert panel.rank_stability == pytest.approx(0.5), (
+            f"Expected rank_stability == 0.5 (2 stable / 4 total), got {panel.rank_stability}"
         )
 
 
@@ -772,11 +757,11 @@ class TestRetainedFloorAxis:
             simulate=_const_simulate,
         )
         # baseline_top is the config at panel_floor (None here) — run_sweep at baseline floor
-        # The low-floor value should match baseline_top if they share the floor.
+        # The low-floor value (50.0) matches baseline_top (same floor) → 1 stable.
         # The high-floor value is None → unstable.
-        # At minimum rank_stability < 1.0 because of the None top
-        assert panel.rank_stability < 1.0, (
-            f"Expected rank_stability < 1.0 with a None top, got {panel.rank_stability}"
+        # Exactly 1 stable / 2 total = 0.5
+        assert panel.rank_stability == pytest.approx(0.5), (
+            f"Expected rank_stability == 0.5 (1 stable / 2 total), got {panel.rank_stability}"
         )
 
     def test_floor_axis_does_not_mutate_finance_in_base_configs(self) -> None:

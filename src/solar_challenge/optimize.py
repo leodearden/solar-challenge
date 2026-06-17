@@ -440,8 +440,6 @@ def _build_axis_configs(
         ValueError: If *name* is unknown, or if a FinanceConfig knob is
             requested but ``scenario.finance is None``.
     """
-    from solar_challenge.pv import PVConfig  # lazy to avoid heavy import at module level
-
     finance_field_names = {f.name for f in dc_fields(FinanceConfig)}
 
     result: "List[tuple[ConfigPoint, ScenarioConfig]]" = []
