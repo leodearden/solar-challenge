@@ -214,7 +214,7 @@ def test_finance_report_renders_flex_value_block() -> None:
     Additive: default None → output bit-identical (no flex block).
     """
     from solar_challenge.config import FinanceConfig
-    from solar_challenge.finance import bill_distribution, householder_bill
+    from solar_challenge.finance import bill_distribution
     from solar_challenge.flex import resolve_flex_band
     from solar_challenge.home import SummaryStatistics
     from solar_challenge.output import generate_finance_report
@@ -265,17 +265,35 @@ def test_finance_report_renders_flex_value_block() -> None:
     assert "Flexibility Value" in report, (
         "With flex_band=central, '## Flexibility Value' block must appear"
     )
-    assert "250" in report, (
-        "Central band time_shift_gbp=250 must appear in the report"
+    # Use exact rendered cell strings to catch value regressions precisely.
+    # time_shift_gbp=250 → "£250" in Time-shift row; "250" alone would match "1250" etc.
+    assert "£250" in report, (
+        "Central band time_shift_gbp=250 must render as '£250' in the report"
     )
-    assert "30" in report, (
-        "Central band grid_services_per_home_gbp=30 must appear in the report"
+    # grid_services_per_home_gbp=30 → table cell "| £30 |"; bare "30" matches "130", "300", etc.
+    assert "| £30 |" in report, (
+        "Central band grid_services_per_home_gbp=30 must render as '| £30 |' table cell"
     )
-    assert "12" in report, (
-        "Central band grid_services_per_kw_gbp=12 must appear in the report"
+    # grid_services_per_kw_gbp=12 → "£12.0/kW"; bare "12" matches "120", "12.5", etc.
+    assert "£12.0/kW" in report, (
+        "Central band grid_services_per_kw_gbp=12 must render as '£12.0/kW' in the report"
     )
     assert "central" in report.lower(), (
         "'central' band name must appear in the report"
+    )
+
+    # ---- Empty flex_band_name must fall back to '—' placeholder --------------
+    report_no_name = generate_finance_report(
+        dist,
+        scenario_name="Flex",
+        flex_band=central,
+        flex_band_name="",
+    )
+    assert "Flexibility Value" in report_no_name, (
+        "flex_band set but flex_band_name='' must still render the Flexibility Value block"
+    )
+    assert "—" in report_no_name, (
+        "Empty flex_band_name must render the '—' fallback placeholder"
     )
 
     # ---- Additive: default still returns baseline exactly --------------------
