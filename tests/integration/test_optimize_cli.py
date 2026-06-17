@@ -1221,3 +1221,61 @@ class TestOptimizeCLIE2EFast:
         ), (
             f"Expected clear error message about unknown alias in output:\n{result.output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §H — @pytest.mark.slow real-PVGIS board signal (step-11)
+# ---------------------------------------------------------------------------
+
+_FLEX_SCENARIO = Path(__file__).parent.parent.parent / "scenarios" / "bristol-phase1-flex.yaml"
+
+
+@pytest.mark.slow
+class TestOptimizeCLISlowE2E:
+    """Slow real-PVGIS end-to-end test (W-H6 board signal).
+
+    Runs `optimize configs scenarios/bristol-phase1-flex.yaml` over a short
+    3-day window with a single config point (4 kWp, 0 kWh, 5 kW) and no
+    sensitivity panel.  Verifies that a board member can read and pick a
+    config from the output.
+
+    Skipped automatically when the scenario file is absent.
+    """
+
+    def test_optimize_bristol_short_window(self) -> None:
+        """`optimize configs bristol-phase1-flex.yaml --start 2024-01-01 --end 2024-01-03` exits 0 with board report."""
+        if not _FLEX_SCENARIO.exists():
+            pytest.skip(f"Scenario file not found: {_FLEX_SCENARIO}")
+
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "optimize", "configs", str(_FLEX_SCENARIO),
+                "--pv", "4",
+                "--battery", "0",
+                "--inverter", "5",
+                "--sensitivity", "",  # empty → skip panel, keep test bounded
+                "--start", "2024-01-01",
+                "--end", "2024-01-03",
+            ],
+        )
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 from real-PVGIS optimize configs; got {result.exit_code}.\n"
+            f"Output:\n{result.output}"
+        )
+        assert "cost-recovery rank" in result.output.lower(), (
+            f"Expected cost-recovery rank heading in real-PVGIS output:\n{result.output}"
+        )
+        assert (
+            "fixed-15p" in result.output.lower()
+            or "trade-off" in result.output.lower()
+            or "trade‑off" in result.output.lower()
+            or "baseline" in result.output.lower()
+        ), (
+            f"Expected fixed-15p trade-off heading in real-PVGIS output:\n{result.output}"
+        )
