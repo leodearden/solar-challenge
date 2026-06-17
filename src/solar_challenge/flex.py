@@ -89,11 +89,49 @@ class FlexibilityValueBand:
 # default (config.py:264).  Used to anchor the per-kW ↔ per-home cross-check in the
 # consulting §1.1 table.  The W2 consuming formula uses each home's ACTUAL
 # max_discharge_kw; 2.5 is the consulting model's representative figure only.
-# Populated in step-4.
 REPRESENTATIVE_DISCHARGE_POWER_KW: float = 2.5  # kW; config.py:264 default
 
-# Canonical band presets keyed "low"/"central"/"high".  Populated in step-4.
-FLEX_VALUE_BANDS: dict[str, FlexibilityValueBand] = {}
+_PROVENANCE = "consulting 2026-06-16-flexibility-value-buildability-model.md §1.1/§1.4 + PRD §6"
+
+# Canonical band presets keyed "low"/"central"/"high".
+# Numbers from consulting §1.1 (time-shift, grid-services per-home, headline total)
+# and PRD §6 (grid-services per-kW rate).
+#
+# NOTE: total_gbp is the DOCUMENTED HEADLINE INCREMENT, NOT the arithmetic sum of
+# time_shift_gbp + grid_services_per_home_gbp.  Consulting §1.1 warns: "Do not
+# simply add the column maxima — arbitrage and self-consumption contend for the
+# same battery capacity."  Example: low band 100+4=104 ≠ 120 (documented total).
+#
+# Per-home ↔ per-kW cross-check (rate × 2.5 ≈ per-home, within ±£1.0):
+#   low:     1.5 × 2.5 = 3.75 ≈ 4  (doc rounds to ~1.5)
+#   central: 12.0 × 2.5 = 30.0 (exact)
+#   high:    48.0 × 2.5 = 120.0 (exact)
+FLEX_VALUE_BANDS: dict[str, FlexibilityValueBand] = {
+    "low": FlexibilityValueBand(
+        name="low",
+        time_shift_gbp=100.0,
+        grid_services_per_home_gbp=4.0,
+        grid_services_per_kw_gbp=1.5,
+        total_gbp=120.0,
+        provenance=_PROVENANCE,
+    ),
+    "central": FlexibilityValueBand(
+        name="central",
+        time_shift_gbp=250.0,
+        grid_services_per_home_gbp=30.0,
+        grid_services_per_kw_gbp=12.0,
+        total_gbp=280.0,
+        provenance=_PROVENANCE,
+    ),
+    "high": FlexibilityValueBand(
+        name="high",
+        time_shift_gbp=330.0,
+        grid_services_per_home_gbp=120.0,
+        grid_services_per_kw_gbp=48.0,
+        total_gbp=450.0,
+        provenance=_PROVENANCE,
+    ),
+}
 
 
 def resolve_flex_band(band: str) -> FlexibilityValueBand:
