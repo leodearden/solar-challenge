@@ -196,7 +196,7 @@ def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
 
 
 # ---------------------------------------------------------------------------
-# step-1: TestSensitivityDataclasses (RED — imports fail until step-2)
+# TestSensitivityDataclasses
 # ---------------------------------------------------------------------------
 
 
@@ -350,7 +350,7 @@ class TestSensitivityDataclasses:
 
 
 # ---------------------------------------------------------------------------
-# step-3: TestBuildAxisConfigs (RED — _build_axis_configs doesn't exist yet)
+# TestBuildAxisConfigs
 # ---------------------------------------------------------------------------
 
 
@@ -461,7 +461,7 @@ class TestBuildAxisConfigs:
 
 
 # ---------------------------------------------------------------------------
-# step-5: TestSensitivityPanelStructure (RED — sensitivity_panel not yet impl)
+# TestSensitivityPanelStructure
 # ---------------------------------------------------------------------------
 
 
@@ -548,7 +548,7 @@ class TestSensitivityPanelStructure:
 
 
 # ---------------------------------------------------------------------------
-# step-7: TestWH4Coupling — W-H4 user-observable rank-flip signal
+# TestWH4Coupling — W-H4 user-observable rank-flip signal
 # ---------------------------------------------------------------------------
 
 
@@ -676,7 +676,7 @@ class TestWH4Coupling:
 
 
 # ---------------------------------------------------------------------------
-# step-9: TestRetainedFloorAxis — floor axis uses run_sweep's first-class override
+# TestRetainedFloorAxis — floor axis uses run_sweep's first-class override
 # ---------------------------------------------------------------------------
 
 
@@ -791,7 +791,7 @@ class TestRetainedFloorAxis:
 
 
 # ---------------------------------------------------------------------------
-# step-11: TestSensitivityPanelGuards — ValueError on bad inputs
+# TestSensitivityPanelGuards — ValueError on bad inputs
 # ---------------------------------------------------------------------------
 
 

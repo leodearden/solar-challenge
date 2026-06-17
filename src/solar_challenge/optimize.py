@@ -516,7 +516,7 @@ def sensitivity_panel(
             unknown knob name is encountered.
     """
     # -----------------------------------------------------------------------
-    # Guards (step-12 completes these; step-6 installs them inline here)
+    # Input guards
     # -----------------------------------------------------------------------
     if not base_configs:
         raise ValueError("base_configs must not be empty")
@@ -542,6 +542,12 @@ def sensitivity_panel(
 
     # -----------------------------------------------------------------------
     # OAT loop
+    # NOTE: each (axis, value) point re-runs the full run_sweep independently.
+    # A future optimisation could short-circuit a value that equals the
+    # baseline knob level by reusing the already-computed `base` sweep, or
+    # memoize run_sweep results keyed by (name, value).  This is acceptable
+    # overhead in the current offline-simulate use case; revisit if
+    # sensitivity_panel is called under a real ProcessPoolExecutor simulator.
     # -----------------------------------------------------------------------
     axis_list: List[SensitivityAxis] = []
     total = 0
