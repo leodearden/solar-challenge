@@ -313,8 +313,11 @@ class YearPoint:
     should ensure the scenario period covers approximately one year for
     consistent energy and revenue units.
 
-    ``fleet_revenue_gbp`` is the sum of per-home
-    (self_consumption_saving_gbp + seg_export_income_gbp).
+    ``fleet_revenue_gbp`` is the CBS revenue:
+    own-use savings (own_use_rate × fleet_self_consumption_kwh / 100)
+    + SEG export income (Σ seg_export_income_gbp per home)
+    + grid-services topper (grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw)
+    − CBS grid-charge cost (Σ total_grid_charge_cost_gbp per home).
     """
 
     year: int
@@ -337,7 +340,7 @@ class YearPoint:
     """Total grid import by the fleet that year (kWh, ≥ 0)."""
 
     fleet_revenue_gbp: float
-    """Fleet total revenue (self-consumption saving + SEG export income) (£)."""
+    """CBS revenue (own-use + SEG + grid-services topper − CBS grid-charge cost) (£)."""
 
     def __post_init__(self) -> None:
         if self.year < 0:
@@ -861,8 +864,14 @@ def project_multi_year(
         fleet_imp = sum(s.total_grid_import_kwh for s in per_home_summaries)
         per_home_discharge = [s.total_battery_discharge_kwh for s in per_home_summaries]
 
-        # Fleet revenue: Σ_home (self_consumption_saving_gbp + seg_export_income_gbp)
-        # Reuses householder_bill so self_consumption_override is automatically honoured.
+        # CBS fleet revenue (PRD §3.2):
+        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
+        #   seg_revenue     = Σ bill.seg_export_income_gbp
+        #   grid_services   = grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw
+        #   cbs_grid_charge = Σ summary.total_grid_charge_cost_gbp
+        #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services − cbs_grid_charge
+        # householder_bill is still called for seg_export_income_gbp (honours
+        # self_consumption_override and seg scaling automatically).
         bills = [
             householder_bill(
                 s,
@@ -872,9 +881,15 @@ def project_multi_year(
             )
             for s in per_home_summaries
         ]
-        fleet_revenue = sum(
-            b.self_consumption_saving_gbp + b.seg_export_income_gbp for b in bills
+        own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc / 100.0
+        seg_revenue = sum(b.seg_export_income_gbp for b in bills)
+        grid_services = finance.grid_services_income_per_kw_per_year_gbp * sum(
+            h.battery_config.max_discharge_kw
+            for h in homes
+            if h.battery_config is not None
         )
+        cbs_grid_charge_cost = sum(s.total_grid_charge_cost_gbp for s in per_home_summaries)
+        fleet_revenue = own_use_revenue + seg_revenue + grid_services - cbs_grid_charge_cost
 
         # PV SOH: mean of calculate_degradation_factor over all homes
         pv_sohs = [

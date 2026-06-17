@@ -135,6 +135,7 @@ class EnergyFlowResult:
     grid_export: float
     grid_import: float
     battery_soc: float  # SOC after this timestep
+    grid_charge: float = 0.0  # informational: kWh stored in battery from grid (sub-set of battery_charge and grid_import)
 
 
 def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:
@@ -279,9 +280,9 @@ def simulate_timestep(
     # Only PV charge reduces export; grid charge adds to import.
     # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
     # (post charge-efficiency loss), consistent with the PV-charging convention.
-    # validate_energy_balance closes on stored energy.  Callers computing the
-    # exact grid-side draw (e.g. for cost accounting) should divide
-    # grid_charge_stored_kwh by battery.charge_efficiency.
+    # validate_energy_balance closes on stored energy.  The CBS cost-accounting
+    # convention (home.py) prices stored energy directly — the same basis as
+    # grid_import_kwh — so no charge-efficiency divisor is applied.
     grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
     grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
 
@@ -294,6 +295,7 @@ def simulate_timestep(
         grid_export=grid_export_kwh,
         grid_import=grid_import_kwh,
         battery_soc=battery_soc,
+        grid_charge=grid_charge_stored_kwh,
     )
 
 
@@ -396,9 +398,9 @@ def simulate_timestep_tou(
     # Only PV charge reduces export; grid charge adds to import.
     # NOTE: grid_charge_stored_kwh is the energy delivered to the battery
     # (post charge-efficiency loss), consistent with the PV-charging convention.
-    # validate_energy_balance closes on stored energy.  Callers computing the
-    # exact grid-side draw (e.g. for cost accounting) should divide
-    # grid_charge_stored_kwh by battery.charge_efficiency.
+    # validate_energy_balance closes on stored energy.  The CBS cost-accounting
+    # convention (home.py) prices stored energy directly — the same basis as
+    # grid_import_kwh — so no charge-efficiency divisor is applied.
     grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
     grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
 
@@ -411,6 +413,7 @@ def simulate_timestep_tou(
         grid_export=grid_export_kwh,
         grid_import=grid_import_kwh,
         battery_soc=battery_soc,
+        grid_charge=grid_charge_stored_kwh,
     )
 
 

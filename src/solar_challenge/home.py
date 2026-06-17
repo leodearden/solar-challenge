@@ -94,6 +94,7 @@ class SimulationResults:
     tariff_rate: pd.Series
     strategy_name: str = "self_consumption"
     heat_pump_load: Optional[pd.Series] = None
+    grid_charge_cost: Optional[pd.Series] = None  # per-timestep cost of grid-to-battery charging in £ (None when tariff_config is None)
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to DataFrame.
@@ -150,6 +151,7 @@ class SummaryStatistics:
     total_heat_pump_load_kwh: Optional[float] = None  # total heat pump consumption
     peak_heat_pump_load_kw: Optional[float] = None  # peak heat pump load
     heat_pump_load_ratio: Optional[float] = None  # heat_pump_load / total_demand
+    total_grid_charge_cost_gbp: float = 0.0  # total CBS grid-to-battery charging cost in £
 
 
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
@@ -321,9 +323,11 @@ def simulate_home(
     if config.tariff_config is not None:
         tariff_rates = [config.tariff_config.get_rate(ts) for ts in index]
         import_costs = [r.grid_import * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
+        grid_charge_costs: list[float] = [r.grid_charge * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
     else:
         tariff_rates = [0.0 for _ in results_list]
         import_costs = [0.0 for _ in results_list]
+        grid_charge_costs = [0.0 for _ in results_list]
 
     # Calculate export revenue.
     # Priority: SEG tariff > import-rate fallback > zero.
@@ -401,6 +405,11 @@ def simulate_home(
             name="tariff_rate_per_kwh",
         ),
         heat_pump_load=heat_pump_load_series,
+        grid_charge_cost=pd.Series(
+            grid_charge_costs,
+            index=index,
+            name="grid_charge_cost_gbp",
+        ) if config.tariff_config is not None else None,
     )
 
 
@@ -510,6 +519,13 @@ def calculate_summary(
             SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh),
         )
 
+    # Calculate CBS grid-charge cost
+    total_grid_charge_cost = (
+        float(results.grid_charge_cost.sum())
+        if results.grid_charge_cost is not None
+        else 0.0
+    )
+
     # Calculate heat pump metrics if heat pump load is present
     total_heat_pump_kwh: Optional[float] = None
     peak_heat_pump_kw: Optional[float] = None
@@ -541,4 +557,5 @@ def calculate_summary(
         total_heat_pump_load_kwh=total_heat_pump_kwh,
         peak_heat_pump_load_kw=peak_heat_pump_kw,
         heat_pump_load_ratio=heat_pump_ratio,
+        total_grid_charge_cost_gbp=total_grid_charge_cost,
     )

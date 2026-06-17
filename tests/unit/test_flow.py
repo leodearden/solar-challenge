@@ -844,3 +844,144 @@ class TestSimulateTimestepGridCharge:
         assert result_none.grid_export == pytest.approx(result_omit.grid_export)
         assert result_none.grid_import == pytest.approx(result_omit.grid_import)
         assert result_none.self_consumption == pytest.approx(result_omit.self_consumption)
+
+
+# ---------------------------------------------------------------------------
+# CR2 step-1: RED tests for EnergyFlowResult.grid_charge field
+# ---------------------------------------------------------------------------
+
+class TestEnergyFlowResultGridCharge:
+    """RED tests for the new EnergyFlowResult.grid_charge field (CR2 step-1).
+
+    All tests below fail until step-2 adds grid_charge to EnergyFlowResult.
+    """
+
+    def test_grid_charge_field_defaults_to_zero(self) -> None:
+        """(a) EnergyFlowResult exposes grid_charge defaulting to 0.0."""
+        result = EnergyFlowResult(
+            generation=1.0,
+            demand=1.0,
+            self_consumption=1.0,
+            battery_charge=0.0,
+            battery_discharge=0.0,
+            grid_export=0.0,
+            grid_import=0.0,
+            battery_soc=0.0,
+        )
+        assert result.grid_charge == pytest.approx(0.0)
+
+    def test_tou_cheap_period_grid_charge_positive(
+        self,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+        grid_charge_battery: Battery,
+    ) -> None:
+        """(b) Cheap period with grid_charging: result.grid_charge > 0 and equals
+        the kWh added to the battery from the grid.
+        """
+        # No PV generation or demand → all battery charge must come from the grid
+        result = simulate_timestep_tou(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestamp=off_peak_ts,
+            tariff=economy7_tariff,
+            timestep_minutes=60,
+        )
+        assert result.grid_charge > 0.0, (
+            "grid_charge should be > 0 during cheap period when grid_charging is set"
+        )
+        # When there is no PV charge, all battery charge comes from the grid
+        assert result.grid_charge == pytest.approx(result.battery_charge)
+
+    def test_tou_peak_period_grid_charge_is_zero(
+        self,
+        economy7_tariff: TariffConfig,
+        peak_ts: pd.Timestamp,
+        grid_charge_battery: Battery,
+    ) -> None:
+        """(c-i) Peak period: grid_charge == 0.0 (no grid-charging in peak)."""
+        result = simulate_timestep_tou(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestamp=peak_ts,
+            tariff=economy7_tariff,
+            timestep_minutes=60,
+        )
+        assert result.grid_charge == pytest.approx(0.0)
+
+    def test_no_grid_charging_config_returns_zero(
+        self,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+    ) -> None:
+        """(c-ii) simulate_timestep_tou with grid_charging=None: grid_charge == 0.0."""
+        config = BatteryConfig(
+            capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5, grid_charging=None
+        )
+        battery = Battery(config, initial_soc_kwh=2.0)
+        result = simulate_timestep_tou(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=battery,
+            timestamp=off_peak_ts,
+            tariff=economy7_tariff,
+            timestep_minutes=60,
+        )
+        assert result.grid_charge == pytest.approx(0.0)
+
+    def test_simulate_timestep_no_grid_charging_returns_zero(
+        self,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+    ) -> None:
+        """(c-iii) simulate_timestep (flat-rate path) with no grid_charging: grid_charge == 0.0."""
+        config = BatteryConfig.default_5kwh()
+        battery = Battery(config, initial_soc_kwh=2.0)
+        result = simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=battery,
+            timestep_minutes=60,
+        )
+        assert result.grid_charge == pytest.approx(0.0)
+
+    def test_grid_charge_sub_component_of_battery_charge(
+        self,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+    ) -> None:
+        """(d-i) grid_charge <= battery_charge (energy balance sub-component)."""
+        # Modest PV excess + grid top-up; grid_charge is only the grid portion
+        config = BatteryConfig(
+            capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5,
+            grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+        )
+        battery = Battery(config, initial_soc_kwh=2.0)
+        result = simulate_timestep_tou(
+            generation_kw=1.0,
+            demand_kw=0.5,
+            battery=battery,
+            timestamp=off_peak_ts,
+            tariff=economy7_tariff,
+            timestep_minutes=60,
+        )
+        assert result.grid_charge <= result.battery_charge + 1e-9
+
+    def test_grid_charge_sub_component_of_grid_import(
+        self,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+        grid_charge_battery: Battery,
+    ) -> None:
+        """(d-ii) grid_charge <= grid_import (grid-charged energy is part of import)."""
+        result = simulate_timestep_tou(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestamp=off_peak_ts,
+            tariff=economy7_tariff,
+            timestep_minutes=60,
+        )
+        assert result.grid_charge <= result.grid_import + 1e-9
