@@ -154,6 +154,66 @@ class ConfigResult:
 
 
 # ---------------------------------------------------------------------------
+# RankedSweep — aggregated sweep output (W3 task B, PRD §3.1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RankedSweep:
+    """Aggregated result of :func:`run_sweep` over a cartesian config grid.
+
+    Attributes:
+        results: Feasible :class:`ConfigResult` objects sorted ascending by
+            ``representative_outlay_gbp`` (deterministic tie-break: surplus
+            desc, pv_kwp asc, battery_kwh asc, inverter_kw asc).
+        infeasible: :class:`ConfigPoint` objects whose
+            ``binding == 'infeasible_above_retail'``, in input order.
+        retained_cash_floor_gbp: The effective retained-cash floor used for
+            the solve across all grid cells (£/home/year).  Echoes
+            ``retained_cash_floor_gbp`` passed to :func:`run_sweep` when
+            non-None, otherwise ``scenario.finance.retained_cash_floor_per_home_per_year_gbp``.
+        cheapest_feasible: :class:`ConfigPoint` with the lowest
+            ``representative_outlay_gbp`` (== ``results[0].config``), or
+            ``None`` when ``results`` is empty.
+        pareto_baseline: Non-dominated :class:`ConfigPoint` objects on the
+            (baseline_outlay ↓, baseline_surplus ↑) trade-off, computed over
+            ALL evaluated configs (feasible and infeasible), sorted by
+            ``baseline_outlay_gbp`` ascending.
+    """
+
+    results: tuple[ConfigResult, ...]
+    """Feasible configs sorted ascending by representative_outlay_gbp."""
+
+    infeasible: tuple[ConfigPoint, ...]
+    """ConfigPoints with binding=='infeasible_above_retail', in input order."""
+
+    retained_cash_floor_gbp: float
+    """Effective retained-cash floor used for the solve (£/home/year)."""
+
+    cheapest_feasible: Optional[ConfigPoint]
+    """ConfigPoint with lowest outlay (results[0].config), or None."""
+
+    pareto_baseline: tuple[ConfigPoint, ...]
+    """Non-dominated set on (baseline_outlay ↓, baseline_surplus ↑) over all configs."""
+
+    def __post_init__(self) -> None:
+        """Validate cheapest_feasible invariant."""
+        if self.results:
+            if self.cheapest_feasible is not self.results[0].config:
+                raise ValueError(
+                    "cheapest_feasible must equal results[0].config when results is non-empty; "
+                    f"got cheapest_feasible={self.cheapest_feasible!r}, "
+                    f"results[0].config={self.results[0].config!r}"
+                )
+        else:
+            if self.cheapest_feasible is not None:
+                raise ValueError(
+                    "cheapest_feasible must be None when results is empty; "
+                    f"got {self.cheapest_feasible!r}"
+                )
+
+
+# ---------------------------------------------------------------------------
 # enumerate_configs
 # ---------------------------------------------------------------------------
 
