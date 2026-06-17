@@ -193,3 +193,157 @@ def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
     even under a constant simulate.
     """
     return _make_fleet_results(n_homes=_N_HOMES)
+
+
+# ---------------------------------------------------------------------------
+# step-1: TestSensitivityDataclasses (RED — imports fail until step-2)
+# ---------------------------------------------------------------------------
+
+
+class TestSensitivityDataclasses:
+    """SensitivityAxis and SensitivityPanel: construction, field access, frozen, validation."""
+
+    # --- SensitivityAxis ---
+
+    def test_sensitivity_axis_fields_read_back(self) -> None:
+        """All fields read back after valid construction."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
+
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        axis = SensitivityAxis(
+            name="battery_cost_per_kwh_gbp",
+            values=(100.0, 250.0, 500.0),
+            rankings=((pt,), (pt,), (pt,)),
+            top_config_per_value=(pt, pt, pt),
+        )
+        assert axis.name == "battery_cost_per_kwh_gbp"
+        assert axis.values == (100.0, 250.0, 500.0)
+        assert axis.rankings == ((pt,), (pt,), (pt,))
+        assert axis.top_config_per_value == (pt, pt, pt)
+
+    def test_sensitivity_axis_none_in_top_config_per_value(self) -> None:
+        """top_config_per_value may contain None entries (no feasible config)."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
+
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        axis = SensitivityAxis(
+            name="retained_cash_floor_per_home_per_year_gbp",
+            values=(50.0, 9999.0),
+            rankings=((pt,), ()),
+            top_config_per_value=(pt, None),
+        )
+        assert axis.top_config_per_value[0] is pt
+        assert axis.top_config_per_value[1] is None
+
+    def test_sensitivity_axis_frozen(self) -> None:
+        """Assigning any field raises FrozenInstanceError."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
+
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        axis = SensitivityAxis(
+            name="x",
+            values=(1.0,),
+            rankings=((pt,),),
+            top_config_per_value=(pt,),
+        )
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            axis.name = "y"  # type: ignore[misc]
+
+    def test_sensitivity_axis_empty_values_raises(self) -> None:
+        """Empty values tuple raises ValueError."""
+        from solar_challenge.optimize import SensitivityAxis
+
+        with pytest.raises(ValueError, match="values must not be empty"):
+            SensitivityAxis(
+                name="x",
+                values=(),
+                rankings=(),
+                top_config_per_value=(),
+            )
+
+    def test_sensitivity_axis_length_mismatch_rankings(self) -> None:
+        """len(values) != len(rankings) raises ValueError."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
+
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        with pytest.raises(ValueError):
+            SensitivityAxis(
+                name="x",
+                values=(1.0, 2.0),  # length 2
+                rankings=((pt,),),   # length 1
+                top_config_per_value=(pt, pt),
+            )
+
+    def test_sensitivity_axis_length_mismatch_tops(self) -> None:
+        """len(values) != len(top_config_per_value) raises ValueError."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
+
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        with pytest.raises(ValueError):
+            SensitivityAxis(
+                name="x",
+                values=(1.0, 2.0),          # length 2
+                rankings=((pt,), (pt,)),
+                top_config_per_value=(pt,),  # length 1
+            )
+
+    # --- SensitivityPanel ---
+
+    def test_sensitivity_panel_fields_read_back(self) -> None:
+        """All fields read back after valid construction."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityAxis, SensitivityPanel
+
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        axis = SensitivityAxis(
+            name="x",
+            values=(1.0,),
+            rankings=((pt,),),
+            top_config_per_value=(pt,),
+        )
+        panel = SensitivityPanel(
+            axes=(axis,),
+            baseline_top=pt,
+            rank_stability=0.75,
+        )
+        assert panel.axes == (axis,)
+        assert panel.baseline_top is pt
+        assert panel.rank_stability == pytest.approx(0.75)
+
+    def test_sensitivity_panel_frozen(self) -> None:
+        """Assigning any field raises FrozenInstanceError."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityAxis, SensitivityPanel
+
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        axis = SensitivityAxis(
+            name="x",
+            values=(1.0,),
+            rankings=((pt,),),
+            top_config_per_value=(pt,),
+        )
+        panel = SensitivityPanel(axes=(axis,), baseline_top=pt, rank_stability=0.5)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            panel.rank_stability = 0.9  # type: ignore[misc]
+
+    def test_sensitivity_panel_rank_stability_out_of_range_raises(self) -> None:
+        """rank_stability outside [0, 1] raises ValueError."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityAxis, SensitivityPanel
+
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        axis = SensitivityAxis(
+            name="x",
+            values=(1.0,),
+            rankings=((pt,),),
+            top_config_per_value=(pt,),
+        )
+        with pytest.raises(ValueError, match="rank_stability"):
+            SensitivityPanel(axes=(axis,), baseline_top=pt, rank_stability=1.5)
+        with pytest.raises(ValueError, match="rank_stability"):
+            SensitivityPanel(axes=(axis,), baseline_top=pt, rank_stability=-0.1)
+
+    def test_sensitivity_panel_empty_axes_raises(self) -> None:
+        """Empty axes tuple raises ValueError."""
+        from solar_challenge.optimize import ConfigPoint, SensitivityPanel
+
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        with pytest.raises(ValueError, match="axes"):
+            SensitivityPanel(axes=(), baseline_top=pt, rank_stability=1.0)
