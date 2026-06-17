@@ -1412,12 +1412,21 @@ class _DistributionSampler:
 def generate_homes_from_distribution(
     config: FleetDistributionConfig,
     location: Location,
+    *,
+    fleet_tariff: Optional[TariffConfig] = None,
+    fleet_grid_charging: Optional[GridChargeConfig] = None,
 ) -> list[HomeConfig]:
     """Generate a list of homes by sampling from distributions.
 
     Args:
         config: Fleet distribution configuration
         location: Location for all homes
+        fleet_tariff: Optional TariffConfig to apply to every home. When None
+            (default) homes are generated with tariff_config=None, preserving
+            bit-identical behaviour for callers that do not pass this kwarg.
+        fleet_grid_charging: Optional GridChargeConfig to apply to every home
+            that has a battery. When None (default) the battery's grid_charging
+            remains None, preserving bit-identical behaviour.
 
     Returns:
         List of HomeConfig objects
@@ -1520,6 +1529,7 @@ def generate_homes_from_distribution(
                     capacity_kwh=battery_capacity,
                     max_charge_kw=charge_kw if charge_kw is not None else 2.5,
                     max_discharge_kw=discharge_kw if discharge_kw is not None else 2.5,
+                    grid_charging=fleet_grid_charging,
                 )
 
         # Sample load parameters
@@ -1601,7 +1611,7 @@ def generate_homes_from_distribution(
                 ev_config=ev_config,
                 location=location,
                 name=f"Home {i + 1}",
-                tariff_config=None,
+                tariff_config=fleet_tariff,
                 dispatch_strategy="greedy",
             )
         )
