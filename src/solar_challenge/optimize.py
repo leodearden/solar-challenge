@@ -4,17 +4,18 @@
 This module provides the homogeneous-install config enumerator that is the
 foundation of the W3 cost-recovery sweep (PRD §3.1/§3.2/§10-A/§10-B).
 
-Exported symbols
-----------------
+Public API
+----------
 ConfigPoint           — frozen (pv_kwp, battery_kwh, inverter_kw) value object
 ConfigResult          — per-config evaluation result (cost-recovery + baseline economics)
 RankedSweep           — aggregated sweep output (ranked feasible configs + infeasible set)
 enumerate_configs     — cartesian-product enumerator → eager list (small grids)
 iter_configs          — generator variant of enumerate_configs (large grids / streaming)
 run_sweep             — drive all configs through W2 cost-recovery + rank by outlay
-_rank_feasible        — pure sort helper (tie-break key)
-_split_infeasible     — split ConfigResults into feasible/infeasible lists
-_pareto_baseline      — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
+rank                  — pure stable sort over any ConfigResult sequence (5-key ascending)
+feasible_split        — partition ConfigResults by binding=='infeasible_above_retail'
+pareto_baseline       — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
+cheapest_feasible     — ConfigPoint with lowest outlay among feasible results, or None
 """
 
 from __future__ import annotations
@@ -306,6 +307,165 @@ def enumerate_configs(
 
 
 # ---------------------------------------------------------------------------
+# Public pure helpers (W3 task C)
+# ---------------------------------------------------------------------------
+
+__all__ = [
+    "ConfigPoint",
+    "ConfigResult",
+    "RankedSweep",
+    "enumerate_configs",
+    "iter_configs",
+    "run_sweep",
+    "rank",
+    "feasible_split",
+    "pareto_baseline",
+    "cheapest_feasible",
+]
+
+
+def cheapest_feasible(
+    results: Sequence["ConfigResult"],
+) -> "Optional[ConfigPoint]":
+    """Return the :class:`ConfigPoint` with the lowest ``representative_outlay_gbp``
+    among feasible results, or ``None`` when no feasible result exists.
+
+    Uses :func:`feasible_split` to partition then :func:`rank` to sort; the
+    winner is always a feasible record even when infeasible records have a
+    globally lower outlay.
+
+    .. note::
+        This function shares its name with the :attr:`RankedSweep.cheapest_feasible`
+        dataclass field it logically produces.  The function is the computation;
+        the field stores the result.  Inside :func:`run_sweep` the field is
+        populated directly from the already-ranked feasible list (``ranked_feasible[0].config``)
+        rather than by calling this function, to avoid a redundant sort pass.
+
+    Args:
+        results: Any sequence of :class:`ConfigResult` objects (may be empty).
+
+    Returns:
+        :class:`ConfigPoint` of ``rank(feasible)[0]``, or ``None`` when the
+        feasible list is empty.
+    """
+    feasible, _ = feasible_split(results)
+    ranked = rank(feasible)
+    return ranked[0].config if ranked else None
+
+
+def pareto_baseline(
+    results: Sequence["ConfigResult"],
+) -> "tuple[ConfigPoint, ...]":
+    """Compute the non-dominated set on the (baseline_outlay ↓, baseline_surplus ↑) plane.
+
+    A result *A* dominates result *B* when
+    ``A.baseline_outlay_gbp <= B.baseline_outlay_gbp`` **and**
+    ``A.baseline_surplus_per_home_gbp >= B.baseline_surplus_per_home_gbp``
+    with at least one strict inequality.
+
+    Computes over **all** supplied configs (feasible and infeasible); infeasible
+    configs are included when their (outlay, surplus) pair is non-dominated.
+
+    The non-dominated :class:`ConfigPoint` objects are returned sorted by
+    ``baseline_outlay_gbp`` ascending (ties broken by surplus descending) for
+    reproducibility.
+
+    Args:
+        results: Any sequence of :class:`ConfigResult` objects (may be empty).
+
+    Returns:
+        Non-dominated :class:`ConfigPoint` objects sorted by baseline_outlay ascending.
+    """
+    non_dominated: List[ConfigResult] = []
+    for cand in results:
+        dominated = False
+        for other in results:
+            if other is cand:
+                continue
+            better_or_equal_outlay = other.baseline_outlay_gbp <= cand.baseline_outlay_gbp
+            better_or_equal_surplus = (
+                other.baseline_surplus_per_home_gbp >= cand.baseline_surplus_per_home_gbp
+            )
+            strictly_better = (
+                other.baseline_outlay_gbp < cand.baseline_outlay_gbp
+                or other.baseline_surplus_per_home_gbp > cand.baseline_surplus_per_home_gbp
+            )
+            if better_or_equal_outlay and better_or_equal_surplus and strictly_better:
+                dominated = True
+                break
+        if not dominated:
+            non_dominated.append(cand)
+
+    non_dominated.sort(
+        key=lambda r: (r.baseline_outlay_gbp, -r.baseline_surplus_per_home_gbp)
+    )
+    return tuple(r.config for r in non_dominated)
+
+
+def feasible_split(
+    results: Sequence["ConfigResult"],
+) -> "tuple[List[ConfigResult], List[ConfigResult]]":
+    """Partition ConfigResults into feasible and infeasible lists.
+
+    The split predicate is ``binding == 'infeasible_above_retail'``; records
+    with ``binding`` of ``'floor'`` or ``'rate_clamped_zero'`` land in the
+    feasible side regardless of the :attr:`ConfigResult.feasible` boolean.
+
+    Input order is preserved within each output list.
+
+    Args:
+        results: Any sequence of :class:`ConfigResult` objects (may be empty).
+
+    Returns:
+        ``(feasible, infeasible)`` where *infeasible* contains every record
+        whose ``binding == 'infeasible_above_retail'`` and *feasible* contains
+        the remainder.  Both sides are :class:`ConfigResult` lists.
+    """
+    feasible: List[ConfigResult] = []
+    infeasible: List[ConfigResult] = []
+    for r in results:
+        if r.binding == "infeasible_above_retail":
+            infeasible.append(r)
+        else:
+            feasible.append(r)
+    return feasible, infeasible
+
+
+def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
+    """Sort ConfigResults by the W3 rank key (pure, stable, no filtering).
+
+    Sort key (five levels, all applied for determinism):
+
+    1. ``representative_outlay_gbp`` ascending — cheapest householder outlay first.
+    2. ``surplus_at_solved_gbp`` **descending** — higher project surplus preferred on tie.
+    3. ``config.pv_kwp`` ascending.
+    4. ``config.battery_kwh`` ascending.
+    5. ``config.inverter_kw`` ascending.
+
+    Infeasible-binding records (``binding == 'infeasible_above_retail'``) are NOT
+    filtered; they appear in the output at their natural sort position.  Use
+    :func:`feasible_split` before calling ``rank`` when only feasible results are
+    needed.
+
+    Args:
+        results: Any sequence of :class:`ConfigResult` objects (may be empty).
+
+    Returns:
+        New list sorted by the rank key.  The input sequence is not modified.
+    """
+    return sorted(
+        results,
+        key=lambda r: (
+            r.representative_outlay_gbp,
+            -r.surplus_at_solved_gbp,
+            r.config.pv_kwp,
+            r.config.battery_kwh,
+            r.config.inverter_kw,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
@@ -445,109 +605,19 @@ def _age0_baseline_outlay(
 def _split_infeasible(
     results: List[ConfigResult],
 ) -> tuple[List[ConfigResult], List[ConfigPoint]]:
-    """Split evaluated ConfigResults into feasible list and infeasible ConfigPoints.
-
-    Splits on the :attr:`ConfigResult.feasible` boolean rather than the
-    ``binding`` string so that any future ``binding`` value with ``feasible=False``
-    is correctly classified without a string-match change.
-
-    Args:
-        results: All evaluated ConfigResults from :func:`_evaluate_config`.
-
-    Returns:
-        ``(feasible_list, infeasible_points)`` where *infeasible_points* preserves
-        the input order of configs whose ``feasible`` field is ``False``.
-    """
-    feasible: List[ConfigResult] = []
-    infeasible: List[ConfigPoint] = []
-    for r in results:
-        if r.feasible:
-            feasible.append(r)
-        else:
-            # binding should be 'infeasible_above_retail' when feasible=False;
-            # splitting on the bool guards against future binding strings.
-            infeasible.append(r.config)
-    return feasible, infeasible
+    """Delegate to public :func:`feasible_split`; return ConfigPoints for infeasible side."""
+    feas, infeas = feasible_split(results)
+    return feas, [r.config for r in infeas]
 
 
 def _rank_feasible(feasible: List[ConfigResult]) -> List[ConfigResult]:
-    """Sort feasible ConfigResults by the W3 rank key (ascending).
-
-    Sort key (all five levels applied for determinism):
-
-    1. ``representative_outlay_gbp`` ascending (primary — cheapest for householder)
-    2. ``surplus_at_solved_gbp`` **descending** (higher surplus preferred on tie)
-    3. ``config.pv_kwp`` ascending
-    4. ``config.battery_kwh`` ascending
-    5. ``config.inverter_kw`` ascending
-
-    Args:
-        feasible: Feasible ConfigResults (binding != 'infeasible_above_retail').
-
-    Returns:
-        New list sorted by the rank key.  The input list is not modified.
-    """
-    return sorted(
-        feasible,
-        key=lambda r: (
-            r.representative_outlay_gbp,
-            -r.surplus_at_solved_gbp,
-            r.config.pv_kwp,
-            r.config.battery_kwh,
-            r.config.inverter_kw,
-        ),
-    )
+    """Delegate to public :func:`rank` (single source of truth)."""
+    return rank(feasible)
 
 
 def _pareto_baseline(results: List[ConfigResult]) -> tuple[ConfigPoint, ...]:
-    """Compute the non-dominated set on the (baseline_outlay ↓, baseline_surplus ↑) plane.
-
-    A result *A* dominates result *B* when
-    ``A.baseline_outlay_gbp <= B.baseline_outlay_gbp`` **and**
-    ``A.baseline_surplus_per_home_gbp >= B.baseline_surplus_per_home_gbp``
-    with at least one strict inequality.
-
-    The non-dominated :class:`ConfigPoint` objects are returned sorted by
-    ``baseline_outlay_gbp`` ascending (ties broken by surplus descending) for
-    reproducibility.
-
-    Computes over **all** evaluated configs (feasible and infeasible); infeasible
-    configs are included when their (outlay, surplus) pair is non-dominated.
-
-    Args:
-        results: All evaluated ConfigResults (feasible + infeasible).
-
-    Returns:
-        Non-dominated ConfigPoints sorted by baseline_outlay ascending.
-    """
-    non_dominated: List[ConfigResult] = []
-    for cand in results:
-        dominated = False
-        for other in results:
-            if other is cand:
-                continue
-            # other dominates cand if: outlay ≤ and surplus ≥ with at least one strict
-            better_or_equal_outlay = (
-                other.baseline_outlay_gbp <= cand.baseline_outlay_gbp
-            )
-            better_or_equal_surplus = (
-                other.baseline_surplus_per_home_gbp >= cand.baseline_surplus_per_home_gbp
-            )
-            strictly_better = (
-                other.baseline_outlay_gbp < cand.baseline_outlay_gbp
-                or other.baseline_surplus_per_home_gbp > cand.baseline_surplus_per_home_gbp
-            )
-            if better_or_equal_outlay and better_or_equal_surplus and strictly_better:
-                dominated = True
-                break
-        if not dominated:
-            non_dominated.append(cand)
-
-    # Sort by baseline_outlay ascending, then surplus descending for determinism
-    non_dominated.sort(
-        key=lambda r: (r.baseline_outlay_gbp, -r.baseline_surplus_per_home_gbp)
-    )
-    return tuple(r.config for r in non_dominated)
+    """Delegate to public :func:`pareto_baseline` (single source of truth)."""
+    return pareto_baseline(results)
 
 
 def _evaluate_config(
@@ -702,16 +772,15 @@ def run_sweep(
         for point, scenario in configs
     ]
 
-    # Split into feasible / infeasible and rank
-    feasible, infeasible_pts = _split_infeasible(all_results)
-    ranked_feasible = _rank_feasible(feasible)
+    # Split, rank, and derive cheapest using the public pure helpers
+    feasible_results, infeasible_results = feasible_split(all_results)
+    ranked_feasible = rank(feasible_results)
+    infeasible_pts = [r.config for r in infeasible_results]
+    # Derive cheapest from the already-ranked list to avoid redundant O(n log n) work.
+    cheapest: Optional[ConfigPoint] = ranked_feasible[0].config if ranked_feasible else None
 
-    cheapest: Optional[ConfigPoint] = (
-        ranked_feasible[0].config if ranked_feasible else None
-    )
-
-    # Compute Pareto front over ALL evaluated configs
-    pareto = _pareto_baseline(all_results)
+    # Compute Pareto front over ALL evaluated configs (feasible + infeasible)
+    pareto = pareto_baseline(all_results)
 
     # Determine the effective retained-cash floor to echo.
     # When no global override is given, we read the floor from the FIRST config's
