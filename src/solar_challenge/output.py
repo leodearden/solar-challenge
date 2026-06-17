@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Output and reporting functions for simulation results."""
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
     from solar_challenge.finance import BillDistribution, CostRecoverySolution, ProjectEconomics
     from solar_challenge.flex import FlexibilityValueBand
+    from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep, SensitivityPanel
 
 
 @dataclass(frozen=True)
@@ -778,10 +780,8 @@ def generate_finance_report(
 
     # ---- Optional project-economics block (η) --------------------------------
     if economics is not None:
-        import math as _math
-
         # Format IRR: NaN → "n/a"
-        if _math.isnan(economics.equity_irr):
+        if math.isnan(economics.equity_irr):
             irr_str = "n/a"
         else:
             irr_str = f"{economics.equity_irr:.1%}"
@@ -793,7 +793,7 @@ def generate_finance_report(
         )
 
         # Format min DSCR: inf → "∞"
-        if _math.isinf(economics.min_dscr):
+        if math.isinf(economics.min_dscr):
             dscr_str = "∞"
         else:
             dscr_str = f"{economics.min_dscr:.2f}×"
@@ -867,5 +867,164 @@ Time-shift basis: net import-cost reduction (off-peak charge cost captured in
 grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-discharge/yr
 (PRD §6).*
 """
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+# generate_config_ranking_report  (W3 task E, PRD §3.6 / §10-E)
+# ---------------------------------------------------------------------------
+
+# Human-readable binding/feasibility label map (reused from generate_finance_report).
+_BINDING_LABELS: Mapping[str, str] = {
+    "floor": "✔ Surplus meets floor",
+    "rate_clamped_zero": "✔ Over-feasible (rate clamped to 0, surplus > floor)",
+    "infeasible_above_retail": "✘ INFEASIBLE: required rate exceeds retail",
+}
+
+
+def _fmt_dscr(val: float) -> str:
+    """Format DSCR: inf → '∞', otherwise '{val:.2f}×'."""
+    return "∞" if math.isinf(val) else f"{val:.2f}×"
+
+
+def _fmt_irr(val: float) -> str:
+    """Format IRR: NaN → 'n/a', otherwise '{val:.1%}'."""
+    return "n/a" if math.isnan(val) else f"{val:.1%}"
+
+
+def _fmt_payback(val: "Optional[float]") -> str:
+    """Format payback: None → '—', otherwise '{val:.1f} yr'."""
+    return "—" if val is None else f"{val:.1f} yr"
+
+
+def generate_config_ranking_report(
+    ranked: "RankedSweep",
+    panel: "Optional[SensitivityPanel]" = None,
+) -> str:
+    """Generate the W3 board-readable config-ranking report.
+
+    Renders two markdown tables and an optional sensitivity section:
+
+    - **Table 1 — Cost-Recovery Rank**: one row per feasible config in
+      ``ranked.results``, sorted ascending by ``representative_outlay_gbp``.
+      The cheapest feasible config (``results[0]``) is flagged as the
+      RECOMMENDATION.  Infeasible configs (``ranked.infeasible``) appear in a
+      separate section (dims only — economics are not retained for infeasible
+      configs; see :class:`~solar_challenge.optimize.RankedSweep`).
+    - **Table 2 — Fixed-15p Trade-Off**: one row per feasible config →
+      baseline outlay and CBS surplus at the fixed 15 p/kWh own-use rate, plus
+      a Pareto flag.  Infeasible configs are omitted from this table because
+      :class:`~solar_challenge.optimize.RankedSweep` retains them only as
+      :class:`~solar_challenge.optimize.ConfigPoint` objects without baseline
+      economics; they remain visible in Table 1's infeasible list.
+    - **Sensitivity section** (rendered only when ``panel`` is not ``None``):
+      per-axis sub-tables and the panel-level ``rank_stability``.  When
+      ``panel`` is ``None`` the output is bit-identical to the two-table form,
+      mirroring :func:`generate_finance_report`'s additive-optional idiom.
+
+    Args:
+        ranked: Aggregated sweep output from :func:`~solar_challenge.optimize.run_sweep`.
+        panel: Optional OAT sensitivity panel from
+            :func:`~solar_challenge.optimize.sensitivity_panel`; omitted
+            (``None``) to produce just the two-table output.
+
+    Returns:
+        A markdown-formatted string suitable for console output or file export.
+    """
+    # ---- Table 1: COST-RECOVERY RANK ----------------------------------------
+    report = "## Cost-Recovery Rank\n\n"
+
+    if not ranked.results:
+        report += "*No feasible configurations found.*\n"
+    else:
+        report += (
+            "| Config | Solved Rate (p/kWh) | Rep Outlay (£) | "
+            "Min/Mean/Median/Max (£) | CBS Surplus (£/home/yr) | "
+            "Feasibility | Total CapEx (£) | Min DSCR | Equity IRR | Payback |\n"
+        )
+        report += (
+            "|--------|--------------------:|---------------:|"
+            "------------------------|------------------------:|"
+            "------------|----------------:|----------|-----------|----------|\n"
+        )
+        for i, cr in enumerate(ranked.results):
+            cp = cr.config
+            label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
+            if i == 0:
+                label += " ★ RECOMMENDATION"
+            sol = cr.solution
+            dist_str = (
+                f"£{sol.outlay.min_gbp:.0f} / £{sol.outlay.mean_gbp:.0f} / "
+                f"£{sol.outlay.median_gbp:.0f} / £{sol.outlay.max_gbp:.0f}"
+            )
+            binding_label = _BINDING_LABELS.get(cr.binding, cr.binding)
+            report += (
+                f"| {label} "
+                f"| {cr.solved_own_use_rate_pence_per_kwh:.2f} p/kWh "
+                f"| £{cr.representative_outlay_gbp:.2f} "
+                f"| {dist_str} "
+                f"| £{cr.surplus_at_solved_gbp:.2f} "
+                f"| {binding_label} "
+                f"| £{cr.total_capex_gbp:,.0f} "
+                f"| {_fmt_dscr(cr.min_dscr)} "
+                f"| {_fmt_irr(cr.equity_irr)} "
+                f"| {_fmt_payback(cr.payback_years)} |\n"
+            )
+
+    if ranked.infeasible:
+        report += "\n### Infeasible Configurations\n\n"
+        report += "| Config | Binding |\n"
+        report += "|--------|---------|\n"
+        for cp in ranked.infeasible:
+            label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
+            report += f"| {label} | {_BINDING_LABELS['infeasible_above_retail']} |\n"
+
+    # ---- Table 2: FIXED-15p TRADE-OFF ----------------------------------------
+    # Infeasible configs are omitted from Table 2 because RankedSweep retains them
+    # only as ConfigPoints without baseline_outlay/baseline_surplus economics; they
+    # remain visible in Table 1's infeasible list above.
+    report += "\n## Fixed-15p Trade-Off\n\n"
+    if not ranked.results:
+        report += "*No feasible configurations to compare.*\n"
+    else:
+        pareto_set = set(ranked.pareto_baseline)
+        report += (
+            "| Config | Baseline Outlay (£/yr) | Baseline CBS Surplus (£/home/yr) | Pareto |\n"
+        )
+        report += "|--------|----------------------:|--------------------------------:|--------|\n"
+        for cr in ranked.results:
+            cp = cr.config
+            label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
+            pareto_flag = "✔ Pareto" if cp in pareto_set else "—"
+            report += (
+                f"| {label} "
+                f"| £{cr.baseline_outlay_gbp:.2f} "
+                f"| £{cr.baseline_surplus_per_home_gbp:.2f} "
+                f"| {pareto_flag} |\n"
+            )
+
+    # ---- Optional sensitivity section ----------------------------------------
+    # Rendered only when panel is not None.  When panel is None the output is
+    # bit-identical to the two-table form, mirroring generate_finance_report's
+    # additive-optional idiom (economics/cost_recovery/flex_band=None behaviour).
+    if panel is not None:
+        report += "\n## Sensitivity Analysis\n\n"
+        report += f"Rank stability: **{panel.rank_stability:.1%}** "
+        report += f"(fraction of swept values where cheapest config == baseline top)\n\n"
+        report += f"Baseline top config: {panel.baseline_top.pv_kwp:.1f} kWp / "
+        report += f"{panel.baseline_top.battery_kwh:.1f} kWh / "
+        report += f"{panel.baseline_top.inverter_kw:.1f} kW\n"
+
+        for axis in panel.axes:
+            report += f"\n### Axis: {axis.name}\n\n"
+            report += "| Value | Top Config |\n"
+            report += "|------:|-----------|\n"
+            for val, top in zip(axis.values, axis.top_config_per_value):
+                if top is None:
+                    top_str = "—"
+                else:
+                    top_str = f"{top.pv_kwp:.1f} kWp / {top.battery_kwh:.1f} kWh / {top.inverter_kw:.1f} kW"
+                report += f"| {val:.2f} | {top_str} |\n"
 
     return report
