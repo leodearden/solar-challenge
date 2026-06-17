@@ -522,8 +522,12 @@ class TestRunSweepSingleConfig:
 
         cr = ranked.results[0]
 
-        # Direct W2 call for comparison
-        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+        # Direct W2 call for comparison: use configs[0][1] (the scenario after
+        # enumerate_configs applied the install — homes may have been modified, e.g.
+        # battery fabricated from battery_kwh=6.0 on homes that had no battery).
+        # The finance block is preserved from the base scenario by enumerate_configs.
+        sweep_scenario = configs[0][1]
+        sol = solve_cost_recovery_rate(sweep_scenario, finance, simulate=simulate)
 
         assert cr.representative_outlay_gbp == pytest.approx(sol.representative_outlay_gbp)
         assert cr.solved_own_use_rate_pence_per_kwh == pytest.approx(
@@ -551,8 +555,11 @@ class TestRunSweepSingleConfig:
         ranked = run_sweep(configs, simulate=simulate)
         cr = ranked.results[0]
 
-        curve = project_multi_year(scenario, finance, simulate=simulate)
-        econ = project_economics(curve, scenario, finance)
+        # Use configs[0][1] — the same scenario run_sweep uses (homes may differ
+        # after _apply_install, e.g. battery fabricated).
+        sweep_scenario = configs[0][1]
+        curve = project_multi_year(sweep_scenario, finance, simulate=simulate)
+        econ = project_economics(curve, sweep_scenario, finance)
 
         assert cr.baseline_surplus_per_home_gbp == pytest.approx(
             econ.net_surplus_per_home_per_year_gbp
@@ -580,14 +587,16 @@ class TestRunSweepSingleConfig:
         ranked = run_sweep(configs, simulate=simulate)
         cr = ranked.results[0]
 
+        sweep_scenario = configs[0][1]
+
         # The fake simulate always returns fr (ignores fleet config including age)
         # so the age-0 baseline simulation returns the same fr.
-        # Compute expected baseline_outlay directly.
+        # Compute expected baseline_outlay directly using sweep_scenario's tariff.
         summaries = [
-            calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
+            calculate_summary(r, seg_tariff_pence_per_kwh=sweep_scenario.seg_tariff_pence_per_kwh)
             for r in fr.per_home_results
         ]
-        sim_days = 365
+        sim_days = summaries[0].simulation_days
         dist = bill_distribution(summaries, finance, sim_days)
         expected_outlay = dist.representative.total_outlay_gbp
 
@@ -976,11 +985,14 @@ class TestRetainedCashFloorOverride:
         ranked = run_sweep(configs, retained_cash_floor_gbp=F, simulate=simulate)
         cr = ranked.results[0]
 
-        # Direct W2 call with the overridden floor
+        # Direct W2 call with the overridden floor.
+        # Use configs[0][1] as the base — same scenario run_sweep uses after
+        # enumerate_configs (homes may have been modified, e.g. battery fabricated).
+        sweep_scenario = configs[0][1]
         finance_overridden = dataclasses.replace(
             finance, retained_cash_floor_per_home_per_year_gbp=F
         )
-        scenario_overridden = dataclasses.replace(scenario, finance=finance_overridden)
+        scenario_overridden = dataclasses.replace(sweep_scenario, finance=finance_overridden)
         sol = solve_cost_recovery_rate(scenario_overridden, finance_overridden, simulate=simulate)
 
         assert cr.surplus_at_solved_gbp == pytest.approx(sol.net_surplus_per_home_per_year_gbp)
