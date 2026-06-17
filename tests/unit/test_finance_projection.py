@@ -1082,6 +1082,7 @@ class TestProjectMultiYearRevenue:
         finance = FinanceConfig(
             standing_charge_pence_per_day=28.0,
             asset_life_years=5,
+            loan_term_years=5,  # must be <= asset_life_years
             own_use_rate_pence_per_kwh=15.0,
             grid_services_income_per_kw_per_year_gbp=grid_services_rate,
         )
@@ -1177,16 +1178,21 @@ class TestProjectMultiYearRevenue:
             f"(Σ total_grid_charge_cost_gbp), got {actual_deduction:.4f} £"
         )
 
-    def test_self_consumption_override_yields_different_revenue(self) -> None:
-        """A finance with self_consumption_override produces different fleet_revenue_gbp.
+    def test_self_consumption_override_does_not_change_own_use_revenue(self) -> None:
+        """CBS own_use_revenue is override-invariant: own_use_rate × fleet_sc / 100 uses
+        physics fleet_sc regardless of self_consumption_override.
 
-        Updated for CR2: override changes fleet_sc, which changes own_use_revenue
-        (= own_use_rate × fleet_sc / 100), so the two curves still differ.
+        Updated for CR2: the OLD formula (retail_rate × sc_saving_kwh) DID change with the
+        override (different sc_kwh). The NEW formula (own_use_rate × PHYSICS fleet_sc) does
+        NOT change because fleet_sc comes from the simulation results, not the override.
+        This RED-fails against the old implementation which used self_consumption_saving_gbp.
         """
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.finance import householder_bill, project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.home import calculate_summary
 
         n_homes = 1
-        fr = _make_fleet_results(n_homes=n_homes, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
+        sc, exp, imp = 4000.0, 1000.0, 500.0
+        fr = _make_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
 
         # Physics path (no override)
         scenario_phys, finance_phys = self._make_revenue_scenario(
@@ -1195,16 +1201,20 @@ class TestProjectMultiYearRevenue:
         )
         curve_phys = project_multi_year(scenario_phys, finance_phys, simulate=lambda fc, s, e: fr)
 
-        # Spreadsheet path (with override)
+        # Spreadsheet path (with override — different SC fraction)
         scenario_over, finance_over = self._make_revenue_scenario(
             n_homes=n_homes,
-            self_consumption_override=0.50,  # 50% self-consumption
+            self_consumption_override=0.50,  # 50% of gen, changes SC calc in householder_bill
         )
         curve_over = project_multi_year(scenario_over, finance_over, simulate=lambda fc, s, e: fr)
 
-        # The two revenue values should differ (different SC → different own_use_revenue)
-        assert curve_phys.points[0].fleet_revenue_gbp != pytest.approx(
-            curve_over.points[0].fleet_revenue_gbp, rel=1e-3
+        # Under the NEW CBS formula: own_use_revenue = own_use_rate × PHYSICS fleet_sc / 100.
+        # Physics fleet_sc is the same in both paths (from the injected SimulationResults),
+        # so own_use_revenue is identical. With zero export_revenue in the mock SimulationResults,
+        # seg_revenue is also zero. Hence both paths produce the SAME fleet_revenue_gbp.
+        # (This would FAIL under the OLD formula where self_consumption_saving changed with override.)
+        assert curve_phys.points[0].fleet_revenue_gbp == pytest.approx(
+            curve_over.points[0].fleet_revenue_gbp, rel=1e-4
         )
 
     def test_fleet_revenue_non_negative(self) -> None:
