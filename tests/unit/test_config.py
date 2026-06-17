@@ -3370,6 +3370,21 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.battery_config is not None
             assert home.battery_config.grid_charging is None
 
+    def test_fleet_dispatch_strategy_threaded_to_all_homes(self) -> None:
+        """fleet_dispatch_strategy='tou_optimized' sets dispatch_strategy on every home."""
+        homes = generate_homes_from_distribution(
+            self._base_config(), Location.bristol(), fleet_dispatch_strategy="tou_optimized"
+        )
+        assert len(homes) == 5
+        for home in homes:
+            assert home.dispatch_strategy == "tou_optimized"
+
+    def test_dispatch_strategy_defaults_to_greedy(self) -> None:
+        """No fleet_dispatch_strategy kwarg: every home defaults to dispatch_strategy='greedy'."""
+        homes = generate_homes_from_distribution(self._base_config(), Location.bristol())
+        for home in homes:
+            assert home.dispatch_strategy == "greedy"
+
 
 class TestLoadFleetConfigFlexThreading:
     """Tests for YAML tariff + grid_charging threading through load_fleet_config."""
