@@ -1221,6 +1221,163 @@ class TestProjectMultiYearRevenue:
 
 
 # ---------------------------------------------------------------------------
+# _seg_export_income_gbp — direct unit tests (amendment: suggestion 3)
+# ---------------------------------------------------------------------------
+
+
+def _make_seg_summary(
+    total_generation_kwh: float = 4000.0,
+    total_grid_export_kwh: float = 800.0,
+    total_export_revenue_gbp: float = 24.0,
+) -> "SummaryStatistics":  # type: ignore[name-defined]
+    """Minimal SummaryStatistics for testing _seg_export_income_gbp."""
+    from solar_challenge.home import SummaryStatistics
+
+    sc_kwh = total_generation_kwh - total_grid_export_kwh
+    return SummaryStatistics(
+        total_generation_kwh=total_generation_kwh,
+        total_demand_kwh=sc_kwh + 1200.0,
+        total_self_consumption_kwh=sc_kwh,
+        total_grid_import_kwh=1200.0,
+        total_grid_export_kwh=total_grid_export_kwh,
+        total_battery_charge_kwh=0.0,
+        total_battery_discharge_kwh=0.0,
+        peak_generation_kw=2.0,
+        peak_demand_kw=1.5,
+        self_consumption_ratio=sc_kwh / total_generation_kwh if total_generation_kwh > 0 else 0.0,
+        grid_dependency_ratio=0.3,
+        export_ratio=total_grid_export_kwh / total_generation_kwh if total_generation_kwh > 0 else 0.0,
+        simulation_days=365,
+        total_import_cost_gbp=276.0,
+        total_export_revenue_gbp=total_export_revenue_gbp,
+        net_cost_gbp=276.0 - total_export_revenue_gbp,
+    )
+
+
+class TestSegExportIncomeGbp:
+    """Direct unit tests for _seg_export_income_gbp (amendment: reviewer suggestion 3).
+
+    The helper's zero-export fallback and override-path arithmetic are not
+    covered by hand-computed assertions in the projection tests (which use the
+    function under test to compute expected values, making them wiring tests
+    rather than contract tests).  These tests verify the helper's own logic.
+    """
+
+    def _make_finance_seg(
+        self,
+        self_consumption_override: "float | None" = None,
+    ) -> "FinanceConfig":  # type: ignore[name-defined]
+        from solar_challenge.config import FinanceConfig
+
+        return FinanceConfig(
+            standing_charge_pence_per_day=28.0,
+            asset_life_years=5,
+            loan_term_years=5,
+            self_consumption_override=self_consumption_override,
+            own_use_rate_pence_per_kwh=15.0,
+        )
+
+    def test_physics_path_returns_annualised_export_revenue(self) -> None:
+        """Physics path (no override): returns total_export_revenue_gbp directly."""
+        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+
+        summary = _make_seg_summary(
+            total_generation_kwh=4000.0,
+            total_grid_export_kwh=800.0,
+            total_export_revenue_gbp=24.0,
+        )
+        finance = self._make_finance_seg(self_consumption_override=None)
+
+        result = _seg_export_income_gbp(summary, finance, simulation_days=365)
+
+        assert result == pytest.approx(24.0, rel=1e-9)
+
+    def test_override_zero_export_kwh_returns_zero(self) -> None:
+        """Override path with zero physics export kWh: returns 0.0 (rate fallback).
+
+        When total_grid_export_kwh == 0, the effective export rate cannot be
+        derived from physics figures and falls back to 0.0 p/kWh.  The result
+        must be exactly 0.0 regardless of the override fraction.
+        """
+        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+
+        # Summary with no export at all (e.g. all generation self-consumed)
+        summary_no_export = _make_seg_summary(
+            total_generation_kwh=4000.0,
+            total_grid_export_kwh=0.0,
+            total_export_revenue_gbp=0.0,
+        )
+        finance = self._make_finance_seg(self_consumption_override=0.60)
+
+        result = _seg_export_income_gbp(summary_no_export, finance, simulation_days=365)
+
+        # effective_export_rate_pence = 0.0 (fallback), so result = override_export * 0 = 0
+        assert result == pytest.approx(0.0, abs=1e-9)
+
+    def test_override_nonzero_export_computes_override_kwh_times_effective_rate(self) -> None:
+        """Override path with nonzero physics export: returns override_export_kwh × effective_rate.
+
+        Contract (§3.2):
+          sc_kwh          = override × gen_kwh
+          override_export = max(gen_kwh - sc_kwh, 0)
+          effective_rate  = (export_rev / export_kwh) × 100  p/kWh
+          result          = override_export × effective_rate / 100
+
+        Using override=0.60 (60% sc → export=40%=1600 kWh) against physics
+        that had 20% export (800 kWh, 24 £ → 3 p/kWh):
+          override_export = 4000 - 0.60×4000 = 1600 kWh
+          effective_rate  = (24/800)×100 = 3 p/kWh
+          result          = 1600×3/100 = 48 £
+        """
+        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+
+        summary = _make_seg_summary(
+            total_generation_kwh=4000.0,
+            total_grid_export_kwh=800.0,   # physics: 20% of gen
+            total_export_revenue_gbp=24.0,  # => 3 p/kWh effective rate
+        )
+        # Override: 60% self-consumption → 40% export → 1600 kWh
+        finance = self._make_finance_seg(self_consumption_override=0.60)
+
+        result = _seg_export_income_gbp(summary, finance, simulation_days=365)
+
+        # hand-checked: 1600 * 3 / 100 = 48.0
+        assert result == pytest.approx(48.0, rel=1e-9)
+
+    def test_short_period_annualises_physics_export_revenue(self) -> None:
+        """Physics path: short simulation period is annualised to 365 days."""
+        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+
+        # Build a summary with a 182-day simulation (half year)
+        from solar_challenge.home import SummaryStatistics
+
+        summary_182 = SummaryStatistics(
+            total_generation_kwh=2000.0,
+            total_demand_kwh=2600.0,
+            total_self_consumption_kwh=1600.0,
+            total_grid_import_kwh=1000.0,
+            total_grid_export_kwh=400.0,
+            total_battery_charge_kwh=0.0,
+            total_battery_discharge_kwh=0.0,
+            peak_generation_kw=2.0,
+            peak_demand_kw=1.5,
+            self_consumption_ratio=0.80,
+            grid_dependency_ratio=0.38,
+            export_ratio=0.20,
+            simulation_days=182,
+            total_import_cost_gbp=230.0,
+            total_export_revenue_gbp=12.0,  # half-year figure
+            net_cost_gbp=218.0,
+        )
+        finance = self._make_finance_seg(self_consumption_override=None)
+
+        result = _seg_export_income_gbp(summary_182, finance, simulation_days=182)
+
+        expected = 12.0 * (365 / 182)
+        assert result == pytest.approx(expected, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # Adaptive node refinement — H4 (step-15 / step-16)
 # ---------------------------------------------------------------------------
 
