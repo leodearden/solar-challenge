@@ -285,6 +285,7 @@ Synthetic energy inputs (per home, annual):
 | `retained_cash_floor_per_home_per_year_gbp` | £27 |
 | `retail_baseline_rate_pence_per_kwh` | 23 p/kWh |
 | `vat_rate` | 5 % |
+| `standing_charge_pence_per_day` | 60 p/day (from `_FIN_GOLDEN` calibration fixture) |
 | `grid_services_income_per_kw_per_year_gbp` | £0 (no-flex) |
 | PV degradation rate (`PVConfig.degradation_rate_per_year`) | 0.5 %/yr (0.005, linear; default in `calculate_degradation_factor`) |
 
