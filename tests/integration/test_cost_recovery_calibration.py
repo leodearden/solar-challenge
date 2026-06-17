@@ -297,3 +297,119 @@ class TestNoFlexAnchorReconciliation:
         )
         # No numeric pin — just confirm we ran without raising
         assert True
+
+
+# ---------------------------------------------------------------------------
+# Step-3 RED / step-4 GREEN: TestStructuralInvariants — H1 and H2
+# ---------------------------------------------------------------------------
+
+
+def _make_interior_fleet_cr6(
+    n_homes: int = 5,
+    self_kwh: float = 2000.0,
+    export_kwh: float = 800.0,
+    import_kwh: float = 1200.0,
+) -> "FleetResults":  # type: ignore[name-defined]
+    """Build a small synthetic FleetResults tuned to the interior 'floor' regime.
+
+    Interior guarantee: surplus(r=0) < floor < surplus(r=retail).
+    With n_homes=5, self_kwh=2000, and _make_finance_interior_cr6():
+      fleet_sc = 5×2000 = 10,000 kWh
+      At r=0: fleet_rev=0, surplus=(0−opex−debt)/5 << floor
+      At r=retail: fleet_rev=retail×10000/100, surplus >> floor
+    Hence r* is strictly interior.
+
+    Implementation added in step-4 GREEN (stub → NotImplementedError).
+    """
+    raise NotImplementedError("implement in step-4")
+
+
+def _make_finance_interior_cr6(
+    retained_cash_floor: float = 50.0,
+    pv_cost_per_kwp: float = 2000.0,
+    grant_gbp: float = 0.0,
+    retail_rate: float = 30.0,
+) -> "FinanceConfig":  # type: ignore[name-defined]
+    """Build an interior-regime FinanceConfig for H1/H2 structural invariant tests.
+
+    Interior regime guaranteed by: high capex (no grant) + small fleet →
+    surplus(r=0) = (0−opex−debt)/n < floor, surplus(r=retail) > floor.
+
+    Implementation added in step-4 GREEN (stub → NotImplementedError).
+    """
+    raise NotImplementedError("implement in step-4")
+
+
+class TestStructuralInvariants:
+    """H1 (surplus==floor) and H2 (capex→rate monotone) structural invariants.
+
+    All tests are fast + hermetic: programmatic configs + injected simulate.
+    """
+
+    def _build_interior(
+        self,
+        n_homes: int = 5,
+        self_kwh: float = 2000.0,
+        pv_cost_per_kwp: float = 2000.0,
+        grant_gbp: float = 0.0,
+        retained_cash_floor: float = 50.0,
+        retail_rate: float = 30.0,
+    ) -> tuple:
+        """Return (scenario, finance, simulate) for an interior 'floor' regime."""
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+
+        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+        scenario = ScenarioConfig(name="CR6-Interior", period=period, homes=homes)
+        finance = _make_finance_interior_cr6(
+            retained_cash_floor=retained_cash_floor,
+            pv_cost_per_kwp=pv_cost_per_kwp,
+            grant_gbp=grant_gbp,
+            retail_rate=retail_rate,
+        )
+        fr = _make_interior_fleet_cr6(
+            n_homes=n_homes,
+            self_kwh=self_kwh,
+        )
+        simulate = lambda fc, s, e: fr  # noqa: E731
+        return scenario, finance, simulate
+
+    def test_h1_surplus_equals_floor(self) -> None:
+        """H1: interior regime → binding=='floor', feasible=True, surplus≈floor (exact).
+
+        The closed-form affine solve guarantees surplus(r*) = floor to float ε.
+        Cross-check: re-run project_multi_year at the solved rate; the affine
+        reconstruction and re-sim must agree to float ε (mirrors CR4 H1 cross-check).
+        """
+        import dataclasses
+        from solar_challenge.finance import (
+            project_economics,
+            project_multi_year,
+            solve_cost_recovery_rate,
+        )
+
+        scenario, finance, simulate = self._build_interior()
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+        # H1 hard assertions
+        assert sol.binding == "floor", (
+            f"Expected binding='floor' (interior regime); got {sol.binding!r}"
+        )
+        assert sol.feasible is True
+        assert sol.net_surplus_per_home_per_year_gbp == pytest.approx(
+            finance.retained_cash_floor_per_home_per_year_gbp, abs=1e-6
+        ), (
+            f"H1: expected surplus=floor={finance.retained_cash_floor_per_home_per_year_gbp}; "
+            f"got {sol.net_surplus_per_home_per_year_gbp:.8f}"
+        )
+
+        # H1 cross-check: re-sim at solved rate must agree to float ε
+        finance_solved = dataclasses.replace(
+            finance,
+            own_use_rate_pence_per_kwh=sol.own_use_rate_pence_per_kwh,
+        )
+        curve_solved = project_multi_year(scenario, finance_solved, simulate=simulate)
+        econ_solved = project_economics(curve_solved, scenario, finance_solved)
+        assert econ_solved.net_surplus_per_home_per_year_gbp == pytest.approx(
+            sol.net_surplus_per_home_per_year_gbp, abs=1e-6
+        )
