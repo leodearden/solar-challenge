@@ -734,29 +734,34 @@ class TestBillDistribution:
 
 
 def _make_bill_distribution(multiplier: float = 1.0) -> "BillDistribution":  # type: ignore[name-defined]
-    """Build a synthetic BillDistribution for report rendering tests."""
+    """Build a synthetic BillDistribution for report rendering tests (CR3 contract).
+
+    Uses the default _make_summary fixture values (retail 23p, own_use 15p):
+      standing=219, import=276, own_use_payment=330, vat=41.25,
+      total_outlay=866.25, sc_saving=184.80, baseline=1051.05,
+      saving_vs_baseline=184.80, saving_pct≈17.58, sc_fraction=0.55
+    """
     from solar_challenge.finance import BillBreakdown, BillDistribution
 
     rep = BillBreakdown(
         standing_charge_gbp=219.0 * multiplier,
         import_cost_gbp=276.0 * multiplier,
-        vat_gbp=24.75 * multiplier,
-        gross_bill_gbp=519.75 * multiplier,
-        seg_export_income_gbp=73.8 * multiplier,
-        self_consumption_saving_gbp=531.3 * multiplier,
-        baseline_bill_gbp=980.0 * multiplier,
-        net_annual_bill_gbp=445.95 * multiplier,
-        saving_vs_baseline_gbp=534.05 * multiplier,
-        saving_pct=54.5 * multiplier,
+        own_use_payment_gbp=330.0 * multiplier,
+        vat_gbp=41.25 * multiplier,
+        total_outlay_gbp=866.25 * multiplier,
+        self_consumption_saving_gbp=184.80 * multiplier,
+        baseline_bill_gbp=1051.05 * multiplier,
+        saving_vs_baseline_gbp=184.80 * multiplier,
+        saving_pct=17.58 * multiplier,
         self_consumption_fraction=0.55 * multiplier,
     )
     return BillDistribution(
         representative=rep,
-        per_home_net_bill_gbp=(rep.net_annual_bill_gbp,),
-        min_gbp=300.0 * multiplier,
-        mean_gbp=440.0 * multiplier,
-        median_gbp=rep.net_annual_bill_gbp,
-        max_gbp=600.0 * multiplier,
+        per_home_net_bill_gbp=(rep.total_outlay_gbp,),
+        min_gbp=700.0 * multiplier,
+        mean_gbp=850.0 * multiplier,
+        median_gbp=rep.total_outlay_gbp,
+        max_gbp=1000.0 * multiplier,
     )
 
 
@@ -772,22 +777,26 @@ class TestGenerateFinanceReport:
         assert isinstance(report, str)
 
     def test_physics_bill_block_present(self) -> None:
-        """Report must contain the householder-bill block headings."""
+        """Report must contain the CR3 householder-bill block headings (no Gross Bill / SEG)."""
         from solar_challenge.output import generate_finance_report
 
         dist = _make_bill_distribution()
         report = generate_finance_report(dist)
 
-        # Key line items must be present
+        # CR3 line items that MUST appear
         assert "Standing Charge" in report or "standing" in report.lower()
         assert "Import" in report or "import" in report.lower()
         assert "VAT" in report or "vat" in report.lower()
-        assert "Gross Bill" in report or "gross" in report.lower()
-        assert "SEG" in report or "seg" in report.lower() or "Export" in report
-        assert "Net Annual Bill" in report or "net" in report.lower()
+        assert "Own-Use Payment" in report or "own-use" in report.lower() or "own_use" in report.lower()
+        assert "Total Outlay" in report or "total outlay" in report.lower()
+
+        # W2 fields that must NOT appear (CBS owns assets; no SEG to householder)
+        assert "Gross Bill" not in report
+        assert "SEG Export Income" not in report
+        assert "Net Annual Bill" not in report
 
     def test_distribution_table_present(self) -> None:
-        """Report must contain a per-home distribution table with min/mean/median/max."""
+        """Report must contain a per-home total-outlay distribution table."""
         from solar_challenge.output import generate_finance_report
 
         dist = _make_bill_distribution()
@@ -797,17 +806,19 @@ class TestGenerateFinanceReport:
         assert "mean" in report.lower() or "Mean" in report
         assert "median" in report.lower() or "Median" in report
         assert "max" in report.lower() or "Max" in report
+        # CR3: distribution heading must reference "outlay" not the old "Net Annual Bill"
+        assert "Total Annual Outlay" in report or "total annual outlay" in report.lower()
 
     def test_representative_values_in_report(self) -> None:
-        """Report must include representative bill values."""
+        """Report must include representative total_outlay_gbp value."""
         from solar_challenge.output import generate_finance_report
 
         dist = _make_bill_distribution()
         report = generate_finance_report(dist)
 
-        # Check net_annual_bill_gbp appears (formatted to 2 dp)
-        net = dist.representative.net_annual_bill_gbp
-        assert f"{net:.2f}" in report
+        # CR3: check total_outlay_gbp appears (formatted to 2 dp)
+        outlay = dist.representative.total_outlay_gbp
+        assert f"{outlay:.2f}" in report
 
     def test_scenario_name_in_report(self) -> None:
         """When scenario_name is provided it must appear in the report."""
@@ -975,6 +986,6 @@ class TestFinanceCLIEndToEnd:
             f"Exit {result.exit_code}. Output:\n{result.output}"
         )
         output = result.output.lower()
-        # Householder-bill block headings must be present
+        # Householder-bill block headings must be present (CR3: outlay-based)
         assert "finance" in output or "bill" in output
-        assert "net" in output or "annual" in output
+        assert "outlay" in output or "import" in output
