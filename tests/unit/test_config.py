@@ -3385,6 +3385,18 @@ class TestGenerateHomesFromDistributionFlex:
         for home in homes:
             assert home.dispatch_strategy == "greedy"
 
+    def test_dispatch_strategy_empty_string_defaults_to_greedy(self) -> None:
+        """Empty-string fleet_dispatch_strategy='': every home falls back to 'greedy'.
+
+        Documents the `fleet_dispatch_strategy or "greedy"` contract so future
+        editors cannot silently break the empty-string case.
+        """
+        homes = generate_homes_from_distribution(
+            self._base_config(), Location.bristol(), fleet_dispatch_strategy=""
+        )
+        for home in homes:
+            assert home.dispatch_strategy == "greedy"
+
 
 class TestLoadFleetConfigFlexThreading:
     """Tests for YAML tariff + grid_charging threading through load_fleet_config."""
@@ -3536,5 +3548,70 @@ finance:
                 assert home.battery_config.grid_charging is None, (
                     "grid_charging must be None when no battery.grid_charging key is present"
                 )
+        finally:
+            path.unlink()
+
+    def test_fleet_yaml_invalid_dispatch_strategy_raises(self) -> None:
+        """A typo in fleet_distribution.dispatch_strategy raises ConfigurationError.
+
+        Catches config errors early rather than silently falling back to
+        self-consumption at simulation time (e.g. 'tou-optimised' instead of
+        'tou_optimized').
+        """
+        yaml_content = """
+name: Invalid Strategy Test
+fleet_distribution:
+  n_homes: 2
+  seed: 42
+  pv:
+    capacity_kw: 4.0
+  battery:
+    capacity_kwh: 5.0
+  load:
+    annual_consumption_kwh: 3400
+  dispatch_strategy: tou-optimised
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            with pytest.raises(ConfigurationError, match="tou-optimised"):
+                load_fleet_config(path)
+        finally:
+            path.unlink()
+
+    def test_dispatch_strategy_tou_without_tariff_warns(self) -> None:
+        """tou_optimized without a tariff block emits a UserWarning.
+
+        Strategy is still threaded to all homes so the config-layer assertion
+        passes, but the warning surfaces the tariff omission early rather than
+        letting the simulation silently fall back to self-consumption dispatch.
+        """
+        yaml_content = """
+name: TOU No Tariff Warning Test
+fleet_distribution:
+  n_homes: 2
+  seed: 42
+  pv:
+    capacity_kw: 4.0
+  battery:
+    capacity_kwh: 5.0
+  load:
+    annual_consumption_kwh: 3400
+  dispatch_strategy: tou_optimized
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            with pytest.warns(UserWarning, match="tou_optimized"):
+                fleet = load_fleet_config(path)
+            # Strategy is still threaded despite the warning.
+            for home in fleet.homes:
+                assert home.dispatch_strategy == "tou_optimized"
         finally:
             path.unlink()
