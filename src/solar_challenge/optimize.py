@@ -318,7 +318,37 @@ __all__ = [
     "iter_configs",
     "run_sweep",
     "rank",
+    "feasible_split",
 ]
+
+
+def feasible_split(
+    results: Sequence["ConfigResult"],
+) -> "tuple[List[ConfigResult], List[ConfigResult]]":
+    """Partition ConfigResults into feasible and infeasible lists.
+
+    The split predicate is ``binding == 'infeasible_above_retail'``; records
+    with ``binding`` of ``'floor'`` or ``'rate_clamped_zero'`` land in the
+    feasible side regardless of the :attr:`ConfigResult.feasible` boolean.
+
+    Input order is preserved within each output list.
+
+    Args:
+        results: Any sequence of :class:`ConfigResult` objects (may be empty).
+
+    Returns:
+        ``(feasible, infeasible)`` where *infeasible* contains every record
+        whose ``binding == 'infeasible_above_retail'`` and *feasible* contains
+        the remainder.  Both sides are :class:`ConfigResult` lists.
+    """
+    feasible: List[ConfigResult] = []
+    infeasible: List[ConfigResult] = []
+    for r in results:
+        if r.binding == "infeasible_above_retail":
+            infeasible.append(r)
+        else:
+            feasible.append(r)
+    return feasible, infeasible
 
 
 def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
@@ -495,29 +525,9 @@ def _age0_baseline_outlay(
 def _split_infeasible(
     results: List[ConfigResult],
 ) -> tuple[List[ConfigResult], List[ConfigPoint]]:
-    """Split evaluated ConfigResults into feasible list and infeasible ConfigPoints.
-
-    Splits on the :attr:`ConfigResult.feasible` boolean rather than the
-    ``binding`` string so that any future ``binding`` value with ``feasible=False``
-    is correctly classified without a string-match change.
-
-    Args:
-        results: All evaluated ConfigResults from :func:`_evaluate_config`.
-
-    Returns:
-        ``(feasible_list, infeasible_points)`` where *infeasible_points* preserves
-        the input order of configs whose ``feasible`` field is ``False``.
-    """
-    feasible: List[ConfigResult] = []
-    infeasible: List[ConfigPoint] = []
-    for r in results:
-        if r.feasible:
-            feasible.append(r)
-        else:
-            # binding should be 'infeasible_above_retail' when feasible=False;
-            # splitting on the bool guards against future binding strings.
-            infeasible.append(r.config)
-    return feasible, infeasible
+    """Delegate to public :func:`feasible_split`; return ConfigPoints for infeasible side."""
+    feas, infeas = feasible_split(results)
+    return feas, [r.config for r in infeas]
 
 
 def _rank_feasible(feasible: List[ConfigResult]) -> List[ConfigResult]:
