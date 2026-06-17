@@ -983,4 +983,28 @@ def generate_config_ranking_report(
             label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
             report += f"| {label} | {_BINDING_LABELS['infeasible_above_retail']} |\n"
 
+    # ---- Table 2: FIXED-15p TRADE-OFF ----------------------------------------
+    # Infeasible configs are omitted from Table 2 because RankedSweep retains them
+    # only as ConfigPoints without baseline_outlay/baseline_surplus economics; they
+    # remain visible in Table 1's infeasible list above.
+    report += "\n## Fixed-15p Trade-Off\n\n"
+    if not ranked.results:
+        report += "*No feasible configurations to compare.*\n"
+    else:
+        pareto_set = set(ranked.pareto_baseline)
+        report += (
+            "| Config | Baseline Outlay (£/yr) | Baseline CBS Surplus (£/home/yr) | Pareto |\n"
+        )
+        report += "|--------|----------------------:|--------------------------------:|--------|\n"
+        for cr in ranked.results:
+            cp = cr.config
+            label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
+            pareto_flag = "✔ Pareto" if cp in pareto_set else "—"
+            report += (
+                f"| {label} "
+                f"| £{cr.baseline_outlay_gbp:.2f} "
+                f"| £{cr.baseline_surplus_per_home_gbp:.2f} "
+                f"| {pareto_flag} |\n"
+            )
+
     return report
