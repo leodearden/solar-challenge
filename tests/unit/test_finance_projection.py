@@ -1023,10 +1023,10 @@ class TestProjectMultiYearRevenue:
 
         CR2 RED test: the old formula used self_consumption_saving_gbp (priced at
         retail_baseline_rate=30p/kWh); the new formula uses own_use_rate_pence_per_kwh
-        (default 15p/kWh) × fleet_sc + Σ seg_export_income_gbp - Σ total_grid_charge_cost_gbp.
-        These rates differ, so this test fails against the old _simulate_age implementation.
+        (default 15p/kWh) × fleet_sc + Σ _seg_export_income_gbp - Σ total_grid_charge_cost_gbp.
+        CR3: SEG is now computed via _seg_export_income_gbp (extracted from householder_bill).
         """
-        from solar_challenge.finance import householder_bill, project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.finance import _seg_export_income_gbp, project_multi_year  # type: ignore[attr-defined]
         from solar_challenge.home import calculate_summary
 
         n_homes = 2
@@ -1038,18 +1038,11 @@ class TestProjectMultiYearRevenue:
         summaries = [calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
                      for r in fr.per_home_results]
         fleet_sc_kwh = sum(s.total_self_consumption_kwh for s in summaries)
-        bills = [
-            householder_bill(
-                s,
-                annual_self_consumption_kwh=s.total_self_consumption_kwh,
-                finance=finance,
-                simulation_days=s.simulation_days,
-            )
-            for s in summaries
-        ]
         # New formula (no grid_services since homes have no battery):
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc_kwh / 100.0
-        seg_revenue = sum(b.seg_export_income_gbp for b in bills)
+        seg_revenue = sum(
+            _seg_export_income_gbp(s, finance, s.simulation_days) for s in summaries
+        )
         cbs_grid_charge_cost = sum(s.total_grid_charge_cost_gbp for s in summaries)
         expected_revenue = own_use_revenue + seg_revenue - cbs_grid_charge_cost
 
@@ -1117,7 +1110,7 @@ class TestProjectMultiYearRevenue:
 
         fleet_revenue_gbp == own_use_revenue + seg_revenue + grid_services (no deduction).
         """
-        from solar_challenge.finance import householder_bill, project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.finance import _seg_export_income_gbp, project_multi_year  # type: ignore[attr-defined]
         from solar_challenge.home import calculate_summary
 
         n_homes = 1
@@ -1130,18 +1123,12 @@ class TestProjectMultiYearRevenue:
         summaries = [calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
                      for r in fr.per_home_results]
         fleet_sc_kwh = sum(s.total_self_consumption_kwh for s in summaries)
-        bills = [
-            householder_bill(
-                s,
-                annual_self_consumption_kwh=s.total_self_consumption_kwh,
-                finance=finance,
-                simulation_days=s.simulation_days,
-            )
-            for s in summaries
-        ]
 
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc_kwh / 100.0
-        seg_revenue = sum(b.seg_export_income_gbp for b in bills)
+        # CR3: SEG computed via _seg_export_income_gbp (no seg_export_income_gbp on bill)
+        seg_revenue = sum(
+            _seg_export_income_gbp(s, finance, s.simulation_days) for s in summaries
+        )
         expected_revenue = own_use_revenue + seg_revenue  # no deduction (cbs_cost==0)
 
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)

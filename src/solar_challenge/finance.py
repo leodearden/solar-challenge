@@ -153,6 +153,71 @@ class BillDistribution:
 DEFAULT_SPREADSHEET_SELF_CONSUMPTION: float = 0.70
 
 # ---------------------------------------------------------------------------
+# _seg_export_income_gbp — CBS SEG revenue helper (extracted from W2 model)
+# ---------------------------------------------------------------------------
+
+
+def _seg_export_income_gbp(
+    summary: "SummaryStatistics",
+    finance: "FinanceConfig",
+    simulation_days: int,
+) -> float:
+    """Compute the SEG export income for a single home (CBS-revenue side).
+
+    This is the export-income logic that was removed from the householder bill
+    in CR3 (the CBS owns the export MPAN, so export revenue flows to the CBS,
+    not the householder).  It is used by :func:`project_multi_year._simulate_age`
+    to compute ``seg_revenue = Σ _seg_export_income_gbp(s, ...)`` as part of
+    the CBS fleet revenue formula (PRD §3.2).
+
+    Replicates the annualisation + physics/override switch from the old
+    householder_bill export path:
+
+    * **Physics path** (``finance.self_consumption_override`` is None):
+      annualised ``summary.total_export_revenue_gbp``.
+    * **Override path**: re-compute override export kWh from the override
+      self-consumption fraction; price at the effective export rate derived
+      from the physics figures (falls back to 0.0 if physics export kWh == 0).
+
+    Args:
+        summary: Per-home simulation output (read-only).
+        finance: FinanceConfig with tariff + assumption parameters.
+        simulation_days: Actual simulation length in days; triggers
+            annualisation to 365 days when < 360.
+
+    Returns:
+        SEG export income in GBP (£), annualised to a 365-day year.
+    """
+    override = finance.self_consumption_override
+
+    # ---- Annualise the physics figures (mirrors householder_bill) -----------
+    if simulation_days < _SHORT_PERIOD_THRESHOLD:
+        scale = _ANNUALISATION_DAYS / max(simulation_days, 1)
+        gen_kwh = summary.total_generation_kwh * scale
+        sc_kwh_physics = summary.total_self_consumption_kwh * scale
+        export_kwh = summary.total_grid_export_kwh * scale
+        export_rev_physics = summary.total_export_revenue_gbp * scale
+    else:
+        gen_kwh = summary.total_generation_kwh
+        sc_kwh_physics = summary.total_self_consumption_kwh
+        export_kwh = summary.total_grid_export_kwh
+        export_rev_physics = summary.total_export_revenue_gbp
+
+    if override is None:
+        # Physics path: annualised SEG revenue from simulation
+        return float(export_rev_physics)
+    else:
+        # Spreadsheet path: recompute from override fraction
+        sc_kwh = override * gen_kwh
+        override_export_kwh = max(gen_kwh - sc_kwh, 0.0)
+        if export_kwh > 0.0:
+            effective_export_rate_pence = (export_rev_physics / export_kwh) * 100.0
+        else:
+            effective_export_rate_pence = 0.0
+        return float(override_export_kwh * effective_export_rate_pence / 100.0)
+
+
+# ---------------------------------------------------------------------------
 # householder_bill
 # ---------------------------------------------------------------------------
 
@@ -901,23 +966,18 @@ def project_multi_year(
 
         # CBS fleet revenue (PRD §3.2):
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
-        #   seg_revenue     = Σ bill.seg_export_income_gbp
+        #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)
         #   grid_services   = grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw
         #   cbs_grid_charge = Σ summary.total_grid_charge_cost_gbp
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services − cbs_grid_charge
-        # householder_bill is still called for seg_export_income_gbp (honours
-        # self_consumption_override and seg scaling automatically).
-        bills = [
-            householder_bill(
-                s,
-                annual_self_consumption_kwh=s.total_self_consumption_kwh,
-                finance=finance,
-                simulation_days=s.simulation_days,
-            )
-            for s in per_home_summaries
-        ]
+        # CR3: SEG revenue is extracted via _seg_export_income_gbp (honours
+        # self_consumption_override and seg scaling automatically); householder_bill
+        # is no longer called here since seg_export_income_gbp was removed from it.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc / 100.0
-        seg_revenue = sum(b.seg_export_income_gbp for b in bills)
+        seg_revenue = sum(
+            _seg_export_income_gbp(s, finance, s.simulation_days)
+            for s in per_home_summaries
+        )
         grid_services = finance.grid_services_income_per_kw_per_year_gbp * sum(
             h.battery_config.max_discharge_kw
             for h in homes
