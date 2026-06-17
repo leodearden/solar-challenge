@@ -11,7 +11,7 @@ from typing import Optional
 
 import pytest
 
-from solar_challenge.optimize import feasible_split, rank
+from solar_challenge.optimize import feasible_split, pareto_baseline, rank
 
 
 # ---------------------------------------------------------------------------
@@ -271,3 +271,96 @@ class TestFeasibleSplit:
         feasible_out, infeasible_out = feasible_split([contradictory])
         assert len(infeasible_out) == 1
         assert len(feasible_out) == 0
+
+
+# ---------------------------------------------------------------------------
+# TestParetoBaseline — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
+# ---------------------------------------------------------------------------
+
+
+class TestParetoBaseline:
+    """pareto_baseline() non-dominated filter over ConfigResult sequences."""
+
+    def test_strictly_dominated_point_excluded(self) -> None:
+        """A point with higher outlay AND lower surplus is excluded from the front."""
+        dominator = _make_config_result(
+            pv_kwp=4.0, baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0
+        )
+        dominated = _make_config_result(
+            pv_kwp=5.0, baseline_outlay_gbp=400.0, baseline_surplus_per_home_gbp=100.0
+        )
+        front = pareto_baseline([dominator, dominated])
+        configs_in_front = set(front)
+        assert dominator.config in configs_in_front
+        assert dominated.config not in configs_in_front
+
+    def test_incomparable_point_retained(self) -> None:
+        """A point with lower outlay but lower surplus is incomparable — both retained."""
+        a = _make_config_result(
+            pv_kwp=4.0, baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=50.0
+        )
+        b = _make_config_result(
+            pv_kwp=5.0, baseline_outlay_gbp=500.0, baseline_surplus_per_home_gbp=200.0
+        )
+        front = pareto_baseline([a, b])
+        assert len(front) == 2
+
+    def test_all_non_dominated_input_all_returned(self) -> None:
+        """When no point is dominated, the full set is returned."""
+        records = [
+            _make_config_result(
+                pv_kwp=float(i + 1),
+                baseline_outlay_gbp=float(100 + i * 100),
+                baseline_surplus_per_home_gbp=float(200 - i * 40),
+            )
+            for i in range(4)
+        ]
+        # Construct so each step trades off: higher outlay, lower surplus — all incomparable
+        front = pareto_baseline(records)
+        assert len(front) == 4
+
+    def test_identical_pairs_both_retained(self) -> None:
+        """Two records with identical (outlay, surplus) are BOTH retained ('at least one strict')."""
+        a = _make_config_result(
+            pv_kwp=4.0, baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=100.0
+        )
+        b = _make_config_result(
+            pv_kwp=5.0, baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=100.0
+        )
+        front = pareto_baseline([a, b])
+        assert len(front) == 2
+
+    def test_infeasible_record_included_when_non_dominated(self) -> None:
+        """An infeasible-binding record on the Pareto front is NOT excluded."""
+        infeas = _make_config_result(
+            pv_kwp=4.0,
+            binding="infeasible_above_retail",
+            feasible=False,
+            baseline_outlay_gbp=200.0,
+            baseline_surplus_per_home_gbp=300.0,
+        )
+        feas = _make_config_result(
+            pv_kwp=5.0,
+            baseline_outlay_gbp=400.0,
+            baseline_surplus_per_home_gbp=100.0,
+        )
+        front = pareto_baseline([infeas, feas])
+        assert infeas.config in front
+        assert feas.config not in front  # dominated by infeas on both axes
+
+    def test_output_sorted_by_baseline_outlay_ascending(self) -> None:
+        """Output is sorted by baseline_outlay_gbp ascending."""
+        records = [
+            _make_config_result(
+                pv_kwp=float(i + 1),
+                baseline_outlay_gbp=float(500 - i * 100),
+                baseline_surplus_per_home_gbp=float(i * 50),
+            )
+            for i in range(4)
+        ]
+        front = pareto_baseline(records)
+        outlays = [cp.pv_kwp for cp in front]  # pv_kwp encodes position here
+        # verify the outlay values are ascending by extracting from matching records
+        result_map = {r.config: r for r in records}
+        front_outlays = [result_map[cp].baseline_outlay_gbp for cp in front]
+        assert front_outlays == sorted(front_outlays)
