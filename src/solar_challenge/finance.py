@@ -1138,7 +1138,12 @@ def project_multi_year(
         )
         if finance.grid_services_model == "capacity_at_events":
             from solar_challenge.gridservices import compute_grid_services_at_events
-            assert finance.grid_services_events is not None  # narrowed for mypy strict; ConfigurationError guard added in step-4
+            if finance.grid_services_events is None:
+                from solar_challenge.config import ConfigurationError
+                raise ConfigurationError(
+                    "grid_services_model='capacity_at_events' requires "
+                    "grid_services_events to be configured"
+                )
             grid_services = compute_grid_services_at_events(
                 fleet_results, finance.grid_services_events
             ).annual_income_gbp
