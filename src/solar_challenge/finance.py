@@ -1125,7 +1125,7 @@ def project_multi_year(
         # CBS fleet revenue (PRD §3.2):
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
         #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)
-        #   grid_services   = grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw
+        #   grid_services   = model-dependent (flat or capacity_at_events)
         #   cbs_grid_charge = Σ summary.total_grid_charge_cost_gbp
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services − cbs_grid_charge
         # CR3: SEG revenue is extracted via _seg_export_income_gbp (honours
@@ -1136,11 +1136,18 @@ def project_multi_year(
             _seg_export_income_gbp(s, finance, s.simulation_days)
             for s in per_home_summaries
         )
-        grid_services = finance.grid_services_income_per_kw_per_year_gbp * sum(
-            h.battery_config.max_discharge_kw
-            for h in homes
-            if h.battery_config is not None
-        )
+        if finance.grid_services_model == "capacity_at_events":
+            from solar_challenge.gridservices import compute_grid_services_at_events
+            assert finance.grid_services_events is not None  # narrowed for mypy strict; ConfigurationError guard added in step-4
+            grid_services = compute_grid_services_at_events(
+                fleet_results, finance.grid_services_events
+            ).annual_income_gbp
+        else:
+            grid_services = finance.grid_services_income_per_kw_per_year_gbp * sum(
+                h.battery_config.max_discharge_kw
+                for h in homes
+                if h.battery_config is not None
+            )
         cbs_grid_charge_cost = sum(s.total_grid_charge_cost_gbp for s in per_home_summaries)
         fleet_revenue = own_use_revenue + seg_revenue + grid_services - cbs_grid_charge_cost
 
