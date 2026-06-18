@@ -187,3 +187,90 @@ class TestEventWindowValidation:
             event_hours=3.0,
         )
         assert pickle.loads(pickle.dumps(ew)) == ew
+
+
+# ---------------------------------------------------------------------------
+# Step-5: GridServicesRateBand + GridServicesRateBands + module constant
+# ---------------------------------------------------------------------------
+
+
+class TestGridServicesRateBands:
+    """Tests for GridServicesRateBand, GridServicesRateBands, and module helpers."""
+
+    def test_module_constant_has_three_bands(self) -> None:
+        """GRID_SERVICES_RATE_BANDS has resolvable low/central/high bands."""
+        from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
+
+        for band_name in ("low", "central", "high"):
+            band = GRID_SERVICES_RATE_BANDS.resolve(band_name)
+            assert band is not None
+
+    def test_resolve_helper_and_constant_agree(self) -> None:
+        """resolve_grid_services_rate_band('central') equals GRID_SERVICES_RATE_BANDS.resolve('central')."""
+        from solar_challenge.gridservices import (
+            GRID_SERVICES_RATE_BANDS,
+            GridServicesRateBand,
+            resolve_grid_services_rate_band,
+        )
+
+        central_via_helper = resolve_grid_services_rate_band("central")
+        central_via_constant = GRID_SERVICES_RATE_BANDS.resolve("central")
+        assert central_via_helper == central_via_constant
+        assert isinstance(central_via_helper, GridServicesRateBand)
+
+    def test_central_rates_are_positive(self) -> None:
+        """Central band availability and utilisation rates are > 0."""
+        from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
+
+        central = GRID_SERVICES_RATE_BANDS.resolve("central")
+        assert central.availability_gbp_per_kw_per_event > 0
+        assert central.utilisation_gbp_per_mwh > 0
+
+    def test_low_le_central_le_high_availability(self) -> None:
+        """Low <= Central <= High for availability_gbp_per_kw_per_event."""
+        from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
+
+        low = GRID_SERVICES_RATE_BANDS.resolve("low")
+        central = GRID_SERVICES_RATE_BANDS.resolve("central")
+        high = GRID_SERVICES_RATE_BANDS.resolve("high")
+        assert low.availability_gbp_per_kw_per_event <= central.availability_gbp_per_kw_per_event
+        assert central.availability_gbp_per_kw_per_event <= high.availability_gbp_per_kw_per_event
+
+    def test_low_le_central_le_high_utilisation(self) -> None:
+        """Low <= Central <= High for utilisation_gbp_per_mwh."""
+        from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
+
+        low = GRID_SERVICES_RATE_BANDS.resolve("low")
+        central = GRID_SERVICES_RATE_BANDS.resolve("central")
+        high = GRID_SERVICES_RATE_BANDS.resolve("high")
+        assert low.utilisation_gbp_per_mwh <= central.utilisation_gbp_per_mwh
+        assert central.utilisation_gbp_per_mwh <= high.utilisation_gbp_per_mwh
+
+    def test_unknown_band_raises_value_error(self) -> None:
+        """resolve of an unknown band raises ValueError."""
+        from solar_challenge.gridservices import resolve_grid_services_rate_band
+
+        with pytest.raises(ValueError):
+            resolve_grid_services_rate_band("extreme")
+
+    def test_rate_band_rejects_negative_availability(self) -> None:
+        """GridServicesRateBand raises ValueError for negative availability."""
+        from solar_challenge.gridservices import GridServicesRateBand
+
+        with pytest.raises(ValueError):
+            GridServicesRateBand(availability_gbp_per_kw_per_event=-1.0, utilisation_gbp_per_mwh=5.0)
+
+    def test_rate_band_rejects_negative_utilisation(self) -> None:
+        """GridServicesRateBand raises ValueError for negative utilisation."""
+        from solar_challenge.gridservices import GridServicesRateBand
+
+        with pytest.raises(ValueError):
+            GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=-5.0)
+
+    def test_rate_band_is_frozen(self) -> None:
+        """GridServicesRateBand is frozen — attribute assignment raises FrozenInstanceError."""
+        from solar_challenge.gridservices import GridServicesRateBand
+
+        band = GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=5.0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            band.availability_gbp_per_kw_per_event = 2.0  # type: ignore[misc]
