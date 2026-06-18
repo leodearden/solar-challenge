@@ -163,7 +163,9 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     )
     finance_flat0 = dataclasses.replace(
         finance_base,
-        grid_services_income_per_kw_per_year_gbp=0.0,
+        grid_services_model="flat",
+        grid_services_events=None,
+        grid_services_income_per_kw_per_year_gbp=0.0,  # irrelevant in flat model
     )
 
     # Direct event-derived figure (the expected value for the delta)
@@ -429,15 +431,23 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
     fr = _synthetic_fleet_results_in_window(homes)
     simulate = _constant_simulate(fr)
 
-    # (1) default model is "flat"
-    assert finance_base.grid_services_model == "flat", (
-        "FinanceConfig.grid_services_model default must be 'flat'"
+    # (1) FinanceConfig.grid_services_model field default is "flat"
+    # (decoupled from the board YAML, which ships capacity_at_events after task-76 ε flip)
+    _gs_field = next(
+        f for f in dataclasses.fields(finance_base) if f.name == "grid_services_model"
+    )
+    assert _gs_field.default == "flat", (
+        "FinanceConfig.grid_services_model field default must be 'flat'"
     )
 
     # (2) flat: no events config vs attached events config → bit-identical
-    finance_flat_no_events = dataclasses.replace(finance_base, grid_services_events=None)
+    # Build from an explicitly flat base (board YAML ships capacity_at_events after ε flip)
+    finance_flat_base = dataclasses.replace(
+        finance_base, grid_services_model="flat", grid_services_events=None
+    )
+    finance_flat_no_events = finance_flat_base  # events already None
     finance_flat_with_events = dataclasses.replace(
-        finance_base,
+        finance_flat_base,
         grid_services_events=GridServicesEventsConfig(band="central"),
     )
     curve_no_events = project_multi_year(scenario, finance_flat_no_events, simulate=simulate)
@@ -507,6 +517,8 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
     )
     finance_flat0 = dataclasses.replace(
         finance_base,
+        grid_services_model="flat",
+        grid_services_events=None,
         grid_services_income_per_kw_per_year_gbp=0.0,
     )
 
