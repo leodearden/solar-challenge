@@ -3615,3 +3615,262 @@ fleet_distribution:
                 assert home.dispatch_strategy == "tou_optimized"
         finally:
             path.unlink()
+
+
+# ---------------------------------------------------------------------------
+# FinanceConfig grid_services_model selector (step-11)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceConfigGridServicesModel:
+    """FinanceConfig.grid_services_model + grid_services_events fields (step-11)."""
+
+    _BASE: dict = {"standing_charge_pence_per_day": 60.0}
+
+    def test_default_grid_services_model_is_flat(self) -> None:
+        """Default grid_services_model is 'flat'."""
+        fc = FinanceConfig(**self._BASE)
+        assert fc.grid_services_model == "flat"
+
+    def test_default_grid_services_events_is_none(self) -> None:
+        """Default grid_services_events is None."""
+        fc = FinanceConfig(**self._BASE)
+        assert fc.grid_services_events is None
+
+    def test_all_pre_existing_defaults_unchanged(self) -> None:
+        """Adding new fields does not disturb any pre-existing FinanceConfig defaults."""
+        fc = FinanceConfig(**self._BASE)
+        assert fc.vat_rate == 0.05
+        assert fc.retail_baseline_rate_pence_per_kwh == 23.0
+        assert fc.self_consumption_override is None
+        assert fc.pv_cost_per_kwp_gbp == 1000.0
+        assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
+
+    def test_frozen_with_new_fields(self) -> None:
+        """FinanceConfig is still frozen after adding new fields."""
+        import dataclasses as dc
+        fc = FinanceConfig(**self._BASE)
+        with pytest.raises(dc.FrozenInstanceError):
+            fc.grid_services_model = "capacity_at_events"  # type: ignore[misc]
+
+    def test_picklable_with_new_fields(self) -> None:
+        """FinanceConfig is picklable when grid_services_events is None."""
+        import pickle
+        fc = FinanceConfig(**self._BASE)
+        assert pickle.loads(pickle.dumps(fc)) == fc
+
+    def test_capacity_at_events_model_with_config(self) -> None:
+        """Constructing with grid_services_model='capacity_at_events' + GridServicesEventsConfig round-trips."""
+        import pickle
+        from solar_challenge.gridservices import GridServicesEventsConfig
+        events_cfg = GridServicesEventsConfig()
+        fc = FinanceConfig(
+            **self._BASE,
+            grid_services_model="capacity_at_events",
+            grid_services_events=events_cfg,
+        )
+        assert fc.grid_services_model == "capacity_at_events"
+        assert fc.grid_services_events == events_cfg
+        assert pickle.loads(pickle.dumps(fc)) == fc
+
+    def test_unknown_grid_services_model_raises(self) -> None:
+        """Unknown grid_services_model raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, grid_services_model="foo")
+
+    def test_capacity_at_events_without_config_ok(self) -> None:
+        """grid_services_model='capacity_at_events' with grid_services_events=None still constructs."""
+        fc = FinanceConfig(**self._BASE, grid_services_model="capacity_at_events")
+        assert fc.grid_services_model == "capacity_at_events"
+        assert fc.grid_services_events is None
+
+
+# ---------------------------------------------------------------------------
+# _parse_finance_config: grid_services_model + nested grid_services_events (step-13)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceConfigParsingGridServices:
+    """Tests for _parse_finance_config with grid_services_model + grid_services_events."""
+
+    _BASE = {"standing_charge_pence_per_day": 60.0}
+
+    def test_omitting_model_defaults_flat(self) -> None:
+        """Finance dict omitting grid_services_model yields 'flat' + None events."""
+        result = _parse_finance_config(self._BASE)
+        assert result is not None
+        assert result.grid_services_model == "flat"
+        assert result.grid_services_events is None
+
+    def test_capacity_at_events_with_nested_events_block(self) -> None:
+        """grid_services_model='capacity_at_events' + events block parses fully."""
+        from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
+        data = {
+            **self._BASE,
+            "grid_services_model": "capacity_at_events",
+            "grid_services_events": {
+                "band": "high",
+                "aggregator_share": 0.1,
+                "utilisation_factor": 0.8,
+                "availability_gbp_per_kw_per_event": 2.5,
+                "utilisation_gbp_per_mwh": 80.0,
+                "event_windows": [
+                    {
+                        "months": [11, 12, 1, 2],
+                        "weekdays": [0, 1, 2, 3, 4],
+                        "hours": [16, 17, 18],
+                        "events_per_year": 12,
+                        "event_hours": 3.0,
+                    }
+                ],
+            },
+        }
+        result = _parse_finance_config(data)
+        assert result is not None
+        assert result.grid_services_model == "capacity_at_events"
+        assert isinstance(result.grid_services_events, GridServicesEventsConfig)
+        cfg = result.grid_services_events
+        assert cfg.band == "high"
+        assert cfg.aggregator_share == 0.1
+        assert cfg.utilisation_factor == 0.8
+        assert cfg.availability_gbp_per_kw_per_event == 2.5
+        assert cfg.utilisation_gbp_per_mwh == 80.0
+        assert len(cfg.event_windows) == 1
+        ew = cfg.event_windows[0]
+        assert isinstance(ew, EventWindow)
+        assert set(ew.months) == {11, 12, 1, 2}
+        assert set(ew.weekdays) == {0, 1, 2, 3, 4}
+        assert set(ew.hours) == {16, 17, 18}
+        assert ew.events_per_year == 12
+        assert ew.event_hours == 3.0
+
+    def test_unknown_model_raises_configuration_error(self) -> None:
+        """Unknown grid_services_model in dict raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config({**self._BASE, "grid_services_model": "unknown"})
+
+    def test_nested_negative_override_raises(self) -> None:
+        """Negative availability override in nested block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "central",
+                    "aggregator_share": 0.25,
+                    "utilisation_factor": 0.6,
+                    "availability_gbp_per_kw_per_event": -1.0,
+                    "event_windows": [
+                        {"months": [12], "weekdays": [0], "hours": [17],
+                         "events_per_year": 1, "event_hours": 1.0}
+                    ],
+                },
+            })
+
+    def test_nested_aggregator_share_one_raises(self) -> None:
+        """aggregator_share=1 in nested block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "central",
+                    "aggregator_share": 1.0,
+                    "utilisation_factor": 0.6,
+                    "event_windows": [
+                        {"months": [12], "weekdays": [0], "hours": [17],
+                         "events_per_year": 1, "event_hours": 1.0}
+                    ],
+                },
+            })
+
+    def test_nested_empty_event_windows_raises(self) -> None:
+        """Empty event_windows list in nested block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "central",
+                    "aggregator_share": 0.25,
+                    "utilisation_factor": 0.6,
+                    "event_windows": [],
+                },
+            })
+
+    def test_nested_unknown_band_raises(self) -> None:
+        """Unknown band in nested block raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "extreme",
+                    "aggregator_share": 0.25,
+                    "utilisation_factor": 0.6,
+                    "event_windows": [
+                        {"months": [12], "weekdays": [0], "hours": [17],
+                         "events_per_year": 1, "event_hours": 1.0}
+                    ],
+                },
+            })
+
+    # ---- Robustness: malformed nested values (suggestions from code review) ----
+
+    def test_non_dict_grid_services_events_raises(self) -> None:
+        """grid_services_events as a string (not a dict) raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="mapping"):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": "central",  # wrong type
+            })
+
+    def test_non_numeric_event_hours_raises(self) -> None:
+        """event_hours='abc' (non-numeric string) raises ConfigurationError, not raw ValueError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "central",
+                    "aggregator_share": 0.25,
+                    "utilisation_factor": 0.6,
+                    "event_windows": [
+                        {"months": [12], "weekdays": [0], "hours": [17],
+                         "events_per_year": 1, "event_hours": "abc"},
+                    ],
+                },
+            })
+
+    def test_missing_required_event_window_key_raises(self) -> None:
+        """event_window dict missing a required key raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="requires 'hours'"):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "central",
+                    "aggregator_share": 0.25,
+                    "utilisation_factor": 0.6,
+                    "event_windows": [
+                        # 'hours' key intentionally omitted
+                        {"months": [12], "weekdays": [0],
+                         "events_per_year": 1, "event_hours": 1.0},
+                    ],
+                },
+            })
+
+    def test_non_dict_event_window_entry_raises(self) -> None:
+        """A non-dict entry in event_windows list raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="mapping"):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "central",
+                    "aggregator_share": 0.25,
+                    "utilisation_factor": 0.6,
+                    "event_windows": ["not-a-dict"],  # list entry is a string
+                },
+            })
