@@ -274,3 +274,74 @@ class TestGridServicesRateBands:
         band = GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=5.0)
         with pytest.raises(dataclasses.FrozenInstanceError):
             band.availability_gbp_per_kw_per_event = 2.0  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Step-7: GridServicesEventsConfig defaults + construction
+# ---------------------------------------------------------------------------
+
+
+class TestGridServicesEventsConfigDefaults:
+    """GridServicesEventsConfig construction, defaults, immutability, and pickling."""
+
+    def test_default_event_windows_structure(self) -> None:
+        """DEFAULT_EVENT_WINDOWS is a non-empty tuple of EventWindow with the winter schedule."""
+        from solar_challenge.gridservices import DEFAULT_EVENT_WINDOWS, EventWindow
+
+        assert isinstance(DEFAULT_EVENT_WINDOWS, tuple)
+        assert len(DEFAULT_EVENT_WINDOWS) >= 1
+        assert all(isinstance(ew, EventWindow) for ew in DEFAULT_EVENT_WINDOWS)
+
+        ew = DEFAULT_EVENT_WINDOWS[0]
+        assert set(ew.months) == {11, 12, 1, 2}
+        assert set(ew.weekdays) == {0, 1, 2, 3, 4}
+        assert set(ew.hours) == {16, 17, 18}
+        assert ew.events_per_year == 12
+        assert ew.event_hours == 3.0
+
+    def test_default_construction(self) -> None:
+        """GridServicesEventsConfig() uses all expected defaults."""
+        from solar_challenge.gridservices import DEFAULT_EVENT_WINDOWS, GridServicesEventsConfig
+
+        cfg = GridServicesEventsConfig()
+        assert cfg.band == "central"
+        assert cfg.event_windows == DEFAULT_EVENT_WINDOWS
+        assert 0.0 <= cfg.aggregator_share < 1.0
+        assert 0.0 <= cfg.utilisation_factor <= 1.0
+        assert cfg.availability_gbp_per_kw_per_event is None
+        assert cfg.utilisation_gbp_per_mwh is None
+
+    def test_fully_specified_config_round_trips(self) -> None:
+        """All fields survive round-trip when explicitly set."""
+        from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
+
+        ews = (EventWindow(months=(12,), weekdays=(0,), hours=(17,), events_per_year=6, event_hours=2.0),)
+        cfg = GridServicesEventsConfig(
+            band="high",
+            event_windows=ews,
+            aggregator_share=0.1,
+            utilisation_factor=0.8,
+            availability_gbp_per_kw_per_event=2.5,
+            utilisation_gbp_per_mwh=80.0,
+        )
+        assert cfg.band == "high"
+        assert cfg.event_windows == ews
+        assert cfg.aggregator_share == 0.1
+        assert cfg.utilisation_factor == 0.8
+        assert cfg.availability_gbp_per_kw_per_event == 2.5
+        assert cfg.utilisation_gbp_per_mwh == 80.0
+
+    def test_is_frozen(self) -> None:
+        """GridServicesEventsConfig is frozen — assignment raises FrozenInstanceError."""
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        cfg = GridServicesEventsConfig()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cfg.band = "low"  # type: ignore[misc]
+
+    def test_is_picklable(self) -> None:
+        """GridServicesEventsConfig survives a pickle round-trip equal to the original."""
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        cfg = GridServicesEventsConfig()
+        assert pickle.loads(pickle.dumps(cfg)) == cfg
