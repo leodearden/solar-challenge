@@ -55,22 +55,49 @@ class TestEventWindowMask:
         assert mask.index.equals(idx)
 
         # Mon Dec 15:00 — before window
-        assert mask.iloc[0] is False or mask.iloc[0] == False  # noqa: E712
+        assert not bool(mask.iloc[0])
         # Mon Dec 16:00 — in window
-        assert mask.iloc[1] is True or mask.iloc[1] == True  # noqa: E712
+        assert bool(mask.iloc[1])
         # Mon Dec 17:00 — in window
-        assert mask.iloc[2] is True or mask.iloc[2] == True  # noqa: E712
+        assert bool(mask.iloc[2])
         # Mon Dec 18:00 — in window
-        assert mask.iloc[3] is True or mask.iloc[3] == True  # noqa: E712
+        assert bool(mask.iloc[3])
         # Mon Dec 19:00 — hour excluded
-        assert mask.iloc[4] is False or mask.iloc[4] == False  # noqa: E712
+        assert not bool(mask.iloc[4])
         # Sat Dec 17:00 — weekend excluded
-        assert mask.iloc[5] is False or mask.iloc[5] == False  # noqa: E712
+        assert not bool(mask.iloc[5])
         # Mon Jul 17:00 — summer excluded
-        assert mask.iloc[6] is False or mask.iloc[6] == False  # noqa: E712
+        assert not bool(mask.iloc[6])
 
         # Exactly 3 in-window rows: Mon Dec 16, 17, 18
         assert int(mask.sum()) == 3
+
+    def test_event_window_mask_tz_naive(self) -> None:
+        """mask() works on tz-naive DatetimeIndex as well as tz-aware."""
+        from solar_challenge.gridservices import EventWindow
+
+        # tz-naive index with same hand-verifiable points
+        idx = pd.DatetimeIndex(
+            [
+                "2024-12-02 15:00",  # Mon Dec, before window
+                "2024-12-02 17:00",  # Mon Dec, in window
+                "2024-12-07 17:00",  # Sat Dec, weekend excluded
+            ]
+        )
+
+        ew = EventWindow(
+            months=(11, 12, 1, 2),
+            weekdays=(0, 1, 2, 3, 4),
+            hours=(16, 17, 18),
+            events_per_year=12,
+            event_hours=3.0,
+        )
+        mask = ew.mask(idx)
+
+        assert isinstance(mask, pd.Series)
+        assert mask.dtype == bool
+        assert mask.index.equals(idx)
+        assert mask.tolist() == [False, True, False]
 
 
 # ---------------------------------------------------------------------------

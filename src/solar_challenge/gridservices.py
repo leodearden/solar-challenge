@@ -63,7 +63,21 @@ class GridServicesRateBand:
     provenance: str = ""
 
     def __post_init__(self) -> None:
-        """Validate non-negativity (uses ValueError, not ConfigurationError)."""
+        """Validate non-negativity.
+
+        .. note::
+            This class intentionally raises ``ValueError`` rather than
+            ``ConfigurationError`` (unlike :class:`EventWindow` and
+            :class:`GridServicesEventsConfig`).  The module constant
+            :data:`GRID_SERVICES_RATE_BANDS` is constructed at *import time*
+            before ``config.py`` has necessarily been loaded, so importing
+            ``ConfigurationError`` inside ``__post_init__`` here would
+            re-introduce the import cycle this module was designed to avoid.
+            Callers that parse user-supplied rates through a config dict
+            receive errors wrapped as ``ConfigurationError`` by the
+            :func:`~solar_challenge.config._parse_finance_config` layer.
+            This mirrors the convention in :class:`~solar_challenge.flex.FlexibilityValueBand`.
+        """
         if self.availability_gbp_per_kw_per_event < 0:
             raise ValueError(
                 "availability_gbp_per_kw_per_event must be non-negative, "
@@ -191,7 +205,21 @@ class EventWindow:
     event_hours: float
 
     def __post_init__(self) -> None:
-        """Validate domain constraints, raising ConfigurationError on violation."""
+        """Validate domain constraints, raising ConfigurationError on violation.
+
+        .. important::
+            ``ConfigurationError`` is imported *inside each failure branch* rather
+            than once at the top of this method.  :data:`DEFAULT_EVENT_WINDOWS` is
+            a module-level constant that constructs a valid :class:`EventWindow` at
+            *import time*, which calls this ``__post_init__``.  A top-level import
+            here would fire during ``gridservices`` module initialisation — before
+            ``config.py`` has finished loading — and re-introduce the circular
+            import this module was designed to avoid.  The per-branch approach is
+            safe because a valid construction never reaches any of the
+            ``if <invalid>:`` branches, so the import is never triggered at load
+            time.  (Compare :class:`GridServicesEventsConfig`, where no module-level
+            instances exist, so the consolidated form is safe there.)
+        """
         if not self.months:
             from solar_challenge.config import ConfigurationError
             raise ConfigurationError("EventWindow.months must be a non-empty tuple")
@@ -291,39 +319,44 @@ class GridServicesEventsConfig:
     utilisation_gbp_per_mwh: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Validate domain constraints, raising ConfigurationError on violation."""
+        """Validate domain constraints, raising ConfigurationError on violation.
+
+        The import is done once at the top of ``__post_init__`` rather than
+        inside every failure branch.  This is still *lazy* — ``__post_init__``
+        runs at construction time, not at module load, so it does NOT trigger
+        ``config.py`` when the module constants are built at import time.
+        """
+        # Single lazy import at the top of __post_init__ — avoids repetition
+        # while preserving the load-time cycle-break (this runs at construction,
+        # not at gridservices module load).
+        from solar_challenge.config import ConfigurationError
+
         _VALID_BANDS = frozenset({"low", "central", "high"})
         if self.band not in _VALID_BANDS:
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 f"GridServicesEventsConfig.band must be one of "
                 f"{sorted(_VALID_BANDS)}, got '{self.band}'"
             )
         if not self.event_windows:
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 "GridServicesEventsConfig.event_windows must be a non-empty tuple"
             )
         if not (0.0 <= self.aggregator_share < 1.0):
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 f"GridServicesEventsConfig.aggregator_share must be in [0, 1), "
                 f"got {self.aggregator_share}"
             )
         if not (0.0 <= self.utilisation_factor <= 1.0):
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 f"GridServicesEventsConfig.utilisation_factor must be in [0, 1], "
                 f"got {self.utilisation_factor}"
             )
         if self.availability_gbp_per_kw_per_event is not None and self.availability_gbp_per_kw_per_event < 0:
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 "GridServicesEventsConfig.availability_gbp_per_kw_per_event override "
                 f"must be >= 0, got {self.availability_gbp_per_kw_per_event}"
             )
         if self.utilisation_gbp_per_mwh is not None and self.utilisation_gbp_per_mwh < 0:
-            from solar_challenge.config import ConfigurationError
             raise ConfigurationError(
                 "GridServicesEventsConfig.utilisation_gbp_per_mwh override "
                 f"must be >= 0, got {self.utilisation_gbp_per_mwh}"

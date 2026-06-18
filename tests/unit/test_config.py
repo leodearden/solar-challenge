@@ -3814,3 +3814,63 @@ class TestFinanceConfigParsingGridServices:
                     ],
                 },
             })
+
+    # ---- Robustness: malformed nested values (suggestions from code review) ----
+
+    def test_non_dict_grid_services_events_raises(self) -> None:
+        """grid_services_events as a string (not a dict) raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="mapping"):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": "central",  # wrong type
+            })
+
+    def test_non_numeric_event_hours_raises(self) -> None:
+        """event_hours='abc' (non-numeric string) raises ConfigurationError, not raw ValueError."""
+        with pytest.raises(ConfigurationError):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "central",
+                    "aggregator_share": 0.25,
+                    "utilisation_factor": 0.6,
+                    "event_windows": [
+                        {"months": [12], "weekdays": [0], "hours": [17],
+                         "events_per_year": 1, "event_hours": "abc"},
+                    ],
+                },
+            })
+
+    def test_missing_required_event_window_key_raises(self) -> None:
+        """event_window dict missing a required key raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="requires 'hours'"):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "central",
+                    "aggregator_share": 0.25,
+                    "utilisation_factor": 0.6,
+                    "event_windows": [
+                        # 'hours' key intentionally omitted
+                        {"months": [12], "weekdays": [0],
+                         "events_per_year": 1, "event_hours": 1.0},
+                    ],
+                },
+            })
+
+    def test_non_dict_event_window_entry_raises(self) -> None:
+        """A non-dict entry in event_windows list raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="mapping"):
+            _parse_finance_config({
+                **self._BASE,
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {
+                    "band": "central",
+                    "aggregator_share": 0.25,
+                    "utilisation_factor": 0.6,
+                    "event_windows": ["not-a-dict"],  # list entry is a string
+                },
+            })
