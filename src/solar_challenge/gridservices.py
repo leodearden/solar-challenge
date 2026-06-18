@@ -39,6 +39,127 @@ import pandas as pd
 
 
 # ---------------------------------------------------------------------------
+# GridServicesRateBand + GridServicesRateBands
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GridServicesRateBand:
+    """Per-event capacity-at-events rate decomposition for one uncertainty band.
+
+    Mirrors :class:`~solar_challenge.flex.FlexibilityValueBand` in structure
+    but is specific to the capacity-at-events pricing model.
+
+    Attributes:
+        availability_gbp_per_kw_per_event: Availability payment per kW of
+            contracted discharge capacity per activation event (£/kW/event).
+        utilisation_gbp_per_mwh: Utilisation payment per MWh of actual energy
+            dispatched during events (£/MWh).
+        provenance: Source reference for these rates.
+    """
+
+    availability_gbp_per_kw_per_event: float
+    utilisation_gbp_per_mwh: float
+    provenance: str = ""
+
+    def __post_init__(self) -> None:
+        """Validate non-negativity (uses ValueError, not ConfigurationError)."""
+        if self.availability_gbp_per_kw_per_event < 0:
+            raise ValueError(
+                "availability_gbp_per_kw_per_event must be non-negative, "
+                f"got {self.availability_gbp_per_kw_per_event}"
+            )
+        if self.utilisation_gbp_per_mwh < 0:
+            raise ValueError(
+                f"utilisation_gbp_per_mwh must be non-negative, "
+                f"got {self.utilisation_gbp_per_mwh}"
+            )
+
+
+@dataclass(frozen=True)
+class GridServicesRateBands:
+    """Container for the three canonical (low / central / high) rate bands.
+
+    Attributes:
+        low: Pessimistic rate scenario.
+        central: Central-estimate rate scenario.
+        high: Optimistic rate scenario.
+    """
+
+    low: GridServicesRateBand
+    central: GridServicesRateBand
+    high: GridServicesRateBand
+
+    def resolve(self, band: str) -> GridServicesRateBand:
+        """Return the band matching *band*.
+
+        Args:
+            band: One of ``"low"``, ``"central"``, ``"high"``.
+
+        Returns:
+            The matching :class:`GridServicesRateBand`.
+
+        Raises:
+            ValueError: If *band* is not a known name.
+        """
+        if band == "low":
+            return self.low
+        if band == "central":
+            return self.central
+        if band == "high":
+            return self.high
+        raise ValueError(
+            f"Unknown grid-services rate band '{band}'. Available: high, central, low"
+        )
+
+
+# PRD open-Q2: default band rates to be calibrated in a tuning task.
+# Seeded near the flat-rate neighbourhood (central £12/kW/yr ≈ £1/kW/event
+# for ~12 events/yr).  Availability is per-kW per event; utilisation is per MWh
+# dispatched during the event.
+_RATE_PROVENANCE = (
+    "PRD docs/prds/enhanced-grid-services-capacity-at-events.md open-Q2 "
+    "(calibrated defaults; tuning task to follow)"
+)
+
+GRID_SERVICES_RATE_BANDS: GridServicesRateBands = GridServicesRateBands(
+    low=GridServicesRateBand(
+        availability_gbp_per_kw_per_event=0.50,
+        utilisation_gbp_per_mwh=30.0,
+        provenance=_RATE_PROVENANCE,
+    ),
+    central=GridServicesRateBand(
+        availability_gbp_per_kw_per_event=1.00,
+        utilisation_gbp_per_mwh=60.0,
+        provenance=_RATE_PROVENANCE,
+    ),
+    high=GridServicesRateBand(
+        availability_gbp_per_kw_per_event=2.00,
+        utilisation_gbp_per_mwh=120.0,
+        provenance=_RATE_PROVENANCE,
+    ),
+)
+
+
+def resolve_grid_services_rate_band(band: str) -> GridServicesRateBand:
+    """Validate *band* and return the corresponding :class:`GridServicesRateBand`.
+
+    Delegates to :meth:`GRID_SERVICES_RATE_BANDS.resolve`.
+
+    Args:
+        band: One of ``"low"``, ``"central"``, ``"high"``.
+
+    Returns:
+        The matching :class:`GridServicesRateBand` from
+        :data:`GRID_SERVICES_RATE_BANDS`.
+
+    Raises:
+        ValueError: If *band* is not a known key.
+    """
+    return GRID_SERVICES_RATE_BANDS.resolve(band)
+
+
+# ---------------------------------------------------------------------------
 # EventWindow
 # ---------------------------------------------------------------------------
 
