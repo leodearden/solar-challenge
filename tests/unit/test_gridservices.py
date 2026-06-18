@@ -485,3 +485,143 @@ class TestGridServicesEventsConfigValidation:
         )
         assert cfg.availability_gbp_per_kw_per_event == 0.0
         assert cfg.utilisation_gbp_per_mwh == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Helpers for TestComputeFleetSpareCapacityKw (steps 1, 3)
+# ---------------------------------------------------------------------------
+
+
+def _make_gs_sim_results(
+    battery_soc: "list[float]",
+    battery_discharge: "list[float]",
+    index: pd.DatetimeIndex,
+) -> "SimulationResults":  # type: ignore[name-defined]
+    """Build a minimal SimulationResults with hand-set battery_soc and battery_discharge.
+
+    All other series are set to zero.  Use this helper for grid-services spare-capacity
+    tests that only read battery_soc / battery_discharge.
+    """
+    from solar_challenge.home import SimulationResults
+
+    zeros = pd.Series(0.0, index=index)
+    return SimulationResults(
+        generation=zeros.copy(),
+        demand=zeros.copy(),
+        self_consumption=zeros.copy(),
+        battery_charge=zeros.copy(),
+        battery_discharge=pd.Series(battery_discharge, index=index, dtype=float),
+        battery_soc=pd.Series(battery_soc, index=index, dtype=float),
+        grid_import=zeros.copy(),
+        grid_export=zeros.copy(),
+        import_cost=zeros.copy(),
+        export_revenue=zeros.copy(),
+        tariff_rate=zeros.copy(),
+    )
+
+
+def _make_gs_fleet_results(
+    homes_data: "list[tuple]",
+) -> "FleetResults":  # type: ignore[name-defined]
+    """Build a FleetResults from per-home (SimulationResults, HomeConfig) pairs."""
+    from solar_challenge.fleet import FleetResults
+
+    per_home = [sim for sim, _ in homes_data]
+    configs = [cfg for _, cfg in homes_data]
+    return FleetResults(per_home_results=per_home, home_configs=configs)
+
+
+def _make_gs_home_config(
+    battery_config: "BatteryConfig",  # type: ignore[name-defined]
+) -> "HomeConfig":  # type: ignore[name-defined]
+    """Build a minimal HomeConfig with the given BatteryConfig."""
+    from solar_challenge.home import HomeConfig
+    from solar_challenge.load import LoadConfig
+    from solar_challenge.location import Location
+    from solar_challenge.pv import PVConfig
+
+    return HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
+        load_config=LoadConfig(annual_consumption_kwh=3500.0),
+        battery_config=battery_config,
+        location=Location.bristol(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step-1: compute_fleet_spare_capacity_kw — RED
+# ---------------------------------------------------------------------------
+
+
+class TestComputeFleetSpareCapacityKw:
+    """Tests for compute_fleet_spare_capacity_kw — firm spare battery capacity at events."""
+
+    def test_firm_multihome_avail_kw(self) -> None:
+        """Two-home fleet: floor-pinned home contributes zero, other contributes min(P,E/h).
+
+        Hand-computed expected value (non-tautological):
+
+        Config: capacity_kwh=10, min_soc_fraction=0.1, soh=1.0, max_discharge_kw=3.0
+            => min_soc_kwh = 10.0 * 1.0 * 0.1 = 1.0
+
+        Home A in-window: soc=[4.0, 3.5, 3.0], discharge=[1.0, 1.5, 0.5]
+            P_spare = 3.0 - max(1.0, 1.5, 0.5) = 3.0 - 1.5 = 1.5
+            E_spare = min(4.0-1.0, 3.5-1.0, 3.0-1.0) = min(3.0, 2.5, 2.0) = 2.0
+            avail_A = min(1.5, 2.0/3.0) = min(1.5, 0.6667) = 2/3
+
+        Home B (floor-pinned): soc=[1.0, 1.0, 1.0], discharge=[0.0, 0.0, 0.0]
+            E_spare = min(0.0, 0.0, 0.0) = 0.0 => avail_B = max(0, min(..., 0)) = 0
+
+        Total = 2/3
+        """
+        from solar_challenge.battery import BatteryConfig
+        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
+
+        # Dec 2 2024 = Monday (weekday=0), December (month=12) — confirmed in existing tests
+        idx = pd.DatetimeIndex(
+            [
+                "2024-12-02 16:00",  # in-window
+                "2024-12-02 17:00",  # in-window
+                "2024-12-02 18:00",  # in-window
+                "2024-12-02 19:00",  # out-of-window (hour 19 excluded)
+            ],
+            tz="Europe/London",
+        )
+
+        w = EventWindow(
+            months=(12,),
+            weekdays=(0,),
+            hours=(16, 17, 18),
+            events_per_year=12,
+            event_hours=3.0,
+        )
+
+        # BatteryConfig: soh=1.0 so min_soc_kwh = capacity * min_soc_fraction exactly
+        bat_cfg = BatteryConfig(
+            capacity_kwh=10.0,
+            max_discharge_kw=3.0,
+            min_soc_fraction=0.1,
+            soh=1.0,
+        )
+        home_cfg = _make_gs_home_config(bat_cfg)
+
+        # Home A: partial discharge, well above floor
+        sim_a = _make_gs_sim_results(
+            battery_soc=[4.0, 3.5, 3.0, 3.0],
+            battery_discharge=[1.0, 1.5, 0.5, 0.5],
+            index=idx,
+        )
+        # Home B: floor-pinned (soc = min_soc_kwh throughout)
+        sim_b = _make_gs_sim_results(
+            battery_soc=[1.0, 1.0, 1.0, 1.0],
+            battery_discharge=[0.0, 0.0, 0.0, 0.0],
+            index=idx,
+        )
+
+        fleet = _make_gs_fleet_results([(sim_a, home_cfg), (sim_b, home_cfg)])
+
+        result = compute_fleet_spare_capacity_kw(fleet, (w,))
+
+        assert len(result) == 1, "one window → one result"
+        assert result[0] >= 0.0, "I1: capacity must be non-negative"
+        assert result == pytest.approx((2.0 / 3.0,))
