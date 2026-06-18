@@ -403,10 +403,12 @@ def compute_fleet_spare_capacity_kw(
       window) and ≤ E_spare / event_hours (energy deliverable throughout the
       window without violating the SOC floor).
 
-    **Skips** (handled by callers of this minimal happy-path implementation):
+    **Skips** (handled transparently — contribute 0 to the sum):
 
-    * Homes with ``battery_config is None`` (PV-only) — see step-4 guard.
-    * Windows absent from a home's index — see step-4 guard.
+    * Homes with ``battery_config is None`` (PV-only homes in a heterogeneous
+      fleet) — skipped entirely; they have no battery to dispatch.
+    * Windows absent from a home's index (``mask.any()`` is False) — skipped
+      to avoid reducing an empty Series (which would produce NaN).
 
     Args:
         fleet_results: Simulation results for the fleet.  Accessed via
@@ -426,11 +428,18 @@ def compute_fleet_spare_capacity_kw(
             fleet_results.per_home_results, fleet_results.home_configs
         ):
             battery_config = home_cfg.battery_config
-            min_soc_kwh = Battery(battery_config).min_soc_kwh
+            # Guard 1: skip PV-only homes (no battery to dispatch)
+            if battery_config is None:
+                continue
             mask = window.mask(sim.battery_soc.index)
+            # Guard 2: skip if window is entirely absent from this home's index
+            # (avoids NaN from reducing an empty Series)
+            if not bool(mask.any()):
+                continue
+            min_soc_kwh = Battery(battery_config).min_soc_kwh
             soc_w = sim.battery_soc[mask]
             dis_w = sim.battery_discharge[mask]
-            p_spare = battery_config.max_discharge_kw - float(dis_w.max())  # type: ignore[union-attr]
+            p_spare = battery_config.max_discharge_kw - float(dis_w.max())
             e_spare = float((soc_w - min_soc_kwh).min())
             total += max(0.0, min(p_spare, e_spare / window.event_hours))
         avails.append(float(total))
