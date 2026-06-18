@@ -1085,6 +1085,17 @@ def project_multi_year(
     start_ts = scenario.period.get_start_timestamp(tz)
     end_ts = scenario.period.get_end_timestamp(tz)
 
+    # ---- Fail-fast: validate grid_services_model prerequisites ---------------
+    # Guard here so misconfiguration is caught before any simulation work is
+    # done (the inner guard in _simulate_age would only fire after the first
+    # full fleet simulation, which wastes a full age-0 run for a 100-home fleet).
+    if finance.grid_services_model == "capacity_at_events" and finance.grid_services_events is None:
+        from solar_challenge.config import ConfigurationError
+        raise ConfigurationError(
+            "grid_services_model='capacity_at_events' requires "
+            "grid_services_events to be configured"
+        )
+
     asset_life = finance.asset_life_years
 
     # ---- Seed nodes ---------------------------------------------------------
@@ -1142,12 +1153,9 @@ def project_multi_year(
             for s in per_home_summaries
         )
         if finance.grid_services_model == "capacity_at_events":
-            if finance.grid_services_events is None:
-                from solar_challenge.config import ConfigurationError
-                raise ConfigurationError(
-                    "grid_services_model='capacity_at_events' requires "
-                    "grid_services_events to be configured"
-                )
+            # None is already excluded by the top-of-function guard; this assert
+            # only narrows Optional[GridServicesEventsConfig] for mypy strict.
+            assert finance.grid_services_events is not None
             if "value" not in _event_gs_memo:
                 from solar_challenge.gridservices import compute_grid_services_at_events
                 _event_gs_memo["value"] = compute_grid_services_at_events(
