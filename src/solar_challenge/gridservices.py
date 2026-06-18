@@ -35,14 +35,15 @@ branch only, so that the module constants (``GRID_SERVICES_RATE_BANDS``,
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import pandas as pd
 
-from solar_challenge.battery import Battery
+from solar_challenge.battery import Battery, BatteryConfig
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
+    from solar_challenge.home import SimulationResults
 
 
 # ---------------------------------------------------------------------------
@@ -421,22 +422,33 @@ def compute_fleet_spare_capacity_kw(
         order).  Each value is the total firm spare dispatchable capacity in kW
         across the fleet for that window.
     """
+    # Pre-compute the SOC floor for each battery home once.  Battery construction
+    # is window-independent (min_soc_kwh depends only on the config), so computing
+    # it inside the window loop would redundantly allocate N_windows Battery objects
+    # per home.  We also collect (sim, battery_config) so the inner loop no longer
+    # needs to touch home_configs at all.
+    #
+    # strict=True (Python 3.10+): a length mismatch between per_home_results and
+    # home_configs raises ValueError immediately rather than silently truncating to
+    # the shorter list and under-counting spare capacity.
+    home_floors: list[Any] = []
+    for sim, home_cfg in zip(
+        fleet_results.per_home_results, fleet_results.home_configs, strict=True
+    ):
+        battery_config: Optional[BatteryConfig] = home_cfg.battery_config
+        if battery_config is None:
+            continue  # PV-only home: no battery to dispatch
+        home_floors.append((sim, battery_config, Battery(battery_config).min_soc_kwh))
+
     avails: list[float] = []
     for window in windows:
         total = 0.0
-        for sim, home_cfg in zip(
-            fleet_results.per_home_results, fleet_results.home_configs
-        ):
-            battery_config = home_cfg.battery_config
-            # Guard 1: skip PV-only homes (no battery to dispatch)
-            if battery_config is None:
-                continue
+        for sim, battery_config, min_soc_kwh in home_floors:
             mask = window.mask(sim.battery_soc.index)
-            # Guard 2: skip if window is entirely absent from this home's index
+            # Guard: skip if window is entirely absent from this home's index
             # (avoids NaN from reducing an empty Series)
             if not bool(mask.any()):
                 continue
-            min_soc_kwh = Battery(battery_config).min_soc_kwh
             soc_w = sim.battery_soc[mask]
             dis_w = sim.battery_discharge[mask]
             p_spare = battery_config.max_discharge_kw - float(dis_w.max())
