@@ -345,3 +345,116 @@ class TestGridServicesEventsConfigDefaults:
 
         cfg = GridServicesEventsConfig()
         assert pickle.loads(pickle.dumps(cfg)) == cfg
+
+
+# ---------------------------------------------------------------------------
+# Step-9: GridServicesEventsConfig validation
+# ---------------------------------------------------------------------------
+
+
+class TestGridServicesEventsConfigValidation:
+    """GridServicesEventsConfig.__post_init__ rejects invalid fields."""
+
+    def test_negative_availability_override_raises(self) -> None:
+        """Negative availability_gbp_per_kw_per_event raises ConfigurationError."""
+        from solar_challenge.config import ConfigurationError
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        with pytest.raises(ConfigurationError):
+            GridServicesEventsConfig(availability_gbp_per_kw_per_event=-0.01)
+
+    def test_negative_utilisation_override_raises(self) -> None:
+        """Negative utilisation_gbp_per_mwh raises ConfigurationError."""
+        from solar_challenge.config import ConfigurationError
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        with pytest.raises(ConfigurationError):
+            GridServicesEventsConfig(utilisation_gbp_per_mwh=-1.0)
+
+    def test_aggregator_share_negative_raises(self) -> None:
+        """aggregator_share < 0 raises ConfigurationError."""
+        from solar_challenge.config import ConfigurationError
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        with pytest.raises(ConfigurationError):
+            GridServicesEventsConfig(aggregator_share=-0.01)
+
+    def test_aggregator_share_exactly_one_raises(self) -> None:
+        """aggregator_share == 1.0 raises ConfigurationError ([0, 1) bound)."""
+        from solar_challenge.config import ConfigurationError
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        with pytest.raises(ConfigurationError):
+            GridServicesEventsConfig(aggregator_share=1.0)
+
+    def test_aggregator_share_greater_than_one_raises(self) -> None:
+        """aggregator_share > 1 raises ConfigurationError."""
+        from solar_challenge.config import ConfigurationError
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        with pytest.raises(ConfigurationError):
+            GridServicesEventsConfig(aggregator_share=1.1)
+
+    def test_utilisation_factor_negative_raises(self) -> None:
+        """utilisation_factor < 0 raises ConfigurationError."""
+        from solar_challenge.config import ConfigurationError
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        with pytest.raises(ConfigurationError):
+            GridServicesEventsConfig(utilisation_factor=-0.01)
+
+    def test_utilisation_factor_greater_than_one_raises(self) -> None:
+        """utilisation_factor > 1 raises ConfigurationError."""
+        from solar_challenge.config import ConfigurationError
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        with pytest.raises(ConfigurationError):
+            GridServicesEventsConfig(utilisation_factor=1.01)
+
+    def test_empty_event_windows_raises(self) -> None:
+        """Empty event_windows tuple raises ConfigurationError."""
+        from solar_challenge.config import ConfigurationError
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        with pytest.raises(ConfigurationError):
+            GridServicesEventsConfig(event_windows=())
+
+    def test_unknown_band_raises(self) -> None:
+        """Unknown band name raises ConfigurationError."""
+        from solar_challenge.config import ConfigurationError
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        with pytest.raises(ConfigurationError):
+            GridServicesEventsConfig(band="mid")
+
+    def test_aggregator_share_zero_ok(self) -> None:
+        """aggregator_share == 0.0 is valid."""
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        cfg = GridServicesEventsConfig(aggregator_share=0.0)
+        assert cfg.aggregator_share == 0.0
+
+    def test_utilisation_factor_zero_ok(self) -> None:
+        """utilisation_factor == 0.0 is valid."""
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        cfg = GridServicesEventsConfig(utilisation_factor=0.0)
+        assert cfg.utilisation_factor == 0.0
+
+    def test_utilisation_factor_one_ok(self) -> None:
+        """utilisation_factor == 1.0 is valid."""
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        cfg = GridServicesEventsConfig(utilisation_factor=1.0)
+        assert cfg.utilisation_factor == 1.0
+
+    def test_override_rates_zero_ok(self) -> None:
+        """Override rates set to 0.0 (non-negative) are accepted."""
+        from solar_challenge.gridservices import GridServicesEventsConfig
+
+        cfg = GridServicesEventsConfig(
+            availability_gbp_per_kw_per_event=0.0,
+            utilisation_gbp_per_mwh=0.0,
+        )
+        assert cfg.availability_gbp_per_kw_per_event == 0.0
+        assert cfg.utilisation_gbp_per_mwh == 0.0
