@@ -3615,3 +3615,71 @@ fleet_distribution:
                 assert home.dispatch_strategy == "tou_optimized"
         finally:
             path.unlink()
+
+
+# ---------------------------------------------------------------------------
+# FinanceConfig grid_services_model selector (step-11)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceConfigGridServicesModel:
+    """FinanceConfig.grid_services_model + grid_services_events fields (step-11)."""
+
+    _BASE: dict = {"standing_charge_pence_per_day": 60.0}
+
+    def test_default_grid_services_model_is_flat(self) -> None:
+        """Default grid_services_model is 'flat'."""
+        fc = FinanceConfig(**self._BASE)
+        assert fc.grid_services_model == "flat"
+
+    def test_default_grid_services_events_is_none(self) -> None:
+        """Default grid_services_events is None."""
+        fc = FinanceConfig(**self._BASE)
+        assert fc.grid_services_events is None
+
+    def test_all_pre_existing_defaults_unchanged(self) -> None:
+        """Adding new fields does not disturb any pre-existing FinanceConfig defaults."""
+        fc = FinanceConfig(**self._BASE)
+        assert fc.vat_rate == 0.05
+        assert fc.retail_baseline_rate_pence_per_kwh == 23.0
+        assert fc.self_consumption_override is None
+        assert fc.pv_cost_per_kwp_gbp == 1000.0
+        assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
+
+    def test_frozen_with_new_fields(self) -> None:
+        """FinanceConfig is still frozen after adding new fields."""
+        import dataclasses as dc
+        fc = FinanceConfig(**self._BASE)
+        with pytest.raises(dc.FrozenInstanceError):
+            fc.grid_services_model = "capacity_at_events"  # type: ignore[misc]
+
+    def test_picklable_with_new_fields(self) -> None:
+        """FinanceConfig is picklable when grid_services_events is None."""
+        import pickle
+        fc = FinanceConfig(**self._BASE)
+        assert pickle.loads(pickle.dumps(fc)) == fc
+
+    def test_capacity_at_events_model_with_config(self) -> None:
+        """Constructing with grid_services_model='capacity_at_events' + GridServicesEventsConfig round-trips."""
+        import pickle
+        from solar_challenge.gridservices import GridServicesEventsConfig
+        events_cfg = GridServicesEventsConfig()
+        fc = FinanceConfig(
+            **self._BASE,
+            grid_services_model="capacity_at_events",
+            grid_services_events=events_cfg,
+        )
+        assert fc.grid_services_model == "capacity_at_events"
+        assert fc.grid_services_events == events_cfg
+        assert pickle.loads(pickle.dumps(fc)) == fc
+
+    def test_unknown_grid_services_model_raises(self) -> None:
+        """Unknown grid_services_model raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
+            FinanceConfig(**self._BASE, grid_services_model="foo")
+
+    def test_capacity_at_events_without_config_ok(self) -> None:
+        """grid_services_model='capacity_at_events' with grid_services_events=None still constructs."""
+        fc = FinanceConfig(**self._BASE, grid_services_model="capacity_at_events")
+        assert fc.grid_services_model == "capacity_at_events"
+        assert fc.grid_services_events is None
