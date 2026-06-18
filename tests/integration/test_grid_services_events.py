@@ -199,3 +199,37 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
         f"Isolated gs ({isolated_gs:.4f}) must differ from flat term "
         f"({flat_gs:.4f}) — confirms the two models produce different values."
     )
+
+
+# ---------------------------------------------------------------------------
+# Step-3 (RED) → Step-4 (GREEN): Guard — None events → ConfigurationError
+# ---------------------------------------------------------------------------
+
+
+def test_guard_capacity_at_events_with_events_none_raises_configuration_error() -> None:
+    """capacity_at_events + grid_services_events=None must raise ConfigurationError.
+
+    α permits grid_services_events=None even when model='capacity_at_events'
+    (α only validates the selector field; δ is the consumer that must guard this).
+
+    RED after step-2: the transient `assert finance.grid_services_events is not None`
+    raises AssertionError — pytest.raises(ConfigurationError) does not match.
+    GREEN after step-4: assert replaced with explicit ConfigurationError guard.
+    """
+    from solar_challenge.config import ConfigurationError  # type: ignore[attr-defined]
+
+    scenario, finance_base = _board_econ_scenario()
+    homes = scenario.homes
+    fr = _synthetic_fleet_results_in_window(homes)
+    simulate = _constant_simulate(fr)
+
+    finance_none = dataclasses.replace(
+        finance_base,
+        grid_services_model="capacity_at_events",
+        grid_services_events=None,
+    )
+
+    from solar_challenge.finance import project_multi_year
+
+    with pytest.raises(ConfigurationError):
+        project_multi_year(scenario, finance_none, simulate=simulate)
