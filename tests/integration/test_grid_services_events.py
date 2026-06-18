@@ -233,3 +233,61 @@ def test_guard_capacity_at_events_with_events_none_raises_configuration_error() 
 
     with pytest.raises(ConfigurationError):
         project_multi_year(scenario, finance_none, simulate=simulate)
+
+
+# ---------------------------------------------------------------------------
+# Step-5 (RED) → Step-6 (GREEN): Compute-once / reuse-across-ages
+# ---------------------------------------------------------------------------
+
+
+def test_compute_once_event_figure_reused_across_ages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """compute_grid_services_at_events is called exactly ONCE per project_multi_year run.
+
+    Monkeypatches a counting wrapper on solar_challenge.gridservices.
+    compute_grid_services_at_events. The lazy `from solar_challenge.gridservices
+    import ...` inside _simulate_age re-resolves the attribute on each call, so the
+    patch is observed.
+
+    With asset_life_years=25 → seed_ages=[0,12,24] (3 ages) + bisection trial
+    nodes → ≥3 _simulate_age calls without memoization.
+
+    RED after step-4: per-age implementation calls the function for every
+    _simulate_age invocation → call count ≥ 3.
+    GREEN after step-6: first-call memoization → count == 1.
+    """
+    import solar_challenge.gridservices as gs_module
+    from solar_challenge.gridservices import (
+        GridServicesEventsConfig,
+        compute_grid_services_at_events as original_fn,
+    )
+
+    call_count: dict[str, int] = {"n": 0}
+
+    def counting_wrapper(fleet_results, cfg):  # type: ignore[no-untyped-def]
+        call_count["n"] += 1
+        return original_fn(fleet_results, cfg)
+
+    monkeypatch.setattr(gs_module, "compute_grid_services_at_events", counting_wrapper)
+
+    scenario, finance_base = _board_econ_scenario()
+    homes = scenario.homes
+    fr = _synthetic_fleet_results_in_window(homes)
+    simulate = _constant_simulate(fr)
+
+    events_cfg = GridServicesEventsConfig(band="central")
+    finance_events = dataclasses.replace(
+        finance_base,
+        grid_services_model="capacity_at_events",
+        grid_services_events=events_cfg,
+        grid_services_income_per_kw_per_year_gbp=0.0,
+    )
+
+    from solar_challenge.finance import project_multi_year
+
+    project_multi_year(scenario, finance_events, simulate=simulate)
+
+    assert call_count["n"] == 1, (
+        f"compute_grid_services_at_events must be called exactly once per "
+        f"project_multi_year run; got {call_count['n']}. "
+        f"RED if not memoized (step-6 adds the closure-captured memo dict)."
+    )
