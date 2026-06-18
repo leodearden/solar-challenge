@@ -1152,3 +1152,122 @@ class TestComputeGridServicesAtEvents:
 
         assert result_half.annual_income_gbp == pytest.approx(result_full.annual_income_gbp * 0.5)
 
+    # -----------------------------------------------------------------------
+    # Step-5: rate-override precedence — RED
+    # -----------------------------------------------------------------------
+
+    def test_both_rate_overrides_take_precedence(self) -> None:
+        """Both availability and utilisation overrides supersede the band rates.
+
+        Fixture: avail=1.0, agg=0.0, util_factor=1.0, single window (N=12, h=3.0).
+        Overrides: availability_gbp_per_kw_per_event=2.0, utilisation_gbp_per_mwh=100.0.
+
+        Hand-derived (non-tautological from override literals):
+            avail_income = 1.0 * 2.0 * 12 = 24.0
+            util_income  = 1.0 * 1.0 * 3.0 * (100/1000) * 12 = 3.6
+            net          = (24.0 + 3.6) * 1.0 = 27.6
+        Central-band-only would give: 1.0*1.0*12 + 1.0*1.0*3.0*(60/1000)*12 = 14.16 (different).
+        """
+        from solar_challenge.gridservices import (
+            GRID_SERVICES_RATE_BANDS,
+            GridServicesEventsConfig,
+            compute_grid_services_at_events,
+        )
+
+        fleet, w = self._make_fixture()
+        cfg = GridServicesEventsConfig(
+            band="central",
+            event_windows=(w,),
+            aggregator_share=0.0,
+            utilisation_factor=1.0,
+            availability_gbp_per_kw_per_event=2.0,
+            utilisation_gbp_per_mwh=100.0,
+        )
+
+        # Hand-derived from override literals (non-tautological)
+        avail_income = 1.0 * 2.0 * w.events_per_year
+        util_income = 1.0 * cfg.utilisation_factor * w.event_hours * (100.0 / 1000.0) * w.events_per_year
+        expected_net = avail_income + util_income  # agg=0.0
+
+        # Central-band-only (different from expected_net → confirms override is tested)
+        band = GRID_SERVICES_RATE_BANDS.resolve("central")
+        band_only_net = (
+            1.0 * band.availability_gbp_per_kw_per_event * w.events_per_year
+            + 1.0 * cfg.utilisation_factor * w.event_hours * (band.utilisation_gbp_per_mwh / 1000.0) * w.events_per_year
+        )
+
+        result = compute_grid_services_at_events(fleet, cfg)
+
+        assert result.annual_income_gbp == pytest.approx(expected_net)
+        assert result.annual_income_gbp != pytest.approx(band_only_net)
+
+    def test_availability_only_override(self) -> None:
+        """Availability override applies; utilisation falls back to band rate.
+
+        Overrides: availability_gbp_per_kw_per_event=2.0, utilisation_gbp_per_mwh=None.
+
+        Hand-derived:
+            avail_income = 1.0 * 2.0 * 12 = 24.0        (override)
+            util_income  = 1.0 * 1.0 * 3.0 * (60/1000) * 12 = 2.16  (central band)
+            net          = 26.16
+        """
+        from solar_challenge.gridservices import (
+            GRID_SERVICES_RATE_BANDS,
+            GridServicesEventsConfig,
+            compute_grid_services_at_events,
+        )
+
+        fleet, w = self._make_fixture()
+        cfg = GridServicesEventsConfig(
+            band="central",
+            event_windows=(w,),
+            aggregator_share=0.0,
+            utilisation_factor=1.0,
+            availability_gbp_per_kw_per_event=2.0,
+            # utilisation_gbp_per_mwh=None (default) → use band
+        )
+
+        band = GRID_SERVICES_RATE_BANDS.resolve("central")
+        avail_income = 1.0 * 2.0 * w.events_per_year  # override rate
+        util_income = 1.0 * cfg.utilisation_factor * w.event_hours * (band.utilisation_gbp_per_mwh / 1000.0) * w.events_per_year
+        expected_net = avail_income + util_income
+
+        result = compute_grid_services_at_events(fleet, cfg)
+
+        assert result.annual_income_gbp == pytest.approx(expected_net)
+
+    def test_utilisation_only_override(self) -> None:
+        """Utilisation override applies; availability falls back to band rate.
+
+        Overrides: availability_gbp_per_kw_per_event=None, utilisation_gbp_per_mwh=100.0.
+
+        Hand-derived:
+            avail_income = 1.0 * 1.0 * 12 = 12.0        (central band)
+            util_income  = 1.0 * 1.0 * 3.0 * (100/1000) * 12 = 3.6  (override)
+            net          = 15.6
+        """
+        from solar_challenge.gridservices import (
+            GRID_SERVICES_RATE_BANDS,
+            GridServicesEventsConfig,
+            compute_grid_services_at_events,
+        )
+
+        fleet, w = self._make_fixture()
+        cfg = GridServicesEventsConfig(
+            band="central",
+            event_windows=(w,),
+            aggregator_share=0.0,
+            utilisation_factor=1.0,
+            # availability_gbp_per_kw_per_event=None (default) → use band
+            utilisation_gbp_per_mwh=100.0,
+        )
+
+        band = GRID_SERVICES_RATE_BANDS.resolve("central")
+        avail_income = 1.0 * band.availability_gbp_per_kw_per_event * w.events_per_year
+        util_income = 1.0 * cfg.utilisation_factor * w.event_hours * (100.0 / 1000.0) * w.events_per_year
+        expected_net = avail_income + util_income
+
+        result = compute_grid_services_at_events(fleet, cfg)
+
+        assert result.annual_income_gbp == pytest.approx(expected_net)
+
