@@ -85,8 +85,26 @@ fleet_distribution:
 #   matching this scenario's flex_band: central (default Central for the board).
 #   Units: per kW of battery max_discharge_kw (Σ across all battery homes).
 #   Source: W1 δ (task 55) — seam gate proving band → project surplus.
+#   Retained as flat-fallback/provenance; inert under capacity_at_events model (I3).
+# grid_services_model: capacity_at_events (ε / task-76): board scenario opts into
+#   the event-window-derived grid-services model.  The flat field above is kept as
+#   documented provenance and for test_flex_grid_services.test_board_scenario_grid_services_filled_from_central_band.
 finance:
   standing_charge_pence_per_day: 60.0
   own_use_rate_pence_per_kwh: 15.0
   retained_cash_floor_per_home_per_year_gbp: 27.0
   grid_services_income_per_kw_per_year_gbp: 12.0
+  grid_services_model: capacity_at_events
+  # Capacity-at-events: winter Demand Flexibility Service (DFS) style events.
+  # One winter-weekday evening window, 12 events/yr × 3h (DEFAULT_EVENT_WINDOWS).
+  # aggregator_share: 0.25 (aggregator fee); utilisation_factor: 0.6 (availability weight).
+  grid_services_events:
+    band: central
+    aggregator_share: 0.25
+    utilisation_factor: 0.6
+    event_windows:
+      - months: [11, 12, 1, 2]
+        weekdays: [0, 1, 2, 3, 4]
+        hours: [16, 17, 18]
+        events_per_year: 12
+        event_hours: 3.0

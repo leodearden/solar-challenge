@@ -180,6 +180,18 @@ def run(
     # ---- Simulate fleet -----------------------------------------------------
     fleet_results: FleetResults = simulate_fleet(fleet_config, start_date, end_date)
 
+    # ---- Capacity-at-events grid-services figure (ε / task-76) -------------
+    # Computed once from the already-available fleet_results; None for flat model.
+    from solar_challenge.gridservices import GridServicesAtEvents as _GSAtEvents
+    from solar_challenge.gridservices import compute_grid_services_at_events as _cgs
+
+    _grid_services_at_events: Optional[_GSAtEvents] = (
+        _cgs(fleet_results, finance.grid_services_events)
+        if finance.grid_services_model == "capacity_at_events"
+        and finance.grid_services_events is not None
+        else None
+    )
+
     # ---- Per-home summaries -------------------------------------------------
     summaries = [
         calculate_summary(r) for r in fleet_results.per_home_results
@@ -254,6 +266,7 @@ def run(
             cost_recovery=cost_recovery_result,
             flex_band=resolved_flex_band,
             flex_band_name=band_name or "",
+            grid_services_at_events=_grid_services_at_events,
         )
     elif assumptions == AssumptionMode.spreadsheet:
         assert dist_spreadsheet is not None
@@ -264,6 +277,7 @@ def run(
             cost_recovery=cost_recovery_result,
             flex_band=resolved_flex_band,
             flex_band_name=band_name or "",
+            grid_services_at_events=_grid_services_at_events,
         )
     else:  # both
         assert dist_physics is not None
@@ -276,6 +290,7 @@ def run(
             cost_recovery=cost_recovery_result,
             flex_band=resolved_flex_band,
             flex_band_name=band_name or "",
+            grid_services_at_events=_grid_services_at_events,
         )
 
     console.print(report)
