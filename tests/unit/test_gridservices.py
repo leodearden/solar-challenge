@@ -829,6 +829,70 @@ class TestComputeFleetSpareCapacityKw:
         # a regression to nominal-capacity (soh=1.0) floor
         assert result == pytest.approx((0.4,))
 
+# ---------------------------------------------------------------------------
+# Step-1 (γ): TestGridServicesAtEvents — frozen dataclass structure
+# ---------------------------------------------------------------------------
+
+
+class TestGridServicesAtEvents:
+    """GridServicesAtEvents frozen dataclass: construction, immutability, pickling."""
+
+    def test_import(self) -> None:
+        """GridServicesAtEvents imports from solar_challenge.gridservices."""
+        from solar_challenge.gridservices import GridServicesAtEvents  # noqa: F401
+
+    def test_fields_round_trip(self) -> None:
+        """All three fields survive construction and read back equal to inputs."""
+        from solar_challenge.gridservices import GridServicesAtEvents
+
+        obj = GridServicesAtEvents(
+            annual_income_gbp=150.0,
+            per_window_avail_kw=(1.0, 2.0),
+            per_window_income_gbp=(60.0, 90.0),
+        )
+        assert obj.annual_income_gbp == 150.0
+        assert obj.per_window_avail_kw == (1.0, 2.0)
+        assert obj.per_window_income_gbp == (60.0, 90.0)
+
+    def test_single_window_fields(self) -> None:
+        """Single-window construction works and fields have correct types."""
+        from solar_challenge.gridservices import GridServicesAtEvents
+
+        obj = GridServicesAtEvents(
+            annual_income_gbp=9.972,
+            per_window_avail_kw=(1.0,),
+            per_window_income_gbp=(9.972,),
+        )
+        assert isinstance(obj.annual_income_gbp, float)
+        assert isinstance(obj.per_window_avail_kw, tuple)
+        assert isinstance(obj.per_window_income_gbp, tuple)
+        assert len(obj.per_window_avail_kw) == 1
+        assert len(obj.per_window_income_gbp) == 1
+
+    def test_is_frozen(self) -> None:
+        """GridServicesAtEvents is frozen — attribute assignment raises FrozenInstanceError."""
+        from solar_challenge.gridservices import GridServicesAtEvents
+
+        obj = GridServicesAtEvents(
+            annual_income_gbp=10.0,
+            per_window_avail_kw=(1.0,),
+            per_window_income_gbp=(10.0,),
+        )
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            obj.annual_income_gbp = 20.0  # type: ignore[misc]
+
+    def test_is_picklable(self) -> None:
+        """GridServicesAtEvents survives a pickle round-trip equal to the original."""
+        from solar_challenge.gridservices import GridServicesAtEvents
+
+        obj = GridServicesAtEvents(
+            annual_income_gbp=150.0,
+            per_window_avail_kw=(1.5, 2.5),
+            per_window_income_gbp=(75.0, 75.0),
+        )
+        assert pickle.loads(pickle.dumps(obj)) == obj
+
+
     def test_soc_below_floor_clamps_to_zero(self) -> None:
         """Home whose soc dips below min_soc_kwh mid-window must contribute 0.
 
