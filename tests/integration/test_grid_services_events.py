@@ -352,3 +352,87 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
         f"Flat (£{rev_flat:.4f}) and capacity_at_events (£{rev_events:.4f}) "
         "must differ for the same fleet — confirms the supersede takes effect."
     )
+
+
+# ---------------------------------------------------------------------------
+# Step-8 (GREEN on arrival): B5 — solve-still-holds + I4 rate-independence
+# ---------------------------------------------------------------------------
+
+
+def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
+    """B5 solve-still-holds + I4 rate-independence contract guard on the W2 seam.
+
+    (1) solve_cost_recovery_rate on the capacity_at_events scenario converges —
+        returns a CostRecoverySolution with a finite own_use_rate and valid binding.
+    (2) Event income flows through: net_surplus under capacity_at_events exceeds
+        net_surplus under flat-rate-0 for the same fleet.
+    (3) I4 rate-independence: isolated grid_services component is invariant to
+        own_use_rate_pence_per_kwh (event income does not depend on the CBS tariff,
+        so the affine reconstruction in solve_cost_recovery_rate stays valid).
+
+    GREEN on arrival: event income (like the flat term) is rate-independent
+    (own_use_rate never enters physical dispatch or gridservices computation),
+    so the existing affine reconstruction (finance.py:1789-1802) remains exact.
+    """
+    import math
+
+    from solar_challenge.finance import (
+        project_economics,
+        project_multi_year,
+        solve_cost_recovery_rate,
+    )
+    from solar_challenge.gridservices import GridServicesEventsConfig
+
+    scenario, finance_base = _board_econ_scenario()
+    homes = scenario.homes
+    fr = _synthetic_fleet_results_in_window(homes)
+    simulate = _constant_simulate(fr)
+
+    events_cfg = GridServicesEventsConfig(band="central")
+    finance_events = dataclasses.replace(
+        finance_base,
+        grid_services_model="capacity_at_events",
+        grid_services_events=events_cfg,
+        grid_services_income_per_kw_per_year_gbp=0.0,
+    )
+    finance_flat0 = dataclasses.replace(
+        finance_base,
+        grid_services_income_per_kw_per_year_gbp=0.0,
+    )
+
+    # (1) solve converges (finite rate, valid binding)
+    sol = solve_cost_recovery_rate(scenario, finance_events, simulate=simulate)
+    assert math.isfinite(sol.own_use_rate_pence_per_kwh), (
+        f"Solved own-use rate must be finite; got {sol.own_use_rate_pence_per_kwh!r}"
+    )
+    assert sol.binding in {"floor", "rate_clamped_zero", "infeasible_above_retail"}, (
+        f"Unexpected binding value: {sol.binding!r}"
+    )
+
+    # (2) event income flows through: capacity_at_events surplus > flat-rate-0 surplus
+    curve_events = project_multi_year(scenario, finance_events, simulate=simulate)
+    curve_flat0 = project_multi_year(scenario, finance_flat0, simulate=simulate)
+    surplus_events = project_economics(
+        curve_events, scenario, finance_events
+    ).net_surplus_per_home_per_year_gbp
+    surplus_flat0 = project_economics(
+        curve_flat0, scenario, finance_flat0
+    ).net_surplus_per_home_per_year_gbp
+    assert surplus_events > surplus_flat0, (
+        f"capacity_at_events surplus (£{surplus_events:.4f}/home/yr) must exceed "
+        f"flat-rate-0 surplus (£{surplus_flat0:.4f}/home/yr) — event income flows through."
+    )
+
+    # (3) I4 rate-independence: isolated gs component invariant to own_use_rate
+    finance_events_r5 = dataclasses.replace(finance_events, own_use_rate_pence_per_kwh=5.0)
+    finance_events_r20 = dataclasses.replace(finance_events, own_use_rate_pence_per_kwh=20.0)
+    finance_flat0_r5 = dataclasses.replace(finance_flat0, own_use_rate_pence_per_kwh=5.0)
+    finance_flat0_r20 = dataclasses.replace(finance_flat0, own_use_rate_pence_per_kwh=20.0)
+
+    gs_at_r5 = _isolate_gs_component(scenario, finance_events_r5, finance_flat0_r5, simulate)
+    gs_at_r20 = _isolate_gs_component(scenario, finance_events_r20, finance_flat0_r20, simulate)
+
+    assert gs_at_r5 == pytest.approx(gs_at_r20, rel=1e-9), (
+        f"Isolated grid_services component must be invariant to own_use_rate; "
+        f"at r=5 p/kWh: £{gs_at_r5:.6f}, at r=20 p/kWh: £{gs_at_r20:.6f}"
+    )
