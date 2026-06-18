@@ -1271,3 +1271,130 @@ class TestComputeGridServicesAtEvents:
 
         assert result.annual_income_gbp == pytest.approx(expected_net)
 
+    # -----------------------------------------------------------------------
+    # Amendment pass: band-resolution coverage for all three bands
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.parametrize("band_name", ["low", "central", "high"])
+    def test_all_bands_band_resolution(self, band_name: str) -> None:
+        """Band-resolution branch validated for all three bands (no overrides).
+
+        Uses the standard fixture (avail=1.0) and re-derives expected income from
+        GRID_SERVICES_RATE_BANDS.resolve(band_name) in-test — non-tautological
+        because the rate constants are independent of the function under test.
+
+        This catches a mis-routing regression (e.g. always using 'central' rates)
+        for 'low' and 'high' bands, which the existing single-band tests cannot.
+        """
+        from solar_challenge.gridservices import (
+            GRID_SERVICES_RATE_BANDS,
+            GridServicesEventsConfig,
+            compute_grid_services_at_events,
+        )
+
+        fleet, w = self._make_fixture()
+        cfg = GridServicesEventsConfig(band=band_name, event_windows=(w,))
+
+        band = GRID_SERVICES_RATE_BANDS.resolve(band_name)
+        avail_income = 1.0 * band.availability_gbp_per_kw_per_event * w.events_per_year
+        util_income = (
+            1.0
+            * cfg.utilisation_factor
+            * w.event_hours
+            * (band.utilisation_gbp_per_mwh / 1000.0)
+            * w.events_per_year
+        )
+        expected_net = (avail_income + util_income) * (1.0 - cfg.aggregator_share)
+
+        result = compute_grid_services_at_events(fleet, cfg)
+
+        assert result.annual_income_gbp == pytest.approx(expected_net)
+        assert result.per_window_avail_kw == pytest.approx((1.0,))
+
+    # -----------------------------------------------------------------------
+    # Amendment pass: multi-home fleet income end-to-end
+    # -----------------------------------------------------------------------
+
+    def test_multi_home_fleet_income_reflects_summed_avail(self) -> None:
+        """Two battery homes → income reflects sum of per-home avail_kW (end-to-end).
+
+        Home A: max_discharge_kw=4.0, soc=[5,5,5], discharge=[3,3,3]
+            P_spare = 4.0 - 3.0 = 1.0
+            E_spare = min(5-1, 5-1, 5-1) = 4.0
+            avail_A = min(1.0, 4.0/3.0) = 1.0
+
+        Home B: max_discharge_kw=5.0, soc=[5,5,5], discharge=[2,2,2]
+            P_spare = 5.0 - 2.0 = 3.0
+            E_spare = min(5-1, 5-1, 5-1) = 4.0
+            avail_B = min(3.0, 4.0/3.0) = 4/3
+
+        Fleet total avail = 1.0 + 4/3 = 7/3.
+
+        Expected income is re-derived from avail=7/3 and
+        GRID_SERVICES_RATE_BANDS.resolve('central') — not by calling the SUT —
+        so this is a non-tautological assertion that income scales with summed avail.
+        """
+        from solar_challenge.battery import BatteryConfig
+        from solar_challenge.gridservices import (
+            GRID_SERVICES_RATE_BANDS,
+            EventWindow,
+            GridServicesEventsConfig,
+            compute_fleet_spare_capacity_kw,
+            compute_grid_services_at_events,
+        )
+
+        idx = pd.DatetimeIndex(
+            ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
+            tz="Europe/London",
+        )
+        w = EventWindow(
+            months=(12,), weekdays=(0,), hours=(16, 17, 18),
+            events_per_year=12, event_hours=3.0,
+        )
+
+        # Home A: avail_A = 1.0 (same as _make_fixture single-home)
+        bat_a = BatteryConfig(
+            capacity_kwh=10.0, max_discharge_kw=4.0, min_soc_fraction=0.1, soh=1.0,
+        )
+        home_a = _make_gs_home_config(bat_a)
+        sim_a = _make_gs_sim_results(
+            battery_soc=[5.0, 5.0, 5.0],
+            battery_discharge=[3.0, 3.0, 3.0],
+            index=idx,
+        )
+
+        # Home B: max_discharge_kw=5.0, discharge=[2,2,2] → avail_B = 4/3
+        bat_b = BatteryConfig(
+            capacity_kwh=10.0, max_discharge_kw=5.0, min_soc_fraction=0.1, soh=1.0,
+        )
+        home_b = _make_gs_home_config(bat_b)
+        sim_b = _make_gs_sim_results(
+            battery_soc=[5.0, 5.0, 5.0],
+            battery_discharge=[2.0, 2.0, 2.0],
+            index=idx,
+        )
+
+        fleet = _make_gs_fleet_results([(sim_a, home_a), (sim_b, home_b)])
+        cfg = GridServicesEventsConfig(band="central", event_windows=(w,))
+
+        # Independent reference: avail from β, income re-derived from band constant
+        expected_avail = 1.0 + 4.0 / 3.0  # 7/3
+        band = GRID_SERVICES_RATE_BANDS.resolve("central")
+        avail_income = expected_avail * band.availability_gbp_per_kw_per_event * w.events_per_year
+        util_income = (
+            expected_avail
+            * cfg.utilisation_factor
+            * w.event_hours
+            * (band.utilisation_gbp_per_mwh / 1000.0)
+            * w.events_per_year
+        )
+        expected_net = (avail_income + util_income) * (1.0 - cfg.aggregator_share)
+
+        result = compute_grid_services_at_events(fleet, cfg)
+
+        # per_window_avail_kw must match β and equal the hand-derived fleet sum
+        beta_avails = compute_fleet_spare_capacity_kw(fleet, cfg.event_windows)
+        assert result.per_window_avail_kw == pytest.approx(beta_avails)
+        assert result.per_window_avail_kw == pytest.approx((expected_avail,))
+        assert result.annual_income_gbp == pytest.approx(expected_net)
+
