@@ -23,6 +23,8 @@ Key public symbols:
   per PRD open-Q4.
 * :class:`GridServicesEventsConfig` — frozen dataclass combining band selection,
   event windows, aggregator share, and utilisation factor.
+* :func:`compute_fleet_spare_capacity_kw` — per-event-window firm spare
+  dispatchable battery capacity (kW) summed across the fleet.
 
 **Import cycle note**: this module has NO top-level import of ``config.py``.
 ``ConfigurationError`` is imported *lazily*, inside each validation-failure
@@ -33,9 +35,14 @@ branch only, so that the module constants (``GRID_SERVICES_RATE_BANDS``,
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import pandas as pd
+
+from solar_challenge.battery import Battery
+
+if TYPE_CHECKING:
+    from solar_challenge.fleet import FleetResults
 
 
 # ---------------------------------------------------------------------------
@@ -361,3 +368,70 @@ class GridServicesEventsConfig:
                 "GridServicesEventsConfig.utilisation_gbp_per_mwh override "
                 f"must be >= 0, got {self.utilisation_gbp_per_mwh}"
             )
+
+
+# ---------------------------------------------------------------------------
+# compute_fleet_spare_capacity_kw
+# ---------------------------------------------------------------------------
+
+
+def compute_fleet_spare_capacity_kw(
+    fleet_results: "FleetResults",
+    windows: tuple["EventWindow", ...],
+) -> tuple[float, ...]:
+    """Compute firm spare dispatchable battery capacity (kW) per event window.
+
+    For each event window, sums across the fleet the firm spare battery
+    capacity derived solely from observable per-timestep SOC and net discharge
+    series — no purpose-attribution of the underlying dispatch is required.
+
+    **Formula** (per battery home, per window *w*):
+
+    .. code-block:: text
+
+        mask      = w.mask(sim.battery_soc.index)        # in-window bool Series
+        P_spare   = max_discharge_kw - max_{t in w}(battery_discharge)
+        E_spare   = min_{t in w}(battery_soc - min_soc_kwh)
+        avail(h)  = max(0.0, min(P_spare, E_spare / w.event_hours))
+        avail(w)  = Σ_h avail(h)
+
+    The single ``max(0, min(P_spare, E_spare/event_hours))`` expression
+    satisfies:
+
+    * **I1** — result is always ≥ 0 (the outer ``max(0,...)`` ensures this).
+    * **I2** — firmness: avail ≤ P_spare (inverter headroom throughout the
+      window) and ≤ E_spare / event_hours (energy deliverable throughout the
+      window without violating the SOC floor).
+
+    **Skips** (handled by callers of this minimal happy-path implementation):
+
+    * Homes with ``battery_config is None`` (PV-only) — see step-4 guard.
+    * Windows absent from a home's index — see step-4 guard.
+
+    Args:
+        fleet_results: Simulation results for the fleet.  Accessed via
+            ``fleet_results.per_home_results`` and ``fleet_results.home_configs``.
+        windows: Tuple of :class:`EventWindow` objects; order is preserved in
+            the output.
+
+    Returns:
+        A :class:`tuple` of :class:`float` with one entry per window (in input
+        order).  Each value is the total firm spare dispatchable capacity in kW
+        across the fleet for that window.
+    """
+    avails: list[float] = []
+    for window in windows:
+        total = 0.0
+        for sim, home_cfg in zip(
+            fleet_results.per_home_results, fleet_results.home_configs
+        ):
+            battery_config = home_cfg.battery_config
+            min_soc_kwh = Battery(battery_config).min_soc_kwh
+            mask = window.mask(sim.battery_soc.index)
+            soc_w = sim.battery_soc[mask]
+            dis_w = sim.battery_discharge[mask]
+            p_spare = battery_config.max_discharge_kw - float(dis_w.max())  # type: ignore[union-attr]
+            e_spare = float((soc_w - min_soc_kwh).min())
+            total += max(0.0, min(p_spare, e_spare / window.event_hours))
+        avails.append(float(total))
+    return tuple(avails)
