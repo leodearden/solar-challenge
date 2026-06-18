@@ -289,3 +289,42 @@ class GridServicesEventsConfig:
     utilisation_factor: float = 0.6
     availability_gbp_per_kw_per_event: Optional[float] = None
     utilisation_gbp_per_mwh: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Validate domain constraints, raising ConfigurationError on violation."""
+        _VALID_BANDS = frozenset({"low", "central", "high"})
+        if self.band not in _VALID_BANDS:
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                f"GridServicesEventsConfig.band must be one of "
+                f"{sorted(_VALID_BANDS)}, got '{self.band}'"
+            )
+        if not self.event_windows:
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                "GridServicesEventsConfig.event_windows must be a non-empty tuple"
+            )
+        if not (0.0 <= self.aggregator_share < 1.0):
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                f"GridServicesEventsConfig.aggregator_share must be in [0, 1), "
+                f"got {self.aggregator_share}"
+            )
+        if not (0.0 <= self.utilisation_factor <= 1.0):
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                f"GridServicesEventsConfig.utilisation_factor must be in [0, 1], "
+                f"got {self.utilisation_factor}"
+            )
+        if self.availability_gbp_per_kw_per_event is not None and self.availability_gbp_per_kw_per_event < 0:
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                "GridServicesEventsConfig.availability_gbp_per_kw_per_event override "
+                f"must be >= 0, got {self.availability_gbp_per_kw_per_event}"
+            )
+        if self.utilisation_gbp_per_mwh is not None and self.utilisation_gbp_per_mwh < 0:
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                "GridServicesEventsConfig.utilisation_gbp_per_mwh override "
+                f"must be >= 0, got {self.utilisation_gbp_per_mwh}"
+            )
