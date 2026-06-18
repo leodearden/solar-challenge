@@ -659,3 +659,75 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
     assert expected_kw_str in report, (
         f"Report must contain per-window avail_kW '{expected_kw_str} kW'"
     )
+
+
+# ---------------------------------------------------------------------------
+# Step-3 (RED) → Step-4 (GREEN): ε — CLI finance run emits event-derived line
+# ---------------------------------------------------------------------------
+
+
+def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> None:
+    """finance run scenarios/bristol-phase1-flex.yaml emits the capacity-at-events line.
+
+    Patches simulate_fleet with an in-window synthetic FleetResults, invokes the
+    CLI against the board scenario, and asserts:
+      - exit_code == 0
+      - "Grid services (capacity-at-events)" line in output
+      - a positive event-derived £ figure in output
+      - (after YAML flip) the supersede inequality: event income ≠ flat_rate × Σ kW
+
+    RED because: (a) the board YAML is still flat → CLI computes no event figure
+    → no "Grid services (capacity-at-events)" line in output; (b) cli/finance.py
+    does not yet compute/pass grid_services_at_events to generate_finance_report.
+    GREEN after step-4: YAML flipped to capacity_at_events + CLI wired up.
+    """
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import pytest
+    from typer.testing import CliRunner
+
+    from solar_challenge.cli.main import app
+    from solar_challenge.config import _parse_finance_config, load_config  # type: ignore[attr-defined]
+    from solar_challenge.gridservices import compute_grid_services_at_events
+
+    scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
+
+    # In-window FleetResults from the board homes
+    scenario, _finance = _board_econ_scenario()
+    homes = scenario.homes
+    fr = _synthetic_fleet_results_in_window(homes)
+
+    with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", str(scenario_path)])
+
+    assert result.exit_code == 0, (
+        f"CLI exited {result.exit_code}. Output:\n{result.output}"
+    )
+
+    # Main assertion (RED before step-4): the capacity-at-events line must appear
+    assert "Grid services (capacity-at-events)" in result.output, (
+        f"Expected 'Grid services (capacity-at-events)' line in output.\n{result.output}"
+    )
+
+    # The rendered event-derived £ must be present (positive)
+    assert "£" in result.output, "Output must contain a £ figure"
+
+    # Supersede inequality (only checkable after ε flips the board YAML to
+    # capacity_at_events; skips gracefully if still flat)
+    raw = load_config(scenario_path)
+    finance = _parse_finance_config(raw.get("finance"))
+    assert finance is not None
+    if finance.grid_services_events is not None:
+        flat_rate = finance.grid_services_income_per_kw_per_year_gbp
+        sigma = sum(
+            h.battery_config.max_discharge_kw
+            for h in homes if h.battery_config is not None
+        )
+        gse_direct = compute_grid_services_at_events(fr, finance.grid_services_events)
+        assert gse_direct.annual_income_gbp != pytest.approx(flat_rate * sigma, rel=1e-3), (
+            f"Event-derived income (£{gse_direct.annual_income_gbp:.2f}) must differ from "
+            f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
+            "confirms the supersede takes effect."
+        )
