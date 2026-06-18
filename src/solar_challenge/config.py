@@ -26,6 +26,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.ev import EVConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
+from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
@@ -513,6 +514,14 @@ class FinanceConfig:
         grid_services_income_per_kw_per_year_gbp: Exogenous DFS/DNO grid-services income
             per kW of installed battery discharge power per year, net of aggregator share
             (default 0.0; W1 cross-PRD seam — W1-delta fills the value cross-batch).
+        grid_services_model: Grid-services pricing model selector.  ``"flat"`` uses
+            the legacy flat per-kW rate (``grid_services_income_per_kw_per_year_gbp``);
+            ``"capacity_at_events"`` uses the structured events-based model configured
+            via ``grid_services_events``.  Default ``"flat"`` leaves all existing
+            behaviour bit-unchanged.
+        grid_services_events: Optional :class:`~solar_challenge.gridservices.GridServicesEventsConfig`
+            used when ``grid_services_model == "capacity_at_events"``.  May be ``None``
+            even for that model (α only validates the selector field; γ/δ consume it).
     """
 
     standing_charge_pence_per_day: float
@@ -532,6 +541,8 @@ class FinanceConfig:
     own_use_rate_pence_per_kwh: float = 15.0
     retained_cash_floor_per_home_per_year_gbp: float = 27.0
     grid_services_income_per_kw_per_year_gbp: float = 0.0
+    grid_services_model: str = "flat"
+    grid_services_events: Optional[GridServicesEventsConfig] = None
 
     def __post_init__(self) -> None:
         """Validate financial parameters, raising ConfigurationError on violation."""
@@ -600,6 +611,12 @@ class FinanceConfig:
             raise ConfigurationError(
                 "grid_services_income_per_kw_per_year_gbp must be >= 0, "
                 f"got {self.grid_services_income_per_kw_per_year_gbp}"
+            )
+        _VALID_GS_MODELS = frozenset({"flat", "capacity_at_events"})
+        if self.grid_services_model not in _VALID_GS_MODELS:
+            raise ConfigurationError(
+                f"grid_services_model must be one of {sorted(_VALID_GS_MODELS)}, "
+                f"got '{self.grid_services_model}'"
             )
 
 
