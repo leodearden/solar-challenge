@@ -1098,6 +1098,11 @@ def project_multi_year(
 
     sampled_data: dict[int, _NodeData] = {}
 
+    # Memo dict for the capacity_at_events grid-services figure (PRD decision 7 / Open Q1).
+    # Computed once from the representative (age-0) simulation, reused for all ages
+    # and all bisection trial nodes.  Captured by the _simulate_age closure.
+    _event_gs_memo: dict[str, float] = {}
+
     def _simulate_age(
         age: int,
         cum_tp: list[float],
@@ -1137,16 +1142,18 @@ def project_multi_year(
             for s in per_home_summaries
         )
         if finance.grid_services_model == "capacity_at_events":
-            from solar_challenge.gridservices import compute_grid_services_at_events
             if finance.grid_services_events is None:
                 from solar_challenge.config import ConfigurationError
                 raise ConfigurationError(
                     "grid_services_model='capacity_at_events' requires "
                     "grid_services_events to be configured"
                 )
-            grid_services = compute_grid_services_at_events(
-                fleet_results, finance.grid_services_events
-            ).annual_income_gbp
+            if "value" not in _event_gs_memo:
+                from solar_challenge.gridservices import compute_grid_services_at_events
+                _event_gs_memo["value"] = compute_grid_services_at_events(
+                    fleet_results, finance.grid_services_events
+                ).annual_income_gbp
+            grid_services = _event_gs_memo["value"]
         else:
             grid_services = finance.grid_services_income_per_kw_per_year_gbp * sum(
                 h.battery_config.max_discharge_kw
