@@ -1698,6 +1698,55 @@ def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceCon
         raise ConfigurationError(
             "finance.standing_charge_pence_per_day is required"
         )
+
+    # Parse optional nested grid_services_events block BEFORE the try/except so
+    # ConfigurationError raised by GridServicesEventsConfig.__post_init__ propagates
+    # without being swallowed by the (ValueError, TypeError) 'non-numeric' wrapper.
+    grid_services_model: str = str(data.get("grid_services_model", "flat"))
+    grid_services_events_obj: Optional[GridServicesEventsConfig] = None
+    gs_events_raw = data.get("grid_services_events")
+    if gs_events_raw is not None:
+        gs_data = gs_events_raw
+        # Parse event_windows list-of-dicts -> tuple[EventWindow, ...]
+        # mirroring _parse_tariff_config 'custom' branch.
+        ew_raw_list = gs_data.get("event_windows", [])
+        if not isinstance(ew_raw_list, list):
+            raise ConfigurationError(
+                "grid_services_events.event_windows must be a list of window dicts"
+            )
+        parsed_windows: list[EventWindow] = []
+        for i, ew_dict in enumerate(ew_raw_list):
+            for req_key in ("months", "weekdays", "hours", "events_per_year", "event_hours"):
+                if req_key not in ew_dict:
+                    raise ConfigurationError(
+                        f"grid_services_events.event_windows[{i}] requires '{req_key}' field"
+                    )
+            parsed_windows.append(
+                EventWindow(
+                    months=tuple(int(m) for m in ew_dict["months"]),
+                    weekdays=tuple(int(d) for d in ew_dict["weekdays"]),
+                    hours=tuple(int(h) for h in ew_dict["hours"]),
+                    events_per_year=int(ew_dict["events_per_year"]),
+                    event_hours=float(ew_dict["event_hours"]),
+                )
+            )
+        # Build optional override float fields
+        avail_raw = gs_data.get("availability_gbp_per_kw_per_event")
+        util_raw = gs_data.get("utilisation_gbp_per_mwh")
+        # GridServicesEventsConfig.__post_init__ validates; ConfigurationError propagates.
+        grid_services_events_obj = GridServicesEventsConfig(
+            band=gs_data.get("band", "central"),
+            event_windows=tuple(parsed_windows),
+            aggregator_share=float(gs_data.get("aggregator_share", 0.25)),
+            utilisation_factor=float(gs_data.get("utilisation_factor", 0.6)),
+            availability_gbp_per_kw_per_event=(
+                float(avail_raw) if avail_raw is not None else None
+            ),
+            utilisation_gbp_per_mwh=(
+                float(util_raw) if util_raw is not None else None
+            ),
+        )
+
     try:
         sc_raw = data.get("self_consumption_override")
         return FinanceConfig(
@@ -1728,6 +1777,8 @@ def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceCon
             grid_services_income_per_kw_per_year_gbp=float(
                 data.get("grid_services_income_per_kw_per_year_gbp", 0.0)
             ),
+            grid_services_model=grid_services_model,
+            grid_services_events=grid_services_events_obj,
         )
     except (ValueError, TypeError) as exc:
         raise ConfigurationError(
