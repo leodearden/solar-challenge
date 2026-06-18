@@ -563,3 +563,98 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
         f"Isolated grid_services component must be invariant to own_use_rate; "
         f"at r=5 p/kWh: £{gs_at_r5:.6f}, at r=20 p/kWh: £{gs_at_r20:.6f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Step-1 (RED) → Step-2 (GREEN): ε — finance report renders capacity-at-events line
+# ---------------------------------------------------------------------------
+
+
+def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
+    """generate_finance_report with grid_services_at_events renders the event-derived line.
+
+    Builds a synthetic BillDistribution + a positive-spare FleetResults,
+    computes the event figure, then asserts the rendered report contains:
+      - "Grid services (capacity-at-events)" label
+      - the formatted annual £ (event-derived)
+      - the per-window avail_kW value
+
+    RED because generate_finance_report has no grid_services_at_events param yet
+    (TypeError on the keyword argument).
+    GREEN after step-2 adds the Optional[GridServicesAtEvents] param and renders
+    the line inside the existing flex-value block.
+    """
+    from solar_challenge.config import FinanceConfig
+    from solar_challenge.finance import bill_distribution
+    from solar_challenge.flex import resolve_flex_band
+    from solar_challenge.gridservices import (
+        GridServicesEventsConfig,
+        compute_grid_services_at_events,
+    )
+    from solar_challenge.home import SummaryStatistics
+    from solar_challenge.output import generate_finance_report
+
+    # Build a minimal synthetic BillDistribution (mirrors test_flex_timeshift pattern)
+    sc_ratio = 2200.0 / 4000.0
+    gd_ratio = 1200.0 / 3400.0
+    ex_ratio = 1800.0 / 4000.0
+    summary = SummaryStatistics(
+        total_generation_kwh=4000.0,
+        total_demand_kwh=3400.0,
+        total_self_consumption_kwh=2200.0,
+        total_grid_import_kwh=1200.0,
+        total_grid_export_kwh=1800.0,
+        total_battery_charge_kwh=0.0,
+        total_battery_discharge_kwh=0.0,
+        peak_generation_kw=3.5,
+        peak_demand_kw=2.0,
+        self_consumption_ratio=sc_ratio,
+        grid_dependency_ratio=gd_ratio,
+        export_ratio=ex_ratio,
+        simulation_days=365,
+        total_import_cost_gbp=276.0,
+        total_export_revenue_gbp=73.8,
+        net_cost_gbp=202.2,
+        seg_revenue_gbp=73.8,
+    )
+    finance = FinanceConfig(
+        standing_charge_pence_per_day=60.0,
+        own_use_rate_pence_per_kwh=15.0,
+    )
+    dist = bill_distribution([summary], finance, 365)
+
+    # Build an in-window FleetResults from the board homes
+    scenario, _finance_base = _board_econ_scenario()
+    homes = scenario.homes
+    fr = _synthetic_fleet_results_in_window(homes)
+
+    # Compute the event figure (precondition: must be positive)
+    events_cfg = GridServicesEventsConfig(band="central")
+    gse = compute_grid_services_at_events(fr, events_cfg)
+    assert gse.annual_income_gbp > 0.0, (
+        "Synthetic in-window fleet must yield positive annual event income"
+    )
+
+    # Call generate_finance_report with the new param (RED: TypeError before step-2)
+    report = generate_finance_report(
+        dist,
+        scenario_name="Epsilon-Events-Test",
+        flex_band=resolve_flex_band("central"),
+        flex_band_name="central",
+        grid_services_at_events=gse,
+    )
+
+    # The line must appear in the flex-value block
+    assert "Grid services (capacity-at-events)" in report, (
+        "Report must contain the 'Grid services (capacity-at-events)' label"
+    )
+    # Formatted annual £ must appear (comma-separated, no decimals)
+    expected_gbp_str = f"£{gse.annual_income_gbp:,.0f}"
+    assert expected_gbp_str in report, (
+        f"Report must contain the event-derived annual income '{expected_gbp_str}'"
+    )
+    # Per-window avail_kW must appear (1 dp format expected)
+    expected_kw_str = f"{gse.per_window_avail_kw:.1f}"
+    assert expected_kw_str in report, (
+        f"Report must contain per-window avail_kW '{expected_kw_str} kW'"
+    )
