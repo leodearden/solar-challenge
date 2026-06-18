@@ -134,3 +134,68 @@ def _isolate_gs_component(
     return _rev_at(scenario, finance_events, simulate, year) - _rev_at(
         scenario, finance_flat0, simulate, year
     )
+
+
+# ---------------------------------------------------------------------------
+# Step-1 (RED) → Step-2 (GREEN): B3 — supersede takes effect
+# ---------------------------------------------------------------------------
+
+
+def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
+    """capacity_at_events model supersedes (replaces) the flat per-kW term.
+
+    Isolated grid_services component from the delta (rev_events - rev_flat0)
+    EQUALS compute_grid_services_at_events directly AND differs from the flat term.
+
+    RED on base: _simulate_age always computes the flat term, so the isolated delta
+    equals the flat increment (0, since flat rate=0) and the event-derived figure
+    is positive — first assertion fails.
+    GREEN after step-2: the capacity_at_events branch replaces the flat term.
+    """
+    from solar_challenge.gridservices import (
+        GridServicesEventsConfig,
+        compute_grid_services_at_events,
+    )
+
+    scenario, finance_base = _board_econ_scenario()
+    homes = scenario.homes
+    fr = _synthetic_fleet_results_in_window(homes)
+    simulate = _constant_simulate(fr)
+
+    events_cfg = GridServicesEventsConfig(band="central")
+    finance_events = dataclasses.replace(
+        finance_base,
+        grid_services_model="capacity_at_events",
+        grid_services_events=events_cfg,
+        grid_services_income_per_kw_per_year_gbp=0.0,  # irrelevant in events model
+    )
+    finance_flat0 = dataclasses.replace(
+        finance_base,
+        grid_services_income_per_kw_per_year_gbp=0.0,
+    )
+
+    # Direct event-derived figure (the expected value for the delta)
+    expected_gs = compute_grid_services_at_events(fr, events_cfg).annual_income_gbp
+    assert expected_gs > 0.0, "Synthetic in-window fleet must yield positive event income"
+
+    # Isolated component via the flat-rate-0 delta
+    isolated_gs = _isolate_gs_component(scenario, finance_events, finance_flat0, simulate)
+
+    # I3: isolated == event-derived (supersede, not add)
+    assert isolated_gs == pytest.approx(expected_gs, rel=1e-6), (
+        f"Isolated gs component ({isolated_gs:.4f}) must equal event-derived figure "
+        f"({expected_gs:.4f}). RED if _simulate_age still uses the flat term."
+    )
+
+    # Teeth: event figure ≠ flat term for a non-zero flat rate
+    flat_rate = finance_base.grid_services_income_per_kw_per_year_gbp
+    sigma = sum(
+        h.battery_config.max_discharge_kw
+        for h in homes
+        if h.battery_config is not None
+    )
+    flat_gs = flat_rate * sigma
+    assert isolated_gs != pytest.approx(flat_gs, rel=1e-3), (
+        f"Isolated gs ({isolated_gs:.4f}) must differ from flat term "
+        f"({flat_gs:.4f}) — confirms the two models produce different values."
+    )
