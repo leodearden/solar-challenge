@@ -67,6 +67,43 @@ class EventWindow:
     events_per_year: int
     event_hours: float
 
+    def __post_init__(self) -> None:
+        """Validate domain constraints, raising ConfigurationError on violation."""
+        if not self.months:
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError("EventWindow.months must be a non-empty tuple")
+        if not self.weekdays:
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError("EventWindow.weekdays must be a non-empty tuple")
+        if not self.hours:
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError("EventWindow.hours must be a non-empty tuple")
+        if any(m < 1 or m > 12 for m in self.months):
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                f"EventWindow.months values must be in 1..12, got {self.months}"
+            )
+        if any(d < 0 or d > 6 for d in self.weekdays):
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                f"EventWindow.weekdays values must be in 0..6, got {self.weekdays}"
+            )
+        if any(h < 0 or h > 23 for h in self.hours):
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                f"EventWindow.hours values must be in 0..23, got {self.hours}"
+            )
+        if self.events_per_year <= 0:
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                f"EventWindow.events_per_year must be > 0, got {self.events_per_year}"
+            )
+        if self.event_hours <= 0.0:
+            from solar_challenge.config import ConfigurationError
+            raise ConfigurationError(
+                f"EventWindow.event_hours must be > 0, got {self.event_hours}"
+            )
+
     def mask(self, index: pd.DatetimeIndex) -> pd.Series:
         """Return a boolean Series selecting in-window timesteps.
 
