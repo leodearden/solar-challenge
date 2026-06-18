@@ -123,6 +123,10 @@ def _board_econ_scenario() -> tuple:  # type: ignore[return]
 
     cfg = load_config(SCENARIO)
     finance = _parse_finance_config(cfg.get("finance"))
+    # The board YAML ships capacity_at_events after task-76 ε flip; pin flat
+    # model so these seam tests continue verifying flat-rate arithmetic before
+    # and after that flip.  The pin is a no-op while the YAML is still flat.
+    finance = dataclasses.replace(finance, grid_services_model="flat", grid_services_events=None)
     fleet = load_fleet_config(SCENARIO)
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
     scenario = ScenarioConfig(
@@ -289,6 +293,11 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     cfg = load_config(SCENARIO)
     finance_dict = dict(cfg["finance"])
     finance_dict.pop("grid_services_income_per_kw_per_year_gbp")
+    # Also remove event-model keys so the parser defaults to flat model.
+    # No-op before task-76 ε flip (board YAML is flat); preserves the
+    # "all grid-services keys unset" intent after the flip.
+    finance_dict.pop("grid_services_model", None)
+    finance_dict.pop("grid_services_events", None)
     assert "grid_services_income_per_kw_per_year_gbp" not in finance_dict, (
         "Key must be absent so the parser fallback fires"
     )
@@ -370,6 +379,9 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     cfg = load_config(SCENARIO)
     finance_base = _parse_finance_config(cfg.get("finance"))
     assert finance_base is not None
+    # Pin to flat model: board YAML ships capacity_at_events after task-76 ε
+    # flip; this test verifies flat-rate seam math, so decouple from board default.
+    finance_base = dataclasses.replace(finance_base, grid_services_model="flat", grid_services_events=None)
 
     finance_zero = dataclasses.replace(
         finance_base, grid_services_income_per_kw_per_year_gbp=0.0

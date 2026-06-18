@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
     from solar_challenge.finance import BillDistribution, CostRecoverySolution, ProjectEconomics
     from solar_challenge.flex import FlexibilityValueBand
+    from solar_challenge.gridservices import GridServicesAtEvents
     from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep, SensitivityPanel
 
 
@@ -675,6 +676,7 @@ def generate_finance_report(
     cost_recovery: Optional["CostRecoverySolution"] = None,
     flex_band: Optional["FlexibilityValueBand"] = None,
     flex_band_name: str = "",
+    grid_services_at_events: Optional["GridServicesAtEvents"] = None,
 ) -> str:
     """Generate a markdown finance report from one or two BillDistributions.
 
@@ -710,6 +712,15 @@ def generate_finance_report(
         flex_band_name: Optional human-readable label for the flexibility band
             (e.g. ``"central"``); used in the report header.  Ignored when
             ``flex_band`` is ``None``.
+        grid_services_at_events: Optional
+            :class:`~solar_challenge.gridservices.GridServicesAtEvents` from
+            :func:`~solar_challenge.gridservices.compute_grid_services_at_events`;
+            when provided (and ``flex_band`` is also set), renders a
+            "Grid services (capacity-at-events)" sub-section inside the
+            flexibility-value block showing the event-derived annual fleet
+            income and per-event available capacity.  ``None`` (default)
+            reproduces the existing output exactly (additive; bit-identical
+            default).
 
     Returns:
         A markdown-formatted finance report string.
@@ -866,6 +877,17 @@ Band: **{band_label}**
 Time-shift basis: net import-cost reduction (off-peak charge cost captured in
 grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-discharge/yr
 (PRD §6).*
+"""
+        # ε: optional capacity-at-events sub-section (additive; None → bit-identical)
+        if grid_services_at_events is not None:
+            _avail_kw = sum(grid_services_at_events.per_window_avail_kw)
+            report += f"""
+**Grid services (capacity-at-events)**
+
+| Metric | Value |
+|--------|-------|
+| Annual fleet income | £{grid_services_at_events.annual_income_gbp:,.0f} |
+| Per-event available capacity | {_avail_kw:.1f} kW |
 """
 
     return report

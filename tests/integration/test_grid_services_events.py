@@ -163,7 +163,9 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     )
     finance_flat0 = dataclasses.replace(
         finance_base,
-        grid_services_income_per_kw_per_year_gbp=0.0,
+        grid_services_model="flat",
+        grid_services_events=None,
+        grid_services_income_per_kw_per_year_gbp=0.0,  # irrelevant in flat model
     )
 
     # Direct event-derived figure (the expected value for the delta)
@@ -429,15 +431,23 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
     fr = _synthetic_fleet_results_in_window(homes)
     simulate = _constant_simulate(fr)
 
-    # (1) default model is "flat"
-    assert finance_base.grid_services_model == "flat", (
-        "FinanceConfig.grid_services_model default must be 'flat'"
+    # (1) FinanceConfig.grid_services_model field default is "flat"
+    # (decoupled from the board YAML, which ships capacity_at_events after task-76 ε flip)
+    _gs_field = next(
+        f for f in dataclasses.fields(finance_base) if f.name == "grid_services_model"
+    )
+    assert _gs_field.default == "flat", (
+        "FinanceConfig.grid_services_model field default must be 'flat'"
     )
 
     # (2) flat: no events config vs attached events config → bit-identical
-    finance_flat_no_events = dataclasses.replace(finance_base, grid_services_events=None)
+    # Build from an explicitly flat base (board YAML ships capacity_at_events after ε flip)
+    finance_flat_base = dataclasses.replace(
+        finance_base, grid_services_model="flat", grid_services_events=None
+    )
+    finance_flat_no_events = finance_flat_base  # events already None
     finance_flat_with_events = dataclasses.replace(
-        finance_base,
+        finance_flat_base,
         grid_services_events=GridServicesEventsConfig(band="central"),
     )
     curve_no_events = project_multi_year(scenario, finance_flat_no_events, simulate=simulate)
@@ -507,6 +517,8 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
     )
     finance_flat0 = dataclasses.replace(
         finance_base,
+        grid_services_model="flat",
+        grid_services_events=None,
         grid_services_income_per_kw_per_year_gbp=0.0,
     )
 
@@ -551,3 +563,171 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
         f"Isolated grid_services component must be invariant to own_use_rate; "
         f"at r=5 p/kWh: £{gs_at_r5:.6f}, at r=20 p/kWh: £{gs_at_r20:.6f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Step-1 (RED) → Step-2 (GREEN): ε — finance report renders capacity-at-events line
+# ---------------------------------------------------------------------------
+
+
+def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
+    """generate_finance_report with grid_services_at_events renders the event-derived line.
+
+    Builds a synthetic BillDistribution + a positive-spare FleetResults,
+    computes the event figure, then asserts the rendered report contains:
+      - "Grid services (capacity-at-events)" label
+      - the formatted annual £ (event-derived)
+      - the per-window avail_kW value
+
+    RED because generate_finance_report has no grid_services_at_events param yet
+    (TypeError on the keyword argument).
+    GREEN after step-2 adds the Optional[GridServicesAtEvents] param and renders
+    the line inside the existing flex-value block.
+    """
+    from solar_challenge.config import FinanceConfig
+    from solar_challenge.finance import bill_distribution
+    from solar_challenge.flex import resolve_flex_band
+    from solar_challenge.gridservices import (
+        GridServicesEventsConfig,
+        compute_grid_services_at_events,
+    )
+    from solar_challenge.home import SummaryStatistics
+    from solar_challenge.output import generate_finance_report
+
+    # Build a minimal synthetic BillDistribution (mirrors test_flex_timeshift pattern)
+    sc_ratio = 2200.0 / 4000.0
+    gd_ratio = 1200.0 / 3400.0
+    ex_ratio = 1800.0 / 4000.0
+    summary = SummaryStatistics(
+        total_generation_kwh=4000.0,
+        total_demand_kwh=3400.0,
+        total_self_consumption_kwh=2200.0,
+        total_grid_import_kwh=1200.0,
+        total_grid_export_kwh=1800.0,
+        total_battery_charge_kwh=0.0,
+        total_battery_discharge_kwh=0.0,
+        peak_generation_kw=3.5,
+        peak_demand_kw=2.0,
+        self_consumption_ratio=sc_ratio,
+        grid_dependency_ratio=gd_ratio,
+        export_ratio=ex_ratio,
+        simulation_days=365,
+        total_import_cost_gbp=276.0,
+        total_export_revenue_gbp=73.8,
+        net_cost_gbp=202.2,
+        seg_revenue_gbp=73.8,
+    )
+    finance = FinanceConfig(
+        standing_charge_pence_per_day=60.0,
+        own_use_rate_pence_per_kwh=15.0,
+    )
+    dist = bill_distribution([summary], finance, 365)
+
+    # Build an in-window FleetResults from the board homes
+    scenario, _finance_base = _board_econ_scenario()
+    homes = scenario.homes
+    fr = _synthetic_fleet_results_in_window(homes)
+
+    # Compute the event figure (precondition: must be positive)
+    events_cfg = GridServicesEventsConfig(band="central")
+    gse = compute_grid_services_at_events(fr, events_cfg)
+    assert gse.annual_income_gbp > 0.0, (
+        "Synthetic in-window fleet must yield positive annual event income"
+    )
+
+    # Call generate_finance_report with the new param (RED: TypeError before step-2)
+    report = generate_finance_report(
+        dist,
+        scenario_name="Epsilon-Events-Test",
+        flex_band=resolve_flex_band("central"),
+        flex_band_name="central",
+        grid_services_at_events=gse,
+    )
+
+    # The line must appear in the flex-value block
+    assert "Grid services (capacity-at-events)" in report, (
+        "Report must contain the 'Grid services (capacity-at-events)' label"
+    )
+    # Formatted annual £ must appear (comma-separated, no decimals)
+    expected_gbp_str = f"£{gse.annual_income_gbp:,.0f}"
+    assert expected_gbp_str in report, (
+        f"Report must contain the event-derived annual income '{expected_gbp_str}'"
+    )
+    # Per-window avail_kW (summed across windows) must appear (1 dp format expected)
+    # per_window_avail_kw is tuple[float,...]; sum gives total fleet avail kW.
+    expected_kw_str = f"{sum(gse.per_window_avail_kw):.1f}"
+    assert expected_kw_str in report, (
+        f"Report must contain per-window avail_kW '{expected_kw_str} kW'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step-3 (RED) → Step-4 (GREEN): ε — CLI finance run emits event-derived line
+# ---------------------------------------------------------------------------
+
+
+def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> None:
+    """finance run scenarios/bristol-phase1-flex.yaml emits the capacity-at-events line.
+
+    Patches simulate_fleet with an in-window synthetic FleetResults, invokes the
+    CLI against the board scenario, and asserts:
+      - exit_code == 0
+      - "Grid services (capacity-at-events)" line in output
+      - a positive event-derived £ figure in output
+      - (after YAML flip) the supersede inequality: event income ≠ flat_rate × Σ kW
+
+    RED because: (a) the board YAML is still flat → CLI computes no event figure
+    → no "Grid services (capacity-at-events)" line in output; (b) cli/finance.py
+    does not yet compute/pass grid_services_at_events to generate_finance_report.
+    GREEN after step-4: YAML flipped to capacity_at_events + CLI wired up.
+    """
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import pytest
+    from typer.testing import CliRunner
+
+    from solar_challenge.cli.main import app
+    from solar_challenge.config import _parse_finance_config, load_config  # type: ignore[attr-defined]
+    from solar_challenge.gridservices import compute_grid_services_at_events
+
+    scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
+
+    # In-window FleetResults from the board homes
+    scenario, _finance = _board_econ_scenario()
+    homes = scenario.homes
+    fr = _synthetic_fleet_results_in_window(homes)
+
+    with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
+        runner = CliRunner()
+        result = runner.invoke(app, ["finance", "run", str(scenario_path)])
+
+    assert result.exit_code == 0, (
+        f"CLI exited {result.exit_code}. Output:\n{result.output}"
+    )
+
+    # Main assertion (RED before step-4): the capacity-at-events line must appear
+    assert "Grid services (capacity-at-events)" in result.output, (
+        f"Expected 'Grid services (capacity-at-events)' line in output.\n{result.output}"
+    )
+
+    # The rendered event-derived £ must be present (positive)
+    assert "£" in result.output, "Output must contain a £ figure"
+
+    # Supersede inequality (only checkable after ε flips the board YAML to
+    # capacity_at_events; skips gracefully if still flat)
+    raw = load_config(scenario_path)
+    finance = _parse_finance_config(raw.get("finance"))
+    assert finance is not None
+    if finance.grid_services_events is not None:
+        flat_rate = finance.grid_services_income_per_kw_per_year_gbp
+        sigma = sum(
+            h.battery_config.max_discharge_kw
+            for h in homes if h.battery_config is not None
+        )
+        gse_direct = compute_grid_services_at_events(fr, finance.grid_services_events)
+        assert gse_direct.annual_income_gbp != pytest.approx(flat_rate * sigma, rel=1e-3), (
+            f"Event-derived income (£{gse_direct.annual_income_gbp:.2f}) must differ from "
+            f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
+            "confirms the supersede takes effect."
+        )
