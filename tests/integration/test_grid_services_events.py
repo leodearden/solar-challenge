@@ -291,3 +291,64 @@ def test_compute_once_event_figure_reused_across_ages(monkeypatch: pytest.Monkey
         f"project_multi_year run; got {call_count['n']}. "
         f"RED if not memoized (step-6 adds the closure-captured memo dict)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Step-7 (GREEN on arrival): B4 — flat model bit-identical regression
+# ---------------------------------------------------------------------------
+
+
+def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
+    """B4 backward-compat regression: flat model YearPoint stream is bit-identical
+    whether or not grid_services_events is attached; flat ≠ capacity_at_events.
+
+    (1) FinanceConfig.grid_services_model default is "flat".
+    (2) Flat with events=None vs flat with events config attached → identical curves.
+        The event config is inert unless grid_services_model=='capacity_at_events'.
+    (3) Flat curve ≠ capacity_at_events curve for the same fleet (teeth).
+
+    GREEN on arrival: the single conditional in step-2/step-6 preserves the flat path
+    char-for-char and ignores grid_services_events when model is "flat".
+    """
+    from solar_challenge.config import FinanceConfig  # type: ignore[attr-defined]
+    from solar_challenge.finance import project_multi_year
+    from solar_challenge.gridservices import GridServicesEventsConfig
+
+    scenario, finance_base = _board_econ_scenario()
+    homes = scenario.homes
+    fr = _synthetic_fleet_results_in_window(homes)
+    simulate = _constant_simulate(fr)
+
+    # (1) default model is "flat"
+    assert finance_base.grid_services_model == "flat", (
+        "FinanceConfig.grid_services_model default must be 'flat'"
+    )
+
+    # (2) flat: no events config vs attached events config → bit-identical
+    finance_flat_no_events = dataclasses.replace(finance_base, grid_services_events=None)
+    finance_flat_with_events = dataclasses.replace(
+        finance_base,
+        grid_services_events=GridServicesEventsConfig(band="central"),
+    )
+    curve_no_events = project_multi_year(scenario, finance_flat_no_events, simulate=simulate)
+    curve_with_events = project_multi_year(scenario, finance_flat_with_events, simulate=simulate)
+    assert curve_no_events.points == curve_with_events.points, (
+        "Flat model must produce bit-identical YearPoint tuples with/without "
+        "grid_services_events attached — the event config is inert in flat mode."
+    )
+
+    # (3) flat ≠ capacity_at_events (teeth — confirms supersede is real)
+    finance_events = dataclasses.replace(
+        finance_base,
+        grid_services_model="capacity_at_events",
+        grid_services_events=GridServicesEventsConfig(band="central"),
+        grid_services_income_per_kw_per_year_gbp=0.0,
+    )
+    curve_events = project_multi_year(scenario, finance_events, simulate=simulate)
+
+    rev_flat = curve_no_events.points[0].fleet_revenue_gbp
+    rev_events = curve_events.points[0].fleet_revenue_gbp
+    assert rev_flat != rev_events, (
+        f"Flat (£{rev_flat:.4f}) and capacity_at_events (£{rev_events:.4f}) "
+        "must differ for the same fleet — confirms the supersede takes effect."
+    )
