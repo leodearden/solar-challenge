@@ -625,3 +625,150 @@ class TestComputeFleetSpareCapacityKw:
         assert len(result) == 1, "one window → one result"
         assert result[0] >= 0.0, "I1: capacity must be non-negative"
         assert result == pytest.approx((2.0 / 3.0,))
+
+    # -----------------------------------------------------------------------
+    # Step-3: zero-condition and guard tests — RED
+    # -----------------------------------------------------------------------
+
+    def test_at_max_discharge_contributes_zero(self) -> None:
+        """Home at max_discharge_kw in-window contributes 0 (I2 firmness guard).
+
+        Hand-computed:
+            Config: max_discharge_kw=3.0, capacity_kwh=10, min_soc_fraction=0.1, soh=1.0
+            in-window discharge=[2.0, 3.0, 1.0]  ← touches max
+            P_spare = 3.0 - max(2.0, 3.0, 1.0) = 3.0 - 3.0 = 0.0
+            avail = max(0, min(0.0, ...)) = 0
+
+        This exercises the I2 clamping — the clamped min(P_spare, ...) expression
+        already handles this; no special-case code is needed.
+        """
+        from solar_challenge.battery import BatteryConfig
+        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
+
+        idx = pd.DatetimeIndex(
+            ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
+            tz="Europe/London",
+        )
+        w = EventWindow(
+            months=(12,), weekdays=(0,), hours=(16, 17, 18),
+            events_per_year=12, event_hours=3.0,
+        )
+        bat_cfg = BatteryConfig(capacity_kwh=10.0, max_discharge_kw=3.0, min_soc_fraction=0.1, soh=1.0)
+        home_cfg = _make_gs_home_config(bat_cfg)
+
+        # Discharge touches max_discharge_kw (=3.0) during window ⇒ P_spare = 0
+        sim = _make_gs_sim_results(
+            battery_soc=[5.0, 4.0, 3.0],
+            battery_discharge=[2.0, 3.0, 1.0],
+            index=idx,
+        )
+        fleet = _make_gs_fleet_results([(sim, home_cfg)])
+
+        result = compute_fleet_spare_capacity_kw(fleet, (w,))
+
+        assert len(result) == 1
+        assert result[0] == pytest.approx(0.0), "at-max-discharge home must contribute 0"
+
+    def test_home_without_battery_contributes_zero(self) -> None:
+        """Fleet with a PV-only home (battery_config=None) must not crash.
+
+        The PV-only home must be skipped (contributes 0) and the battery home's
+        avail is returned unchanged.
+
+        Hand-computed for battery home:
+            Config: max_discharge_kw=3.0, capacity_kwh=10, min_soc_fraction=0.1, soh=1.0
+            soc=[4.0, 3.5, 3.0], discharge=[1.0, 1.5, 0.5]
+            P_spare = 1.5, E_spare = 2.0, avail = 2/3
+        """
+        from solar_challenge.battery import BatteryConfig
+        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
+        from solar_challenge.home import HomeConfig
+        from solar_challenge.load import LoadConfig
+        from solar_challenge.location import Location
+        from solar_challenge.pv import PVConfig
+
+        idx = pd.DatetimeIndex(
+            ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
+            tz="Europe/London",
+        )
+        w = EventWindow(
+            months=(12,), weekdays=(0,), hours=(16, 17, 18),
+            events_per_year=12, event_hours=3.0,
+        )
+
+        # Battery home
+        bat_cfg = BatteryConfig(capacity_kwh=10.0, max_discharge_kw=3.0, min_soc_fraction=0.1, soh=1.0)
+        bat_home = _make_gs_home_config(bat_cfg)
+        sim_bat = _make_gs_sim_results(
+            battery_soc=[4.0, 3.5, 3.0],
+            battery_discharge=[1.0, 1.5, 0.5],
+            index=idx,
+        )
+
+        # PV-only home (battery_config=None)
+        pv_only_home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
+            load_config=LoadConfig(annual_consumption_kwh=3500.0),
+            battery_config=None,  # PV-only
+            location=Location.bristol(),
+        )
+        sim_pv = _make_gs_sim_results(
+            battery_soc=[0.0, 0.0, 0.0],
+            battery_discharge=[0.0, 0.0, 0.0],
+            index=idx,
+        )
+
+        fleet = _make_gs_fleet_results([(sim_bat, bat_home), (sim_pv, pv_only_home)])
+
+        result = compute_fleet_spare_capacity_kw(fleet, (w,))
+
+        assert len(result) == 1
+        assert result[0] >= 0.0, "I1: non-negative"
+        # Result must equal battery home's avail alone (2/3), PV-only home contributes 0
+        assert result == pytest.approx((2.0 / 3.0,))
+
+    def test_window_absent_from_index_is_zero(self) -> None:
+        """Window absent from the home's index contributes 0; order is preserved.
+
+        Two windows: w1 selectable by the index (hours 16-18), w2 with hours (2, 3)
+        that never appear in the index.
+
+        Hand-computed for w1 (one battery home):
+            Config: max_discharge_kw=3.0, capacity_kwh=10, min_soc_fraction=0.1, soh=1.0
+            soc=[4.0, 3.5, 3.0], discharge=[1.0, 1.5, 0.5]
+            avail_w1 = 2/3
+
+        For w2 (empty mask): no timesteps → contributes 0.
+        """
+        from solar_challenge.battery import BatteryConfig
+        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
+
+        idx = pd.DatetimeIndex(
+            ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
+            tz="Europe/London",
+        )
+        w1 = EventWindow(
+            months=(12,), weekdays=(0,), hours=(16, 17, 18),
+            events_per_year=12, event_hours=3.0,
+        )
+        # w2 matches hours 2-3, which never appear in the 3-point index above
+        w2 = EventWindow(
+            months=(12,), weekdays=(0,), hours=(2, 3),
+            events_per_year=12, event_hours=2.0,
+        )
+
+        bat_cfg = BatteryConfig(capacity_kwh=10.0, max_discharge_kw=3.0, min_soc_fraction=0.1, soh=1.0)
+        home_cfg = _make_gs_home_config(bat_cfg)
+        sim = _make_gs_sim_results(
+            battery_soc=[4.0, 3.5, 3.0],
+            battery_discharge=[1.0, 1.5, 0.5],
+            index=idx,
+        )
+        fleet = _make_gs_fleet_results([(sim, home_cfg)])
+
+        result = compute_fleet_spare_capacity_kw(fleet, (w1, w2))
+
+        assert len(result) == 2, "two windows → two results"
+        assert all(v >= 0.0 for v in result), "I1: all non-negative"
+        assert result[0] == pytest.approx(2.0 / 3.0), "w1 avail matches hand-computed"
+        assert result[1] == pytest.approx(0.0), "absent window contributes 0"
