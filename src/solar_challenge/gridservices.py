@@ -163,6 +163,8 @@ def resolve_grid_services_rate_band(band: str) -> GridServicesRateBand:
 # EventWindow
 # ---------------------------------------------------------------------------
 
+# (GridServicesEventsConfig and DEFAULT_EVENT_WINDOWS defined after EventWindow below)
+
 
 @dataclass(frozen=True)
 class EventWindow:
@@ -242,3 +244,48 @@ class EventWindow:
             & index.hour.isin(self.hours)
         )
         return pd.Series(arr, index=index)
+
+
+# ---------------------------------------------------------------------------
+# DEFAULT_EVENT_WINDOWS + GridServicesEventsConfig
+# ---------------------------------------------------------------------------
+
+# PRD open-Q4: default event schedule.
+# Single winter-weekday-16:00-19:00 window per the PRD default.
+DEFAULT_EVENT_WINDOWS: tuple["EventWindow", ...] = (
+    EventWindow(
+        months=(11, 12, 1, 2),
+        weekdays=(0, 1, 2, 3, 4),
+        hours=(16, 17, 18),
+        events_per_year=12,
+        event_hours=3.0,
+    ),
+)
+
+
+@dataclass(frozen=True)
+class GridServicesEventsConfig:
+    """Configuration for the capacity-at-events grid-services pricing model.
+
+    Attributes:
+        band: Uncertainty band name (``"low"``, ``"central"``, or ``"high"``).
+        event_windows: Tuple of :class:`EventWindow` objects describing when
+            activation events can occur.
+        aggregator_share: Fraction of gross income paid to the aggregator;
+            must be in ``[0, 1)``.
+        utilisation_factor: Expected fraction of contracted capacity actually
+            dispatched during events; must be in ``[0, 1]``.
+        availability_gbp_per_kw_per_event: Optional override for the
+            availability rate (£/kW/event).  If ``None``, the rate is taken
+            from :data:`GRID_SERVICES_RATE_BANDS` via *band*.
+        utilisation_gbp_per_mwh: Optional override for the utilisation rate
+            (£/MWh).  If ``None``, the rate is taken from
+            :data:`GRID_SERVICES_RATE_BANDS` via *band*.
+    """
+
+    band: str = "central"
+    event_windows: tuple[EventWindow, ...] = DEFAULT_EVENT_WINDOWS
+    aggregator_share: float = 0.25
+    utilisation_factor: float = 0.6
+    availability_gbp_per_kw_per_event: Optional[float] = None
+    utilisation_gbp_per_mwh: Optional[float] = None
