@@ -653,8 +653,9 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
     assert expected_gbp_str in report, (
         f"Report must contain the event-derived annual income '{expected_gbp_str}'"
     )
-    # Per-window avail_kW must appear (1 dp format expected)
-    expected_kw_str = f"{gse.per_window_avail_kw:.1f}"
+    # Per-window avail_kW (summed across windows) must appear (1 dp format expected)
+    # per_window_avail_kw is tuple[float,...]; sum gives total fleet avail kW.
+    expected_kw_str = f"{sum(gse.per_window_avail_kw):.1f}"
     assert expected_kw_str in report, (
         f"Report must contain per-window avail_kW '{expected_kw_str} kW'"
     )
