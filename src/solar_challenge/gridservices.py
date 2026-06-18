@@ -28,6 +28,9 @@ Key public symbols:
 * :class:`GridServicesAtEvents` — frozen dataclass holding the banded
   availability + utilisation income breakdown returned by
   :func:`compute_grid_services_at_events`.
+* :func:`compute_grid_services_at_events` — applies the banded availability +
+  utilisation pricing formula per event window, returning a
+  :class:`GridServicesAtEvents` breakdown.
 
 **Import cycle note**: this module has NO top-level import of ``config.py``.
 ``ConfigurationError`` is imported *lazily*, inside each validation-failure
@@ -494,3 +497,69 @@ class GridServicesAtEvents:
     annual_income_gbp: float
     per_window_avail_kw: tuple[float, ...]
     per_window_income_gbp: tuple[float, ...]
+
+
+# ---------------------------------------------------------------------------
+# compute_grid_services_at_events
+# ---------------------------------------------------------------------------
+
+
+def compute_grid_services_at_events(
+    fleet_results: "FleetResults",
+    cfg: "GridServicesEventsConfig",
+) -> GridServicesAtEvents:
+    """Compute banded availability + utilisation income from grid-services events.
+
+    Applies the capacity-at-events pricing formula per event window using the
+    firm spare capacity from :func:`compute_fleet_spare_capacity_kw` (β) and
+    the rates from :data:`GRID_SERVICES_RATE_BANDS` (resolved via *cfg.band*).
+
+    **Formula** (per window *w* with firm spare capacity *avail_kW*):
+
+    .. code-block:: text
+
+        avail_rate  = band.availability_gbp_per_kw_per_event
+        util_rate   = band.utilisation_gbp_per_mwh
+        avail_income = avail * avail_rate * w.events_per_year
+        util_income  = avail * cfg.utilisation_factor * w.event_hours
+                       * (util_rate / 1000.0) * w.events_per_year
+        gross_w      = avail_income + util_income
+        net_w        = gross_w * (1.0 - cfg.aggregator_share)
+
+    The per-window income is **net** of the aggregator share.  Consumers must
+    NOT re-apply ``(1 - aggregator_share)`` — see
+    :class:`GridServicesAtEvents`.
+
+    Args:
+        fleet_results: Simulation results for the fleet.
+        cfg: Grid-services configuration (band, event windows, aggregator share,
+            utilisation factor, optional rate overrides).
+
+    Returns:
+        A :class:`GridServicesAtEvents` with:
+
+        - ``per_window_avail_kw`` — firm spare capacity per window (from β).
+        - ``per_window_income_gbp`` — net income per window (in window order).
+        - ``annual_income_gbp`` — sum of per-window net income.
+    """
+    avails = compute_fleet_spare_capacity_kw(fleet_results, cfg.event_windows)
+    band = resolve_grid_services_rate_band(cfg.band)
+
+    per_window_net: list[float] = []
+    for window, avail in zip(cfg.event_windows, avails):
+        avail_income = avail * band.availability_gbp_per_kw_per_event * window.events_per_year
+        util_income = (
+            avail
+            * cfg.utilisation_factor
+            * window.event_hours
+            * (band.utilisation_gbp_per_mwh / 1000.0)
+            * window.events_per_year
+        )
+        gross = avail_income + util_income
+        per_window_net.append(gross * (1.0 - cfg.aggregator_share))
+
+    return GridServicesAtEvents(
+        annual_income_gbp=float(sum(per_window_net)),
+        per_window_avail_kw=tuple(float(a) for a in avails),
+        per_window_income_gbp=tuple(per_window_net),
+    )
