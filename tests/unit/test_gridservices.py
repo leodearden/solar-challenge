@@ -829,6 +829,54 @@ class TestComputeFleetSpareCapacityKw:
         # a regression to nominal-capacity (soh=1.0) floor
         assert result == pytest.approx((0.4,))
 
+    def test_soc_below_floor_clamps_to_zero(self) -> None:
+        """Home whose soc dips below min_soc_kwh mid-window must contribute 0.
+
+        This is the only path where the outer max(0.0, ...) clamp matters for
+        the energy term (E_spare goes negative).  The at-max-discharge test
+        exercises P_spare=0; this test exercises E_spare < 0.
+
+        Hand-computed:
+            Config: capacity_kwh=10, min_soc_fraction=0.1, soh=1.0
+                ⇒ min_soc_kwh = 10.0 * 1.0 * 0.1 = 1.0
+            in-window soc=[2.0, 0.8, 2.0]  ← 0.8 < 1.0 = min_soc_kwh
+                discharge=[0.5, 0.5, 0.5]
+            P_spare = 3.0 - 0.5 = 2.5
+            E_spare = min(2.0-1.0, 0.8-1.0, 2.0-1.0) = min(1.0, -0.2, 1.0) = -0.2
+            avail   = max(0.0, min(2.5, -0.2/3.0)) = max(0.0, negative) = 0.0
+        """
+        from solar_challenge.battery import BatteryConfig
+        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
+
+        idx = pd.DatetimeIndex(
+            ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
+            tz="Europe/London",
+        )
+        w = EventWindow(
+            months=(12,), weekdays=(0,), hours=(16, 17, 18),
+            events_per_year=12, event_hours=3.0,
+        )
+        bat_cfg = BatteryConfig(
+            capacity_kwh=10.0, max_discharge_kw=3.0, min_soc_fraction=0.1, soh=1.0,
+        )
+        home_cfg = _make_gs_home_config(bat_cfg)
+        # Middle soc value dips below the floor (1.0) ⇒ E_spare = -0.2 < 0
+        sim = _make_gs_sim_results(
+            battery_soc=[2.0, 0.8, 2.0],
+            battery_discharge=[0.5, 0.5, 0.5],
+            index=idx,
+        )
+        fleet = _make_gs_fleet_results([(sim, home_cfg)])
+
+        result = compute_fleet_spare_capacity_kw(fleet, (w,))
+
+        assert len(result) == 1
+        assert result[0] >= 0.0, "I1: non-negative"
+        assert result == pytest.approx((0.0,)), (
+            "below-floor soc ⇒ E_spare<0 ⇒ avail must be clamped to 0"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Step-1 (γ): TestGridServicesAtEvents — frozen dataclass structure
 # ---------------------------------------------------------------------------
@@ -891,51 +939,3 @@ class TestGridServicesAtEvents:
             per_window_income_gbp=(75.0, 75.0),
         )
         assert pickle.loads(pickle.dumps(obj)) == obj
-
-
-    def test_soc_below_floor_clamps_to_zero(self) -> None:
-        """Home whose soc dips below min_soc_kwh mid-window must contribute 0.
-
-        This is the only path where the outer max(0.0, ...) clamp matters for
-        the energy term (E_spare goes negative).  The at-max-discharge test
-        exercises P_spare=0; this test exercises E_spare < 0.
-
-        Hand-computed:
-            Config: capacity_kwh=10, min_soc_fraction=0.1, soh=1.0
-                ⇒ min_soc_kwh = 10.0 * 1.0 * 0.1 = 1.0
-            in-window soc=[2.0, 0.8, 2.0]  ← 0.8 < 1.0 = min_soc_kwh
-                discharge=[0.5, 0.5, 0.5]
-            P_spare = 3.0 - 0.5 = 2.5
-            E_spare = min(2.0-1.0, 0.8-1.0, 2.0-1.0) = min(1.0, -0.2, 1.0) = -0.2
-            avail   = max(0.0, min(2.5, -0.2/3.0)) = max(0.0, negative) = 0.0
-        """
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
-
-        idx = pd.DatetimeIndex(
-            ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
-            tz="Europe/London",
-        )
-        w = EventWindow(
-            months=(12,), weekdays=(0,), hours=(16, 17, 18),
-            events_per_year=12, event_hours=3.0,
-        )
-        bat_cfg = BatteryConfig(
-            capacity_kwh=10.0, max_discharge_kw=3.0, min_soc_fraction=0.1, soh=1.0,
-        )
-        home_cfg = _make_gs_home_config(bat_cfg)
-        # Middle soc value dips below the floor (1.0) ⇒ E_spare = -0.2 < 0
-        sim = _make_gs_sim_results(
-            battery_soc=[2.0, 0.8, 2.0],
-            battery_discharge=[0.5, 0.5, 0.5],
-            index=idx,
-        )
-        fleet = _make_gs_fleet_results([(sim, home_cfg)])
-
-        result = compute_fleet_spare_capacity_kw(fleet, (w,))
-
-        assert len(result) == 1
-        assert result[0] >= 0.0, "I1: non-negative"
-        assert result == pytest.approx((0.0,)), (
-            "below-floor soc ⇒ E_spare<0 ⇒ avail must be clamped to 0"
-        )

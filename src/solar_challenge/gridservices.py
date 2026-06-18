@@ -25,6 +25,9 @@ Key public symbols:
   event windows, aggregator share, and utilisation factor.
 * :func:`compute_fleet_spare_capacity_kw` — per-event-window firm spare
   dispatchable battery capacity (kW) summed across the fleet.
+* :class:`GridServicesAtEvents` — frozen dataclass holding the banded
+  availability + utilisation income breakdown returned by
+  :func:`compute_grid_services_at_events`.
 
 **Import cycle note**: this module has NO top-level import of ``config.py``.
 ``ConfigurationError`` is imported *lazily*, inside each validation-failure
@@ -456,3 +459,38 @@ def compute_fleet_spare_capacity_kw(
             total += max(0.0, min(p_spare, e_spare / window.event_hours))
         avails.append(float(total))
     return tuple(avails)
+
+
+# ---------------------------------------------------------------------------
+# GridServicesAtEvents
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GridServicesAtEvents:
+    """Banded availability + utilisation income breakdown from a grid-services event model.
+
+    Returned by :func:`compute_grid_services_at_events`.  All income figures are
+    **net** of the aggregator share (i.e. the householder-side income).
+
+    Attributes:
+        annual_income_gbp: Total annual grid-services income across all event
+            windows (£/year).  Equals ``sum(per_window_income_gbp)``.
+        per_window_avail_kw: Per-window firm spare dispatchable capacity (kW),
+            in the same order as the :attr:`GridServicesEventsConfig.event_windows`
+            tuple.  Sourced directly from
+            :func:`compute_fleet_spare_capacity_kw`.
+        per_window_income_gbp: Per-window net income (£), in window order.
+            Each entry is the net (post-aggregator-share) availability +
+            utilisation income for that window.
+
+    .. note::
+        ``sum(per_window_income_gbp) == annual_income_gbp`` is a design
+        invariant.  Consumers (**δ**, **ε**) must NOT re-apply
+        ``(1 - aggregator_share)`` to the per-window tuple — it has already
+        been applied.
+    """
+
+    annual_income_gbp: float
+    per_window_avail_kw: tuple[float, ...]
+    per_window_income_gbp: tuple[float, ...]
