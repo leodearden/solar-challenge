@@ -514,12 +514,22 @@ def compute_grid_services_at_events(
     firm spare capacity from :func:`compute_fleet_spare_capacity_kw` (β) and
     the rates from :data:`GRID_SERVICES_RATE_BANDS` (resolved via *cfg.band*).
 
+    **Rate resolution** (override precedence):
+
+    .. code-block:: text
+
+        avail_rate = cfg.availability_gbp_per_kw_per_event   if not None
+                   else band.availability_gbp_per_kw_per_event
+        util_rate  = cfg.utilisation_gbp_per_mwh             if not None
+                   else band.utilisation_gbp_per_mwh
+
+    Each rate field can be overridden independently; a ``None`` field falls back
+    to the band value resolved via *cfg.band*.
+
     **Formula** (per window *w* with firm spare capacity *avail_kW*):
 
     .. code-block:: text
 
-        avail_rate  = band.availability_gbp_per_kw_per_event
-        util_rate   = band.utilisation_gbp_per_mwh
         avail_income = avail * avail_rate * w.events_per_year
         util_income  = avail * cfg.utilisation_factor * w.event_hours
                        * (util_rate / 1000.0) * w.events_per_year
@@ -545,14 +555,26 @@ def compute_grid_services_at_events(
     avails = compute_fleet_spare_capacity_kw(fleet_results, cfg.event_windows)
     band = resolve_grid_services_rate_band(cfg.band)
 
+    # Override precedence: use cfg field if explicitly set, else fall back to band.
+    avail_rate = (
+        cfg.availability_gbp_per_kw_per_event
+        if cfg.availability_gbp_per_kw_per_event is not None
+        else band.availability_gbp_per_kw_per_event
+    )
+    util_rate = (
+        cfg.utilisation_gbp_per_mwh
+        if cfg.utilisation_gbp_per_mwh is not None
+        else band.utilisation_gbp_per_mwh
+    )
+
     per_window_net: list[float] = []
     for window, avail in zip(cfg.event_windows, avails):
-        avail_income = avail * band.availability_gbp_per_kw_per_event * window.events_per_year
+        avail_income = avail * avail_rate * window.events_per_year
         util_income = (
             avail
             * cfg.utilisation_factor
             * window.event_hours
-            * (band.utilisation_gbp_per_mwh / 1000.0)
+            * (util_rate / 1000.0)
             * window.events_per_year
         )
         gross = avail_income + util_income
