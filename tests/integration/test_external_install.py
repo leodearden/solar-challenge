@@ -4,19 +4,24 @@
 These tests prove that an EXTERNAL consumer can:
   - Install the solar_challenge wheel into a project-free environment (H6).
   - Import every symbol in the frozen public surface (solar_challenge.__all__)
-    and have each one resolve and be callable/present (H1).
+    and have each one resolve (H1); non-class/non-routine symbols are confirmed
+    non-None (constants present).
   - Confirm the wheel ships solar_challenge/py.typed (PEP 561).
 
 The wheel is built once via a module-scoped fixture to avoid building twice.
 The consumer-side proof runs inside an isolated uv env via _external_probe.py,
 which is NOT collected by pytest (underscore-prefixed, matches _helpers.py).
 
-Marked ``build`` (NOT ``slow``) so tests run in the default
-``-m 'not slow and not e2e'`` gate while remaining independently selectable.
+Marked ``build`` (NOT ``slow``) to stay independently selectable
+(``pytest -m build``).  Note: the project's default ``addopts`` does not
+deselect ``build``, so a plain ``pytest`` run will execute these heavy tests
+(timeouts: 300 s build + 600 s isolated install).  Tests skip automatically
+when ``uv`` is absent from PATH.
 """
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import zipfile
 from pathlib import Path
@@ -40,6 +45,9 @@ def built_wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
     Uses tmp_path_factory (module-scoped) rather than tmp_path (function-scoped).
     The project root is computed as the grandparent of the tests/ directory.
     """
+    if shutil.which("uv") is None:
+        pytest.skip("uv not available on PATH — skipping build-marker tests")
+
     project_root = Path(__file__).resolve().parents[2]
     out_dir = tmp_path_factory.mktemp("wheel_out")
 
@@ -105,7 +113,9 @@ def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> 
     --isolated --with <wheel>`` environment.  The probe:
       - Asserts the package loaded from site-packages (not the worktree src/).
       - Iterates solar_challenge.__all__ and getattr-resolves each name.
-      - Classifies: classes/routines → assert callable; else → assert not None.
+      - Classifies: classes/routines → resolution is the assertion (callable() is
+        always True for them by the Python data model, so it is intentionally
+        omitted); else → assert not None (constant present).
       - Prints ``EXTERNAL-INSTALL-OK n/n`` and exits 0 on success.
 
     The test asserts returncode==0 AND the sentinel is in stdout.
