@@ -100,3 +100,37 @@ def test_doc_contains_pinned_dependency_recipe(project_root: Path) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Tests — Behavior B: doc↔__all__ drift guard
+# ---------------------------------------------------------------------------
+
+def test_doc_surface_listing_matches_all(project_root: Path) -> None:
+    """The sentinel-delimited surface listing must equal solar_challenge.__all__.
+
+    Imports the live __all__ so any future surface change fails this test
+    until the doc is updated — a true drift guard.  Also asserts no
+    duplicate names in the listing.
+    """
+    import solar_challenge  # noqa: PLC0415 — intentional deferred import
+
+    doc_text = _read_doc(project_root)
+    parsed = _parse_surface_names(doc_text)
+
+    # No duplicates
+    assert len(parsed) == len(set(parsed)), (
+        f"Duplicate names in {DOC_REL_PATH} surface listing: "
+        f"{[n for n in parsed if parsed.count(n) > 1]}"
+    )
+
+    doc_names = set(parsed)
+    live_names = set(solar_challenge.__all__)
+
+    extra_in_doc = doc_names - live_names
+    missing_from_doc = live_names - doc_names
+
+    assert doc_names == live_names, (
+        f"Surface listing in {DOC_REL_PATH} does not match solar_challenge.__all__.\n"
+        f"  Extra in doc (not in __all__):  {sorted(extra_in_doc)}\n"
+        f"  Missing from doc (in __all__):  {sorted(missing_from_doc)}\n"
+        "Update the <!-- BEGIN-API-SURFACE --> / <!-- END-API-SURFACE --> block."
+    )
