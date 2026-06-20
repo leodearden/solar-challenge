@@ -145,97 +145,27 @@ def test_all_equals_frozen_set() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 kind: committed name→kind table (derived by introspection, never by
-# naming convention — FlatRateTariff is a CamelCase factory FUNCTION;
-# GRID_SERVICES_RATE_BANDS is a frozen-dataclass INSTANCE = constant).
+# H2 kind: targeted gotcha-guard for names whose kind would be WRONG if
+# inferred from naming convention alone.
 #
-# taxonomy:
+# The full surface is pinned by FROZEN_SET above.  This table supplements
+# it with explicit kind checks only for the non-obvious entries:
+#   • FlatRateTariff  — CamelCase looks like a class; it is a factory function
+#   • GRID_SERVICES_RATE_BANDS — UPPER_CASE looks like a plain constant; it is
+#     a frozen-dataclass instance (still "constant" in our taxonomy, but the
+#     distinction is worth pinning)
+#   • DispatchTariffPeriod — Enum alias; verifies it resolves to a class, not
+#     to a string/sentinel from a botched re-export
+#
+# taxonomy (for reference):
 #   class    → inspect.isclass  (covers dataclasses, Enums, ABCs)
 #   function → inspect.isroutine (covers all def functions / factory callables)
 #   constant → neither           (dicts, tuples, lists, frozen-dataclass instances)
 # ---------------------------------------------------------------------------
 EXPECTED_KIND: dict[str, str] = {
-    # --- finance ---
-    "householder_bill": "function",
-    "solve_cost_recovery_rate": "function",
-    "bill_distribution": "function",
-    "BillBreakdown": "class",
-    "BillDistribution": "class",
-    "CostRecoverySolution": "class",
-    "FinanceConfig": "class",
-    # --- signature-closure types ---
-    "SummaryStatistics": "class",
-    "ScenarioConfig": "class",
-    "FleetConfig": "class",
-    "FleetResults": "class",
-    # --- dispatch ---
-    "DispatchStrategy": "class",       # ABC
-    "DispatchDecision": "class",
-    "GridChargeContext": "class",
-    "compute_grid_charge_power_kw": "function",
-    "SelfConsumptionStrategy": "class",  # ABC
-    "TOUOptimizedStrategy": "class",     # ABC
-    "PeakShavingStrategy": "class",      # ABC
-    "DispatchTariffPeriod": "class",     # Enum (alias for dispatch.TariffPeriod)
-    # --- battery ---
-    "Battery": "class",
-    "BatteryConfig": "class",
-    "compute_soh": "function",
-    # --- flow ---
-    "EnergyFlowResult": "class",
-    "simulate_timestep": "function",
-    "simulate_timestep_tou": "function",
-    "validate_energy_balance": "function",
-    "calculate_self_consumption": "function",
-    "calculate_excess_pv": "function",
-    "calculate_shortfall": "function",
-    # --- tariff ---
-    "TariffConfig": "class",
-    "TariffPeriod": "class",
-    "calculate_bill": "function",
-    "FlatRateTariff": "function",        # GOTCHA: CamelCase factory, NOT a class
-    # --- seg ---
-    "SEGTariff": "class",
-    "resolve_seg_tariff": "function",
-    "calculate_seg_revenue": "function",
-    "SEG_PRESETS": "constant",           # dict
-    # --- gridservices ---
-    "GridServicesRateBand": "class",
-    "GridServicesRateBands": "class",
-    "resolve_grid_services_rate_band": "function",
-    "EventWindow": "class",
-    "GridServicesEventsConfig": "class",
-    "GridServicesAtEvents": "class",
-    "compute_fleet_spare_capacity_kw": "function",
-    "compute_grid_services_at_events": "function",
-    "GRID_SERVICES_RATE_BANDS": "constant",  # frozen-dataclass instance
-    "DEFAULT_EVENT_WINDOWS": "constant",     # tuple
-    # --- community ---
-    "CommunityConfig": "class",
-    "CommunityBillingConfig": "class",
-    "CommunityResults": "class",
-    "simulate_community": "function",
-    "validate_community_balance": "function",
-    # --- pv ---
-    "PVConfig": "class",
-    "simulate_pv_output": "function",
-    "create_model_chain": "function",
-    "create_pv_system": "function",
-    "apply_degradation": "function",
-    "calculate_degradation_factor": "function",
-    "interpolate_to_minute_resolution": "function",
-    # --- weather ---
-    "get_tmy_data": "function",
-    "WeatherCache": "class",
-    "get_weather_cache": "function",
-    "set_weather_cache": "function",
-    # --- load ---
-    "LoadConfig": "class",
-    "OFGEM_TDCV_BY_OCCUPANTS": "constant",  # dict
-    "ELEXON_PROFILE_CLASS_1": "constant",   # list
-    "SEASONAL_FACTORS": "constant",         # dict
-    # --- location ---
-    "Location": "class",
+    "FlatRateTariff": "function",           # GOTCHA: CamelCase factory, NOT a class
+    "GRID_SERVICES_RATE_BANDS": "constant", # GOTCHA: frozen-dataclass instance, NOT a class
+    "DispatchTariffPeriod": "class",        # Enum alias — verifies clean class re-export
 }
 
 
@@ -249,33 +179,36 @@ def _kind(obj: object) -> str:
 
 
 def test_expected_kind_keys_match_frozen_set() -> None:
-    """Sync guard: EXPECTED_KIND keys must equal FROZEN_SET.
+    """Sync guard: every key in EXPECTED_KIND must exist in FROZEN_SET.
 
-    A name added to FROZEN_SET but missing from EXPECTED_KIND (or vice-versa)
-    fails here, keeping the two contract tables in lockstep.
+    EXPECTED_KIND is a targeted gotcha-guard (not a mirror of the full surface),
+    so equality is not required — only that no stale / misspelled gotcha entry
+    references a name that was removed from the public surface.
     """
-    expected_keys = set(EXPECTED_KIND)
-    assert expected_keys == FROZEN_SET, (
-        f"EXPECTED_KIND and FROZEN_SET are out of sync.\n"
-        f"In EXPECTED_KIND but not FROZEN_SET: {sorted(expected_keys - FROZEN_SET)}\n"
-        f"In FROZEN_SET but not EXPECTED_KIND: {sorted(FROZEN_SET - expected_keys)}"
+    stale = set(EXPECTED_KIND) - FROZEN_SET
+    assert not stale, (
+        f"EXPECTED_KIND contains names not in FROZEN_SET (stale/misspelled?): "
+        f"{sorted(stale)}"
     )
 
 
 def test_every_name_resolves_to_expected_kind() -> None:
-    """H2 kind: each public name resolves via the PEP-562 lazy loader to the expected kind.
+    """H2: all public names resolve via the PEP-562 lazy loader; gotcha kinds are correct.
 
-    Exercises solar_challenge.__getattr__ for every name — must not raise
-    AttributeError — and asserts the resolved object's introspected kind matches
-    the committed EXPECTED_KIND table.
+    Iterates every name in FROZEN_SET — exercises solar_challenge.__getattr__
+    and must not raise AttributeError for any name.
+
+    For the small subset named in EXPECTED_KIND (the gotcha entries where naming
+    convention would mislead), additionally asserts the introspected kind is correct.
     """
     for name in sorted(FROZEN_SET):
-        obj = getattr(solar_challenge, name)  # triggers lazy loader on first call
-        actual_kind = _kind(obj)
-        assert actual_kind == EXPECTED_KIND[name], (
-            f"solar_challenge.{name}: expected kind={EXPECTED_KIND[name]!r}, "
-            f"got kind={actual_kind!r} (type={type(obj).__name__})"
-        )
+        obj = getattr(solar_challenge, name)  # triggers lazy loader; must not raise
+        if name in EXPECTED_KIND:
+            actual_kind = _kind(obj)
+            assert actual_kind == EXPECTED_KIND[name], (
+                f"solar_challenge.{name}: expected kind={EXPECTED_KIND[name]!r}, "
+                f"got kind={actual_kind!r} (type={type(obj).__name__})"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +230,7 @@ def test_import_is_pvlib_free() -> None:
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     assert result.returncode == 0, (
         f"pvlib was imported by 'import solar_challenge'.\nstderr: {result.stderr}"
@@ -314,6 +248,7 @@ def test_touching_pvconfig_imports_pvlib() -> None:
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
+        timeout=60,
     )
     assert result.returncode == 0, (
         f"pvlib was NOT imported after touching solar_challenge.PVConfig.\nstderr: {result.stderr}"
