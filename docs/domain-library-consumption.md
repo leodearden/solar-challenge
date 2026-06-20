@@ -21,6 +21,12 @@ dependencies = [
 ]
 ```
 
+> **Portability note:** The `file://` path above (`/home/leo/src/my-solar-challenge`)
+> is the canonical location used in this orchestrator environment.  On any other
+> host — including CI runners and other developer machines — replace it with the
+> absolute path to your local clone of `my-solar-challenge` before running
+> `uv lock`.
+
 **Worked example** (P0 freeze tag):
 
 ```toml

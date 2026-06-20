@@ -24,7 +24,15 @@ DOC_REL_PATH = "docs/domain-library-consumption.md"
 
 
 def test_consumption_doc_exists(project_root: Path) -> None:
-    """The consumption-recipe doc must exist and be non-empty."""
+    """The consumption-recipe doc must exist and be non-empty.
+
+    This is a deliberate deliverable-presence smoke check.  The authoritative
+    public-surface contract is separately enforced by
+    ``tests/unit/test_init_lazy_surface.py`` (which asserts
+    ``solar_challenge.__all__`` matches the frozen set) and by the import-time
+    guard in ``src/solar_challenge/__init__.py``, so no symbol-list mirroring
+    is needed here.
+    """
     doc_path = project_root / DOC_REL_PATH
     assert doc_path.exists(), (
         f"{DOC_REL_PATH} does not exist; create it with the pinned-dependency "
