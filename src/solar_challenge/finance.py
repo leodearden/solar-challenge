@@ -25,9 +25,156 @@ from typing import TYPE_CHECKING, Any, Callable, List, NamedTuple, Optional, Seq
 import pandas as pd
 
 if TYPE_CHECKING:
-    from solar_challenge.config import FinanceConfig, ScenarioConfig
+    from solar_challenge.config import ScenarioConfig
     from solar_challenge.fleet import FleetConfig, FleetResults
+    from solar_challenge.gridservices import GridServicesEventsConfig
     from solar_challenge.home import SummaryStatistics
+
+
+# ---------------------------------------------------------------------------
+# FinanceConfig — relocated from config.py (T2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FinanceConfig:
+    """Financial parameters for community PV/battery project appraisal.
+
+    Holds investor-spreadsheet defaults (§3.1 of the financial-layer PRD)
+    used to compute project NPV, payback period, and per-home savings.
+    All monetary values are in nominal GBP or pence; rates are fractional.
+
+    Attributes:
+        standing_charge_pence_per_day: Retail grid standing charge (required).
+        vat_rate: VAT fraction applied to retail electricity (default 0.05).
+        retail_baseline_rate_pence_per_kwh: Grid import unit rate before project
+            (default 23.0 p/kWh).
+        self_consumption_override: Optional fixed self-consumption fraction
+            (0, 1]; if None the simulator uses the modelled value.
+        pv_cost_per_kwp_gbp: PV hardware + install cost per kWp (default 1000.0).
+        roof_fit_cost_gbp: Fixed per-home roof-fitting cost (default 1000.0).
+        battery_cost_per_kwh_gbp: Battery hardware cost per kWh (default 250.0).
+        inverter_cost_per_kw_gbp: Inverter capex cost per kW of effective (AC) inverter
+            capacity (default 0.0; 0 permitted).
+        grant_gbp: Total grant received by the project (default 250000.0; 0 allowed).
+        equity_fraction: Fraction of project cost financed by equity (default 0.75).
+        loan_term_years: Loan repayment term in years (default 15).
+        loan_rate: Annual loan interest rate as a fraction (default 0.07).
+        opex_per_home_per_year_gbp: Annual operating cost per home (default 131.0).
+        asset_life_years: Useful life of the asset in years (default 25).
+        own_use_rate_pence_per_kwh: CBS transfer price for self-consumed CBS-owned solar
+            (default 15.0 p/kWh; 0 permitted).
+        retained_cash_floor_per_home_per_year_gbp: Board-set minimum retained CBS
+            surplus per home per year in GBP (default 27.0; 0 permitted).
+        grid_services_income_per_kw_per_year_gbp: Exogenous DFS/DNO grid-services income
+            per kW of installed battery discharge power per year, net of aggregator share
+            (default 0.0; W1 cross-PRD seam — W1-delta fills the value cross-batch).
+        grid_services_model: Grid-services pricing model selector.  ``"flat"`` uses
+            the legacy flat per-kW rate (``grid_services_income_per_kw_per_year_gbp``);
+            ``"capacity_at_events"`` uses the structured events-based model configured
+            via ``grid_services_events``.  Default ``"flat"`` leaves all existing
+            behaviour bit-unchanged.
+        grid_services_events: Optional :class:`~solar_challenge.gridservices.GridServicesEventsConfig`
+            used when ``grid_services_model == "capacity_at_events"``.  May be ``None``
+            even for that model (α only validates the selector field; γ/δ consume it).
+    """
+
+    standing_charge_pence_per_day: float
+    vat_rate: float = 0.05
+    retail_baseline_rate_pence_per_kwh: float = 23.0
+    self_consumption_override: Optional[float] = None
+    pv_cost_per_kwp_gbp: float = 1000.0
+    roof_fit_cost_gbp: float = 1000.0
+    battery_cost_per_kwh_gbp: float = 250.0
+    inverter_cost_per_kw_gbp: float = 0.0
+    grant_gbp: float = 250000.0
+    equity_fraction: float = 0.75
+    loan_term_years: int = 15
+    loan_rate: float = 0.07
+    opex_per_home_per_year_gbp: float = 131.0
+    asset_life_years: int = 25
+    own_use_rate_pence_per_kwh: float = 15.0
+    retained_cash_floor_per_home_per_year_gbp: float = 27.0
+    grid_services_income_per_kw_per_year_gbp: float = 0.0
+    grid_services_model: str = "flat"
+    grid_services_events: Optional["GridServicesEventsConfig"] = None
+
+    def __post_init__(self) -> None:
+        """Validate financial parameters, raising ConfigurationError on violation."""
+        from solar_challenge.config import ConfigurationError  # lazy — avoids cycle
+
+        if not (0.0 <= self.vat_rate <= 1.0):
+            raise ConfigurationError(
+                f"vat_rate must be in [0, 1], got {self.vat_rate}"
+            )
+        if not (0.0 <= self.equity_fraction <= 1.0):
+            raise ConfigurationError(
+                f"equity_fraction must be in [0, 1], got {self.equity_fraction}"
+            )
+        if self.self_consumption_override is not None:
+            if not (0.0 < self.self_consumption_override <= 1.0):
+                raise ConfigurationError(
+                    "self_consumption_override must be in (0, 1] when set, "
+                    f"got {self.self_consumption_override}"
+                )
+        if self.loan_term_years <= 0:
+            raise ConfigurationError(
+                f"loan_term_years must be > 0, got {self.loan_term_years}"
+            )
+        if self.loan_rate < 0.0:
+            raise ConfigurationError(
+                f"loan_rate must be >= 0, got {self.loan_rate}"
+            )
+        if self.asset_life_years < self.loan_term_years:
+            raise ConfigurationError(
+                f"asset_life_years ({self.asset_life_years}) must be >= "
+                f"loan_term_years ({self.loan_term_years})"
+            )
+        # Cost/rate fields must be strictly positive
+        _positive_fields = {
+            "standing_charge_pence_per_day": self.standing_charge_pence_per_day,
+            "retail_baseline_rate_pence_per_kwh": self.retail_baseline_rate_pence_per_kwh,
+            "pv_cost_per_kwp_gbp": self.pv_cost_per_kwp_gbp,
+            "roof_fit_cost_gbp": self.roof_fit_cost_gbp,
+            "battery_cost_per_kwh_gbp": self.battery_cost_per_kwh_gbp,
+            "opex_per_home_per_year_gbp": self.opex_per_home_per_year_gbp,
+        }
+        for field_name, value in _positive_fields.items():
+            if value <= 0.0:
+                raise ConfigurationError(
+                    f"{field_name} must be > 0, got {value}"
+                )
+        # Grant may be zero but not negative
+        if self.grant_gbp < 0.0:
+            raise ConfigurationError(
+                f"grant_gbp must be >= 0, got {self.grant_gbp}"
+            )
+        # Inverter cost may be zero (opt-in default) but not negative
+        if self.inverter_cost_per_kw_gbp < 0.0:
+            raise ConfigurationError(
+                f"inverter_cost_per_kw_gbp must be >= 0, got {self.inverter_cost_per_kw_gbp}"
+            )
+        # Cost-recovery fields: zero allowed, negative rejected
+        if self.own_use_rate_pence_per_kwh < 0.0:
+            raise ConfigurationError(
+                f"own_use_rate_pence_per_kwh must be >= 0, got {self.own_use_rate_pence_per_kwh}"
+            )
+        if self.retained_cash_floor_per_home_per_year_gbp < 0.0:
+            raise ConfigurationError(
+                "retained_cash_floor_per_home_per_year_gbp must be >= 0, "
+                f"got {self.retained_cash_floor_per_home_per_year_gbp}"
+            )
+        if self.grid_services_income_per_kw_per_year_gbp < 0.0:
+            raise ConfigurationError(
+                "grid_services_income_per_kw_per_year_gbp must be >= 0, "
+                f"got {self.grid_services_income_per_kw_per_year_gbp}"
+            )
+        _VALID_GS_MODELS = frozenset({"flat", "capacity_at_events"})
+        if self.grid_services_model not in _VALID_GS_MODELS:
+            raise ConfigurationError(
+                f"grid_services_model must be one of {sorted(_VALID_GS_MODELS)}, "
+                f"got '{self.grid_services_model}'"
+            )
 
 
 # ---------------------------------------------------------------------------
