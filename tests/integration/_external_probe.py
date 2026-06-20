@@ -12,8 +12,8 @@ NOT collected by pytest (underscore prefix; matches tests/integration/_helpers.p
 convention; pytest's python_files=["test_*.py"] never touches it).
 
 Exit codes:
-  0 — all symbols in solar_challenge.__all__ resolved and passed checks.
-  1 — at least one symbol failed to resolve or failed the callable/not-None check.
+  0 — all symbols in solar_challenge.__all__ resolved; non-None constants confirmed.
+  1 — at least one symbol failed to resolve, or a constant resolved to None.
 """
 from __future__ import annotations
 
@@ -51,18 +51,15 @@ for name in s.__all__:
     # Attempt to resolve the symbol via the lazy loader (or cached attribute).
     try:
         obj = getattr(s, name)
-    except (AttributeError, ImportError, Exception) as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # broad catch is intentional for a probe
         failures.append(f"  RESOLVE ERROR  {name!r}: {type(exc).__name__}: {exc}")
         continue
 
-    # Classification: class or routine → must be callable; otherwise → must be non-None.
-    # Surface-agnostic: avoids fragile per-class constructor knowledge (H1 relaxed contract).
-    if inspect.isclass(obj) or inspect.isroutine(obj):
-        if not callable(obj):
-            failures.append(
-                f"  CALLABLE FAIL  {name!r}: expected callable, got {type(obj)!r}"
-            )
-    else:
+    # Classification: class or routine → getattr-resolution is the load-bearing
+    # signal.  callable() is always True for classes/routines by the Python data
+    # model, so checking it would be vacuous and is intentionally omitted.
+    # Non-class, non-routine → must be a non-None constant.
+    if not inspect.isclass(obj) and not inspect.isroutine(obj):
         if obj is None:
             failures.append(
                 f"  NONE CONSTANT  {name!r}: expected non-None constant, got None"
