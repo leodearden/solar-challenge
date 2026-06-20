@@ -134,3 +134,101 @@ solar_challenge.set_weather_cache(my_test_cache)
 The listing below mirrors `solar_challenge.__all__` and is CI-checked against
 the live surface by `tests/unit/test_consumption_doc.py`.  Update this section
 whenever `__all__` changes.
+
+<!-- BEGIN-API-SURFACE -->
+```
+# finance / bill engine (finance.py)
+householder_bill
+solve_cost_recovery_rate
+bill_distribution
+BillBreakdown
+BillDistribution
+CostRecoverySolution
+FinanceConfig
+
+# signature-closure types (home.py / config.py / fleet.py)
+SummaryStatistics
+ScenarioConfig
+FleetConfig
+FleetResults
+
+# dispatch (dispatch.py)
+DispatchStrategy
+DispatchDecision
+GridChargeContext
+compute_grid_charge_power_kw
+SelfConsumptionStrategy
+TOUOptimizedStrategy
+PeakShavingStrategy
+DispatchTariffPeriod
+
+# battery (battery.py)
+Battery
+BatteryConfig
+compute_soh
+
+# flow (flow.py)
+EnergyFlowResult
+simulate_timestep
+simulate_timestep_tou
+validate_energy_balance
+calculate_self_consumption
+calculate_excess_pv
+calculate_shortfall
+
+# tariff (tariff.py)
+TariffConfig
+TariffPeriod
+calculate_bill
+FlatRateTariff
+
+# seg (seg.py)
+SEGTariff
+resolve_seg_tariff
+calculate_seg_revenue
+SEG_PRESETS
+
+# gridservices (gridservices.py)
+GridServicesRateBand
+GridServicesRateBands
+resolve_grid_services_rate_band
+EventWindow
+GridServicesEventsConfig
+GridServicesAtEvents
+compute_fleet_spare_capacity_kw
+compute_grid_services_at_events
+GRID_SERVICES_RATE_BANDS
+DEFAULT_EVENT_WINDOWS
+
+# community (community.py)
+CommunityConfig
+CommunityBillingConfig
+CommunityResults
+simulate_community
+validate_community_balance
+
+# pv (pv.py)
+PVConfig
+simulate_pv_output
+create_model_chain
+create_pv_system
+apply_degradation
+calculate_degradation_factor
+interpolate_to_minute_resolution
+
+# weather (weather.py)
+get_tmy_data
+WeatherCache
+get_weather_cache
+set_weather_cache
+
+# load (load.py)
+LoadConfig
+OFGEM_TDCV_BY_OCCUPANTS
+ELEXON_PROFILE_CLASS_1
+SEASONAL_FACTORS
+
+# location (location.py)
+Location
+```
+<!-- END-API-SURFACE -->
