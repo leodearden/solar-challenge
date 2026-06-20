@@ -189,11 +189,13 @@ _SYMBOL_MODULE: dict[str, str] = {
 }
 
 # Sanity check at import time: every __all__ name must have a mapping.
-assert set(_SYMBOL_MODULE) == set(__all__), (
-    f"_SYMBOL_MODULE / __all__ mismatch: "
-    f"extra={set(_SYMBOL_MODULE)-set(__all__)}, "
-    f"missing={set(__all__)-set(_SYMBOL_MODULE)}"
-)
+# Uses an explicit RuntimeError (not bare assert) so the check survives -O/-OO.
+if set(_SYMBOL_MODULE) != set(__all__):
+    raise RuntimeError(
+        f"_SYMBOL_MODULE / __all__ mismatch: "
+        f"extra={set(_SYMBOL_MODULE)-set(__all__)}, "
+        f"missing={set(__all__)-set(_SYMBOL_MODULE)}"
+    )
 
 # ---------------------------------------------------------------------------
 # Alias resolution: public name differs from the symbol name in the origin module

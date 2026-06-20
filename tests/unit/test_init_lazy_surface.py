@@ -4,6 +4,8 @@ T3 owns this file (tests/unit/test_init_lazy_surface.py) and src/solar_challenge
 T4 owns the surface-lock/freeze test (tests/unit/test_public_api_surface.py — a SEPARATE file).
 """
 
+import ast
+import pathlib
 import subprocess
 import sys
 
@@ -13,105 +15,26 @@ import solar_challenge
 
 
 # ---------------------------------------------------------------------------
-# Step-1 gate: __all__ completeness and no-duplicates / no-CLI check
+# Step-1 gate: structural __all__ checks (T3 owns no-dups / no-CLI / count)
+# T4 (test_public_api_surface.py) is the authoritative freeze test that pins
+# the exact set of 68 names — avoid maintaining a second EXPECTED_ALL copy here.
 # ---------------------------------------------------------------------------
-
-EXPECTED_ALL: set[str] = {
-    # --- finance / bill engine (finance.py) ---
-    "householder_bill",
-    "solve_cost_recovery_rate",
-    "bill_distribution",
-    "BillBreakdown",
-    "BillDistribution",
-    "CostRecoverySolution",
-    "FinanceConfig",
-    # --- signature-closure types (home.py / config.py / fleet.py) ---
-    "SummaryStatistics",
-    "ScenarioConfig",
-    "FleetConfig",
-    "FleetResults",
-    # --- dispatch (dispatch.py) ---
-    "DispatchStrategy",
-    "DispatchDecision",
-    "GridChargeContext",
-    "compute_grid_charge_power_kw",
-    "SelfConsumptionStrategy",
-    "TOUOptimizedStrategy",
-    "PeakShavingStrategy",
-    "DispatchTariffPeriod",  # alias for dispatch.TariffPeriod (collision-renamed)
-    # --- battery (battery.py) ---
-    "Battery",
-    "BatteryConfig",
-    "compute_soh",
-    # --- flow (flow.py) ---
-    "EnergyFlowResult",
-    "simulate_timestep",
-    "simulate_timestep_tou",
-    "validate_energy_balance",
-    "calculate_self_consumption",
-    "calculate_excess_pv",
-    "calculate_shortfall",
-    # --- tariff (tariff.py) ---
-    "TariffConfig",
-    "TariffPeriod",
-    "calculate_bill",
-    "FlatRateTariff",
-    # --- seg (seg.py) ---
-    "SEGTariff",
-    "resolve_seg_tariff",
-    "calculate_seg_revenue",
-    "SEG_PRESETS",
-    # --- gridservices (gridservices.py) ---
-    "GridServicesRateBand",
-    "GridServicesRateBands",
-    "resolve_grid_services_rate_band",
-    "EventWindow",
-    "GridServicesEventsConfig",
-    "GridServicesAtEvents",
-    "compute_fleet_spare_capacity_kw",
-    "compute_grid_services_at_events",
-    "GRID_SERVICES_RATE_BANDS",
-    "DEFAULT_EVENT_WINDOWS",
-    # --- community (community.py) ---
-    "CommunityConfig",
-    "CommunityBillingConfig",
-    "CommunityResults",
-    "simulate_community",
-    "validate_community_balance",
-    # --- pv (pv.py) ---
-    "PVConfig",
-    "simulate_pv_output",
-    "create_model_chain",
-    "create_pv_system",
-    "apply_degradation",
-    "calculate_degradation_factor",
-    "interpolate_to_minute_resolution",
-    # --- weather (weather.py) ---
-    "get_tmy_data",
-    "WeatherCache",
-    "get_weather_cache",
-    "set_weather_cache",
-    # --- load (load.py) ---
-    "LoadConfig",
-    "OFGEM_TDCV_BY_OCCUPANTS",
-    "ELEXON_PROFILE_CLASS_1",
-    "SEASONAL_FACTORS",
-    # --- location (location.py) ---
-    "Location",
-}
 
 
 def test_all_is_complete_frozen_surface() -> None:
-    """__all__ must be exactly the 68-name frozen surface from PRD §3.1."""
+    """__all__ has no duplicates, excludes CLI names, and has the expected count.
+
+    T4 (test_public_api_surface.py) is the authoritative surface-lock that pins
+    the exact set of names. This test checks only structural properties T3 owns.
+    """
     assert hasattr(solar_challenge, "__all__"), "__all__ not defined on package"
-    actual = set(solar_challenge.__all__)
-    assert actual == EXPECTED_ALL, (
-        f"Extra names: {actual - EXPECTED_ALL}\nMissing names: {EXPECTED_ALL - actual}"
-    )
-    # No duplicates
     as_list = list(solar_challenge.__all__)
+    # No duplicates
     assert len(as_list) == len(set(as_list)), "Duplicate names in __all__"
+    # Exact count matches PRD §3.1 (68 names); T4 pins the actual names
+    assert len(as_list) == 68, f"Expected 68 names in __all__, got {len(as_list)}"
     # CLI stays out of __all__
+    actual = set(solar_challenge.__all__)
     assert "get_cli_app" not in actual
     assert not any(n.startswith("cli") or n.startswith("web") for n in actual)
 
@@ -122,15 +45,23 @@ def test_all_is_complete_frozen_surface() -> None:
 
 
 def test_every_name_resolves_and_caches() -> None:
-    """Each name in __all__ resolves via lazy __getattr__ and is cached on second access."""
-    for name in solar_challenge.__all__:
-        obj = getattr(solar_challenge, name)
-        assert obj is not None, f"solar_challenge.{name} resolved to None"
+    """Each name resolves to the correct origin-module object and is cached on second access."""
+    from importlib import import_module
+
+    for name, mod_name in solar_challenge._SYMBOL_MODULE.items():  # type: ignore[attr-defined]
+        source_name = solar_challenge._SOURCE_NAME.get(name, name)  # type: ignore[attr-defined]
+        origin_obj = getattr(import_module(f"solar_challenge.{mod_name}"), source_name)
+        # Resolve via lazy __getattr__ (or return already-cached value)
+        resolved = getattr(solar_challenge, name)
+        assert resolved is origin_obj, (
+            f"solar_challenge.{name} resolved to wrong object; "
+            f"expected solar_challenge.{mod_name}.{source_name}"
+        )
         # After first access the resolved object is cached in the module namespace
         assert name in vars(solar_challenge), f"{name!r} not in vars() after first access"
         # Repeat access returns the identical (cached) object
         obj2 = getattr(solar_challenge, name)
-        assert obj is obj2, f"Cached and fresh {name!r} differ"
+        assert resolved is obj2, f"Cached and fresh {name!r} differ"
 
 
 def test_unknown_attribute_raises() -> None:
@@ -191,3 +122,40 @@ def test_touching_pv_imports_pvlib() -> None:
 def test_dir_returns_sorted_all() -> None:
     """`dir(solar_challenge)` returns exactly sorted(__all__)."""
     assert dir(solar_challenge) == sorted(solar_challenge.__all__)
+
+
+# ---------------------------------------------------------------------------
+# TYPE_CHECKING sync guard: verifies the typed re-export block stays in sync
+# with __all__ so a forgotten entry breaks this test rather than mypy for consumers.
+# ---------------------------------------------------------------------------
+
+
+def test_type_checking_block_names_match_all() -> None:
+    """Names bound in the TYPE_CHECKING block must equal set(__all__) plus 'Typer'.
+
+    Parses __init__.py with ast to extract the names bound in the TYPE_CHECKING
+    block and verifies they stay in sync with __all__. Adding a name to __all__
+    and _SYMBOL_MODULE but forgetting the TYPE_CHECKING re-export would otherwise
+    silently break mypy --strict for consumers without failing this package's own checks.
+    """
+    src = pathlib.Path(solar_challenge.__file__).read_text()
+    tree = ast.parse(src)
+
+    tc_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
+                for stmt in node.body:
+                    if isinstance(stmt, ast.ImportFrom):
+                        for alias in stmt.names:
+                            # asname is the local binding; fall back to the imported name
+                            tc_names.add(alias.asname if alias.asname else alias.name)
+
+    # TYPE_CHECKING block includes "Typer" for get_cli_app()'s return annotation;
+    # Typer is NOT in __all__ — CLI is shipped but unfrozen.
+    expected = set(solar_challenge.__all__) | {"Typer"}
+    assert tc_names == expected, (
+        f"TYPE_CHECKING block out of sync with __all__.\n"
+        f"Extra (not in __all__ + Typer): {tc_names - expected}\n"
+        f"Missing (in __all__ but not TYPE_CHECKING): {expected - tc_names}"
+    )
