@@ -203,6 +203,29 @@ _SOURCE_NAME: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# PEP-562 lazy attribute loader
+# ---------------------------------------------------------------------------
+def __getattr__(name: str) -> Any:
+    """PEP-562 hook: resolve public names lazily on first attribute access.
+
+    Caches the resolved object into globals() so subsequent accesses are plain
+    attribute hits (no repeated importlib calls).
+    """
+    mod_name = _SYMBOL_MODULE.get(name)
+    if mod_name is None:
+        raise AttributeError(f"module 'solar_challenge' has no attribute {name!r}")
+    module = importlib.import_module(f"solar_challenge.{mod_name}")
+    obj = getattr(module, _SOURCE_NAME.get(name, name))
+    globals()[name] = obj   # cache for repeat access
+    return obj
+
+
+def __dir__() -> list[str]:
+    """Return exactly the frozen public surface for `dir(solar_challenge)`."""
+    return sorted(__all__)
+
+
+# ---------------------------------------------------------------------------
 # Lazy CLI accessor (get_cli_app is NOT in __all__ — shipped, unfrozen)
 # ---------------------------------------------------------------------------
 def get_cli_app() -> "Typer":
