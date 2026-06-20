@@ -101,7 +101,7 @@ class FinanceConfig:
 
     def __post_init__(self) -> None:
         """Validate financial parameters, raising ConfigurationError on violation."""
-        from solar_challenge.config import ConfigurationError  # lazy — avoids cycle
+        from solar_challenge.config import ConfigurationError  # lazy: avoids import cycle; sys.modules cache makes repeat lookups O(1)
 
         if not (0.0 <= self.vat_rate <= 1.0):
             raise ConfigurationError(
