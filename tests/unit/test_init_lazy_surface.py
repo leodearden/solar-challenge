@@ -17,7 +17,7 @@ import solar_challenge
 # ---------------------------------------------------------------------------
 # Step-1 gate: structural __all__ checks (T3 owns no-dups / no-CLI / count)
 # T4 (test_public_api_surface.py) is the authoritative freeze test that pins
-# the exact set of 68 names — avoid maintaining a second EXPECTED_ALL copy here.
+# the exact set of 69 names — avoid maintaining a second EXPECTED_ALL copy here.
 # ---------------------------------------------------------------------------
 
 
@@ -31,8 +31,8 @@ def test_all_is_complete_frozen_surface() -> None:
     as_list = list(solar_challenge.__all__)
     # No duplicates
     assert len(as_list) == len(set(as_list)), "Duplicate names in __all__"
-    # Exact count matches PRD §3.1 (68 names); T4 pins the actual names
-    assert len(as_list) == 68, f"Expected 68 names in __all__, got {len(as_list)}"
+    # Exact count matches PRD §3.1 (69 names, includes bill); T4 pins the actual names
+    assert len(as_list) == 69, f"Expected 69 names in __all__, got {len(as_list)}"
     # CLI stays out of __all__
     actual = set(solar_challenge.__all__)
     assert "get_cli_app" not in actual
