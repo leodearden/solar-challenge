@@ -1182,7 +1182,10 @@ def bill_distribution(
     bills = [
         householder_bill(
             summary=s,
-            annual_self_consumption_kwh=s.total_self_consumption_kwh,
+            # Basis C (task-84 §6): own-use = demand − import (CBS-supplied energy consumed).
+            # Arbitrage-immune: excludes grid-charged battery discharge which inflates
+            # total_self_consumption_kwh but does not reduce the home's grid import.
+            annual_self_consumption_kwh=_cbs_own_use_kwh(s),
             finance=finance,
             simulation_days=simulation_days,
         )
