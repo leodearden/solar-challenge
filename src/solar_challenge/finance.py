@@ -1394,13 +1394,16 @@ def project_multi_year(
             for r in fleet_results.per_home_results
         ]
 
-        fleet_sc = sum(s.total_self_consumption_kwh for s in per_home_summaries)
+        # Basis C (task-84 §6): own-use = demand − import (CBS-supplied energy consumed).
+        # Arbitrage-immune: grid-charged battery discharge inflates
+        # total_self_consumption_kwh but NOT demand − import.
+        fleet_sc = sum(_cbs_own_use_kwh(s) for s in per_home_summaries)
         fleet_exp = sum(s.total_grid_export_kwh for s in per_home_summaries)
         fleet_imp = sum(s.total_grid_import_kwh for s in per_home_summaries)
         per_home_discharge = [s.total_battery_discharge_kwh for s in per_home_summaries]
 
         # CBS fleet revenue (PRD §3.2):
-        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
+        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100   (fleet_sc = basis C)
         #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)
         #   grid_services   = model-dependent (flat or capacity_at_events)
         #   cbs_grid_charge = Σ summary.total_grid_charge_cost_gbp
