@@ -36,6 +36,7 @@ import solar_challenge
 # ---------------------------------------------------------------------------
 FROZEN_SET: frozenset[str] = frozenset({
     # --- finance / bill engine (finance.py) ---
+    "bill",
     "householder_bill",
     "solve_cost_recovery_rate",
     "bill_distribution",
@@ -125,7 +126,7 @@ def test_all_equals_frozen_set() -> None:
     Fails on any add/remove to __all__ without updating FROZEN_SET.
     The symmetric-difference message names the exact drifted symbol(s).
 
-    Also asserts len==68 explicitly — a bare set-compare would silently pass
+    Also asserts len==69 explicitly — a bare set-compare would silently pass
     if __all__ contained a duplicate entry (set collapses duplicates).
     """
     actual = set(solar_challenge.__all__)
@@ -134,9 +135,9 @@ def test_all_equals_frozen_set() -> None:
         f"__all__ has drifted from FROZEN_SET.  "
         f"Symmetric difference: {sorted(diff)}"
     )
-    assert len(solar_challenge.__all__) == len(FROZEN_SET) == 68, (
+    assert len(solar_challenge.__all__) == len(FROZEN_SET) == 69, (
         f"Length mismatch: __all__ has {len(solar_challenge.__all__)} names, "
-        f"FROZEN_SET has {len(FROZEN_SET)} (expected 68 each)"
+        f"FROZEN_SET has {len(FROZEN_SET)} (expected 69 each)"
     )
     # Document the CLI-excluded invariant explicitly
     assert "get_cli_app" not in solar_challenge.__all__, (

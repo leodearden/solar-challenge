@@ -533,6 +533,119 @@ def _seg_export_income_gbp(
 
 
 # ---------------------------------------------------------------------------
+# bill() — period-native billing core (task 83 §1)
+# ---------------------------------------------------------------------------
+
+
+def bill(
+    *,
+    period_days: float,
+    generation_kwh: float,
+    demand_kwh: float,
+    self_consumption_kwh: float,
+    import_kwh: float,
+    import_cost_gbp: float,
+    baseline_import_cost_gbp: float,
+    finance: "FinanceConfig",
+) -> BillBreakdown:
+    """Period-native billing core: pure arithmetic over caller-resolved inputs.
+
+    This is the single source of truth for the BillBreakdown identities (§3.1).
+    It performs **no** annualisation, no re-pricing of import energy, and emits
+    no warnings — all of that belongs in the caller (e.g. :func:`householder_bill`
+    for the simulator's annual wrapper).
+
+    Identities:
+      standing_charge_gbp   = standing_pence_per_day × period_days / 100
+      own_use_payment_gbp   = own_use_rate × self_consumption_kwh / 100
+      vat_gbp               = vat_rate × (import_cost + standing + own_use_payment)
+      total_outlay_gbp      = (import_cost + standing + own_use_payment) × (1 + vat_rate)
+      baseline_bill_gbp     = (baseline_import_cost + standing) × (1 + vat_rate)
+      eff_rate              = baseline_import_cost / demand_kwh × 100  (fallback to retail when demand==0)
+      self_consumption_saving_gbp = sc × (eff_rate − own_use_rate) × (1 + vat_rate) / 100
+      saving_vs_baseline_gbp = baseline_bill − total_outlay
+      saving_pct            = 100 × saving / baseline  (0.0 when baseline==0)
+      self_consumption_fraction = sc / generation  (0.0 when generation==0)
+
+    Args:
+        period_days: Duration of the billing period in days.
+        generation_kwh: Total PV generation during the period (kWh).
+        demand_kwh: Total household demand during the period (kWh).
+        self_consumption_kwh: Solar energy consumed on-site (kWh).
+        import_kwh: Energy imported from the grid (kWh).  Accepted for contract
+            completeness (symmetric with platform period engine) but not consumed
+            by the arithmetic; import_cost_gbp is used as the financial measure.
+        import_cost_gbp: Cost of grid imports (£, caller-priced, passed verbatim).
+            For TOU/mid-period billing the caller prices import_kwh at the
+            appropriate rate before calling this function.
+        baseline_import_cost_gbp: Hypothetical cost if all demand were imported
+            at the baseline rate (£, caller-computed).  Drives eff_rate and
+            self_consumption_saving.
+        finance: Financial parameters.
+
+    Returns:
+        A fully computed, frozen :class:`BillBreakdown`.
+    """
+    vat_rate = finance.vat_rate
+    own_use_rate_pence = finance.own_use_rate_pence_per_kwh
+    standing_pence_per_day = finance.standing_charge_pence_per_day
+
+    # --- Standing charge (period-proportional) ---
+    standing_charge_gbp = standing_pence_per_day * period_days / 100.0
+
+    # --- Own-use payment (CBS transfer price × self-consumed kWh) ---
+    own_use_payment_gbp = own_use_rate_pence * self_consumption_kwh / 100.0
+
+    # --- VAT (on import + standing + own-use payment) ---
+    vat_gbp = vat_rate * (import_cost_gbp + standing_charge_gbp + own_use_payment_gbp)
+
+    # --- Total outlay (headline) ---
+    total_outlay_gbp = (
+        import_cost_gbp + standing_charge_gbp + own_use_payment_gbp
+    ) * (1.0 + vat_rate)
+
+    # --- Baseline bill (no solar, all demand at baseline rate) ---
+    baseline_bill_gbp = (baseline_import_cost_gbp + standing_charge_gbp) * (1.0 + vat_rate)
+
+    # --- Effective displaced rate (TOU-consistent: derived from caller-priced baseline) ---
+    if demand_kwh > 0.0:
+        eff_rate_pence = baseline_import_cost_gbp / demand_kwh * 100.0
+    else:
+        eff_rate_pence = finance.retail_baseline_rate_pence_per_kwh
+
+    # --- Self-consumption saving (price-gap benefit, VAT-inclusive) ---
+    self_consumption_saving_gbp = (
+        self_consumption_kwh * (eff_rate_pence - own_use_rate_pence) * (1.0 + vat_rate) / 100.0
+    )
+
+    # --- Saving vs baseline ---
+    saving_vs_baseline_gbp = baseline_bill_gbp - total_outlay_gbp
+    saving_pct = (
+        (saving_vs_baseline_gbp / baseline_bill_gbp) * 100.0
+        if baseline_bill_gbp != 0.0
+        else 0.0
+    )
+
+    # --- Self-consumption fraction ---
+    self_consumption_fraction = (
+        self_consumption_kwh / generation_kwh if generation_kwh > 0.0 else 0.0
+    )
+
+    return BillBreakdown(
+        standing_charge_gbp=float(standing_charge_gbp),
+        import_cost_gbp=float(import_cost_gbp),
+        own_use_payment_gbp=float(own_use_payment_gbp),
+        vat_gbp=float(vat_gbp),
+        total_outlay_gbp=float(total_outlay_gbp),
+        self_consumption_saving_gbp=float(self_consumption_saving_gbp),
+        baseline_bill_gbp=float(baseline_bill_gbp),
+        saving_vs_baseline_gbp=float(saving_vs_baseline_gbp),
+        saving_pct=float(saving_pct),
+        self_consumption_fraction=float(self_consumption_fraction),
+    )
+
+
+# ---------------------------------------------------------------------------
 # householder_bill
 # ---------------------------------------------------------------------------
 
@@ -543,20 +656,20 @@ def householder_bill(
     finance: "FinanceConfig",
     simulation_days: int,
 ) -> BillBreakdown:
-    """Compute a per-householder annual cost-recovery outlay from simulation outputs.
+    """Annual cost-recovery bill wrapper for simulator outputs.
 
-    Implements the CR3 (§3.1) definitional invariants:
+    This is the **annual wrapper** over :func:`bill` that converts simulation
+    outputs (which may cover any period) into a standardised 365-day bill.
+    All bill arithmetic (identities, VAT, savings) lives in :func:`bill` —
+    the single source of truth.
 
-    * ``own_use_payment_gbp = own_use_rate × sc_kwh / 100``
-    * ``vat_gbp = vat_rate × (import_cost_gbp + standing_charge_gbp + own_use_payment_gbp)``
-    * ``total_outlay_gbp = (import_cost_gbp + standing_charge_gbp + own_use_payment_gbp)
-      × (1 + vat_rate)``
-    * ``self_consumption_saving_gbp = sc_kwh × (retail − own_use_rate) × (1+vat) / 100``
-    * ``saving_vs_baseline_gbp = baseline_bill_gbp − total_outlay_gbp``
-
-    The CBS owns the assets and the export MPAN; the householder receives no SEG
-    credit.  SEG export income flows to the CBS revenue calculation in
-    :func:`_seg_export_income_gbp` / :func:`project_multi_year` instead.
+    Responsibilities of this wrapper (not in bill()):
+      * Annualise sub-year simulation totals via :func:`_annualise_physics`.
+      * Emit a :class:`UserWarning` for short periods (< 360 days).
+      * Resolve the physics/override self-consumption path.
+      * Apply the missing-tariff retail fallback with a :class:`UserWarning`.
+      * Always call bill(period_days=365, ...) so standing charge is
+        annual regardless of the original simulation length.
 
     H3 board identity (holds when import is retail-priced, import_kwh = demand − sc):
       saving_vs_baseline == sc × (retail − own_use) × (1+vat) / 100
@@ -571,12 +684,9 @@ def householder_bill(
             annualisation to 365 days when < 360.
 
     Returns:
-        A fully computed, frozen BillBreakdown.
+        A fully computed, frozen BillBreakdown (delegated to :func:`bill`).
     """
-    vat_rate = finance.vat_rate
     retail_rate_pence = finance.retail_baseline_rate_pence_per_kwh
-    own_use_rate_pence = finance.own_use_rate_pence_per_kwh
-    standing_pence_per_day = finance.standing_charge_pence_per_day
     override = finance.self_consumption_override
 
     # ---- Annualisation (§3.2 / §12) ----------------------------------------
@@ -600,14 +710,14 @@ def householder_bill(
     # export_kwh / export_rev_physics not needed here: SEG moved to
     # _seg_export_income_gbp in CR3; householder_bill no longer computes export income.
 
-    # ---- Standing charge (always annualised to 365 days) --------------------
-    standing_charge_gbp = standing_pence_per_day * _ANNUALISATION_DAYS / 100.0
-
     # ---- Self-consumption switch (§2.3 / §3.2) ------------------------------
     if override is None:
         # Physics path: use simulation figures directly
         import_cost_gbp = import_cost_physics
         sc_kwh = sc_kwh_physics
+        # import_kwh_for_bill matches phys.import_kwh (set above) — the energy
+        # quantity priced by import_cost_gbp on the physics path.
+        import_kwh_for_bill = import_kwh
 
         # Missing-tariff fallback (§3.2 robustness).  Homes generated from a
         # fleet_distribution carry tariff_config=None (config.py), and
@@ -641,51 +751,23 @@ def householder_bill(
         # Recompute import: demand minus self-consumed solar
         override_import_kwh = max(demand_kwh - sc_kwh, 0.0)
         import_cost_gbp = override_import_kwh * effective_import_rate_pence / 100.0
+        # Keep import_kwh consistent with import_cost_gbp: on the override path,
+        # import_cost_gbp prices override_import_kwh (not phys.import_kwh).
+        import_kwh_for_bill = override_import_kwh
 
-    # ---- Own-use payment (NEW in CR3): own_use_rate × sc_kwh / 100 ----------
-    own_use_payment_gbp = own_use_rate_pence * sc_kwh / 100.0
-
-    # ---- VAT line (applies to import + standing + own_use_payment) ----------
-    vat_gbp = vat_rate * (import_cost_gbp + standing_charge_gbp + own_use_payment_gbp)
-
-    # ---- Total outlay (headline, replaces net_annual_bill_gbp) ---------------
-    total_outlay_gbp = (
-        import_cost_gbp + standing_charge_gbp + own_use_payment_gbp
-    ) * (1.0 + vat_rate)
-
-    # ---- Self-consumption saving (REDEFINED): sc × (retail − own_use) × (1+vat)/100 --
-    self_consumption_saving_gbp = (
-        sc_kwh * (retail_rate_pence - own_use_rate_pence) * (1.0 + vat_rate) / 100.0
-    )
-
-    # ---- Baseline bill (no solar / no battery, VAT-inclusive) ---------------
-    baseline_bill_gbp = (
-        demand_kwh * retail_rate_pence / 100.0
-        + standing_pence_per_day * _ANNUALISATION_DAYS / 100.0
-    ) * (1.0 + vat_rate)
-
-    # ---- Saving vs baseline -------------------------------------------------
-    saving_vs_baseline_gbp = baseline_bill_gbp - total_outlay_gbp
-    saving_pct = (
-        (saving_vs_baseline_gbp / baseline_bill_gbp) * 100.0
-        if baseline_bill_gbp != 0.0
-        else 0.0
-    )
-
-    # ---- Self-consumption fraction ------------------------------------------
-    self_consumption_fraction = sc_kwh / gen_kwh if gen_kwh > 0.0 else 0.0
-
-    return BillBreakdown(
-        standing_charge_gbp=float(standing_charge_gbp),
-        import_cost_gbp=float(import_cost_gbp),
-        own_use_payment_gbp=float(own_use_payment_gbp),
-        vat_gbp=float(vat_gbp),
-        total_outlay_gbp=float(total_outlay_gbp),
-        self_consumption_saving_gbp=float(self_consumption_saving_gbp),
-        baseline_bill_gbp=float(baseline_bill_gbp),
-        saving_vs_baseline_gbp=float(saving_vs_baseline_gbp),
-        saving_pct=float(saving_pct),
-        self_consumption_fraction=float(self_consumption_fraction),
+    # ---- Delegate all bill arithmetic to bill() (single source of truth) ----
+    # period_days=365 reproduces the old annual standing-charge hard-code exactly:
+    #   bill()'s standing = standing_pence * 365 / 100  ==  old _ANNUALISATION_DAYS
+    baseline_import_cost_gbp = demand_kwh * retail_rate_pence / 100.0
+    return bill(
+        period_days=float(_ANNUALISATION_DAYS),
+        generation_kwh=gen_kwh,
+        demand_kwh=demand_kwh,
+        self_consumption_kwh=sc_kwh,
+        import_kwh=import_kwh_for_bill,
+        import_cost_gbp=import_cost_gbp,
+        baseline_import_cost_gbp=baseline_import_cost_gbp,
+        finance=finance,
     )
 
 

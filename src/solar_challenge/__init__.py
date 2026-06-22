@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 # ---------------------------------------------------------------------------
 # Frozen public surface — PRD §3.1
@@ -18,6 +18,7 @@ __version__ = "0.1.0"
 # ---------------------------------------------------------------------------
 __all__: list[str] = [
     # --- finance / bill engine (finance.py; FinanceConfig relocated there, T2) ---
+    "bill",              # period-native billing core; bare name is intentional — mirrors householder_bill brevity, primary platform import target
     "householder_bill",
     "solve_cost_recovery_rate",
     "bill_distribution",
@@ -106,6 +107,7 @@ __all__: list[str] = [
 # ---------------------------------------------------------------------------
 _SYMBOL_MODULE: dict[str, str] = {
     # finance
+    "bill": "finance",
     "householder_bill": "finance",
     "solve_cost_recovery_rate": "finance",
     "bill_distribution": "finance",
@@ -249,6 +251,7 @@ if TYPE_CHECKING:
     from typer import Typer  # for get_cli_app() return annotation
 
     # finance
+    from solar_challenge.finance import bill as bill
     from solar_challenge.finance import householder_bill as householder_bill
     from solar_challenge.finance import solve_cost_recovery_rate as solve_cost_recovery_rate
     from solar_challenge.finance import bill_distribution as bill_distribution
