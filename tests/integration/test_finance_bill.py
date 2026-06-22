@@ -956,11 +956,6 @@ class TestFinanceCLI:
 
 
 # ---------------------------------------------------------------------------
-# Step-1 (task 83): TestBillCore — period-native bill() core
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Step-3 (task 83): TestHouseholderBillWrapperEquivalence
 # ---------------------------------------------------------------------------
 
@@ -1113,6 +1108,70 @@ class TestHouseholderBillWrapperEquivalence:
         # Wrapper passes period_days=365 regardless of simulation_days → annual standing
         expected_annual_standing = 60.0 * 365 / 100.0
         assert b.standing_charge_gbp == pytest.approx(expected_annual_standing)
+
+    def test_physics_path_literal_bill_values(self) -> None:
+        """householder_bill(physics, 365d) output matches hand-computed literal £ values.
+
+        Anchors key fields on independently verified numbers rather than
+        re-deriving them from the same source expressions, so a regression in
+        bill() arithmetic surfaces as a divergence from these literals.
+
+        Inputs (all round numbers for pencil-and-paper verification):
+          gen=4000, demand=3000, sc=2400, import=600 kWh, import_cost=£138
+          standing=60 p/day, own_use=15 p/kWh, VAT=5%, retail=23 p/kWh
+        """
+        from solar_challenge.finance import householder_bill
+
+        finance = _make_finance(
+            standing_charge_pence_per_day=60.0,
+            own_use_rate_pence_per_kwh=15.0,
+            vat_rate=0.05,
+            retail_baseline_rate_pence_per_kwh=23.0,
+        )
+        summary = _make_summary(
+            simulation_days=365,
+            total_generation_kwh=4000.0,
+            total_demand_kwh=3000.0,
+            total_self_consumption_kwh=2400.0,
+            total_grid_import_kwh=600.0,
+            total_grid_export_kwh=1600.0,
+            total_import_cost_gbp=138.0,       # 600 kWh × 23 p/kWh
+            total_export_revenue_gbp=0.0,
+            net_cost_gbp=138.0,
+            seg_revenue_gbp=0.0,
+        )
+        b = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=365,
+        )
+        # Hand-computed literals:
+        #   standing      = 60 × 365 / 100         = £219.00
+        #   own_use       = 15 × 2400 / 100         = £360.00
+        #   import_cost   = 138.00 (physics)         = £138.00
+        #   VAT           = 0.05 × (138+219+360)     = 0.05×717 = £35.85
+        #   total_outlay  = 717 × 1.05               = £752.85
+        #   baseline_import = 3000×23/100             = £690.00
+        #   baseline_bill = (690+219) × 1.05 = 909×1.05 = £954.45
+        #   eff_rate      = 690/3000×100              = 23.0 p/kWh (== retail)
+        #   sc_saving     = 2400×(23−15)×1.05/100     = 2400×8×1.05/100 = £201.60
+        #   saving_vs_baseline = 954.45 − 752.85      = £201.60
+        #   sc_fraction   = 2400 / 4000               = 0.60
+        assert b.standing_charge_gbp == pytest.approx(219.00)
+        assert b.import_cost_gbp == pytest.approx(138.00)
+        assert b.own_use_payment_gbp == pytest.approx(360.00)
+        assert b.vat_gbp == pytest.approx(35.85)
+        assert b.total_outlay_gbp == pytest.approx(752.85)
+        assert b.baseline_bill_gbp == pytest.approx(954.45)
+        assert b.self_consumption_saving_gbp == pytest.approx(201.60)
+        assert b.saving_vs_baseline_gbp == pytest.approx(201.60)
+        assert b.self_consumption_fraction == pytest.approx(0.60)
+
+
+# ---------------------------------------------------------------------------
+# Step-1 (task 83): TestBillCore — period-native bill() core
+# ---------------------------------------------------------------------------
 
 
 class TestBillCore:

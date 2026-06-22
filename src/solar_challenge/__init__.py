@@ -18,7 +18,7 @@ __version__ = "0.3.0"
 # ---------------------------------------------------------------------------
 __all__: list[str] = [
     # --- finance / bill engine (finance.py; FinanceConfig relocated there, T2) ---
-    "bill",
+    "bill",              # period-native billing core; bare name is intentional — mirrors householder_bill brevity, primary platform import target
     "householder_bill",
     "solve_cost_recovery_rate",
     "bill_distribution",

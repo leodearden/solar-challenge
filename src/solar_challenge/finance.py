@@ -715,6 +715,9 @@ def householder_bill(
         # Physics path: use simulation figures directly
         import_cost_gbp = import_cost_physics
         sc_kwh = sc_kwh_physics
+        # import_kwh_for_bill matches phys.import_kwh (set above) — the energy
+        # quantity priced by import_cost_gbp on the physics path.
+        import_kwh_for_bill = import_kwh
 
         # Missing-tariff fallback (§3.2 robustness).  Homes generated from a
         # fleet_distribution carry tariff_config=None (config.py), and
@@ -748,6 +751,9 @@ def householder_bill(
         # Recompute import: demand minus self-consumed solar
         override_import_kwh = max(demand_kwh - sc_kwh, 0.0)
         import_cost_gbp = override_import_kwh * effective_import_rate_pence / 100.0
+        # Keep import_kwh consistent with import_cost_gbp: on the override path,
+        # import_cost_gbp prices override_import_kwh (not phys.import_kwh).
+        import_kwh_for_bill = override_import_kwh
 
     # ---- Delegate all bill arithmetic to bill() (single source of truth) ----
     # period_days=365 reproduces the old annual standing-charge hard-code exactly:
@@ -758,7 +764,7 @@ def householder_bill(
         generation_kwh=gen_kwh,
         demand_kwh=demand_kwh,
         self_consumption_kwh=sc_kwh,
-        import_kwh=phys.import_kwh,
+        import_kwh=import_kwh_for_bill,
         import_cost_gbp=import_cost_gbp,
         baseline_import_cost_gbp=baseline_import_cost_gbp,
         finance=finance,

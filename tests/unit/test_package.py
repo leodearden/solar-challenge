@@ -25,19 +25,35 @@ def test_version_is_release_target():
     assert solar_challenge.__version__ == "0.3.0"
 
 
-def test_pyproject_version_matches_dunder():
-    """pyproject.toml version must equal solar_challenge.__version__.
+def _pyproject_project_version(text: str) -> str:
+    """Extract version from the [project] section of pyproject.toml text.
 
-    Parses pyproject.toml with a regex (tomllib-free; compatible with Py3.10+).
-    Only the [project] table version field is matched.
+    Scopes the search to the [project] table (not a later [tool.*] or
+    [build-system] table that might also contain a ``version =`` line),
+    so a future table reorder cannot match the wrong field.
+    """
+    # Isolate [project] section: starts at "[project]" and ends at the next
+    # section header (a bare "[" at start of line) or end-of-file.
+    block_match = re.search(
+        r'^\[project\](.*?)(?=^\[|\Z)', text, re.DOTALL | re.MULTILINE
+    )
+    assert block_match is not None, "No [project] section in pyproject.toml"
+    project_block = block_match.group(1)
+    m = re.search(r'^version\s*=\s*"([^"]+)"', project_block, re.MULTILINE)
+    assert m is not None, "No 'version = ...' in [project] section of pyproject.toml"
+    return m.group(1)
+
+
+def test_pyproject_version_matches_dunder():
+    """pyproject.toml [project] version must equal solar_challenge.__version__.
+
+    Uses a section-scoped parse so a future pyproject edit adding another
+    ``version =`` line in a different table cannot match spuriously.
     """
     project_root = Path(__file__).parent.parent.parent
     text = (project_root / "pyproject.toml").read_text(encoding="utf-8")
-    # Match `version = "..."` in the [project] section
-    m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    assert m is not None, "Could not find 'version = ...' in pyproject.toml"
-    pyproject_version = m.group(1)
+    pyproject_version = _pyproject_project_version(text)
     assert pyproject_version == solar_challenge.__version__, (
-        f"pyproject.toml version {pyproject_version!r} != "
+        f"pyproject.toml [project] version {pyproject_version!r} != "
         f"solar_challenge.__version__ {solar_challenge.__version__!r}"
     )
