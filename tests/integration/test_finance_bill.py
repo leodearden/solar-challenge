@@ -960,6 +960,161 @@ class TestFinanceCLI:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Step-3 (task 83): TestHouseholderBillWrapperEquivalence
+# ---------------------------------------------------------------------------
+
+
+class TestHouseholderBillWrapperEquivalence:
+    """Regression guard: householder_bill must be a thin wrapper over bill().
+
+    RED pre-refactor (step-4): householder_bill uses retail directly for
+    self_consumption_saving while bill() uses eff_rate (a float round-trip),
+    so the two can differ by ≤1 ULP. These tests require the wrapper IS that
+    bill() call (exact frozen-dataclass equality over all 10 fields).
+    """
+
+    def test_wrapper_equals_bill_annual_physics(self) -> None:
+        """householder_bill(365-day, physics path) == bill(period_days=365, ...).
+
+        Byte-identical guard over all 10 BillBreakdown fields.
+        Pre-refactor: fails by ≤1 ULP on self_consumption_saving_gbp.
+        Post-refactor (step-4): passes because the wrapper IS that call.
+        """
+        from solar_challenge.finance import bill, householder_bill
+
+        summary = _make_summary()   # 365-day, import_cost=276>0
+        finance = _make_finance()
+
+        actual = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=365,
+        )
+        baseline_import_cost_gbp = (
+            summary.total_demand_kwh * finance.retail_baseline_rate_pence_per_kwh / 100.0
+        )
+        expected = bill(
+            period_days=365,
+            generation_kwh=summary.total_generation_kwh,
+            demand_kwh=summary.total_demand_kwh,
+            self_consumption_kwh=summary.total_self_consumption_kwh,
+            import_kwh=summary.total_grid_import_kwh,
+            import_cost_gbp=summary.total_import_cost_gbp,
+            baseline_import_cost_gbp=baseline_import_cost_gbp,
+            finance=finance,
+        )
+        # Exact frozen-dataclass equality (all 10 fields)
+        assert actual == expected
+
+    def test_wrapper_equals_bill_annual_override(self) -> None:
+        """householder_bill(365-day, override=0.90) == bill(period_days=365, ...) with override inputs.
+
+        Uses pytest.approx(rel=1e-12, abs=1e-12) to be robust to incidental
+        operand-order drift in the override path's intermediate computations.
+        """
+        from solar_challenge.finance import bill, householder_bill
+
+        summary = _make_summary()   # import_rate = 23.0 p/kWh, gen=4000, demand=3400
+        finance = _make_finance(self_consumption_override=0.90)
+
+        actual = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=365,
+        )
+
+        # Reproduce wrapper's override path inputs with IDENTICAL expressions
+        gen_kwh = summary.total_generation_kwh
+        demand_kwh = summary.total_demand_kwh
+        import_kwh = summary.total_grid_import_kwh
+        import_cost_physics = summary.total_import_cost_gbp
+        retail_rate = finance.retail_baseline_rate_pence_per_kwh
+
+        sc_kwh = finance.self_consumption_override * gen_kwh   # type: ignore[operator]  # 3600.0
+        if import_kwh > 0.0:
+            eff_import_rate = (import_cost_physics / import_kwh) * 100.0
+        else:
+            eff_import_rate = retail_rate
+        override_import_kwh = max(demand_kwh - sc_kwh, 0.0)
+        override_import_cost = override_import_kwh * eff_import_rate / 100.0
+        baseline_import_cost_gbp = demand_kwh * retail_rate / 100.0
+
+        expected = bill(
+            period_days=365,
+            generation_kwh=gen_kwh,
+            demand_kwh=demand_kwh,
+            self_consumption_kwh=sc_kwh,
+            import_kwh=override_import_kwh,
+            import_cost_gbp=override_import_cost,
+            baseline_import_cost_gbp=baseline_import_cost_gbp,
+            finance=finance,
+        )
+        # Field-by-field approximate equality (robust to incidental operand-order drift)
+        assert actual.standing_charge_gbp == pytest.approx(
+            expected.standing_charge_gbp, rel=1e-12, abs=1e-12
+        )
+        assert actual.import_cost_gbp == pytest.approx(
+            expected.import_cost_gbp, rel=1e-12, abs=1e-12
+        )
+        assert actual.own_use_payment_gbp == pytest.approx(
+            expected.own_use_payment_gbp, rel=1e-12, abs=1e-12
+        )
+        assert actual.vat_gbp == pytest.approx(expected.vat_gbp, rel=1e-12, abs=1e-12)
+        assert actual.total_outlay_gbp == pytest.approx(
+            expected.total_outlay_gbp, rel=1e-12, abs=1e-12
+        )
+        assert actual.self_consumption_saving_gbp == pytest.approx(
+            expected.self_consumption_saving_gbp, rel=1e-12, abs=1e-12
+        )
+        assert actual.baseline_bill_gbp == pytest.approx(
+            expected.baseline_bill_gbp, rel=1e-12, abs=1e-12
+        )
+        assert actual.saving_vs_baseline_gbp == pytest.approx(
+            expected.saving_vs_baseline_gbp, rel=1e-12, abs=1e-12
+        )
+        assert actual.saving_pct == pytest.approx(expected.saving_pct, rel=1e-12, abs=1e-12)
+        assert actual.self_consumption_fraction == pytest.approx(
+            expected.self_consumption_fraction, rel=1e-12, abs=1e-12
+        )
+
+    def test_wrapper_standing_still_annual_for_short_period(self) -> None:
+        """householder_bill for a short-period sim still annualises standing to 365 days.
+
+        The wrapper always calls bill(period_days=365, ...) regardless of simulation_days,
+        so the standing charge stays at the full annual value even for a 30-day sim.
+        """
+        from solar_challenge.finance import householder_bill
+
+        finance = _make_finance(standing_charge_pence_per_day=60.0)
+        summary = _make_summary(
+            simulation_days=30,
+            total_import_cost_gbp=22.68,
+            total_export_revenue_gbp=6.07,
+            net_cost_gbp=16.61,
+            total_generation_kwh=328.77,
+            total_demand_kwh=279.45,
+            total_self_consumption_kwh=180.82,
+            total_grid_import_kwh=98.63,
+            total_grid_export_kwh=147.95,
+            seg_revenue_gbp=6.07,
+        )
+
+        with pytest.warns(UserWarning, match="30 days"):
+            b = householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=30,
+            )
+
+        # Wrapper passes period_days=365 regardless of simulation_days → annual standing
+        expected_annual_standing = 60.0 * 365 / 100.0
+        assert b.standing_charge_gbp == pytest.approx(expected_annual_standing)
+
+
 class TestBillCore:
     """Fast (no-network) tests for the period-native bill() core function.
 
