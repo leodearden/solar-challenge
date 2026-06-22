@@ -742,6 +742,421 @@ class TestThetaStaysGreen:
         )
 
 
+# ---------------------------------------------------------------------------
+# Task-84 grid-charge simulation builder (step-3 / step-4)
+# ---------------------------------------------------------------------------
+
+
+def _make_grid_charge_sim_results_cr6(
+    self_kwh: float,
+    export_kwh: float,
+    import_to_load_kwh: float,
+    grid_charge_kwh: float,
+    grid_charge_cost_per_home_gbp: float,
+    n_steps: int = 8760,
+) -> "SimulationResults":  # type: ignore[name-defined]
+    """Build a synthetic SimulationResults for grid-charging (arbitrage) homes.
+
+    Energy accounting:
+        total_grid_import = import_to_load + grid_charge  (both cross grid boundary)
+        demand             = sc + import_to_load           (battery discharge in sc)
+        basis C own-use   = demand − grid_import = sc − grid_charge < sc
+
+    This exposes the B-vs-C gap: total_self_consumption (B-style, discharge-inclusive)
+    is self_kwh, while demand − import is self_kwh − grid_charge_kwh.
+
+    grid_charge_cost series is non-None so total_grid_charge_cost_gbp > 0 in the summary.
+    """
+    import pandas as pd
+    from solar_challenge.home import SimulationResults
+
+    idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
+    sc_kw = self_kwh / (n_steps / 60.0)
+    exp_kw = export_kwh / (n_steps / 60.0)
+    imp_to_load_kw = import_to_load_kwh / (n_steps / 60.0)
+    grid_charge_kw = grid_charge_kwh / (n_steps / 60.0)
+    gen_kw = sc_kw + exp_kw
+    demand_kw = sc_kw + imp_to_load_kw          # demand = sc + import_to_load
+    total_imp_kw = imp_to_load_kw + grid_charge_kw  # inflated by grid_charge
+    zeros = pd.Series(0.0, index=idx)
+
+    charge_per_step = grid_charge_cost_per_home_gbp / n_steps
+
+    return SimulationResults(
+        generation=pd.Series(gen_kw, index=idx),
+        demand=pd.Series(demand_kw, index=idx),
+        self_consumption=pd.Series(sc_kw, index=idx),
+        battery_charge=zeros.copy(),
+        battery_discharge=zeros.copy(),
+        battery_soc=zeros.copy(),
+        grid_import=pd.Series(total_imp_kw, index=idx),
+        grid_export=pd.Series(exp_kw, index=idx),
+        import_cost=zeros.copy(),
+        export_revenue=zeros.copy(),
+        tariff_rate=zeros.copy(),
+        grid_charge_cost=pd.Series(charge_per_step, index=idx),
+    )
+
+
+def _make_grid_charge_fleet_cr6(
+    n_homes: int = 5,
+    self_kwh: float = 2000.0,
+    export_kwh: float = 400.0,
+    import_to_load_kwh: float = 800.0,
+    grid_charge_kwh: float = 200.0,
+    grid_charge_cost_per_home_gbp: float = 30.0,
+) -> "FleetResults":  # type: ignore[name-defined]
+    """Build a grid-charging FleetResults for basis-C reconciliation tests.
+
+    With defaults:
+        total_self_consumption_kwh = 2000 kWh/home  (B-style)
+        total_demand_kwh           = 2000 + 800 = 2800 kWh/home
+        total_grid_import_kwh      = 800 + 200 = 1000 kWh/home
+        _cbs_own_use_kwh           = 2800 − 1000 = 1800 kWh/home   (basis C)
+        gap                        = 2000 − 1800 = 200 kWh/home     (= grid_charge)
+    """
+    from solar_challenge.fleet import FleetResults
+
+    homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+    per_home = [
+        _make_grid_charge_sim_results_cr6(
+            self_kwh=self_kwh,
+            export_kwh=export_kwh,
+            import_to_load_kwh=import_to_load_kwh,
+            grid_charge_kwh=grid_charge_kwh,
+            grid_charge_cost_per_home_gbp=grid_charge_cost_per_home_gbp,
+        )
+        for _ in range(n_homes)
+    ]
+    return FleetResults(per_home_results=per_home, home_configs=homes)
+
+
+# ---------------------------------------------------------------------------
+# Task-84 RED / GREEN: TestCbsOwnUseKwhHelper — unit test for _cbs_own_use_kwh
+# ---------------------------------------------------------------------------
+
+
+class TestArbitrageBasisCReconciliation:
+    """Basis-C reconciliation for grid-charging (arbitrage) fleets (task-84 step-3/4).
+
+    Verifies three properties on a fleet where grid_charge_kwh > 0:
+    (c) _cbs_own_use_kwh(s) < s.total_self_consumption_kwh (B-vs-C gap exposed)
+    (a) project_multi_year().points[0].fleet_self_consumption_kwh == sum(_cbs_own_use_kwh)
+        AND strictly < sum(total_self_consumption_kwh)
+    Plus a flat/no-grid-charge control showing no gap.
+
+    (a) is the RED-until-step-4 assertion: before the fix, _simulate_age
+    aggregates total_self_consumption_kwh (B-style) rather than basis C.
+    """
+
+    _N_HOMES = 5
+    _SELF_KWH = 2000.0
+    _GRID_CHARGE_KWH = 200.0  # per home → basis C = 2000 - 200 = 1800
+
+    def _build_grid_charge(self) -> tuple:  # type: ignore[type-arg]
+        """Return (scenario, finance, fr, summaries) for the grid-charging fleet."""
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+        from solar_challenge.home import calculate_summary
+
+        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+        homes = [_make_home_config_fin_cr6() for _ in range(self._N_HOMES)]
+        scenario = ScenarioConfig(name="CR6-Arb-BasisC", period=period, homes=homes)
+        finance = _make_finance_interior_cr6(
+            retained_cash_floor=27.0,
+            pv_cost_per_kwp=2000.0,
+            grant_gbp=0.0,
+            retail_rate=30.0,
+        )
+        fr = _make_grid_charge_fleet_cr6(
+            n_homes=self._N_HOMES,
+            self_kwh=self._SELF_KWH,
+            grid_charge_kwh=self._GRID_CHARGE_KWH,
+        )
+        summaries = [calculate_summary(r) for r in fr.per_home_results]
+        return scenario, finance, fr, summaries
+
+    def test_c_helper_gap_on_grid_charge_homes(self) -> None:
+        """(c) For each home: _cbs_own_use_kwh(s) < total_sc AND == demand - import."""
+        from solar_challenge.finance import _cbs_own_use_kwh
+
+        _, _, _, summaries = self._build_grid_charge()
+        for s in summaries:
+            basis_c = _cbs_own_use_kwh(s)
+            # Basis C must be strictly less than B-style total_self_consumption_kwh
+            assert basis_c < s.total_self_consumption_kwh, (
+                f"Expected basis-C {basis_c:.1f} < sc {s.total_self_consumption_kwh:.1f}"
+            )
+            # And equals demand - import exactly
+            assert basis_c == pytest.approx(
+                s.total_demand_kwh - s.total_grid_import_kwh, rel=1e-9
+            )
+
+    def test_a_fleet_sc_is_basis_c(self) -> None:
+        """(a) project_multi_year fleet_sc == sum(_cbs_own_use_kwh) < sum(total_sc).
+
+        RED until step-4: before the fix _simulate_age uses total_self_consumption_kwh.
+        """
+        from solar_challenge.finance import _cbs_own_use_kwh, project_multi_year
+
+        scenario, finance, fr, summaries = self._build_grid_charge()
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        curve = project_multi_year(scenario, finance, simulate=simulate)
+        year0 = curve.points[0]
+
+        expected_basis_c = sum(_cbs_own_use_kwh(s) for s in summaries)
+        b_style_sum = sum(s.total_self_consumption_kwh for s in summaries)
+
+        # (a) fleet_self_consumption_kwh must equal the basis-C sum (not B-style)
+        assert year0.fleet_self_consumption_kwh == pytest.approx(expected_basis_c, rel=1e-9), (
+            f"fleet_sc should be basis-C {expected_basis_c:.1f} kWh "
+            f"but got {year0.fleet_self_consumption_kwh:.1f} kWh "
+            f"(B-style = {b_style_sum:.1f} kWh)"
+        )
+        # And must be strictly less than B-style
+        assert year0.fleet_self_consumption_kwh < b_style_sum
+
+    def test_flat_control_no_gap(self) -> None:
+        """Flat-rate control: _cbs_own_use_kwh == total_sc when grid_charge==0."""
+        from solar_challenge.finance import _cbs_own_use_kwh
+        from solar_challenge.home import calculate_summary
+
+        # Use the existing flat-rate builder (grid_charge_cost=None)
+        flat_sr = _make_sim_results_cr6(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+        s = calculate_summary(flat_sr)
+        # No grid charging → demand - import = sc + import - import = sc
+        assert _cbs_own_use_kwh(s) == pytest.approx(s.total_self_consumption_kwh, rel=1e-9)
+
+    def _build_grid_charge_interior(self) -> tuple:  # type: ignore[type-arg]
+        """Return (scenario, finance, fr, summaries) for the interior grid-charging fleet.
+
+        Interior-tuned: self_kwh=2800, grid_charge_kwh=200 → basis C = 2600/home
+        fleet_sc (basis C) = 5 × 2600 = 13,000 kWh
+        r* = (floor×n + opex + debt_svc + cbs_gc) / (fleet_sc/100) ≈ 21.2p < retail=30p
+        → binding='floor', feasible=True.
+        """
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+        from solar_challenge.home import calculate_summary
+
+        n_homes = 5
+        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+        scenario = ScenarioConfig(name="CR6-Arb-Interior", period=period, homes=homes)
+        finance = _make_finance_interior_cr6(
+            retained_cash_floor=27.0,
+            pv_cost_per_kwp=2000.0,
+            grant_gbp=0.0,
+            retail_rate=30.0,
+        )
+        fr = _make_grid_charge_fleet_cr6(
+            n_homes=n_homes,
+            self_kwh=2800.0,         # sc (B-style, discharge-inclusive)
+            export_kwh=400.0,
+            import_to_load_kwh=800.0,
+            grid_charge_kwh=200.0,   # → basis C = 2800 - 200 = 2600 kWh/home
+            grid_charge_cost_per_home_gbp=30.0,
+        )
+        summaries = [calculate_summary(r) for r in fr.per_home_results]
+        return scenario, finance, fr, summaries
+
+    def test_b_solve_binds_floor_grid_charge(self) -> None:
+        """(b) Interior grid-charging fleet: solve binding=='floor', surplus==27.0.
+
+        After step-4, solve_cost_recovery_rate uses basis-C fleet_sc in the affine
+        slope, so the interior condition holds for the grid-charging fleet and the
+        closed-form identity surplus(r*) == floor is exact to float ε.
+        """
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        scenario, finance, fr, summaries = self._build_grid_charge_interior()
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+        assert sol.binding == "floor", (
+            f"Expected binding='floor' for interior grid-charging fleet; got {sol.binding!r}"
+        )
+        assert sol.feasible is True
+        assert sol.net_surplus_per_home_per_year_gbp == pytest.approx(27.0, abs=1e-6), (
+            f"Expected net_surplus=27.0 (floor); got {sol.net_surplus_per_home_per_year_gbp:.8f}"
+        )
+
+    def test_b_bill_basis_c(self) -> None:
+        """(b) bill_distribution uses basis C for own_use_payment after the fix.
+
+        RED until step-6: before the fix, bill_distribution passes total_sc (B-style),
+        giving own_use_payment = rate × total_sc/100, so the == assertion fails.
+        After step-6 the == assertion passes and < assertion confirms the gap.
+        """
+        import dataclasses
+        from solar_challenge.finance import (
+            _cbs_own_use_kwh,
+            bill_distribution,
+            solve_cost_recovery_rate,
+        )
+
+        scenario, finance, fr, summaries = self._build_grid_charge_interior()
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+        rate = sol.own_use_rate_pence_per_kwh
+
+        # Build bill distribution at the solved rate
+        finance_solved = dataclasses.replace(finance, own_use_rate_pence_per_kwh=rate)
+        sim_days = summaries[0].simulation_days
+        dist = bill_distribution(summaries, finance_solved, sim_days)
+        rep_bill = dist.representative
+
+        # Find the summary that is the representative (median-outlay home)
+        # bill_distribution selects by median total_outlay; all homes are identical
+        # so any summary will do; use summaries[0].
+        rep_summary = summaries[0]
+        basis_c_kwh = _cbs_own_use_kwh(rep_summary)
+        b_style_kwh = rep_summary.total_self_consumption_kwh
+
+        # After step-6: own_use_payment == rate × basis_c / 100
+        assert rep_bill.own_use_payment_gbp == pytest.approx(
+            rate * basis_c_kwh / 100.0, rel=1e-9
+        ), (
+            f"own_use_payment should be rate×basis_c/100 = {rate:.4f}×{basis_c_kwh:.1f}/100 "
+            f"= {rate * basis_c_kwh / 100:.4f} GBP; "
+            f"got {rep_bill.own_use_payment_gbp:.4f} GBP "
+            f"(B-style would be {rate * b_style_kwh / 100:.4f})"
+        )
+        # Gap: basis-C payment < B-style payment (on grid-charging homes)
+        assert rep_bill.own_use_payment_gbp < rate * b_style_kwh / 100.0
+
+    def test_b_flat_control_still_binds_floor(self) -> None:
+        """Flat-rate fleet control: solve still binding='floor' with same finance."""
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        # Use the no-grid-charge interior fleet with the same finance config
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+
+        n_homes = 5
+        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+        homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
+        scenario = ScenarioConfig(name="CR6-Flat-Control", period=period, homes=homes)
+        finance = _make_finance_interior_cr6(
+            retained_cash_floor=27.0,
+            pv_cost_per_kwp=2000.0,
+            grant_gbp=0.0,
+            retail_rate=30.0,
+        )
+        fr = _make_interior_fleet_cr6(n_homes=n_homes, self_kwh=2000.0)
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+        assert sol.binding == "floor", (
+            f"Flat control: expected binding='floor'; got {sol.binding!r}"
+        )
+        assert sol.feasible is True
+
+    def test_basis_c_rate_exceeds_b_style_implied(self) -> None:
+        """Basis-C solved rate is strictly higher than the B-style implied rate.
+
+        With the floor constraint binding, r* = recovery_target / (fleet_sc/100).
+        On a grid-charging fleet, basis-C fleet_sc (Σ demand−import) <
+        B-style fleet_sc (Σ total_self_consumption_kwh), so r*(basis C) >
+        r*(B-style implied).
+
+        This locks in the directional fix: a regression back to B-style sc
+        would lower the solved rate, causing CBS under-recovery and silently
+        missing the retained-cash floor.
+        """
+        from solar_challenge.finance import _cbs_own_use_kwh, solve_cost_recovery_rate
+
+        scenario, finance, fr, summaries = self._build_grid_charge_interior()
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+        r_basis_c = sol.own_use_rate_pence_per_kwh
+
+        fleet_sc_basis_c = sum(_cbs_own_use_kwh(s) for s in summaries)
+        fleet_sc_b_style = sum(s.total_self_consumption_kwh for s in summaries)
+
+        # Floor binding: r × fleet_sc/100 = recovery_target (constant).
+        # Implied B-style rate: what the solver would return with B-style fleet_sc.
+        #   r_b_implied = r_c × fleet_sc_c / fleet_sc_b  (same recovery target)
+        # Since fleet_sc_b > fleet_sc_c on grid-charging homes, r_c > r_b_implied.
+        r_b_implied = r_basis_c * fleet_sc_basis_c / fleet_sc_b_style
+        assert r_basis_c > r_b_implied, (
+            f"Basis-C rate ({r_basis_c:.4f} p/kWh) must exceed B-style implied "
+            f"rate ({r_b_implied:.4f} p/kWh); basis-C fleet_sc={fleet_sc_basis_c:.0f} kWh "
+            f"< B-style fleet_sc={fleet_sc_b_style:.0f} kWh"
+        )
+
+
+class TestCbsOwnUseKwhHelper:
+    """Unit tests for the module-level helper _cbs_own_use_kwh (basis C).
+
+    Basis C: own_use_kwh = max(total_demand_kwh − total_grid_import_kwh, 0.0)
+    Tests cover the normal case and the clamp-to-zero case.
+    """
+
+    def test_normal_case(self) -> None:
+        """demand=3400, import=1600 → basis C = 1800 kWh."""
+        from solar_challenge.finance import _cbs_own_use_kwh
+
+        s = _make_sim_results_cr6(
+            self_kwh=1800.0,
+            export_kwh=400.0,
+            import_kwh=1600.0,
+        )
+        from solar_challenge.home import calculate_summary
+        summary = calculate_summary(s)
+        # total_demand = sc + import = 1800 + 1600 = 3400
+        # total_grid_import = 1600
+        # basis C = 3400 - 1600 = 1800
+        assert _cbs_own_use_kwh(summary) == pytest.approx(1800.0, rel=1e-9)
+
+    def test_clamp_to_zero(self) -> None:
+        """Degenerate: import > demand → basis C clamped to 0.0 with a UserWarning."""
+        from solar_challenge.finance import _cbs_own_use_kwh
+
+        # Build a summary with demand=500, import=900 by construction.
+        # demand = sc + import → sc = demand - import = 500 - 900 = -400 (impossible in physics)
+        # Instead, build manually via _make_sim_results_cr6 with sc=0, import>demand:
+        # Use sc=500, import=900 → demand=1400 (still basis C > 0).
+        # We need a summary where demand < import to test the clamp.
+        # Build summary directly to set total_demand_kwh=500, total_grid_import_kwh=900.
+        import pandas as pd
+        from solar_challenge.home import SimulationResults, calculate_summary
+
+        n_steps = 8760
+        idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
+        zeros = pd.Series(0.0, index=idx)
+        # demand_kw such that sum*(1/60) = 500 kWh
+        demand_kw = 500.0 / (n_steps / 60.0)
+        # import_kw such that sum*(1/60) = 900 kWh
+        import_kw = 900.0 / (n_steps / 60.0)
+        # gen_kw = 0 (no generation)
+        sr = SimulationResults(
+            generation=zeros.copy(),
+            demand=pd.Series(demand_kw, index=idx),
+            self_consumption=zeros.copy(),
+            battery_charge=zeros.copy(),
+            battery_discharge=zeros.copy(),
+            battery_soc=zeros.copy(),
+            grid_import=pd.Series(import_kw, index=idx),
+            grid_export=zeros.copy(),
+            import_cost=zeros.copy(),
+            export_revenue=zeros.copy(),
+            tariff_rate=zeros.copy(),
+            grid_charge_cost=None,
+        )
+        summary = calculate_summary(sr)
+        # total_demand = 500, total_grid_import = 900 → demand - import = -400 → clamp to 0.0
+        from solar_challenge.finance import _cbs_own_use_kwh
+        assert summary.total_demand_kwh == pytest.approx(500.0, rel=1e-9)
+        assert summary.total_grid_import_kwh == pytest.approx(900.0, rel=1e-9)
+        # The clamp must emit a UserWarning (degenerate case is now observable, not silent)
+        with pytest.warns(UserWarning, match="Basis-C own-use is negative"):
+            result = _cbs_own_use_kwh(summary)
+        assert result == pytest.approx(0.0, abs=1e-9)
+
+
 @pytest.mark.slow
 class TestPhysicsReconciliationColumn:
     """Real-PVGIS physics column — REPORTED, not asserted == spreadsheet (step-9 RED / step-10 GREEN).

@@ -533,6 +533,54 @@ def _seg_export_income_gbp(
 
 
 # ---------------------------------------------------------------------------
+# _cbs_own_use_kwh — basis-C own-use energy helper (task-84 §6)
+# ---------------------------------------------------------------------------
+
+
+def _cbs_own_use_kwh(summary: "SummaryStatistics") -> float:
+    """Basis-C own-use energy for CBS cost-recovery accounting (kWh).
+
+    Basis C: own-use = consumption − import = CBS-supplied energy consumed.
+    This equals the energy that did NOT cross the grid boundary in the
+    consumption direction, i.e. the CBS-originated energy actually used by
+    the home.
+
+    Arbitrage-immune: grid-charged battery discharge inflates
+    ``total_self_consumption_kwh`` (B-style: min(direct + discharge, demand))
+    but does NOT inflate ``total_demand_kwh − total_grid_import_kwh`` because
+    the grid-charged energy is counted in ``total_grid_import_kwh``.  The CBS
+    bears the battery round-trip loss (absorbed into the headline own-use rate).
+
+    Clamps to 0.0 when import > demand and emits a ``UserWarning``.  This
+    condition should not occur in real simulations (it implies net import
+    exceeds total household demand, which is physically impossible under normal
+    dispatch); when it does arise it indicates a dispatch/accounting bug and
+    silently zeroing would mask it.
+
+    Args:
+        summary: Per-home simulation output; uses
+            ``total_demand_kwh`` and ``total_grid_import_kwh``.
+
+    Returns:
+        Basis-C own-use energy in kWh (≥ 0.0).
+    """
+    delta = summary.total_demand_kwh - summary.total_grid_import_kwh
+    if delta < 0.0:
+        warnings.warn(
+            f"Basis-C own-use is negative for a home "
+            f"(demand={summary.total_demand_kwh:.3f} kWh, "
+            f"import={summary.total_grid_import_kwh:.3f} kWh, "
+            f"delta={delta:.3f} kWh); clamped to 0.0. "
+            f"This likely indicates a dispatch/accounting bug in the simulation "
+            f"(import > demand is physically impossible under normal operation).",
+            UserWarning,
+            stacklevel=2,
+        )
+        return 0.0
+    return delta
+
+
+# ---------------------------------------------------------------------------
 # bill() — period-native billing core (task 83 §1)
 # ---------------------------------------------------------------------------
 
@@ -813,7 +861,23 @@ class YearPoint:
     1.0 when the fleet has no batteries)."""
 
     fleet_self_consumption_kwh: float
-    """Total self-consumed solar energy for the fleet that year (kWh, ≥ 0)."""
+    """Total self-consumed solar energy for the fleet that year (kWh, ≥ 0).
+
+    .. note::
+        **Physics path** (:func:`project_multi_year` / ``_simulate_age``):
+        this field holds **basis-C own-use** (Σ demand − import per home),
+        NOT the physics self-consumption series.  The name is retained for
+        back-compat; read it as "fleet basis-C own-use kWh" on this path.
+
+        **Flat-assumption curve path** (:func:`make_flat_assumption_curve`):
+        this field holds a fraction-based figure
+        (``self_consumption_fraction × gen``), consistent with the
+        spreadsheet assumption model; may differ from basis-C on
+        grid-charging fleets.
+
+        Do not treat this field as a uniform physics self-consumption
+        series across both code paths.
+    """
 
     fleet_export_kwh: float
     """Total grid export from the fleet that year (kWh, ≥ 0)."""
@@ -1150,7 +1214,15 @@ def bill_distribution(
     bills = [
         householder_bill(
             summary=s,
-            annual_self_consumption_kwh=s.total_self_consumption_kwh,
+            # Basis C (task-84 §6): own-use = demand − import (CBS-supplied energy consumed).
+            # Arbitrage-immune: excludes grid-charged battery discharge which inflates
+            # total_self_consumption_kwh but does not reduce the home's grid import.
+            # NOTE: basis C applies only on the physics path (finance.self_consumption_override
+            # is None).  When self_consumption_override is set (spreadsheet / override path),
+            # householder_bill ignores annual_self_consumption_kwh and recomputes
+            # sc = override × gen; that path remains fraction-based and is unaffected by
+            # this basis-C migration.
+            annual_self_consumption_kwh=_cbs_own_use_kwh(s),
             finance=finance,
             simulation_days=simulation_days,
         )
@@ -1362,13 +1434,16 @@ def project_multi_year(
             for r in fleet_results.per_home_results
         ]
 
-        fleet_sc = sum(s.total_self_consumption_kwh for s in per_home_summaries)
+        # Basis C (task-84 §6): own-use = demand − import (CBS-supplied energy consumed).
+        # Arbitrage-immune: grid-charged battery discharge inflates
+        # total_self_consumption_kwh but NOT demand − import.
+        fleet_sc = sum(_cbs_own_use_kwh(s) for s in per_home_summaries)
         fleet_exp = sum(s.total_grid_export_kwh for s in per_home_summaries)
         fleet_imp = sum(s.total_grid_import_kwh for s in per_home_summaries)
         per_home_discharge = [s.total_battery_discharge_kwh for s in per_home_summaries]
 
         # CBS fleet revenue (PRD §3.2):
-        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
+        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100   (fleet_sc = basis C)
         #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)
         #   grid_services   = model-dependent (flat or capacity_at_events)
         #   cbs_grid_charge = Σ summary.total_grid_charge_cost_gbp

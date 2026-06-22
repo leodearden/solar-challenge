@@ -636,8 +636,12 @@ class TestBillDistribution:
 
         CR3: per_home_net_bill_gbp name retained (back-compat §12-Q4), value
         redefined to per-home total_outlay_gbp.
+
+        Basis C (task-84 §6): bill_distribution uses _cbs_own_use_kwh (demand −
+        import) as annual_self_consumption_kwh.  The expected bill must use the
+        same basis so the assertion reflects the actual contract.
         """
-        from solar_challenge.finance import bill_distribution, householder_bill
+        from solar_challenge.finance import _cbs_own_use_kwh, bill_distribution, householder_bill
 
         summaries = self._make_fleet()
         finance = _make_finance()
@@ -646,7 +650,8 @@ class TestBillDistribution:
         for i, s in enumerate(summaries):
             expected_bill = householder_bill(
                 summary=s,
-                annual_self_consumption_kwh=s.total_self_consumption_kwh,
+                # Basis C: matches what bill_distribution passes internally
+                annual_self_consumption_kwh=_cbs_own_use_kwh(s),
                 finance=finance,
                 simulation_days=365,
             )

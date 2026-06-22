@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solar-challenge"
-version = "0.3.0"
+version = "0.4.0"
 description = "Energy flow simulator for domestic PV and battery systems"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
