@@ -1053,6 +1053,40 @@ class TestArbitrageBasisCReconciliation:
         )
         assert sol.feasible is True
 
+    def test_basis_c_rate_exceeds_b_style_implied(self) -> None:
+        """Basis-C solved rate is strictly higher than the B-style implied rate.
+
+        With the floor constraint binding, r* = recovery_target / (fleet_sc/100).
+        On a grid-charging fleet, basis-C fleet_sc (Σ demand−import) <
+        B-style fleet_sc (Σ total_self_consumption_kwh), so r*(basis C) >
+        r*(B-style implied).
+
+        This locks in the directional fix: a regression back to B-style sc
+        would lower the solved rate, causing CBS under-recovery and silently
+        missing the retained-cash floor.
+        """
+        from solar_challenge.finance import _cbs_own_use_kwh, solve_cost_recovery_rate
+
+        scenario, finance, fr, summaries = self._build_grid_charge_interior()
+        simulate = lambda fc, s, e: fr  # noqa: E731
+
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+        r_basis_c = sol.own_use_rate_pence_per_kwh
+
+        fleet_sc_basis_c = sum(_cbs_own_use_kwh(s) for s in summaries)
+        fleet_sc_b_style = sum(s.total_self_consumption_kwh for s in summaries)
+
+        # Floor binding: r × fleet_sc/100 = recovery_target (constant).
+        # Implied B-style rate: what the solver would return with B-style fleet_sc.
+        #   r_b_implied = r_c × fleet_sc_c / fleet_sc_b  (same recovery target)
+        # Since fleet_sc_b > fleet_sc_c on grid-charging homes, r_c > r_b_implied.
+        r_b_implied = r_basis_c * fleet_sc_basis_c / fleet_sc_b_style
+        assert r_basis_c > r_b_implied, (
+            f"Basis-C rate ({r_basis_c:.4f} p/kWh) must exceed B-style implied "
+            f"rate ({r_b_implied:.4f} p/kWh); basis-C fleet_sc={fleet_sc_basis_c:.0f} kWh "
+            f"< B-style fleet_sc={fleet_sc_b_style:.0f} kWh"
+        )
+
 
 class TestCbsOwnUseKwhHelper:
     """Unit tests for the module-level helper _cbs_own_use_kwh (basis C).
@@ -1078,7 +1112,7 @@ class TestCbsOwnUseKwhHelper:
         assert _cbs_own_use_kwh(summary) == pytest.approx(1800.0, rel=1e-9)
 
     def test_clamp_to_zero(self) -> None:
-        """Degenerate: import > demand → basis C clamped to 0.0."""
+        """Degenerate: import > demand → basis C clamped to 0.0 with a UserWarning."""
         from solar_challenge.finance import _cbs_own_use_kwh
 
         # Build a summary with demand=500, import=900 by construction.
@@ -1117,7 +1151,10 @@ class TestCbsOwnUseKwhHelper:
         from solar_challenge.finance import _cbs_own_use_kwh
         assert summary.total_demand_kwh == pytest.approx(500.0, rel=1e-9)
         assert summary.total_grid_import_kwh == pytest.approx(900.0, rel=1e-9)
-        assert _cbs_own_use_kwh(summary) == pytest.approx(0.0, abs=1e-9)
+        # The clamp must emit a UserWarning (degenerate case is now observable, not silent)
+        with pytest.warns(UserWarning, match="Basis-C own-use is negative"):
+            result = _cbs_own_use_kwh(summary)
+        assert result == pytest.approx(0.0, abs=1e-9)
 
 
 @pytest.mark.slow
