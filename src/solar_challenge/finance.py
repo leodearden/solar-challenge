@@ -533,6 +533,38 @@ def _seg_export_income_gbp(
 
 
 # ---------------------------------------------------------------------------
+# _cbs_own_use_kwh — basis-C own-use energy helper (task-84 §6)
+# ---------------------------------------------------------------------------
+
+
+def _cbs_own_use_kwh(summary: "SummaryStatistics") -> float:
+    """Basis-C own-use energy for CBS cost-recovery accounting (kWh).
+
+    Basis C: own-use = consumption − import = CBS-supplied energy consumed.
+    This equals the energy that did NOT cross the grid boundary in the
+    consumption direction, i.e. the CBS-originated energy actually used by
+    the home.
+
+    Arbitrage-immune: grid-charged battery discharge inflates
+    ``total_self_consumption_kwh`` (B-style: min(direct + discharge, demand))
+    but does NOT inflate ``total_demand_kwh − total_grid_import_kwh`` because
+    the grid-charged energy is counted in ``total_grid_import_kwh``.  The CBS
+    bears the battery round-trip loss (absorbed into the headline own-use rate).
+
+    Clamps to 0.0 for degenerate cases where import > demand (should not occur
+    in real simulations but can arise in hand-crafted test fixtures).
+
+    Args:
+        summary: Per-home simulation output; uses
+            ``total_demand_kwh`` and ``total_grid_import_kwh``.
+
+    Returns:
+        Basis-C own-use energy in kWh (≥ 0.0).
+    """
+    return max(summary.total_demand_kwh - summary.total_grid_import_kwh, 0.0)
+
+
+# ---------------------------------------------------------------------------
 # bill() — period-native billing core (task 83 §1)
 # ---------------------------------------------------------------------------
 
