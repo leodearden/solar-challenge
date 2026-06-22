@@ -955,6 +955,216 @@ class TestFinanceCLI:
         assert "finance" in combined.lower()
 
 
+# ---------------------------------------------------------------------------
+# Step-1 (task 83): TestBillCore — period-native bill() core
+# ---------------------------------------------------------------------------
+
+
+class TestBillCore:
+    """Fast (no-network) tests for the period-native bill() core function.
+
+    RED until step-2 (bill() implemented in finance.py).
+    """
+
+    def test_30day_standing_charge(self) -> None:
+        """bill() with period_days=30 produces period-proportional standing charge.
+
+        Must NOT annualise to 365 days — that is the wrapper's responsibility.
+        """
+        from solar_challenge.finance import bill
+
+        finance = _make_finance(standing_charge_pence_per_day=60.0)
+        b = bill(
+            period_days=30,
+            generation_kwh=300.0,
+            demand_kwh=280.0,
+            self_consumption_kwh=180.0,
+            import_kwh=100.0,
+            import_cost_gbp=23.0,
+            baseline_import_cost_gbp=280.0 * 23.0 / 100.0,
+            finance=finance,
+        )
+        expected_standing = 60.0 * 30 / 100.0  # = 18.0
+        annual_standing = 60.0 * 365 / 100.0    # = 219.0  (must NOT be this)
+        assert b.standing_charge_gbp == pytest.approx(expected_standing)
+        assert b.standing_charge_gbp != pytest.approx(annual_standing)
+
+    def test_period_native_identities(self) -> None:
+        """bill() must satisfy all definitional BillBreakdown identities (CR3).
+
+        With period_days=30, standing=18.0, import=23.0, own_use=27.0.
+        """
+        from solar_challenge.finance import bill
+
+        own_use_rate = 15.0  # p/kWh
+        vat_rate = 0.05
+        finance = _make_finance(
+            standing_charge_pence_per_day=60.0,
+            own_use_rate_pence_per_kwh=own_use_rate,
+            vat_rate=vat_rate,
+            retail_baseline_rate_pence_per_kwh=23.0,
+        )
+        baseline_import_cost = 280.0 * 23.0 / 100.0  # = 64.4
+        b = bill(
+            period_days=30,
+            generation_kwh=300.0,
+            demand_kwh=280.0,
+            self_consumption_kwh=180.0,
+            import_kwh=100.0,
+            import_cost_gbp=23.0,
+            baseline_import_cost_gbp=baseline_import_cost,
+            finance=finance,
+        )
+
+        standing = 60.0 * 30 / 100.0    # 18.0
+        own_use = own_use_rate * 180.0 / 100.0   # 27.0
+        import_cost = 23.0
+
+        # own_use_payment
+        assert b.own_use_payment_gbp == pytest.approx(own_use)
+
+        # vat
+        expected_vat = vat_rate * (import_cost + standing + own_use)
+        assert b.vat_gbp == pytest.approx(expected_vat)
+
+        # total_outlay
+        expected_outlay = (import_cost + standing + own_use) * (1.0 + vat_rate)
+        assert b.total_outlay_gbp == pytest.approx(expected_outlay)
+
+        # baseline_bill
+        expected_baseline = (baseline_import_cost + standing) * (1.0 + vat_rate)
+        assert b.baseline_bill_gbp == pytest.approx(expected_baseline)
+
+        # eff_rate = baseline_import_cost / demand * 100
+        eff_rate = baseline_import_cost / 280.0 * 100.0  # = 23.0 here
+        expected_sc_saving = 180.0 * (eff_rate - own_use_rate) * (1.0 + vat_rate) / 100.0
+        assert b.self_consumption_saving_gbp == pytest.approx(expected_sc_saving)
+
+        # saving_vs_baseline
+        assert b.saving_vs_baseline_gbp == pytest.approx(
+            b.baseline_bill_gbp - b.total_outlay_gbp
+        )
+
+        # saving_pct
+        expected_pct = (b.saving_vs_baseline_gbp / b.baseline_bill_gbp) * 100.0
+        assert b.saving_pct == pytest.approx(expected_pct)
+
+        # self_consumption_fraction
+        assert b.self_consumption_fraction == pytest.approx(180.0 / 300.0)
+
+    def test_caller_priced_import(self) -> None:
+        """import_cost_gbp is passed verbatim to the bill — no internal re-pricing.
+
+        An arbitrary import_cost_gbp=99.99 (unrelated to import_kwh) must appear
+        in the output unmodified and flow through to vat and total_outlay.
+        """
+        from solar_challenge.finance import bill
+
+        finance = _make_finance()
+        b = bill(
+            period_days=30,
+            generation_kwh=300.0,
+            demand_kwh=280.0,
+            self_consumption_kwh=180.0,
+            import_kwh=100.0,
+            import_cost_gbp=99.99,   # arbitrary, unrelated to import_kwh
+            baseline_import_cost_gbp=280.0 * 23.0 / 100.0,
+            finance=finance,
+        )
+        assert b.import_cost_gbp == 99.99
+        # Flows into total_outlay
+        standing = finance.standing_charge_pence_per_day * 30 / 100.0
+        own_use = finance.own_use_rate_pence_per_kwh * 180.0 / 100.0
+        expected_outlay = (99.99 + standing + own_use) * (1.0 + finance.vat_rate)
+        assert b.total_outlay_gbp == pytest.approx(expected_outlay)
+
+    def test_eff_rate_is_tou_consistent(self) -> None:
+        """self_consumption_saving uses eff_rate derived from baseline_import_cost,
+        not the configured retail rate.
+
+        baseline_import_cost = 280 * 30/100 = 84.0 → eff_rate = 30 p/kWh
+        finance.retail = 23 p/kWh
+        saving must use eff_rate=30, NOT retail=23.
+        """
+        from solar_challenge.finance import bill
+
+        finance = _make_finance(
+            retail_baseline_rate_pence_per_kwh=23.0,
+            own_use_rate_pence_per_kwh=15.0,
+        )
+        # baseline implies avg rate of 30 p/kWh (not 23 p retail)
+        baseline_import_cost = 280.0 * 30.0 / 100.0   # = 84.0
+
+        b = bill(
+            period_days=30,
+            generation_kwh=300.0,
+            demand_kwh=280.0,
+            self_consumption_kwh=180.0,
+            import_kwh=100.0,
+            import_cost_gbp=23.0,
+            baseline_import_cost_gbp=baseline_import_cost,
+            finance=finance,
+        )
+
+        eff_rate = 30.0  # derived: 84.0 / 280.0 * 100
+        expected_sc_saving = (
+            180.0 * (eff_rate - finance.own_use_rate_pence_per_kwh)
+            * (1.0 + finance.vat_rate) / 100.0
+        )
+        retail_sc_saving = (
+            180.0 * (finance.retail_baseline_rate_pence_per_kwh - finance.own_use_rate_pence_per_kwh)
+            * (1.0 + finance.vat_rate) / 100.0
+        )
+        assert b.self_consumption_saving_gbp == pytest.approx(expected_sc_saving)
+        # must NOT use the configured retail rate
+        assert b.self_consumption_saving_gbp != pytest.approx(retail_sc_saving)
+
+    def test_demand_zero_falls_back_to_retail(self) -> None:
+        """demand_kwh==0 must not raise ZeroDivisionError.
+
+        (a) demand=0, sc=0: self_consumption_saving == 0.
+        (b) demand=0, sc>0: eff_rate falls back to retail_baseline_rate.
+        """
+        from solar_challenge.finance import bill
+
+        finance = _make_finance(
+            retail_baseline_rate_pence_per_kwh=23.0,
+            own_use_rate_pence_per_kwh=15.0,
+        )
+
+        # (a) demand=0, sc=0: no ZeroDivisionError, saving == 0
+        b_zero = bill(
+            period_days=30,
+            generation_kwh=300.0,
+            demand_kwh=0.0,
+            self_consumption_kwh=0.0,
+            import_kwh=0.0,
+            import_cost_gbp=0.0,
+            baseline_import_cost_gbp=0.0,
+            finance=finance,
+        )
+        assert b_zero.self_consumption_saving_gbp == pytest.approx(0.0)
+
+        # (b) demand=0, sc>0: eff_rate == retail (fallback), saving uses retail
+        sc_kwh = 180.0
+        b_sc_only = bill(
+            period_days=30,
+            generation_kwh=300.0,
+            demand_kwh=0.0,
+            self_consumption_kwh=sc_kwh,
+            import_kwh=0.0,
+            import_cost_gbp=0.0,
+            baseline_import_cost_gbp=0.0,
+            finance=finance,
+        )
+        expected_sc_saving = (
+            sc_kwh
+            * (finance.retail_baseline_rate_pence_per_kwh - finance.own_use_rate_pence_per_kwh)
+            * (1.0 + finance.vat_rate) / 100.0
+        )
+        assert b_sc_only.self_consumption_saving_gbp == pytest.approx(expected_sc_saving)
+
+
 @pytest.mark.slow
 class TestFinanceCLIEndToEnd:
     """Slow end-to-end CLI test using real PVGIS (weather cache must be warm)."""
