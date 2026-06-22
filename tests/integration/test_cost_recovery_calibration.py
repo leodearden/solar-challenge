@@ -742,6 +742,77 @@ class TestThetaStaysGreen:
         )
 
 
+# ---------------------------------------------------------------------------
+# Task-84 RED / GREEN: TestCbsOwnUseKwhHelper — unit test for _cbs_own_use_kwh
+# ---------------------------------------------------------------------------
+
+
+class TestCbsOwnUseKwhHelper:
+    """Unit tests for the module-level helper _cbs_own_use_kwh (basis C).
+
+    Basis C: own_use_kwh = max(total_demand_kwh − total_grid_import_kwh, 0.0)
+    Tests cover the normal case and the clamp-to-zero case.
+    """
+
+    def test_normal_case(self) -> None:
+        """demand=3400, import=1600 → basis C = 1800 kWh."""
+        from solar_challenge.finance import _cbs_own_use_kwh
+
+        s = _make_sim_results_cr6(
+            self_kwh=1800.0,
+            export_kwh=400.0,
+            import_kwh=1600.0,
+        )
+        from solar_challenge.home import calculate_summary
+        summary = calculate_summary(s)
+        # total_demand = sc + import = 1800 + 1600 = 3400
+        # total_grid_import = 1600
+        # basis C = 3400 - 1600 = 1800
+        assert _cbs_own_use_kwh(summary) == pytest.approx(1800.0, rel=1e-9)
+
+    def test_clamp_to_zero(self) -> None:
+        """Degenerate: import > demand → basis C clamped to 0.0."""
+        from solar_challenge.finance import _cbs_own_use_kwh
+
+        # Build a summary with demand=500, import=900 by construction.
+        # demand = sc + import → sc = demand - import = 500 - 900 = -400 (impossible in physics)
+        # Instead, build manually via _make_sim_results_cr6 with sc=0, import>demand:
+        # Use sc=500, import=900 → demand=1400 (still basis C > 0).
+        # We need a summary where demand < import to test the clamp.
+        # Build summary directly to set total_demand_kwh=500, total_grid_import_kwh=900.
+        import pandas as pd
+        from solar_challenge.home import SimulationResults, calculate_summary
+
+        n_steps = 8760
+        idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
+        zeros = pd.Series(0.0, index=idx)
+        # demand_kw such that sum*(1/60) = 500 kWh
+        demand_kw = 500.0 / (n_steps / 60.0)
+        # import_kw such that sum*(1/60) = 900 kWh
+        import_kw = 900.0 / (n_steps / 60.0)
+        # gen_kw = 0 (no generation)
+        sr = SimulationResults(
+            generation=zeros.copy(),
+            demand=pd.Series(demand_kw, index=idx),
+            self_consumption=zeros.copy(),
+            battery_charge=zeros.copy(),
+            battery_discharge=zeros.copy(),
+            battery_soc=zeros.copy(),
+            grid_import=pd.Series(import_kw, index=idx),
+            grid_export=zeros.copy(),
+            import_cost=zeros.copy(),
+            export_revenue=zeros.copy(),
+            tariff_rate=zeros.copy(),
+            grid_charge_cost=None,
+        )
+        summary = calculate_summary(sr)
+        # total_demand = 500, total_grid_import = 900 → demand - import = -400 → clamp to 0.0
+        from solar_challenge.finance import _cbs_own_use_kwh
+        assert summary.total_demand_kwh == pytest.approx(500.0, rel=1e-9)
+        assert summary.total_grid_import_kwh == pytest.approx(900.0, rel=1e-9)
+        assert _cbs_own_use_kwh(summary) == pytest.approx(0.0, abs=1e-9)
+
+
 @pytest.mark.slow
 class TestPhysicsReconciliationColumn:
     """Real-PVGIS physics column — REPORTED, not asserted == spreadsheet (step-9 RED / step-10 GREEN).
