@@ -21,8 +21,15 @@ def test_version_format():
 
 
 def test_version_is_release_target():
-    """Package version must be 0.3.0 (additive minor bump for bill() export)."""
-    assert solar_challenge.__version__ == "0.3.0"
+    """Package version must be 0.4.0 (minor bump: basis-C cost-recovery + arbitrage fix).
+
+    0.3.0 was the additive minor bump for bill() export.
+    0.4.0 is the basis-C release: own_use = demand − import across the money path
+    (_simulate_age fleet_sc and bill_distribution annual_sc both use _cbs_own_use_kwh),
+    fixing silent CBS under-recovery on TOU-arbitrage / grid-charging homes. Platform
+    P7 task α2 re-pins to this version.
+    """
+    assert solar_challenge.__version__ == "0.4.0"
 
 
 def _pyproject_project_version(text: str) -> str:
