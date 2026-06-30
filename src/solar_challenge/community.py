@@ -123,6 +123,10 @@ class CommunityResults:
         Community battery state of charge (kWh).  Zero for p2p mode.
     fleet_results:
         Reference to the source :class:`~solar_challenge.fleet.FleetResults`.
+    sharing_mode:
+        Authoritative sharing mode copied directly from
+        :attr:`CommunityConfig.sharing_mode` at construction time.
+        Either ``"p2p"`` or ``"community_battery"``.
     """
 
     grid_import: pd.Series
@@ -131,6 +135,7 @@ class CommunityResults:
     battery_discharge: pd.Series
     battery_soc: pd.Series
     fleet_results: "FleetResults"
+    sharing_mode: Literal["p2p", "community_battery"]
     # Billing fields populated by simulate_community when config.billing is
     # fully specified (both tariff and seg_rate_pence_per_kwh present).
     baseline_net_cost_gbp: Optional[float] = None
@@ -292,6 +297,7 @@ def simulate_community(
             battery_discharge=zeros.copy(),
             battery_soc=zeros.copy(),
             fleet_results=fleet_results,
+            sharing_mode=config.sharing_mode,
         )
     else:
         # Community battery dispatch — sequential because SOC is stateful.
@@ -345,6 +351,7 @@ def simulate_community(
             battery_discharge=pd.Series(cb_dis_vals, index=index, dtype=float),
             battery_soc=pd.Series(soc_vals, index=index, dtype=float),
             fleet_results=fleet_results,
+            sharing_mode=config.sharing_mode,
         )
 
     # --- VNM billing: baseline vs community net cost (ε / task-34) ---

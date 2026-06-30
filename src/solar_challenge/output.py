@@ -435,9 +435,7 @@ class CommunityMetrics:
     export_reduction_kwh: float
     battery_charge_kwh: float
     battery_discharge_kwh: float
-    #: Heuristic: 'community_battery' when battery was active, else 'p2p'.
-    #: TODO: read directly from CommunityResults.sharing_mode once that field
-    #: is added to community.py (requires editing a module outside this task's scope).
+    #: Authoritative sharing mode, read directly from CommunityResults.sharing_mode.
     sharing_mode: str
 
 
@@ -469,12 +467,7 @@ def compute_community_metrics(community_results: "CommunityResults") -> Communit
     else:
         self_sufficiency = 0.0
 
-    # Sharing-mode heuristic: battery activity → community_battery, else p2p.
-    # CommunityResults carries no sharing_mode field yet; this is the best
-    # derivation possible without editing community.py (outside task scope).
-    sharing_mode = (
-        "community_battery" if cr.battery_charge.abs().sum() > 0 else "p2p"
-    )
+    sharing_mode = cr.sharing_mode
 
     return CommunityMetrics(
         dt_h=dt_h,

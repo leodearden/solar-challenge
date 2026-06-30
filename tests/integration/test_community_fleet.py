@@ -9,6 +9,7 @@ Tests the full stack:
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from solar_challenge.config import load_community_config, load_fleet_config
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
-from solar_challenge.output import generate_community_report
+from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff
 
@@ -893,3 +894,94 @@ class TestFleetRunCommunityBillingCLI:
         assert "Baseline Net Cost" in result.output or "Savings" in result.output, (
             f"Expected billing rows in community table stdout:\n{result.output[-500:]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task-86 Step-3: TestComputeCommunityMetricsSharingMode
+# ---------------------------------------------------------------------------
+
+class TestComputeCommunityMetricsSharingMode:
+    """compute_community_metrics reads the authoritative CommunityResults.sharing_mode field
+    rather than inferring it from battery activity.
+
+    The discriminating tests pin both directions of the former heuristic divergence:
+    - A p2p result with injected non-zero battery_charge must still report 'p2p'.
+    - A community_battery result with all-zero battery_charge must still report
+      'community_battery'.
+    """
+
+    @pytest.fixture
+    def small_fleet(self) -> FleetResults:
+        """Minimal 2-home fleet: exporter + importer."""
+        index = pd.date_range("2024-06-21 12:00", periods=4, freq="min", tz="Europe/London")
+        return _make_fleet(
+            index,
+            [
+                ([3.0, 5.0, 5.0, 1.0], [1.0, 1.0, 1.0, 1.0]),  # exporter
+                ([0.0, 0.0, 0.0, 0.0], [2.0, 2.0, 2.0, 2.0]),  # importer
+            ],
+        )
+
+    @pytest.fixture
+    def cr_p2p(self, small_fleet: FleetResults) -> object:
+        return simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
+
+    @pytest.fixture
+    def cr_batt(self, small_fleet: FleetResults) -> object:
+        return simulate_community(
+            small_fleet,
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=BatteryConfig(
+                    capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0
+                ),
+            ),
+        )
+
+    def test_metrics_p2p_sharing_mode(self, cr_p2p: object) -> None:
+        """compute_community_metrics reads 'p2p' from the authoritative field."""
+        metrics = compute_community_metrics(cr_p2p)
+        assert metrics.sharing_mode == "p2p"
+
+    def test_metrics_community_battery_sharing_mode(self, cr_batt: object) -> None:
+        """compute_community_metrics reads 'community_battery' from the authoritative field."""
+        metrics = compute_community_metrics(cr_batt)
+        assert metrics.sharing_mode == "community_battery"
+
+    def test_metrics_p2p_non_zero_battery_charge_is_still_p2p(
+        self, cr_p2p: object
+    ) -> None:
+        """Discriminating test: p2p result with injected non-zero battery_charge stays 'p2p'.
+
+        The old heuristic (battery_charge.abs().sum() > 0 → 'community_battery') would
+        wrongly report 'community_battery' here.  The authoritative field must win.
+        """
+        # Inject a non-zero battery_charge series to fool the heuristic.
+        non_zero_charge = pd.Series(
+            [1.0, 0.5, 0.5, 0.0],
+            index=cr_p2p.grid_import.index,  # type: ignore[union-attr]
+            dtype=float,
+        )
+        mislabeled = dataclasses.replace(cr_p2p, battery_charge=non_zero_charge)
+        # The authoritative field says p2p; the heuristic would say community_battery.
+        assert compute_community_metrics(mislabeled).sharing_mode == "p2p"
+
+    def test_metrics_community_battery_zero_charge_is_still_community_battery(
+        self, cr_batt: object
+    ) -> None:
+        """Inverse discriminating test: community_battery result with all-zero battery_charge
+        stays 'community_battery'.
+
+        The old heuristic (battery_charge.abs().sum() == 0 → 'p2p') would wrongly report
+        'p2p' for a community_battery run whose battery never cycled during the window.
+        The authoritative field must win.
+        """
+        # Inject an all-zero battery_charge series to fool the heuristic in the other direction.
+        zero_charge = pd.Series(
+            [0.0, 0.0, 0.0, 0.0],
+            index=cr_batt.grid_import.index,  # type: ignore[union-attr]
+            dtype=float,
+        )
+        mislabeled = dataclasses.replace(cr_batt, battery_charge=zero_charge)
+        # The authoritative field says community_battery; the heuristic would say p2p.
+        assert compute_community_metrics(mislabeled).sharing_mode == "community_battery"
