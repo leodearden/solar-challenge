@@ -93,7 +93,7 @@ are **not changed** — only the money path moves to basis C.
 
 ## 3. Householder-Outlay Equations
 
-Source: `finance.py:householder_bill()` (lines 393–539), `BillBreakdown` (lines 38–107).
+Source: `finance.py:householder_bill()`, `BillBreakdown`.
 
 All monetary values in GBP (£).  VAT is applied to (import + standing + own-use)
 as a block; the householder receives **no SEG deduction**.
@@ -150,7 +150,7 @@ saving_vs_baseline  ≈ £226/yr             (REPORTED; not pinned — see §7)
 
 ## 4. CBS-Revenue Equation
 
-Source: `finance.py:project_multi_year()` lines 1125–1145.
+Source: `finance.py:project_multi_year()`.
 
 At each projection year, the CBS fleet revenue is:
 
@@ -195,7 +195,7 @@ This identity is hard-asserted in `TestNoFlexAnchorReconciliation::test_no_flex_
 
 ## 5. Cost-Recovery Solve + Feasibility Cases
 
-Source: `finance.py:solve_cost_recovery_rate()` (lines 1693–1868).
+Source: `finance.py:solve_cost_recovery_rate()`.
 
 The CBS net surplus per home is **exactly affine** in the own-use rate `r`:
 
@@ -231,7 +231,7 @@ for the `BillDistribution` (representative median-outlay home, min/mean/median/m
 
 ## 6. Capex → Debt → Required-Own-Use → Outlay Coupling (H2)
 
-Source: `finance.py:project_economics()` lines 1487–1513.
+Source: `finance.py:project_economics()`.
 
 The project capex is built up as a 4-term sum:
 
@@ -460,7 +460,7 @@ net revenue, so the solver accepts a lower rate.  This is hard-asserted in
 
 ## 9. The Rendered Cost-Recovery Report (output.py)
 
-Source: `src/solar_challenge/output.py` lines 807–837.
+Source: `src/solar_challenge/output.py` (`render_cost_recovery_report()`).
 
 Running `solar-challenge fleet run --cost-recovery` appends a `## Cost-Recovery Analysis`
 block to the markdown summary.  The block renders the `CostRecoverySolution` fields:
@@ -496,13 +496,13 @@ fleet median — the board's single-home summary figure.
 | Concept | Equation | Code location |
 |---------|----------|---------------|
 | Basis-C own-use energy | `own_use_kwh = demand − import` (≥ 0; see §2) | `_cbs_own_use_kwh()` |
-| Own-use payment | `own_use_rate × own_use_kwh / 100` (basis C) | `householder_bill()` line 499 |
-| VAT | `vat_rate × (import + standing + own_use_payment)` | line 502 |
-| Total outlay | `(import + standing + own_use_payment) × (1+vat)` | line 505 |
-| Saving | `baseline_bill − total_outlay` | line 521 |
-| CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ basis-C own_use) | `project_multi_year()` line 1134 |
-| CBS revenue (full) | `own_use_rev + seg_rev + gs_income − cbs_grid_charge` | lines 1134–1145 |
+| Own-use payment | `own_use_rate × own_use_kwh / 100` (basis C) | `householder_bill()` |
+| VAT | `vat_rate × (import + standing + own_use_payment)` | `householder_bill()` |
+| Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `householder_bill()` |
+| Saving | `baseline_bill − total_outlay` | `householder_bill()` |
+| CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ basis-C own_use) | `project_multi_year()` |
+| CBS revenue (full) | `own_use_rev + seg_rev + gs_income − cbs_grid_charge` | `project_multi_year()` |
 | Solve rate-base | `fleet_sc = Σ_homes (demand − import)` (basis C; §2) | `_simulate_age()` |
-| Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` line 1814 |
-| Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost)` | `project_economics()` line 1497 |
-| Net surplus | `mean(surplus_y) / n_homes` over 25 yr | line 1558–1559 |
+| Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` |
+| Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost)` | `project_economics()` |
+| Net surplus | `mean(surplus_y) / n_homes` over 25 yr | `project_economics()` |
