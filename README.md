@@ -11,12 +11,13 @@ A Python-based energy flow simulator for the Solar Challenge community energy pr
 
 ## Current Phase Scope
 
-Version 0.1 focuses on:
+Version 0.4.0 is feature-complete, providing:
 - Self-consumption modelling for individual homes
 - Smart Export Guarantee (SEG) export calculation
 - Fleet-level aggregation for 100 homes
-
-More sophisticated power-sharing schemes are planned for future phases.
+- Community power-sharing and CBS cost-recovery billing
+- TOU arbitrage / grid-charging dispatch
+- Multi-year financial projection (25-yr PCHIP curve)
 
 ## Technical Stack
 
@@ -40,17 +41,14 @@ More sophisticated power-sharing schemes are planned for future phases.
    cd my-solar-challenge
    ```
 
-2. Run the setup script:
+2. Install in editable mode with development dependencies:
    ```bash
-   chmod +x init.sh
-   ./init.sh
+   pip install -e ".[dev]"
    ```
 
-   Or manually:
+   To also run the web dashboard, add the `[web]` extra:
    ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
+   pip install -e ".[dev,web]"
    ```
 
 3. Verify installation:
@@ -70,9 +68,6 @@ More sophisticated power-sharing schemes are planned for future phases.
 ## Running Tests
 
 ```bash
-# Activate virtual environment
-source venv/bin/activate
-
 # Run all tests
 pytest -v
 
@@ -95,8 +90,7 @@ my-solar-challenge/
 │       ├── feature_list.json
 │       ├── progress.txt
 │       └── init.sh
-├── requirements.txt         # Python dependencies
-├── pyproject.toml           # Project configuration
+├── pyproject.toml           # Project configuration (canonical; defines extras dev/web/stochastic)
 └── README.md
 ```
 

@@ -27,11 +27,11 @@ dependencies = [
 > absolute path to your local clone of `my-solar-challenge` before running
 > `uv lock`.
 
-**Worked example** (P0 freeze tag):
+**Worked example** (current release tag):
 
 ```toml
 dependencies = [
-  "solar-challenge @ git+file:///home/leo/src/my-solar-challenge@solar-challenge-v0.1.0",
+  "solar-challenge @ git+file:///home/leo/src/my-solar-challenge@solar-challenge-v0.4.0",
 ]
 ```
 
@@ -81,12 +81,13 @@ The git+file pin **insulates** each consuming worktree:
 Tags use the prefix `solar-challenge-` followed by a semantic version:
 
 ```
-solar-challenge-v0.1.0   ← P0 API freeze (first pinnable release)
-solar-challenge-v0.2.0   ← next minor (additive surface changes)
-solar-challenge-v1.0.0   ← first stable / breaking-change boundary
+solar-challenge-v0.2.0   ← first pinnable release (API freeze)
+solar-challenge-v0.3.0   ← next minor (additive surface changes)
+solar-challenge-v0.4.0   ← current release (basis-C cost-recovery + arbitrage)
+solar-challenge-v1.0.0   ← first stable / breaking-change boundary (future)
 ```
 
-**P0 cuts the first freeze tag** — that tag IS the literal API freeze, i.e.
+**The first freeze tag** (`solar-challenge-v0.2.0`) IS the literal API freeze, i.e.
 `solar_challenge.__all__` is considered stable from that point.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer

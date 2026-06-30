@@ -5,7 +5,7 @@ This is the T4 contract file (PRD docs/prds/domain-library-extraction.md §3.5,
 specification that future maintainers must update when the public surface changes.
 
 Concerns:
-  H2 surface-lock  — FROZEN_SET pins the exact 68 public names (test_all_equals_frozen_set)
+  H2 surface-lock  — FROZEN_SET pins the exact 69 public names (test_all_equals_frozen_set)
   H2 kind          — EXPECTED_KIND pins the introspected kind of each name
                      (test_expected_kind_keys_match_frozen_set,
                       test_every_name_resolves_to_expected_kind)
@@ -28,7 +28,7 @@ import solar_challenge
 
 
 # ---------------------------------------------------------------------------
-# H2 surface-lock: committed frozenset of the exact 68 public names
+# H2 surface-lock: committed frozenset of the exact 69 public names
 #
 # Mirrors PRD §3.1 grouped by origin module.  Any add/remove to __all__ must
 # be reflected here; the test below fails with a clear symmetric-difference

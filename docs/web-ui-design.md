@@ -1,14 +1,22 @@
 # Solar Challenge Web UI — Design Specification
 
+> **⚠ Non-authoritative design document.** This file is the original forward-looking
+> design specification, written before implementation, and has diverged from the
+> as-built code.  The as-built stack uses **Alpine.js** for client interactivity
+> (**no HTMX**) and a **compiled Tailwind CSS build** (`static/dist/style.css`,
+> built from `static/src/input.css`; the CDN play-mode approach in this document
+> was not adopted).  Treat HTMX references and the "CDN (no build step)" Tailwind
+> claim throughout this document as aspirational/historical.
+
 ## Overview
 
 A rich, interactive web dashboard for the Solar Challenge energy flow simulator. The UI enables users to configure and run single-home and fleet simulations, explore results through interactive data visualisations, browse past simulation runs, build and sweep scenarios, and get help from an AI assistant — all without using the command line.
 
-Built on the existing Flask + HTMX stack, enhanced with Tailwind CSS, Alpine.js, and Plotly.js.
+Built on the existing Flask + Alpine.js stack, enhanced with compiled Tailwind CSS and Plotly.js.
 
 ## Design Philosophy
 
-- **Progressive enhancement** — Flask/Jinja2 server-rendered pages with HTMX for dynamic updates and Alpine.js for lightweight client interactivity. No SPA framework.
+- **Progressive enhancement** — Flask/Jinja2 server-rendered pages with Alpine.js for lightweight client interactivity. No SPA framework.
 - **Python-centric** — All logic stays in Python. JavaScript is used only for chart rendering and minor UI interactions.
 - **Zero infrastructure** — SQLite for persistence, threading for background jobs. No Redis, Celery, or external services required (except Anthropic API for the AI assistant).
 - **Responsive** — Works on tablets and desktops. Not optimised for mobile (simulation tool, not a consumer app).
@@ -18,9 +26,9 @@ Built on the existing Flask + HTMX stack, enhanced with Tailwind CSS, Alpine.js,
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | Backend | Flask + Blueprints | Existing, extended with multiple blueprints |
-| Templating | Jinja2 + HTMX 2.x | Upgrade from 1.9.10; SSE extension for progress |
-| Client interactivity | Alpine.js 3.x | Lightweight reactivity for forms, toggles, tabs |
-| Styling | Tailwind CSS 3.x | CDN play mode (no build step) |
+| Templating | Jinja2 | Server-rendered pages |
+| Client interactivity | Alpine.js 3.x | Lightweight reactivity for forms, toggles, tabs (as-built; HTMX was not adopted) |
+| Styling | Tailwind CSS 3.x | Compiled build (`static/dist/style.css`; CDN play mode was not adopted) |
 | Charts | Plotly.js 2.x | Already present |
 | Persistence | SQLite via `sqlite3` | stdlib, no ORM |
 | Background jobs | `concurrent.futures.ThreadPoolExecutor` + SSE | No external broker |

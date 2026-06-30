@@ -4,7 +4,7 @@
 projection (ζ surface).
 
 Provides:
-  - ``BillBreakdown`` — frozen dataclass with 11 financial line items.
+  - ``BillBreakdown`` — frozen dataclass with 10 financial line items.
   - ``BillDistribution`` — frozen dataclass with fleet-level bill statistics.
   - ``householder_bill`` — pure function mapping simulation outputs to a bill.
   - ``bill_distribution`` — aggregates per-home bills into a BillDistribution.
