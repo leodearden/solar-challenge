@@ -1690,6 +1690,54 @@ def _resolve_homes(scenario: "ScenarioConfig") -> List[Any]:
     return homes
 
 
+def _reconcile_seg_homes(homes: List[Any], scenario_seg_rate: Optional[float]) -> List[Any]:
+    """Thread the scenario-level SEG rate onto every home whose seg_tariff is None.
+
+    This is the single-SEG-source reconciliation that makes per-home
+    ``HomeConfig.seg_tariff`` the definitive input for all SEG maths inside
+    :func:`project_multi_year`.  It mirrors the threading workaround in
+    ``cli/finance.py:162-169`` so the public library API self-reconciles.
+
+    Args:
+        homes: List of ``HomeConfig`` objects as returned by :func:`_resolve_homes`.
+        scenario_seg_rate: ``ScenarioConfig.seg_tariff_pence_per_kwh`` — the
+            scenario-level SEG rate in pence per kWh, or ``None`` when not set.
+
+    Returns:
+        New list of ``HomeConfig`` objects with ``seg_tariff`` set on every home
+        that had ``seg_tariff is None`` when ``scenario_seg_rate`` is not None.
+        Returns the input list unchanged when ``scenario_seg_rate is None``.
+
+    Raises:
+        ValueError: When a home already has a ``seg_tariff`` whose rate is not
+            close (``math.isclose``) to ``scenario_seg_rate``.  This prevents
+            silently inconsistent SEG configurations from reaching the projection.
+    """
+    if scenario_seg_rate is None:
+        return homes
+
+    import math
+    from solar_challenge.seg import SEGTariff
+
+    scenario_tariff = SEGTariff(name="", rate_pence_per_kwh=scenario_seg_rate)
+    result: List[Any] = []
+    for home in homes:
+        if home.seg_tariff is None:
+            result.append(dataclasses.replace(home, seg_tariff=scenario_tariff))
+        elif not math.isclose(home.seg_tariff.rate_pence_per_kwh, scenario_seg_rate):
+            home_name = getattr(home, "name", None)
+            name_part = f" (home {home_name!r})" if home_name is not None else ""
+            raise ValueError(
+                f"Inconsistent SEG rate{name_part}: per-home seg_tariff has "
+                f"{home.seg_tariff.rate_pence_per_kwh}p/kWh but "
+                f"scenario.seg_tariff_pence_per_kwh={scenario_seg_rate}p/kWh. "
+                "Set only one, or use matching rates."
+            )
+        else:
+            result.append(home)
+    return result
+
+
 def _annuity_payment(principal: float, rate: float, n_years: int) -> float:
     """Compute the level annual payment on a loan (closed-form annuity).
 
