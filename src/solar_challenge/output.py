@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import pandas as pd
 
-from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.home import SimulationResults, calculate_summary
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
@@ -16,116 +16,6 @@ if TYPE_CHECKING:
     from solar_challenge.flex import FlexibilityValueBand
     from solar_challenge.gridservices import GridServicesAtEvents
     from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep, SensitivityPanel
-
-
-@dataclass(frozen=True)
-class StrategyComparisonResult:
-    """Result of comparing two dispatch strategies.
-
-    All delta values are calculated as (alternative - baseline).
-    Negative delta_grid_import_kwh means the alternative imports less from grid.
-
-    Attributes:
-        baseline_strategy: Name of the baseline strategy
-        alternative_strategy: Name of the alternative strategy
-        baseline_summary: Summary statistics for baseline
-        alternative_summary: Summary statistics for alternative
-        delta_grid_import_kwh: Change in grid import (kWh)
-        delta_grid_export_kwh: Change in grid export (kWh)
-        delta_self_consumption_kwh: Change in self-consumption (kWh)
-        peak_import_reduction_pct: Percentage reduction in peak grid import
-    """
-
-    baseline_strategy: str
-    alternative_strategy: str
-    baseline_summary: SummaryStatistics
-    alternative_summary: SummaryStatistics
-    delta_grid_import_kwh: float
-    delta_grid_export_kwh: float
-    delta_self_consumption_kwh: float
-    peak_import_reduction_pct: float
-
-
-def compare_strategies(
-    baseline: SimulationResults,
-    alternative: SimulationResults,
-) -> StrategyComparisonResult:
-    """Compare two simulation results from different dispatch strategies.
-
-    Calculates deltas between an alternative strategy and a baseline,
-    showing the impact of switching strategies on grid import, export,
-    self-consumption, and peak demand.
-
-    Args:
-        baseline: Results from the baseline strategy (e.g., self-consumption)
-        alternative: Results from the alternative strategy (e.g., TOU or peak-shaving)
-
-    Returns:
-        StrategyComparisonResult with deltas and percentage improvements
-    """
-    base_summary = calculate_summary(baseline)
-    alt_summary = calculate_summary(alternative)
-
-    # Peak grid import reduction
-    base_peak_import = float(baseline.grid_import.max())
-    alt_peak_import = float(alternative.grid_import.max())
-    if base_peak_import > 0:
-        peak_reduction_pct = (base_peak_import - alt_peak_import) / base_peak_import * 100
-    else:
-        peak_reduction_pct = 0.0
-
-    return StrategyComparisonResult(
-        baseline_strategy=baseline.strategy_name,
-        alternative_strategy=alternative.strategy_name,
-        baseline_summary=base_summary,
-        alternative_summary=alt_summary,
-        delta_grid_import_kwh=alt_summary.total_grid_import_kwh - base_summary.total_grid_import_kwh,
-        delta_grid_export_kwh=alt_summary.total_grid_export_kwh - base_summary.total_grid_export_kwh,
-        delta_self_consumption_kwh=alt_summary.total_self_consumption_kwh - base_summary.total_self_consumption_kwh,
-        peak_import_reduction_pct=peak_reduction_pct,
-    )
-
-
-def generate_comparison_report(
-    comparison: StrategyComparisonResult,
-) -> str:
-    """Generate a markdown report comparing two dispatch strategies.
-
-    Args:
-        comparison: Strategy comparison result
-
-    Returns:
-        Formatted markdown text report
-    """
-    base = comparison.baseline_summary
-    alt = comparison.alternative_summary
-
-    report = f"""# Strategy Comparison Report
-
-## Strategies
-- Baseline: {comparison.baseline_strategy}
-- Alternative: {comparison.alternative_strategy}
-
-## Energy Comparison (kWh)
-| Metric | Baseline | Alternative | Delta |
-|--------|----------|-------------|-------|
-| Grid Import | {base.total_grid_import_kwh:.1f} | {alt.total_grid_import_kwh:.1f} | {comparison.delta_grid_import_kwh:+.1f} |
-| Grid Export | {base.total_grid_export_kwh:.1f} | {alt.total_grid_export_kwh:.1f} | {comparison.delta_grid_export_kwh:+.1f} |
-| Self-Consumption | {base.total_self_consumption_kwh:.1f} | {alt.total_self_consumption_kwh:.1f} | {comparison.delta_self_consumption_kwh:+.1f} |
-| Battery Charged | {base.total_battery_charge_kwh:.1f} | {alt.total_battery_charge_kwh:.1f} | {alt.total_battery_charge_kwh - base.total_battery_charge_kwh:+.1f} |
-| Battery Discharged | {base.total_battery_discharge_kwh:.1f} | {alt.total_battery_discharge_kwh:.1f} | {alt.total_battery_discharge_kwh - base.total_battery_discharge_kwh:+.1f} |
-
-## Efficiency Comparison
-| Metric | Baseline | Alternative |
-|--------|----------|-------------|
-| Self-Consumption Ratio | {base.self_consumption_ratio:.1%} | {alt.self_consumption_ratio:.1%} |
-| Grid Dependency | {base.grid_dependency_ratio:.1%} | {alt.grid_dependency_ratio:.1%} |
-| Export Ratio | {base.export_ratio:.1%} | {alt.export_ratio:.1%} |
-
-## Peak Import Reduction
-- Peak import reduction: {comparison.peak_import_reduction_pct:.1f}%
-"""
-    return report
 
 
 def export_to_csv(

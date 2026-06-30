@@ -197,3 +197,4 @@ class TestAggregateAnnual:
         assert "grid_dependency_ratio" in annual
         assert "export_ratio" in annual
         assert "simulation_days" in annual
+
