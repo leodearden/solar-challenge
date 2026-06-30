@@ -33,7 +33,7 @@ relationship to the system has three components:
 | Component | Who receives/pays | Where in code |
 |-----------|------------------|---------------|
 | Self-consumed solar | Householder pays CBS at `own_use_rate` p/kWh | `householder_bill()` `own_use_payment_gbp` |
-| Grid export (SEG) | CBS receives; not passed to householder | `project_multi_year()` `fleet_revenue_gbp` |
+| Grid export (SEG) | CBS receives; not passed to householder | `project_multi_year()` `fleet_revenue_gbp` (SEG rate reconciled from `ScenarioConfig.seg_tariff_pence_per_kwh` onto homes) |
 | Grid import | Householder pays retailer at `retail_baseline_rate` p/kWh | `householder_bill()` `import_cost_gbp` |
 
 The householder carries no debt, no capital obligation, and no export-MPAN risk.
@@ -170,6 +170,16 @@ own_use_revenue   = own_use_rate_pence_per_kwh × fleet_sc_kwh / 100
 seg_revenue       = Σ_homes _seg_export_income_gbp(home, finance, sim_days)
                     (= Σ home.total_export_revenue_gbp on the physics path,
                     unless self_consumption_override is set)
+
+                    SEG input reconciliation: project_multi_year calls
+                    _reconcile_seg_homes() immediately after _resolve_homes().
+                    When ScenarioConfig.seg_tariff_pence_per_kwh is set and a
+                    home's HomeConfig.seg_tariff is None, the scenario rate is
+                    threaded onto that home as SEGTariff(rate_pence_per_kwh=R),
+                    making per-home seg_tariff the single source of SEG maths
+                    (robust to the Task-85 export-revenue zeroing).  If a
+                    per-home seg_tariff is already set and its rate differs from
+                    the scenario rate, ValueError is raised (fail-fast).
 
 grid_services_income = grid_services_income_per_kw_per_year_gbp
                        × Σ_homes battery.max_discharge_kw
