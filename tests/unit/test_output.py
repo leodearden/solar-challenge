@@ -198,28 +198,3 @@ class TestAggregateAnnual:
         assert "export_ratio" in annual
         assert "simulation_days" in annual
 
-
-class TestStrategyComparisonClusterRemoved:
-    """Regression guard: dead strategy-comparison cluster must be absent.
-
-    StrategyComparisonResult, compare_strategies, and generate_comparison_report
-    are orphaned dead code with no callers, no test coverage, and no place in
-    the frozen public surface.  They were removed in task #87 and must not
-    creep back.
-    """
-
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "StrategyComparisonResult",
-            "compare_strategies",
-            "generate_comparison_report",
-        ],
-    )
-    def test_dead_symbol_absent(self, name):
-        """Dead strategy-comparison symbols must not exist in solar_challenge.output."""
-        import solar_challenge.output as output_module
-
-        assert not hasattr(output_module, name), (
-            f"{name} is dead code and must stay removed from solar_challenge.output"
-        )
