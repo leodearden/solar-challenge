@@ -906,3 +906,57 @@ class TestCommunityBillingSavings:
         assert cr.baseline_net_cost_gbp is None
         assert cr.community_net_cost_gbp is None
         assert cr.community_savings_gbp is None
+
+
+# ---------------------------------------------------------------------------
+# Task-86 Step-1: TestCommunityResultsSharingMode
+# ---------------------------------------------------------------------------
+
+class TestCommunityResultsSharingMode:
+    """RED tests: CommunityResults must carry the authoritative sharing_mode field.
+
+    Tests fail today because CommunityResults has no sharing_mode attribute.
+    """
+
+    @pytest.fixture
+    def index(self) -> pd.DatetimeIndex:
+        return pd.date_range("2024-06-21 12:00", periods=3, freq="1min")
+
+    @pytest.fixture
+    def small_fleet(self, index: pd.DatetimeIndex) -> FleetResults:
+        """Minimal 2-home fleet for sharing_mode field tests."""
+        return _make_fleet(
+            index,
+            [
+                ([4.0, 1.0, 2.0], [0.0, 0.0, 0.0]),  # exporter
+                ([0.0, 0.0, 0.0], [2.0, 3.0, 2.0]),  # importer
+            ],
+        )
+
+    def test_p2p_sharing_mode_field(self, small_fleet: FleetResults) -> None:
+        """simulate_community with p2p config sets sharing_mode == 'p2p'."""
+        from solar_challenge.community import simulate_community
+
+        cr = simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
+        assert cr.sharing_mode == "p2p"
+
+    def test_community_battery_sharing_mode_field(self, small_fleet: FleetResults) -> None:
+        """simulate_community with community_battery config sets sharing_mode == 'community_battery'."""
+        from solar_challenge.community import simulate_community
+
+        cfg = CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=BatteryConfig(
+                capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0
+            ),
+        )
+        cr = simulate_community(small_fleet, cfg)
+        assert cr.sharing_mode == "community_battery"
+
+    def test_sharing_mode_pickle_round_trip(self, small_fleet: FleetResults) -> None:
+        """CommunityResults.sharing_mode survives pickle.loads(pickle.dumps(...))."""
+        from solar_challenge.community import simulate_community
+
+        p2p_result = simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
+        restored = pickle.loads(pickle.dumps(p2p_result))
+        assert restored.sharing_mode == "p2p"
