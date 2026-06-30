@@ -276,19 +276,22 @@ class TestSimulateHomeSEGNonRegression:
             location=Location.bristol(),
         )
 
-    def test_legacy_export_priced_at_import_rate(self, no_seg_config, june21_weather_data):
-        """Without seg_tariff, export_revenue == grid_export * tariff_rate / 60 (element-wise)."""
-        results = simulate_home(
-            no_seg_config,
-            start_date=pd.Timestamp("2024-06-21"),
-            end_date=pd.Timestamp("2024-06-21"),
-            weather_data=june21_weather_data,
-        )
-        # export_revenue (£/min) == grid_export (kW) * tariff_rate (£/kWh) / 60 (min/h)
-        expected = results.grid_export * results.tariff_rate / 60.0
-        pd.testing.assert_series_equal(
-            results.export_revenue, expected, check_names=False, rtol=1e-6
-        )
+    def test_tou_without_seg_zeroes_export_revenue_and_warns(
+        self, no_seg_config, june21_weather_data
+    ):
+        """TOU tariff without seg_tariff: export_revenue must be zero and emit a UserWarning."""
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(
+                no_seg_config,
+                start_date=pd.Timestamp("2024-06-21"),
+                end_date=pd.Timestamp("2024-06-21"),
+                weather_data=june21_weather_data,
+            )
+        # Non-vacuous: some export actually occurred on this sunny day.
+        assert results.grid_export.sum() > 0, "Expected grid export on a sunny day"
+        # Corrected behaviour: no SEG tariff => no export revenue at any timestep.
+        assert (results.export_revenue == 0).all(), "export_revenue must be zero when seg_tariff is None"
+        assert calculate_summary(results).total_export_revenue_gbp == 0
 
     def test_named_preset_end_to_end(self, june21_weather_data):
         """resolve_seg_tariff('Octopus') wired into HomeConfig prices export at 4.1 p/kWh."""
