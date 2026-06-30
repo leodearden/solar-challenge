@@ -901,13 +901,13 @@ class TestFleetRunCommunityBillingCLI:
 # ---------------------------------------------------------------------------
 
 class TestComputeCommunityMetricsSharingMode:
-    """RED tests: compute_community_metrics must read the authoritative sharing_mode field.
+    """compute_community_metrics reads the authoritative CommunityResults.sharing_mode field
+    rather than inferring it from battery activity.
 
-    The discriminating test injects a non-zero battery_charge into a p2p result
-    and asserts the metric still reports 'p2p' — the old heuristic would wrongly
-    return 'community_battery' for this case.
-
-    These tests are RED until step-4 replaces the heuristic with cr.sharing_mode.
+    The discriminating tests pin both directions of the former heuristic divergence:
+    - A p2p result with injected non-zero battery_charge must still report 'p2p'.
+    - A community_battery result with all-zero battery_charge must still report
+      'community_battery'.
     """
 
     @pytest.fixture
@@ -965,3 +965,23 @@ class TestComputeCommunityMetricsSharingMode:
         mislabeled = dataclasses.replace(cr_p2p, battery_charge=non_zero_charge)
         # The authoritative field says p2p; the heuristic would say community_battery.
         assert compute_community_metrics(mislabeled).sharing_mode == "p2p"
+
+    def test_metrics_community_battery_zero_charge_is_still_community_battery(
+        self, cr_batt: object
+    ) -> None:
+        """Inverse discriminating test: community_battery result with all-zero battery_charge
+        stays 'community_battery'.
+
+        The old heuristic (battery_charge.abs().sum() == 0 → 'p2p') would wrongly report
+        'p2p' for a community_battery run whose battery never cycled during the window.
+        The authoritative field must win.
+        """
+        # Inject an all-zero battery_charge series to fool the heuristic in the other direction.
+        zero_charge = pd.Series(
+            [0.0, 0.0, 0.0, 0.0],
+            index=cr_batt.grid_import.index,  # type: ignore[union-attr]
+            dtype=float,
+        )
+        mislabeled = dataclasses.replace(cr_batt, battery_charge=zero_charge)
+        # The authoritative field says community_battery; the heuristic would say p2p.
+        assert compute_community_metrics(mislabeled).sharing_mode == "community_battery"

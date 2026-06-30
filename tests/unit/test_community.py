@@ -913,9 +913,11 @@ class TestCommunityBillingSavings:
 # ---------------------------------------------------------------------------
 
 class TestCommunityResultsSharingMode:
-    """RED tests: CommunityResults must carry the authoritative sharing_mode field.
+    """CommunityResults carries the authoritative sharing_mode from the simulation config.
 
-    Tests fail today because CommunityResults has no sharing_mode attribute.
+    Asserts that simulate_community propagates config.sharing_mode into the result
+    for both 'p2p' and 'community_battery' modes, and that the field survives a
+    pickle round-trip.
     """
 
     @pytest.fixture
