@@ -1374,6 +1374,7 @@ def project_multi_year(
 
     # ---- Resolve homes (support both .homes list and single .home) ----------
     homes = _resolve_homes(scenario)
+    homes = _reconcile_seg_homes(homes, scenario.seg_tariff_pence_per_kwh)
 
     # ---- Derive timezone from scenario location (or first home) -------------
     tz: str
