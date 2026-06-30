@@ -18,11 +18,14 @@ deterministic and has no side-effects: suitable for use in parallel fleet runs.
 from __future__ import annotations
 
 import dataclasses
+import math
 import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, List, NamedTuple, Optional, Sequence
 
 import pandas as pd
+
+from solar_challenge.seg import SEGTariff
 
 if TYPE_CHECKING:
     from solar_challenge.config import ScenarioConfig
@@ -1717,9 +1720,6 @@ def _reconcile_seg_homes(homes: List[Any], scenario_seg_rate: Optional[float]) -
     if scenario_seg_rate is None:
         return homes
 
-    import math
-    from solar_challenge.seg import SEGTariff
-
     scenario_tariff = SEGTariff(name="", rate_pence_per_kwh=scenario_seg_rate)
     result: List[Any] = []
     for home in homes:
@@ -2151,6 +2151,7 @@ def solve_cost_recovery_rate(
 
     # ---- Resolve homes + time axes (mirrors project_multi_year) --------------
     homes = _resolve_homes(scenario)
+    homes = _reconcile_seg_homes(homes, scenario.seg_tariff_pence_per_kwh)
 
     tz: str
     if scenario.location is not None:

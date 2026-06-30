@@ -1813,6 +1813,21 @@ class TestProjectHonoursScenarioLevelSeg:
         assert sol_seg.feasible == sol_ref.feasible, (
             f"feasible: scenario_seg={sol_seg.feasible} != home_ref={sol_ref.feasible}"
         )
+        # Outlay-path equivalence: representative_outlay and saving both flow through
+        # the step-6 age-0 outlay path (finance.py:2225); assert they match so a future
+        # regression where the outlay path is export-dependent cannot go undetected.
+        assert sol_seg.representative_outlay_gbp == pytest.approx(
+            sol_ref.representative_outlay_gbp, rel=1e-6
+        ), (
+            f"representative_outlay: scenario_seg={sol_seg.representative_outlay_gbp:.4f} "
+            f"!= home_ref={sol_ref.representative_outlay_gbp:.4f}"
+        )
+        assert sol_seg.saving_vs_baseline_gbp == pytest.approx(
+            sol_ref.saving_vs_baseline_gbp, rel=1e-6
+        ), (
+            f"saving_vs_baseline: scenario_seg={sol_seg.saving_vs_baseline_gbp:.4f} "
+            f"!= home_ref={sol_ref.saving_vs_baseline_gbp:.4f}"
+        )
 
         # Non-vacuousness: SEG income must affect at least one solve metric vs no-SEG baseline
         rate_differs = not math.isclose(
