@@ -447,7 +447,6 @@ def validate_energy_balance(
     storage_delta = result.battery_charge - result.battery_discharge
     energy_out = result.demand + result.grid_export + storage_delta
 
-    # But wait - we need to reconsider this
     # generation + import = demand + export + (charge - discharge)
     # This simplifies because:
     # - self_consumption = min(gen, demand)
