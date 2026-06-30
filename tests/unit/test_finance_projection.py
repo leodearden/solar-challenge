@@ -1541,3 +1541,83 @@ class TestProjectMultiYearAdaptive:
                 f"{curve.points[i].fleet_self_consumption_kwh:.3f} > "
                 f"{curve.points[i-1].fleet_self_consumption_kwh:.3f}"
             )
+
+
+# ---------------------------------------------------------------------------
+# _reconcile_seg_homes — unit tests (task-89 step-1)
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileSegHomes:
+    """Unit tests for the _reconcile_seg_homes pure helper."""
+
+    def test_none_scenario_rate_returns_homes_unchanged(self) -> None:
+        """(a) When scenario_seg_rate is None, return the homes list unchanged."""
+        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
+
+        home = _make_home_config()
+        result = _reconcile_seg_homes([home], scenario_seg_rate=None)
+        assert result == [home]
+        assert result[0] is home  # same object, no copy
+
+    def test_none_seg_home_gets_tariff_threaded(self) -> None:
+        """(b) Home with seg_tariff=None + scenario_seg_rate=6.0 → seg_tariff set to SEGTariff(6.0).
+
+        Other HomeConfig fields (pv_config, load_config, location, battery_config)
+        are preserved unchanged via dataclasses.replace semantics.
+        """
+        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
+        from solar_challenge.seg import SEGTariff
+
+        home = _make_home_config()
+        assert home.seg_tariff is None  # pre-condition
+
+        result = _reconcile_seg_homes([home], scenario_seg_rate=6.0)
+        assert len(result) == 1
+        updated = result[0]
+        # seg_tariff is threaded
+        assert updated.seg_tariff is not None
+        assert isinstance(updated.seg_tariff, SEGTariff)
+        assert updated.seg_tariff.rate_pence_per_kwh == pytest.approx(6.0)
+        # other fields preserved
+        assert updated.pv_config == home.pv_config
+        assert updated.load_config == home.load_config
+        assert updated.location == home.location
+        assert updated.battery_config == home.battery_config
+        # input not mutated
+        assert home.seg_tariff is None
+
+    def test_home_with_existing_seg_and_none_scenario_rate_unchanged(self) -> None:
+        """(c) Home with seg_tariff=SEGTariff(4.0) + scenario_seg_rate=None → unchanged."""
+        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
+        from solar_challenge.seg import SEGTariff
+
+        tariff = SEGTariff(name="export", rate_pence_per_kwh=4.0)
+        home = dataclasses.replace(_make_home_config(), seg_tariff=tariff)
+        result = _reconcile_seg_homes([home], scenario_seg_rate=None)
+        assert result == [home]
+        assert result[0].seg_tariff is tariff
+
+    def test_consistent_rate_no_raise_home_unchanged(self) -> None:
+        """(d) Home seg=SEGTariff(6.0) + scenario_seg_rate=6.0 (CLI-style) → no raise, same home."""
+        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
+        from solar_challenge.seg import SEGTariff
+
+        tariff = SEGTariff(name="", rate_pence_per_kwh=6.0)
+        home = dataclasses.replace(_make_home_config(), seg_tariff=tariff)
+        # Must not raise; home is returned as-is (rates match)
+        result = _reconcile_seg_homes([home], scenario_seg_rate=6.0)
+        assert len(result) == 1
+        assert result[0] is home
+
+    def test_inconsistent_rate_raises_value_error(self) -> None:
+        """(e) Home seg=SEGTariff(4.0) + scenario_seg_rate=6.0 → raises ValueError naming both rates."""
+        from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
+        from solar_challenge.seg import SEGTariff
+
+        tariff = SEGTariff(name="", rate_pence_per_kwh=4.0)
+        home = dataclasses.replace(_make_home_config(), seg_tariff=tariff)
+        import re
+
+        with pytest.raises(ValueError, match=re.compile(r"inconsistent.*SEG", re.IGNORECASE)):
+            _reconcile_seg_homes([home], scenario_seg_rate=6.0)
