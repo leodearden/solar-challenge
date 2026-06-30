@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Single home simulation combining PV, battery, and load."""
 
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -330,21 +331,21 @@ def simulate_home(
         grid_charge_costs = [0.0 for _ in results_list]
 
     # Calculate export revenue.
-    # Priority: SEG tariff > import-rate fallback > zero.
-    # When seg_tariff is set, export is priced at the SEG rate (pence/kWh converted to £).
-    # When only a tariff_config is set (no SEG), fall back to the import rate so that
-    # existing non-SEG behaviour and out-of-scope integration tests are preserved.
+    # Grid export is valued at the export/SEG rate, never the import tariff rate.
+    # Without a seg_tariff there is no export revenue (zero is the economically correct value).
     if config.seg_tariff is not None:
         export_revenues = [
             calculate_seg_revenue(r.grid_export, config.seg_tariff)
             for r in results_list
         ]
-    elif config.tariff_config is not None:
-        export_revenues = [
-            r.grid_export * rate
-            for r, rate in zip(results_list, tariff_rates, strict=True)
-        ]
     else:
+        if config.tariff_config is not None:
+            warnings.warn(
+                "tariff_config is set but seg_tariff is None: export_revenue will be 0.0. "
+                "Configure HomeConfig.seg_tariff to value grid exports at the SEG/export rate.",
+                UserWarning,
+                stacklevel=2,
+            )
         export_revenues = [0.0 for _ in results_list]
 
     return SimulationResults(

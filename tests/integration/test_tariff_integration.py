@@ -77,7 +77,8 @@ class TestEconomy7TariffIntegration:
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-27")  # 7 days
 
-        results = simulate_home(economy7_config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(economy7_config, start, end)
 
         # All result fields populated
         assert isinstance(results, SimulationResults)
@@ -94,7 +95,8 @@ class TestEconomy7TariffIntegration:
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-21")  # 1 day
 
-        results = simulate_home(economy7_config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(economy7_config, start, end)
 
         # Economy 7 default: off-peak 00:30-07:30
         off_peak_times = results.tariff_rate.index[
@@ -121,7 +123,8 @@ class TestEconomy7TariffIntegration:
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-23")  # 3 days
 
-        results = simulate_home(economy7_config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(economy7_config, start, end)
 
         # Import costs should be non-negative
         assert (results.import_cost >= 0).all()
@@ -142,32 +145,27 @@ class TestEconomy7TariffIntegration:
         )
 
     def test_export_revenue_calculated(self, economy7_config):
-        """Export revenue is calculated with Economy 7 rates."""
+        """Without seg_tariff, export_revenue is zero (never priced at import rate)."""
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-23")  # 3 days
 
-        results = simulate_home(economy7_config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(economy7_config, start, end)
 
         # Export revenue should be non-negative
         assert (results.export_revenue >= 0).all()
 
-        # Total export revenue should be positive (exports expected in summer)
-        assert results.export_revenue.sum() > 0
-
-        # Revenue should match grid exports * tariff rates
-        expected_revenue = results.grid_export * results.tariff_rate / 60
-        pd.testing.assert_series_equal(
-            results.export_revenue,
-            expected_revenue,
-            check_names=False,
-        )
+        # Without a SEG tariff, export revenue must be zero at every timestep.
+        assert (results.export_revenue == 0).all()
+        assert calculate_summary(results).total_export_revenue_gbp == 0
 
     def test_summary_financial_totals(self, economy7_config):
         """Summary statistics include correct financial totals."""
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-27")  # 7 days
 
-        results = simulate_home(economy7_config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(economy7_config, start, end)
         summary = calculate_summary(results)
 
         # Financial totals should match sum of time series
@@ -192,9 +190,10 @@ class TestEconomy7TariffIntegration:
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-27")  # 7 days
 
-        # Simulate with both tariffs
-        economy7_results = simulate_home(economy7_config, start, end)
-        flat_results = simulate_home(flat_rate_config, start, end)
+        # Simulate with both tariffs (both have tariff_config but no seg_tariff → warns)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            economy7_results = simulate_home(economy7_config, start, end)
+            flat_results = simulate_home(flat_rate_config, start, end)
 
         # Calculate summaries
         economy7_summary = calculate_summary(economy7_results)
@@ -215,17 +214,17 @@ class TestEconomy7TariffIntegration:
         assert economy7_summary.total_import_cost_gbp > 0
         assert flat_summary.total_import_cost_gbp > 0
 
-        # Export revenue should be similar (same export amounts)
-        # But may differ due to different rates
-        assert economy7_summary.total_export_revenue_gbp > 0
-        assert flat_summary.total_export_revenue_gbp > 0
+        # Without SEG tariff, export revenue is zero for both configs.
+        assert economy7_summary.total_export_revenue_gbp == 0
+        assert flat_summary.total_export_revenue_gbp == 0
 
     def test_pv_only_with_economy7(self, pv_only_economy7_config):
         """PV-only system works with Economy 7 tariff."""
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-27")  # 7 days
 
-        results = simulate_home(pv_only_economy7_config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(pv_only_economy7_config, start, end)
 
         # Simulation completes successfully
         assert isinstance(results, SimulationResults)
@@ -250,7 +249,8 @@ class TestEconomy7TariffIntegration:
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-21")  # 1 day
 
-        results = simulate_home(economy7_config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(economy7_config, start, end)
         df = results.to_dataframe()
 
         # Tariff columns should be present
@@ -267,7 +267,8 @@ class TestEconomy7TariffIntegration:
         start = pd.Timestamp("2024-01-15")
         end = pd.Timestamp("2024-01-21")  # 7 days in winter
 
-        results = simulate_home(economy7_config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(economy7_config, start, end)
         summary = calculate_summary(results)
 
         # Winter should have lower generation, higher imports
@@ -286,16 +287,18 @@ class TestEconomy7TariffIntegration:
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-27")  # 7 days in summer
 
-        results = simulate_home(economy7_config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(economy7_config, start, end)
         summary = calculate_summary(results)
 
         # Summer should have high generation
         assert summary.total_generation_kwh > 50  # Good generation in June
 
-        # Export revenue should be significant
-        assert summary.total_export_revenue_gbp > 0
+        # Without SEG tariff, export revenue is zero (energy is still exported,
+        # but there is no rate configured to value it).
+        assert summary.total_export_revenue_gbp == 0
 
-        # Export ratio should be reasonable
+        # Export ratio should be reasonable (energy-based, unaffected by revenue fix)
         assert summary.export_ratio > 0.1
 
         # Net cost may be negative (earning money) in summer
@@ -350,7 +353,8 @@ class TestEconomy7TariffIntegration:
         start = pd.Timestamp("2024-06-21")
         end = pd.Timestamp("2024-06-21")  # 1 day
 
-        results = simulate_home(config, start, end)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(config, start, end)
 
         # Check custom off-peak times (01:00-08:00)
         off_peak_times = results.tariff_rate.index[
@@ -371,7 +375,8 @@ class TestEconomy7TariffIntegration:
         end = pd.Timestamp("2024-06-22")  # 2 days
 
         # validate_balance=True is default, should not raise
-        results = simulate_home(economy7_config, start, end, validate_balance=True)
+        with pytest.warns(UserWarning, match="seg_tariff"):
+            results = simulate_home(economy7_config, start, end, validate_balance=True)
         assert results is not None
 
         # All values should be non-negative
