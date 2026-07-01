@@ -154,7 +154,7 @@ conventions:
       flip-to-pending condition recorded on it.
     why: >
       `deferred` without a trigger is quarantine rot nobody polls. CURRENT STATE: PASS — the task
-      tree has ZERO deferred tasks (91 tasks: 84 done, 7 cancelled).
+      tree has ZERO deferred tasks (92 tasks: 84 done, 8 cancelled).
 
 subprojects:
   simulation-core:
