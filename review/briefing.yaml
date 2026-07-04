@@ -247,8 +247,8 @@ subprojects:
       - what: "Capacity-at-events grid-services income is MEMOIZED from the age-0 simulation and reused for all 25 projection years — it does not track battery SOH degradation over the asset life."
         why: "Documented decision, but a real fidelity limitation specifically for the capacity-at-events path (the flat model also doesn't degrade, but it isn't claiming to model real spare capacity). Surface it. tracking: null"
         tracking: null
-      - what: "Finance doc/naming hygiene: docs/cost-recovery-finance-model.md cites stale line numbers (acknowledged in-doc), finance.py's module docstring says '11 line items' (BillBreakdown has 10), and BillDistribution.per_home_net_bill_gbp is a deprecated-but-live name that actually holds total_outlay."
-        why: "Doc/naming drift, not by design — confusing to a maintainer or new consumer. Surface for cleanup. tracking: null"
+      - what: "BillDistribution.per_home_net_bill_gbp is a deprecated-but-live name that actually holds total_outlay (Task 88's F-NAME-1 explicitly left this out-of-scope; the other two sub-claims formerly bundled here — stale doc line numbers and finance.py's docstring count — were fixed by Task 88's F-DOC-4/F-DOC-5 and are dropped from this gap)."
+        why: "Doc/naming drift, not by design — confusing to a maintainer or new consumer expecting the name to match what it holds. Intentional back-compat decision to keep the name, but still worth surfacing. tracking: null"
         tracking: null
       - what: "solve_cost_recovery_rate's affine reconstruction can be a few pence off true breakeven under severe-loss scenarios (a negative-revenue year clamps the base node)."
         why: "Documented limitation in the function docstring; acceptable for the operating regime but a reviewer should know the solve is approximate at the edges. tracking: null"
@@ -315,15 +315,16 @@ subprojects:
 #   - Two TariffPeriod symbols: tariff.TariffPeriod (dataclass) vs dispatch.TariffPeriod
 #     (enum, re-exported as DispatchTariffPeriod). Easy to import the wrong one.
 #   - BillDistribution.per_home_net_bill_gbp holds TOTAL OUTLAY despite the name.
-#   - README still frames scope as "Version 0.1 … power-sharing planned for future
-#     phases" and documents a pip/venv/requirements.txt/init.sh install flow — both
-#     now MISDESCRIBE reality (everything's built; the project uses uv + pyproject +
-#     the [dev]/[web] extras). A newcomer reading README gets a wrong mental model.
-#   - docs/domain-library-consumption.md's worked example cites a tag
-#     `solar-challenge-v0.1.0` that does NOT exist (first real tag is v0.2.0;
-#     current is v0.4.0).
-#   - tests/unit/test_public_api_surface.py's docstring says "68 public names" but
-#     the frozen surface is 69 (stale comment).
-#   The README + consumption-doc + stale-comment items were user-confirmed as
-#   work-to-flag (2026-06-29), not by-design.
+#   (RESOLVED — no live gaps) The following three footguns were fixed by Task 88
+#   (commit d650077b1850a56129b1a3536c4a6811c329fbb6, merged 2026-06-30) and
+#   re-verified directly against the live files on 2026-07-04; /review should NOT
+#   re-flag them:
+#   - README now says "Version 0.4.0 is feature-complete" and lists power-sharing
+#     as a shipped feature; the install flow documented is pip-based (`pip install
+#     -e ".[dev]"`), matching current practice (init.sh only appears in the
+#     long_running/ dev-harness tree diagram, not the install instructions).
+#   - docs/domain-library-consumption.md's worked example now cites the current
+#     tag `solar-challenge-v0.4.0`; no reference to the nonexistent v0.1.0 tag remains.
+#   - tests/unit/test_public_api_surface.py's docstring now says "69 public names",
+#     matching the frozen surface.
 # ─────────────────────────────────────────────────────────────────────────────
