@@ -2,7 +2,7 @@
 # Package defaults live in dark-factory/orchestrator/defaults.yaml; this file
 # overrides only what is project-specific.
 
-project_root: "/home/leo/src/my-solar-challenge"
+project_root: "/home/leo/src/solar-challenge"
 
 # Orchestrator-level daily cost ceiling. The package default ($200,
 # defaults.yaml:330) is a pre-failover backstop that trips during normal

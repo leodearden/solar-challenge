@@ -38,7 +38,7 @@ Version 0.4.0 is feature-complete, providing:
 1. Clone the repository:
    ```bash
    git clone <repository-url>
-   cd my-solar-challenge
+   cd solar-challenge
    ```
 
 2. Install in editable mode with development dependencies:
@@ -78,7 +78,7 @@ pytest --cov=src/solar_challenge
 ## Project Structure
 
 ```
-my-solar-challenge/
+solar-challenge/
 ├── src/
 │   └── solar_challenge/     # Main package
 ├── tests/

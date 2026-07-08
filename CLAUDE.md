@@ -84,11 +84,11 @@ Typer-based with subcommands: `home run|quick`, `fleet run|sweep`, `config templ
 This project is a dark-factory orchestrator target (onboarded via `factory-init`).
 
 - **Canonical `project_id`: `my_solar_challenge`** — the directory name is
-  hyphenated (`my-solar-challenge`) but the canonical id uses underscores.
+  hyphenated (`solar-challenge`) but the canonical id uses underscores.
   Always use this exact id for fused-memory writes and task operations; the
   dashboard may display the hyphenated form.
 - Route **all** task operations through the **fused-memory MCP** with
-  `project_root: "/home/leo/src/my-solar-challenge"` — never edit task state
+  `project_root: "/home/leo/src/solar-challenge"` — never edit task state
   directly.
 - Write-tag memory operations with `project_id: "my_solar_challenge"` and a
   descriptive `agent_id`.

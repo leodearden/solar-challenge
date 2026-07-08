@@ -171,8 +171,8 @@
     "cargo_aliases": [],
     "shell_scripts": []
   },
-  "project_dir": "/home/leo/src/my-solar-challenge",
+  "project_dir": "/home/leo/src/solar-challenge",
   "created_at": "2026-02-19T10:59:26.744707",
   "project_hash": "24ce4416b1c1d1f6cb7b513804d070aa",
-  "inherited_from": "/home/leo/src/my-solar-challenge"
+  "inherited_from": "/home/leo/src/solar-challenge"
 }
