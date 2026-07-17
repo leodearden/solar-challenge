@@ -1,0 +1,53 @@
+# my_solar_challenge — dark-factory orchestrator configuration.
+# Package defaults live in dark-factory/orchestrator/defaults.yaml; this file
+# overrides only what is project-specific.
+
+project_root: "/home/leo/src/solar-challenge"
+
+# Orchestrator-level daily cost ceiling. The package default ($200,
+# defaults.yaml:330) is a pre-failover backstop that trips during normal
+# operation now that per-account Max caps are the real spend governor — spend
+# here is notional/imputed across flat-rate Max subscription accounts, not
+# metered API billing. Mirrors dark-factory's own config.yaml:51 (10000.0 =
+# effectively disabled). Without this, the scheduler self-pauses on the stale
+# default during architect-heavy days (the known false-positive pattern).
+orch_daily_cost_ceiling_usd: 10000.0
+
+# Shared fused-memory HTTP server (one server, all projects). Only project_id
+# is per-project; the URL is always 8002.
+fused_memory:
+  url: "http://127.0.0.1:8002"
+  project_id: "my_solar_challenge"
+  server_command: []
+
+# Escalation MCP — unique port per project; MUST match .mcp.json so interactive
+# sessions and the orchestrator share one escalation server.
+escalation:
+  queue_dir: "data/escalations"
+  port: 8106
+
+# Verification commands — run inside a fresh git worktree, so they must work
+# without anything that isn't committed. This project is editable-installed into
+# a local venv/ (gitignored), which a worktree won't have — so we use `uv run`,
+# which resolves pyproject deps into an ephemeral per-worktree .venv. Validated
+# during factory-init: `uv run --extra dev` builds the package + imports cleanly.
+#
+# Tests exclude the `slow` marker (real PVGIS network calls) and `e2e`
+# (playwright browser tests) — neither belongs in a per-task verify loop.
+# The `web` extra is required: web/* unit tests import flask at module level,
+# so without it pytest fails *collection* (ModuleNotFoundError) before the
+# marker filter applies. `--ignore=tests/e2e` skips the playwright suite at
+# collection time too (the `not e2e` marker only deselects post-collection,
+# which still trips the playwright import).
+test_command: "uv run --extra dev --extra web pytest -m 'not slow and not e2e' --ignore=tests/e2e"
+# No standalone linter configured; mypy strict (type_check_command) is the
+# static-analysis gate. Use a no-op rather than a command that always fails.
+# `--extra web` so web/* modules type-check against their real deps (flask).
+lint_command: "true"
+type_check_command: "uv run --extra dev --extra web mypy src/solar_challenge"
+
+git:
+  main_branch: "main"
+  branch_prefix: "task/"
+  remote: "origin"
+  worktree_dir: ".worktrees"
