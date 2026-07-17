@@ -50,11 +50,16 @@ def test_envrc_targets_canonical_config(project_root: Path) -> None:
     basename comparison rather than ``.endswith("orchestrator.yaml")`` because
     the canonical filename also ends with that literal substring — an
     endswith check could never fail on the legacy name.
+
+    The regex tolerates double-quoted, single-quoted, or unquoted values so a
+    stylistic change to the export line (e.g. dropping quotes) doesn't turn
+    this into a false-negative "could not find ORCH_CONFIG_PATH" failure
+    instead of tracking the actual invariant being guarded.
     """
     envrc_path = project_root / ".envrc"
     text = envrc_path.read_text(encoding="utf-8")
-    m = re.search(r'ORCH_CONFIG_PATH\s*=\s*"([^"]+)"', text)
-    assert m, 'could not find ORCH_CONFIG_PATH="..." in .envrc'
+    m = re.search(r'ORCH_CONFIG_PATH\s*=\s*["\']?([^"\'\s]+)', text)
+    assert m, 'could not find ORCH_CONFIG_PATH=... in .envrc'
     value = m.group(1)
     assert os.path.basename(value) == "dark-factory-orchestrator.yaml", (
         f".envrc ORCH_CONFIG_PATH={value!r} does not target the canonical "
