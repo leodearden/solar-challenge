@@ -248,7 +248,7 @@ convention**; the frozen-surface listing (mirrors `__all__`); and the consumptio
 
 - **All domain modules present + import-clean** (§6 — verified 2026-06-20). No domain logic is written
   here.
-- **`uv` available + both repos use `uv run` for verify** (sim `orchestrator.yaml`:
+- **`uv` available + both repos use `uv run` for verify** (sim `dark-factory-orchestrator.yaml`:
   `uv run --extra dev --extra web …`; platform `orchestrator.yaml`: `uv run --extra dev …`). Verified.
 - **`solar-challenge-platform` repo exists, dark-factory-onboarded, `dependencies = []`** awaiting this
   seam (verified: `pyproject.toml` comment "becomes a dependency here once it is pip-installable").

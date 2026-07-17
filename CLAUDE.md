@@ -92,7 +92,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   directly.
 - Write-tag memory operations with `project_id: "solar_challenge"` and a
   descriptive `agent_id`.
-- Config lives at the repo root: `orchestrator.yaml` (+ `.mcp.json`, `.envrc`).
+- Config lives at the repo root: `dark-factory-orchestrator.yaml` (+ `.mcp.json`, `.envrc`).
   Escalation MCP runs on port **8106**; fused-memory is shared on 8002.
 - Orchestrator verify uses `uv run --extra dev …` (worktree-safe; the local
   `venv/` is not present inside task worktrees).
