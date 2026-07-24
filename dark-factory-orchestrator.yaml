@@ -1,4 +1,4 @@
-# my_solar_challenge — dark-factory orchestrator configuration.
+# solar_challenge — dark-factory orchestrator configuration.
 # Package defaults live in dark-factory/orchestrator/defaults.yaml; this file
 # overrides only what is project-specific.
 
@@ -17,7 +17,7 @@ orch_daily_cost_ceiling_usd: 10000.0
 # is per-project; the URL is always 8002.
 fused_memory:
   url: "http://127.0.0.1:8002"
-  project_id: "my_solar_challenge"
+  project_id: "solar_challenge"
   server_command: []
 
 # Escalation MCP — unique port per project; MUST match .mcp.json so interactive
