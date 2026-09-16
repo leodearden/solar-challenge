@@ -51,3 +51,15 @@ git:
   branch_prefix: "task/"
   remote: "origin"
   worktree_dir: ".worktrees"
+
+# OS filesystem sandbox (Landlock) — dark-factory-fleet OS filesystem sandbox
+# rollout, fleet-remainder wave (PRD os-sandbox-worktree-containment in the
+# dark-factory repo), gated on the reify wave. Kernel-enforced whole-
+# filesystem read-only except each task's own writable scope; backend pinned
+# to landlock (the proven fleet backend; bwrap is effectively dead
+# fleet-wide). `sandbox.*` is not in the config hot-reload allowlist, so this
+# edit is inert until the next orchestrator restart — the scheduled fleet
+# redeploy applies it, so no separate deploy task is needed for this project.
+sandbox:
+  enabled: true
+  backend: landlock
