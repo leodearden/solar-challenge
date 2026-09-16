@@ -3,9 +3,8 @@
 
 These tests encode the invariant that in-repo references to the dark-factory
 orchestrator config point at the canonical ./dark-factory-orchestrator.yaml
-file rather than the legacy top-level ./orchestrator.yaml path, and that any
-surviving ./orchestrator.yaml is a valid symlink resolving to the canonical
-file (a transitional shim that may or may not still be present).
+file rather than the legacy top-level ./orchestrator.yaml path, and that the
+legacy path itself no longer exists.
 """
 
 import os
@@ -67,28 +66,13 @@ def test_envrc_targets_canonical_config(project_root: Path) -> None:
     )
 
 
-def test_legacy_symlink_valid_if_present(project_root: Path) -> None:
-    """Any surviving ./orchestrator.yaml must be a valid symlink to the canonical file.
+def test_legacy_top_level_config_absent(project_root: Path) -> None:
+    """The legacy top-level ./orchestrator.yaml must not exist in any form.
 
-    The legacy top-level path may be deleted once no in-repo references to it
-    remain, or retained as a transitional shim if a running orchestrator
-    process still holds the legacy path in its own --config invocation. This
-    invariant holds in either case: if the path is present it must be a
-    symlink resolving to dark-factory-orchestrator.yaml, and if it is absent
-    the check is vacuously satisfied.
+    Uses ``lexists`` so a dangling symlink also counts as present.
     """
     legacy_path = project_root / "orchestrator.yaml"
-    if not os.path.lexists(legacy_path):
-        return
-    assert legacy_path.is_symlink(), (
-        f"{legacy_path} exists but is not a symlink (expected a transitional "
-        "symlink to dark-factory-orchestrator.yaml, or no file at all)"
-    )
-    target = os.readlink(legacy_path)
-    assert os.path.basename(target) == "dark-factory-orchestrator.yaml", (
-        f"{legacy_path} symlink target {target!r} does not point at "
+    assert not os.path.lexists(legacy_path), (
+        f"{legacy_path} exists; the orchestrator config lives only at "
         "dark-factory-orchestrator.yaml"
-    )
-    assert legacy_path.resolve().name == "dark-factory-orchestrator.yaml", (
-        f"{legacy_path} does not resolve to dark-factory-orchestrator.yaml"
     )
