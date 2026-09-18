@@ -166,12 +166,12 @@ conventions:
       Deferred-task invariant: no task may sit in `deferred` status without a concrete, actionable
       flip-to-pending condition recorded on it.
     why: >
-      `deferred` without a trigger is quarantine rot nobody polls. CURRENT STATE: PASS — live
-      get_statuses confirms ZERO tasks in `deferred` status. NO TALLY IS STORED HERE (see the
-      POSTURE header above for why) — this claim itself is a point-in-time snapshot that has
-      drifted stale across every prior fix (tasks 91, 92 — a cancelled duplicate — 96, 107) even
-      while the ZERO-deferred claim kept holding; re-verify via get_statuses(project_root=...)
-      before relying on this, rather than trusting a stored count.
+      `deferred` without a trigger is quarantine rot nobody polls. This briefing deliberately
+      stores no verdict on the current tree — earlier revisions asserted the check's outcome
+      directly here (see the POSTURE header above for the drift history) and that assertion went
+      stale before its own fix branch could even merge, across every prior recurrence. Derive the
+      current state live via get_statuses(project_root=...) and confirm every task currently
+      sitting in `deferred` status carries a concrete, actionable flip-to-pending condition.
 
 subprojects:
   simulation-core:
