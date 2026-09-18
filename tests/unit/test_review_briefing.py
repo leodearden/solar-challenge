@@ -93,6 +93,22 @@ def _posture_header_lines(text: str) -> list[str]:
     return header
 
 
+def _comment_lines_immediately_above(lines: list[str], index: int) -> list[str]:
+    """Return the contiguous run of comment lines directly above ``lines[index]``.
+
+    Walks upward while a line's stripped content starts with ``#``, stopping
+    at the first blank or non-comment line. Used to find a `# human-edited`
+    marker that may span more than one comment line immediately preceding a
+    YAML entry.
+    """
+    above: list[str] = []
+    i = index - 1
+    while i >= 0 and lines[i].strip().startswith("#"):
+        above.append(lines[i])
+        i -= 1
+    return above
+
+
 def _deferred_invariant_rule_line_index(lines: list[str]) -> int:
     """Return the 0-based index of the `- rule: >` line for the Deferred-task invariant.
 
@@ -221,13 +237,13 @@ def test_drift_proof_blocks_are_marked_human_edited(project_root: Path) -> None:
     )
 
     rule_idx = _deferred_invariant_rule_line_index(lines)
-    line_above = lines[rule_idx - 1] if rule_idx > 0 else ""
-    assert "human-edited" in line_above, (
+    preceding_comments = _comment_lines_immediately_above(lines, rule_idx)
+    assert any("human-edited" in line for line in preceding_comments), (
         "Deferred-task-invariant convention is not preceded by a "
         "`# human-edited` comment line immediately above its `- rule: >` "
         "line — a /review-briefing regeneration could overwrite its "
         "verdict-free phrasing with a fresh snapshot. The marker must sit "
         "on its own comment line, not inside the `why: >` folded scalar "
-        f"(that would be string content, not a comment). Line immediately "
-        f"above `- rule: >` was: {line_above!r}"
+        "(that would be string content, not a comment). Comment lines "
+        f"immediately above `- rule: >` were: {preceding_comments!r}"
     )
