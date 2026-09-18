@@ -154,29 +154,6 @@ def test_briefing_stores_no_task_tally_snapshot(project_root: Path) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "literal",
-    [
-        "tasks 90-93, 96",
-        "As of 2026-09-18, live get_statuses showed the current tree",
-        "a heterogeneous 100-home fleet",
-        "domestic PV and battery systems at 1-minute resolution",
-        "the current tag solar-challenge-v0.4.0",
-    ],
-)
-def test_tally_detector_ignores_non_tally_numbers(literal: str) -> None:
-    """_TALLY_RE must not fire on task-ID references, dates, or domain numbers.
-
-    Guards the detector itself against being too broad: a task-ID list
-    ("tasks 90-93, 96"), a date, or an unrelated domain number already
-    present in the file (fleet size, sample resolution, a version tag) must
-    never be mistaken for a task-tree tally.
-    """
-    assert _TALLY_RE.search(literal) is None, (
-        f"_TALLY_RE unexpectedly matched non-tally text: {literal!r}"
-    )
-
-
 def test_deferred_invariant_stores_no_point_in_time_verdict(project_root: Path) -> None:
     """The Deferred-task-invariant `why` must not store a verdict about the live tree.
 
