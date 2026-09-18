@@ -83,6 +83,37 @@ def _find_deferred_invariant_convention(data: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _posture_header_lines(text: str) -> list[str]:
+    """Return the leading run of `#`-prefixed lines (the POSTURE header block)."""
+    header: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("#"):
+            break
+        header.append(line)
+    return header
+
+
+def _deferred_invariant_rule_line_index(lines: list[str]) -> int:
+    """Return the 0-based index of the `- rule: >` line for the Deferred-task invariant.
+
+    The invariant's name lives in the folded `rule` scalar's first content
+    line, one line below its `- rule: >` header — so this locates the name,
+    then walks back to that header line.
+    """
+    for i, line in enumerate(lines):
+        if "Deferred-task invariant" in line:
+            for j in range(i - 1, -1, -1):
+                if re.match(r"\s*-\s*rule:\s*>", lines[j]):
+                    return j
+            pytest.fail(
+                "found 'Deferred-task invariant' text but could not locate "
+                "its preceding `- rule: >` line"
+            )
+    pytest.fail(
+        "no line containing 'Deferred-task invariant' found in review/briefing.yaml"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -163,4 +194,40 @@ def test_deferred_invariant_stores_no_point_in_time_verdict(project_root: Path) 
     assert "get_statuses" in why, (
         "Deferred-task-invariant `why` must name get_statuses as the live "
         f"derivation source for anyone checking this invariant. `why` was:\n{why}"
+    )
+
+
+def test_drift_proof_blocks_are_marked_human_edited(project_root: Path) -> None:
+    """Both drift-proof blocks must carry a `# human-edited` marker comment.
+
+    Per briefing-schema.md's "Human edit preservation" section, a future
+    `/review-briefing` regeneration preserves any line or block carrying a
+    `# human-edited` comment — and would otherwise be free to overwrite this
+    fix's drift-proof phrasing with a fresh task-tally snapshot, reopening
+    the same recurrence through a second path. The marker must be a real
+    YAML comment line, not text folded into a `why: >` scalar's string
+    value, so both checks below inspect specific raw text lines rather than
+    parsed YAML values.
+    """
+    text = _read_briefing(project_root)
+    lines = text.splitlines()
+
+    header = _posture_header_lines(text)
+    assert any("human-edited" in line for line in header), (
+        "POSTURE header comment block carries no `# human-edited` marker — "
+        "a /review-briefing regeneration could overwrite its drift-proof "
+        "phrasing with a fresh task-tally snapshot (briefing-schema.md "
+        "'Human edit preservation')."
+    )
+
+    rule_idx = _deferred_invariant_rule_line_index(lines)
+    line_above = lines[rule_idx - 1] if rule_idx > 0 else ""
+    assert "human-edited" in line_above, (
+        "Deferred-task-invariant convention is not preceded by a "
+        "`# human-edited` comment line immediately above its `- rule: >` "
+        "line — a /review-briefing regeneration could overwrite its "
+        "verdict-free phrasing with a fresh snapshot. The marker must sit "
+        "on its own comment line, not inside the `why: >` folded scalar "
+        f"(that would be string content, not a comment). Line immediately "
+        f"above `- rule: >` was: {line_above!r}"
     )
