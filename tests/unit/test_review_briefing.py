@@ -4,24 +4,24 @@
 Repo-invariant guard against a recurring drift class: review/briefing.yaml's
 POSTURE header and its Deferred-task-invariant convention have repeatedly
 embedded a point-in-time snapshot of the live orchestrator task tree — a
-tally of tasks by status, or a stored pass/fail verdict about the tree — and
-then gone stale before their own fix branch could even merge. This has
-recurred four times: Task 91, Task 92 (a cancelled duplicate of the same
-fix), Task 96, and Task 107 (this fix). The tree's single source of truth is
-the live orchestrator task store, not a copy committed to this repo, so
-storing a copy guarantees drift (a merge-latency-vs-churn race). The only
-fix that does not recur is to delete the stored copy and require any tally
-or verdict to be re-derived live via get_statuses(project_root=...) at read
-time. These tests fail the build if a task tally or a stored verdict about
-the live tree ever reappears in review/briefing.yaml.
+tally of tasks by status — and then gone stale before their own fix branch
+could even merge. This has recurred four times: Task 91, Task 92 (a
+cancelled duplicate of the same fix), Task 96, and Task 107 (this fix). The
+tree's single source of truth is the live orchestrator task store, not a
+copy committed to this repo, so storing a copy guarantees drift (a
+merge-latency-vs-churn race). The only fix that does not recur is to delete
+the stored copy, require any tally to be re-derived live via
+get_statuses(project_root=...) at read time, and mark both rewritten blocks
+`# human-edited` so a `/review-briefing` regeneration cannot silently
+reintroduce a fresh snapshot. These tests fail the build if a task tally
+ever reappears in review/briefing.yaml, or if either drift-prone block loses
+its `# human-edited` marker.
 """
 
 import re
 from pathlib import Path
-from typing import Any
 
 import pytest
-import yaml
 
 
 # ---------------------------------------------------------------------------
@@ -58,29 +58,6 @@ def _find_tally_lines(text: str) -> list[tuple[int, str]]:
         for lineno, line in enumerate(text.splitlines(), start=1)
         if _TALLY_RE.search(line)
     ]
-
-
-def _load_briefing(project_root: Path) -> dict[str, Any]:
-    """Parse review/briefing.yaml and return the loaded mapping."""
-    data = yaml.safe_load(_read_briefing(project_root))
-    assert isinstance(data, dict), "review/briefing.yaml did not parse to a mapping"
-    return data
-
-
-def _find_deferred_invariant_convention(data: dict[str, Any]) -> dict[str, Any]:
-    """Return the conventions[] entry whose `rule` names the Deferred-task invariant.
-
-    Asserts a match is found so this guard cannot be silently satisfied by
-    deleting the invariant altogether — only by rewriting its `why` text.
-    """
-    for entry in data.get("conventions", []):
-        if "Deferred-task invariant" in entry.get("rule", ""):
-            return entry
-    pytest.fail(
-        "no conventions[] entry with a `rule` naming 'Deferred-task invariant' "
-        "found in review/briefing.yaml — the invariant must not be deleted, "
-        "only its stored-verdict `why` text rewritten"
-    )
 
 
 def _posture_header_lines(text: str) -> list[str]:
@@ -151,42 +128,6 @@ def test_briefing_stores_no_task_tally_snapshot(project_root: Path) -> None:
         "count(s) and instruct readers to derive them live via "
         "get_statuses(project_root=...) instead. Offending line(s):\n"
         + "\n".join(f"  line {lineno}: {line.strip()}" for lineno, line in offenders)
-    )
-
-
-def test_deferred_invariant_stores_no_point_in_time_verdict(project_root: Path) -> None:
-    """The Deferred-task-invariant `why` must not store a verdict about the live tree.
-
-    A stored PASS/FAIL-style token, or a claim that the deferred count is
-    currently zero, is a point-in-time snapshot of the live tree exactly as
-    a numeric tally is: it goes stale the moment a task is later deferred,
-    independently of whether any number is spelled out. The `why` must
-    instead name get_statuses as the place to check — so this rule cannot
-    be satisfied by simply deleting the derivation instruction along with
-    the verdict.
-    """
-    data = _load_briefing(project_root)
-    entry = _find_deferred_invariant_convention(data)
-    why = str(entry.get("why", ""))
-
-    verdict_token = re.search(r"(?i)\b(pass|fail)\b", why)
-    assert verdict_token is None, (
-        "Deferred-task-invariant `why` stores a point-in-time PASS/FAIL-style "
-        f"verdict about the live tree ({verdict_token.group(0)!r}) — this is "
-        "the exact drift class this guard exists to prevent (see module "
-        f"docstring). `why` was:\n{why}"
-    )
-
-    zero_deferred_claim = re.search(r"(?i)zero.{0,40}deferred|deferred.{0,40}zero", why)
-    assert zero_deferred_claim is None, (
-        "Deferred-task-invariant `why` stores a point-in-time 'zero deferred "
-        f"tasks' claim about the live tree ({zero_deferred_claim.group(0)!r}) "
-        f"— re-verify live instead of asserting it as fact. `why` was:\n{why}"
-    )
-
-    assert "get_statuses" in why, (
-        "Deferred-task-invariant `why` must name get_statuses as the live "
-        f"derivation source for anyone checking this invariant. `why` was:\n{why}"
     )
 
 

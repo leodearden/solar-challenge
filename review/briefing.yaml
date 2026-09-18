@@ -165,8 +165,9 @@ conventions:
       before relying on this, and any newly-introduced marker must be tracked by a
       non-terminal task.
 
-  # human-edited — the why below deliberately stores no verdict on the live tree (see
-  # tests/unit/test_review_briefing.py for the guarded invariant).
+  # human-edited — the why below deliberately stores no verdict on the live
+  # tree; see the POSTURE header above for the drift history this avoids
+  # repeating.
   - rule: >
       Deferred-task invariant: no task may sit in `deferred` status without a concrete, actionable
       flip-to-pending condition recorded on it.
