@@ -28,6 +28,8 @@ def _make_bill_breakdown() -> "BillBreakdown":  # type: ignore[name-defined]
         own_use_payment_gbp=50.0,
         vat_gbp=17.5,
         total_outlay_gbp=367.5,
+        own_use_vat_gbp=2.5,
+        cbs_amount_due_gbp=52.5,
         self_consumption_saving_gbp=30.0,
         baseline_bill_gbp=500.0,
         saving_vs_baseline_gbp=132.5,

@@ -4,7 +4,7 @@
 projection (ζ surface).
 
 Provides:
-  - ``BillBreakdown`` — frozen dataclass with 10 financial line items.
+  - ``BillBreakdown`` — frozen dataclass of per-householder financial line items.
   - ``BillDistribution`` — frozen dataclass with fleet-level bill statistics.
   - ``householder_bill`` — pure function mapping simulation outputs to a bill.
   - ``bill_distribution`` — aggregates per-home bills into a BillDistribution.
@@ -181,7 +181,7 @@ class FinanceConfig:
 
 
 # ---------------------------------------------------------------------------
-# BillBreakdown — 11 required fields per §3.1
+# BillBreakdown — per-householder line items (§3.1)
 # ---------------------------------------------------------------------------
 
 
@@ -199,6 +199,8 @@ class BillBreakdown:
                                              + own_use_payment_gbp)
       total_outlay_gbp         = (import_cost_gbp + standing_charge_gbp
                                   + own_use_payment_gbp) × (1 + vat_rate)
+      own_use_vat_gbp          = vat_rate × own_use_payment_gbp
+      cbs_amount_due_gbp       = own_use_payment_gbp + own_use_vat_gbp
       self_consumption_saving_gbp = self_consumed_kwh × (retail − own_use_rate)
                                     × (1 + vat_rate) / 100
       saving_vs_baseline_gbp   = baseline_bill_gbp − total_outlay_gbp
@@ -229,6 +231,18 @@ class BillBreakdown:
     """Total annual householder outlay (headline): (import + standing + own_use) × (1+vat) (£).
 
     Replaces net_annual_bill_gbp from the old W2 model.  No SEG deduction.
+    """
+
+    own_use_vat_gbp: float
+    """VAT on the CBS own-use payment: vat_rate × own_use_payment_gbp (£)."""
+
+    cbs_amount_due_gbp: float
+    """What the household pays the CBS: own_use_payment_gbp + own_use_vat_gbp (£).
+
+    Import and standing charge are paid to the retailer and are NOT part of
+    this figure.  Defined as the float SUM of the two fields above (never
+    own_use_payment × (1 + vat_rate)) so a consumer summing the line floats
+    reproduces this total exactly.
     """
 
     self_consumption_saving_gbp: float
@@ -611,6 +625,8 @@ def bill(
       own_use_payment_gbp   = own_use_rate × self_consumption_kwh / 100
       vat_gbp               = vat_rate × (import_cost + standing + own_use_payment)
       total_outlay_gbp      = (import_cost + standing + own_use_payment) × (1 + vat_rate)
+      own_use_vat_gbp       = vat_rate × own_use_payment
+      cbs_amount_due_gbp    = own_use_payment + own_use_vat_gbp
       baseline_bill_gbp     = (baseline_import_cost + standing) × (1 + vat_rate)
       eff_rate              = baseline_import_cost / demand_kwh × 100  (fallback to retail when demand==0)
       self_consumption_saving_gbp = sc × (eff_rate − own_use_rate) × (1 + vat_rate) / 100
@@ -655,6 +671,10 @@ def bill(
         import_cost_gbp + standing_charge_gbp + own_use_payment_gbp
     ) * (1.0 + vat_rate)
 
+    # --- CBS-collectable slice (own-use payment plus its VAT) ---
+    own_use_vat_gbp = vat_rate * own_use_payment_gbp
+    cbs_amount_due_gbp = own_use_payment_gbp + own_use_vat_gbp
+
     # --- Baseline bill (no solar, all demand at baseline rate) ---
     baseline_bill_gbp = (baseline_import_cost_gbp + standing_charge_gbp) * (1.0 + vat_rate)
 
@@ -688,6 +708,8 @@ def bill(
         own_use_payment_gbp=float(own_use_payment_gbp),
         vat_gbp=float(vat_gbp),
         total_outlay_gbp=float(total_outlay_gbp),
+        own_use_vat_gbp=float(own_use_vat_gbp),
+        cbs_amount_due_gbp=float(cbs_amount_due_gbp),
         self_consumption_saving_gbp=float(self_consumption_saving_gbp),
         baseline_bill_gbp=float(baseline_bill_gbp),
         saving_vs_baseline_gbp=float(saving_vs_baseline_gbp),
