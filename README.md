@@ -11,7 +11,7 @@ A Python-based energy flow simulator for the Solar Challenge community energy pr
 
 ## Current Phase Scope
 
-Version 0.5.0 is feature-complete, providing:
+The current release is feature-complete, providing:
 - Self-consumption modelling for individual homes
 - Smart Export Guarantee (SEG) export calculation
 - Fleet-level aggregation for 100 homes
