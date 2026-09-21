@@ -21,15 +21,17 @@ def test_version_format():
 
 
 def test_version_is_release_target():
-    """Package version must be 0.4.0 (minor bump: basis-C cost-recovery + arbitrage fix).
+    """Package version must be 0.5.0 (additive minor bump: CBS amount due).
 
     0.3.0 was the additive minor bump for bill() export.
-    0.4.0 is the basis-C release: own_use = demand − import across the money path
-    (_simulate_age fleet_sc and bill_distribution annual_sc both use _cbs_own_use_kwh),
-    fixing silent CBS under-recovery on TOU-arbitrage / grid-charging homes. Platform
-    P7 task α2 re-pins to this version.
+    0.4.0 was the basis-C cost-recovery + arbitrage-fix release.
+    0.5.0 adds BillBreakdown.own_use_vat_gbp and cbs_amount_due_gbp, the
+    CBS-collectable slice of the householder's outlay (own-use payment plus VAT
+    on it, excluding retailer-side import and standing charge), so the CBS can
+    invoice own-use only. Platform PRD cbs-invoice-own-use-only task λ2 re-pins
+    to this version.
     """
-    assert solar_challenge.__version__ == "0.4.0"
+    assert solar_challenge.__version__ == "0.5.0"
 
 
 def _pyproject_project_version(text: str) -> str:
