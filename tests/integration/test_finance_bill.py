@@ -1384,6 +1384,111 @@ class TestBillCore:
         assert b_sc_only.self_consumption_saving_gbp == pytest.approx(expected_sc_saving)
 
 
+# ---------------------------------------------------------------------------
+# TestCbsAmountDue — CBS-collectable slice (own-use VAT + amount due)
+# ---------------------------------------------------------------------------
+
+
+class TestCbsAmountDue:
+    """Fast (no-network) tests for own_use_vat_gbp and cbs_amount_due_gbp.
+
+    These two fields carve out the slice of the householder's outlay that the
+    CBS actually invoices, leaving import cost and standing charge (both owed
+    to the retailer) out of it.
+    """
+
+    @staticmethod
+    def _u1_bill() -> "tuple[BillBreakdown, FinanceConfig]":  # type: ignore[name-defined]
+        """The PRD U1 scenario: 12 p/kWh own-use, 558 kWh self-consumed, 5% VAT."""
+        from solar_challenge.finance import bill
+
+        finance = _make_finance(
+            own_use_rate_pence_per_kwh=12.0,
+            vat_rate=0.05,
+            standing_charge_pence_per_day=60.0,
+            retail_baseline_rate_pence_per_kwh=23.0,
+        )
+        b = bill(
+            period_days=365,
+            generation_kwh=1000.0,
+            demand_kwh=1200.0,
+            self_consumption_kwh=558.0,
+            import_kwh=642.0,
+            import_cost_gbp=147.66,
+            baseline_import_cost_gbp=276.0,
+            finance=finance,
+        )
+        return b, finance
+
+    def test_u1_bill_own_use_vat_and_amount_due(self) -> None:
+        """PRD U1 signal: own-use £66.96, VAT £3.348, CBS amount due £70.308.
+
+        The first two literals are bit-exact in IEEE-754 (12.0 × 558.0 / 100.0
+        is exactly 66.96, and 0.05 × 66.96 is exactly 3.348), so they are
+        asserted with bare ==.  The third is not: the exact float sum is
+        70.30799999999999, ~7e-15 below the literal 70.308, so only the decimal
+        *rendering* is approximate — the value itself is exact by construction
+        (see test_cbs_amount_due_is_exact_float_sum).
+        """
+        b, _finance = self._u1_bill()
+
+        assert b.own_use_payment_gbp == 66.96
+        assert b.own_use_vat_gbp == 3.348
+        assert b.cbs_amount_due_gbp == pytest.approx(70.308)
+
+    def test_cbs_amount_due_is_exact_float_sum(self) -> None:
+        """cbs_amount_due_gbp must be the float SUM of its two line items (E3).
+
+        The platform's R2 float→Decimal seam
+        (billing/from_statement.py::statement_floats_from, ε=1e-9 GBP per
+        segment) reconciles by summing the per-line floats against the stated
+        total.  So the sum must be the *definition* of the total, not a
+        re-derivation such as own_use_payment × (1 + vat_rate) — hence bare ==
+        rather than approx here.
+        """
+        b, finance = self._u1_bill()
+
+        assert b.cbs_amount_due_gbp == b.own_use_payment_gbp + b.own_use_vat_gbp
+        assert b.own_use_vat_gbp == finance.vat_rate * b.own_use_payment_gbp
+
+    def test_cbs_amount_due_excludes_import_and_standing(self) -> None:
+        """Retailer-side charges stay out of what the CBS invoices (identity B21).
+
+        On a bill with a non-zero import cost (£147.66) and standing charge
+        (£219.00), the CBS amount due is strictly less than the total outlay by
+        exactly those two charges plus their VAT.
+        """
+        b, finance = self._u1_bill()
+
+        assert b.import_cost_gbp > 0.0
+        assert b.standing_charge_gbp > 0.0
+        assert b.cbs_amount_due_gbp < b.total_outlay_gbp
+        assert b.cbs_amount_due_gbp == pytest.approx(
+            b.total_outlay_gbp
+            - (b.import_cost_gbp + b.standing_charge_gbp) * (1.0 + finance.vat_rate)
+        )
+
+    def test_householder_bill_carries_cbs_fields(self) -> None:
+        """The annual wrapper inherits both fields through delegation to bill().
+
+        householder_bill() computes no bill arithmetic of its own, so the
+        identities must hold exactly on its output too — no re-derivation.
+        """
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary(simulation_days=365)
+        finance = _make_finance()
+        b = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=summary.simulation_days,
+        )
+
+        assert b.own_use_vat_gbp == finance.vat_rate * b.own_use_payment_gbp
+        assert b.cbs_amount_due_gbp == b.own_use_payment_gbp + b.own_use_vat_gbp
+
+
 @pytest.mark.slow
 class TestFinanceCLIEndToEnd:
     """Slow end-to-end CLI test using real PVGIS (weather cache must be warm)."""
