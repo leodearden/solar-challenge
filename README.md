@@ -11,11 +11,12 @@ A Python-based energy flow simulator for the Solar Challenge community energy pr
 
 ## Current Phase Scope
 
-Version 0.4.0 is feature-complete, providing:
+Version 0.5.0 is feature-complete, providing:
 - Self-consumption modelling for individual homes
 - Smart Export Guarantee (SEG) export calculation
 - Fleet-level aggregation for 100 homes
-- Community power-sharing and CBS cost-recovery billing
+- Community power-sharing and CBS cost-recovery billing, including the
+  CBS amount-due fields (`BillBreakdown.own_use_vat_gbp`, `cbs_amount_due_gbp`)
 - TOU arbitrage / grid-charging dispatch
 - Multi-year financial projection (25-yr PCHIP curve)
 

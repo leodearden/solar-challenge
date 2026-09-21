@@ -340,12 +340,14 @@ subprojects:
 #   (commit d650077b1850a56129b1a3536c4a6811c329fbb6, merged 2026-06-30) and
 #   re-verified directly against the live files on 2026-07-04; /review should NOT
 #   re-flag them:
-#   - README now says "Version 0.4.0 is feature-complete" and lists power-sharing
-#     as a shipped feature; the install flow documented is pip-based (`pip install
-#     -e ".[dev]"`), matching current practice (init.sh only appears in the
-#     long_running/ dev-harness tree diagram, not the install instructions).
+#   - README now says "Version 0.5.0 is feature-complete" and lists power-sharing
+#     as a shipped feature, with the CBS amount-due fields (own_use_vat_gbp,
+#     cbs_amount_due_gbp) called out too; the install flow documented is
+#     pip-based (`pip install -e ".[dev]"`), matching current practice (init.sh
+#     only appears in the long_running/ dev-harness tree diagram, not the
+#     install instructions).
 #   - docs/domain-library-consumption.md's worked example now cites the current
-#     tag `solar-challenge-v0.4.0`; no reference to the nonexistent v0.1.0 tag remains.
+#     tag `solar-challenge-v0.5.0`; no reference to the nonexistent v0.1.0 tag remains.
 #   - tests/unit/test_public_api_surface.py's docstring now says "69 public names",
 #     matching the frozen surface.
 # ─────────────────────────────────────────────────────────────────────────────
