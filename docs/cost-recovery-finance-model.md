@@ -4,7 +4,7 @@
 **Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/output.py`
 **Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate)
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
-**Version**: 0.4.0 (basis-C cost-recovery release; platform α2 re-pins to this version)
+**Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
 
 ---
 
@@ -114,6 +114,11 @@ total_outlay_gbp         = (import_cost_gbp
                             + standing_charge_gbp
                             + own_use_payment_gbp) × (1 + vat_rate)
 
+own_use_vat_gbp          = vat_rate × own_use_payment_gbp
+
+cbs_amount_due_gbp       = own_use_payment_gbp + own_use_vat_gbp
+                           (float sum — not own_use_payment × (1 + vat_rate))
+
 baseline_bill_gbp        = (demand_kwh × retail_rate / 100
                             + standing_charge_pence_per_day × 365 / 100) × (1 + vat_rate)
 
@@ -124,6 +129,11 @@ saving_pct               = 100 × saving_vs_baseline_gbp / baseline_bill_gbp
 self_consumption_saving_gbp = own_use_kwh × (retail_rate − own_use_rate)
                               × (1 + vat_rate) / 100
 ```
+
+The CBS invoices `cbs_amount_due_gbp` — the own-use payment plus VAT on it, and
+nothing else — while `total_outlay_gbp` remains the household's whole-picture
+annual outlay: import cost and standing charge are paid to the retailer and
+appear on the CBS statement as context only (Leo's ruling, 2026-09-21).
 
 **H3 board identity** (holds when import is priced at retail, import_kwh = demand − own_use_kwh):
 
@@ -140,6 +150,8 @@ import_kwh          = 1,400 kWh/home/yr
 import_cost_gbp     = 1,400 × 23 / 100  = £322.00/yr (retail fallback; no tariff config)
 standing_charge_gbp = 60 × 365 / 100    = £219.00/yr
 own_use_payment_gbp = 12.22 × 2,000 / 100 = £244.40/yr  (at solved rate; basis C = 2,000 here)
+own_use_vat_gbp     = 0.05 × 244.40     = £12.22/yr
+cbs_amount_due_gbp  = 244.40 + 12.22    = £256.62/yr  (invoiced by the CBS)
 vat_gbp             = 0.05 × (322 + 219 + 244.40) = £39.27/yr
 total_outlay_gbp    = (322 + 219 + 244.40) × 1.05 ≈ £824.67/yr
 baseline_bill_gbp   = ((2000+1400) × 23/100 + 219) × 1.05 ≈ £1,051.05/yr
