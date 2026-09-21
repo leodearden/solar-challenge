@@ -11,28 +11,12 @@ from __future__ import annotations
 
 import pytest
 
+from tests._factories import make_bill_breakdown, make_bill_distribution
+
 
 # ---------------------------------------------------------------------------
 # §A — Helper factories (copied/adapted from test_cost_recovery_solve.py)
 # ---------------------------------------------------------------------------
-
-
-def _make_bill_breakdown(total_outlay: float = 367.5) -> "BillBreakdown":  # type: ignore[name-defined]
-    """Build a minimal BillBreakdown for fixture use."""
-    from solar_challenge.finance import BillBreakdown
-
-    return BillBreakdown(
-        standing_charge_gbp=100.0,
-        import_cost_gbp=200.0,
-        own_use_payment_gbp=50.0,
-        vat_gbp=17.5,
-        total_outlay_gbp=total_outlay,
-        self_consumption_saving_gbp=30.0,
-        baseline_bill_gbp=500.0,
-        saving_vs_baseline_gbp=132.5,
-        saving_pct=26.5,
-        self_consumption_fraction=0.35,
-    )
 
 
 def _make_bill_distribution(
@@ -41,12 +25,9 @@ def _make_bill_distribution(
     median_gbp: float = 367.5,
     max_gbp: float = 420.0,
 ) -> "BillDistribution":  # type: ignore[name-defined]
-    """Build a minimal BillDistribution for fixture use."""
-    from solar_challenge.finance import BillDistribution
-
-    rep = _make_bill_breakdown(total_outlay=mean_gbp)
-    return BillDistribution(
-        representative=rep,
+    """Build a minimal BillDistribution whose representative sits at *mean_gbp*."""
+    return make_bill_distribution(
+        representative=make_bill_breakdown(total_outlay_gbp=mean_gbp),
         per_home_net_bill_gbp=(min_gbp, mean_gbp, max_gbp),
         min_gbp=min_gbp,
         mean_gbp=mean_gbp,
@@ -236,7 +217,7 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
-        # _make_bill_breakdown default: saving_vs_baseline_gbp=132.5 → renders as £132.50
+        # make_bill_breakdown default: saving_vs_baseline_gbp=132.5 → renders as £132.50
 
         report = generate_finance_report(bill, cost_recovery=sol)
         cr_idx = report.find("## Cost-Recovery Analysis")
@@ -252,7 +233,7 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
-        # _make_bill_breakdown default: saving_pct=26.5 → renders as "26.5%" in CR section
+        # make_bill_breakdown default: saving_pct=26.5 → renders as "26.5%" in CR section
 
         report = generate_finance_report(bill, cost_recovery=sol)
         cr_idx = report.find("## Cost-Recovery Analysis")

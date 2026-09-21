@@ -12,6 +12,7 @@ from typing import Optional
 import pytest
 
 from solar_challenge.optimize import cheapest_feasible, feasible_split, pareto_baseline, rank
+from tests._factories import make_bill_breakdown, make_bill_distribution
 
 
 # ---------------------------------------------------------------------------
@@ -26,23 +27,15 @@ def _make_cost_recovery_solution(
     outlay_gbp: float = 400.0,
     surplus: float = 100.0,
 ) -> object:
-    from solar_challenge.finance import BillBreakdown, BillDistribution, CostRecoverySolution
+    from solar_challenge.finance import CostRecoverySolution
 
-    rep = BillBreakdown(
-        standing_charge_gbp=100.0,
-        import_cost_gbp=200.0,
-        own_use_payment_gbp=50.0,
-        vat_gbp=17.5,
+    rep = make_bill_breakdown(
         total_outlay_gbp=outlay_gbp,
-        self_consumption_saving_gbp=30.0,
-        baseline_bill_gbp=500.0,
         saving_vs_baseline_gbp=100.0,
         saving_pct=20.0,
-        self_consumption_fraction=0.35,
     )
-    dist = BillDistribution(
+    dist = make_bill_distribution(
         representative=rep,
-        per_home_net_bill_gbp=(outlay_gbp,),
         min_gbp=outlay_gbp,
         mean_gbp=outlay_gbp,
         median_gbp=outlay_gbp,

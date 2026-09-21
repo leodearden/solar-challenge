@@ -18,6 +18,8 @@ from typing import Optional
 
 import pytest
 
+from tests._factories import make_bill_breakdown, make_bill_distribution
+
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -780,9 +782,7 @@ class TestProjectEconomicsIRRPayback:
 
 def _make_bill_distribution(multiplier: float = 1.0) -> "BillDistribution":  # type: ignore[name-defined]
     """Build a synthetic BillDistribution for report tests (CR3 contract)."""
-    from solar_challenge.finance import BillBreakdown, BillDistribution
-
-    rep = BillBreakdown(
+    rep = make_bill_breakdown(
         standing_charge_gbp=219.0 * multiplier,
         import_cost_gbp=276.0 * multiplier,
         own_use_payment_gbp=330.0 * multiplier,
@@ -794,9 +794,8 @@ def _make_bill_distribution(multiplier: float = 1.0) -> "BillDistribution":  # t
         saving_pct=17.58 * multiplier,
         self_consumption_fraction=0.55 * multiplier,
     )
-    return BillDistribution(
+    return make_bill_distribution(
         representative=rep,
-        per_home_net_bill_gbp=(rep.total_outlay_gbp,),
         min_gbp=700.0 * multiplier,
         mean_gbp=850.0 * multiplier,
         median_gbp=rep.total_outlay_gbp,

@@ -4,7 +4,7 @@
 projection (ζ surface).
 
 Provides:
-  - ``BillBreakdown`` — frozen dataclass with 10 financial line items.
+  - ``BillBreakdown`` — frozen dataclass of per-householder financial line items.
   - ``BillDistribution`` — frozen dataclass with fleet-level bill statistics.
   - ``householder_bill`` — pure function mapping simulation outputs to a bill.
   - ``bill_distribution`` — aggregates per-home bills into a BillDistribution.
@@ -181,7 +181,7 @@ class FinanceConfig:
 
 
 # ---------------------------------------------------------------------------
-# BillBreakdown — 11 required fields per §3.1
+# BillBreakdown — per-householder line items (§3.1)
 # ---------------------------------------------------------------------------
 
 
@@ -199,9 +199,27 @@ class BillBreakdown:
                                              + own_use_payment_gbp)
       total_outlay_gbp         = (import_cost_gbp + standing_charge_gbp
                                   + own_use_payment_gbp) × (1 + vat_rate)
+      own_use_vat_gbp          = vat_rate × own_use_payment_gbp
+      cbs_amount_due_gbp       = own_use_payment_gbp + own_use_vat_gbp
       self_consumption_saving_gbp = self_consumed_kwh × (retail − own_use_rate)
                                     × (1 + vat_rate) / 100
       saving_vs_baseline_gbp   = baseline_bill_gbp − total_outlay_gbp
+
+    Two overlapping views — never sum across them:
+
+      Whole outlay (what the household spends, and to whom).  The disjoint
+      charges are standing_charge_gbp + import_cost_gbp + own_use_payment_gbp;
+      all their VAT is in vat_gbp; the headline is total_outlay_gbp.
+
+      CBS-collectable slice (what the CBS invoices).  own_use_payment_gbp plus
+      own_use_vat_gbp, totalled in cbs_amount_due_gbp.  Standing charge and
+      import are owed to the retailer and stay out of it.
+
+    The slice is a strict *subset* of the whole: own_use_vat_gbp ⊆ vat_gbp and
+    cbs_amount_due_gbp ⊆ total_outlay_gbp.  So a consumer that iterates the
+    £-valued fields and adds them up double-counts.  Reconciling the CBS
+    invoice means summing exactly {own_use_payment_gbp, own_use_vat_gbp}
+    against cbs_amount_due_gbp and reading no other field.
 
     All monetary values are in GBP (£).  The H3 board identity holds when
     import is retail-priced and import_kwh == demand − sc:
@@ -231,6 +249,18 @@ class BillBreakdown:
     Replaces net_annual_bill_gbp from the old W2 model.  No SEG deduction.
     """
 
+    own_use_vat_gbp: float
+    """VAT on the CBS own-use payment: vat_rate × own_use_payment_gbp (£)."""
+
+    cbs_amount_due_gbp: float
+    """What the household pays the CBS: own_use_payment_gbp + own_use_vat_gbp (£).
+
+    Import and standing charge are paid to the retailer and are NOT part of
+    this figure.  Defined as the float SUM of the two fields above (never
+    own_use_payment × (1 + vat_rate)) so a consumer summing the line floats
+    reproduces this total exactly.
+    """
+
     self_consumption_saving_gbp: float
     """Value of solar used on-site relative to full retail purchase (£, VAT-inclusive).
 
@@ -253,6 +283,29 @@ class BillBreakdown:
 
     self_consumption_fraction: float
     """Fraction of total PV generation consumed on-site (dimensionless, 0–1)."""
+
+    def __post_init__(self) -> None:
+        """Enforce the CBS-slice identity for every producer, not just bill().
+
+        :func:`bill` builds cbs_amount_due_gbp as exactly this float sum, but
+        the class is public and constructible by anyone — test fixtures, and
+        consumer scaffolding in the platform repo.  A consumer reconciling the
+        per-line floats against the stated total (the platform's R2 seam) must
+        never be handed a breakdown where they disagree.
+
+        Bare equality, not a tolerance: the identity is exact float addition by
+        construction, and the fields must stay ``fields()``-visible for the
+        generic dataclass walk in ``web.storage`` to serialise them, so a
+        derived ``@property`` is not an option.
+        """
+        expected = self.own_use_payment_gbp + self.own_use_vat_gbp
+        if self.cbs_amount_due_gbp != expected:
+            raise ValueError(
+                f"cbs_amount_due_gbp must be the float sum own_use_payment_gbp "
+                f"+ own_use_vat_gbp ({self.own_use_payment_gbp!r} + "
+                f"{self.own_use_vat_gbp!r} = {expected!r}), got "
+                f"{self.cbs_amount_due_gbp!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -611,6 +664,8 @@ def bill(
       own_use_payment_gbp   = own_use_rate × self_consumption_kwh / 100
       vat_gbp               = vat_rate × (import_cost + standing + own_use_payment)
       total_outlay_gbp      = (import_cost + standing + own_use_payment) × (1 + vat_rate)
+      own_use_vat_gbp       = vat_rate × own_use_payment
+      cbs_amount_due_gbp    = own_use_payment + own_use_vat_gbp
       baseline_bill_gbp     = (baseline_import_cost + standing) × (1 + vat_rate)
       eff_rate              = baseline_import_cost / demand_kwh × 100  (fallback to retail when demand==0)
       self_consumption_saving_gbp = sc × (eff_rate − own_use_rate) × (1 + vat_rate) / 100
@@ -655,6 +710,10 @@ def bill(
         import_cost_gbp + standing_charge_gbp + own_use_payment_gbp
     ) * (1.0 + vat_rate)
 
+    # --- CBS-collectable slice (own-use payment plus its VAT) ---
+    own_use_vat_gbp = vat_rate * own_use_payment_gbp
+    cbs_amount_due_gbp = own_use_payment_gbp + own_use_vat_gbp
+
     # --- Baseline bill (no solar, all demand at baseline rate) ---
     baseline_bill_gbp = (baseline_import_cost_gbp + standing_charge_gbp) * (1.0 + vat_rate)
 
@@ -688,6 +747,8 @@ def bill(
         own_use_payment_gbp=float(own_use_payment_gbp),
         vat_gbp=float(vat_gbp),
         total_outlay_gbp=float(total_outlay_gbp),
+        own_use_vat_gbp=float(own_use_vat_gbp),
+        cbs_amount_due_gbp=float(cbs_amount_due_gbp),
         self_consumption_saving_gbp=float(self_consumption_saving_gbp),
         baseline_bill_gbp=float(baseline_bill_gbp),
         saving_vs_baseline_gbp=float(saving_vs_baseline_gbp),

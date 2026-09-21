@@ -31,7 +31,7 @@ dependencies = [
 
 ```toml
 dependencies = [
-  "solar-challenge @ git+file:///home/leo/src/my-solar-challenge@solar-challenge-v0.4.0",
+  "solar-challenge @ git+file:///home/leo/src/my-solar-challenge@solar-challenge-v0.5.0",
 ]
 ```
 
@@ -83,12 +83,23 @@ Tags use the prefix `solar-challenge-` followed by a semantic version:
 ```
 solar-challenge-v0.2.0   ← first pinnable release (API freeze)
 solar-challenge-v0.3.0   ← next minor (additive surface changes)
-solar-challenge-v0.4.0   ← current release (basis-C cost-recovery + arbitrage)
+solar-challenge-v0.4.0   ← basis-C cost-recovery + arbitrage
+solar-challenge-v0.5.0   ← current release (CBS amount due: own-use VAT + collectable total)
 solar-challenge-v1.0.0   ← first stable / breaking-change boundary (future)
 ```
 
 **The first freeze tag** (`solar-challenge-v0.2.0`) IS the literal API freeze, i.e.
 `solar_challenge.__all__` is considered stable from that point.
+
+**v0.5.0 is additive for readers of `BillBreakdown`, but not for its
+constructors.** The two new fields are **required** and have no defaults — a
+defaulted `0.0` would silently invoice a zero amount due — so any code that
+builds a `BillBreakdown` (typically test fixtures) must supply
+`own_use_vat_gbp` and `cbs_amount_due_gbp` when it re-pins. `__post_init__`
+additionally rejects a pair where `cbs_amount_due_gbp` is not the exact float
+sum `own_use_payment_gbp + own_use_vat_gbp`, so derive the two rather than
+hardcoding a rounded literal. Consumers that only read the dataclass —
+including anything walking it with `dataclasses.fields()` — need no change.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

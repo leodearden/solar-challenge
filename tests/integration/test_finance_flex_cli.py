@@ -16,44 +16,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _make_bill_breakdown(total_outlay: float = 367.5) -> "BillBreakdown":  # type: ignore[name-defined]
-    """Build a minimal BillBreakdown for fixture use."""
-    from solar_challenge.finance import BillBreakdown
-
-    return BillBreakdown(
-        standing_charge_gbp=100.0,
-        import_cost_gbp=200.0,
-        own_use_payment_gbp=50.0,
-        vat_gbp=17.5,
-        total_outlay_gbp=total_outlay,
-        self_consumption_saving_gbp=30.0,
-        baseline_bill_gbp=500.0,
-        saving_vs_baseline_gbp=132.5,
-        saving_pct=26.5,
-        self_consumption_fraction=0.35,
-    )
-
-
-def _make_bill_distribution(
-    min_gbp: float = 300.0,
-    mean_gbp: float = 367.5,
-    median_gbp: float = 367.5,
-    max_gbp: float = 420.0,
-) -> "BillDistribution":  # type: ignore[name-defined]
-    """Build a minimal BillDistribution for fixture use."""
-    from solar_challenge.finance import BillDistribution
-
-    rep = _make_bill_breakdown(total_outlay=mean_gbp)
-    return BillDistribution(
-        representative=rep,
-        per_home_net_bill_gbp=(min_gbp, mean_gbp, max_gbp),
-        per_home_saving_gbp=(0.0, 132.5, 265.0),
-        per_home_self_consumption_fraction=(0.3, 0.35, 0.4),
-        n_homes=5,
-        median_net_bill_gbp=median_gbp,
-    )
-
-
 def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
     """Build a minimal HomeConfig for fixture use."""
     from solar_challenge.home import HomeConfig
