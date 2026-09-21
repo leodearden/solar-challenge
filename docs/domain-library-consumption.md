@@ -31,7 +31,7 @@ dependencies = [
 
 ```toml
 dependencies = [
-  "solar-challenge @ git+file:///home/leo/src/my-solar-challenge@solar-challenge-v0.4.0",
+  "solar-challenge @ git+file:///home/leo/src/my-solar-challenge@solar-challenge-v0.5.0",
 ]
 ```
 
@@ -83,7 +83,8 @@ Tags use the prefix `solar-challenge-` followed by a semantic version:
 ```
 solar-challenge-v0.2.0   ← first pinnable release (API freeze)
 solar-challenge-v0.3.0   ← next minor (additive surface changes)
-solar-challenge-v0.4.0   ← current release (basis-C cost-recovery + arbitrage)
+solar-challenge-v0.4.0   ← basis-C cost-recovery + arbitrage
+solar-challenge-v0.5.0   ← current release (CBS amount due: own-use VAT + collectable total)
 solar-challenge-v1.0.0   ← first stable / breaking-change boundary (future)
 ```
 
