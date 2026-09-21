@@ -205,6 +205,22 @@ class BillBreakdown:
                                     × (1 + vat_rate) / 100
       saving_vs_baseline_gbp   = baseline_bill_gbp − total_outlay_gbp
 
+    Two overlapping views — never sum across them:
+
+      Whole outlay (what the household spends, and to whom).  The disjoint
+      charges are standing_charge_gbp + import_cost_gbp + own_use_payment_gbp;
+      all their VAT is in vat_gbp; the headline is total_outlay_gbp.
+
+      CBS-collectable slice (what the CBS invoices).  own_use_payment_gbp plus
+      own_use_vat_gbp, totalled in cbs_amount_due_gbp.  Standing charge and
+      import are owed to the retailer and stay out of it.
+
+    The slice is a strict *subset* of the whole: own_use_vat_gbp ⊆ vat_gbp and
+    cbs_amount_due_gbp ⊆ total_outlay_gbp.  So a consumer that iterates the
+    £-valued fields and adds them up double-counts.  Reconciling the CBS
+    invoice means summing exactly {own_use_payment_gbp, own_use_vat_gbp}
+    against cbs_amount_due_gbp and reading no other field.
+
     All monetary values are in GBP (£).  The H3 board identity holds when
     import is retail-priced and import_kwh == demand − sc:
       saving_vs_baseline == self_consumed × (retail − own_use) × (1+vat) / 100
@@ -267,6 +283,29 @@ class BillBreakdown:
 
     self_consumption_fraction: float
     """Fraction of total PV generation consumed on-site (dimensionless, 0–1)."""
+
+    def __post_init__(self) -> None:
+        """Enforce the CBS-slice identity for every producer, not just bill().
+
+        :func:`bill` builds cbs_amount_due_gbp as exactly this float sum, but
+        the class is public and constructible by anyone — test fixtures, and
+        consumer scaffolding in the platform repo.  A consumer reconciling the
+        per-line floats against the stated total (the platform's R2 seam) must
+        never be handed a breakdown where they disagree.
+
+        Bare equality, not a tolerance: the identity is exact float addition by
+        construction, and the fields must stay ``fields()``-visible for the
+        generic dataclass walk in ``web.storage`` to serialise them, so a
+        derived ``@property`` is not an option.
+        """
+        expected = self.own_use_payment_gbp + self.own_use_vat_gbp
+        if self.cbs_amount_due_gbp != expected:
+            raise ValueError(
+                f"cbs_amount_due_gbp must be the float sum own_use_payment_gbp "
+                f"+ own_use_vat_gbp ({self.own_use_payment_gbp!r} + "
+                f"{self.own_use_vat_gbp!r} = {expected!r}), got "
+                f"{self.cbs_amount_due_gbp!r}"
+            )
 
 
 # ---------------------------------------------------------------------------

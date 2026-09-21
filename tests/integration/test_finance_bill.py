@@ -17,6 +17,7 @@ import pytest
 
 from solar_challenge.config import FinanceConfig
 from solar_challenge.home import SummaryStatistics
+from tests._factories import make_bill_breakdown, make_bill_distribution
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +94,14 @@ class TestHouseholderBillPhysics:
           own_use_payment_gbp   = own_use_rate × sc_kwh / 100
           vat_gbp               = vat_rate × (import_cost + standing + own_use_payment)
           total_outlay_gbp      = (import_cost + standing + own_use_payment) × (1 + vat_rate)
+          own_use_vat_gbp       = vat_rate × own_use_payment
+          cbs_amount_due_gbp    = own_use_payment + own_use_vat_gbp
           self_consumption_saving_gbp = sc × (retail − own_use) × (1+vat)/100
           saving_vs_baseline_gbp = baseline_bill_gbp − total_outlay_gbp
+
+        This is the exhaustive identity enumeration for the wrapper path — every
+        new BillBreakdown identity belongs here (and in the bill() twin,
+        TestBillCore::test_period_native_identities), not in a class of its own.
 
         Removed fields (CBS owns assets): gross_bill_gbp, seg_export_income_gbp,
         net_annual_bill_gbp.
@@ -141,6 +148,14 @@ class TestHouseholderBillPhysics:
             bill.import_cost_gbp + bill.standing_charge_gbp + bill.own_use_payment_gbp
         ) * (1.0 + finance.vat_rate)
         assert bill.total_outlay_gbp == pytest.approx(expected_outlay)
+
+        # --- CBS-collectable slice: own-use VAT, and the amount due that sums it ---
+        assert bill.own_use_vat_gbp == pytest.approx(
+            finance.vat_rate * bill.own_use_payment_gbp
+        )
+        assert bill.cbs_amount_due_gbp == pytest.approx(
+            bill.own_use_payment_gbp + bill.own_use_vat_gbp
+        )
 
         # --- Self-consumption saving (REDEFINED): sc × (retail − own_use) × (1+vat)/100 ---
         retail = finance.retail_baseline_rate_pence_per_kwh
@@ -746,25 +761,20 @@ def _make_bill_distribution(multiplier: float = 1.0) -> "BillDistribution":  # t
       total_outlay=866.25, sc_saving=184.80, baseline=1051.05,
       saving_vs_baseline=184.80, saving_pct≈17.58, sc_fraction=0.55
     """
-    from solar_challenge.finance import BillBreakdown, BillDistribution
-
-    rep = BillBreakdown(
+    rep = make_bill_breakdown(
         standing_charge_gbp=219.0 * multiplier,
         import_cost_gbp=276.0 * multiplier,
         own_use_payment_gbp=330.0 * multiplier,
         vat_gbp=41.25 * multiplier,
         total_outlay_gbp=866.25 * multiplier,
-        own_use_vat_gbp=16.5 * multiplier,
-        cbs_amount_due_gbp=346.5 * multiplier,
         self_consumption_saving_gbp=184.80 * multiplier,
         baseline_bill_gbp=1051.05 * multiplier,
         saving_vs_baseline_gbp=184.80 * multiplier,
         saving_pct=17.58 * multiplier,
         self_consumption_fraction=0.55 * multiplier,
     )
-    return BillDistribution(
+    return make_bill_distribution(
         representative=rep,
-        per_home_net_bill_gbp=(rep.total_outlay_gbp,),
         min_gbp=700.0 * multiplier,
         mean_gbp=850.0 * multiplier,
         median_gbp=rep.total_outlay_gbp,
@@ -973,13 +983,13 @@ class TestHouseholderBillWrapperEquivalence:
     RED pre-refactor (step-4): householder_bill uses retail directly for
     self_consumption_saving while bill() uses eff_rate (a float round-trip),
     so the two can differ by ≤1 ULP. These tests require the wrapper IS that
-    bill() call (exact frozen-dataclass equality over all 10 fields).
+    bill() call (exact frozen-dataclass equality over every field).
     """
 
     def test_wrapper_equals_bill_annual_physics(self) -> None:
         """householder_bill(365-day, physics path) == bill(period_days=365, ...).
 
-        Byte-identical guard over all 10 BillBreakdown fields.
+        Byte-identical guard over every BillBreakdown field.
         Pre-refactor: fails by ≤1 ULP on self_consumption_saving_gbp.
         Post-refactor (step-4): passes because the wrapper IS that call.
         """
@@ -1007,7 +1017,7 @@ class TestHouseholderBillWrapperEquivalence:
             baseline_import_cost_gbp=baseline_import_cost_gbp,
             finance=finance,
         )
-        # Exact frozen-dataclass equality (all 10 fields)
+        # Exact frozen-dataclass equality (every field)
         assert actual == expected
 
     def test_wrapper_equals_bill_annual_override(self) -> None:
@@ -1214,6 +1224,11 @@ class TestBillCore:
         """bill() must satisfy all definitional BillBreakdown identities (CR3).
 
         With period_days=30, standing=18.0, import=23.0, own_use=27.0.
+
+        This is the exhaustive identity enumeration for the bill() core — every
+        new BillBreakdown identity belongs here (and in the wrapper twin,
+        TestHouseholderBillPhysics::test_bill_definitional_invariants), not in a
+        class of its own.
         """
         from solar_challenge.finance import bill
 
@@ -1251,6 +1266,10 @@ class TestBillCore:
         # total_outlay
         expected_outlay = (import_cost + standing + own_use) * (1.0 + vat_rate)
         assert b.total_outlay_gbp == pytest.approx(expected_outlay)
+
+        # own_use_vat and the CBS amount due that sums it
+        assert b.own_use_vat_gbp == pytest.approx(vat_rate * own_use)
+        assert b.cbs_amount_due_gbp == pytest.approx(own_use + b.own_use_vat_gbp)
 
         # baseline_bill
         expected_baseline = (baseline_import_cost + standing) * (1.0 + vat_rate)
@@ -1397,6 +1416,12 @@ class TestCbsAmountDue:
     These two fields carve out the slice of the householder's outlay that the
     CBS actually invoices, leaving import cost and standing charge (both owed
     to the retailer) out of it.
+
+    The bare *identities* live with all the others, in
+    TestHouseholderBillPhysics::test_bill_definitional_invariants and
+    TestBillCore::test_period_native_identities.  What only this class covers
+    is the E3 exact-float-sum contract, the excludes-retailer-charges
+    decomposition, and the PRD U1 literals.
     """
 
     @staticmethod
@@ -1469,26 +1494,6 @@ class TestCbsAmountDue:
             b.total_outlay_gbp
             - (b.import_cost_gbp + b.standing_charge_gbp) * (1.0 + finance.vat_rate)
         )
-
-    def test_householder_bill_carries_cbs_fields(self) -> None:
-        """The annual wrapper inherits both fields through delegation to bill().
-
-        householder_bill() computes no bill arithmetic of its own, so the
-        identities must hold exactly on its output too — no re-derivation.
-        """
-        from solar_challenge.finance import householder_bill
-
-        summary = _make_summary(simulation_days=365)
-        finance = _make_finance()
-        b = householder_bill(
-            summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-            finance=finance,
-            simulation_days=summary.simulation_days,
-        )
-
-        assert b.own_use_vat_gbp == finance.vat_rate * b.own_use_payment_gbp
-        assert b.cbs_amount_due_gbp == b.own_use_payment_gbp + b.own_use_vat_gbp
 
 
 @pytest.mark.slow

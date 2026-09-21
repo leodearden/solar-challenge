@@ -14,43 +14,12 @@ from typing import Optional
 
 import pytest
 
+from tests._factories import make_bill_breakdown, make_bill_distribution
+
 
 # ---------------------------------------------------------------------------
 # Shared offline scaffolding (adapted from tests/unit/test_cost_recovery_solve.py)
 # ---------------------------------------------------------------------------
-
-
-def _make_bill_breakdown() -> "BillBreakdown":  # type: ignore[name-defined]
-    from solar_challenge.finance import BillBreakdown
-
-    return BillBreakdown(
-        standing_charge_gbp=100.0,
-        import_cost_gbp=200.0,
-        own_use_payment_gbp=50.0,
-        vat_gbp=17.5,
-        total_outlay_gbp=367.5,
-        own_use_vat_gbp=2.5,
-        cbs_amount_due_gbp=52.5,
-        self_consumption_saving_gbp=30.0,
-        baseline_bill_gbp=500.0,
-        saving_vs_baseline_gbp=132.5,
-        saving_pct=26.5,
-        self_consumption_fraction=0.35,
-    )
-
-
-def _make_bill_distribution() -> "BillDistribution":  # type: ignore[name-defined]
-    from solar_challenge.finance import BillDistribution
-
-    rep = _make_bill_breakdown()
-    return BillDistribution(
-        representative=rep,
-        per_home_net_bill_gbp=(367.5,),
-        min_gbp=367.5,
-        mean_gbp=367.5,
-        median_gbp=367.5,
-        max_gbp=367.5,
-    )
 
 
 def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
@@ -213,25 +182,15 @@ def _make_cost_recovery_solution(
     outlay_gbp: float = 400.0,
     surplus: float = 100.0,
 ) -> "CostRecoverySolution":  # type: ignore[name-defined]
-    from solar_challenge.finance import BillBreakdown, BillDistribution, CostRecoverySolution
+    from solar_challenge.finance import CostRecoverySolution
 
-    rep = BillBreakdown(
-        standing_charge_gbp=100.0,
-        import_cost_gbp=200.0,
-        own_use_payment_gbp=50.0,
-        vat_gbp=17.5,
+    rep = make_bill_breakdown(
         total_outlay_gbp=outlay_gbp,
-        own_use_vat_gbp=2.5,
-        cbs_amount_due_gbp=52.5,
-        self_consumption_saving_gbp=30.0,
-        baseline_bill_gbp=500.0,
         saving_vs_baseline_gbp=100.0,
         saving_pct=20.0,
-        self_consumption_fraction=0.35,
     )
-    dist = BillDistribution(
+    dist = make_bill_distribution(
         representative=rep,
-        per_home_net_bill_gbp=(outlay_gbp,),
         min_gbp=outlay_gbp,
         mean_gbp=outlay_gbp,
         median_gbp=outlay_gbp,

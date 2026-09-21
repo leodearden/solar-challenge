@@ -12,45 +12,12 @@ from typing import Optional
 
 import pytest
 
+from tests._factories import make_bill_distribution
+
 
 # ---------------------------------------------------------------------------
 # §3.1 — CostRecoverySolution frozen dataclass (step-1 / step-2)
 # ---------------------------------------------------------------------------
-
-
-def _make_bill_breakdown() -> "BillBreakdown":  # type: ignore[name-defined]
-    """Build a minimal BillBreakdown for fixture use."""
-    from solar_challenge.finance import BillBreakdown
-
-    return BillBreakdown(
-        standing_charge_gbp=100.0,
-        import_cost_gbp=200.0,
-        own_use_payment_gbp=50.0,
-        vat_gbp=17.5,
-        total_outlay_gbp=367.5,
-        own_use_vat_gbp=2.5,
-        cbs_amount_due_gbp=52.5,
-        self_consumption_saving_gbp=30.0,
-        baseline_bill_gbp=500.0,
-        saving_vs_baseline_gbp=132.5,
-        saving_pct=26.5,
-        self_consumption_fraction=0.35,
-    )
-
-
-def _make_bill_distribution() -> "BillDistribution":  # type: ignore[name-defined]
-    """Build a minimal BillDistribution for fixture use."""
-    from solar_challenge.finance import BillDistribution
-
-    rep = _make_bill_breakdown()
-    return BillDistribution(
-        representative=rep,
-        per_home_net_bill_gbp=(367.5,),
-        min_gbp=367.5,
-        mean_gbp=367.5,
-        median_gbp=367.5,
-        max_gbp=367.5,
-    )
 
 
 class TestCostRecoverySolution:
@@ -59,7 +26,7 @@ class TestCostRecoverySolution:
     def _make_valid(self) -> "CostRecoverySolution":  # type: ignore[name-defined]
         from solar_challenge.finance import CostRecoverySolution
 
-        outlay = _make_bill_distribution()
+        outlay = make_bill_distribution()
         return CostRecoverySolution(
             own_use_rate_pence_per_kwh=15.0,
             outlay=outlay,
@@ -86,7 +53,7 @@ class TestCostRecoverySolution:
         """binding='rate_clamped_zero' constructs without errors."""
         from solar_challenge.finance import CostRecoverySolution
 
-        outlay = _make_bill_distribution()
+        outlay = make_bill_distribution()
         sol = CostRecoverySolution(
             own_use_rate_pence_per_kwh=0.0,
             outlay=outlay,
@@ -104,7 +71,7 @@ class TestCostRecoverySolution:
         """binding='infeasible_above_retail' constructs without errors."""
         from solar_challenge.finance import CostRecoverySolution
 
-        outlay = _make_bill_distribution()
+        outlay = make_bill_distribution()
         sol = CostRecoverySolution(
             own_use_rate_pence_per_kwh=30.0,
             outlay=outlay,
@@ -128,7 +95,7 @@ class TestCostRecoverySolution:
         """__post_init__ rejects an out-of-whitelist binding with ValueError."""
         from solar_challenge.finance import CostRecoverySolution
 
-        outlay = _make_bill_distribution()
+        outlay = make_bill_distribution()
         with pytest.raises(ValueError, match="binding"):
             CostRecoverySolution(
                 own_use_rate_pence_per_kwh=15.0,
@@ -145,7 +112,7 @@ class TestCostRecoverySolution:
         """__post_init__ rejects a negative own_use_rate_pence_per_kwh with ValueError."""
         from solar_challenge.finance import CostRecoverySolution
 
-        outlay = _make_bill_distribution()
+        outlay = make_bill_distribution()
         with pytest.raises(ValueError, match="own_use_rate"):
             CostRecoverySolution(
                 own_use_rate_pence_per_kwh=-1.0,
@@ -162,7 +129,7 @@ class TestCostRecoverySolution:
         """All 8 fields read back correctly after construction."""
         from solar_challenge.finance import CostRecoverySolution
 
-        outlay = _make_bill_distribution()
+        outlay = make_bill_distribution()
         sol = CostRecoverySolution(
             own_use_rate_pence_per_kwh=12.5,
             outlay=outlay,
