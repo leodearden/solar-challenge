@@ -1478,6 +1478,34 @@ class TestCbsAmountDue:
         assert b.cbs_amount_due_gbp == b.own_use_payment_gbp + b.own_use_vat_gbp
         assert b.own_use_vat_gbp == finance.vat_rate * b.own_use_payment_gbp
 
+    def test_inconsistent_amount_due_is_unconstructible(self) -> None:
+        """BillBreakdown rejects a cbs_amount_due_gbp that is not the float sum.
+
+        bill() is not the only producer — the class is public and consumer
+        scaffolding builds it directly — so the identity is enforced in
+        __post_init__ rather than trusted to convention.  The rejected value
+        here is the U1 decimal rendering 70.308, which sits ~7e-15 above the
+        float sum 66.96 + 3.348 — close enough to look right, and exactly the
+        kind of hand-transcribed literal the guard exists to catch.
+        """
+        from solar_challenge.finance import BillBreakdown
+
+        with pytest.raises(ValueError, match="cbs_amount_due_gbp"):
+            BillBreakdown(
+                standing_charge_gbp=219.0,
+                import_cost_gbp=147.66,
+                own_use_payment_gbp=66.96,
+                vat_gbp=20.68,
+                total_outlay_gbp=454.30,
+                own_use_vat_gbp=3.348,
+                cbs_amount_due_gbp=70.308,  # ≠ 66.96 + 3.348
+                self_consumption_saving_gbp=61.38,
+                baseline_bill_gbp=519.75,
+                saving_vs_baseline_gbp=65.45,
+                saving_pct=12.59,
+                self_consumption_fraction=0.558,
+            )
+
     def test_cbs_amount_due_excludes_import_and_standing(self) -> None:
         """Retailer-side charges stay out of what the CBS invoices (identity B21).
 
