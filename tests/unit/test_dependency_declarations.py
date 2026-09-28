@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Dependency declaration contract tests.
 
-Every third-party import the package requires outside its web subpackage
-(which the `web` extra serves) must be satisfied by a DIRECT core dependency,
-not by whatever another package's extra happens to pull in, and no core
+Every third-party import the package requires must be satisfied by a declared
+dependency, not by whatever another package's extra happens to pull in: code
+outside the web subpackage needs DIRECT core dependencies, and the web
+subpackage needs core dependencies or the `web` extra that serves it.  No core
 dependency may request an extra its distribution does not provide.  An import
 inside a try block that handles ImportError is optional by construction and
 exempt.  pyproject.toml is parsed structurally (TOML plus PEP 508
@@ -12,8 +13,8 @@ requirements), not by regex.
 
 import ast
 import sys
-from collections.abc import Iterable, Iterator
-from importlib.metadata import metadata, packages_distributions
+from collections.abc import Callable, Iterable, Iterator
+from importlib.metadata import PackageNotFoundError, distribution, metadata, packages_distributions
 from pathlib import Path
 
 import pytest
@@ -23,17 +24,42 @@ from packaging.utils import canonicalize_name
 from tests._pyproject import load_project_table
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
+_WEB = "web"
 
 
 def _core_requirements(project_root: Path) -> list[Requirement]:
     """Return the parsed [project].dependencies of pyproject.toml."""
-    return [Requirement(s) for s in load_project_table(project_root)["dependencies"]]
+    return [Requirement(specifier) for specifier in load_project_table(project_root)["dependencies"]]
+
+
+def _extra_requirements(project_root: Path, extras: Iterable[str]) -> list[Requirement]:
+    """Return the parsed [project.optional-dependencies] requirements of each named extra."""
+    optional = load_project_table(project_root)["optional-dependencies"]
+    return [Requirement(specifier) for extra in extras for specifier in optional[extra]]
+
+
+def _uninstalled(requirements: Iterable[Requirement]) -> list[str]:
+    """Return the sorted names of the applicable *requirements* whose distribution is not installed."""
+    missing: list[str] = []
+    for requirement in requirements:
+        if requirement.marker is not None and not requirement.marker.evaluate():
+            continue
+        try:
+            distribution(requirement.name)
+        except PackageNotFoundError:
+            missing.append(requirement.name)
+    return sorted(missing)
+
+
+def _web_sources(package_dir: Path) -> list[Path]:
+    """Return the package's .py files inside its web subpackage, the one the web extra serves."""
+    return list((package_dir / _WEB).rglob("*.py"))
 
 
 def _core_sources(package_dir: Path) -> list[Path]:
     """Return the package's .py files outside its web subpackage."""
-    web_dir = package_dir / "web"
-    return [source for source in package_dir.rglob("*.py") if web_dir not in source.parents]
+    web_sources = set(_web_sources(package_dir))
+    return [source for source in package_dir.rglob("*.py") if source not in web_sources]
 
 
 def _handles_import_failure(node: ast.Try) -> bool:
@@ -94,18 +120,42 @@ def _third_party_distributions(modules: set[str]) -> set[str]:
     reason="before Python 3.11, importlib.metadata.packages_distributions() reads only "
     "top_level.txt, which wheels such as numpy, pandas, rich and typer do not ship",
 )
-def test_core_sources_import_only_declared_core_dependencies(project_root: Path) -> None:
-    """Every third-party distribution the package requires outside web/ must be a declared core dependency."""
+@pytest.mark.parametrize(
+    ("select_sources", "extras"),
+    [
+        pytest.param(_core_sources, (), id="outside-web"),
+        pytest.param(_web_sources, (_WEB,), id="web"),
+    ],
+)
+def test_sources_import_only_declared_dependencies(
+    project_root: Path,
+    select_sources: Callable[[Path], list[Path]],
+    extras: tuple[str, ...],
+) -> None:
+    """Every third-party distribution a source scope requires must be declared for that scope."""
+    extra_requirements = _extra_requirements(project_root, extras)
+    uninstalled = _uninstalled(extra_requirements)
+    if uninstalled:
+        install_flags = "".join(f" --extra {extra}" for extra in extras)
+        pytest.skip(
+            "imports can be mapped to distributions only where the extras this source scope may "
+            f"use are installed; not installed: {uninstalled}. "
+            f"Install them, e.g. with `uv run --extra dev{install_flags} pytest`"
+        )
     required = _third_party_distributions(
-        _required_top_level_modules(_core_sources(project_root / "src" / "solar_challenge"))
+        _required_top_level_modules(select_sources(project_root / "src" / "solar_challenge"))
     )
-    declared = {canonicalize_name(r.name) for r in _core_requirements(project_root)}
+    allowed = [*_core_requirements(project_root), *extra_requirements]
+    declared = {canonicalize_name(r.name) for r in allowed}
 
     undeclared = sorted(required - declared)
+    groups = ", ".join(
+        ["[project].dependencies", *(f"[project.optional-dependencies].{extra}" for extra in extras)]
+    )
     assert not undeclared, (
-        f"src/solar_challenge (outside web/) requires distributions missing from "
-        f"[project].dependencies; undeclared: {undeclared}; required={sorted(required)}. "
-        "Add them to [project].dependencies in pyproject.toml, or make the import optional "
+        f"this source scope of src/solar_challenge requires distributions missing from {groups}; "
+        f"undeclared: {undeclared}; required={sorted(required)}. "
+        "Declare them in one of those groups in pyproject.toml, or make the import optional "
         "inside a try block that handles ImportError"
     )
 
