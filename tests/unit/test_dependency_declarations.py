@@ -9,6 +9,9 @@ dependency may request an extra its distribution does not provide.  An import
 inside a try block that handles ImportError is optional by construction and
 exempt.  pyproject.toml is parsed structurally (TOML plus PEP 508
 requirements), not by regex.
+
+pyproject.toml is also the only dependency declaration: no requirements*.txt at
+the project root may restate it, since a hand-maintained copy drifts from it.
 """
 
 import ast
@@ -177,4 +180,14 @@ def test_core_dependencies_request_only_provided_extras(project_root: Path) -> N
         "installed distributions do not provide. Resolvers (uv, pip) warn about unknown "
         "extras in every consumer's lock or install; drop the extra and depend directly on "
         "what the code needs"
+    )
+
+
+def test_no_requirements_file_duplicates_pyproject(project_root: Path) -> None:
+    """pyproject.toml must be the only dependency declaration; no requirements*.txt may restate it."""
+    duplicates = sorted(path.name for path in project_root.glob("requirements*.txt"))
+    assert not duplicates, (
+        f"{duplicates} at the project root restate the dependencies pyproject.toml declares, "
+        "and a hand-maintained copy drifts from its source; delete them and install from "
+        'pyproject.toml instead (pip install -e ".[dev]", or uv run --extra dev)'
     )
