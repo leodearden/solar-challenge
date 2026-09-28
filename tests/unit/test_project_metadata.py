@@ -19,6 +19,9 @@ from tests._pyproject import load_project_table
 # (solar-challenge-platform) install the library on.
 _CONSUMER_INTERPRETERS: tuple[tuple[int, int], ...] = ((3, 13), (3, 14))
 
+# Minors the project dropped at end of life (3.10: October 2026).
+_RETIRED_INTERPRETERS: tuple[tuple[int, int], ...] = ((3, 10),)
+
 _PYTHON_MINOR_CLASSIFIER = re.compile(r"Programming Language :: Python :: (\d+)\.(\d+)")
 
 
@@ -103,6 +106,24 @@ def test_requires_python_admits_consumer_interpreter(
     assert version in admitted_minor_versions(python_range), (
         f"Python {version} is outside requires-python={str(python_range)!r}; "
         "downstream consumers need the library installable on this interpreter"
+    )
+
+
+@pytest.mark.parametrize(
+    "version",
+    _RETIRED_INTERPRETERS,
+    ids=[f"{major}.{minor}" for major, minor in _RETIRED_INTERPRETERS],
+)
+def test_requires_python_excludes_retired_interpreter(
+    project_root: Path, version: tuple[int, int]
+) -> None:
+    """requires-python must not admit an interpreter the project retired at end of life."""
+    python_range = requires_python(project_root)
+    major, minor = version
+
+    assert version not in admitted_minor_versions(python_range), (
+        f"requires-python={str(python_range)!r} admits Python {major}.{minor}, which the project "
+        "retired at end of life; raise the requires-python floor above it"
     )
 
 
