@@ -2463,6 +2463,7 @@ dependencies = [
     { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pvlib" },
     { name = "pyyaml" },
+    { name = "rich" },
     { name = "richardsonpy" },
     { name = "typer" },
 ]
@@ -2499,6 +2500,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pytest-playwright", marker = "extra == 'e2e'", specifier = ">=0.4.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
+    { name = "rich", specifier = ">=12.3.0" },
     { name = "richardsonpy", specifier = ">=0.2.0" },
     { name = "typer", extras = ["all"], specifier = ">=0.9.0" },
 ]
