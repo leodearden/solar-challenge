@@ -2471,8 +2471,10 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "mypy" },
+    { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 e2e = [
     { name = "playwright" },
@@ -2491,6 +2493,7 @@ requires-dist = [
     { name = "flask", marker = "extra == 'web'", specifier = ">=3.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "numpy", specifier = ">=1.24.0" },
+    { name = "packaging", marker = "extra == 'dev'", specifier = ">=22.0" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "playwright", marker = "extra == 'e2e'", specifier = ">=1.40.0" },
     { name = "plotly", marker = "extra == 'web'", specifier = ">=5.0.0" },
@@ -2502,6 +2505,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "rich", specifier = ">=12.3.0" },
     { name = "richardsonpy", specifier = ">=0.2.0" },
+    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=1.0.0" },
     { name = "typer", specifier = ">=0.12.1" },
 ]
 provides-extras = ["dev", "stochastic", "web", "e2e"]

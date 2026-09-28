@@ -13,3 +13,5 @@ richardsonpy>=0.2.0
 pytest>=7.0.0
 pytest-cov>=4.0.0
 mypy>=1.0.0
+packaging>=22.0
+tomli>=1.0.0; python_version < '3.11'
