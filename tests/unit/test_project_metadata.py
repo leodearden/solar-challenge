@@ -38,6 +38,15 @@ def _extract_classifiers(text: str) -> list[str]:
     return re.findall(r'"(Programming Language :: Python :: [^"]+)"', text)
 
 
+def _classifier_minor_versions(text: str) -> set[tuple[int, int]]:
+    """Return the (major, minor) pairs named by 'Programming Language :: Python :: X.Y' classifiers."""
+    matches = (
+        re.fullmatch(r"Programming Language :: Python :: (\d+)\.(\d+)", classifier)
+        for classifier in _extract_classifiers(text)
+    )
+    return {(int(m.group(1)), int(m.group(2))) for m in matches if m}
+
+
 def _parse_version_pin(pin: str) -> tuple[int, int]:
     """Parse a version string like '3.12' or '3.12.3' into (major, minor)."""
     parts = pin.strip().split(".")
@@ -178,4 +187,24 @@ def test_requires_python_admits_verified_interpreter(
     assert lower <= version < upper, (
         f"Python {version} outside [{lower}, {upper}) from requires-python={specifier!r}; "
         "the platform consumer needs the library installable on this verified interpreter"
+    )
+
+
+def test_classifiers_match_requires_python_range(project_root: Path) -> None:
+    """The X.Y classifiers must name exactly the minor versions requires-python admits."""
+    text = _read_pyproject(project_root)
+    specifier = _extract_requires_python(text)
+    (lower_major, lower_minor), (upper_major, upper_minor) = _parse_bounded_range(specifier)
+
+    assert lower_major == upper_major, (
+        f"requires-python={specifier!r} spans major versions {lower_major} and {upper_major}; "
+        "extend this test to enumerate the admitted minors across a major boundary"
+    )
+    admitted = {(lower_major, minor) for minor in range(lower_minor, upper_minor)}
+    declared = _classifier_minor_versions(text)
+
+    assert declared == admitted, (
+        f"Programming Language classifiers {sorted(declared)} disagree with "
+        f"requires-python={specifier!r}: missing classifiers {sorted(admitted - declared)}, "
+        f"extra classifiers {sorted(declared - admitted)}"
     )
