@@ -24,15 +24,18 @@ from packaging.utils import canonicalize_name
 from tests._pyproject import load_project_table
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
+_WEB = "web"
 
 
-def _declared_requirements(project_root: Path, extras: Iterable[str] = ()) -> list[Requirement]:
-    """Return the parsed [project].dependencies of pyproject.toml plus those of each named extra."""
-    project = load_project_table(project_root)
-    specifiers = list(project["dependencies"])
-    for extra in extras:
-        specifiers.extend(project["optional-dependencies"][extra])
-    return [Requirement(specifier) for specifier in specifiers]
+def _core_requirements(project_root: Path) -> list[Requirement]:
+    """Return the parsed [project].dependencies of pyproject.toml."""
+    return [Requirement(specifier) for specifier in load_project_table(project_root)["dependencies"]]
+
+
+def _extra_requirements(project_root: Path, extras: Iterable[str]) -> list[Requirement]:
+    """Return the parsed [project.optional-dependencies] requirements of each named extra."""
+    optional = load_project_table(project_root)["optional-dependencies"]
+    return [Requirement(specifier) for extra in extras for specifier in optional[extra]]
 
 
 def _uninstalled(requirements: Iterable[Requirement]) -> list[str]:
@@ -50,7 +53,7 @@ def _uninstalled(requirements: Iterable[Requirement]) -> list[str]:
 
 def _web_sources(package_dir: Path) -> list[Path]:
     """Return the package's .py files inside its web subpackage, the one the web extra serves."""
-    return list((package_dir / "web").rglob("*.py"))
+    return list((package_dir / _WEB).rglob("*.py"))
 
 
 def _core_sources(package_dir: Path) -> list[Path]:
@@ -121,7 +124,7 @@ def _third_party_distributions(modules: set[str]) -> set[str]:
     ("select_sources", "extras"),
     [
         pytest.param(_core_sources, (), id="outside-web"),
-        pytest.param(_web_sources, ("web",), id="web"),
+        pytest.param(_web_sources, (_WEB,), id="web"),
     ],
 )
 def test_sources_import_only_declared_dependencies(
@@ -130,18 +133,19 @@ def test_sources_import_only_declared_dependencies(
     extras: tuple[str, ...],
 ) -> None:
     """Every third-party distribution a source scope requires must be declared for that scope."""
-    allowed = _declared_requirements(project_root, extras)
-    uninstalled = _uninstalled(allowed)
+    extra_requirements = _extra_requirements(project_root, extras)
+    uninstalled = _uninstalled(extra_requirements)
     if uninstalled:
         install_flags = "".join(f" --extra {extra}" for extra in extras)
         pytest.skip(
-            "imports can be mapped to distributions only where every requirement declared for "
-            f"this source scope is installed; not installed: {uninstalled}. "
+            "imports can be mapped to distributions only where the extras this source scope may "
+            f"use are installed; not installed: {uninstalled}. "
             f"Install them, e.g. with `uv run --extra dev{install_flags} pytest`"
         )
     required = _third_party_distributions(
         _required_top_level_modules(select_sources(project_root / "src" / "solar_challenge"))
     )
+    allowed = [*_core_requirements(project_root), *extra_requirements]
     declared = {canonicalize_name(r.name) for r in allowed}
 
     undeclared = sorted(required - declared)
@@ -159,7 +163,7 @@ def test_sources_import_only_declared_dependencies(
 def test_core_dependencies_request_only_provided_extras(project_root: Path) -> None:
     """No core dependency may request an extra that its installed distribution does not provide."""
     unknown_extras: dict[str, list[str]] = {}
-    for requirement in _declared_requirements(project_root):
+    for requirement in _core_requirements(project_root):
         if not requirement.extras:
             continue
         provides_extra = metadata(requirement.name).get_all("Provides-Extra") or []
