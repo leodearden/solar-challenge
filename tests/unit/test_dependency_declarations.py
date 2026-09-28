@@ -14,7 +14,7 @@ requirements), not by regex.
 import ast
 import sys
 from collections.abc import Callable, Iterable, Iterator
-from importlib.metadata import metadata, packages_distributions
+from importlib.metadata import PackageNotFoundError, distribution, metadata, packages_distributions
 from pathlib import Path
 
 import pytest
@@ -33,6 +33,19 @@ def _declared_requirements(project_root: Path, extras: Iterable[str] = ()) -> li
     for extra in extras:
         specifiers.extend(project["optional-dependencies"][extra])
     return [Requirement(specifier) for specifier in specifiers]
+
+
+def _uninstalled(requirements: Iterable[Requirement]) -> list[str]:
+    """Return the sorted names of the applicable *requirements* whose distribution is not installed."""
+    missing: list[str] = []
+    for requirement in requirements:
+        if requirement.marker is not None and not requirement.marker.evaluate():
+            continue
+        try:
+            distribution(requirement.name)
+        except PackageNotFoundError:
+            missing.append(requirement.name)
+    return sorted(missing)
 
 
 def _web_sources(package_dir: Path) -> list[Path]:
@@ -118,6 +131,14 @@ def test_sources_import_only_declared_dependencies(
 ) -> None:
     """Every third-party distribution a source scope requires must be declared for that scope."""
     allowed = _declared_requirements(project_root, extras)
+    uninstalled = _uninstalled(allowed)
+    if uninstalled:
+        install_flags = "".join(f" --extra {extra}" for extra in extras)
+        pytest.skip(
+            "imports can be mapped to distributions only where every requirement declared for "
+            f"this source scope is installed; not installed: {uninstalled}. "
+            f"Install them, e.g. with `uv run --extra dev{install_flags} pytest`"
+        )
     required = _third_party_distributions(
         _required_top_level_modules(select_sources(project_root / "src" / "solar_challenge"))
     )
