@@ -11,6 +11,11 @@ of tests/unit/test_license_compliance.py.
 import re
 from pathlib import Path
 
+import pytest
+
+# Interpreters beyond the .python-version pin on which the full suite was verified green (task 113).
+_VERIFIED_NEWER_INTERPRETERS: tuple[tuple[int, int], ...] = ((3, 13), (3, 14))
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -56,6 +61,20 @@ def _parse_requires_python_bounds(specifier: str) -> tuple[tuple[int, int] | Non
             lower = (int(m_ge.group(1)), int(m_ge.group(2)))
         elif m_lt:
             upper = (int(m_lt.group(1)), int(m_lt.group(2)))
+    return lower, upper
+
+
+def _parse_bounded_range(specifier: str) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return the [lower, upper) bounds of *specifier*, failing loudly if either is unparseable."""
+    lower, upper = _parse_requires_python_bounds(specifier)
+    assert lower is not None, (
+        f"Could not parse a lower bound (>=X.Y) from requires-python={specifier!r}; "
+        "update _parse_requires_python_bounds to handle this specifier form"
+    )
+    assert upper is not None, (
+        f"Could not parse an upper bound (<X.Y) from requires-python={specifier!r}; "
+        "update _parse_requires_python_bounds to handle this specifier form"
+    )
     return lower, upper
 
 
@@ -138,4 +157,25 @@ def test_python_version_listed_in_classifiers(project_root: Path) -> None:
         f"No 'Programming Language :: Python :: {version_str}' classifier found in "
         f"pyproject.toml; add it or adjust .python-version to a declared version. "
         f"Found classifiers: {classifiers}"
+    )
+
+
+@pytest.mark.parametrize(
+    "version",
+    _VERIFIED_NEWER_INTERPRETERS,
+    ids=[f"{major}.{minor}" for major, minor in _VERIFIED_NEWER_INTERPRETERS],
+)
+def test_requires_python_admits_verified_interpreter(
+    project_root: Path, version: tuple[int, int]
+) -> None:
+    """requires-python must admit every interpreter the suite was verified on.
+
+    This is the contract that lets consumers install the library on 3.13 and 3.14.
+    """
+    specifier = _extract_requires_python(_read_pyproject(project_root))
+    lower, upper = _parse_bounded_range(specifier)
+
+    assert lower <= version < upper, (
+        f"Python {version} outside [{lower}, {upper}) from requires-python={specifier!r}; "
+        "the platform consumer needs the library installable on this verified interpreter"
     )
