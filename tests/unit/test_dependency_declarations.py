@@ -16,16 +16,12 @@ from pathlib import Path
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
+from tests._pyproject import load_project_table
 
 
 def _core_requirements(project_root: Path) -> list[Requirement]:
     """Return the parsed [project].dependencies of pyproject.toml."""
-    pyproject_text = (project_root / "pyproject.toml").read_text(encoding="utf-8")
-    return [Requirement(s) for s in tomllib.loads(pyproject_text)["project"]["dependencies"]]
+    return [Requirement(s) for s in load_project_table(project_root)["dependencies"]]
 
 
 def _imported_top_level_modules(package_dir: Path) -> set[str]:

@@ -3,88 +3,54 @@
 
 These tests encode machine-checkable invariants that keep pyproject.toml's
 requires-python specifier, the .python-version pin, and the Programming
-Language classifiers mutually consistent.  Parsing is text-based so it
-works under Python 3.10 where tomllib is unavailable, matching the style
-of tests/unit/test_license_compliance.py.
+Language classifiers mutually consistent.  pyproject.toml is parsed as TOML
+and requires-python is evaluated as a PEP 440 specifier set.
 """
 
 import re
 from pathlib import Path
 
 import pytest
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
-# Interpreters beyond the .python-version pin on which the full suite was verified green (task 113).
-_VERIFIED_NEWER_INTERPRETERS: tuple[tuple[int, int], ...] = ((3, 13), (3, 14))
+from tests._pyproject import load_project_table
+
+# Interpreters beyond the .python-version pin that downstream consumers
+# (solar-challenge-platform) install the library on.
+_CONSUMER_INTERPRETERS: tuple[tuple[int, int], ...] = ((3, 13), (3, 14))
+
+_PYTHON_MINOR_CLASSIFIER = re.compile(r"Programming Language :: Python :: (\d+)\.(\d+)")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _read_pyproject(project_root: Path) -> str:
-    """Return the full text of pyproject.toml."""
-    return (project_root / "pyproject.toml").read_text(encoding="utf-8")
+def _requires_python(project_root: Path) -> SpecifierSet:
+    """Return pyproject.toml's requires-python as a PEP 440 specifier set."""
+    return SpecifierSet(load_project_table(project_root)["requires-python"])
 
 
-def _extract_requires_python(text: str) -> str:
-    """Extract the requires-python value (without surrounding quotes)."""
-    m = re.search(r'requires-python\s*=\s*"([^"]+)"', text)
-    assert m, "could not find requires-python in pyproject.toml"
-    return m.group(1)
+def _admitted_minor_versions(requires_python: SpecifierSet) -> set[tuple[int, int]]:
+    """Return the Python 3 minor versions, searched from 3.0 to 3.99, that *requires_python* admits."""
+    return {(3, minor) for minor in range(100) if requires_python.contains(f"3.{minor}")}
 
 
-def _extract_classifiers(text: str) -> list[str]:
-    """Return every classifier value found in pyproject.toml."""
-    return re.findall(r'"(Programming Language :: Python :: [^"]+)"', text)
-
-
-def _classifier_minor_versions(text: str) -> set[tuple[int, int]]:
+def _classifier_minor_versions(project_root: Path) -> set[tuple[int, int]]:
     """Return the (major, minor) pairs named by 'Programming Language :: Python :: X.Y' classifiers."""
     matches = (
-        re.fullmatch(r"Programming Language :: Python :: (\d+)\.(\d+)", classifier)
-        for classifier in _extract_classifiers(text)
+        _PYTHON_MINOR_CLASSIFIER.fullmatch(classifier)
+        for classifier in load_project_table(project_root)["classifiers"]
     )
     return {(int(m.group(1)), int(m.group(2))) for m in matches if m}
 
 
-def _parse_version_pin(pin: str) -> tuple[int, int]:
-    """Parse a version string like '3.12' or '3.12.3' into (major, minor)."""
-    parts = pin.strip().split(".")
-    assert len(parts) >= 2, f"unexpected .python-version content: {pin!r}"
-    return int(parts[0]), int(parts[1])
-
-
-def _parse_requires_python_bounds(specifier: str) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
-    """Return (lower_bound, upper_bound) as (major, minor) tuples or None.
-
-    Parses specifiers like '>=3.10,<3.13'.  Only handles >= and < forms
-    that appear in this project's pyproject.toml.
-    """
-    lower: tuple[int, int] | None = None
-    upper: tuple[int, int] | None = None
-    for part in specifier.split(","):
-        part = part.strip()
-        m_ge = re.match(r">=\s*(\d+)\.(\d+)", part)
-        m_lt = re.match(r"<\s*(\d+)\.(\d+)", part)
-        if m_ge:
-            lower = (int(m_ge.group(1)), int(m_ge.group(2)))
-        elif m_lt:
-            upper = (int(m_lt.group(1)), int(m_lt.group(2)))
-    return lower, upper
-
-
-def _parse_bounded_range(specifier: str) -> tuple[tuple[int, int], tuple[int, int]]:
-    """Return the [lower, upper) bounds of *specifier*, failing loudly if either is unparseable."""
-    lower, upper = _parse_requires_python_bounds(specifier)
-    assert lower is not None, (
-        f"Could not parse a lower bound (>=X.Y) from requires-python={specifier!r}; "
-        "update _parse_requires_python_bounds to handle this specifier form"
-    )
-    assert upper is not None, (
-        f"Could not parse an upper bound (<X.Y) from requires-python={specifier!r}; "
-        "update _parse_requires_python_bounds to handle this specifier form"
-    )
-    return lower, upper
+def _python_version_pin(project_root: Path) -> Version:
+    """Return the interpreter version pinned by .python-version."""
+    pv_file = project_root / ".python-version"
+    assert pv_file.exists(), ".python-version missing (run test_python_version_file_exists first)"
+    return Version(pv_file.read_text(encoding="utf-8").strip())
 
 
 # ---------------------------------------------------------------------------
@@ -94,14 +60,13 @@ def _parse_bounded_range(specifier: str) -> tuple[tuple[int, int], tuple[int, in
 def test_requires_python_has_upper_bound(project_root: Path) -> None:
     """requires-python must include an upper bound (<X.Y).
 
-    An unbounded specifier lets uv resolve undeclared interpreters (e.g.
-    free-threaded 3.14) which changes multiprocessing defaults and triggers
-    GIL-re-enable warnings from optional deps.
+    An unbounded specifier lets uv resolve interpreters the suite has never
+    run on (e.g. a future 3.15), where changed interpreter defaults or new
+    warnings from optional deps would go unnoticed.
     """
-    text = _read_pyproject(project_root)
-    specifier = _extract_requires_python(text)
-    assert "<" in specifier, (
-        f"requires-python={specifier!r} has no upper bound (<X.Y); "
+    requires_python = _requires_python(project_root)
+    assert any(spec.operator in {"<", "<="} for spec in requires_python), (
+        f"requires-python={str(requires_python)!r} has no upper bound (<X.Y); "
         "add one matching the Programming Language classifiers"
     )
 
@@ -121,90 +86,52 @@ def test_python_version_file_exists(project_root: Path) -> None:
 
 
 def test_python_version_within_requires_python(project_root: Path) -> None:
-    """.python-version pin must satisfy the requires-python lower and upper bounds."""
-    text = _read_pyproject(project_root)
-    specifier = _extract_requires_python(text)
-    lower, upper = _parse_requires_python_bounds(specifier)
+    """.python-version pin must satisfy requires-python."""
+    requires_python = _requires_python(project_root)
+    pin = _python_version_pin(project_root)
 
-    # Fail loudly if the specifier uses a form that _parse_requires_python_bounds
-    # does not recognise (e.g. >X.Y, <=X.Y, ==X.Y, ~=X.Y, patch-level versions).
-    # Silently returning None and skipping the bound check gives false confidence
-    # that the pin is within range when the parser is simply unaware of the form.
-    assert lower is not None, (
-        f"Could not parse a lower bound (>=X.Y) from requires-python={specifier!r}; "
-        "update _parse_requires_python_bounds to handle this specifier form"
-    )
-    assert upper is not None, (
-        f"Could not parse an upper bound (<X.Y) from requires-python={specifier!r}; "
-        "update _parse_requires_python_bounds to handle this specifier form"
-    )
-
-    pv_file = project_root / ".python-version"
-    assert pv_file.exists(), ".python-version missing (run test_python_version_file_exists first)"
-    pin = _parse_version_pin(pv_file.read_text(encoding="utf-8"))
-
-    assert pin >= lower, (
-        f".python-version {pin} is below requires-python lower bound {lower}"
-    )
-    assert pin < upper, (
-        f".python-version {pin} is not below requires-python upper bound {upper}"
+    assert requires_python.contains(pin), (
+        f".python-version {pin} is outside requires-python={str(requires_python)!r}"
     )
 
 
 def test_python_version_listed_in_classifiers(project_root: Path) -> None:
     """.python-version minor version must appear as a Programming Language classifier."""
-    text = _read_pyproject(project_root)
-    classifiers = _extract_classifiers(text)
+    pin = _python_version_pin(project_root)
+    declared = _classifier_minor_versions(project_root)
 
-    pv_file = project_root / ".python-version"
-    assert pv_file.exists(), ".python-version missing (run test_python_version_file_exists first)"
-    major, minor = _parse_version_pin(pv_file.read_text(encoding="utf-8"))
-    version_str = f"{major}.{minor}"
-
-    matching = [c for c in classifiers if c.endswith(f":: {version_str}")]
-    assert matching, (
-        f"No 'Programming Language :: Python :: {version_str}' classifier found in "
+    assert (pin.major, pin.minor) in declared, (
+        f"No 'Programming Language :: Python :: {pin.major}.{pin.minor}' classifier found in "
         f"pyproject.toml; add it or adjust .python-version to a declared version. "
-        f"Found classifiers: {classifiers}"
+        f"Declared X.Y classifiers: {sorted(declared)}"
     )
 
 
 @pytest.mark.parametrize(
     "version",
-    _VERIFIED_NEWER_INTERPRETERS,
-    ids=[f"{major}.{minor}" for major, minor in _VERIFIED_NEWER_INTERPRETERS],
+    _CONSUMER_INTERPRETERS,
+    ids=[f"{major}.{minor}" for major, minor in _CONSUMER_INTERPRETERS],
 )
-def test_requires_python_admits_verified_interpreter(
+def test_requires_python_admits_consumer_interpreter(
     project_root: Path, version: tuple[int, int]
 ) -> None:
-    """requires-python must admit every interpreter the suite was verified on.
+    """requires-python must admit every interpreter downstream consumers install the library on."""
+    requires_python = _requires_python(project_root)
 
-    This is the contract that lets consumers install the library on 3.13 and 3.14.
-    """
-    specifier = _extract_requires_python(_read_pyproject(project_root))
-    lower, upper = _parse_bounded_range(specifier)
-
-    assert lower <= version < upper, (
-        f"Python {version} outside [{lower}, {upper}) from requires-python={specifier!r}; "
-        "the platform consumer needs the library installable on this verified interpreter"
+    assert version in _admitted_minor_versions(requires_python), (
+        f"Python {version} is outside requires-python={str(requires_python)!r}; "
+        "downstream consumers need the library installable on this interpreter"
     )
 
 
 def test_classifiers_match_requires_python_range(project_root: Path) -> None:
     """The X.Y classifiers must name exactly the minor versions requires-python admits."""
-    text = _read_pyproject(project_root)
-    specifier = _extract_requires_python(text)
-    (lower_major, lower_minor), (upper_major, upper_minor) = _parse_bounded_range(specifier)
-
-    assert lower_major == upper_major, (
-        f"requires-python={specifier!r} spans major versions {lower_major} and {upper_major}; "
-        "extend this test to enumerate the admitted minors across a major boundary"
-    )
-    admitted = {(lower_major, minor) for minor in range(lower_minor, upper_minor)}
-    declared = _classifier_minor_versions(text)
+    requires_python = _requires_python(project_root)
+    admitted = _admitted_minor_versions(requires_python)
+    declared = _classifier_minor_versions(project_root)
 
     assert declared == admitted, (
         f"Programming Language classifiers {sorted(declared)} disagree with "
-        f"requires-python={specifier!r}: missing classifiers {sorted(admitted - declared)}, "
-        f"extra classifiers {sorted(declared - admitted)}"
+        f"requires-python={str(requires_python)!r}: missing classifiers "
+        f"{sorted(admitted - declared)}, extra classifiers {sorted(declared - admitted)}"
     )
