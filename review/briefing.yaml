@@ -226,7 +226,6 @@ subprojects:
     known_gaps: []
 
     exclude:
-      - "long_running/ — dev harness; its feature_list.json is FROZEN at phase 1 (all 'passes: true') and predates EV/heat-pump/dispatch/tariff/SEG/sweep/finance/community/web. Do NOT judge completeness from it."
       - "scenarios/, results/, data/, logs/, .cache/, build/ — input fixtures and runtime/build output, not application logic."
 
   finance-economics:
@@ -354,4 +353,8 @@ subprojects:
 #   feature-complete") and calls out the new CBS amount-due fields
 #   (own_use_vat_gbp, cbs_amount_due_gbp); docs/domain-library-consumption.md's
 #   worked example now cites tag `solar-challenge-v0.5.0`. Still resolved.)
+#   (2026-09-28: follow-up, not part of the Task 88 attestation above — task/115
+#   deleted the long_running/ dev harness, so init.sh no longer appears anywhere,
+#   README's tree diagram included; the documented install flow is still
+#   `pip install -e ".[dev]"`. Still resolved.)
 # ─────────────────────────────────────────────────────────────────────────────

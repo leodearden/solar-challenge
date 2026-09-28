@@ -86,22 +86,13 @@ solar-challenge/
 │   ├── unit/                # Unit tests
 │   ├── integration/         # Integration tests
 │   └── conftest.py          # Shared fixtures
-├── long_running/
-│   └── solar-simulator/     # Development harness
-│       ├── feature_list.json
-│       ├── progress.txt
-│       └── init.sh
 ├── pyproject.toml           # Project configuration (canonical; defines extras dev/web/stochastic)
 └── README.md
 ```
 
 ## Development
 
-This project follows test-driven development (TDD). Features are tracked in `long_running/solar-simulator/feature_list.json` and progress is logged in `long_running/solar-simulator/progress.txt`.
-
-### Feature Status
-
-See `long_running/solar-simulator/feature_list.json` for the complete list of features and their implementation status.
+This project follows test-driven development (TDD).
 
 ## Data Sources
 
