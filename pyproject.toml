@@ -7,7 +7,7 @@ name = "solar-challenge"
 version = "0.5.0"
 description = "Energy flow simulator for domestic PV and battery systems"
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<3.15"
 license = {text = "AGPL-3.0-or-later"}
 authors = [
     {name = "Leo Dawn"}
@@ -21,6 +21,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
@@ -28,7 +30,8 @@ dependencies = [
     "pandas>=2.0.0",
     "numpy>=1.24.0",
     "pyyaml>=6.0.0",
-    "typer[all]>=0.9.0",
+    "typer>=0.12.1",
+    "rich>=12.3.0",
     "richardsonpy>=0.2.0",
 ]
 
@@ -40,6 +43,8 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "mypy>=1.0.0",
+    "packaging>=22.0",
+    "tomli>=1.0.0; python_version < '3.11'",
 ]
 stochastic = []  # backward-compat alias; richardsonpy is now a core dependency
 web = [
