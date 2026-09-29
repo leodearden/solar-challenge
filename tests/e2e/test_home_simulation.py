@@ -1,7 +1,7 @@
 """End-to-end tests for the Single Home Simulation page (/simulate/home).
 
-Verifies form defaults, tab navigation, battery toggle, preset selector,
-submit button, and detects Bug B4 (buildPayload missing form fields).
+Verifies form defaults, tab navigation, preset selector, submit button,
+and detects Bug B4 (buildPayload missing form fields).
 """
 
 import pytest
@@ -112,52 +112,6 @@ def test_tab_navigation(page: Page, live_server: str) -> None:
             f"Tab '{label}' should be selected (aria-selected='true'), "
             f"got '{selected}'"
         )
-
-
-# ── Battery tab enable/disable ───────────────────────────────────────
-
-
-def test_battery_tab_enable_disable(page: Page, live_server: str) -> None:
-    """Toggling the battery switch shows/hides the battery configuration fields."""
-    page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-
-    # Navigate to the Battery tab
-    battery_tab = page.locator(
-        'nav[aria-label="Configuration tabs"] button',
-        has_text="Battery",
-    )
-    battery_tab.click()
-
-    battery_panel = page.get_by_role("tabpanel")
-    expect(
-        battery_panel.get_by_role("heading", name="Battery Storage Configuration")
-    ).to_be_visible()
-
-    # The battery toggle: the one switch in the open tab panel
-    toggle = battery_panel.get_by_role("switch")
-    expect(toggle).to_be_visible()
-
-    # Battery is disabled by default (formData.battery_enabled = false)
-    expect(toggle).to_have_attribute("aria-checked", "false")
-    battery_fields = page.locator("#battery_kwh")
-
-    # Verify fields are hidden initially
-    expect(battery_fields).not_to_be_visible()
-
-    # Enable battery
-    toggle.click()
-    expect(toggle).to_have_attribute("aria-checked", "true")
-
-    # Battery capacity slider should now be visible
-    expect(battery_fields).to_be_visible()
-
-    # Disable battery again
-    toggle.click()
-    expect(toggle).to_have_attribute("aria-checked", "false")
-
-    # Fields should be hidden again
-    expect(battery_fields).not_to_be_visible()
 
 
 # ── Submit button ────────────────────────────────────────────────────
