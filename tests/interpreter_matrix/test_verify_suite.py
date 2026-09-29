@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from tests._interpreters import admitted_minor_versions, python_version_pin, requires_python
+from tests._interpreters import off_pin_minor_versions
 from tests._orchestrator_config import load_orchestrator_config
 
 # Parametrization happens at collection time, before any fixture exists.
@@ -45,13 +45,7 @@ print(json.dumps({
 """
 
 
-def _off_pin_minors() -> list[tuple[int, int]]:
-    """Return the minors requires-python admits, except the .python-version pin the verify covers."""
-    pin = python_version_pin(PROJECT_ROOT)
-    return sorted(admitted_minor_versions(requires_python(PROJECT_ROOT)) - {(pin.major, pin.minor)})
-
-
-_OFF_PIN_MINORS = _off_pin_minors()
+_OFF_PIN_MINORS = sorted(off_pin_minor_versions(PROJECT_ROOT))
 
 
 def _matrix_venv(major: int, minor: int) -> Path:

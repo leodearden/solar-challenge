@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from tests._interpreters import admitted_minor_versions, python_version_pin, requires_python
+from tests._interpreters import off_pin_minor_versions, python_version_pin
 from tests._orchestrator_config import load_orchestrator_config
 
 _MATRIX_JOB = "interpreter-matrix"
@@ -87,15 +87,13 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(pro
         f"the {_MATRIX_JOB!r} lane job {command!r} failed to collect (exit {result.returncode})\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    pin = python_version_pin(project_root)
-    off_pin = admitted_minor_versions(requires_python(project_root)) - {(pin.major, pin.minor)}
-    expected = sorted(f"{major}.{minor}" for major, minor in off_pin)
+    expected = sorted(f"{major}.{minor}" for major, minor in off_pin_minor_versions(project_root))
     node_ids = [line for line in result.stdout.splitlines() if "::" in line]
     collected = sorted(node_id.rpartition("[")[2].removesuffix("]") for node_id in node_ids)
     assert collected == expected, (
         f"the {_MATRIX_JOB!r} lane job collected {node_ids}; expected exactly one case per minor "
-        f"requires-python admits other than the .python-version pin {pin}, each node-id ending "
-        f"in its interpreter: {expected}"
+        f"requires-python admits other than the .python-version pin {python_version_pin(project_root)}, "
+        f"each node-id ending in its interpreter: {expected}"
     )
 
 

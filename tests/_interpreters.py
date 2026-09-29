@@ -44,3 +44,12 @@ def python_version_pin(project_root: Path) -> Version:
     pv_file = project_root / ".python-version"
     assert pv_file.exists(), f".python-version missing at {pv_file}"
     return Version(pv_file.read_text(encoding="utf-8").strip())
+
+
+def off_pin_minor_versions(project_root: Path) -> set[tuple[int, int]]:
+    """Return the minors requires-python admits other than the .python-version pin's.
+
+    The per-task verify runs on the pin; the interpreter matrix re-verifies every other admitted minor.
+    """
+    pin = python_version_pin(project_root)
+    return admitted_minor_versions(requires_python(project_root)) - {(pin.major, pin.minor)}
