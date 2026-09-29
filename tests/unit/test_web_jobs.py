@@ -597,12 +597,16 @@ class TestJobManagerShutdown:
 class TestLiveManagers:
     """Tests for live_managers(), the snapshot of every JobManager not yet garbage-collected."""
 
-    def test_live_managers_reports_a_manager_created_after_an_earlier_snapshot(self) -> None:
-        before = live_managers()
+    def test_live_managers_reports_a_newly_constructed_manager(self) -> None:
         manager = JobManager(max_workers=1)
 
         assert manager in live_managers()
-        assert manager not in before
+
+    def test_an_earlier_snapshot_does_not_gain_managers_constructed_after_it(self) -> None:
+        snapshot = live_managers()
+        manager = JobManager(max_workers=1)
+
+        assert manager not in snapshot
 
     def test_live_managers_includes_shut_down_managers(self) -> None:
         manager = JobManager(max_workers=1)
