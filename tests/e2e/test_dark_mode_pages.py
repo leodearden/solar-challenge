@@ -29,6 +29,21 @@ def _assert_dark_class_on_html(page: Page, page_name: str) -> None:
     )
 
 
+def _plotly_background_colors(page: Page) -> list[str]:
+    """Collect each Plotly chart's painted paper color and every .bg rect fill."""
+    colors: list[str] = page.evaluate("""() => {
+        const colors = [];
+        for (const chart of document.querySelectorAll('.js-plotly-plot')) {
+            colors.push(getComputedStyle(chart.querySelector('.main-svg')).backgroundColor);
+            for (const rect of chart.querySelectorAll('.bg')) {
+                colors.push(getComputedStyle(rect).fill);
+            }
+        }
+        return colors;
+    }""")
+    return colors
+
+
 # -- Dark mode on /simulate/home -------------------------------------------
 
 
@@ -78,14 +93,12 @@ def test_dark_mode_results_page_charts(
     _enable_dark_mode_and_reload(page, live_server + f"/results/home/{run_id}")
     _assert_dark_class_on_html(page, f"/results/home/{run_id}")
 
-    bg_rect = page.locator(".plot-container .bg").first
-    expect(bg_rect).to_be_attached()
+    expect(page.locator(".plot-container .bg").first).to_be_attached()
 
-    bg_fill = bg_rect.get_attribute("fill")
-    assert bg_fill is not None, "Plotly's .bg rect carries no fill attribute to check"
+    backgrounds = _plotly_background_colors(page)
 
-    # In dark mode the chart background should NOT be pure white
-    assert bg_fill.lower() not in ("#ffffff", "#fff", "rgb(255, 255, 255)", "white"), (
-        f"Plotly chart background is white ({bg_fill}) in dark mode. "
+    # In dark mode no chart background should be pure white
+    assert "rgb(255, 255, 255)" not in backgrounds, (
+        f"Plotly chart background is white in dark mode: {backgrounds}. "
         f"Charts should use a dark background color when dark mode is active."
     )
