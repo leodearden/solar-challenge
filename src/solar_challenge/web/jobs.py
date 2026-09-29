@@ -44,8 +44,10 @@ def live_managers() -> "frozenset[JobManager]":
 def shutdown_all_managers(wait: bool = False) -> None:
     """Shut down every live JobManager, as JobManager.shutdown does.
 
-    Shutting down an already-shut-down manager is a no-op, making this safe
-    to call more than once (idempotent).
+    A server whose requests submit jobs must call this when it stops, since
+    nothing else drops the jobs still queued.  Shutting down an
+    already-shut-down manager is a no-op, making this safe to call more than
+    once (idempotent).
 
     Args:
         wait: If True, block until every manager's running jobs finish.
