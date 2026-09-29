@@ -34,7 +34,9 @@ def _plotly_background_colors(page: Page) -> list[str]:
     colors: list[str] = page.evaluate("""() => {
         const colors = [];
         for (const chart of document.querySelectorAll('.js-plotly-plot')) {
-            colors.push(getComputedStyle(chart.querySelector('.main-svg')).backgroundColor);
+            const paper = chart.querySelector('.main-svg');
+            if (!paper) throw new Error(`Plotly chart #${chart.id} has no .main-svg`);
+            colors.push(getComputedStyle(paper).backgroundColor);
             for (const rect of chart.querySelectorAll('.bg')) {
                 colors.push(getComputedStyle(rect).fill);
             }
@@ -88,7 +90,10 @@ def test_dark_mode_results_page_charts(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Plotly chart backgrounds should not be white (#ffffff) in dark mode."""
+    """No Plotly chart on the results page's opening tab is painted white in dark mode.
+
+    chart-renderer.js defers the other tabs' charts until shown, so they are not checked.
+    """
     run_id, _ = seeded_home_run
     _enable_dark_mode_and_reload(page, live_server + f"/results/home/{run_id}")
     _assert_dark_class_on_html(page, f"/results/home/{run_id}")
