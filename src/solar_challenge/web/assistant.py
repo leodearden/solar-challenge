@@ -6,9 +6,8 @@ Slice ②: adds streaming SSE chat endpoint (POST /assistant/chat),
   per-session history endpoint (GET /assistant/history), and
   chat_messages persistence via database.py helpers.
 
-The Anthropic SDK import is deliberately deferred inside _create_client()
-so blueprint registration remains robust regardless of whether the SDK
-is installed in the current environment.
+The Anthropic SDK is imported only inside _create_client(); its docstring
+gives the reason.
 """
 
 import json
@@ -767,11 +766,13 @@ def chat_history() -> ResponseReturnValue:
 
 
 def _create_client() -> Any:
-    """Create and return an Anthropic client (deferred import seam).
+    """Create and return an Anthropic client.
 
-    Defers ``import anthropic`` so blueprint registration works even when the
-    SDK is not installed.  Callers should wrap this in try/except ImportError
-    to handle the absent-SDK case gracefully.
+    Imports the SDK here rather than at module top level because it is slow to
+    import and only answering a chat needs it: building the app and serving the
+    chat page never import it, as
+    tests/unit/test_web_app.py::test_building_the_app_does_not_import_the_anthropic_sdk
+    pins.
 
     Returns:
         An ``anthropic.Anthropic`` instance.
@@ -821,7 +822,8 @@ def chat() -> Response:
             )
             return
 
-        # Deferred client construction — catches ImportError / SDK construction errors
+        # Constructing a client fails on a misconfigured environment, such as a
+        # malformed ANTHROPIC_BASE_URL.
         try:
             client = _create_client()
         except Exception as exc:
