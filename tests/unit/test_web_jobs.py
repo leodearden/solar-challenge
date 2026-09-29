@@ -20,8 +20,40 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.app import create_app
 from solar_challenge.web.database import init_db
-from solar_challenge.web.jobs import JobManager, live_managers, shutdown_all_managers
+from solar_challenge.web.jobs import HomeSimulator, JobManager, live_managers, shutdown_all_managers
 from solar_challenge.web.storage import RunStorage
+
+
+def _an_hour_at(generation_kw: float) -> SimulationResults:
+    index = pd.date_range("2024-06-01 12:00", periods=60, freq="1min")
+
+    def constant(kw: float) -> pd.Series:
+        return pd.Series([kw] * 60, index=index)
+
+    return SimulationResults(
+        generation=constant(generation_kw),
+        demand=constant(1.0),
+        self_consumption=constant(1.0),
+        battery_charge=constant(0.0),
+        battery_discharge=constant(0.0),
+        battery_soc=constant(0.0),
+        grid_import=constant(0.0),
+        grid_export=constant(generation_kw - 1.0),
+        import_cost=constant(0.0),
+        export_revenue=constant(0.0),
+        tariff_rate=constant(0.25),
+    )
+
+
+class _RecordingSimulation:
+    """Stands in for simulate_home: records each home it is asked to simulate and returns an hour at the home's PV size."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
+
+    def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        self.calls.append((config, start_date, end_date))
+        return _an_hour_at(config.pv_config.capacity_kw)
 
 
 @pytest.fixture
@@ -41,9 +73,21 @@ def app(tmp_path) -> Flask:
     return test_app
 
 
+def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
+    """Make a JobManager that runs *simulation* the app's job manager, and return a client of the app."""
+    app.extensions["job_manager"] = JobManager(simulate_home=simulation)
+    return app.test_client()
+
+
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
+    """A client whose jobs run a fake simulation that returns at once, so the teardown drain has nothing to wait for."""
+    return _client_whose_jobs_run(app, _RecordingSimulation())
+
+
+@pytest.fixture
+def real_simulation_client(app: Flask) -> FlaskClient:
+    """A client of the JobManager create_app built, whose jobs run the real simulate_home."""
     return app.test_client()
 
 
@@ -516,38 +560,6 @@ def _run_storage(tmp_path: Path) -> RunStorage:
     storage = RunStorage(db_path=tmp_path / "jobs.db", data_dir=tmp_path / "data")
     init_db(storage.db_path)
     return storage
-
-
-def _an_hour_at(generation_kw: float) -> SimulationResults:
-    index = pd.date_range("2024-06-01 12:00", periods=60, freq="1min")
-
-    def constant(kw: float) -> pd.Series:
-        return pd.Series([kw] * 60, index=index)
-
-    return SimulationResults(
-        generation=constant(generation_kw),
-        demand=constant(1.0),
-        self_consumption=constant(1.0),
-        battery_charge=constant(0.0),
-        battery_discharge=constant(0.0),
-        battery_soc=constant(0.0),
-        grid_import=constant(0.0),
-        grid_export=constant(generation_kw - 1.0),
-        import_cost=constant(0.0),
-        export_revenue=constant(0.0),
-        tariff_rate=constant(0.25),
-    )
-
-
-class _RecordingSimulation:
-    """Stands in for simulate_home: records each home it is asked to simulate and returns an hour at the home's PV size."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
-
-    def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
-        self.calls.append((config, start_date, end_date))
-        return _an_hour_at(config.pv_config.capacity_kw)
 
 
 def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
