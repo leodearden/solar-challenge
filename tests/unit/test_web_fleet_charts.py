@@ -240,7 +240,6 @@ class TestFinancialBreakdownPricing:
 
     def test_uses_engine_priced_series(self) -> None:
         """financial_breakdown must aggregate import_cost/export_revenue series directly."""
-        pytest.importorskip("plotly")
         import numpy as np
         import pandas as pd
         from solar_challenge.home import SimulationResults

@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from solar_challenge.home import SimulationResults
 
@@ -103,13 +105,8 @@ def power_flow_timeline(results: SimulationResults) -> str:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     # Build a DataFrame from the relevant series and downsample
     df = pd.DataFrame({
         "PV Generation": results.generation,
@@ -169,13 +166,8 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
         battery_capacity_kwh: Nominal battery capacity in kWh.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     soc = _adaptive_downsample_series(results.battery_soc)
     dates = [d.isoformat() for d in soc.index]
     values = soc.round(4).tolist()
@@ -228,13 +220,9 @@ def sankey_diagram(summary: dict[str, Any]) -> str:
         summary: Dictionary with SummaryStatistics fields.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string, or ``"{}"`` if there is no energy flow
+        to draw.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     total_gen = summary.get("total_generation_kwh", 0)
     total_demand = summary.get("total_demand_kwh", 0)
     total_self = summary.get("total_self_consumption_kwh", 0)
@@ -329,13 +317,8 @@ def daily_energy_balance(results: SimulationResults) -> str:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     from solar_challenge.output import aggregate_daily  # noqa: PLC0415
 
     daily = aggregate_daily(results)
@@ -380,17 +363,12 @@ def monthly_summary(results: SimulationResults) -> str | None:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string, ``None`` if the simulation spans
-        fewer than 90 days, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string, or ``None`` if the simulation spans
+        fewer than 90 days.
     """
     sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
     if sim_days < 90:
         return None
-
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
 
     from solar_challenge.output import aggregate_monthly  # noqa: PLC0415
 
@@ -444,14 +422,8 @@ def financial_breakdown(results: SimulationResults) -> str:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-        from plotly.subplots import make_subplots  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     # import_cost and export_revenue are per-minute GBP amounts
     # (energy_kWh × rate), NOT power — resample without /60.
     daily_cost = results.import_cost.resample("D").sum().round(2)
@@ -527,17 +499,12 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string, ``None`` if the simulation spans
-        fewer than 180 days, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string, or ``None`` if the simulation spans
+        fewer than 180 days.
     """
     sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
     if sim_days < 180:
         return None
-
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
 
     from solar_challenge.output import calculate_seasonal_metrics  # noqa: PLC0415
 
@@ -583,11 +550,6 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
         is present.
     """
     if results.heat_pump_load is None:
-        return None
-
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
         return None
 
     # --- Load share pie chart ---
@@ -654,13 +616,8 @@ def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str
         labels: Display labels for each run.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     traces: list[Any] = []
     for i, (results, label) in enumerate(zip(results_list, labels)):
         colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
@@ -710,13 +667,8 @@ def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> 
         labels: Display labels for each run.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     categories = ["Generation", "Demand", "Self-Consumption", "Grid Import", "Grid Export"]
     keys = [
         "total_generation_kwh",
@@ -760,13 +712,8 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
         labels: Display labels for each run.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     theta = [
         "Self-Consumption %",
         "Grid Dependency %",
@@ -840,13 +787,8 @@ def fleet_aggregate_timeline(aggregate_results: SimulationResults) -> str:
         aggregate_results: Aggregated SimulationResults for the fleet.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     df = pd.DataFrame({
         "PV Generation": aggregate_results.generation,
         "Demand": aggregate_results.demand,
@@ -905,13 +847,8 @@ def fleet_grid_impact(aggregate_results: SimulationResults) -> str:
         aggregate_results: Aggregated SimulationResults for the fleet.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     net = aggregate_results.grid_import - aggregate_results.grid_export
     net = _adaptive_downsample_series(net)
     dates = [d.isoformat() for d in net.index]
@@ -966,13 +903,8 @@ def fleet_heatmap(home_summaries: list[dict[str, Any]]) -> str:
         home_summaries: List of dicts with per-home energy totals.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     summaries = home_summaries[:50]
     metrics = [
         ("total_generation_kwh", "Generation"),
@@ -1018,13 +950,8 @@ def fleet_box_plots(home_summaries: list[dict[str, Any]]) -> str:
         home_summaries: List of dicts with per-home energy totals.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     metrics = [
         ("total_generation_kwh", "Generation", COLOUR_PALETTE["pv_generation"]),
         ("total_demand_kwh", "Demand", COLOUR_PALETTE["demand"]),
@@ -1064,14 +991,8 @@ def fleet_distribution_histograms(home_summaries: list[dict[str, Any]]) -> str:
             ratios.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+        Plotly figure JSON string.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-        from plotly.subplots import make_subplots  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     fig = make_subplots(
         rows=1, cols=3,
         subplot_titles=["Generation (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"],
@@ -1164,14 +1085,8 @@ def sweep_parameter_chart(
         metric_name: Display name for the Y-axis (e.g. "Self-Consumption (%)").
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable
-        or inputs are empty.
+        Plotly figure JSON string, or ``"{}"`` if either input list is empty.
     """
-    try:
-        import plotly.graph_objects as go  # noqa: PLC0415
-    except ImportError:
-        return "{}"
-
     if not param_values or not metric_values:
         return "{}"
 
