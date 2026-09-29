@@ -78,18 +78,11 @@ def test_dark_mode_results_page_charts(
     _enable_dark_mode_and_reload(page, live_server + f"/results/home/{run_id}")
     _assert_dark_class_on_html(page, f"/results/home/{run_id}")
 
-    # Wait for Plotly charts to render
-    page.wait_for_timeout(2000)
+    bg_rect = page.locator(".plot-container .bg").first
+    expect(bg_rect).to_be_attached()
 
-    # Check Plotly .bg rect fill color
-    bg_fill = page.evaluate("""() => {
-        const bgRect = document.querySelector('.plot-container .bg');
-        if (!bgRect) return null;
-        return bgRect.getAttribute('fill');
-    }""")
-
-    if bg_fill is None:
-        pytest.skip("No Plotly .bg element found on results page")
+    bg_fill = bg_rect.get_attribute("fill")
+    assert bg_fill is not None, "Plotly's .bg rect carries no fill attribute to check"
 
     # In dark mode the chart background should NOT be pure white
     assert bg_fill.lower() not in ("#ffffff", "#fff", "rgb(255, 255, 255)", "white"), (
