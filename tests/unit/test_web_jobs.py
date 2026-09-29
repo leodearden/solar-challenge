@@ -14,7 +14,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.app import create_app
-from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.jobs import JobManager, live_managers
 
 
 @pytest.fixture
@@ -592,6 +592,23 @@ class TestJobManagerShutdown:
         # Suppress "local variable 'jm' assigned but never used" lint; the
         # strong reference is the point — it keeps jm alive through both calls.
         del jm
+
+
+class TestLiveManagers:
+    """Tests for live_managers(), the snapshot of every JobManager not yet garbage-collected."""
+
+    def test_live_managers_reports_a_manager_created_after_an_earlier_snapshot(self) -> None:
+        before = live_managers()
+        manager = JobManager(max_workers=1)
+
+        assert manager in live_managers()
+        assert manager not in before
+
+    def test_live_managers_includes_shut_down_managers(self) -> None:
+        manager = JobManager(max_workers=1)
+        manager.shutdown()
+
+        assert manager in live_managers()
 
 
 class TestRecoverStaleJobs:
