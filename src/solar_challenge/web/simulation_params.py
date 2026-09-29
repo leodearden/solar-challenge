@@ -161,10 +161,10 @@ def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, p
         if max_discharge_kw_raw is not None:
             battery_kwargs["max_discharge_kw"] = float(max_discharge_kw_raw)
         if efficiency_pct_raw is not None:
-            eff = float(efficiency_pct_raw)
-            if not (0 < eff <= 100):
-                raise ValueError(f"Efficiency must be between 0 and 100, got {eff}")
-            battery_kwargs["efficiency_pct"] = eff
+            efficiency_pct = float(efficiency_pct_raw)
+            if not (0 < efficiency_pct <= 100):
+                raise ValueError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
+            battery_kwargs["efficiency"] = efficiency_pct / 100
         try:
             dispatch_data = data.get("dispatch_strategy")
             if dispatch_data:
