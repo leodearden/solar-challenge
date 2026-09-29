@@ -20,6 +20,7 @@ from solar_challenge.web.jobs import JobManager
 
 from tests._sse import parse_sse_events
 from tests.unit.web_assistant._fakes import (
+    FakeAnthropic,
     install_fake_anthropic,
     make_end_turn_stream,
     make_fake_stream,
@@ -175,12 +176,12 @@ class TestToolUseLoop:
     def test_tool_sse_frame_emitted(
         self,
         client: FlaskClient,
-        sequence_mock_anthropic: dict[str, Any],
+        sequence_mock_anthropic: FakeAnthropic,
     ) -> None:
         """A tool_use response causes a 'tool' SSE frame with the tool name."""
         TOOL_ID = "toolu_explain_001"
 
-        sequence_mock_anthropic["set_streams"]([
+        sequence_mock_anthropic.set_streams([
             make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
             make_end_turn_stream(["The self-consumption ratio means X."]),
         ])
@@ -199,14 +200,14 @@ class TestToolUseLoop:
     def test_stream_called_twice_and_tool_result_has_canonical_band(
         self,
         client: FlaskClient,
-        sequence_mock_anthropic: dict[str, Any],
+        sequence_mock_anthropic: FakeAnthropic,
     ) -> None:
         """stream() called twice; 2nd call's messages[-1] contains the canonical band string."""
         from solar_challenge.web.assistant import _METRIC_TABLE
         TOOL_ID = "toolu_explain_002"
         CANONICAL_BAND = _METRIC_TABLE["self_consumption_ratio"]["uk_benchmark_band"]
 
-        sequence_mock_anthropic["set_streams"]([
+        sequence_mock_anthropic.set_streams([
             make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
             make_end_turn_stream(["Result follows."]),
         ])
@@ -215,7 +216,7 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         resp.get_data(as_text=True)
 
-        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        call_kwargs_list = sequence_mock_anthropic.calls
         assert len(call_kwargs_list) == 2, (
             f"Expected stream() to be called exactly 2 times, got {len(call_kwargs_list)}"
         )
@@ -250,16 +251,16 @@ class TestToolUseLoop:
     def test_tools_param_present_and_ordered(
         self,
         client: FlaskClient,
-        sequence_mock_anthropic: dict[str, Any],
+        sequence_mock_anthropic: FakeAnthropic,
     ) -> None:
         """stream() kwargs carry 'tools' with 6-tool names in fixed order."""
-        sequence_mock_anthropic["set_streams"]([
+        sequence_mock_anthropic.set_streams([
             make_end_turn_stream(["reply"]),
         ])
 
         client.post("/assistant/chat", json={"message": "ping"})
 
-        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        call_kwargs_list = sequence_mock_anthropic.calls
         assert call_kwargs_list, "Expected at least one stream() call"
         first_kwargs = call_kwargs_list[0]
         assert "tools" in first_kwargs, f"Expected 'tools' in stream() kwargs: {first_kwargs.keys()}"
@@ -278,12 +279,12 @@ class TestToolUseLoop:
     def test_done_frame_terminates_stream(
         self,
         client: FlaskClient,
-        sequence_mock_anthropic: dict[str, Any],
+        sequence_mock_anthropic: FakeAnthropic,
     ) -> None:
         """After a tool_use + end_turn, the SSE stream ends with a 'done' frame."""
         TOOL_ID = "toolu_explain_003"
 
-        sequence_mock_anthropic["set_streams"]([
+        sequence_mock_anthropic.set_streams([
             make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
             make_end_turn_stream(["done"]),
         ])
@@ -299,7 +300,7 @@ class TestToolUseLoop:
     def test_termination_bounded_by_max_tool_iterations(
         self,
         client: FlaskClient,
-        sequence_mock_anthropic: dict[str, Any],
+        sequence_mock_anthropic: FakeAnthropic,
     ) -> None:
         """A model that always returns tool_use is bounded by _MAX_TOOL_ITERATIONS."""
         from solar_challenge.web.assistant import _MAX_TOOL_ITERATIONS
@@ -314,14 +315,14 @@ class TestToolUseLoop:
             )
             for i in range(_MAX_TOOL_ITERATIONS + 10)  # more than the cap
         ]
-        sequence_mock_anthropic["set_streams"](infinite_streams)
+        sequence_mock_anthropic.set_streams(infinite_streams)
 
         resp = client.post("/assistant/chat", json={"message": "explain forever"})
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
         # stream() should be called exactly _MAX_TOOL_ITERATIONS times
-        call_count = len(sequence_mock_anthropic["call_kwargs_list"])
+        call_count = len(sequence_mock_anthropic.calls)
         assert call_count == _MAX_TOOL_ITERATIONS, (
             f"Expected exactly {_MAX_TOOL_ITERATIONS} stream() calls (loop cap), "
             f"got {call_count}"
@@ -337,11 +338,11 @@ class TestToolUseLoop:
     def test_final_message_without_stop_reason_streams_reply(
         self,
         client: FlaskClient,
-        sequence_mock_anthropic: dict[str, Any],
+        sequence_mock_anthropic: FakeAnthropic,
     ) -> None:
         """A final message with no stop_reason, as make_fake_stream builds it,
         still yields delta frames and a done frame."""
-        sequence_mock_anthropic["set_streams"]([
+        sequence_mock_anthropic.set_streams([
             make_fake_stream(["Hello", " world"]),
         ])
 
@@ -433,7 +434,7 @@ class TestRunLookupToolSurface:
         self,
         client: FlaskClient,
         app: Flask,
-        sequence_mock_anthropic: dict[str, Any],
+        sequence_mock_anthropic: FakeAnthropic,
         tmp_path: Path,
     ) -> None:
         """SSE 'tool' frame emitted for get_run_results; 2nd stream contains seeded summary value."""
@@ -449,7 +450,7 @@ class TestRunLookupToolSurface:
         )
 
         TOOL_ID = "toolu_grr_e2e_001"
-        sequence_mock_anthropic["set_streams"]([
+        sequence_mock_anthropic.set_streams([
             make_tool_use_stream(
                 TOOL_ID, "get_run_results", {"run_id_or_name": "e2e-run-001"}
             ),
@@ -469,7 +470,7 @@ class TestRunLookupToolSurface:
         )
 
         # 2. The 2nd stream() call's messages[-1] tool_result content must contain the summary value
-        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        call_kwargs_list = sequence_mock_anthropic.calls
         assert len(call_kwargs_list) == 2, (
             f"Expected stream() called exactly 2 times; got {len(call_kwargs_list)}"
         )
@@ -597,7 +598,7 @@ class TestSimulationToolUseSignal:
         self,
         client: FlaskClient,
         app: Flask,
-        sequence_mock_anthropic: dict[str, Any],
+        sequence_mock_anthropic: FakeAnthropic,
     ) -> None:
         """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config
         against the app's DATABASE and DATA_DIR; tool_result contains /results/home/<run_id>."""
@@ -610,7 +611,7 @@ class TestSimulationToolUseSignal:
         jm.submit_home_job.return_value = (JOB_ID, RUN_ID)
         app.extensions["job_manager"] = jm
 
-        sequence_mock_anthropic["set_streams"]([
+        sequence_mock_anthropic.set_streams([
             make_tool_use_stream(
                 TOOL_ID,
                 "run_home_simulation",
@@ -649,7 +650,7 @@ class TestSimulationToolUseSignal:
         assert call_kwargs.kwargs["data_dir"] == app.config["DATA_DIR"]
 
         # 3. 2nd stream() call's messages[-1] tool_result content must contain results_url
-        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        call_kwargs_list = sequence_mock_anthropic.calls
         assert len(call_kwargs_list) == 2, (
             f"Expected stream() called exactly 2 times; got {len(call_kwargs_list)}"
         )
@@ -675,7 +676,7 @@ class TestSimulationToolUseSignal:
         self,
         client: FlaskClient,
         app: Flask,
-        sequence_mock_anthropic: dict[str, Any],
+        sequence_mock_anthropic: FakeAnthropic,
     ) -> None:
         """run_fleet_simulation: submit_fleet_job receives 3-home configs list against the app's
         DATABASE and DATA_DIR; tool_result contains /results/fleet/<run_id>."""
@@ -687,7 +688,7 @@ class TestSimulationToolUseSignal:
         jm.submit_fleet_job.return_value = (JOB_ID, RUN_ID)
         app.extensions["job_manager"] = jm
 
-        sequence_mock_anthropic["set_streams"]([
+        sequence_mock_anthropic.set_streams([
             make_tool_use_stream(
                 TOOL_ID,
                 "run_fleet_simulation",
@@ -715,7 +716,7 @@ class TestSimulationToolUseSignal:
         assert call_kwargs.kwargs["data_dir"] == app.config["DATA_DIR"]
 
         # 2nd stream's tool_result content must contain the fleet results_url
-        call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
+        call_kwargs_list = sequence_mock_anthropic.calls
         assert len(call_kwargs_list) == 2, (
             f"Expected stream() called exactly 2 times; got {len(call_kwargs_list)}"
         )

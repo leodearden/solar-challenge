@@ -15,7 +15,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from tests._sse import SseFrame, parse_sse_events
-from tests.unit.web_assistant._fakes import install_fake_anthropic, make_fake_stream, seed_run
+from tests.unit.web_assistant._fakes import FakeAnthropic, install_fake_anthropic, make_fake_stream, seed_run
 
 
 def reply_text(events: list[SseFrame]) -> str:
@@ -222,10 +222,10 @@ class TestChatEndpointHappyPath:
     def test_chat_returns_sse_stream(
         self,
         client: FlaskClient,
-        mock_anthropic: dict,
+        mock_anthropic: FakeAnthropic,
     ) -> None:
         """POST /chat returns 200 text/event-stream with delta + done frames."""
-        mock_anthropic["set_chunks"](["Hello", " world"])
+        mock_anthropic.set_chunks(["Hello", " world"])
 
         resp = client.post(
             "/assistant/chat",
@@ -242,10 +242,10 @@ class TestChatEndpointHappyPath:
     def test_chat_delta_frames_reconstruct_reply(
         self,
         client: FlaskClient,
-        mock_anthropic: dict,
+        mock_anthropic: FakeAnthropic,
     ) -> None:
         """Concatenated delta frame texts equal the mocked reply."""
-        mock_anthropic["set_chunks"](["Hello", " world"])
+        mock_anthropic.set_chunks(["Hello", " world"])
 
         resp = client.post("/assistant/chat", json={"message": "test"})
         body = resp.get_data(as_text=True)
@@ -255,27 +255,27 @@ class TestChatEndpointHappyPath:
     def test_chat_uses_default_model(
         self,
         client: FlaskClient,
-        mock_anthropic: dict,
+        mock_anthropic: FakeAnthropic,
     ) -> None:
         """Without SOLAR_ASSISTANT_MODEL env var, model defaults to claude-opus-4-8."""
-        mock_anthropic["set_chunks"](["ok"])
+        mock_anthropic.set_chunks(["ok"])
 
         client.post("/assistant/chat", json={"message": "ping"})
 
-        kwargs = mock_anthropic["state"]["last_kwargs"]
+        kwargs = mock_anthropic.last_kwargs
         assert kwargs.get("model") == "claude-opus-4-8"
 
     def test_chat_system_block_has_cache_control(
         self,
         client: FlaskClient,
-        mock_anthropic: dict,
+        mock_anthropic: FakeAnthropic,
     ) -> None:
         """system block list has cache_control == {'type': 'ephemeral'}."""
-        mock_anthropic["set_chunks"](["ok"])
+        mock_anthropic.set_chunks(["ok"])
 
         client.post("/assistant/chat", json={"message": "ping"})
 
-        kwargs = mock_anthropic["state"]["last_kwargs"]
+        kwargs = mock_anthropic.last_kwargs
         system_list = kwargs.get("system", [])
         assert len(system_list) >= 1
         first_block = system_list[0]
@@ -284,11 +284,11 @@ class TestChatEndpointHappyPath:
     def test_chat_persists_user_and_assistant_turns(
         self,
         client: FlaskClient,
-        mock_anthropic: dict,
+        mock_anthropic: FakeAnthropic,
         app: Flask,
     ) -> None:
         """After POST /chat, user+assistant rows appear in GET /history on the SAME client."""
-        mock_anthropic["set_chunks"](["mock reply"])
+        mock_anthropic.set_chunks(["mock reply"])
 
         # Pin the session_id so we can be sure we're checking the right one
         with client.session_transaction() as sess:
@@ -527,7 +527,7 @@ class TestHistoryWindowAlternation:
     def test_window_starts_with_user_turn_after_many_exchanges(
         self,
         client: FlaskClient,
-        mock_anthropic: dict,
+        mock_anthropic: FakeAnthropic,
         app: Flask,
     ) -> None:
         """msgs[0]["role"] must be 'user' even when the tail starts on an assistant row."""
@@ -545,14 +545,14 @@ class TestHistoryWindowAlternation:
             save_chat_message(db_path, "window-sid", "user", f"user-{i}")
             save_chat_message(db_path, "window-sid", "assistant", f"assistant-{i}")
 
-        mock_anthropic["set_chunks"](["window reply"])
+        mock_anthropic.set_chunks(["window reply"])
 
         # Handler saves user row → 23 total; slices last 20 → starts on assistant row
         resp = client.post("/assistant/chat", json={"message": "latest"})
         assert resp.status_code == 200
         resp.get_data(as_text=True)  # consume the stream
 
-        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        msgs = mock_anthropic.last_kwargs["messages"]
         assert msgs, "Expected non-empty messages list in captured kwargs"
 
         # API invariant: window must start with a user turn
@@ -618,7 +618,7 @@ class TestRunContextInjection:
         self,
         client: FlaskClient,
         app: Flask,
-        mock_anthropic: dict[str, Any],
+        mock_anthropic: FakeAnthropic,
     ) -> None:
         """POST with run_id injects summary into messages[-1]['content'] before API call."""
         db_path = app.config["DATABASE"]
@@ -632,7 +632,7 @@ class TestRunContextInjection:
             summary={"total_generation_kwh": summary_marker},
         )
 
-        mock_anthropic["set_chunks"](["ok"])
+        mock_anthropic.set_chunks(["ok"])
 
         resp = client.post(
             "/assistant/chat",
@@ -641,7 +641,7 @@ class TestRunContextInjection:
         assert resp.status_code == 200
         resp.get_data(as_text=True)
 
-        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        msgs = mock_anthropic.last_kwargs["messages"]
         last_msg = msgs[-1]
         assert last_msg["role"] == "user", f"Expected last msg role=user; got {last_msg['role']!r}"
         content = last_msg["content"]
@@ -657,7 +657,7 @@ class TestRunContextInjection:
         self,
         client: FlaskClient,
         app: Flask,
-        mock_anthropic: dict[str, Any],
+        mock_anthropic: FakeAnthropic,
     ) -> None:
         """The persisted user row contains only the original user message, not injected context."""
         db_path = app.config["DATABASE"]
@@ -673,7 +673,7 @@ class TestRunContextInjection:
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "ctx-persist-sid"
 
-        mock_anthropic["set_chunks"](["ok"])
+        mock_anthropic.set_chunks(["ok"])
 
         resp = client.post(
             "/assistant/chat",
@@ -701,10 +701,10 @@ class TestRunContextInjection:
         self,
         client: FlaskClient,
         app: Flask,
-        mock_anthropic: dict[str, Any],
+        mock_anthropic: FakeAnthropic,
     ) -> None:
         """POST with an unknown run_id streams normally (delta+done, no error/500)."""
-        mock_anthropic["set_chunks"](["normal reply"])
+        mock_anthropic.set_chunks(["normal reply"])
 
         resp = client.post(
             "/assistant/chat",
@@ -719,7 +719,7 @@ class TestRunContextInjection:
         assert "error" not in event_types, f"Unexpected error frame for unknown run_id: {body[:300]}"
 
         # Messages sent to API must NOT contain injected run context for unknown id
-        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        msgs = mock_anthropic.last_kwargs["messages"]
         last_content = msgs[-1]["content"]
         assert "totally-unknown-run-xyz" not in last_content, (
             f"Unknown run_id should not appear in injected content; got: {last_content!r}"
@@ -728,10 +728,10 @@ class TestRunContextInjection:
     def test_no_run_id_leaves_user_message_unchanged(
         self,
         client: FlaskClient,
-        mock_anthropic: dict[str, Any],
+        mock_anthropic: FakeAnthropic,
     ) -> None:
         """POST without run_id: messages[-1]['content'] equals exactly the user message."""
-        mock_anthropic["set_chunks"](["plain reply"])
+        mock_anthropic.set_chunks(["plain reply"])
 
         resp = client.post(
             "/assistant/chat",
@@ -740,7 +740,7 @@ class TestRunContextInjection:
         assert resp.status_code == 200
         resp.get_data(as_text=True)
 
-        msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
+        msgs = mock_anthropic.last_kwargs["messages"]
         last_msg = msgs[-1]
         assert last_msg["role"] == "user"
         assert last_msg["content"] == "plain message no run", (
