@@ -28,9 +28,38 @@ def app(tmp_path: Path) -> Flask:
     return test_app
 
 
+class _RecordingJobManager:
+    """Stands in for the app's JobManager: records each home config a request submits and simulates nothing."""
+
+    def __init__(self) -> None:
+        self.submitted_homes: list[object] = []
+
+    def submit_home_job(
+        self,
+        config: object,
+        start_date: object,
+        end_date: object,
+        db_path: str,
+        data_dir: str,
+        name: str | None = None,
+    ) -> tuple[str, str]:
+        """Record the home config and return a fresh (job_id, run_id) pair."""
+        self.submitted_homes.append(config)
+        n = len(self.submitted_homes)
+        return f"job-{n}", f"run-{n}"
+
+
 @pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
+def recording_job_manager(app: Flask) -> _RecordingJobManager:
+    """Install a recording double as the app's job manager and return it."""
+    job_manager = _RecordingJobManager()
+    app.extensions["job_manager"] = job_manager
+    return job_manager
+
+
+@pytest.fixture
+def client(app: Flask, recording_job_manager: _RecordingJobManager) -> FlaskClient:
+    """Create a Flask test client whose requests submit jobs to the recording double, so none starts a real simulation."""
     return app.test_client()
 
 
@@ -311,36 +340,8 @@ class TestSweepAPI:
         assert response.status_code == 400
 
 
-class _RecordingJobManager:
-    """Stands in for the app's JobManager: records each home config a request submits and simulates nothing."""
-
-    def __init__(self) -> None:
-        self.submitted_homes: list[object] = []
-
-    def submit_home_job(
-        self,
-        config: object,
-        start_date: object,
-        end_date: object,
-        db_path: str,
-        data_dir: str,
-        name: str | None = None,
-    ) -> tuple[str, str]:
-        """Record the home config and return a fresh (job_id, run_id) pair."""
-        self.submitted_homes.append(config)
-        n = len(self.submitted_homes)
-        return f"job-{n}", f"run-{n}"
-
-
 class TestSweepParameters:
     """What POST /api/simulate/sweep submits for a swept parameter: one home per point, carrying that point's value, or nothing at all when the parameter is unsupported or any of its points is invalid."""
-
-    @pytest.fixture
-    def recording_job_manager(self, app: Flask) -> _RecordingJobManager:
-        """Install a recording double as the app's job manager and return it."""
-        job_manager = _RecordingJobManager()
-        app.extensions["job_manager"] = job_manager
-        return job_manager
 
     @pytest.mark.parametrize(
         ("parameter", "values", "swept_value_of"),
