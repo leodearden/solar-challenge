@@ -148,6 +148,34 @@ class TestParseHomeConfigCapabilities:
         assert home_config.battery_config is None  # no battery => no dispatch either
 
 
+class TestParseHomeConfigBatteryEfficiency:
+    """The form's round-trip efficiency percentage reaches BatteryConfig as a fraction."""
+
+    @pytest.mark.parametrize(
+        ("efficiency_pct", "round_trip"),
+        [
+            pytest.param(90, 0.9, id="form-default"),
+            pytest.param(100, 1.0, id="lossless"),
+        ],
+    )
+    def test_efficiency_pct_becomes_round_trip_fraction(
+        self, efficiency_pct: float, round_trip: float
+    ) -> None:
+        """The percentage becomes the fraction of energy a full charge-discharge cycle keeps."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "battery_kwh": 5.0, "efficiency_pct": efficiency_pct}
+        )
+        battery = home_config.battery_config
+        assert battery is not None
+        assert battery.efficiency == pytest.approx(round_trip)
+        assert battery.charge_efficiency * battery.discharge_efficiency == pytest.approx(round_trip)
+
+    def test_out_of_range_efficiency_pct_is_refused_in_the_units_sent(self) -> None:
+        """An out-of-range percentage is reported as sent (150), not as BatteryConfig's 1.5."""
+        with pytest.raises(ValueError, match="got 150"):
+            parse_home_config({**VALID_HOME_PAYLOAD, "battery_kwh": 5.0, "efficiency_pct": 150})
+
+
 class TestParseHomeConfigPVAge:
     """PV-age boundary tests: form→PVConfig threading (§D contract)."""
 
