@@ -227,10 +227,11 @@ class TestJobProgressEndpoint:
 class TestJobResultsEndpoint:
     """Tests for GET /api/jobs/<id>/results."""
 
-    def test_results_returns_409_while_running(self, client: FlaskClient) -> None:
+    def test_results_returns_409_while_running(
+        self, blocking_client: FlaskClient, blocking_simulation: _BlockingSimulation
+    ) -> None:
         """Test GET /api/jobs/<id>/results returns 409 while job is running."""
-        # Submit a job
-        submit_resp = client.post(
+        submit_resp = blocking_client.post(
             "/api/simulate/home",
             json={
                 "pv_kw": 4.0,
@@ -242,12 +243,12 @@ class TestJobResultsEndpoint:
         )
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
+        blocking_simulation.wait_until_started()
 
-        # Immediately check results - should be 409 (not complete yet)
-        # or possibly 200 if it completed very fast
-        results_resp = client.get(f"/api/jobs/{job_id}/results")
-        # It should either be 409 (still running) or 200 (completed very fast)
-        assert results_resp.status_code in (200, 409)
+        results_resp = blocking_client.get(f"/api/jobs/{job_id}/results")
+
+        assert results_resp.status_code == 409
+        assert results_resp.get_json()["status"] == "running"
 
     def test_results_returns_404_unknown_job(self, client: FlaskClient) -> None:
         """Test GET /api/jobs/<unknown_id>/results returns 404."""
