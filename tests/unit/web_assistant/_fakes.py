@@ -29,33 +29,17 @@ from solar_challenge.web.database import get_db, init_db
 def make_fake_stream(text_chunks: list[str]) -> MagicMock:
     """Build a context-manager mock for anthropic.Anthropic().messages.stream().
 
-    Returns a context-manager mock whose ``__enter__`` yields a fake stream
-    object with:
-      - ``stream.text_stream``        — an iterable over *text_chunks*
-      - ``stream.get_final_message()`` — a SimpleNamespace with ``.content``
-        and ``.usage`` (cache_creation_input_tokens, cache_read_input_tokens)
+    It streams *text_chunks*; its final message has ``.content`` and ``.usage``
+    but no ``stop_reason``.
     """
-    def _make_fake_usage() -> SimpleNamespace:
-        return SimpleNamespace(
+    final_message = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="".join(text_chunks))],
+        usage=SimpleNamespace(
             cache_creation_input_tokens=100,
             cache_read_input_tokens=0,
-        )
-
-    def _make_final_message() -> SimpleNamespace:
-        return SimpleNamespace(
-            content=[SimpleNamespace(type="text", text="".join(text_chunks))],
-            usage=_make_fake_usage(),
-        )
-
-    fake_stream = MagicMock()
-    fake_stream.text_stream = iter(text_chunks)
-    fake_stream.get_final_message.return_value = _make_final_message()
-
-    cm = MagicMock()
-    cm.__enter__.return_value = fake_stream
-    cm.__exit__.return_value = False
-
-    return cm
+        ),
+    )
+    return _stream_manager(text_chunks, final_message)
 
 
 def make_tool_use_stream(
@@ -69,53 +53,51 @@ def make_tool_use_stream(
     SimpleNamespace with stop_reason='tool_use' and a content list containing
     one tool_use block.
     """
-    def _make_final_message() -> SimpleNamespace:
-        return SimpleNamespace(
-            stop_reason="tool_use",
-            content=[
-                SimpleNamespace(
-                    type="tool_use",
-                    id=tool_id,
-                    name=tool_name,
-                    input=tool_input,
-                ),
-            ],
-            usage=SimpleNamespace(
-                cache_creation_input_tokens=50,
-                cache_read_input_tokens=0,
+    final_message = SimpleNamespace(
+        stop_reason="tool_use",
+        content=[
+            SimpleNamespace(
+                type="tool_use",
+                id=tool_id,
+                name=tool_name,
+                input=tool_input,
             ),
-        )
-
-    fake_stream = MagicMock()
-    fake_stream.text_stream = iter([])  # no text in tool-use turn
-    fake_stream.get_final_message.return_value = _make_final_message()
-
-    cm = MagicMock()
-    cm.__enter__.return_value = fake_stream
-    cm.__exit__.return_value = False
-    return cm
+        ],
+        usage=SimpleNamespace(
+            cache_creation_input_tokens=50,
+            cache_read_input_tokens=0,
+        ),
+    )
+    return _stream_manager([], final_message)
 
 
 def make_end_turn_stream(text_chunks: list[str]) -> MagicMock:
     """Build a context-manager mock for a stream that ends with stop_reason='end_turn'."""
-    def _make_final_message() -> SimpleNamespace:
-        return SimpleNamespace(
-            stop_reason="end_turn",
-            content=[SimpleNamespace(type="text", text="".join(text_chunks))],
-            usage=SimpleNamespace(
-                cache_creation_input_tokens=0,
-                cache_read_input_tokens=80,
-            ),
-        )
+    final_message = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[SimpleNamespace(type="text", text="".join(text_chunks))],
+        usage=SimpleNamespace(
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=80,
+        ),
+    )
+    return _stream_manager(text_chunks, final_message)
 
-    fake_stream = MagicMock()
-    fake_stream.text_stream = iter(text_chunks)
-    fake_stream.get_final_message.return_value = _make_final_message()
 
-    cm = MagicMock()
-    cm.__enter__.return_value = fake_stream
-    cm.__exit__.return_value = False
-    return cm
+def _stream_manager(text_chunks: list[str], final_message: SimpleNamespace) -> MagicMock:
+    """Fake the MessageStreamManager that ``messages.stream()`` returns.
+
+    Entering it gives a stream whose ``text_stream`` yields *text_chunks* and whose
+    ``get_final_message()`` returns *final_message*.
+    """
+    stream = MagicMock()
+    stream.text_stream = iter(text_chunks)
+    stream.get_final_message.return_value = final_message
+
+    manager = MagicMock()
+    manager.__enter__.return_value = stream
+    manager.__exit__.return_value = False
+    return manager
 
 
 def seed_run(
