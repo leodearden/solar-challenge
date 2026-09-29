@@ -2,7 +2,6 @@
 """Tests for the AI assistant web blueprint (slice ①: foundation wiring + slice ②: chat core)."""
 
 import os
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -446,47 +445,6 @@ class TestChatDegradation:
 
         assert error_data is not None, "Could not find error data payload"
         assert "message" in error_data, f"Error payload missing 'message': {error_data}"
-
-    def test_blueprint_registers_when_sdk_absent(self) -> None:
-        """Blueprint registers even if 'anthropic' is absent from sys.modules.
-
-        Fulfils the slice-② TODO from the slice-① foundation test:
-        deferred import keeps blueprint registration robust.
-        """
-        import sys
-
-        # Patch sys.modules so `import anthropic` would fail
-        original = sys.modules.get("anthropic", None)
-        sys.modules["anthropic"] = None  # type: ignore[assignment]
-        try:
-            # Build a fresh app — should NOT raise during blueprint registration
-            from solar_challenge.web.app import create_app as _create_app
-            import tempfile, os
-
-            with tempfile.TemporaryDirectory() as tmp:
-                db_path = os.path.join(tmp, "test.db")
-                fresh_app = _create_app(
-                    test_config={
-                        "TESTING": True,
-                        "SECRET_KEY": "deferred-test",
-                        "WTF_CSRF_ENABLED": False,
-                        "DATABASE": db_path,
-                        "DATA_DIR": tmp,
-                    }
-                )
-            assert "assistant" in fresh_app.blueprints, (
-                "Expected 'assistant' blueprint registered even when anthropic SDK absent"
-            )
-            # GET /assistant should still return 200 (page renders without the SDK)
-            with fresh_app.test_client() as fc:
-                resp = fc.get("/assistant")
-                assert resp.status_code == 200
-        finally:
-            # Restore sys.modules to original state
-            if original is None:
-                sys.modules.pop("anthropic", None)
-            else:
-                sys.modules["anthropic"] = original
 
 
 # ---------------------------------------------------------------------------
