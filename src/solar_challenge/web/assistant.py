@@ -439,10 +439,8 @@ def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any
         Returns ``{"error": "<reason>"}`` when not found or on any DB error.
         Never raises.
     """
-    from solar_challenge.web.database import get_db
-
     try:
-        with get_db(db_path) as conn:
+        with database.get_db(db_path) as conn:
             cursor = conn.cursor()
             # First attempt: exact id match
             cursor.execute(
@@ -499,15 +497,13 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
         On any DB error returns ``{"runs": [], "error": "<reason>"}``.
         Never raises.
     """
-    from solar_challenge.web.database import get_db
-
     # Clamp limit to a sane range; treat <= 0 as "use default 10"
     _DEFAULT_LIMIT = 10
     _MAX_LIMIT = 50
     effective_limit = max(1, min(limit if limit > 0 else _DEFAULT_LIMIT, _MAX_LIMIT))
 
     try:
-        with get_db(db_path) as conn:
+        with database.get_db(db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, name, type, status, created_at, n_homes, summary_json "
