@@ -724,9 +724,9 @@ def import_fleet_yaml() -> tuple[Response, int]:
 def simulate_sweep() -> tuple[Response, int]:
     """Submit a parameter sweep for background execution.
 
-    Generates a set of sweep points (linear or geometric) and returns
-    them for tracking.  Full job submission is deferred until the
-    JobManager integration is complete.
+    Generates a set of sweep points (linear or geometric) and submits one
+    background home-simulation job per point.  Returns the sweep id, the
+    rounded sweep values and the ids of the submitted jobs.
 
     Expects a JSON body with:
       - parameter: str (e.g. "pv_capacity_kw")
