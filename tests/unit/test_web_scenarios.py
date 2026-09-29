@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable
+from inspect import signature
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,22 @@ def recording_job_manager(app: Flask) -> _RecordingJobManager:
 def client(app: Flask, recording_job_manager: _RecordingJobManager) -> FlaskClient:
     """Create a Flask test client whose requests submit jobs to the recording double, so none starts a real simulation."""
     return app.test_client()
+
+
+def _call_shape(method: Callable[..., object]) -> list[tuple[str, object, object]]:
+    """The parameter names, kinds and defaults that decide which calls a method accepts."""
+    return [(p.name, p.kind, p.default) for p in signature(method).parameters.values()]
+
+
+class TestRecordingJobManager:
+    """The recording double stays in step with the real JobManager it stands in for."""
+
+    def test_submit_home_job_takes_the_parameters_the_real_one_takes(self, app: Flask) -> None:
+        """A change to the real submit_home_job's parameters fails here, instead of passing silently behind the double."""
+        real_job_manager = app.extensions["job_manager"]
+        double = _RecordingJobManager()
+
+        assert _call_shape(double.submit_home_job) == _call_shape(real_job_manager.submit_home_job)
 
 
 class TestScenarioBuilderRoute:
