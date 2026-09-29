@@ -19,7 +19,13 @@ from flask.testing import FlaskClient
 from solar_challenge.web.jobs import JobManager
 
 from tests._sse import parse_sse_events
-from tests.unit.web_assistant._fakes import make_end_turn_stream, make_fake_stream, make_tool_use_stream, seed_run
+from tests.unit.web_assistant._fakes import (
+    install_fake_anthropic,
+    make_end_turn_stream,
+    make_fake_stream,
+    make_tool_use_stream,
+    seed_run,
+)
 
 
 def dispatch_dependencies(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
@@ -44,8 +50,6 @@ def sequence_mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
       - 'call_kwargs_list': list of kwargs dicts recorded per stream() call
       - 'set_streams': callable(list[MagicMock]) — set the ordered stream responses
     """
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-seq-test-key")
-
     state: dict[str, Any] = {
         "call_kwargs_list": [],
         "streams": [],
@@ -62,12 +66,7 @@ def sequence_mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         # fallback: end_turn with empty text
         return make_end_turn_stream(["(fallback)"])
 
-    mock_cls = MagicMock()
-    mock_instance = MagicMock()
-    mock_instance.messages.stream.side_effect = _stream_factory
-    mock_cls.return_value = mock_instance
-
-    monkeypatch.setattr("anthropic.Anthropic", mock_cls, raising=False)
+    install_fake_anthropic(monkeypatch, _stream_factory)
 
     def _set_streams(streams: list[MagicMock]) -> None:
         state["streams"] = streams

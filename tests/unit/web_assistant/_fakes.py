@@ -1,29 +1,58 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Canned collaborators the web-assistant tests drive the assistant with.
 
-The ``make_*_stream`` builders script the context managers that
-``anthropic.Anthropic().messages.stream()`` returns; ``seed_run`` inserts a row
-into the runs table.
+``install_fake_anthropic`` patches ``anthropic.Anthropic`` with a mock whose
+``messages.stream()`` returns what the ``make_*_stream`` builders script;
+``seed_run`` inserts a row into the runs table.
 
 Usage::
 
-    from tests.unit.web_assistant._fakes import make_end_turn_stream, make_tool_use_stream, seed_run
+    from tests.unit.web_assistant._fakes import (
+        install_fake_anthropic,
+        make_end_turn_stream,
+        make_tool_use_stream,
+        seed_run,
+    )
 
     seed_run(db_path, run_id="run-1", name="my-run",
              created_at="2026-01-01T00:00:00+00:00", summary={})
-    anthropic_client.messages.stream.side_effect = [
+    streams = iter([
         make_tool_use_stream("toolu_1", "get_run_results", {"run_id_or_name": "run-1"}),
         make_end_turn_stream(["Here is your run."]),
-    ]
+    ])
+    install_fake_anthropic(monkeypatch, lambda **kwargs: next(streams))
 """
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 from solar_challenge.web.database import get_db, init_db
+
+
+def install_fake_anthropic(
+    monkeypatch: pytest.MonkeyPatch,
+    stream_factory: Callable[..., MagicMock],
+) -> MagicMock:
+    """Set a dummy ANTHROPIC_API_KEY and patch ``anthropic.Anthropic`` with a mock class.
+
+    The client it constructs answers ``messages.stream(**kwargs)`` with
+    ``stream_factory(**kwargs)``. Returns the mock class.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-test-key")
+
+    mock_cls = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.messages.stream.side_effect = stream_factory
+    mock_cls.return_value = mock_instance
+
+    monkeypatch.setattr("anthropic.Anthropic", mock_cls, raising=False)
+    return mock_cls
 
 
 def make_fake_stream(text_chunks: list[str]) -> MagicMock:

@@ -7,7 +7,6 @@ The routes are the /assistant page, GET /assistant/history and POST /assistant/c
 import os
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,7 +15,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from tests._sse import SseFrame, parse_sse_events
-from tests.unit.web_assistant._fakes import make_fake_stream, seed_run
+from tests.unit.web_assistant._fakes import install_fake_anthropic, make_fake_stream, seed_run
 
 
 def reply_text(events: list[SseFrame]) -> str:
@@ -40,8 +39,6 @@ def mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         resp = client.post('/assistant/chat', json={'message': 'hi'})
         kwargs = info['state']['last_kwargs']
     """
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-test-key")
-
     state: dict[str, Any] = {"chunks": ["mock ", "reply"], "last_kwargs": {}}
 
     def _stream_factory(**kwargs: Any) -> Any:
@@ -50,12 +47,7 @@ def mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         state["last_kwargs"].update(kwargs)
         return make_fake_stream(list(state["chunks"]))
 
-    mock_cls = MagicMock()
-    mock_instance = MagicMock()
-    mock_instance.messages.stream.side_effect = _stream_factory
-    mock_cls.return_value = mock_instance
-
-    monkeypatch.setattr("anthropic.Anthropic", mock_cls, raising=False)
+    mock_cls = install_fake_anthropic(monkeypatch, _stream_factory)
 
     def _set_chunks(chunks: list[str]) -> None:
         state["chunks"] = chunks
