@@ -452,9 +452,10 @@ class TestChatDegradation:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A client the SDK cannot construct, as from a malformed ANTHROPIC_BASE_URL,
-        yields an error frame and saves no chat turn."""
+        yields an error frame naming that failure and saves no chat turn."""
+        malformed_port = "notaport"
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-test-key")
-        monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:notaport")
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://localhost:{malformed_port}")
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "construction-failure-sid"
 
@@ -464,6 +465,7 @@ class TestChatDegradation:
         assert "text/event-stream" in resp.content_type
         body = resp.get_data(as_text=True)
         assert "event: error" in body
+        assert malformed_port in body
         assert "event: delta" not in body
         assert "event: done" not in body
         assert client.get("/assistant/history").get_json() == {"messages": []}
