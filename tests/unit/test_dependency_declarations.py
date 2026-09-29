@@ -286,14 +286,24 @@ def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions
         tmp_path / "live_partly_declared.py", "import yaml", f"import {unprovided}"
     )
 
+    not_judged_stdlib_only = _write_import_guard(tmp_path / "not_judged_stdlib_only.py", "import json")
+
     dead = _dead_import_guards(
-        [dead_import, dead_nested_from_import, live_unprovided, live_partly_declared],
+        [
+            dead_import,
+            dead_nested_from_import,
+            live_unprovided,
+            live_partly_declared,
+            not_judged_stdlib_only,
+        ],
         declared={"pyyaml"},
     )
 
     assert dead == [(dead_import, 2, ["yaml"]), (dead_nested_from_import, 2, ["yaml"])], (
         "the dead-guard detector misjudged a synthetic guard: the dead_* guards import only the "
-        "declared pyyaml, and each live_* guard imports a module no declared distribution provides"
+        "declared pyyaml, each live_* guard imports a module no declared distribution provides, "
+        "and not_judged_stdlib_only imports only the standard library, so it guards no "
+        "third-party import and must not be judged dead"
     )
 
 
