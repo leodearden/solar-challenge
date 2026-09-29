@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from tests._interpreters import off_pin_minor_versions, python_version_pin
-from tests._orchestrator_config import load_orchestrator_config
+from tests._orchestrator_config import load_orchestrator_config, offline_lane_jobs
 
 _MATRIX_JOB = "interpreter-matrix"
 
@@ -25,11 +25,6 @@ def _git_config(project_root: Path) -> dict[str, Any]:
     """Return the `git` mapping of dark-factory-orchestrator.yaml, where the offline-lane keys live."""
     git: dict[str, Any] = load_orchestrator_config(project_root)["git"]
     return git
-
-
-def _matrix_jobs(git: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return the offline-lane command entries named interpreter-matrix."""
-    return [job for job in git.get("offline_lane_commands") or [] if job.get("name") == _MATRIX_JOB]
 
 
 def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Path) -> None:
@@ -52,7 +47,7 @@ def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Pa
         "git.offline_lane_infra_enabled is on; that seam runs reify's tests/infra/run_all.sh, "
         "which this repo does not have, so every lane run goes red"
     )
-    matrix_jobs = _matrix_jobs(git)
+    matrix_jobs = offline_lane_jobs(project_root, _MATRIX_JOB)
     assert len(matrix_jobs) == 1, (
         f"git.offline_lane_commands has {len(matrix_jobs)} entries named {_MATRIX_JOB!r}; with "
         "none the off-pin interpreters are never re-verified, with several every merge runs "
@@ -71,7 +66,7 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(pro
     """
     if shutil.which("uv") is None:
         pytest.skip("uv is not installed; the interpreter-matrix job runs through it")
-    command = _matrix_jobs(_git_config(project_root))[0]["command"]
+    command = offline_lane_jobs(project_root, _MATRIX_JOB)[0]["command"]
 
     result = subprocess.run(
         command,
