@@ -214,10 +214,10 @@ class TestJobResultsEndpoint:
 class TestJobCompletion:
     """Test that a job completes successfully end-to-end."""
 
-    def test_home_job_completes(self, client: FlaskClient) -> None:
+    def test_home_job_completes(self, real_simulation_client: FlaskClient) -> None:
         """Test that a submitted home job eventually completes with results."""
         # Submit a minimal 1-day simulation
-        submit_resp = client.post(
+        submit_resp = real_simulation_client.post(
             "/api/simulate/home",
             json={
                 "pv_kw": 4.0,
@@ -236,7 +236,7 @@ class TestJobCompletion:
         deadline = time.monotonic() + 120  # 120 second timeout
         status = "queued"
         while time.monotonic() < deadline:
-            status_resp = client.get(f"/api/jobs/{job_id}")
+            status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
             assert status_resp.status_code == 200
             status_data = status_resp.get_json()
             status = status_data["status"]
@@ -247,16 +247,16 @@ class TestJobCompletion:
         assert status == "completed", f"Job did not complete in time, last status: {status}"
 
         # Now fetch results
-        results_resp = client.get(f"/api/jobs/{job_id}/results")
+        results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
         assert results_resp.status_code == 200
         results_data = results_resp.get_json()
         assert results_data["run_id"] == run_id
         assert "summary" in results_data
         assert results_data["summary"].get("total_generation_kwh") is not None
 
-    def test_home_job_with_battery_completes(self, client: FlaskClient) -> None:
+    def test_home_job_with_battery_completes(self, real_simulation_client: FlaskClient) -> None:
         """Test that a home job with battery completes successfully."""
-        submit_resp = client.post(
+        submit_resp = real_simulation_client.post(
             "/api/simulate/home",
             json={
                 "pv_kw": 4.0,
@@ -274,7 +274,7 @@ class TestJobCompletion:
         deadline = time.monotonic() + 120
         status = "queued"
         while time.monotonic() < deadline:
-            status_resp = client.get(f"/api/jobs/{job_id}")
+            status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
             status_data = status_resp.get_json()
             status = status_data["status"]
             if status in ("completed", "failed"):
