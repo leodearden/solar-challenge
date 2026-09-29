@@ -360,26 +360,26 @@ class TestToolUseLoop:
 class TestRunLookupToolSurface:
     """get_run_results and list_recent_runs as the chat registers, dispatches and calls them."""
 
-    def test_new_tools_input_schema_is_object_with_required(self) -> None:
+    def test_run_lookup_tools_input_schema_is_object_with_required(self) -> None:
         """get_run_results and list_recent_runs have type 'object' and non-empty required."""
         from solar_challenge.web.assistant import _TOOLS
 
-        new_tools = {t["name"]: t for t in _TOOLS if t["name"] in ("get_run_results", "list_recent_runs")}
-        assert "get_run_results" in new_tools, "get_run_results missing from _TOOLS"
-        assert "list_recent_runs" in new_tools, "list_recent_runs missing from _TOOLS"
+        run_lookup_tools = {t["name"]: t for t in _TOOLS if t["name"] in ("get_run_results", "list_recent_runs")}
+        assert "get_run_results" in run_lookup_tools, "get_run_results missing from _TOOLS"
+        assert "list_recent_runs" in run_lookup_tools, "list_recent_runs missing from _TOOLS"
 
-        for name, tool in new_tools.items():
+        for name, tool in run_lookup_tools.items():
             schema = tool["input_schema"]
             assert schema.get("type") == "object", f"{name}: input_schema.type must be 'object'"
             required = schema.get("required", [])
             assert required, f"{name}: required list must be non-empty"
 
         # Specific required fields
-        grr_required = new_tools["get_run_results"]["input_schema"]["required"]
+        grr_required = run_lookup_tools["get_run_results"]["input_schema"]["required"]
         assert "run_id_or_name" in grr_required, (
             f"get_run_results must require 'run_id_or_name'; got {grr_required}"
         )
-        lrr_required = new_tools["list_recent_runs"]["input_schema"]["required"]
+        lrr_required = run_lookup_tools["list_recent_runs"]["input_schema"]["required"]
         assert "limit" in lrr_required, (
             f"list_recent_runs must require 'limit'; got {lrr_required}"
         )
