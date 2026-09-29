@@ -746,8 +746,9 @@ def simulate_sweep() -> tuple[Response, int]:
 
     Returns:
         JSON with sweep_id, parameter, values and job_ids, HTTP 201.
-        HTTP 400, before any job is submitted, for an unsupported parameter
-        or an invalid range.
+        HTTP 400 for an unsupported parameter (the error lists the supported
+        ones), an invalid range, or a point whose home config is invalid.
+        Every 400 comes before any job is submitted.
     """
     import uuid as _uuid  # noqa: PLC0415
 
@@ -786,15 +787,10 @@ def simulate_sweep() -> tuple[Response, int]:
     else:
         values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
 
-    # Submit individual home jobs for each sweep point
-    sweep_id = str(_uuid.uuid4())
-    job_manager = get_job_manager()
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
-
-    job_ids: list[str] = []
     rounded_values = [round(v, 3) for v in values]
 
+    # Build every point's home before any job is submitted
+    point_homes: list[tuple[float, HomeConfig, pd.Timestamp, pd.Timestamp]] = []
     for val in rounded_values:
         point_config = dict(base_config)
         point_config[home_config_key] = val
@@ -806,10 +802,19 @@ def simulate_sweep() -> tuple[Response, int]:
         point_config.setdefault("days", 7)
 
         try:
-            home_config, start_date, end_date, name = _parse_home_config(point_config)
+            home_config, start_date, end_date, _ = _parse_home_config(point_config)
         except (ValueError, TypeError) as exc:
             return jsonify({"error": f"Invalid config for {parameter}={val}: {exc}"}), 400
+        point_homes.append((val, home_config, start_date, end_date))
 
+    # Submit one home job per sweep point
+    sweep_id = str(_uuid.uuid4())
+    job_manager = get_job_manager()
+    db_path = current_app.config["DATABASE"]
+    data_dir = current_app.config["DATA_DIR"]
+
+    job_ids: list[str] = []
+    for val, home_config, start_date, end_date in point_homes:
         job_id, _ = job_manager.submit_home_job(
             config=home_config,
             start_date=start_date,

@@ -334,7 +334,7 @@ class _RecordingJobManager:
 
 
 class TestSweepParameters:
-    """Which parameters POST /api/simulate/sweep may vary: each supported one reaches the simulated home; any other is refused before a point is submitted."""
+    """What POST /api/simulate/sweep submits for a swept parameter: one home per point, carrying that point's value, or nothing at all when the parameter is unsupported or any of its points is invalid."""
 
     @pytest.fixture
     def recording_job_manager(self, app: Flask) -> _RecordingJobManager:
@@ -411,6 +411,24 @@ class TestSweepParameters:
         assert parameter in error
         for supported in ("pv_capacity_kw", "battery_capacity_kwh", "annual_consumption_kwh"):
             assert supported in error
+        assert recording_job_manager.submitted_homes == []
+
+    def test_a_later_invalid_point_refuses_the_sweep_before_any_point_is_submitted(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+    ) -> None:
+        """A sweep whose last point exceeds the PV capacity a home accepts gets 400 naming that point, and submits none of its points.
+
+        Its earlier points are valid, so a sweep that submitted each point as it validated it would already have started their jobs.
+        """
+        response = client.post(
+            "/api/simulate/sweep",
+            json={"parameter": "pv_capacity_kw", "min": 5.0, "max": 25.0, "steps": 3},
+        )
+
+        assert response.status_code == 400
+        assert "pv_capacity_kw=25.0" in response.get_json()["error"]
         assert recording_job_manager.submitted_homes == []
 
 
