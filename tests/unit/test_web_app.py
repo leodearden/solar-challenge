@@ -62,7 +62,7 @@ def test_building_the_app_fails_when_a_module_it_wires_in_cannot_import(
 def test_building_the_app_does_not_import_the_anthropic_sdk(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The assistant imports the anthropic SDK only to answer a chat, so the app and its assistant page work where the SDK cannot import."""
+    """Building the app and serving the assistant page never import the anthropic SDK: the assistant imports it only to answer a chat."""
     monkeypatch.setitem(sys.modules, "anthropic", None)
     _uncache_module(monkeypatch, "solar_challenge.web.assistant")
     _uncache_module(monkeypatch, "solar_challenge.web.app")
