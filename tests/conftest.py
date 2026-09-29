@@ -1,6 +1,7 @@
 """Pytest configuration and shared fixtures."""
 
 import sys
+import weakref
 from collections.abc import Generator
 from typing import Any
 
@@ -23,30 +24,30 @@ def test_data_dir(project_root: Path) -> Path:
     return project_root / "tests" / "data"
 
 
+def _live_job_managers() -> frozenset[Any]:
+    jobs_mod: Any = sys.modules.get("solar_challenge.web.jobs")
+    if jobs_mod is None:
+        return frozenset()
+    return jobs_mod.live_managers()
+
+
 @pytest.fixture(autouse=True)
 def _shutdown_job_managers() -> Generator[None, None, None]:
-    """Drain every JobManager executor after each test.
+    """At teardown, shut down the JobManagers created during the test, waiting for their in-flight simulations.
 
-    Guard on sys.modules so pure non-web test runs never import the
-    optional web stack (avoids pulling in Flask/web deps unnecessarily
-    and silently failing when the ``web`` extra is not installed).
+    Abandoned workers would otherwise hold up interpreter exit.
 
-    For web tests this fixture runs shutdown_all_managers(wait=True) on
-    teardown, draining any in-flight simulations started by submit-only
-    endpoint tests.  This eliminates the ~48 s process-exit linger that
-    occurred when abandoned workers were joined by the interpreter's own
-    _python_exit handler at the end of the suite.
+    Autouse fixtures are set up after every broader-scoped fixture and before
+    the other fixtures of their own scope. So a manager owned by a
+    broader-scoped fixture (e.g. tests/e2e/conftest.py::live_server) already
+    exists at setup and stays running for later tests; the fixture that owns
+    it must shut it down in its own teardown.
 
-    Scope note: all Flask-based fixtures in tests/unit/test_web_jobs.py
-    use the default function scope (no ``scope=`` argument), so each test
-    gets its own JobManager and the WeakSet contains only that test's
-    managers at teardown — no cross-test contamination.  The session-scoped
-    ``live_server`` fixture in tests/e2e/conftest.py creates a JobManager
-    that will be drained after the first e2e test; this is safe because e2e
-    tests browse pre-seeded data only and never submit new simulation jobs
-    mid-session.
+    The web jobs module is looked up in sys.modules, never imported, so runs
+    that never touch the web stack never load it.
     """
+    preexisting = weakref.WeakSet(_live_job_managers())
     yield
-    jobs_mod: Any = sys.modules.get("solar_challenge.web.jobs")
-    if jobs_mod is not None:
-        jobs_mod.shutdown_all_managers(wait=True)
+    for manager in _live_job_managers():
+        if manager not in preexisting:
+            manager.shutdown(wait=True)

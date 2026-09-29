@@ -37,19 +37,22 @@ from solar_challenge.web.storage import RunStorage
 _active_managers: "weakref.WeakSet[JobManager]" = weakref.WeakSet()
 
 
-def shutdown_all_managers(wait: bool = False) -> None:
-    """Shut down every live JobManager registered in _active_managers.
+def live_managers() -> "frozenset[JobManager]":
+    """Return a snapshot of every JobManager not yet garbage-collected, shut down or not."""
+    return frozenset(_active_managers)
 
-    Iterates a snapshot of the registry so that managers garbage-collected
-    between registration and this call are silently skipped.  Shutting down
-    an already-shut-down executor is a no-op, making this safe to call more
-    than once (idempotent).
+
+def shutdown_all_managers(wait: bool = False) -> None:
+    """Shut down every live JobManager.
+
+    Shutting down an already-shut-down executor is a no-op, making this safe
+    to call more than once (idempotent).
 
     Args:
         wait: If True, block until all running workers finish.  Defaults to
             False so the atexit hook does not stall interpreter shutdown.
     """
-    for manager in list(_active_managers):
+    for manager in live_managers():
         manager.shutdown(wait=wait)
 
 
