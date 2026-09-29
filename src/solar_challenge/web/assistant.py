@@ -541,7 +541,7 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
 
 def run_home_simulation(
     params: dict[str, Any],
-    job_manager: JobManager | None,
+    job_manager: JobManager,
     db_path: "str | Path",
     data_dir: "str | Path",
 ) -> dict[str, Any]:
@@ -549,14 +549,14 @@ def run_home_simulation(
 
     Parses *params* using the shared ``_parse_home_config`` helper from
     ``solar_challenge.web.api`` (deferred import to avoid circular imports).
-    Returns a graceful ``{"error": ...}`` dict when *job_manager* is None or
-    when the params fail validation.  Never raises.
+    Returns a graceful ``{"error": ...}`` dict when the params fail validation
+    or the job submission fails.  Never raises.
 
     Args:
         params:      Flat parameter dict (pv_kw, battery_kwh, occupants,
                      location, days, name, …) — same shape as the JSON body
                      accepted by POST /api/simulate/home.
-        job_manager: A ``JobManager`` instance (or ``None``).
+        job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
         data_dir:    Root directory for storing run artefacts.
 
@@ -564,9 +564,6 @@ def run_home_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    if job_manager is None:
-        return {"error": "run_home_simulation requires a running JobManager (job_manager is None)"}
-
     from solar_challenge.web.api import _parse_home_config  # deferred to avoid circularity
 
     # Inject the documented default (7 days) when 'days' is absent OR explicitly None.
@@ -601,7 +598,7 @@ def run_home_simulation(
 
 def run_fleet_simulation(
     params: dict[str, Any],
-    job_manager: JobManager | None,
+    job_manager: JobManager,
     db_path: "str | Path",
     data_dir: "str | Path",
 ) -> dict[str, Any]:
@@ -615,7 +612,7 @@ def run_fleet_simulation(
         params:      Flat parameter dict including ``n_homes`` plus the per-home
                      fields accepted by ``_parse_home_config``
                      (pv_kw, battery_kwh, location, days, …).
-        job_manager: A ``JobManager`` instance (or ``None``).
+        job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
         data_dir:    Root directory for storing run artefacts.
 
@@ -623,9 +620,6 @@ def run_fleet_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    if job_manager is None:
-        return {"error": "run_fleet_simulation requires a running JobManager (job_manager is None)"}
-
     from solar_challenge.web.api import _parse_home_config  # deferred
 
     # Clamp n_homes to [1, 100]
