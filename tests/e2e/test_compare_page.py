@@ -1,7 +1,7 @@
 """End-to-end tests for the Compare page (/history/compare).
 
 Verifies page loading, metrics table, delta columns, color coding,
-and redirect behavior when IDs are missing.
+and the empty state shown when no IDs are given.
 Uses seeded run pair fixtures.
 """
 
@@ -139,20 +139,20 @@ def test_compare_delta_coloring_direction(
             )
 
 
-# -- Compare redirects without IDs -----------------------------------------
+# -- Compare without IDs shows empty state ---------------------------------
 
 
-def test_compare_redirects_without_ids(
+def test_compare_without_ids_shows_empty_state(
     page: Page,
     live_server: str,
 ) -> None:
-    """/history/compare -> redirects to /history/runs."""
+    """/history/compare without ids shows the no-runs-selected state, whose link leads to run history."""
     response = page.goto(live_server + "/history/compare")
     assert response is not None
+    assert response.status == 200
+    expect(page).to_have_url(live_server + "/history/compare")
 
-    # Should redirect to the runs page
-    page.wait_for_load_state("domcontentloaded")
-    final_url = page.url
-    assert "/history/runs" in final_url, (
-        f"Expected redirect to /history/runs, ended up at {final_url}"
-    )
+    expect(page.get_by_role("heading", name="No Runs Selected")).to_be_visible()
+
+    page.get_by_role("link", name="Go to Run History").click()
+    expect(page).to_have_url(live_server + "/history/runs")
