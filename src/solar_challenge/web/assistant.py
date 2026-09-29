@@ -675,23 +675,20 @@ def run_fleet_simulation(
 def _dispatch_tool(
     name: str,
     tool_input: dict[str, Any],
-    db_path: "str | Path | None" = None,
-    job_manager: JobManager | None = None,
-    data_dir: "str | Path | None" = None,
+    *,
+    db_path: "str | Path",
+    job_manager: JobManager,
+    data_dir: "str | Path",
 ) -> dict[str, Any]:
     """Route a tool call to its handler and return the result dict.
 
     Args:
         name:        The tool name as sent by the model.
         tool_input:  The validated input dict from the model's tool_use block.
-        db_path:     Optional path to the SQLite database file.  Required for
-                     DB-backed tools (``get_run_results``, ``list_recent_runs``);
-                     those tools return a graceful ``{"error": ...}`` when None.
-        job_manager: Optional JobManager instance.  Required for trigger tools
-                     (``run_home_simulation``, ``run_fleet_simulation``); those
-                     tools return a graceful ``{"error": ...}`` when None.
-        data_dir:    Optional path to the run data directory.  Required for
-                     trigger tools alongside *job_manager*.
+        db_path:     The SQLite database that the DB-backed tools read and that
+                     submitted jobs record their runs in.
+        job_manager: The app's JobManager, which the trigger tools submit jobs to.
+        data_dir:    The root directory for submitted runs' artefacts.
 
     Returns:
         The handler's result dict, or ``{"error": "..."}`` for unknown names.
@@ -708,26 +705,18 @@ def _dispatch_tool(
         goal: str = str(tool_input.get("goal", ""))
         return suggest_config(annual_kwh, goal)
     if name == "get_run_results":
-        if db_path is None:
-            return {"error": "get_run_results requires a database path (db_path is None)"}
         run_id_or_name: str = str(tool_input.get("run_id_or_name", ""))
         return get_run_results(run_id_or_name, db_path)
     if name == "list_recent_runs":
-        if db_path is None:
-            return {"error": "list_recent_runs requires a database path (db_path is None)"}
         try:
             limit: int = int(tool_input.get("limit", 10))
         except (ValueError, TypeError):
             limit = 10
         return list_recent_runs(limit, db_path)
     if name == "run_home_simulation":
-        _db = str(db_path) if db_path is not None else ""
-        _dir = str(data_dir) if data_dir is not None else ""
-        return run_home_simulation(dict(tool_input), job_manager, _db, _dir)
+        return run_home_simulation(dict(tool_input), job_manager, db_path, data_dir)
     if name == "run_fleet_simulation":
-        _db = str(db_path) if db_path is not None else ""
-        _dir = str(data_dir) if data_dir is not None else ""
-        return run_fleet_simulation(dict(tool_input), job_manager, _db, _dir)
+        return run_fleet_simulation(dict(tool_input), job_manager, db_path, data_dir)
     all_names = ", ".join(t["name"] for t in _TOOLS)
     return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
 
@@ -801,7 +790,7 @@ def chat() -> Response:
     run_id: str = str(data.get("run_id", "")).strip()
     sid = _session_id()
     db_path = current_app.config["DATABASE"]
-    data_dir: str = str(current_app.config.get("DATA_DIR", ""))
+    data_dir = current_app.config["DATA_DIR"]
     job_manager = get_job_manager()
 
     def generate() -> Generator[str, None, None]:
@@ -954,7 +943,11 @@ def chat() -> Response:
 
                         # Dispatch to the handler and collect the result.
                         tool_result = _dispatch_tool(
-                            block_name, block_input, db_path, job_manager, data_dir
+                            block_name,
+                            block_input,
+                            db_path=db_path,
+                            job_manager=job_manager,
+                            data_dir=data_dir,
                         )
                         invoked_tools.append(block_name)
 
