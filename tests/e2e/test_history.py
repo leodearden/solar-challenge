@@ -4,6 +4,8 @@ Verifies page loading, table structure, empty state, filter controls,
 type filter options, column sorting, and compare button visibility.
 """
 
+import re
+
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -61,16 +63,28 @@ def test_history_table_exists(page: Page, live_server: str) -> None:
 
 
 def test_history_empty_state(page: Page, live_server: str) -> None:
-    """In a fresh test DB, the 'No simulation runs found' message appears."""
+    """'No simulation runs found' shows when the runs API returns its empty-database response.
+
+    The API is stubbed, so this holds whatever runs the shared session DB has accumulated.
+    """
+    empty_database_response = {
+        "runs": [],
+        "pagination": {
+            "page": 1,
+            "per_page": 20,
+            "total": 0,
+            "total_pages": 1,
+            "has_next": False,
+            "has_prev": False,
+        },
+    }
+    page.route(
+        re.compile(r"/api/history/runs\?"),
+        lambda route: route.fulfill(json=empty_database_response),
+    )
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
 
-    # Wait for the Alpine component to finish fetching runs.
-    # The loading state disappears and the empty-state message appears.
-    page.wait_for_timeout(1000)
-
-    empty_msg = page.locator("text=No simulation runs found")
-    expect(empty_msg).to_be_visible()
+    expect(page.get_by_text("No simulation runs found")).to_be_visible()
 
 
 # -- Filter controls -------------------------------------------------------
