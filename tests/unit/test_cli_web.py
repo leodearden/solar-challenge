@@ -33,6 +33,8 @@ def blocking_simulation(config, start_date, end_date):
     raise RuntimeError("stub simulation")
 
 
+if not hasattr(solar_challenge.web.jobs, "simulate_home"):
+    sys.exit("solar_challenge.web.jobs has no simulate_home for the blocking stub to replace")
 solar_challenge.web.jobs.simulate_home = blocking_simulation
 try:
     app(["web", "start", "--port", port])
