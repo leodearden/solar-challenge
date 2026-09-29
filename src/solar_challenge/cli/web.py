@@ -40,16 +40,23 @@ def start(
     Launches a local web server hosting the interactive dashboard for
     visualising solar PV and battery simulation results.
 
+    Stopping the server drops the simulations still queued; those already
+    running finish before the process exits.
+
     Examples:
       solar-challenge web start
       solar-challenge web start --host 0.0.0.0 --port 8080
       solar-challenge web start --debug
     """
     from solar_challenge.web import create_app
+    from solar_challenge.web.jobs import shutdown_all_managers
 
     flask_app = create_app()
 
     print_info(f"Starting web dashboard at http://{host}:{port}")
     console.print(f"  Press [bold]Ctrl+C[/bold] to stop the server.")
 
-    flask_app.run(host=host, port=port, debug=debug)
+    try:
+        flask_app.run(host=host, port=port, debug=debug)
+    finally:
+        shutdown_all_managers()
