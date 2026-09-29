@@ -24,7 +24,8 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.home import simulate_home as _default_simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -71,7 +72,7 @@ class JobManager:
         _event_queues: Per-job deques of SSE event dicts.
     """
 
-    def __init__(self, max_workers: int = 2, *, simulate_home: HomeSimulator = simulate_home) -> None:
+    def __init__(self, max_workers: int = 2, *, simulate_home: HomeSimulator = _default_simulate_home) -> None:
         """Initialize the job manager.
 
         Args:
