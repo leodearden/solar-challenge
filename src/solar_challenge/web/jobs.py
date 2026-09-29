@@ -17,19 +17,22 @@ import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
-from typing import Any, Generator
+from typing import Any, Generator, TypeAlias
 
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.home import simulate_home as _default_simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
+
+HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], SimulationResults]
 
 # Module-level weak registry of all live JobManager instances.
 # WeakSet avoids keeping managers alive past their natural lifetime.
@@ -69,13 +72,16 @@ class JobManager:
         _event_queues: Per-job deques of SSE event dicts.
     """
 
-    def __init__(self, max_workers: int = 2) -> None:
+    def __init__(self, max_workers: int = 2, *, simulate_home: HomeSimulator = _default_simulate_home) -> None:
         """Initialize the job manager.
 
         Args:
             max_workers: Maximum number of concurrent simulation threads.
+            simulate_home: Simulates one home over a date range; defaults to
+                solar_challenge.home.simulate_home.
         """
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._simulate_home = simulate_home
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._event_queues: dict[str, collections.deque[dict[str, Any]]] = {}
@@ -557,7 +563,7 @@ class JobManager:
 
         def work(conn: sqlite3.Connection, progress: Callable[[float, str, str], None]) -> None:
             progress(20.0, "Simulating", "Running home simulation...")
-            results = simulate_home(config, start_date, end_date)
+            results = self._simulate_home(config, start_date, end_date)
 
             progress(80.0, "Summarizing", "Calculating summary statistics...")
             summary = calculate_summary(results)
@@ -619,7 +625,7 @@ class JobManager:
             for i, home_config in enumerate(configs):
                 pct = (i / total) * 90.0 + 5.0  # 5% to 95%
                 progress(pct, f"Home {i + 1}/{total}", f"Simulating home {i + 1} of {total}...")
-                results = simulate_home(home_config, start_date, end_date)
+                results = self._simulate_home(home_config, start_date, end_date)
                 summary = calculate_summary(results)
                 per_home_results.append(results)
                 per_home_summaries.append(summary)

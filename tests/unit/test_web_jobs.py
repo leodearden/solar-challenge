@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from typing import Any
 
 import pytest
 pytest.importorskip("flask")
@@ -15,7 +15,7 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.home import HomeConfig
+from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.app import create_app
@@ -351,55 +351,6 @@ class TestJobManagerIntegration:
 class TestJobManagerDirect:
     """Unit tests for JobManager exercised directly without Flask."""
 
-    def test_submit_home_job_with_mock(self, tmp_path: Path) -> None:
-        """Test submit_home_job creates in-memory tracking and returns IDs."""
-        from solar_challenge.web.database import init_db
-
-        db_path = str(tmp_path / "jobs.db")
-        data_dir = str(tmp_path / "data")
-        init_db(db_path)
-
-        jm = JobManager(max_workers=1)
-
-        # Mock simulate_home so we don't run real simulation
-        with patch("solar_challenge.web.jobs.simulate_home") as mock_sim, \
-             patch("solar_challenge.web.jobs.calculate_summary") as mock_summary:
-            mock_sim.return_value = MagicMock()
-            mock_summary.return_value = MagicMock()
-
-            from solar_challenge.home import HomeConfig
-            from solar_challenge.pv import PVConfig
-            from solar_challenge.load import LoadConfig
-            import pandas as pd
-
-            config = HomeConfig(
-                pv_config=PVConfig(capacity_kw=4.0),
-                load_config=LoadConfig(annual_consumption_kwh=3500),
-                name="Test",
-            )
-            start = pd.Timestamp("2024-06-01", tz="UTC")
-            end = pd.Timestamp("2024-06-02", tz="UTC")
-
-            job_id, run_id = jm.submit_home_job(
-                config=config,
-                start_date=start,
-                end_date=end,
-                db_path=db_path,
-                data_dir=data_dir,
-                name="Mock Sim",
-            )
-
-            # Verify returned IDs are non-empty strings
-            assert isinstance(job_id, str) and len(job_id) > 0
-            assert isinstance(run_id, str) and len(run_id) > 0
-
-            # Verify in-memory tracking was created
-            status = jm.get_job_status(job_id)
-            assert status is not None
-            assert status["job_id"] == job_id
-            assert status["run_id"] == run_id
-            assert status["status"] in ("queued", "running", "completed", "failed")
-
     def test_thread_safety_concurrent_access(self, tmp_path: Path) -> None:
         """Test that concurrent get_job_status and get_events calls are thread-safe."""
         jm = JobManager(max_workers=1)
@@ -557,6 +508,8 @@ class TestJobManagerDirect:
 
 
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
+_JUNE_1 = pd.Timestamp("2024-06-01", tz="UTC")
+_JUNE_2 = pd.Timestamp("2024-06-02", tz="UTC")
 
 
 def _run_storage(tmp_path: Path) -> RunStorage:
@@ -565,12 +518,57 @@ def _run_storage(tmp_path: Path) -> RunStorage:
     return storage
 
 
+def _an_hour_at(generation_kw: float) -> SimulationResults:
+    index = pd.date_range("2024-06-01 12:00", periods=60, freq="1min")
+
+    def constant(kw: float) -> pd.Series:
+        return pd.Series([kw] * 60, index=index)
+
+    return SimulationResults(
+        generation=constant(generation_kw),
+        demand=constant(1.0),
+        self_consumption=constant(1.0),
+        battery_charge=constant(0.0),
+        battery_discharge=constant(0.0),
+        battery_soc=constant(0.0),
+        grid_import=constant(0.0),
+        grid_export=constant(generation_kw - 1.0),
+        import_cost=constant(0.0),
+        export_revenue=constant(0.0),
+        tariff_rate=constant(0.25),
+    )
+
+
+class _RecordingSimulation:
+    """Stands in for simulate_home: records each home it is asked to simulate and returns an hour at the home's PV size."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
+
+    def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        self.calls.append((config, start_date, end_date))
+        return _an_hour_at(config.pv_config.capacity_kw)
+
+
+def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
+    deadline = time.monotonic() + 30
+    while True:
+        status = manager.get_job_status(job_id)
+        if status is None:
+            pytest.fail(f"the manager has no status for job {job_id}")
+        if status["status"] in ("completed", "failed"):
+            return status
+        if time.monotonic() > deadline:
+            pytest.fail(f"job {job_id} did not finish within 30 s; its last status was {status}")
+        time.sleep(0.01)
+
+
 def _submit_home_job(manager: JobManager, tmp_path: Path) -> None:
     storage = _run_storage(tmp_path)
     manager.submit_home_job(
         config=_A_HOME,
-        start_date=pd.Timestamp("2024-06-01", tz="UTC"),
-        end_date=pd.Timestamp("2024-06-02", tz="UTC"),
+        start_date=_JUNE_1,
+        end_date=_JUNE_2,
         db_path=str(storage.db_path),
         data_dir=str(storage.data_dir),
     )
@@ -580,11 +578,57 @@ def _submit_fleet_job(manager: JobManager, tmp_path: Path) -> None:
     storage = _run_storage(tmp_path)
     manager.submit_fleet_job(
         configs=[_A_HOME],
-        start_date=pd.Timestamp("2024-06-01", tz="UTC"),
-        end_date=pd.Timestamp("2024-06-02", tz="UTC"),
+        start_date=_JUNE_1,
+        end_date=_JUNE_2,
         db_path=str(storage.db_path),
         data_dir=str(storage.data_dir),
     )
+
+
+class TestJobManagerSimulation:
+    """Tests for the simulation a JobManager runs."""
+
+    def test_a_home_job_runs_the_simulation_the_manager_was_given(self, tmp_path: Path) -> None:
+        storage = _run_storage(tmp_path)
+        simulation = _RecordingSimulation()
+        manager = JobManager(max_workers=1, simulate_home=simulation)
+
+        job_id, run_id = manager.submit_home_job(
+            config=_A_HOME,
+            start_date=_JUNE_1,
+            end_date=_JUNE_2,
+            db_path=str(storage.db_path),
+            data_dir=str(storage.data_dir),
+        )
+
+        status = _wait_until_finished(manager, job_id)
+        assert status["status"] == "completed", status["message"]
+        assert simulation.calls == [(_A_HOME, _JUNE_1, _JUNE_2)]
+        _, _, summary = storage.load_home_run(run_id)
+        assert summary.total_generation_kwh == pytest.approx(4.0)
+
+    def test_a_fleet_job_runs_the_managers_simulation_once_per_home(self, tmp_path: Path) -> None:
+        storage = _run_storage(tmp_path)
+        simulation = _RecordingSimulation()
+        manager = JobManager(max_workers=1, simulate_home=simulation)
+        homes = [
+            _A_HOME,
+            HomeConfig(pv_config=PVConfig(capacity_kw=2.0), load_config=LoadConfig(annual_consumption_kwh=3500)),
+        ]
+
+        job_id, run_id = manager.submit_fleet_job(
+            configs=homes,
+            start_date=_JUNE_1,
+            end_date=_JUNE_2,
+            db_path=str(storage.db_path),
+            data_dir=str(storage.data_dir),
+        )
+
+        status = _wait_until_finished(manager, job_id)
+        assert status["status"] == "completed", status["message"]
+        assert simulation.calls == [(home, _JUNE_1, _JUNE_2) for home in homes]
+        _, _, per_home_summaries = storage.load_fleet_run(run_id)
+        assert [summary.total_generation_kwh for summary in per_home_summaries] == pytest.approx([4.0, 2.0])
 
 
 class TestJobManagerShutdown:

@@ -20,8 +20,10 @@ import sys
 import threading
 from pathlib import Path
 
-import solar_challenge.web.jobs
+from flask import request_started
+
 from solar_challenge.cli import app
+from solar_challenge.web.jobs import JobManager
 
 started_dir, port = Path(sys.argv[1]), sys.argv[2]
 command_returned = threading.Event()
@@ -33,9 +35,14 @@ def blocking_simulation(config, start_date, end_date):
     raise RuntimeError("stub simulation")
 
 
-if not hasattr(solar_challenge.web.jobs, "simulate_home"):
-    sys.exit("solar_challenge.web.jobs has no simulate_home for the blocking stub to replace")
-solar_challenge.web.jobs.simulate_home = blocking_simulation
+blocking_jobs = JobManager(max_workers=2, simulate_home=blocking_simulation)
+
+
+def submit_to_blocking_jobs(dashboard, **extra):
+    dashboard.extensions["job_manager"] = blocking_jobs
+
+
+request_started.connect(submit_to_blocking_jobs)
 try:
     app(["web", "start", "--port", port])
 finally:
