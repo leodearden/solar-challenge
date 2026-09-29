@@ -51,7 +51,9 @@ class FakeAnthropic:
 
     @property
     def calls(self) -> list[dict[str, Any]]:
-        """Each ``messages.stream()`` call's kwargs, oldest first, as a fresh list."""
+        """Every ``messages.stream()`` call's kwargs since the fake was built, oldest first,
+        as a fresh list. The setters never clear it: a test that chats twice sees both chats' calls.
+        """
         return list(self._calls)
 
     @property
