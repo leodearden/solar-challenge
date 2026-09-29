@@ -64,9 +64,8 @@ def _e2e_data_dir(_e2e_tmp_dir):
 def live_server(_e2e_db_path, _e2e_data_dir):
     """Start the Flask app on a random port in a daemon thread.
 
-    The server handles each connection on its own thread, as Flask's dev server
-    does, so a page's open SSE progress streams do not stall other requests
-    (pinned by tests/e2e/test_live_server.py).
+    Each connection is served on its own thread so that open SSE progress
+    streams do not stall other requests.
 
     Yields the base URL (e.g. ``http://127.0.0.1:54321``).  The app's
     JobManager lives for the whole session, so the per-test drain in
