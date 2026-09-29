@@ -1,8 +1,8 @@
 """End-to-end tests for the Parameter Sweep page (/scenarios/sweep).
 
-Verifies page loading, form elements, preview calculations, and detects
-Bug B1 (Alpine race condition with external JS) and Bug B3 (sweep
-endpoint returns empty job_ids).
+Verifies page loading, form elements, preview calculations, that submitting
+a sweep returns one background job per sweep point, and detects Bug B1
+(Alpine race condition with external JS).
 """
 
 import pytest
@@ -154,12 +154,13 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
     )
 
 
-# -- Bug B3: Sweep endpoint stub with empty job_ids -----------------------
+# -- Sweep submission: one background home job per sweep point ------------
 
 
-def test_sweep_submit_returns_501(page: Page, live_server: str) -> None:
-    """Submit a sweep via the form button and verify the API returns 501
-    (not yet implemented) with the generated sweep values.
+def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> None:
+    """Submitting a 3-point sweep via the form button returns 201 with a
+    sweep id, the sweep values and one distinct background home-job id per
+    sweep point.
     """
     page.goto(live_server + "/scenarios/sweep")
     page.wait_for_load_state("networkidle")
@@ -183,8 +184,13 @@ def test_sweep_submit_returns_501(page: Page, live_server: str) -> None:
         page.get_by_role("button", name="Run Parameter Sweep").click()
 
     response = response_info.value
-    assert response.status == 501
+    assert response.status == 201
 
     data = response.json()
-    assert "not yet implemented" in data["error"]
-    assert len(data["values"]) == 3
+    assert data["sweep_id"]
+    assert data["values"] == [2.0, 5.0, 8.0]
+
+    job_ids = data["job_ids"]
+    assert len(job_ids) == 3
+    assert len(set(job_ids)) == 3
+    assert all(job_ids)
