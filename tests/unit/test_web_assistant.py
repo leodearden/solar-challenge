@@ -2149,21 +2149,23 @@ class TestRunHomeSimulation:
         assert "error" in result, f"Expected 'error' key; got {result}"
         jm.submit_home_job.assert_not_called()
 
-    def test_job_manager_none_returns_graceful_error(self, tmp_path: Path) -> None:
-        """job_manager=None returns error dict, no raise."""
+    def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
+        """A submit_home_job that raises yields an error dict naming the failure, and no run link."""
         from solar_challenge.web.assistant import run_home_simulation
 
-        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+        jm = self._make_jm()
+        submit_failure = "job queue unavailable"
+        jm.submit_home_job.side_effect = RuntimeError(submit_failure)
 
-        try:
-            result = run_home_simulation(params, None, str(tmp_path / "t.db"), str(tmp_path))
-        except Exception as exc:
-            raise AssertionError(
-                f"run_home_simulation should not raise when job_manager=None; got: {exc!r}"
-            ) from exc
+        result = run_home_simulation(
+            {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"},
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
 
-        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+        assert submit_failure in result["error"]
+        assert "run_id" not in result
 
     def test_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
         """When 'days' is absent the window passed to submit_home_job is 7 days, not the full year."""
@@ -2331,21 +2333,23 @@ class TestRunFleetSimulation:
         assert "error" in result, f"Expected 'error' key; got {result}"
         jm.submit_fleet_job.assert_not_called()
 
-    def test_job_manager_none_returns_graceful_error(self, tmp_path: Path) -> None:
-        """job_manager=None returns error dict, no raise."""
+    def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
+        """A submit_fleet_job that raises yields an error dict naming the failure, and no run link."""
         from solar_challenge.web.assistant import run_fleet_simulation
 
-        params = {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": 7}
+        jm = self._make_jm()
+        submit_failure = "job queue unavailable"
+        jm.submit_fleet_job.side_effect = RuntimeError(submit_failure)
 
-        try:
-            result = run_fleet_simulation(params, None, str(tmp_path / "t.db"), str(tmp_path))
-        except Exception as exc:
-            raise AssertionError(
-                f"run_fleet_simulation should not raise when job_manager=None; got: {exc!r}"
-            ) from exc
+        result = run_fleet_simulation(
+            {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": 7},
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
 
-        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+        assert submit_failure in result["error"]
+        assert "run_id" not in result
 
     def test_fleet_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
         """When 'days' is absent the fleet window passed to submit_fleet_job is 7 days, not the full year."""
