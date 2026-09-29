@@ -311,6 +311,108 @@ class TestSweepAPI:
         assert response.status_code == 400
 
 
+class _RecordingJobManager:
+    """Stands in for the app's JobManager: records each home config a request submits and simulates nothing."""
+
+    def __init__(self) -> None:
+        self.submitted_homes: list[object] = []
+
+    def submit_home_job(
+        self,
+        config: object,
+        start_date: object,
+        end_date: object,
+        db_path: str,
+        data_dir: str,
+        name: str | None = None,
+    ) -> tuple[str, str]:
+        """Record the home config and return a fresh (job_id, run_id) pair."""
+        self.submitted_homes.append(config)
+        n = len(self.submitted_homes)
+        return f"job-{n}", f"run-{n}"
+
+
+class TestSweepParameters:
+    """Which parameters POST /api/simulate/sweep may vary: each supported one reaches the simulated home; any other is refused before a point is submitted."""
+
+    @pytest.fixture
+    def recording_job_manager(self, app: Flask) -> _RecordingJobManager:
+        """Install a recording double as the app's job manager and return it."""
+        job_manager = _RecordingJobManager()
+        app.extensions["job_manager"] = job_manager
+        return job_manager
+
+    @pytest.mark.parametrize(
+        ("parameter", "values", "swept_value_of"),
+        [
+            pytest.param(
+                "pv_capacity_kw",
+                [2.0, 5.0, 8.0],
+                lambda home: home.pv_config.capacity_kw,
+                id="pv",
+            ),
+            pytest.param(
+                "battery_capacity_kwh",
+                [5.0, 10.0, 15.0],
+                lambda home: home.battery_config.capacity_kwh,
+                id="battery",
+            ),
+            pytest.param(
+                "annual_consumption_kwh",
+                [2000.0, 3500.0, 5000.0],
+                lambda home: home.load_config.annual_consumption_kwh,
+                id="consumption",
+            ),
+        ],
+    )
+    def test_each_point_simulates_a_home_carrying_that_points_value(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        parameter: str,
+        values: list[float],
+        swept_value_of: object,
+    ) -> None:
+        """Each sweep point submits one home whose swept field holds that point's value."""
+        response = client.post(
+            "/api/simulate/sweep",
+            json={
+                "parameter": parameter,
+                "min": values[0],
+                "max": values[-1],
+                "steps": len(values),
+                "mode": "linear",
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.get_json()["values"] == values
+        assert [swept_value_of(home) for home in recording_job_manager.submitted_homes] == values
+
+    @pytest.mark.parametrize("parameter", ["n_homes", "tilt", "no_such_parameter"])
+    def test_unsupported_parameter_is_refused_before_any_point_is_submitted(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        parameter: str,
+    ) -> None:
+        """A parameter outside the supported set, even a real home-config key, gets 400 and submits nothing.
+
+        The error names the refused parameter and every supported one.
+        """
+        response = client.post(
+            "/api/simulate/sweep",
+            json={"parameter": parameter, "min": 10.0, "max": 40.0, "steps": 3},
+        )
+
+        assert response.status_code == 400
+        error = response.get_json()["error"]
+        assert parameter in error
+        for supported in ("pv_capacity_kw", "battery_capacity_kwh", "annual_consumption_kwh"):
+            assert supported in error
+        assert recording_job_manager.submitted_homes == []
+
+
 class TestSweepChart:
     """Tests for the sweep_parameter_chart function in charts.py."""
 
