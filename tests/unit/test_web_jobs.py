@@ -4,7 +4,7 @@ import collections
 import json
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -56,6 +56,26 @@ class _RecordingSimulation:
         return _an_hour_at(config.pv_config.capacity_kw)
 
 
+class _BlockingSimulation:
+    """Stands in for simulate_home: each job waits inside the simulation until release(), then gets an hour at its home's PV size."""
+
+    def __init__(self) -> None:
+        self._started = threading.Event()
+        self._released = threading.Event()
+
+    def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        self._started.set()
+        self._released.wait()
+        return _an_hour_at(config.pv_config.capacity_kw)
+
+    def wait_until_started(self) -> None:
+        if not self._started.wait(timeout=30):
+            pytest.fail("no job entered the simulation within 30 s")
+
+    def release(self) -> None:
+        self._released.set()
+
+
 @pytest.fixture
 def app(tmp_path) -> Flask:
     """Create a test Flask application with temporary database."""
@@ -89,6 +109,20 @@ def client(app: Flask) -> FlaskClient:
 def real_simulation_client(app: Flask) -> FlaskClient:
     """A client of the JobManager create_app built, whose jobs run the real simulate_home."""
     return app.test_client()
+
+
+@pytest.fixture
+def blocking_simulation() -> Iterator[_BlockingSimulation]:
+    """A _BlockingSimulation released at teardown, before tests/conftest.py drains the job managers."""
+    simulation = _BlockingSimulation()
+    yield simulation
+    simulation.release()
+
+
+@pytest.fixture
+def blocking_client(app: Flask, blocking_simulation: _BlockingSimulation) -> FlaskClient:
+    """A client whose jobs wait inside blocking_simulation until it is released."""
+    return _client_whose_jobs_run(app, blocking_simulation)
 
 
 class TestSimulateHomeEndpoint:
