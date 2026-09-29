@@ -1,6 +1,7 @@
 """Tests for the scenario builder and parameter sweep web features."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -371,7 +372,7 @@ class TestSweepParameters:
         recording_job_manager: _RecordingJobManager,
         parameter: str,
         values: list[float],
-        swept_value_of: object,
+        swept_value_of: Callable[[object], float],
     ) -> None:
         """Each sweep point submits one home whose swept field holds that point's value."""
         response = client.post(
