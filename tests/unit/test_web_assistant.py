@@ -398,7 +398,7 @@ class TestChatEndpointHappyPath:
 # ---------------------------------------------------------------------------
 
 class TestChatDegradation:
-    """Graceful-degradation tests: no key → error SSE frame (never 500)."""
+    """Graceful degradation: a chat that cannot start returns an error SSE frame, never a 500."""
 
     def test_missing_api_key_returns_error_frame(
         self,
@@ -445,6 +445,28 @@ class TestChatDegradation:
 
         assert error_data is not None, "Could not find error data payload"
         assert "message" in error_data, f"Error payload missing 'message': {error_data}"
+
+    def test_client_construction_failure_returns_error_frame_and_saves_no_turn(
+        self,
+        client: FlaskClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A client the SDK cannot construct, as from a malformed ANTHROPIC_BASE_URL,
+        yields an error frame and saves no chat turn."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-test-key")
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:notaport")
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "construction-failure-sid"
+
+        resp = client.post("/assistant/chat", json={"message": "hi"})
+
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.content_type
+        body = resp.get_data(as_text=True)
+        assert "event: error" in body
+        assert "event: delta" not in body
+        assert "event: done" not in body
+        assert client.get("/assistant/history").get_json() == {"messages": []}
 
 
 # ---------------------------------------------------------------------------
