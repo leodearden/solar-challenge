@@ -15,6 +15,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.app import create_app
+from solar_challenge.web.simulation_params import parse_date_range, parse_home_config
 
 
 # ---------------------------------------------------------------------------
@@ -1172,17 +1173,15 @@ class TestHomeFormRender:
 
 
 # ===================================================================
-# _parse_home_config boundary tests (call the function directly)
+# parse_home_config boundary tests (call the function directly)
 # ===================================================================
 
 
 class TestParseHomeConfigCapabilities:
-    """Boundary tests calling _parse_home_config directly."""
+    """Boundary tests calling parse_home_config directly."""
 
     def test_heat_pump_fields_populate_home_config(self) -> None:
         """heat_pump dict in payload populates HomeConfig.heat_pump_config."""
-        from solar_challenge.web.api import _parse_home_config
-
         payload = {
             **VALID_HOME_PAYLOAD,
             "heat_pump": {
@@ -1191,15 +1190,13 @@ class TestParseHomeConfigCapabilities:
                 "annual_heat_demand_kwh": 8000,
             },
         }
-        home_config, _start, _end, _name = _parse_home_config(payload)
+        home_config, _start, _end, _name = parse_home_config(payload)
         assert home_config.heat_pump_config is not None
         assert home_config.heat_pump_config.heat_pump_type == "ASHP"
         assert home_config.heat_pump_config.thermal_capacity_kw == 8.0
 
     def test_tariff_fields_populate_home_config(self) -> None:
         """tariff dict in payload populates HomeConfig.tariff_config."""
-        from solar_challenge.web.api import _parse_home_config
-
         payload = {
             **VALID_HOME_PAYLOAD,
             "tariff": {
@@ -1207,15 +1204,13 @@ class TestParseHomeConfigCapabilities:
                 "rate_per_kwh": 0.30,
             },
         }
-        home_config, _start, _end, _name = _parse_home_config(payload)
+        home_config, _start, _end, _name = parse_home_config(payload)
         assert home_config.tariff_config is not None
         # flat_rate TariffConfig has at least one period
         assert len(home_config.tariff_config.periods) > 0
 
     def test_combined_heat_pump_tariff_dispatch_populate_home_config(self) -> None:
         """heat_pump + tariff + dispatch_strategy all populate when battery is enabled."""
-        from solar_challenge.web.api import _parse_home_config
-
         payload = {
             **VALID_HOME_PAYLOAD,
             "battery_kwh": 5.0,
@@ -1232,7 +1227,7 @@ class TestParseHomeConfigCapabilities:
                 "strategy_type": "self_consumption",
             },
         }
-        home_config, _start, _end, _name = _parse_home_config(payload)
+        home_config, _start, _end, _name = parse_home_config(payload)
         assert home_config.heat_pump_config is not None
         assert home_config.tariff_config is not None
         assert home_config.battery_config is not None
@@ -1241,8 +1236,6 @@ class TestParseHomeConfigCapabilities:
 
     def test_dispatch_strategy_ignored_without_battery(self) -> None:
         """dispatch_strategy is silently ignored when no battery is enabled."""
-        from solar_challenge.web.api import _parse_home_config
-
         payload = {
             **VALID_HOME_PAYLOAD,
             "battery_kwh": 0,
@@ -1250,7 +1243,7 @@ class TestParseHomeConfigCapabilities:
                 "strategy_type": "self_consumption",
             },
         }
-        home_config, _start, _end, _name = _parse_home_config(payload)
+        home_config, _start, _end, _name = parse_home_config(payload)
         assert home_config.battery_config is None  # no battery => no dispatch either
 
 
@@ -1295,60 +1288,46 @@ class TestParseHomeConfigErrorPaths:
 
 
 # ===================================================================
-# _parse_date_range unit tests
+# parse_date_range unit tests
 # ===================================================================
 
 
 class TestParseDateRange:
-    """Unit tests for the module-level _parse_date_range(data) helper."""
+    """Unit tests for the parse_date_range(data) helper in solar_challenge.web.simulation_params."""
 
     def test_days_seven_returns_june_window(self) -> None:
         """days=7 returns a 7-day window starting 2024-06-01."""
-        from solar_challenge.web.api import _parse_date_range
-
-        start, end = _parse_date_range({"days": 7})
+        start, end = parse_date_range({"days": 7})
         assert start == "2024-06-01"
         assert end == "2024-06-07"
 
     def test_days_365_returns_full_year(self) -> None:
         """days=365 is the special case: returns the full 2024 calendar year."""
-        from solar_challenge.web.api import _parse_date_range
-
-        start, end = _parse_date_range({"days": 365})
+        start, end = parse_date_range({"days": 365})
         assert start == "2024-01-01"
         assert end == "2024-12-31"
 
     def test_explicit_start_end_returned_verbatim(self) -> None:
         """Explicit start/end strings are returned as-is."""
-        from solar_challenge.web.api import _parse_date_range
-
-        start, end = _parse_date_range({"start": "2024-03-01", "end": "2024-03-05"})
+        start, end = parse_date_range({"start": "2024-03-01", "end": "2024-03-05"})
         assert start == "2024-03-01"
         assert end == "2024-03-05"
 
     def test_empty_data_returns_full_year_defaults(self) -> None:
         """Empty dict returns the default full-year window."""
-        from solar_challenge.web.api import _parse_date_range
-
-        start, end = _parse_date_range({})
+        start, end = parse_date_range({})
         assert start == "2024-01-01"
         assert end == "2024-12-31"
 
     def test_days_zero_raises_value_error(self) -> None:
         """days=0 is not a valid window; must raise ValueError."""
-        import pytest
-        from solar_challenge.web.api import _parse_date_range
-
         with pytest.raises(ValueError, match="positive"):
-            _parse_date_range({"days": 0})
+            parse_date_range({"days": 0})
 
     def test_days_negative_raises_value_error(self) -> None:
         """Negative days must raise ValueError."""
-        import pytest
-        from solar_challenge.web.api import _parse_date_range
-
         with pytest.raises(ValueError, match="positive"):
-            _parse_date_range({"days": -7})
+            parse_date_range({"days": -7})
 
 
 # ===================================================================
@@ -1373,23 +1352,19 @@ class TestParseHomeConfigPVAge:
         assert config.pv_config.system_age_years == 20.0
 
     def test_direct_parse_sets_both_age_fields(self) -> None:
-        """_parse_home_config with explicit age values sets both PVConfig fields."""
-        from solar_challenge.web.api import _parse_home_config
-
+        """parse_home_config with explicit age values sets both PVConfig fields."""
         payload = {
             **VALID_HOME_PAYLOAD,
             "system_age_years": 15,
             "degradation_rate_per_year": 0.01,
         }
-        home_config, _start, _end, _name = _parse_home_config(payload)
+        home_config, _start, _end, _name = parse_home_config(payload)
         assert home_config.pv_config.system_age_years == 15.0
         assert home_config.pv_config.degradation_rate_per_year == 0.01
 
     def test_absent_age_keys_yield_pv_config_defaults(self) -> None:
-        """_parse_home_config with no age keys yields PVConfig default values."""
-        from solar_challenge.web.api import _parse_home_config
-
-        home_config, _start, _end, _name = _parse_home_config(VALID_HOME_PAYLOAD)
+        """parse_home_config with no age keys yields PVConfig default values."""
+        home_config, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
         assert home_config.pv_config.system_age_years == 0.0
         assert home_config.pv_config.degradation_rate_per_year == 0.005
 
@@ -1424,9 +1399,7 @@ class TestParseHomeConfigSEG:
 
     def test_preset_resolves_to_correct_seg_tariff(self) -> None:
         """'seg': {'preset': 'Octopus'} yields SEGTariff with Octopus Energy rate."""
-        from solar_challenge.web.api import _parse_home_config
-
-        home_config, _start, _end, _name = _parse_home_config(
+        home_config, _start, _end, _name = parse_home_config(
             {**VALID_HOME_PAYLOAD, "seg": {"preset": "Octopus"}}
         )
         assert home_config.seg_tariff is not None
@@ -1435,9 +1408,7 @@ class TestParseHomeConfigSEG:
 
     def test_explicit_rate_populates_seg_tariff(self) -> None:
         """'seg': {'rate_pence_per_kwh': 5.5} yields SEGTariff with that rate."""
-        from solar_challenge.web.api import _parse_home_config
-
-        home_config, _start, _end, _name = _parse_home_config(
+        home_config, _start, _end, _name = parse_home_config(
             {**VALID_HOME_PAYLOAD, "seg": {"rate_pence_per_kwh": 5.5}}
         )
         assert home_config.seg_tariff is not None
@@ -1445,9 +1416,7 @@ class TestParseHomeConfigSEG:
 
     def test_absent_seg_key_yields_none(self) -> None:
         """Plain VALID_HOME_PAYLOAD (no 'seg' key) gives seg_tariff=None (back-compat)."""
-        from solar_challenge.web.api import _parse_home_config
-
-        home_config, _start, _end, _name = _parse_home_config(VALID_HOME_PAYLOAD)
+        home_config, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
         assert home_config.seg_tariff is None
 
     def test_endpoint_threads_seg_preset_to_home_config(
@@ -1470,7 +1439,7 @@ class TestParseHomeConfigSEG:
         """POST with seg.rate_pence_per_kwh=5.5 returns 201 and HomeConfig carries that rate.
 
         This exercises the most common non-preset user action (explicit custom rate)
-        through the full HTTP endpoint path, complementing the direct _parse_home_config
+        through the full HTTP endpoint path, complementing the direct parse_home_config
         unit test for the same case.
         """
         resp = client.post(
