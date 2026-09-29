@@ -44,41 +44,9 @@ def dispatch_dependencies(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
 
 
 @pytest.fixture
-def sequence_mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Multi-call sequence mock: records every stream() call's kwargs and streams.
-
-    Returns dict with:
-      - 'call_kwargs_list': list of kwargs dicts recorded per stream() call
-      - 'set_streams': callable(list[MagicMock]) — set the ordered stream responses
-    """
-    state: dict[str, Any] = {
-        "call_kwargs_list": [],
-        "streams": [],
-        "call_index": 0,
-    }
-
-    def _stream_factory(**kwargs: Any) -> Any:
-        state["call_kwargs_list"].append(dict(kwargs))
-        idx = state["call_index"]
-        state["call_index"] += 1
-        streams = state["streams"]
-        if idx < len(streams):
-            return streams[idx]
-        # fallback: end_turn with empty text
-        return make_end_turn_stream(["(fallback)"])
-
-    install_fake_anthropic(monkeypatch, _stream_factory)
-
-    def _set_streams(streams: list[MagicMock]) -> None:
-        state["streams"] = streams
-        state["call_index"] = 0
-        state["call_kwargs_list"].clear()
-
-    return {
-        "call_kwargs_list": state["call_kwargs_list"],
-        "set_streams": _set_streams,
-        "state": state,
-    }
+def sequence_mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> FakeAnthropic:
+    """Stand a FakeAnthropic in for the Anthropic API; each test scripts its replies with set_streams()."""
+    return install_fake_anthropic(monkeypatch)
 
 
 class TestToolSurface:

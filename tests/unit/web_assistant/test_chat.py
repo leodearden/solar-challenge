@@ -6,7 +6,6 @@ The routes are the /assistant page, GET /assistant/history and POST /assistant/c
 
 import os
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -15,7 +14,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from tests._sse import SseFrame, parse_sse_events
-from tests.unit.web_assistant._fakes import FakeAnthropic, install_fake_anthropic, make_fake_stream, seed_run
+from tests.unit.web_assistant._fakes import FakeAnthropic, install_fake_anthropic, seed_run
 
 
 def reply_text(events: list[SseFrame]) -> str:
@@ -24,39 +23,9 @@ def reply_text(events: list[SseFrame]) -> str:
 
 
 @pytest.fixture
-def mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Set a dummy ANTHROPIC_API_KEY and patch anthropic.Anthropic.
-
-    Returns a dict with keys:
-      - 'client_cls' : the patched MagicMock class
-      - 'set_chunks' : callable(chunks) — replace what text_stream yields next call
-      - 'state'      : internal state dict; access kwargs from the last stream()
-                       call via ``state["last_kwargs"]``
-
-    Usage in tests:
-        info = mock_anthropic
-        info['set_chunks'](["Hello", " world"])
-        resp = client.post('/assistant/chat', json={'message': 'hi'})
-        kwargs = info['state']['last_kwargs']
-    """
-    state: dict[str, Any] = {"chunks": ["mock ", "reply"], "last_kwargs": {}}
-
-    def _stream_factory(**kwargs: Any) -> Any:
-        # Mutate in-place so all references to state["last_kwargs"] stay current.
-        state["last_kwargs"].clear()
-        state["last_kwargs"].update(kwargs)
-        return make_fake_stream(list(state["chunks"]))
-
-    mock_cls = install_fake_anthropic(monkeypatch, _stream_factory)
-
-    def _set_chunks(chunks: list[str]) -> None:
-        state["chunks"] = chunks
-
-    return {
-        "client_cls": mock_cls,
-        "set_chunks": _set_chunks,
-        "state": state,
-    }
+def mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> FakeAnthropic:
+    """Stand a FakeAnthropic in for the Anthropic API; each test sets its reply with set_chunks()."""
+    return install_fake_anthropic(monkeypatch)
 
 
 class TestChatMessagePersistence:
