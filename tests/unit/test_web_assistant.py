@@ -2723,11 +2723,7 @@ class TestSlice5RunHomeIntegration:
 
         db_path: str = app.config["DATABASE"]
         data_dir: str = app.config["DATA_DIR"]
-        job_manager = app.extensions.get("job_manager")
-        assert job_manager is not None, (
-            "Expected a real JobManager on app.extensions; got None. "
-            "Is the 'web' extra installed?"
-        )
+        job_manager = app.extensions["job_manager"]
 
         result = run_home_simulation(
             {

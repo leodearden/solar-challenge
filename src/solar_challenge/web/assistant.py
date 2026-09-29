@@ -22,6 +22,7 @@ from flask.helpers import stream_with_context
 from flask.typing import ResponseReturnValue
 
 from solar_challenge.web import database
+from solar_challenge.web.shared import get_job_manager
 
 bp = Blueprint("assistant", __name__)
 
@@ -799,7 +800,7 @@ def chat() -> Response:
     sid = _session_id()
     db_path = current_app.config["DATABASE"]
     data_dir: str = str(current_app.config.get("DATA_DIR", ""))
-    job_manager: Any = current_app.extensions.get("job_manager")
+    job_manager = get_job_manager()
 
     def generate() -> Generator[str, None, None]:
         # Pre-check: API key must be set

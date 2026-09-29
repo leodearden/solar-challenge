@@ -28,28 +28,11 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.web.database import get_db
-from solar_challenge.web.shared import get_storage, resolve_location
+from solar_challenge.web.shared import get_job_manager, get_storage, resolve_location
 
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
-
-
-def _get_job_manager() -> Any:
-    """Get the JobManager instance from the Flask app extensions.
-
-    Returns:
-        JobManager instance.
-
-    Aborts:
-        503: If JobManager is not initialized.
-    """
-    from flask import abort  # noqa: PLC0415
-
-    jm = current_app.extensions.get("job_manager")
-    if jm is None:
-        abort(503, description="Simulation service is not available")
-    return jm
 
 
 def _parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
@@ -281,7 +264,7 @@ def simulate_home_api() -> tuple[Response, int]:
         home_config, start_date, end_date, name = _parse_home_config(data)
     except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
-    job_manager = _get_job_manager()
+    job_manager = get_job_manager()
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
 
@@ -324,7 +307,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
         return jsonify({"error": str(exc)}), 400
     fleet_name = data.get("name", "Fleet Simulation")
 
-    job_manager = _get_job_manager()
+    job_manager = get_job_manager()
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
 
@@ -349,7 +332,7 @@ def get_job_status(job_id: str) -> tuple[Response, int]:
     Returns:
         JSON with job status fields, or 404 if not found.
     """
-    job_manager = _get_job_manager()
+    job_manager = get_job_manager()
     status = job_manager.get_job_status(job_id)
 
     if status is None:
@@ -368,7 +351,7 @@ def get_job_progress(job_id: str) -> Response:
     Returns:
         text/event-stream response.
     """
-    job_manager = _get_job_manager()
+    job_manager = get_job_manager()
 
     def generate_events() -> Generator[str, None, None]:
         """Generate SSE events for the job."""
@@ -433,7 +416,7 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
     Returns:
         JSON with summary data, or 404/409 on error.
     """
-    job_manager = _get_job_manager()
+    job_manager = get_job_manager()
     status = job_manager.get_job_status(job_id)
 
     if status is None:
@@ -642,8 +625,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     if not data:
         return jsonify({"error": "Request body must be JSON"}), 400
 
-    # Validate service availability first — avoids wasted sampling on 503 path.
-    job_manager = _get_job_manager()
+    job_manager = get_job_manager()
 
     from solar_challenge.web.fleet_config import (  # noqa: PLC0415
         apply_fleet_overlay,
@@ -790,7 +772,7 @@ def simulate_sweep() -> tuple[Response, int]:
 
     # Submit individual home jobs for each sweep point
     sweep_id = str(_uuid.uuid4())
-    job_manager = _get_job_manager()
+    job_manager = get_job_manager()
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
 
