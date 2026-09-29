@@ -57,7 +57,10 @@ class _RecordingSimulation:
 
 
 class _BlockingSimulation:
-    """Stands in for simulate_home: each job waits inside the simulation until release(), then gets an hour at its home's PV size."""
+    """Stands in for simulate_home: every job waits inside the simulation until release(), then gets an hour at its home's PV size.
+
+    wait_until_started() returns once the first job is inside the simulation.
+    """
 
     def __init__(self) -> None:
         self._started = threading.Event()
@@ -94,7 +97,7 @@ def app(tmp_path) -> Flask:
 
 
 def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
-    """Make a JobManager that runs *simulation* the app's job manager, and return a client of the app."""
+    """Install a JobManager that runs *simulation* as the app's job manager, and return a client of the app."""
     app.extensions["job_manager"] = JobManager(simulate_home=simulation)
     return app.test_client()
 
