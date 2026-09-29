@@ -624,7 +624,7 @@ class JobManager:
             for i, home_config in enumerate(configs):
                 pct = (i / total) * 90.0 + 5.0  # 5% to 95%
                 progress(pct, f"Home {i + 1}/{total}", f"Simulating home {i + 1} of {total}...")
-                results = simulate_home(home_config, start_date, end_date)
+                results = self._simulate_home(home_config, start_date, end_date)
                 summary = calculate_summary(results)
                 per_home_results.append(results)
                 per_home_summaries.append(summary)
