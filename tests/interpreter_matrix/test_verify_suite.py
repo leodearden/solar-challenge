@@ -14,6 +14,7 @@ Inside a sandbox that cannot write uv's python directory, set
 UV_PYTHON_INSTALL_DIR to a writable path.
 """
 
+import contextlib
 import json
 import os
 import signal
@@ -44,7 +45,6 @@ print(json.dumps({
 }))
 """
 
-
 _OFF_PIN_MINORS = sorted(off_pin_minor_versions(PROJECT_ROOT))
 
 
@@ -64,11 +64,23 @@ def _suite_env(major: int, minor: int) -> dict[str, str]:
     return env
 
 
+def _kill_process_group(proc: subprocess.Popen[str]) -> None:
+    """SIGKILL *proc*'s whole process group, unless *proc* has already been reaped.
+
+    Until Popen reaps *proc*, its pid, which is also the group's id, cannot be reused.
+    """
+    if proc.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+
+
 def _run_verify_suite(env: dict[str, str], python: str) -> subprocess.CompletedProcess[str]:
     """Run the orchestrator's test_command verbatim in *env*, as the orchestrator runs it.
 
-    On a hang the whole process group is killed, so uv, pytest and its workers
-    do not outlive the case.
+    The suite runs in a session of its own, which no signal sent to this process
+    reaches. If the case ends before the suite does (a hang, an interrupt, an
+    error), the whole process group is killed, so uv, pytest and its workers do
+    not outlive the case.
     """
     command = load_orchestrator_config(PROJECT_ROOT)["test_command"]
     proc = subprocess.Popen(
@@ -84,12 +96,14 @@ def _run_verify_suite(env: dict[str, str], python: str) -> subprocess.CompletedP
     try:
         output, _ = proc.communicate(timeout=_SUITE_TIMEOUT_SECS)
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
+        _kill_process_group(proc)
         output, _ = proc.communicate()
         pytest.fail(
             f"the verify suite on Python {python} hung for {_SUITE_TIMEOUT_SECS} s and was killed; "
             f"output tail:\n{output[-_OUTPUT_TAIL_CHARS:]}"
         )
+    finally:
+        _kill_process_group(proc)
     return subprocess.CompletedProcess(command, proc.returncode, output)
 
 
