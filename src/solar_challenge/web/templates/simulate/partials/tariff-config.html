@@ -1,28 +1,13 @@
 {# Tariff configuration partial for the home simulation form.
    Mirrors battery-config.html's enable-toggle / x-show pattern.
    Parent x-data must expose formData with tariff_* fields. #}
+{% from "components/macros.html" import toggle_switch %}
 
 <div class="space-y-6">
     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Import Tariff</h3>
     <p class="text-sm text-slate-500 dark:text-slate-400">Optionally specify an electricity import tariff to model bill savings.</p>
 
-    <!-- Enable/disable toggle -->
-    <div class="flex items-center gap-3">
-        <button
-            type="button"
-            role="switch"
-            :aria-checked="formData.tariff_enabled"
-            @click="formData.tariff_enabled = !formData.tariff_enabled"
-            class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
-            :class="formData.tariff_enabled ? 'bg-amber-500' : 'bg-slate-300 dark:bg-slate-600'"
-        >
-            <span
-                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
-                :class="formData.tariff_enabled ? 'translate-x-5' : 'translate-x-0'"
-            ></span>
-        </button>
-        <label class="text-sm font-semibold text-slate-700 dark:text-slate-300">Enable Tariff</label>
-    </div>
+    {{ toggle_switch(id='tariff_enabled', label='Enable Tariff', state='formData.tariff_enabled') }}
 
     <!-- Tariff settings (shown when enabled) -->
     <div x-show="formData.tariff_enabled" x-cloak x-transition class="space-y-6">
@@ -94,23 +79,7 @@
     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Smart Export Guarantee (SEG)</h3>
     <p class="text-sm text-slate-500 dark:text-slate-400">Optionally price grid exports at a named supplier's SEG rate or a custom rate.</p>
 
-    <!-- Enable/disable toggle -->
-    <div class="flex items-center gap-3">
-        <button
-            type="button"
-            role="switch"
-            :aria-checked="formData.seg_enabled"
-            @click="formData.seg_enabled = !formData.seg_enabled"
-            class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
-            :class="formData.seg_enabled ? 'bg-amber-500' : 'bg-slate-300 dark:bg-slate-600'"
-        >
-            <span
-                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
-                :class="formData.seg_enabled ? 'translate-x-5' : 'translate-x-0'"
-            ></span>
-        </button>
-        <label class="text-sm font-semibold text-slate-700 dark:text-slate-300">Enable SEG Export Pricing</label>
-    </div>
+    {{ toggle_switch(id='seg_enabled', label='Enable SEG Export Pricing', state='formData.seg_enabled') }}
 
     <!-- SEG settings (shown when enabled) -->
     <div x-show="formData.seg_enabled" x-cloak x-transition class="space-y-4">
