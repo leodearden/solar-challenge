@@ -14,6 +14,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.app import create_app
+from solar_challenge.web.jobs import JobManager
 
 
 # ---------------------------------------------------------------------------
@@ -930,6 +931,20 @@ class TestSuggestConfig:
 # Slice ③ — tool surface tests (step-5)
 # ---------------------------------------------------------------------------
 
+def dispatch_dependencies(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
+    """The db_path, job_manager and data_dir ``_dispatch_tool`` requires, rooted in *tmp_path*.
+
+    For tests that do not care which values they pass; keyword *overrides*
+    replace individual entries for those that do.
+    """
+    return {
+        "db_path": tmp_path / "assistant.db",
+        "job_manager": MagicMock(spec=JobManager),
+        "data_dir": tmp_path,
+        **overrides,
+    }
+
+
 class TestToolSurface:
     """Tests for _TOOLS list and _dispatch_tool router."""
 
@@ -973,35 +988,44 @@ class TestToolSurface:
                 f"input_schema.required must be non-empty list for {tool['name']!r}"
             )
 
-    def test_dispatch_explain_metric(self) -> None:
+    def test_dispatch_explain_metric(self, tmp_path: Path) -> None:
         """_dispatch_tool('explain_metric', {...}) returns the same dict as explain_metric()."""
         from solar_challenge.web.assistant import _dispatch_tool, explain_metric
 
-        result = _dispatch_tool("explain_metric", {"metric": "self_consumption_ratio"})
+        result = _dispatch_tool(
+            "explain_metric",
+            {"metric": "self_consumption_ratio"},
+            **dispatch_dependencies(tmp_path),
+        )
         expected = explain_metric("self_consumption_ratio")
         assert result == expected, (
             f"_dispatch_tool result mismatch: {result!r} vs {expected!r}"
         )
 
-    def test_dispatch_suggest_config(self) -> None:
+    def test_dispatch_suggest_config(self, tmp_path: Path) -> None:
         """_dispatch_tool('suggest_config', {...}) returns the same dict as suggest_config()."""
         from solar_challenge.web.assistant import _dispatch_tool, suggest_config
 
         result = _dispatch_tool(
             "suggest_config",
             {"annual_consumption_kwh": 3100, "goal": "self_sufficiency"},
+            **dispatch_dependencies(tmp_path),
         )
         expected = suggest_config(3100, "self_sufficiency")
         assert result == expected, (
             f"_dispatch_tool result mismatch: {result!r} vs {expected!r}"
         )
 
-    def test_dispatch_unknown_returns_error_dict(self) -> None:
+    def test_dispatch_unknown_returns_error_dict(self, tmp_path: Path) -> None:
         """_dispatch_tool with unknown name returns a dict with 'error' key, does NOT raise."""
         from solar_challenge.web.assistant import _dispatch_tool
 
         try:
-            result = _dispatch_tool("nonexistent_tool", {})
+            result = _dispatch_tool(
+                "nonexistent_tool",
+                {},
+                **dispatch_dependencies(tmp_path),
+            )
         except Exception as exc:
             raise AssertionError(
                 f"_dispatch_tool should not raise for unknown tool; got: {exc!r}"
@@ -1771,7 +1795,11 @@ class TestSlice4ToolSurface:
             summary={"total_generation_kwh": 500.0},
         )
 
-        result = _dispatch_tool("get_run_results", {"run_id_or_name": "disp-run-001"}, db_path=str(db_path))
+        result = _dispatch_tool(
+            "get_run_results",
+            {"run_id_or_name": "disp-run-001"},
+            **dispatch_dependencies(tmp_path, db_path=str(db_path)),
+        )
         expected = get_run_results("disp-run-001", db_path)
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
@@ -1790,24 +1818,14 @@ class TestSlice4ToolSurface:
             summary={"self_consumption_ratio": 0.55},
         )
 
-        result = _dispatch_tool("list_recent_runs", {"limit": 5}, db_path=str(db_path))
+        result = _dispatch_tool(
+            "list_recent_runs",
+            {"limit": 5},
+            **dispatch_dependencies(tmp_path, db_path=str(db_path)),
+        )
         expected = list_recent_runs(5, db_path)
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
-
-    def test_dispatch_get_run_results_no_db_path_returns_graceful_error(self) -> None:
-        """_dispatch_tool('get_run_results', {...}, db_path=None) returns graceful error, no raise."""
-        from solar_challenge.web.assistant import _dispatch_tool
-
-        try:
-            result = _dispatch_tool("get_run_results", {"run_id_or_name": "any-id"}, db_path=None)
-        except Exception as exc:
-            raise AssertionError(
-                f"_dispatch_tool should not raise when db_path=None; got: {exc!r}"
-            ) from exc
-
-        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-        assert "error" in result, f"Expected 'error' key when db_path=None; got: {result}"
 
     def test_end_to_end_get_run_results_tool_use_signal(
         self,
@@ -2135,21 +2153,23 @@ class TestRunHomeSimulation:
         assert "error" in result, f"Expected 'error' key; got {result}"
         jm.submit_home_job.assert_not_called()
 
-    def test_job_manager_none_returns_graceful_error(self, tmp_path: Path) -> None:
-        """job_manager=None returns error dict, no raise."""
+    def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
+        """A submit_home_job that raises yields an error dict naming the failure, and no run link."""
         from solar_challenge.web.assistant import run_home_simulation
 
-        params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
+        jm = self._make_jm()
+        submit_failure = "job queue unavailable"
+        jm.submit_home_job.side_effect = RuntimeError(submit_failure)
 
-        try:
-            result = run_home_simulation(params, None, str(tmp_path / "t.db"), str(tmp_path))
-        except Exception as exc:
-            raise AssertionError(
-                f"run_home_simulation should not raise when job_manager=None; got: {exc!r}"
-            ) from exc
+        result = run_home_simulation(
+            {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"},
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
 
-        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+        assert submit_failure in result["error"]
+        assert "run_id" not in result
 
     def test_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
         """When 'days' is absent the window passed to submit_home_job is 7 days, not the full year."""
@@ -2317,21 +2337,23 @@ class TestRunFleetSimulation:
         assert "error" in result, f"Expected 'error' key; got {result}"
         jm.submit_fleet_job.assert_not_called()
 
-    def test_job_manager_none_returns_graceful_error(self, tmp_path: Path) -> None:
-        """job_manager=None returns error dict, no raise."""
+    def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
+        """A submit_fleet_job that raises yields an error dict naming the failure, and no run link."""
         from solar_challenge.web.assistant import run_fleet_simulation
 
-        params = {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": 7}
+        jm = self._make_jm()
+        submit_failure = "job queue unavailable"
+        jm.submit_fleet_job.side_effect = RuntimeError(submit_failure)
 
-        try:
-            result = run_fleet_simulation(params, None, str(tmp_path / "t.db"), str(tmp_path))
-        except Exception as exc:
-            raise AssertionError(
-                f"run_fleet_simulation should not raise when job_manager=None; got: {exc!r}"
-            ) from exc
+        result = run_fleet_simulation(
+            {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": 7},
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
 
-        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
+        assert submit_failure in result["error"]
+        assert "run_id" not in result
 
     def test_fleet_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
         """When 'days' is absent the fleet window passed to submit_fleet_job is 7 days, not the full year."""
@@ -2481,30 +2503,6 @@ class TestSlice5ToolSurface:
             f"Expected dispatch result to match handler result; got {via_dispatch!r} vs {direct!r}"
         )
 
-    def test_dispatch_run_home_simulation_no_job_manager_returns_error(
-        self, tmp_path: Path
-    ) -> None:
-        """_dispatch_tool('run_home_simulation', {...}, job_manager=None) returns error dict."""
-        from solar_challenge.web.assistant import _dispatch_tool
-
-        params = {"pv_kw": 4, "days": 7, "location": "bristol"}
-
-        try:
-            result = _dispatch_tool(
-                "run_home_simulation",
-                params,
-                db_path=str(tmp_path / "t.db"),
-                job_manager=None,
-                data_dir=str(tmp_path),
-            )
-        except Exception as exc:
-            raise AssertionError(
-                f"_dispatch_tool should not raise when job_manager=None; got: {exc!r}"
-            ) from exc
-
-        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-        assert "error" in result, f"Expected 'error' key when job_manager=None; got {result}"
-
 
 # ---------------------------------------------------------------------------
 # Slice ⑤ — end-to-end boundary tool-use signal tests (step-7 RED)
@@ -2547,8 +2545,8 @@ class TestSlice5RunToolSignal:
         app: Flask,
         sequence_mock_anthropic: dict[str, Any],
     ) -> None:
-        """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config;
-        tool_result content contains /results/home/<run_id>."""
+        """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config
+        against the app's DATABASE and DATA_DIR; tool_result contains /results/home/<run_id>."""
         import json as _json
 
         RUN_ID = "run-home-001"
@@ -2595,6 +2593,8 @@ class TestSlice5RunToolSignal:
         assert config.battery_config.capacity_kwh == 5.0, (
             f"Expected battery capacity_kwh=5.0; got {config.battery_config.capacity_kwh}"
         )
+        assert call_kwargs.kwargs["db_path"] == app.config["DATABASE"]
+        assert call_kwargs.kwargs["data_dir"] == app.config["DATA_DIR"]
 
         # 3. 2nd stream() call's messages[-1] tool_result content must contain results_url
         call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
@@ -2625,8 +2625,8 @@ class TestSlice5RunToolSignal:
         app: Flask,
         sequence_mock_anthropic: dict[str, Any],
     ) -> None:
-        """run_fleet_simulation: submit_fleet_job receives 3-home configs list;
-        tool_result contains /results/fleet/<run_id>."""
+        """run_fleet_simulation: submit_fleet_job receives 3-home configs list against the app's
+        DATABASE and DATA_DIR; tool_result contains /results/fleet/<run_id>."""
         RUN_ID = "run-fleet-001"
         JOB_ID = "job-fleet-001"
         TOOL_ID = "toolu_rfs_e2e_001"
@@ -2659,6 +2659,8 @@ class TestSlice5RunToolSignal:
         assert len(configs) == 3, (
             f"Expected submit_fleet_job configs list of length 3; got {len(configs)}"
         )
+        assert call_kwargs.kwargs["db_path"] == app.config["DATABASE"]
+        assert call_kwargs.kwargs["data_dir"] == app.config["DATA_DIR"]
 
         # 2nd stream's tool_result content must contain the fleet results_url
         call_kwargs_list = sequence_mock_anthropic["call_kwargs_list"]
