@@ -51,6 +51,21 @@ git:
   branch_prefix: "task/"
   remote: "origin"
   worktree_dir: ".worktrees"
+  # Offline lane: after every merge to main it re-runs the verify suite on each
+  # Python minor requires-python admits except the .python-version pin
+  # (tests/interpreter_matrix), off the merge path at idle priority — it never
+  # gates a merge. A confirmed red files a fix task whose failing node-id names
+  # the interpreter. The legacy numeric seam is off: this repo has no
+  # scripts/run-offline-deep.sh. offline_lane_enabled and
+  # persistent_offline_deep_worktree take effect at orchestrator restart (the
+  # fleet redeploy applies them); offline_lane_commands is hot-reloadable.
+  persistent_offline_deep_worktree: true
+  offline_lane_enabled: true
+  offline_lane_legacy_numeric_enabled: false
+  offline_lane_commands:
+    - name: interpreter-matrix
+      command: "uv run --extra dev pytest tests/interpreter_matrix"
+      fix_task_priority: "medium"
 
 # OS filesystem sandbox (Landlock) — dark-factory-fleet OS filesystem sandbox
 # rollout, fleet-remainder wave (PRD os-sandbox-worktree-containment in the

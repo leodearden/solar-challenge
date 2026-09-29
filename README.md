@@ -31,7 +31,7 @@ The current release is feature-complete, providing:
 
 ### Prerequisites
 
-- Python 3.10 or higher
+- Python 3.11–3.14 (the `requires-python` range in pyproject.toml)
 - pip package manager
 
 ### Installation

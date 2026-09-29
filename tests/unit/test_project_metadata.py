@@ -2,23 +2,27 @@
 """Python version metadata contract tests.
 
 These tests encode machine-checkable invariants that keep pyproject.toml's
-requires-python specifier, the .python-version pin, and the Programming
-Language classifiers mutually consistent.  pyproject.toml is parsed as TOML
-and requires-python is evaluated as a PEP 440 specifier set.
+requires-python specifier, the .python-version pin, the Programming Language
+classifiers, and the [tool.mypy] python_version target mutually consistent.
+pyproject.toml is parsed as TOML and requires-python is evaluated as a PEP 440
+specifier set.
 """
 
 import re
 from pathlib import Path
 
 import pytest
-from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-from tests._pyproject import load_project_table
+from tests._interpreters import admitted_minor_versions, python_version_pin, requires_python
+from tests._pyproject import load_project_table, load_pyproject
 
 # Interpreters beyond the .python-version pin that downstream consumers
 # (solar-challenge-platform) install the library on.
 _CONSUMER_INTERPRETERS: tuple[tuple[int, int], ...] = ((3, 13), (3, 14))
+
+# Minors the project dropped at end of life (3.10: October 2026).
+_RETIRED_INTERPRETERS: tuple[tuple[int, int], ...] = ((3, 10),)
 
 _PYTHON_MINOR_CLASSIFIER = re.compile(r"Programming Language :: Python :: (\d+)\.(\d+)")
 
@@ -27,16 +31,6 @@ _PYTHON_MINOR_CLASSIFIER = re.compile(r"Programming Language :: Python :: (\d+)\
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _requires_python(project_root: Path) -> SpecifierSet:
-    """Return pyproject.toml's requires-python as a PEP 440 specifier set."""
-    return SpecifierSet(load_project_table(project_root)["requires-python"])
-
-
-def _admitted_minor_versions(requires_python: SpecifierSet) -> set[tuple[int, int]]:
-    """Return the Python 3 minor versions, searched from 3.0 to 3.99, that *requires_python* admits."""
-    return {(3, minor) for minor in range(100) if requires_python.contains(f"3.{minor}")}
-
-
 def _classifier_minor_versions(project_root: Path) -> set[tuple[int, int]]:
     """Return the (major, minor) pairs named by 'Programming Language :: Python :: X.Y' classifiers."""
     matches = (
@@ -44,13 +38,6 @@ def _classifier_minor_versions(project_root: Path) -> set[tuple[int, int]]:
         for classifier in load_project_table(project_root)["classifiers"]
     )
     return {(int(m.group(1)), int(m.group(2))) for m in matches if m}
-
-
-def _python_version_pin(project_root: Path) -> Version:
-    """Return the interpreter version pinned by .python-version."""
-    pv_file = project_root / ".python-version"
-    assert pv_file.exists(), ".python-version missing (run test_python_version_file_exists first)"
-    return Version(pv_file.read_text(encoding="utf-8").strip())
 
 
 # ---------------------------------------------------------------------------
@@ -64,9 +51,9 @@ def test_requires_python_has_upper_bound(project_root: Path) -> None:
     run on (e.g. a future 3.15), where changed interpreter defaults or new
     warnings from optional deps would go unnoticed.
     """
-    requires_python = _requires_python(project_root)
-    assert any(spec.operator in {"<", "<="} for spec in requires_python), (
-        f"requires-python={str(requires_python)!r} has no upper bound (<X.Y); "
+    python_range = requires_python(project_root)
+    assert any(spec.operator in {"<", "<="} for spec in python_range), (
+        f"requires-python={str(python_range)!r} has no upper bound (<X.Y); "
         "add one matching the Programming Language classifiers"
     )
 
@@ -87,17 +74,17 @@ def test_python_version_file_exists(project_root: Path) -> None:
 
 def test_python_version_within_requires_python(project_root: Path) -> None:
     """.python-version pin must satisfy requires-python."""
-    requires_python = _requires_python(project_root)
-    pin = _python_version_pin(project_root)
+    python_range = requires_python(project_root)
+    pin = python_version_pin(project_root)
 
-    assert requires_python.contains(pin), (
-        f".python-version {pin} is outside requires-python={str(requires_python)!r}"
+    assert python_range.contains(pin), (
+        f".python-version {pin} is outside requires-python={str(python_range)!r}"
     )
 
 
 def test_python_version_listed_in_classifiers(project_root: Path) -> None:
     """.python-version minor version must appear as a Programming Language classifier."""
-    pin = _python_version_pin(project_root)
+    pin = python_version_pin(project_root)
     declared = _classifier_minor_versions(project_root)
 
     assert (pin.major, pin.minor) in declared, (
@@ -116,22 +103,56 @@ def test_requires_python_admits_consumer_interpreter(
     project_root: Path, version: tuple[int, int]
 ) -> None:
     """requires-python must admit every interpreter downstream consumers install the library on."""
-    requires_python = _requires_python(project_root)
+    python_range = requires_python(project_root)
 
-    assert version in _admitted_minor_versions(requires_python), (
-        f"Python {version} is outside requires-python={str(requires_python)!r}; "
+    assert version in admitted_minor_versions(python_range), (
+        f"Python {version} is outside requires-python={str(python_range)!r}; "
         "downstream consumers need the library installable on this interpreter"
+    )
+
+
+@pytest.mark.parametrize(
+    "version",
+    _RETIRED_INTERPRETERS,
+    ids=[f"{major}.{minor}" for major, minor in _RETIRED_INTERPRETERS],
+)
+def test_requires_python_excludes_retired_interpreter(
+    project_root: Path, version: tuple[int, int]
+) -> None:
+    """requires-python must not admit an interpreter the project retired at end of life."""
+    python_range = requires_python(project_root)
+    major, minor = version
+
+    assert version not in admitted_minor_versions(python_range), (
+        f"requires-python={str(python_range)!r} admits Python {major}.{minor}, which the project "
+        "retired at end of life; raise the requires-python floor above it"
     )
 
 
 def test_classifiers_match_requires_python_range(project_root: Path) -> None:
     """The X.Y classifiers must name exactly the minor versions requires-python admits."""
-    requires_python = _requires_python(project_root)
-    admitted = _admitted_minor_versions(requires_python)
+    python_range = requires_python(project_root)
+    admitted = admitted_minor_versions(python_range)
     declared = _classifier_minor_versions(project_root)
 
     assert declared == admitted, (
         f"Programming Language classifiers {sorted(declared)} disagree with "
-        f"requires-python={str(requires_python)!r}: missing classifiers "
+        f"requires-python={str(python_range)!r}: missing classifiers "
         f"{sorted(admitted - declared)}, extra classifiers {sorted(declared - admitted)}"
+    )
+
+
+def test_mypy_targets_oldest_admitted_minor(project_root: Path) -> None:
+    """[tool.mypy] python_version must be the oldest minor requires-python admits.
+
+    A newer target misses syntax and standard-library API the floor lacks, so
+    the type check passes code that cannot run on an admitted interpreter.
+    """
+    mypy_target = Version(load_pyproject(project_root)["tool"]["mypy"]["python_version"])
+    oldest_major, oldest_minor = min(admitted_minor_versions(requires_python(project_root)))
+
+    assert (mypy_target.major, mypy_target.minor) == (oldest_major, oldest_minor), (
+        f"[tool.mypy] python_version is {mypy_target}, but the oldest minor requires-python "
+        f"admits is {oldest_major}.{oldest_minor}; set python_version to that floor so mypy "
+        "flags syntax and standard-library API the floor lacks"
     )

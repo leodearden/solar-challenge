@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The interpreter-support claims: the Python minors requires-python admits and the .python-version pin.
+
+Environment markers are evaluated over the same candidate minors, so the minors a
+marker holds on compare directly with the minors requires-python admits.
+"""
+
+from pathlib import Path
+
+from packaging.markers import Marker
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+
+from tests._pyproject import load_project_table
+
+# The candidate Python 3 minors, 3.0 to 3.99, that every derivation below searches.
+_PYTHON3_MINORS = range(100)
+
+
+def requires_python(project_root: Path) -> SpecifierSet:
+    """Return pyproject.toml's requires-python as a PEP 440 specifier set."""
+    return SpecifierSet(load_project_table(project_root)["requires-python"])
+
+
+def admitted_minor_versions(requires_python: SpecifierSet) -> set[tuple[int, int]]:
+    """Return the candidate Python 3 minor versions that *requires_python* admits."""
+    return {(3, minor) for minor in _PYTHON3_MINORS if requires_python.contains(f"3.{minor}")}
+
+
+def minor_versions_where_marker_holds(marker: Marker) -> set[tuple[int, int]]:
+    """Return the candidate Python 3 minor versions on which *marker* holds.
+
+    Only the Python version varies; every other marker variable keeps this host's value.
+    """
+    return {
+        (3, minor)
+        for minor in _PYTHON3_MINORS
+        if marker.evaluate({"python_version": f"3.{minor}", "python_full_version": f"3.{minor}.0"})
+    }
+
+
+def python_version_pin(project_root: Path) -> Version:
+    """Return the interpreter version pinned by .python-version."""
+    pv_file = project_root / ".python-version"
+    assert pv_file.exists(), f".python-version missing at {pv_file}"
+    return Version(pv_file.read_text(encoding="utf-8").strip())
+
+
+def off_pin_minor_versions(project_root: Path) -> set[tuple[int, int]]:
+    """Return the minors requires-python admits other than the .python-version pin's.
+
+    The per-task verify runs on the pin; the interpreter matrix re-verifies every other admitted minor.
+    """
+    pin = python_version_pin(project_root)
+    return admitted_minor_versions(requires_python(project_root)) - {(pin.major, pin.minor)}
