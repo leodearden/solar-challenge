@@ -16,7 +16,7 @@ from flask.testing import FlaskClient
 from solar_challenge.web.app import create_app
 from solar_challenge.web.jobs import JobManager
 
-from tests._sse import parse_sse_events
+from tests._sse import SseFrame, parse_sse_events
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +53,11 @@ def make_fake_stream(text_chunks: list[str]) -> MagicMock:
     cm.__exit__.return_value = False
 
     return cm
+
+
+def reply_text(events: list[SseFrame]) -> str:
+    """Return the reply the delta frames in *events* carry, in stream order."""
+    return "".join(e.data["text"] for e in events if e.event == "delta")
 
 
 @pytest.fixture
@@ -317,25 +322,12 @@ class TestChatEndpointHappyPath:
         mock_anthropic: dict,
     ) -> None:
         """Concatenated delta frame texts equal the mocked reply."""
-        import json as _json
-
         mock_anthropic["set_chunks"](["Hello", " world"])
 
         resp = client.post("/assistant/chat", json={"message": "test"})
         body = resp.get_data(as_text=True)
 
-        # Parse SSE frames: collect event types and data
-        reconstructed = ""
-        for line in body.splitlines():
-            if line.startswith("data: ") and "text" in line:
-                try:
-                    payload = _json.loads(line[6:])
-                    if "text" in payload:
-                        reconstructed += payload["text"]
-                except _json.JSONDecodeError:
-                    pass
-
-        assert reconstructed == "Hello world"
+        assert reply_text(parse_sse_events(body)) == "Hello world"
 
     def test_chat_uses_default_model(
         self,
@@ -578,8 +570,6 @@ class TestChatLiveSmoke:
 
     def test_single_turn_returns_nonempty_reply(self, client: FlaskClient) -> None:
         """A real POST /chat returns delta frames that reconstruct a non-empty reply."""
-        import json as _json
-
         resp = client.post("/assistant/chat", json={"message": "Reply with exactly one word: hello"})
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
@@ -587,14 +577,7 @@ class TestChatLiveSmoke:
         assert "event: done" in body, "Expected done frame"
         assert "event: error" not in body, f"Unexpected error frame: {body[:500]}"
 
-        reconstructed = ""
-        for line in body.splitlines():
-            if line.startswith("data: "):
-                try:
-                    payload = _json.loads(line[6:])
-                    reconstructed += payload.get("text", "")
-                except _json.JSONDecodeError:
-                    pass
+        reconstructed = reply_text(parse_sse_events(body))
         assert len(reconstructed) > 0, "Expected non-empty reconstructed reply"
 
     def test_second_turn_shows_cache_hit(self, client: FlaskClient) -> None:
@@ -1141,34 +1124,6 @@ def sequence_mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 class TestToolUseLoop:
     """Boundary and termination tests for the manual agentic tool-use loop."""
 
-    def _parse_sse_events(self, body: str) -> list[dict[str, Any]]:
-        """Parse SSE body into list of {event, data} dicts."""
-        import json as _json
-
-        events = []
-        lines = body.splitlines()
-        i = 0
-        while i < len(lines):
-            event_type = None
-            data_str = None
-            while i < len(lines) and lines[i].strip():
-                line = lines[i]
-                if line.startswith("event: "):
-                    event_type = line[7:].strip()
-                elif line.startswith("data: "):
-                    data_str = line[6:]
-                i += 1
-            if event_type is not None:
-                parsed_data: Any = None
-                if data_str:
-                    try:
-                        parsed_data = _json.loads(data_str)
-                    except Exception:
-                        parsed_data = data_str
-                events.append({"event": event_type, "data": parsed_data})
-            i += 1  # skip blank line
-        return events
-
     def test_tool_sse_frame_emitted(
         self,
         client: FlaskClient,
@@ -1186,11 +1141,11 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
-        events = self._parse_sse_events(body)
-        tool_events = [e for e in events if e["event"] == "tool"]
+        events = parse_sse_events(body)
+        tool_events = [e for e in events if e.event == "tool"]
         assert tool_events, f"Expected at least one 'tool' SSE frame; events: {events}"
-        assert tool_events[0]["data"]["name"] == "explain_metric", (
-            f"Expected tool frame with name='explain_metric', got: {tool_events[0]['data']}"
+        assert tool_events[0].data["name"] == "explain_metric", (
+            f"Expected tool frame with name='explain_metric', got: {tool_events[0].data}"
         )
 
     def test_stream_called_twice_and_tool_result_has_canonical_band(
@@ -1287,8 +1242,8 @@ class TestToolUseLoop:
 
         resp = client.post("/assistant/chat", json={"message": "explain"})
         body = resp.get_data(as_text=True)
-        events = self._parse_sse_events(body)
-        event_types = [e["event"] for e in events]
+        events = parse_sse_events(body)
+        event_types = [e.event for e in events]
         assert "done" in event_types, (
             f"Expected 'done' frame in event types; got: {event_types}"
         )
@@ -1325,8 +1280,8 @@ class TestToolUseLoop:
         )
 
         # Stream must still terminate cleanly (done or error frame, no hang)
-        events = self._parse_sse_events(body)
-        event_types = [e["event"] for e in events]
+        events = parse_sse_events(body)
+        event_types = [e.event for e in events]
         assert "done" in event_types or "error" in event_types, (
             f"Expected stream to terminate with done or error frame; got: {event_types}"
         )
@@ -1346,8 +1301,8 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
-        events = self._parse_sse_events(body)
-        event_types = [e["event"] for e in events]
+        events = parse_sse_events(body)
+        event_types = [e.event for e in events]
         assert "delta" in event_types, f"Expected delta frames; got: {event_types}"
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
         assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
@@ -1830,8 +1785,6 @@ class TestSlice4ToolSurface:
         tmp_path: Path,
     ) -> None:
         """SSE 'tool' frame emitted for get_run_results; 2nd stream contains seeded summary value."""
-        import json as _json
-
         db_path = app.config["DATABASE"]
         summary_val = 999.75
         _seed_run(
@@ -1856,33 +1809,11 @@ class TestSlice4ToolSurface:
         body = resp.get_data(as_text=True)
 
         # 1. A 'tool' SSE frame named 'get_run_results' must be emitted
-        events: list[dict[str, Any]] = []
-        lines = body.splitlines()
-        i = 0
-        while i < len(lines):
-            event_type = None
-            data_str = None
-            while i < len(lines) and lines[i].strip():
-                line = lines[i]
-                if line.startswith("event: "):
-                    event_type = line[7:].strip()
-                elif line.startswith("data: "):
-                    data_str = line[6:]
-                i += 1
-            if event_type is not None:
-                parsed: Any = None
-                if data_str:
-                    try:
-                        parsed = _json.loads(data_str)
-                    except Exception:
-                        parsed = data_str
-                events.append({"event": event_type, "data": parsed})
-            i += 1
-
-        tool_events = [e for e in events if e["event"] == "tool"]
+        events = parse_sse_events(body)
+        tool_events = [e for e in events if e.event == "tool"]
         assert tool_events, f"Expected at least one 'tool' SSE frame; events: {events}"
-        assert tool_events[0]["data"]["name"] == "get_run_results", (
-            f"Expected tool frame 'get_run_results'; got: {tool_events[0]['data']}"
+        assert tool_events[0].data["name"] == "get_run_results", (
+            f"Expected tool frame 'get_run_results'; got: {tool_events[0].data}"
         )
 
         # 2. The 2nd stream() call's messages[-1] tool_result content must contain the summary value
@@ -2506,34 +2437,6 @@ class TestSlice5ToolSurface:
 class TestSlice5RunToolSignal:
     """E2E boundary tests: mock Anthropic + mock JobManager across the tool_result seam."""
 
-    def _parse_sse_events(self, body: str) -> list[dict[str, Any]]:
-        """Parse SSE body into list of {event, data} dicts."""
-        import json as _json
-
-        events = []
-        lines = body.splitlines()
-        i = 0
-        while i < len(lines):
-            event_type = None
-            data_str = None
-            while i < len(lines) and lines[i].strip():
-                line = lines[i]
-                if line.startswith("event: "):
-                    event_type = line[7:].strip()
-                elif line.startswith("data: "):
-                    data_str = line[6:]
-                i += 1
-            if event_type is not None:
-                parsed: Any = None
-                if data_str:
-                    try:
-                        parsed = _json.loads(data_str)
-                    except Exception:
-                        parsed = data_str
-                events.append({"event": event_type, "data": parsed})
-            i += 1
-        return events
-
     def test_run_home_simulation_tool_use_signal(
         self,
         client: FlaskClient,
@@ -2542,8 +2445,6 @@ class TestSlice5RunToolSignal:
     ) -> None:
         """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config
         against the app's DATABASE and DATA_DIR; tool_result contains /results/home/<run_id>."""
-        import json as _json
-
         RUN_ID = "run-home-001"
         JOB_ID = "job-home-001"
         TOOL_ID = "toolu_rhs_e2e_001"
@@ -2570,11 +2471,11 @@ class TestSlice5RunToolSignal:
         body = resp.get_data(as_text=True)
 
         # 1. 'tool' SSE frame named 'run_home_simulation' must be emitted
-        events = self._parse_sse_events(body)
-        tool_events = [e for e in events if e["event"] == "tool"]
+        events = parse_sse_events(body)
+        tool_events = [e for e in events if e.event == "tool"]
         assert tool_events, f"Expected at least one 'tool' SSE frame; events: {events}"
-        assert tool_events[0]["data"]["name"] == "run_home_simulation", (
-            f"Expected tool frame 'run_home_simulation'; got: {tool_events[0]['data']}"
+        assert tool_events[0].data["name"] == "run_home_simulation", (
+            f"Expected tool frame 'run_home_simulation'; got: {tool_events[0].data}"
         )
 
         # 2. submit_home_job called once with correct HomeConfig
