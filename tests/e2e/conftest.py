@@ -22,6 +22,7 @@ from werkzeug.serving import make_server
 
 from solar_challenge.web.app import create_app
 from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.shared import get_job_manager
 
 
 def _find_free_port() -> int:
@@ -63,7 +64,9 @@ def _e2e_data_dir(_e2e_tmp_dir):
 def live_server(_e2e_db_path, _e2e_data_dir):
     """Start the Flask app on a random port in a daemon thread.
 
-    Yields the base URL (e.g. ``http://127.0.0.1:54321``).
+    Yields the base URL (e.g. ``http://127.0.0.1:54321``).  The app's
+    JobManager lives for the whole session, so the per-test drain in
+    tests/conftest.py leaves it alone and this fixture drains it at teardown.
     """
     app = create_app(
         test_config={
@@ -82,6 +85,8 @@ def live_server(_e2e_db_path, _e2e_data_dir):
     yield f"http://127.0.0.1:{port}"
 
     server.shutdown()
+    with app.app_context():
+        get_job_manager().shutdown(wait=True)
 
 
 @pytest.fixture(scope="session")
