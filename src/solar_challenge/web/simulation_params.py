@@ -183,21 +183,7 @@ def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, p
         use_stochastic=stochastic,
     )
 
-    # Build optional heat pump config.
-    #
-    # Note on key naming: the web JSON contract uses "type" (a shorter, idiomatic
-    # form-field name) whereas the YAML/config.py contract uses "heat_pump_type".
-    # The mapping is intentional and happens here on the single `hp_data.get("type")`
-    # call.  This is the only place that translation is needed.
-    #
-    # Note on implementation pattern: tariff and dispatch configs are built via
-    # shared config._parse_tariff_config / _parse_dispatch_strategy_config helpers
-    # because those helpers exist in config.py.  config._parse_heat_pump_config
-    # exists too, but it reads the YAML contract (it requires the 'heat_pump_type'
-    # and 'thermal_capacity_kw' keys), not the web's "type" key and its defaults,
-    # so HeatPumpConfig is built directly here.  HeatPumpConfig.__post_init__
-    # already raises ValueError on invalid inputs, and ValueError is this
-    # function's own error contract — no extra wrapping is needed here.
+    # Web contract uses "type" and defaults; config._parse_heat_pump_config requires the YAML keys
     heat_pump_config: HeatPumpConfig | None = None
     hp_data = data.get("heat_pump")
     if hp_data:
