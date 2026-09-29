@@ -4,6 +4,7 @@ import collections
 import json
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -20,6 +21,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.web.app import create_app
 from solar_challenge.web.database import init_db
 from solar_challenge.web.jobs import JobManager, live_managers, shutdown_all_managers
+from solar_challenge.web.storage import RunStorage
 
 
 @pytest.fixture
@@ -554,15 +556,34 @@ class TestJobManagerDirect:
         assert jm.get_job_status("young-job") is not None
 
 
+_A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
+
+
+def _run_storage(tmp_path: Path) -> RunStorage:
+    storage = RunStorage(db_path=tmp_path / "jobs.db", data_dir=tmp_path / "data")
+    init_db(storage.db_path)
+    return storage
+
+
 def _submit_home_job(manager: JobManager, tmp_path: Path) -> None:
-    db_path = tmp_path / "jobs.db"
-    init_db(db_path)
+    storage = _run_storage(tmp_path)
     manager.submit_home_job(
-        config=HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500)),
+        config=_A_HOME,
         start_date=pd.Timestamp("2024-06-01", tz="UTC"),
         end_date=pd.Timestamp("2024-06-02", tz="UTC"),
-        db_path=str(db_path),
-        data_dir=str(tmp_path / "data"),
+        db_path=str(storage.db_path),
+        data_dir=str(storage.data_dir),
+    )
+
+
+def _submit_fleet_job(manager: JobManager, tmp_path: Path) -> None:
+    storage = _run_storage(tmp_path)
+    manager.submit_fleet_job(
+        configs=[_A_HOME],
+        start_date=pd.Timestamp("2024-06-01", tz="UTC"),
+        end_date=pd.Timestamp("2024-06-02", tz="UTC"),
+        db_path=str(storage.db_path),
+        data_dir=str(storage.data_dir),
     )
 
 
@@ -576,6 +597,18 @@ class TestJobManagerShutdown:
 
         with pytest.raises(RuntimeError, match="after shutdown"):
             _submit_home_job(manager, tmp_path)
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_refused_job_leaves_no_run_in_the_history(
+        self, submit_job: Callable[[JobManager, Path], None], tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1)
+        manager.shutdown()
+
+        with pytest.raises(RuntimeError, match="after shutdown"):
+            submit_job(manager, tmp_path)
+
+        assert _run_storage(tmp_path).list_runs() == []
 
     def test_shutdown_all_managers_shuts_down_every_live_manager(self, tmp_path: Path) -> None:
         managers = [JobManager(max_workers=1), JobManager(max_workers=1)]

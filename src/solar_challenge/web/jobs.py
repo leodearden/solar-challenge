@@ -115,6 +115,9 @@ class JobManager:
 
         Returns:
             Tuple of (job_id, run_id).
+
+        Raises:
+            RuntimeError: If the manager has shut down; the refused job leaves no record.
         """
         self._cleanup_old_jobs()
 
@@ -186,18 +189,22 @@ class JobManager:
             )
 
         # Submit to thread pool
-        self._executor.submit(
-            self._run_home_simulation,
-            job_id,
-            run_id,
-            config,
-            start_date,
-            end_date,
-            db_path,
-            data_dir,
-            name,
-            created_at,
-        )
+        try:
+            self._executor.submit(
+                self._run_home_simulation,
+                job_id,
+                run_id,
+                config,
+                start_date,
+                end_date,
+                db_path,
+                data_dir,
+                name,
+                created_at,
+            )
+        except RuntimeError:
+            self._forget_job(job_id, run_id, db_path)
+            raise
 
         return job_id, run_id
 
@@ -225,6 +232,9 @@ class JobManager:
 
         Returns:
             Tuple of (job_id, run_id).
+
+        Raises:
+            RuntimeError: If the manager has shut down; the refused job leaves no record.
         """
         self._cleanup_old_jobs()
 
@@ -296,18 +306,22 @@ class JobManager:
             )
 
         # Submit to thread pool
-        self._executor.submit(
-            self._run_fleet_simulation,
-            job_id,
-            run_id,
-            configs,
-            start_date,
-            end_date,
-            db_path,
-            data_dir,
-            name,
-            created_at,
-        )
+        try:
+            self._executor.submit(
+                self._run_fleet_simulation,
+                job_id,
+                run_id,
+                configs,
+                start_date,
+                end_date,
+                db_path,
+                data_dir,
+                name,
+                created_at,
+            )
+        except RuntimeError:
+            self._forget_job(job_id, run_id, db_path)
+            raise
 
         return job_id, run_id
 
@@ -370,6 +384,15 @@ class JobManager:
             for jid in expired:
                 del self._jobs[jid]
                 self._event_queues.pop(jid, None)
+
+    def _forget_job(self, job_id: str, run_id: str, db_path: str) -> None:
+        """Erase every record of a job that the executor refused to schedule."""
+        with self._lock:
+            self._jobs.pop(job_id, None)
+            self._event_queues.pop(job_id, None)
+        with get_db(db_path) as conn:
+            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
     def _update_progress(
         self,
