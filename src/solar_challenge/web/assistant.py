@@ -22,6 +22,8 @@ from flask.helpers import stream_with_context
 from flask.typing import ResponseReturnValue
 
 from solar_challenge.web import database
+from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.shared import get_job_manager
 
 bp = Blueprint("assistant", __name__)
 
@@ -540,7 +542,7 @@ def list_recent_runs(limit: int, db_path: "str | Path") -> dict[str, Any]:
 
 def run_home_simulation(
     params: dict[str, Any],
-    job_manager: Any,
+    job_manager: JobManager | None,
     db_path: "str | Path",
     data_dir: "str | Path",
 ) -> dict[str, Any]:
@@ -600,7 +602,7 @@ def run_home_simulation(
 
 def run_fleet_simulation(
     params: dict[str, Any],
-    job_manager: Any,
+    job_manager: JobManager | None,
     db_path: "str | Path",
     data_dir: "str | Path",
 ) -> dict[str, Any]:
@@ -675,7 +677,7 @@ def _dispatch_tool(
     name: str,
     tool_input: dict[str, Any],
     db_path: "str | Path | None" = None,
-    job_manager: Any = None,
+    job_manager: JobManager | None = None,
     data_dir: "str | Path | None" = None,
 ) -> dict[str, Any]:
     """Route a tool call to its handler and return the result dict.
@@ -799,7 +801,7 @@ def chat() -> Response:
     sid = _session_id()
     db_path = current_app.config["DATABASE"]
     data_dir: str = str(current_app.config.get("DATA_DIR", ""))
-    job_manager: Any = current_app.extensions.get("job_manager")
+    job_manager = get_job_manager()
 
     def generate() -> Generator[str, None, None]:
         # Pre-check: API key must be set

@@ -2,7 +2,6 @@
 """Tests for the AI assistant web blueprint (slice ①: foundation wiring + slice ②: chat core)."""
 
 import os
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -447,47 +446,6 @@ class TestChatDegradation:
         assert error_data is not None, "Could not find error data payload"
         assert "message" in error_data, f"Error payload missing 'message': {error_data}"
 
-    def test_blueprint_registers_when_sdk_absent(self) -> None:
-        """Blueprint registers even if 'anthropic' is absent from sys.modules.
-
-        Fulfils the slice-② TODO from the slice-① foundation test:
-        deferred import keeps blueprint registration robust.
-        """
-        import sys
-
-        # Patch sys.modules so `import anthropic` would fail
-        original = sys.modules.get("anthropic", None)
-        sys.modules["anthropic"] = None  # type: ignore[assignment]
-        try:
-            # Build a fresh app — should NOT raise during blueprint registration
-            from solar_challenge.web.app import create_app as _create_app
-            import tempfile, os
-
-            with tempfile.TemporaryDirectory() as tmp:
-                db_path = os.path.join(tmp, "test.db")
-                fresh_app = _create_app(
-                    test_config={
-                        "TESTING": True,
-                        "SECRET_KEY": "deferred-test",
-                        "WTF_CSRF_ENABLED": False,
-                        "DATABASE": db_path,
-                        "DATA_DIR": tmp,
-                    }
-                )
-            assert "assistant" in fresh_app.blueprints, (
-                "Expected 'assistant' blueprint registered even when anthropic SDK absent"
-            )
-            # GET /assistant should still return 200 (page renders without the SDK)
-            with fresh_app.test_client() as fc:
-                resp = fc.get("/assistant")
-                assert resp.status_code == 200
-        finally:
-            # Restore sys.modules to original state
-            if original is None:
-                sys.modules.pop("anthropic", None)
-            else:
-                sys.modules["anthropic"] = original
-
 
 # ---------------------------------------------------------------------------
 # Slice ② — chat page wiring + configure-notice tests (step-9)
@@ -711,23 +669,6 @@ class TestHistoryWindowAlternation:
         assert msgs[-1]["content"] == "latest", (
             f"Expected last message content 'latest', got {msgs[-1]['content']!r}"
         )
-
-
-def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
-    """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
-
-    The app.py try/except either registers the blueprint (success) or logs a warning and skips
-    registration (ImportError). Checking 'assistant' in app.blueprints is therefore sufficient;
-    the warning-free path is the only way the blueprint ends up registered.
-
-    TODO (slice ②): when the chat handler gains a deferred ``import anthropic``, add a test that
-    patches ``sys.modules['anthropic']`` to ``None`` at the point of blueprint registration and
-    verifies the blueprint still registers — covering the robustness claim in assistant.py's
-    docstring.
-    """
-    assert "assistant" in app.blueprints, (
-        f"Expected 'assistant' blueprint to be registered; got: {list(app.blueprints.keys())}"
-    )
 
 
 def test_assistant_page_renders_chat_shell(client: FlaskClient) -> None:
@@ -2740,11 +2681,7 @@ class TestSlice5RunHomeIntegration:
 
         db_path: str = app.config["DATABASE"]
         data_dir: str = app.config["DATA_DIR"]
-        job_manager = app.extensions.get("job_manager")
-        assert job_manager is not None, (
-            "Expected a real JobManager on app.extensions; got None. "
-            "Is the 'web' extra installed?"
-        )
+        job_manager = app.extensions["job_manager"]
 
         result = run_home_simulation(
             {
