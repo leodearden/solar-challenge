@@ -9,6 +9,7 @@ orchestrator offline lane's interpreter-matrix job (tests/interpreter_matrix).
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -95,4 +96,43 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(pro
         f"the {_MATRIX_JOB!r} lane job collected {node_ids}; expected exactly one case per minor "
         f"requires-python admits other than the .python-version pin {pin}, each node-id ending "
         f"in its interpreter: {expected}"
+    )
+
+
+def test_default_collection_never_reaches_the_interpreter_matrix(project_root: Path) -> None:
+    """Collecting tests/ never reaches tests/interpreter_matrix, even with addopts cleared.
+
+    That covers plain `pytest`, the per-task verify, and dark-factory's serial
+    and confirm reruns, which append `-o addopts=`. PYTEST_ADDOPTS is dropped so
+    only the repo's own exclusion is measured; the sibling test directories are
+    ignored only to keep the collection fast.
+    """
+    siblings = [
+        path
+        for path in (project_root / "tests").iterdir()
+        if path.is_dir() and path.name != "interpreter_matrix"
+    ]
+    env = {name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"}
+
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "--collect-only", "-q", "-o", "addopts=", "tests",
+            *(f"--ignore={sibling}" for sibling in siblings),
+        ],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
+        f"collecting tests/ failed (exit {result.returncode})\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    reached = [line for line in result.stdout.splitlines() if line.startswith("tests/interpreter_matrix/")]
+    assert not reached, (
+        f"a default collection with addopts cleared reached the interpreter matrix: {reached}; "
+        "every verify, and every serial or confirm rerun of it, would then run the whole matrix "
+        "of verify suites, one per admitted interpreter"
     )
