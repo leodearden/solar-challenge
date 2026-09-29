@@ -9,6 +9,7 @@ and scenarios API endpoints under the /api/ prefix.
 import json
 import logging
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Generator
 
@@ -720,6 +721,13 @@ def import_fleet_yaml() -> tuple[Response, int]:
 # ---------------------------------------------------------------------------
 
 
+_SWEEP_PARAMETER_HOME_KEYS: Mapping[str, str] = {
+    "pv_capacity_kw": "pv_kw",
+    "battery_capacity_kwh": "battery_kwh",
+    "annual_consumption_kwh": "consumption_kwh",
+}
+
+
 @api_bp.route("/simulate/sweep", methods=["POST"])
 def simulate_sweep() -> tuple[Response, int]:
     """Submit a parameter sweep for background execution.
@@ -729,7 +737,7 @@ def simulate_sweep() -> tuple[Response, int]:
     rounded sweep values and the ids of the submitted jobs.
 
     Expects a JSON body with:
-      - parameter: str (e.g. "pv_capacity_kw")
+      - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
       - min: float
       - max: float
       - steps: int (>= 2)
@@ -738,6 +746,9 @@ def simulate_sweep() -> tuple[Response, int]:
 
     Returns:
         JSON with sweep_id, parameter, values and job_ids, HTTP 201.
+        HTTP 400 for an unsupported parameter (the error lists the supported
+        ones), an invalid range, or a point whose home config is invalid.
+        Every 400 comes before any job is submitted.
     """
     import uuid as _uuid  # noqa: PLC0415
 
@@ -745,6 +756,12 @@ def simulate_sweep() -> tuple[Response, int]:
     if not data:
         return jsonify({"error": "Request body must be JSON"}), 400
     parameter = str(data.get("parameter", "pv_capacity_kw"))
+    home_config_key = _SWEEP_PARAMETER_HOME_KEYS.get(parameter)
+    if home_config_key is None:
+        supported = ", ".join(_SWEEP_PARAMETER_HOME_KEYS)
+        return jsonify({
+            "error": f"Unsupported sweep parameter {parameter!r}; supported parameters: {supported}",
+        }), 400
     try:
         min_val = float(data.get("min", 1.0))
         max_val = float(data.get("max", 10.0))
@@ -770,26 +787,13 @@ def simulate_sweep() -> tuple[Response, int]:
     else:
         values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
 
-    # Submit individual home jobs for each sweep point
-    sweep_id = str(_uuid.uuid4())
-    job_manager = get_job_manager()
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
-
-    # Map parameter names to config keys
-    param_map = {
-        "pv_capacity_kw": "pv_kw",
-        "battery_capacity_kwh": "battery_kwh",
-        "annual_consumption_kwh": "consumption_kwh",
-    }
-    config_key = param_map.get(parameter, parameter)
-
-    job_ids: list[str] = []
     rounded_values = [round(v, 3) for v in values]
 
+    # Build every point's home before any job is submitted
+    point_homes: list[tuple[float, HomeConfig, pd.Timestamp, pd.Timestamp]] = []
     for val in rounded_values:
         point_config = dict(base_config)
-        point_config[config_key] = val
+        point_config[home_config_key] = val
         # Ensure defaults for required fields
         point_config.setdefault("pv_kw", 4.0)
         point_config.setdefault("battery_kwh", 0)
@@ -798,10 +802,19 @@ def simulate_sweep() -> tuple[Response, int]:
         point_config.setdefault("days", 7)
 
         try:
-            home_config, start_date, end_date, name = _parse_home_config(point_config)
+            home_config, start_date, end_date, _ = _parse_home_config(point_config)
         except (ValueError, TypeError) as exc:
             return jsonify({"error": f"Invalid config for {parameter}={val}: {exc}"}), 400
+        point_homes.append((val, home_config, start_date, end_date))
 
+    # Submit one home job per sweep point
+    sweep_id = str(_uuid.uuid4())
+    job_manager = get_job_manager()
+    db_path = current_app.config["DATABASE"]
+    data_dir = current_app.config["DATA_DIR"]
+
+    job_ids: list[str] = []
+    for val, home_config, start_date, end_date in point_homes:
         job_id, _ = job_manager.submit_home_job(
             config=home_config,
             start_date=start_date,

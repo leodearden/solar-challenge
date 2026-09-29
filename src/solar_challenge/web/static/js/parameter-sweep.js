@@ -50,7 +50,6 @@ document.addEventListener('alpine:init', () => {
             { value: 'pv_capacity_kw', label: 'PV Capacity (kW)', min: 1, max: 20, defaultMin: 2, defaultMax: 8 },
             { value: 'battery_capacity_kwh', label: 'Battery Capacity (kWh)', min: 0, max: 50, defaultMin: 0, defaultMax: 13.5 },
             { value: 'annual_consumption_kwh', label: 'Annual Consumption (kWh)', min: 1000, max: 10000, defaultMin: 2000, defaultMax: 5000 },
-            { value: 'n_homes', label: 'Number of Homes', min: 1, max: 500, defaultMin: 10, defaultMax: 100 }
         ],
 
         get currentParam() {
