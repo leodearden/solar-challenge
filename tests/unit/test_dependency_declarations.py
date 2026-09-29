@@ -5,7 +5,9 @@ Every third-party import the package requires must be satisfied by a declared
 dependency, not by whatever another package's extra happens to pull in: code
 outside the web subpackage needs DIRECT core dependencies, and the web
 subpackage needs core dependencies or the `web` extra that serves it.  No core
-dependency may request an extra its distribution does not provide.  An import
+dependency may request an extra its distribution does not provide.  No declared
+requirement may carry an environment marker that holds only on Python minors
+requires-python does not admit, since it could never install.  An import
 inside a try block that handles ImportError is optional by construction and
 exempt.  pyproject.toml is parsed structurally (TOML plus PEP 508
 requirements), not by regex.
@@ -24,6 +26,11 @@ import pytest
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
+from tests._interpreters import (
+    admitted_minor_versions,
+    minor_versions_where_marker_holds,
+    requires_python,
+)
 from tests._pyproject import load_project_table
 
 _IMPORT_FAILURES = {"ImportError", "ModuleNotFoundError"}
@@ -180,6 +187,32 @@ def test_core_dependencies_request_only_provided_extras(project_root: Path) -> N
         "installed distributions do not provide. Resolvers (uv, pip) warn about unknown "
         "extras in every consumer's lock or install; drop the extra and depend directly on "
         "what the code needs"
+    )
+
+
+def test_dependency_markers_hold_on_some_admitted_interpreter(project_root: Path) -> None:
+    """No declared requirement may be gated to Python minors that requires-python does not admit.
+
+    A marker that holds on no candidate minor on this host (e.g. another OS's
+    sys_platform) is not version-gated here and is not judged.
+    """
+    extras = load_project_table(project_root)["optional-dependencies"].keys()
+    requirements = [*_core_requirements(project_root), *_extra_requirements(project_root, extras)]
+    python_range = requires_python(project_root)
+    admitted = admitted_minor_versions(python_range)
+
+    dead: list[str] = []
+    for requirement in requirements:
+        if requirement.marker is None:
+            continue
+        holds_on = minor_versions_where_marker_holds(requirement.marker)
+        if holds_on and holds_on.isdisjoint(admitted):
+            dead.append(str(requirement))
+
+    assert not dead, (
+        f"declared requirements {dead} can never install on an interpreter "
+        f"requires-python={str(python_range)!r} admits: each marker holds only on Python "
+        "minors outside that range. Delete them from pyproject.toml"
     )
 
 

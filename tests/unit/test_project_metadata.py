@@ -2,18 +2,20 @@
 """Python version metadata contract tests.
 
 These tests encode machine-checkable invariants that keep pyproject.toml's
-requires-python specifier, the .python-version pin, and the Programming
-Language classifiers mutually consistent.  pyproject.toml is parsed as TOML
-and requires-python is evaluated as a PEP 440 specifier set.
+requires-python specifier, the .python-version pin, the Programming Language
+classifiers, and the [tool.mypy] python_version target mutually consistent.
+pyproject.toml is parsed as TOML and requires-python is evaluated as a PEP 440
+specifier set.
 """
 
 import re
 from pathlib import Path
 
 import pytest
+from packaging.version import Version
 
 from tests._interpreters import admitted_minor_versions, python_version_pin, requires_python
-from tests._pyproject import load_project_table
+from tests._pyproject import load_project_table, load_pyproject
 
 # Interpreters beyond the .python-version pin that downstream consumers
 # (solar-challenge-platform) install the library on.
@@ -137,4 +139,20 @@ def test_classifiers_match_requires_python_range(project_root: Path) -> None:
         f"Programming Language classifiers {sorted(declared)} disagree with "
         f"requires-python={str(python_range)!r}: missing classifiers "
         f"{sorted(admitted - declared)}, extra classifiers {sorted(declared - admitted)}"
+    )
+
+
+def test_mypy_targets_oldest_admitted_minor(project_root: Path) -> None:
+    """[tool.mypy] python_version must be the oldest minor requires-python admits.
+
+    A newer target misses syntax and standard-library API the floor lacks, so
+    the type check passes code that cannot run on an admitted interpreter.
+    """
+    mypy_target = Version(load_pyproject(project_root)["tool"]["mypy"]["python_version"])
+    oldest_major, oldest_minor = min(admitted_minor_versions(requires_python(project_root)))
+
+    assert (mypy_target.major, mypy_target.minor) == (oldest_major, oldest_minor), (
+        f"[tool.mypy] python_version is {mypy_target}, but the oldest minor requires-python "
+        f"admits is {oldest_major}.{oldest_minor}; set python_version to that floor so mypy "
+        "flags syntax and standard-library API the floor lacks"
     )

@@ -1,12 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The interpreter-support claims: the Python minors requires-python admits and the .python-version pin."""
+"""The interpreter-support claims: the Python minors requires-python admits and the .python-version pin.
+
+Environment markers are evaluated over the same candidate minors, so the minors a
+marker holds on compare directly with the minors requires-python admits.
+"""
 
 from pathlib import Path
 
+from packaging.markers import Marker
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from tests._pyproject import load_project_table
+
+# The candidate Python 3 minors, 3.0 to 3.99, that every derivation below searches.
+_PYTHON3_MINORS = range(100)
 
 
 def requires_python(project_root: Path) -> SpecifierSet:
@@ -15,8 +23,20 @@ def requires_python(project_root: Path) -> SpecifierSet:
 
 
 def admitted_minor_versions(requires_python: SpecifierSet) -> set[tuple[int, int]]:
-    """Return the Python 3 minor versions, searched from 3.0 to 3.99, that *requires_python* admits."""
-    return {(3, minor) for minor in range(100) if requires_python.contains(f"3.{minor}")}
+    """Return the candidate Python 3 minor versions that *requires_python* admits."""
+    return {(3, minor) for minor in _PYTHON3_MINORS if requires_python.contains(f"3.{minor}")}
+
+
+def minor_versions_where_marker_holds(marker: Marker) -> set[tuple[int, int]]:
+    """Return the candidate Python 3 minor versions on which *marker* holds.
+
+    Only the Python version varies; every other marker variable keeps this host's value.
+    """
+    return {
+        (3, minor)
+        for minor in _PYTHON3_MINORS
+        if marker.evaluate({"python_version": f"3.{minor}", "python_full_version": f"3.{minor}.0"})
+    }
 
 
 def python_version_pin(project_root: Path) -> Version:
