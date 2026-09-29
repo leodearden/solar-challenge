@@ -120,9 +120,14 @@ class PVConfig:
 
 
 @functools.cache
-def _sam_library(name: str) -> pd.DataFrame:
-    """pvlib's parsed SAM parameter library `name`, read once per process; callers copy what they take from it."""
+def _shared_sam_library(name: str) -> pd.DataFrame:
+    """pvlib's parsed SAM parameter library `name`, read once per process and shared by every _sam_library call."""
     return pvlib.pvsystem.retrieve_sam(name)
+
+
+def _sam_library(name: str) -> pd.DataFrame:
+    """SAM parameter library `name` as the caller's own frame: under pandas copy-on-write, its edits never reach the shared one."""
+    return _shared_sam_library(name).copy(deep=False)
 
 
 def _get_cec_module() -> dict[str, float]:
