@@ -616,7 +616,7 @@ class TestJobManagerSimulation:
             HomeConfig(pv_config=PVConfig(capacity_kw=2.0), load_config=LoadConfig(annual_consumption_kwh=3500)),
         ]
 
-        job_id, _ = manager.submit_fleet_job(
+        job_id, run_id = manager.submit_fleet_job(
             configs=homes,
             start_date=_JUNE_1,
             end_date=_JUNE_2,
@@ -627,6 +627,8 @@ class TestJobManagerSimulation:
         status = _wait_until_finished(manager, job_id)
         assert status["status"] == "completed", status["message"]
         assert simulation.calls == [(home, _JUNE_1, _JUNE_2) for home in homes]
+        _, _, per_home_summaries = storage.load_fleet_run(run_id)
+        assert [summary.total_generation_kwh for summary in per_home_summaries] == pytest.approx([4.0, 2.0])
 
 
 class TestJobManagerShutdown:
