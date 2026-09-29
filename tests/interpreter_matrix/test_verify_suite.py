@@ -36,7 +36,7 @@ _SUITE_TIMEOUT_SECS = 7200
 # Enough of the suite's output to carry pytest's short test summary.
 _OUTPUT_TAIL_CHARS = 5000
 
-# Run by the matrix environment's own interpreter, so a green suite proves which Python ran it.
+# Printed by the interpreter uv ran the suite with, so a green run proves which Python it was.
 _IDENTITY_PROBE = """
 import json, sys, sysconfig
 print(json.dumps({
@@ -107,15 +107,27 @@ def _run_verify_suite(env: dict[str, str], python: str) -> subprocess.CompletedP
     return subprocess.CompletedProcess(command, proc.returncode, output)
 
 
-def _interpreter_identity(venv: Path) -> dict[str, object]:
-    """Return the Python version and GIL build that *venv*'s interpreter reports for itself."""
+def _interpreter_identity(env: dict[str, str], python: str) -> dict[str, object]:
+    """Return the Python version and GIL build of the interpreter `uv run` resolves in *env*.
+
+    That is the resolution the suite ran under, so the probe reports the
+    interpreter that ran it, whatever uv made of UV_PYTHON and UV_PROJECT_ENVIRONMENT.
+    """
     probe = subprocess.run(
-        [str(venv / "bin" / "python"), "-c", _IDENTITY_PROBE],
+        # --no-sync: a plain `uv run` would re-sync the environment without the suite's extras.
+        ["uv", "run", "--no-sync", "python", "-c", _IDENTITY_PROBE],
+        cwd=PROJECT_ROOT,
+        env=env,
         capture_output=True,
         text=True,
-        check=True,
         timeout=60,
     )
+    if probe.returncode != 0:
+        pytest.fail(
+            f"the verify suite passed, but uv could not run the interpreter it resolves for "
+            f"Python {python} (exit {probe.returncode}), so nothing shows which Python ran the "
+            f"suite; uv said:\n{probe.stderr}"
+        )
     identity: dict[str, object] = json.loads(probe.stdout)
     return identity
 
@@ -129,16 +141,17 @@ def test_verify_suite_passes_on_python(version: tuple[int, int]) -> None:
     """The orchestrator verify suite passes on the GIL build of this admitted minor."""
     major, minor = version
     python = f"{major}.{minor}"
+    env = _suite_env(major, minor)
 
-    result = _run_verify_suite(_suite_env(major, minor), python)
+    result = _run_verify_suite(env, python)
 
     assert result.returncode == 0, (
         f"the verify suite failed on Python {python} (exit {result.returncode}); "
         f"output tail:\n{result.stdout[-_OUTPUT_TAIL_CHARS:]}"
     )
-    identity = _interpreter_identity(_matrix_venv(major, minor))
+    identity = _interpreter_identity(env, python)
     assert identity == {"version": [major, minor], "gil_disabled": False}, (
-        f"the verify suite passed in {_matrix_venv(major, minor)}, but its interpreter reports "
-        f"{identity}, not a GIL build of Python {python}; uv did not honour UV_PYTHON, so the "
-        f"green run says nothing about Python {python}"
+        f"the verify suite passed, but the interpreter uv ran it with reports {identity}, not a "
+        f"GIL build of Python {python}; uv did not honour UV_PYTHON, so the green run says "
+        f"nothing about Python {python}"
     )
