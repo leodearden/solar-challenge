@@ -231,7 +231,7 @@ class TestSweepAPI:
     """Tests for the POST /api/simulate/sweep endpoint."""
 
     def test_sweep_endpoint_returns_201(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep returns 201 with job_ids."""
+        """POST /api/simulate/sweep returns 201 with the values, the parameter and each point's job id, in point order."""
         response = client.post(
             "/api/simulate/sweep",
             json={
@@ -248,8 +248,7 @@ class TestSweepAPI:
         assert "values" in data
         assert len(data["values"]) == 4
         assert data["parameter"] == "pv_capacity_kw"
-        assert "job_ids" in data
-        assert len(data["job_ids"]) == 4
+        assert data["job_ids"] == ["job-1", "job-2", "job-3", "job-4"]
 
     def test_sweep_linear_values(self, client: FlaskClient) -> None:
         """Test that linear sweep generates evenly spaced values."""
