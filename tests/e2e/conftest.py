@@ -64,6 +64,9 @@ def _e2e_data_dir(_e2e_tmp_dir):
 def live_server(_e2e_db_path, _e2e_data_dir):
     """Start the Flask app on a random port in a daemon thread.
 
+    Each connection is served on its own thread so that open SSE progress
+    streams do not stall other requests.
+
     Yields the base URL (e.g. ``http://127.0.0.1:54321``).  The app's
     JobManager lives for the whole session, so the per-test drain in
     tests/conftest.py leaves it alone and this fixture drains it at teardown.
@@ -78,7 +81,7 @@ def live_server(_e2e_db_path, _e2e_data_dir):
     )
 
     port = _find_free_port()
-    server = make_server("127.0.0.1", port, app)
+    server = make_server("127.0.0.1", port, app, threaded=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
