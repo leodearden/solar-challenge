@@ -31,6 +31,10 @@ pytest --cov=src/solar_challenge
 # except the .python-version pin (one case per minor, ~6-10 min each)
 uv run --extra dev pytest tests/interpreter_matrix
 
+# Browser e2e suite: what the offline lane's e2e job runs after every merge
+# (~3.5 min); the per-task verify never runs it
+uv run --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider
+
 # CLI entry point
 solar-challenge --help
 ```
@@ -104,3 +108,15 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   Python minor other than the pin (`tests/interpreter_matrix`). A fix task it
   files names the interpreter in its failing node-id, e.g.
   `...test_verify_suite_passes_on_python[3.14]`; reproduce it by running that node-id.
+- The lane's `e2e` job runs the non-slow Playwright suite after every merge. A
+  fix task it files names the failing e2e node-ids, e.g.
+  `tests/e2e/test_history.py::<test>[chromium]`, or `e2e::nonzero-exit` when
+  the red run printed no failing node-id (it hit the job's `timeout`, or pytest
+  could not start). Reproduce with
+  `uv run --extra dev --extra web --extra e2e pytest <node-id> -p no:cacheprovider`.
+  The browser comes from `~/.cache/ms-playwright`, which the sandbox cannot
+  write, so the playwright locked in `uv.lock` must match an installed
+  chromium-headless-shell. This shows the revision it needs:
+  `uv run --extra e2e playwright install --dry-run chromium-headless-shell`.
+  Installing it (the same command without `--dry-run`) has to happen outside
+  the sandbox.
