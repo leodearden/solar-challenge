@@ -10,11 +10,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 pytest.importorskip("flask")
+import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.home import HomeConfig
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
 from solar_challenge.web.app import create_app
-from solar_challenge.web.jobs import JobManager, live_managers
+from solar_challenge.web.database import init_db
+from solar_challenge.web.jobs import JobManager, live_managers, shutdown_all_managers
 
 
 @pytest.fixture
@@ -549,45 +554,48 @@ class TestJobManagerDirect:
         assert jm.get_job_status("young-job") is not None
 
 
+def _submit_home_job(manager: JobManager, tmp_path: Path) -> None:
+    db_path = tmp_path / "jobs.db"
+    init_db(db_path)
+    manager.submit_home_job(
+        config=HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500)),
+        start_date=pd.Timestamp("2024-06-01", tz="UTC"),
+        end_date=pd.Timestamp("2024-06-02", tz="UTC"),
+        db_path=str(db_path),
+        data_dir=str(tmp_path / "data"),
+    )
+
+
 class TestJobManagerShutdown:
     """Tests for JobManager shutdown."""
 
-    def test_shutdown_calls_executor_shutdown(self) -> None:
-        """Test that shutdown() calls the executor's shutdown method."""
-        jm = JobManager(max_workers=1)
-        jm.shutdown()
-        # After shutdown, submitting should raise
-        # (ThreadPoolExecutor raises RuntimeError after shutdown)
-        # Just verify it doesn't crash
-        assert True
+    def test_a_shut_down_manager_refuses_new_jobs(self, tmp_path: Path) -> None:
+        manager = JobManager(max_workers=1)
 
-    def test_shutdown_all_managers_shuts_down_executors(self) -> None:
-        """Test that shutdown_all_managers() shuts down all live executors."""
-        import solar_challenge.web.jobs as jobs_mod
+        manager.shutdown()
 
-        jm1 = JobManager(max_workers=1)
-        jm2 = JobManager(max_workers=1)
+        with pytest.raises(RuntimeError, match="after shutdown"):
+            _submit_home_job(manager, tmp_path)
 
-        jobs_mod.shutdown_all_managers()
+    def test_shutdown_all_managers_shuts_down_every_live_manager(self, tmp_path: Path) -> None:
+        managers = [JobManager(max_workers=1), JobManager(max_workers=1)]
 
-        # After shutdown, submitting a callable to either executor should raise.
-        with pytest.raises(RuntimeError):
-            jm1._executor.submit(lambda: None)
-        with pytest.raises(RuntimeError):
-            jm2._executor.submit(lambda: None)
+        shutdown_all_managers()
+
+        for manager in managers:
+            with pytest.raises(RuntimeError, match="after shutdown"):
+                _submit_home_job(manager, tmp_path)
 
     def test_shutdown_all_managers_is_idempotent(self) -> None:
         """Test that calling shutdown_all_managers() twice does not raise."""
-        import solar_challenge.web.jobs as jobs_mod
-
         # Bind to a local variable so the manager has a strong reference and
         # is not garbage-collected from the WeakSet before the first shutdown
         # call — without this the WeakSet could be empty and the test would
         # pass trivially without exercising the double-shutdown path.
         jm = JobManager(max_workers=1)
 
-        jobs_mod.shutdown_all_managers()
-        jobs_mod.shutdown_all_managers()  # must not raise
+        shutdown_all_managers()
+        shutdown_all_managers()  # must not raise
 
         # Suppress "local variable 'jm' assigned but never used" lint; the
         # strong reference is the point — it keeps jm alive through both calls.
