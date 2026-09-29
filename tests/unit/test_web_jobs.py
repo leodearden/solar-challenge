@@ -607,6 +607,27 @@ class TestJobManagerSimulation:
         _, _, summary = storage.load_home_run(run_id)
         assert summary.total_generation_kwh == pytest.approx(4.0)
 
+    def test_a_fleet_job_runs_the_managers_simulation_once_per_home(self, tmp_path: Path) -> None:
+        storage = _run_storage(tmp_path)
+        simulation = _RecordingSimulation()
+        manager = JobManager(max_workers=1, simulate_home=simulation)
+        homes = [
+            _A_HOME,
+            HomeConfig(pv_config=PVConfig(capacity_kw=2.0), load_config=LoadConfig(annual_consumption_kwh=3500)),
+        ]
+
+        job_id, _ = manager.submit_fleet_job(
+            configs=homes,
+            start_date=_JUNE_1,
+            end_date=_JUNE_2,
+            db_path=str(storage.db_path),
+            data_dir=str(storage.data_dir),
+        )
+
+        status = _wait_until_finished(manager, job_id)
+        assert status["status"] == "completed", status["message"]
+        assert simulation.calls == [(home, _JUNE_1, _JUNE_2) for home in homes]
+
 
 class TestJobManagerShutdown:
     """Tests for JobManager shutdown."""
