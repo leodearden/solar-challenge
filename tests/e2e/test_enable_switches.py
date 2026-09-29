@@ -43,3 +43,21 @@ def test_home_switch_shows_and_hides_its_settings(
         page.get_by_role("switch", name=switch_name, exact=True),
         page.locator(settings_selector),
     )
+
+
+@pytest.mark.parametrize(
+    ("switch_name", "settings_selector"),
+    [
+        pytest.param("Enable Tariff", "#fleet_tariff_type", id="tariff"),
+        pytest.param("Enable SEG Export Pricing", "#fleet_seg_preset", id="seg"),
+    ],
+)
+def test_fleet_switch_shows_and_hides_its_settings(
+    page: Page, live_server: str, switch_name: str, settings_selector: str
+) -> None:
+    page.goto(live_server + "/simulate/fleet")
+
+    _assert_switch_shows_and_hides(
+        page.get_by_role("switch", name=switch_name, exact=True),
+        page.locator(settings_selector),
+    )
