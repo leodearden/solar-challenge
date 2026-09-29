@@ -33,7 +33,8 @@ escalation:
 # during factory-init: `uv run --extra dev` builds the package + imports cleanly.
 #
 # Tests exclude the `slow` marker (real PVGIS network calls) and `e2e`
-# (playwright browser tests) — neither belongs in a per-task verify loop.
+# (playwright browser tests) — neither belongs in a per-task verify loop; the
+# offline lane's e2e job runs the non-slow e2e suite after every merge instead.
 # The `web` extra is required: web/* unit tests import flask at module level,
 # so without it pytest fails *collection* (ModuleNotFoundError) before the
 # marker filter applies. `--ignore=tests/e2e` skips the playwright suite at
@@ -51,20 +52,27 @@ git:
   branch_prefix: "task/"
   remote: "origin"
   worktree_dir: ".worktrees"
-  # Offline lane: after every merge to main it re-runs the verify suite on each
-  # Python minor requires-python admits except the .python-version pin
-  # (tests/interpreter_matrix), off the merge path at idle priority — it never
-  # gates a merge. A confirmed red files a fix task whose failing node-id names
-  # the interpreter. The legacy numeric seam is off: this repo has no
-  # scripts/run-offline-deep.sh. offline_lane_enabled and
-  # persistent_offline_deep_worktree take effect at orchestrator restart (the
-  # fleet redeploy applies them); offline_lane_commands is hot-reloadable.
+  # Offline lane: after every merge to main it runs each offline_lane_commands
+  # job in order, off the merge path at idle priority; it never gates a merge.
+  # A confirmed red files a fix task naming the failing node-ids.
+  # - interpreter-matrix: the verify suite on each Python minor requires-python
+  #   admits except the .python-version pin.
+  # - e2e: the non-slow Playwright suite. LaneCommand has no timeout field and
+  #   the lane is single-flight, so without `timeout` a hung browser run would
+  #   stall every later lane run; 1800 s is ~8x the measured 214 s run.
+  # The legacy numeric seam is off: this repo has no scripts/run-offline-deep.sh.
+  # offline_lane_enabled and persistent_offline_deep_worktree take effect at
+  # orchestrator restart (the fleet redeploy applies them); offline_lane_commands
+  # is hot-reloadable.
   persistent_offline_deep_worktree: true
   offline_lane_enabled: true
   offline_lane_legacy_numeric_enabled: false
   offline_lane_commands:
     - name: interpreter-matrix
       command: "uv run --extra dev pytest tests/interpreter_matrix"
+      fix_task_priority: "medium"
+    - name: e2e
+      command: "timeout -k 60 1800 uv run --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider"
       fix_task_priority: "medium"
 
 # OS filesystem sandbox (Landlock) — dark-factory-fleet OS filesystem sandbox
