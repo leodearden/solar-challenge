@@ -6,7 +6,6 @@ home and fleet simulations in background threads, with progress
 tracking via SQLite and SSE event queues.
 """
 
-import atexit
 import collections
 import json
 import sqlite3
@@ -43,20 +42,18 @@ def live_managers() -> "frozenset[JobManager]":
 
 
 def shutdown_all_managers(wait: bool = False) -> None:
-    """Shut down every live JobManager.
+    """Shut down every live JobManager, as JobManager.shutdown does.
 
-    Shutting down an already-shut-down executor is a no-op, making this safe
-    to call more than once (idempotent).
+    A server whose requests submit jobs must call this when it stops, since
+    nothing else drops the jobs still queued.  Shutting down an
+    already-shut-down manager is a no-op, making this safe to call more than
+    once (idempotent).
 
     Args:
-        wait: If True, block until all running workers finish.  Defaults to
-            False so the atexit hook does not stall interpreter shutdown.
+        wait: If True, block until every manager's running jobs finish.
     """
     for manager in live_managers():
         manager.shutdown(wait=wait)
-
-
-atexit.register(shutdown_all_managers)
 
 
 class JobManager:
@@ -85,14 +82,14 @@ class JobManager:
         _active_managers.add(self)
 
     def shutdown(self, wait: bool = False) -> None:
-        """Shut down the thread pool executor.
+        """Refuse new jobs and drop the jobs still queued.
+
+        Running jobs cannot be interrupted, and the interpreter waits for them
+        at exit.  Call this before the interpreter starts exiting: by the time
+        atexit hooks run, concurrent.futures has already run every queued job.
 
         Args:
-            wait: If True, block until all running workers finish before
-                returning.  Defaults to False so deployed-server teardown
-                (and the module-level atexit hook) exits promptly.
-                cancel_futures=True drops any queued-but-unstarted jobs so
-                they do not block process exit.
+            wait: If True, block until the running jobs finish before returning.
         """
         self._executor.shutdown(wait=wait, cancel_futures=True)
 
@@ -120,6 +117,9 @@ class JobManager:
 
         Returns:
             Tuple of (job_id, run_id).
+
+        Raises:
+            RuntimeError: If the manager has shut down; the refused job leaves no record.
         """
         self._cleanup_old_jobs()
 
@@ -191,18 +191,22 @@ class JobManager:
             )
 
         # Submit to thread pool
-        self._executor.submit(
-            self._run_home_simulation,
-            job_id,
-            run_id,
-            config,
-            start_date,
-            end_date,
-            db_path,
-            data_dir,
-            name,
-            created_at,
-        )
+        try:
+            self._executor.submit(
+                self._run_home_simulation,
+                job_id,
+                run_id,
+                config,
+                start_date,
+                end_date,
+                db_path,
+                data_dir,
+                name,
+                created_at,
+            )
+        except RuntimeError:
+            self._forget_job(job_id, run_id, db_path)
+            raise
 
         return job_id, run_id
 
@@ -230,6 +234,9 @@ class JobManager:
 
         Returns:
             Tuple of (job_id, run_id).
+
+        Raises:
+            RuntimeError: If the manager has shut down; the refused job leaves no record.
         """
         self._cleanup_old_jobs()
 
@@ -301,18 +308,22 @@ class JobManager:
             )
 
         # Submit to thread pool
-        self._executor.submit(
-            self._run_fleet_simulation,
-            job_id,
-            run_id,
-            configs,
-            start_date,
-            end_date,
-            db_path,
-            data_dir,
-            name,
-            created_at,
-        )
+        try:
+            self._executor.submit(
+                self._run_fleet_simulation,
+                job_id,
+                run_id,
+                configs,
+                start_date,
+                end_date,
+                db_path,
+                data_dir,
+                name,
+                created_at,
+            )
+        except RuntimeError:
+            self._forget_job(job_id, run_id, db_path)
+            raise
 
         return job_id, run_id
 
@@ -375,6 +386,15 @@ class JobManager:
             for jid in expired:
                 del self._jobs[jid]
                 self._event_queues.pop(jid, None)
+
+    def _forget_job(self, job_id: str, run_id: str, db_path: str) -> None:
+        """Erase every record of a job that the executor refused to schedule."""
+        with self._lock:
+            self._jobs.pop(job_id, None)
+            self._event_queues.pop(job_id, None)
+        with get_db(db_path) as conn:
+            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
     def _update_progress(
         self,
