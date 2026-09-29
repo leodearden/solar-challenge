@@ -27,6 +27,10 @@ mypy src/solar_challenge
 # Test coverage
 pytest --cov=src/solar_challenge
 
+# Interpreter matrix: the orchestrator verify on every admitted Python minor
+# except the .python-version pin (one case per minor, ~6-10 min each)
+uv run --extra dev pytest tests/interpreter_matrix
+
 # CLI entry point
 solar-challenge --help
 ```
@@ -96,3 +100,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   Escalation MCP runs on port **8106**; fused-memory is shared on 8002.
 - Orchestrator verify uses `uv run --extra dev …` (worktree-safe; the local
   `venv/` is not present inside task worktrees).
+- After every merge, the offline lane re-runs the verify suite on each admitted
+  Python minor other than the pin (`tests/interpreter_matrix`). A fix task it
+  files names the interpreter in its failing node-id, e.g.
+  `...test_verify_suite_passes_on_python[3.14]`; reproduce it by running that node-id.

@@ -7,6 +7,9 @@ from typing import Any
 import pytest
 from pathlib import Path
 
+# Out of every default collection, even with `-o addopts=`; the offline lane runs it by explicit path.
+collect_ignore = ["interpreter_matrix"]
+
 
 @pytest.fixture
 def project_root() -> Path:
