@@ -43,7 +43,6 @@ dev = [
     "pytest-cov>=4.0.0",
     "mypy>=1.0.0",
     "packaging>=22.0",
-    "tomli>=1.0.0; python_version < '3.11'",
 ]
 stochastic = []  # backward-compat alias; richardsonpy is now a core dependency
 web = [
@@ -77,7 +76,7 @@ markers = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

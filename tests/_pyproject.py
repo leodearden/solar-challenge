@@ -9,14 +9,9 @@ Usage::
     mypy_target = load_pyproject(project_root)["tool"]["mypy"]["python_version"]
 """
 
-import sys
+import tomllib
 from pathlib import Path
 from typing import Any
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 
 def load_pyproject(project_root: Path) -> dict[str, Any]:

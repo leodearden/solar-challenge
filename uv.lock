@@ -2023,7 +2023,6 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "rich", specifier = ">=12.3.0" },
     { name = "richardsonpy", specifier = ">=0.2.0" },
-    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=1.0.0" },
     { name = "typer", specifier = ">=0.12.1" },
 ]
 provides-extras = ["dev", "stochastic", "web", "e2e"]

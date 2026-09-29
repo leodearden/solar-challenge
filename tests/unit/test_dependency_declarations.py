@@ -125,11 +125,6 @@ def _third_party_distributions(modules: set[str]) -> set[str]:
     return {canonicalize_name(dist) for module in third_party for dist in providers[module]}
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="before Python 3.11, importlib.metadata.packages_distributions() reads only "
-    "top_level.txt, which wheels such as numpy, pandas, rich and typer do not ship",
-)
 @pytest.mark.parametrize(
     ("select_sources", "extras"),
     [
