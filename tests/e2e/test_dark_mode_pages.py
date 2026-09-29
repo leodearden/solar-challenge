@@ -29,6 +29,23 @@ def _assert_dark_class_on_html(page: Page, page_name: str) -> None:
     )
 
 
+def _plotly_background_colors(page: Page) -> list[str]:
+    """Collect each Plotly chart's painted paper color and every .bg rect fill."""
+    colors: list[str] = page.evaluate("""() => {
+        const colors = [];
+        for (const chart of document.querySelectorAll('.js-plotly-plot')) {
+            const paper = chart.querySelector('.main-svg');
+            if (!paper) throw new Error(`Plotly chart #${chart.id} has no .main-svg`);
+            colors.push(getComputedStyle(paper).backgroundColor);
+            for (const rect of chart.querySelectorAll('.bg')) {
+                colors.push(getComputedStyle(rect).fill);
+            }
+        }
+        return colors;
+    }""")
+    return colors
+
+
 # -- Dark mode on /simulate/home -------------------------------------------
 
 
@@ -73,26 +90,20 @@ def test_dark_mode_results_page_charts(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Plotly chart backgrounds should not be white (#ffffff) in dark mode."""
+    """No Plotly chart on the results page's opening tab is painted white in dark mode.
+
+    chart-renderer.js defers the other tabs' charts until shown, so they are not checked.
+    """
     run_id, _ = seeded_home_run
     _enable_dark_mode_and_reload(page, live_server + f"/results/home/{run_id}")
     _assert_dark_class_on_html(page, f"/results/home/{run_id}")
 
-    # Wait for Plotly charts to render
-    page.wait_for_timeout(2000)
+    expect(page.locator(".plot-container .bg").first).to_be_attached()
 
-    # Check Plotly .bg rect fill color
-    bg_fill = page.evaluate("""() => {
-        const bgRect = document.querySelector('.plot-container .bg');
-        if (!bgRect) return null;
-        return bgRect.getAttribute('fill');
-    }""")
+    backgrounds = _plotly_background_colors(page)
 
-    if bg_fill is None:
-        pytest.skip("No Plotly .bg element found on results page")
-
-    # In dark mode the chart background should NOT be pure white
-    assert bg_fill.lower() not in ("#ffffff", "#fff", "rgb(255, 255, 255)", "white"), (
-        f"Plotly chart background is white ({bg_fill}) in dark mode. "
+    # In dark mode no chart background should be pure white
+    assert "rgb(255, 255, 255)" not in backgrounds, (
+        f"Plotly chart background is white in dark mode: {backgrounds}. "
         f"Charts should use a dark background color when dark mode is active."
     )
