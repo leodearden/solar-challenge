@@ -28,6 +28,9 @@ def _assert_switch_shows_and_hides(switch: Locator, settings: Locator) -> None:
     ("tab", "switch_name", "settings_selector"),
     [
         pytest.param("Battery", "Enable Battery", "#battery_kwh", id="battery"),
+        pytest.param("Heat Pump", "Enable Heat Pump", "#heat_pump_type", id="heat_pump"),
+        pytest.param("Tariff", "Enable Tariff", "#tariff_type", id="tariff"),
+        pytest.param("Tariff", "Enable SEG Export Pricing", "#seg_preset", id="seg"),
     ],
 )
 def test_home_switch_shows_and_hides_its_settings(
