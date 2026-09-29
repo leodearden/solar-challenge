@@ -158,8 +158,9 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
 
 
 def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> None:
-    """Submitting a 3-point sweep via the form button returns 201 with the
-    sweep values and one background home-job id per sweep point.
+    """Submitting a 3-point sweep via the form button returns 201 with a
+    sweep id, the sweep values and one distinct background home-job id per
+    sweep point.
     """
     page.goto(live_server + "/scenarios/sweep")
     page.wait_for_load_state("networkidle")
@@ -186,5 +187,10 @@ def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> 
     assert response.status == 201
 
     data = response.json()
+    assert data["sweep_id"]
     assert data["values"] == [2.0, 5.0, 8.0]
-    assert len(data["job_ids"]) == 3
+
+    job_ids = data["job_ids"]
+    assert len(job_ids) == 3
+    assert len(set(job_ids)) == 3
+    assert all(job_ids)
