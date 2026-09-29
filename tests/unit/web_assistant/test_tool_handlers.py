@@ -897,7 +897,7 @@ class TestRunFleetSimulation:
 
 
 @pytest.mark.slow
-class TestSlice5RunHomeIntegration:
+class TestRunHomeSimulationWithRealJobManager:
     """SLOW: real 1-day Bristol home sim via real JobManager (excluded from fast verify).
 
     Excluded from the standard verify loop by the 'slow' marker.  Run with

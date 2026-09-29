@@ -473,7 +473,7 @@ class TestChatPageWiring:
         resp = client.get("/assistant")
         html = resp.data.decode()
         assert "next release" not in html, (
-            "The 'next release' placeholder should be removed in slice ②"
+            "The 'next release' placeholder must not appear on the chat page"
         )
 
 

@@ -85,7 +85,7 @@ class TestToolSurface:
     """Tests for _TOOLS list and _dispatch_tool router."""
 
     def test_tools_fixed_order_for_cache_stability(self) -> None:
-        """[t['name'] for t in _TOOLS] == 6-tool order (fixed, cache-safe, slice ⑤ updated)."""
+        """[t['name'] for t in _TOOLS] == 6-tool order (fixed, cache-safe)."""
         from solar_challenge.web.assistant import _TOOLS
 
         names = [t["name"] for t in _TOOLS]
@@ -253,7 +253,7 @@ class TestToolUseLoop:
         client: FlaskClient,
         sequence_mock_anthropic: dict[str, Any],
     ) -> None:
-        """stream() kwargs carry 'tools' with 6-tool names in fixed order (slice ⑤ updated)."""
+        """stream() kwargs carry 'tools' with 6-tool names in fixed order."""
         sequence_mock_anthropic["set_streams"]([
             make_end_turn_stream(["reply"]),
         ])
@@ -335,13 +335,13 @@ class TestToolUseLoop:
             f"Expected stream to terminate with done or error frame; got: {event_types}"
         )
 
-    def test_slice2_happy_path_regression(
+    def test_final_message_without_stop_reason_streams_reply(
         self,
         client: FlaskClient,
         sequence_mock_anthropic: dict[str, Any],
     ) -> None:
-        """Slice-② happy path (no stop_reason / end_turn) still yields delta + done."""
-        # Use the slice-② style: get_final_message has no stop_reason attr
+        """A final message with no stop_reason, as make_fake_stream builds it,
+        still yields delta frames and a done frame."""
         sequence_mock_anthropic["set_streams"]([
             make_fake_stream(["Hello", " world"]),
         ])
@@ -357,8 +357,8 @@ class TestToolUseLoop:
         assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
 
 
-class TestSlice4ToolSurface:
-    """Tests for new tools registered/dispatched in slice ④."""
+class TestRunLookupToolSurface:
+    """get_run_results and list_recent_runs as the chat registers, dispatches and calls them."""
 
     def test_new_tools_input_schema_is_object_with_required(self) -> None:
         """get_run_results and list_recent_runs have type 'object' and non-empty required."""
@@ -493,8 +493,8 @@ class TestSlice4ToolSurface:
         )
 
 
-class TestSlice5ToolSurface:
-    """Tool registration, schema, and dispatch tests for slice ⑤ trigger tools."""
+class TestSimulationToolSurface:
+    """run_home_simulation and run_fleet_simulation as the chat registers and dispatches them."""
 
     def test_six_tools_fixed_order(self) -> None:
         """_TOOLS has exactly 6 tools in the fixed cache-stable order."""
@@ -591,7 +591,7 @@ class TestSlice5ToolSurface:
         )
 
 
-class TestSlice5RunToolSignal:
+class TestSimulationToolUseSignal:
     """E2E boundary tests: mock Anthropic + mock JobManager across the tool_result seam."""
 
     def test_run_home_simulation_tool_use_signal(
