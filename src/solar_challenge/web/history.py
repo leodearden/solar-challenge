@@ -56,7 +56,9 @@ def compare_page() -> str | Response:
     """Render the run comparison page.
 
     Expects query parameter ``ids`` as comma-separated run IDs.
-    Redirects to runs page with a flash message if IDs are missing or insufficient.
+    Redirects to runs page with a flash message only if fewer than two IDs are
+    given or fewer than two of them are found in the database; a missing or
+    empty ``ids`` renders the no-runs-selected empty state instead.
 
     Returns:
         Rendered HTML for the comparison page, or redirect.

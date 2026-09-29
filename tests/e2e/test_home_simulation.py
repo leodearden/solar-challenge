@@ -128,13 +128,18 @@ def test_battery_tab_enable_disable(page: Page, live_server: str) -> None:
         has_text="Battery",
     )
     battery_tab.click()
-    page.wait_for_timeout(300)
 
-    # The battery toggle switch (role="switch")
-    toggle = page.locator('button[role="switch"]')
+    battery_panel = page.get_by_role("tabpanel")
+    expect(
+        battery_panel.get_by_role("heading", name="Battery Storage Configuration")
+    ).to_be_visible()
+
+    # The battery toggle: the one switch in the open tab panel
+    toggle = battery_panel.get_by_role("switch")
     expect(toggle).to_be_visible()
 
     # Battery is disabled by default (formData.battery_enabled = false)
+    expect(toggle).to_have_attribute("aria-checked", "false")
     battery_fields = page.locator("#battery_kwh")
 
     # Verify fields are hidden initially
@@ -142,14 +147,14 @@ def test_battery_tab_enable_disable(page: Page, live_server: str) -> None:
 
     # Enable battery
     toggle.click()
-    page.wait_for_timeout(400)
+    expect(toggle).to_have_attribute("aria-checked", "true")
 
     # Battery capacity slider should now be visible
     expect(battery_fields).to_be_visible()
 
     # Disable battery again
     toggle.click()
-    page.wait_for_timeout(400)
+    expect(toggle).to_have_attribute("aria-checked", "false")
 
     # Fields should be hidden again
     expect(battery_fields).not_to_be_visible()

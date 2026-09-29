@@ -1,7 +1,8 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
 Verifies slider-input sync, distribution type selects, export YAML button,
-and detects missing form fields (simulation name, period selector).
+that the simulation name reaches the submitted run, and detects a missing
+period selector.
 """
 
 import pytest
@@ -86,26 +87,23 @@ def test_fleet_export_yaml_button(page: Page, live_server: str) -> None:
     expect(export_btn.first).to_be_attached()
 
 
-# -- Missing simulation name field (potential bug) --------------------------
+# -- Simulation name reaches the submitted run -----------------------------
 
 
-def test_fleet_missing_simulation_name_field(page: Page, live_server: str) -> None:
-    """Fleet page should have a simulation name input field."""
+def test_fleet_simulation_name_is_submitted(page: Page, live_server: str) -> None:
+    """The name typed into 'Simulation Name' is the name the fleet run is submitted under."""
+    # Abort the submission so no fleet job ever reaches the server's JobManager.
+    page.route("**/api/simulate/fleet-from-distribution", lambda route: route.abort())
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
-    # Search for a name/label input
-    name_input = page.locator('input[x-model*="name"]')
-    if name_input.count() == 0:
-        name_input = page.locator('input[placeholder*="name" i]')
-    if name_input.count() == 0:
-        name_input = page.locator('#simulation_name, #fleet_name, #run_name')
+    run_button = page.get_by_role("button", name="Run Fleet Simulation")
+    expect(run_button).to_be_visible()
 
-    assert name_input.count() > 0, (
-        "Fleet simulation page is missing a simulation name input field. "
-        "Users cannot name their fleet runs before submitting."
-    )
+    page.get_by_label("Simulation Name", exact=True).fill("Bristol Fleet Trial")
+    with page.expect_request("**/api/simulate/fleet-from-distribution") as submission:
+        run_button.click()
+
+    assert submission.value.post_data_json["name"] == "Bristol Fleet Trial"
 
 
 # -- Missing period selector (potential bug) --------------------------------

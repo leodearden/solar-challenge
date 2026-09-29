@@ -139,29 +139,29 @@ def test_mobile_simulate_home_usable(page: Page, live_server: str) -> None:
     expect(submit_btn).to_be_visible()
 
 
-# -- History table scrollable on mobile ------------------------------------
+# -- History lists runs as cards on mobile ---------------------------------
 
 
-def test_mobile_history_table_scrollable(page: Page, live_server: str) -> None:
-    """At 375px width, the history table container has overflow-x-auto
-    to allow horizontal scrolling.
-    """
+def test_mobile_history_lists_runs_as_cards(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """Below the md breakpoint, runs are listed as cards linking to their results; the table is hidden."""
+    run_id, run_name = seeded_home_run
     page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
 
     response = page.goto(live_server + "/history/runs")
     assert response is not None
     assert response.status == 200
 
-    page.wait_for_load_state("networkidle")
+    view_links = page.get_by_role("link", name="View", exact=True)
+    # Wait for the unfiltered list, so its late response cannot overwrite the search results
+    expect(view_links.first).to_be_visible()
 
-    # The table is wrapped in a div with class "overflow-x-auto"
-    table_container = page.locator("div.overflow-x-auto").first
-    expect(table_container).to_be_visible()
+    # Narrow the list to the seeded run, whatever other runs the shared session DB holds
+    page.get_by_label("Search", exact=True).fill(run_name)
 
-    # Verify the container has overflow-x set to 'auto' in computed styles
-    overflow_x = table_container.evaluate(
-        "el => window.getComputedStyle(el).overflowX"
-    )
-    assert overflow_x == "auto", (
-        f"Expected overflow-x: auto on table container, got '{overflow_x}'"
-    )
+    expect(view_links).to_have_count(1)
+    expect(view_links).to_have_attribute("href", f"/results/home/{run_id}")
+    expect(page.locator("table")).to_be_hidden()
