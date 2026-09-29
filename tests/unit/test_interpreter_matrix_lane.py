@@ -67,7 +67,7 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(pro
         command,
         shell=True,
         cwd=project_root,
-        env={**os.environ, "PYTEST_ADDOPTS": "--collect-only -q -o addopts="},
+        env={**os.environ, "PYTEST_ADDOPTS": "--collect-only --verbosity=-1"},
         capture_output=True,
         text=True,
         timeout=300,

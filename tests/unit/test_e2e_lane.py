@@ -29,7 +29,11 @@ def test_offline_lane_runs_one_enabled_e2e_job(project_root: Path) -> None:
 
 
 def test_e2e_job_collects_the_e2e_suite_and_nothing_else(project_root: Path) -> None:
-    """Run as the lane runs it, the e2e job collects at least one test, every one under tests/e2e/."""
+    """Run as the lane runs it, the e2e job collects at least one test, every one under tests/e2e/.
+
+    The repo's pytest addopts stay in force, as they do in the lane, so this also
+    pins that the job's explicit tests/e2e path overrides their --ignore=tests/e2e.
+    """
     if shutil.which("uv") is None:
         pytest.skip("uv is not installed; the e2e job runs through it")
     job = sole_offline_lane_job(project_root, _E2E_JOB)
@@ -39,7 +43,7 @@ def test_e2e_job_collects_the_e2e_suite_and_nothing_else(project_root: Path) -> 
         command,
         shell=True,
         cwd=project_root / job.get("cwd", "."),
-        env={**os.environ, "PYTEST_ADDOPTS": "--collect-only -q -o addopts="},
+        env={**os.environ, "PYTEST_ADDOPTS": "--collect-only --verbosity=-1"},
         capture_output=True,
         text=True,
         timeout=300,
