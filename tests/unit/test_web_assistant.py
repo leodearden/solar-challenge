@@ -3,7 +3,6 @@
 
 import os
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -17,43 +16,12 @@ from solar_challenge.web.app import create_app
 from solar_challenge.web.jobs import JobManager
 
 from tests._sse import SseFrame, parse_sse_events
+from tests.unit.web_assistant._fakes import make_end_turn_stream, make_fake_stream, make_tool_use_stream, seed_run
 
 
 # ---------------------------------------------------------------------------
 # Slice ② helpers & fixtures
 # ---------------------------------------------------------------------------
-
-def make_fake_stream(text_chunks: list[str]) -> MagicMock:
-    """Build a context-manager mock for anthropic.Anthropic().messages.stream().
-
-    Returns a context-manager mock whose ``__enter__`` yields a fake stream
-    object with:
-      - ``stream.text_stream``        — an iterable over *text_chunks*
-      - ``stream.get_final_message()`` — a SimpleNamespace with ``.content``
-        and ``.usage`` (cache_creation_input_tokens, cache_read_input_tokens)
-    """
-    def _make_fake_usage() -> SimpleNamespace:
-        return SimpleNamespace(
-            cache_creation_input_tokens=100,
-            cache_read_input_tokens=0,
-        )
-
-    def _make_final_message() -> SimpleNamespace:
-        return SimpleNamespace(
-            content=[SimpleNamespace(type="text", text="".join(text_chunks))],
-            usage=_make_fake_usage(),
-        )
-
-    fake_stream = MagicMock()
-    fake_stream.text_stream = iter(text_chunks)
-    fake_stream.get_final_message.return_value = _make_final_message()
-
-    cm = MagicMock()
-    cm.__enter__.return_value = fake_stream
-    cm.__exit__.return_value = False
-
-    return cm
-
 
 def reply_text(events: list[SseFrame]) -> str:
     """Return the reply the delta frames in *events* carry, in stream order."""
@@ -1019,66 +987,6 @@ class TestToolSurface:
 # Slice ③ — manual tool-use loop tests (step-7)
 # ---------------------------------------------------------------------------
 
-def make_tool_use_stream(
-    tool_id: str,
-    tool_name: str,
-    tool_input: dict[str, Any],
-) -> MagicMock:
-    """Build a context-manager mock for a stream that ends with stop_reason='tool_use'.
-
-    The fake stream yields no text chunks; get_final_message() returns a
-    SimpleNamespace with stop_reason='tool_use' and a content list containing
-    one tool_use block.
-    """
-    def _make_final_message() -> SimpleNamespace:
-        return SimpleNamespace(
-            stop_reason="tool_use",
-            content=[
-                SimpleNamespace(
-                    type="tool_use",
-                    id=tool_id,
-                    name=tool_name,
-                    input=tool_input,
-                ),
-            ],
-            usage=SimpleNamespace(
-                cache_creation_input_tokens=50,
-                cache_read_input_tokens=0,
-            ),
-        )
-
-    fake_stream = MagicMock()
-    fake_stream.text_stream = iter([])  # no text in tool-use turn
-    fake_stream.get_final_message.return_value = _make_final_message()
-
-    cm = MagicMock()
-    cm.__enter__.return_value = fake_stream
-    cm.__exit__.return_value = False
-    return cm
-
-
-def make_end_turn_stream(text_chunks: list[str]) -> MagicMock:
-    """Build a context-manager mock for a stream that ends with stop_reason='end_turn'."""
-    def _make_final_message() -> SimpleNamespace:
-        return SimpleNamespace(
-            stop_reason="end_turn",
-            content=[SimpleNamespace(type="text", text="".join(text_chunks))],
-            usage=SimpleNamespace(
-                cache_creation_input_tokens=0,
-                cache_read_input_tokens=80,
-            ),
-        )
-
-    fake_stream = MagicMock()
-    fake_stream.text_stream = iter(text_chunks)
-    fake_stream.get_final_message.return_value = _make_final_message()
-
-    cm = MagicMock()
-    cm.__enter__.return_value = fake_stream
-    cm.__exit__.return_value = False
-    return cm
-
-
 @pytest.fixture
 def sequence_mock_anthropic(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Multi-call sequence mock: records every stream() call's kwargs and streams.
@@ -1312,39 +1220,6 @@ class TestToolUseLoop:
 
 
 # ---------------------------------------------------------------------------
-# Slice ④ — test helpers for runs table seeding
-# ---------------------------------------------------------------------------
-
-def _seed_run(
-    db_path: "str | Path",
-    *,
-    run_id: str,
-    name: str,
-    type: str = "home",
-    status: str = "completed",
-    created_at: str,
-    summary: dict[str, Any],
-) -> None:
-    """Insert a row into the runs table for testing read-only handlers.
-
-    Calls init_db (idempotent) to ensure the schema exists, then inserts
-    a minimal runs row with summary_json=json.dumps(summary).
-    """
-    import json as _json
-    from solar_challenge.web.database import get_db, init_db
-
-    init_db(db_path)
-    with get_db(db_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO runs (id, name, type, status, created_at, summary_json)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (run_id, name, type, status, created_at, _json.dumps(summary)),
-        )
-
-
-# ---------------------------------------------------------------------------
 # Slice ④ — get_run_results unit tests (step-1 RED)
 # ---------------------------------------------------------------------------
 
@@ -1357,7 +1232,7 @@ class TestGetRunResults:
 
         db_path = tmp_path / "grr_test.db"
         summary = {"total_generation_kwh": 1234.5, "self_consumption_ratio": 0.62}
-        _seed_run(
+        seed_run(
             db_path,
             run_id="run-abc-123",
             name="test-run",
@@ -1387,7 +1262,7 @@ class TestGetRunResults:
 
         db_path = tmp_path / "grr_name_test.db"
         summary = {"self_sufficiency": 0.45}
-        _seed_run(
+        seed_run(
             db_path,
             run_id="run-xyz-456",
             name="my-named-run",
@@ -1414,7 +1289,7 @@ class TestGetRunResults:
         from solar_challenge.web.assistant import get_run_results
 
         db_path = tmp_path / "grr_unknown_test.db"
-        _seed_run(
+        seed_run(
             db_path,
             run_id="run-known",
             name="known-run",
@@ -1443,7 +1318,7 @@ class TestGetRunResults:
 
         db_path = tmp_path / "grr_collision_test.db"
         # Older run seeded first
-        _seed_run(
+        seed_run(
             db_path,
             run_id="run-old-collision",
             name="shared-run-name",
@@ -1452,7 +1327,7 @@ class TestGetRunResults:
             summary={"total_generation_kwh": 100.0},
         )
         # Newer run with same name seeded second
-        _seed_run(
+        seed_run(
             db_path,
             run_id="run-new-collision",
             name="shared-run-name",
@@ -1527,7 +1402,7 @@ class TestListRecentRuns:
         db_path = tmp_path / "lrr_test.db"
         # Seed 5 runs with distinct created_at timestamps
         for i in range(5):
-            _seed_run(
+            seed_run(
                 db_path,
                 run_id=f"run-{i:03d}",
                 name=f"run-name-{i}",
@@ -1557,7 +1432,7 @@ class TestListRecentRuns:
         from solar_challenge.web.assistant import list_recent_runs
 
         db_path = tmp_path / "lrr_fields_test.db"
-        _seed_run(
+        seed_run(
             db_path,
             run_id="run-fields-001",
             name="fields-run",
@@ -1608,7 +1483,7 @@ class TestListRecentRuns:
         db_path = tmp_path / "lrr_clamp_test.db"
         # Seed 60 rows — more than any sane clamp ceiling (50)
         for i in range(60):
-            _seed_run(
+            seed_run(
                 db_path,
                 run_id=f"clamp-run-{i:03d}",
                 name=f"clamp-{i}",
@@ -1629,7 +1504,7 @@ class TestListRecentRuns:
         from solar_challenge.web.assistant import list_recent_runs
 
         db_path = tmp_path / "lrr_nonpos_test.db"
-        _seed_run(
+        seed_run(
             db_path,
             run_id="run-np-001",
             name="np-run",
@@ -1739,7 +1614,7 @@ class TestSlice4ToolSurface:
         from solar_challenge.web.assistant import _dispatch_tool, get_run_results
 
         db_path = tmp_path / "disp_grr_test.db"
-        _seed_run(
+        seed_run(
             db_path,
             run_id="disp-run-001",
             name="dispatch-run",
@@ -1762,7 +1637,7 @@ class TestSlice4ToolSurface:
         from solar_challenge.web.assistant import _dispatch_tool, list_recent_runs
 
         db_path = tmp_path / "disp_lrr_test.db"
-        _seed_run(
+        seed_run(
             db_path,
             run_id="disp-lrr-001",
             name="lrr-dispatch-run",
@@ -1790,7 +1665,7 @@ class TestSlice4ToolSurface:
         """SSE 'tool' frame emitted for get_run_results; 2nd stream contains seeded summary value."""
         db_path = app.config["DATABASE"]
         summary_val = 999.75
-        _seed_run(
+        seed_run(
             db_path,
             run_id="e2e-run-001",
             name="e2e-signal-run",
@@ -1859,7 +1734,7 @@ class TestRunContextInjection:
         """POST with run_id injects summary into messages[-1]['content'] before API call."""
         db_path = app.config["DATABASE"]
         summary_marker = 987.65
-        _seed_run(
+        seed_run(
             db_path,
             run_id="ctx-run-001",
             name="ctx-signal-run",
@@ -1897,7 +1772,7 @@ class TestRunContextInjection:
     ) -> None:
         """The persisted user row contains only the original user message, not injected context."""
         db_path = app.config["DATABASE"]
-        _seed_run(
+        seed_run(
             db_path,
             run_id="ctx-run-002",
             name="ctx-persist-run",
