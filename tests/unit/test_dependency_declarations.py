@@ -255,6 +255,49 @@ def test_import_guards_guard_an_undeclared_dependency(
     )
 
 
+def _write_import_guard(path: Path, *body_lines: str) -> Path:
+    """Write *path* as a module whose one function runs *body_lines* in a try that handles
+    ImportError, and return *path*. The try is on line 2.
+    """
+    body = "".join(f"        {line}\n" for line in body_lines)
+    path.write_text(
+        f"def render():\n    try:\n{body}    except ImportError:\n        return None\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions(
+    tmp_path: Path,
+) -> None:
+    """A guard is dead only when declared distributions provide every third-party module it guards.
+
+    Once src/ holds no dead guard, test_import_guards_guard_an_undeclared_dependency passes
+    for a detector that flags nothing, so this checks the detector on guards of known verdict.
+    """
+    unprovided = "no_installed_distribution_provides_this_module"
+    dead_import = _write_import_guard(tmp_path / "dead_import.py", "import yaml")
+    dead_nested_from_import = _write_import_guard(
+        tmp_path / "dead_nested_from_import.py",
+        "if sys.version_info >= (3, 11):",
+        "    from yaml import safe_load",
+    )
+    live_unprovided = _write_import_guard(tmp_path / "live_unprovided.py", f"import {unprovided}")
+    live_partly_declared = _write_import_guard(
+        tmp_path / "live_partly_declared.py", "import yaml", f"import {unprovided}"
+    )
+
+    dead = _dead_import_guards(
+        [dead_import, dead_nested_from_import, live_unprovided, live_partly_declared],
+        declared={"pyyaml"},
+    )
+
+    assert dead == [(dead_import, 2, ["yaml"]), (dead_nested_from_import, 2, ["yaml"])], (
+        "the dead-guard detector misjudged a synthetic guard: the dead_* guards import only the "
+        "declared pyyaml, and each live_* guard imports a module no declared distribution provides"
+    )
+
+
 def test_core_dependencies_request_only_provided_extras(project_root: Path) -> None:
     """No core dependency may request an extra that its installed distribution does not provide."""
     unknown_extras: dict[str, list[str]] = {}
