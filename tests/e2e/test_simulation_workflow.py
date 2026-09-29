@@ -33,8 +33,7 @@ def test_submit_home_simulation_via_api(
                 consumption_kwh: 3200,
                 occupants: 3,
                 location: 'bristol',
-                period_days: 1,
-                battery_enabled: false,
+                days: 1,
             }),
         });
         return { status: resp.status, body: await resp.json() };
