@@ -713,23 +713,6 @@ class TestHistoryWindowAlternation:
         )
 
 
-def test_assistant_blueprint_registers_without_warning(app: Flask) -> None:
-    """Blueprint imports and registers cleanly — blueprint presence proves no ImportError was swallowed.
-
-    The app.py try/except either registers the blueprint (success) or logs a warning and skips
-    registration (ImportError). Checking 'assistant' in app.blueprints is therefore sufficient;
-    the warning-free path is the only way the blueprint ends up registered.
-
-    TODO (slice ②): when the chat handler gains a deferred ``import anthropic``, add a test that
-    patches ``sys.modules['anthropic']`` to ``None`` at the point of blueprint registration and
-    verifies the blueprint still registers — covering the robustness claim in assistant.py's
-    docstring.
-    """
-    assert "assistant" in app.blueprints, (
-        f"Expected 'assistant' blueprint to be registered; got: {list(app.blueprints.keys())}"
-    )
-
-
 def test_assistant_page_renders_chat_shell(client: FlaskClient) -> None:
     """GET /assistant → 200 with chat shell markers (chat-messages + chat-input containers)."""
     resp = client.get("/assistant")

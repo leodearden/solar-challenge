@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask application factory for the Solar Challenge web dashboard."""
 
+import atexit
 import logging
 import os
 from pathlib import Path
@@ -8,7 +9,14 @@ from typing import Any
 
 from flask import Flask, render_template
 
+from solar_challenge.web.api import api_bp
+from solar_challenge.web.assistant import bp as assistant_bp
 from solar_challenge.web.database import init_db
+from solar_challenge.web.history import bp as history_bp
+from solar_challenge.web.jobs import JobManager, recover_stale_jobs
+from solar_challenge.web.routes import bp as routes_bp
+from solar_challenge.web.scenarios import bp as scenarios_bp
+from solar_challenge.web.storage import RunStorage
 
 logger = logging.getLogger(__name__)
 
@@ -101,28 +109,21 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     init_db(db_path)
 
     # Initialize RunStorage singleton
-    from solar_challenge.web.storage import RunStorage
     storage = RunStorage(db_path=db_path, data_dir=app.config["DATA_DIR"])
     app.extensions["storage"] = storage
 
     # Initialize JobManager for background simulation execution
-    try:
-        from solar_challenge.web.jobs import JobManager, recover_stale_jobs
-        job_manager = JobManager()
-        app.extensions["job_manager"] = job_manager
+    job_manager = JobManager()
+    app.extensions["job_manager"] = job_manager
 
-        # Recover jobs stuck from previous server shutdown
-        recovered = recover_stale_jobs(db_path)
-        if recovered:
-            logger.info("Recovered %d stale jobs on startup", recovered)
+    # Recover jobs stuck from previous server shutdown
+    recovered = recover_stale_jobs(db_path)
+    if recovered:
+        logger.info("Recovered %d stale jobs on startup", recovered)
 
-        # Register shutdown handler
-        import atexit
-        atexit.register(job_manager.shutdown)
-    except ImportError as e:
-        logger.warning("JobManager not available: %s", e)
+    # Register shutdown handler
+    atexit.register(job_manager.shutdown)
 
-    # Register blueprints (deferred to allow routes to exist independently)
     _register_blueprints(app)
 
     # Register custom error handlers
@@ -138,51 +139,12 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
 
 def _register_blueprints(app: Flask) -> None:
-    """Register application blueprints.
-
-    Attempts to register multiple blueprints for different feature areas:
-    - simulation: Main simulation interface (routes.py for now)
-    - history: Simulation run history and comparison
-    - scenarios: Saved configuration presets and templates
-    - assistant: AI chat assistant for simulation help
-
-    Args:
-        app: The Flask application instance.
-    """
-    # Register main routes blueprint (simulation interface)
-    try:
-        from solar_challenge.web.routes import bp
-        app.register_blueprint(bp)
-    except ImportError as e:
-        logger.warning("Routes blueprint not available: %s", e)
-
-    # Register history blueprint
-    try:
-        from solar_challenge.web.history import bp as history_bp
-        app.register_blueprint(history_bp, url_prefix="/history")
-    except ImportError as e:
-        logger.warning("History blueprint not available: %s", e)
-
-    # Register scenarios blueprint
-    try:
-        from solar_challenge.web.scenarios import bp as scenarios_bp
-        app.register_blueprint(scenarios_bp, url_prefix="/scenarios")
-    except ImportError as e:
-        logger.warning("Scenarios blueprint not available: %s", e)
-
-    # Register API blueprint (background simulation endpoints)
-    try:
-        from solar_challenge.web.api import api_bp
-        app.register_blueprint(api_bp)
-    except ImportError as e:
-        logger.warning("API blueprint not available: %s", e)
-
-    # Register assistant blueprint
-    try:
-        from solar_challenge.web.assistant import bp as assistant_bp  # type: ignore[import-untyped]
-        app.register_blueprint(assistant_bp, url_prefix="/assistant")
-    except ImportError as e:
-        logger.warning("Assistant blueprint not available: %s", e)
+    """Register the blueprint of each feature area on *app*."""
+    app.register_blueprint(routes_bp)
+    app.register_blueprint(history_bp, url_prefix="/history")
+    app.register_blueprint(scenarios_bp, url_prefix="/scenarios")
+    app.register_blueprint(api_bp)
+    app.register_blueprint(assistant_bp, url_prefix="/assistant")
 
 
 if __name__ == "__main__":
