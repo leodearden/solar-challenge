@@ -23,6 +23,7 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.web import database
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager
+from solar_challenge.web.simulation_params import parse_home_config
 
 bp = Blueprint("assistant", __name__)
 
@@ -547,8 +548,8 @@ def run_home_simulation(
 ) -> dict[str, Any]:
     """Submit a home simulation job via the JobManager and return {run_id, results_url}.
 
-    Parses *params* using the shared ``_parse_home_config`` helper from
-    ``solar_challenge.web.api`` (deferred import to avoid circular imports).
+    Parses *params* with ``parse_home_config`` from
+    ``solar_challenge.web.simulation_params``.
     Returns a graceful ``{"error": ...}`` dict when the params fail validation
     or the job submission fails.  Never raises.
 
@@ -564,20 +565,18 @@ def run_home_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    from solar_challenge.web.api import _parse_home_config  # deferred to avoid circularity
-
     # Inject the documented default (7 days) when 'days' is absent OR explicitly None.
     # A caller-supplied non-None 'days' always wins because **params overrides the sentinel
     # key; the caller's tool_input dict is not mutated (we build a new dict).
     # The extra None-check is needed because {"days": 7, **params} leaves days=None when
-    # the model emits an explicit null — _parse_date_range would then fall through to the
+    # the model emits an explicit null — parse_date_range would then fall through to the
     # full 2024 calendar year (~366 days), contradicting the schema's "(default 7)".
     effective_params: dict[str, Any] = {"days": 7, **params}
     if effective_params.get("days") is None:
         effective_params["days"] = 7
 
     try:
-        home_config, start_date, end_date, name = _parse_home_config(effective_params)
+        home_config, start_date, end_date, name = parse_home_config(effective_params)
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
@@ -605,12 +604,12 @@ def run_fleet_simulation(
     """Submit a fleet simulation job via the JobManager and return {run_id, results_url}.
 
     Builds a homogeneous N-home fleet by parsing the per-home param dict
-    (minus ``n_homes``) N times using ``_parse_home_config``.  ``n_homes``
+    (minus ``n_homes``) N times using ``parse_home_config``.  ``n_homes``
     is clamped to [1, 100] to protect the single-worker JobManager.
 
     Args:
         params:      Flat parameter dict including ``n_homes`` plus the per-home
-                     fields accepted by ``_parse_home_config``
+                     fields accepted by ``parse_home_config``
                      (pv_kw, battery_kwh, location, days, …).
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
@@ -620,8 +619,6 @@ def run_fleet_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    from solar_challenge.web.api import _parse_home_config  # deferred
-
     # Clamp n_homes to [1, 100]
     try:
         n_homes: int = max(1, min(int(params.get("n_homes", 1)), 100))
@@ -632,14 +629,14 @@ def run_fleet_simulation(
     per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
     # Inject the documented default (7 days) when absent OR explicitly None.
     # setdefault only guards absent keys; an explicit None bypasses it and would
-    # fall through to _parse_date_range's full-year default — check both cases.
+    # fall through to parse_date_range's full-year default — check both cases.
     per_home.setdefault("days", 7)
     if per_home.get("days") is None:
         per_home["days"] = 7
 
     # Validate once; if it fails, return early without submitting
     try:
-        home_config_0, start_date, end_date, name = _parse_home_config(per_home)
+        home_config_0, start_date, end_date, name = parse_home_config(per_home)
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
