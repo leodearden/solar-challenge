@@ -9,6 +9,7 @@ and scenarios API endpoints under the /api/ prefix.
 import json
 import logging
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Generator
 
@@ -720,6 +721,13 @@ def import_fleet_yaml() -> tuple[Response, int]:
 # ---------------------------------------------------------------------------
 
 
+_SWEEP_PARAMETER_HOME_KEYS: Mapping[str, str] = {
+    "pv_capacity_kw": "pv_kw",
+    "battery_capacity_kwh": "battery_kwh",
+    "annual_consumption_kwh": "consumption_kwh",
+}
+
+
 @api_bp.route("/simulate/sweep", methods=["POST"])
 def simulate_sweep() -> tuple[Response, int]:
     """Submit a parameter sweep for background execution.
@@ -729,7 +737,7 @@ def simulate_sweep() -> tuple[Response, int]:
     rounded sweep values and the ids of the submitted jobs.
 
     Expects a JSON body with:
-      - parameter: str (e.g. "pv_capacity_kw")
+      - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
       - min: float
       - max: float
       - steps: int (>= 2)
@@ -738,6 +746,8 @@ def simulate_sweep() -> tuple[Response, int]:
 
     Returns:
         JSON with sweep_id, parameter, values and job_ids, HTTP 201.
+        HTTP 400, before any job is submitted, for an unsupported parameter
+        or an invalid range.
     """
     import uuid as _uuid  # noqa: PLC0415
 
@@ -745,6 +755,12 @@ def simulate_sweep() -> tuple[Response, int]:
     if not data:
         return jsonify({"error": "Request body must be JSON"}), 400
     parameter = str(data.get("parameter", "pv_capacity_kw"))
+    home_config_key = _SWEEP_PARAMETER_HOME_KEYS.get(parameter)
+    if home_config_key is None:
+        supported = ", ".join(_SWEEP_PARAMETER_HOME_KEYS)
+        return jsonify({
+            "error": f"Unsupported sweep parameter {parameter!r}; supported parameters: {supported}",
+        }), 400
     try:
         min_val = float(data.get("min", 1.0))
         max_val = float(data.get("max", 10.0))
@@ -776,20 +792,12 @@ def simulate_sweep() -> tuple[Response, int]:
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
 
-    # Map parameter names to config keys
-    param_map = {
-        "pv_capacity_kw": "pv_kw",
-        "battery_capacity_kwh": "battery_kwh",
-        "annual_consumption_kwh": "consumption_kwh",
-    }
-    config_key = param_map.get(parameter, parameter)
-
     job_ids: list[str] = []
     rounded_values = [round(v, 3) for v in values]
 
     for val in rounded_values:
         point_config = dict(base_config)
-        point_config[config_key] = val
+        point_config[home_config_key] = val
         # Ensure defaults for required fields
         point_config.setdefault("pv_kw", 4.0)
         point_config.setdefault("battery_kwh", 0)
