@@ -445,6 +445,24 @@ class TestAlignTMYToDemand:
 
         pd.testing.assert_series_equal(aligned, _expected_alignment(demand, later), check_exact=True)
 
+    def test_nan_in_tmy_is_kept_and_only_unmatched_minutes_map_to_zero(self):
+        tmy = pd.Series([np.nan], index=pd.to_datetime(["1990-06-21 12:00"]))
+        demand = pd.Series(1.0, index=pd.date_range("2024-06-21 12:00", periods=2, freq="1min"))
+
+        aligned = _align_tmy_to_demand(tmy, demand)
+
+        expected = _expected_alignment(demand, np.array([np.nan, 0.0]))
+        pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
+    def test_repeated_tmy_wall_clock_minute_keeps_a_later_nan(self):
+        tmy = pd.Series([5.0, np.nan], index=pd.to_datetime(["1990-06-21 12:00", "1991-06-21 12:00"]))
+        demand = pd.Series(1.0, index=pd.to_datetime(["2024-06-21 12:00"]))
+
+        aligned = _align_tmy_to_demand(tmy, demand)
+
+        expected = _expected_alignment(demand, np.array([np.nan]))
+        pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
     def test_full_year_minute_tmy_aligns_within_cpu_budget(self, tmy_minute_year):
         demand = _london_minute_demand("2024-06-01 00:00", "2024-06-01 23:59")
         budget_cpu_seconds = 1.0
