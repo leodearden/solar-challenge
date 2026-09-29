@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable
+from inspect import signature
 from pathlib import Path
 
 import pytest
@@ -28,10 +29,55 @@ def app(tmp_path: Path) -> Flask:
     return test_app
 
 
+class _RecordingJobManager:
+    """Stands in for the app's JobManager: records each home config a request submits and simulates nothing."""
+
+    def __init__(self) -> None:
+        self.submitted_homes: list[object] = []
+
+    def submit_home_job(
+        self,
+        config: object,
+        start_date: object,
+        end_date: object,
+        db_path: str,
+        data_dir: str,
+        name: str | None = None,
+    ) -> tuple[str, str]:
+        """Record the home config and return a fresh (job_id, run_id) pair."""
+        self.submitted_homes.append(config)
+        n = len(self.submitted_homes)
+        return f"job-{n}", f"run-{n}"
+
+
 @pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
+def recording_job_manager(app: Flask) -> _RecordingJobManager:
+    """Install a recording double as the app's job manager and return it."""
+    job_manager = _RecordingJobManager()
+    app.extensions["job_manager"] = job_manager
+    return job_manager
+
+
+@pytest.fixture
+def client(app: Flask, recording_job_manager: _RecordingJobManager) -> FlaskClient:
+    """Create a Flask test client whose requests submit jobs to the recording double, so none starts a real simulation."""
     return app.test_client()
+
+
+def _call_shape(method: Callable[..., object]) -> list[tuple[str, object, object]]:
+    """The parameter names, kinds and defaults that decide which calls a method accepts."""
+    return [(p.name, p.kind, p.default) for p in signature(method).parameters.values()]
+
+
+class TestRecordingJobManager:
+    """The recording double stays in step with the real JobManager it stands in for."""
+
+    def test_submit_home_job_takes_the_parameters_the_real_one_takes(self, app: Flask) -> None:
+        """A change to the real submit_home_job's parameters fails here, instead of passing silently behind the double."""
+        real_job_manager = app.extensions["job_manager"]
+        double = _RecordingJobManager()
+
+        assert _call_shape(double.submit_home_job) == _call_shape(real_job_manager.submit_home_job)
 
 
 class TestScenarioBuilderRoute:
@@ -231,7 +277,7 @@ class TestSweepAPI:
     """Tests for the POST /api/simulate/sweep endpoint."""
 
     def test_sweep_endpoint_returns_201(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep returns 201 with job_ids."""
+        """POST /api/simulate/sweep returns 201 with the values, the parameter and each point's job id, in point order."""
         response = client.post(
             "/api/simulate/sweep",
             json={
@@ -248,8 +294,7 @@ class TestSweepAPI:
         assert "values" in data
         assert len(data["values"]) == 4
         assert data["parameter"] == "pv_capacity_kw"
-        assert "job_ids" in data
-        assert len(data["job_ids"]) == 4
+        assert data["job_ids"] == ["job-1", "job-2", "job-3", "job-4"]
 
     def test_sweep_linear_values(self, client: FlaskClient) -> None:
         """Test that linear sweep generates evenly spaced values."""
@@ -312,36 +357,8 @@ class TestSweepAPI:
         assert response.status_code == 400
 
 
-class _RecordingJobManager:
-    """Stands in for the app's JobManager: records each home config a request submits and simulates nothing."""
-
-    def __init__(self) -> None:
-        self.submitted_homes: list[object] = []
-
-    def submit_home_job(
-        self,
-        config: object,
-        start_date: object,
-        end_date: object,
-        db_path: str,
-        data_dir: str,
-        name: str | None = None,
-    ) -> tuple[str, str]:
-        """Record the home config and return a fresh (job_id, run_id) pair."""
-        self.submitted_homes.append(config)
-        n = len(self.submitted_homes)
-        return f"job-{n}", f"run-{n}"
-
-
 class TestSweepParameters:
     """What POST /api/simulate/sweep submits for a swept parameter: one home per point, carrying that point's value, or nothing at all when the parameter is unsupported or any of its points is invalid."""
-
-    @pytest.fixture
-    def recording_job_manager(self, app: Flask) -> _RecordingJobManager:
-        """Install a recording double as the app's job manager and return it."""
-        job_manager = _RecordingJobManager()
-        app.extensions["job_manager"] = job_manager
-        return job_manager
 
     @pytest.mark.parametrize(
         ("parameter", "values", "swept_value_of"),
