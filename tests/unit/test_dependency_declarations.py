@@ -285,7 +285,6 @@ def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions
     live_partly_declared = _write_import_guard(
         tmp_path / "live_partly_declared.py", "import yaml", f"import {unprovided}"
     )
-
     not_judged_stdlib_only = _write_import_guard(tmp_path / "not_judged_stdlib_only.py", "import json")
 
     dead = _dead_import_guards(
