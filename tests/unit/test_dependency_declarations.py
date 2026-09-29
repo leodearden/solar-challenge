@@ -9,8 +9,10 @@ dependency may request an extra its distribution does not provide.  No declared
 requirement may carry an environment marker that holds only on Python minors
 requires-python does not admit, since it could never install.  An import
 inside a try block that handles ImportError is optional by construction and
-exempt.  pyproject.toml is parsed structurally (TOML plus PEP 508
-requirements), not by regex.
+exempt, but the guard must then guard a distribution its scope does not
+declare: a declared distribution always imports in a valid install, so a
+guard over declared distributions only is dead code.  pyproject.toml is parsed
+structurally (TOML plus PEP 508 requirements), not by regex.
 
 pyproject.toml is also the only dependency declaration: no requirements*.txt at
 the project root may restate it, since a hand-maintained copy drifts from it.
@@ -61,6 +63,25 @@ def _uninstalled(requirements: Iterable[Requirement]) -> list[str]:
     return sorted(missing)
 
 
+def _declared_distributions_or_skip(project_root: Path, extras: tuple[str, ...]) -> set[str]:
+    """Return the canonical names a source scope may import: [project].dependencies plus the
+    requirements of *extras*.
+
+    Skips the calling test unless every applicable requirement of *extras* is installed,
+    since imports map to distributions only through installed metadata.
+    """
+    extra_requirements = _extra_requirements(project_root, extras)
+    uninstalled = _uninstalled(extra_requirements)
+    if uninstalled:
+        install_flags = "".join(f" --extra {extra}" for extra in extras)
+        pytest.skip(
+            "imports can be mapped to distributions only where the extras this source scope may "
+            f"use are installed; not installed: {uninstalled}. "
+            f"Install them, e.g. with `uv run --extra dev{install_flags} pytest`"
+        )
+    return {canonicalize_name(r.name) for r in [*_core_requirements(project_root), *extra_requirements]}
+
+
 def _web_sources(package_dir: Path) -> list[Path]:
     """Return the package's .py files inside its web subpackage, the one the web extra serves."""
     return list((package_dir / _WEB).rglob("*.py"))
@@ -70,6 +91,17 @@ def _core_sources(package_dir: Path) -> list[Path]:
     """Return the package's .py files outside its web subpackage."""
     web_sources = set(_web_sources(package_dir))
     return [source for source in package_dir.rglob("*.py") if source not in web_sources]
+
+
+_SOURCE_SCOPES = [
+    pytest.param(_core_sources, (), id="outside-web"),
+    pytest.param(_web_sources, (_WEB,), id="web"),
+]
+
+
+def _parse(source: Path) -> ast.Module:
+    """Return the syntax tree of the Python *source* file."""
+    return ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
 
 
 def _handles_import_failure(node: ast.Try) -> bool:
@@ -93,6 +125,17 @@ def _required_imports(nodes: Iterable[ast.AST]) -> Iterator[ast.Import | ast.Imp
             yield from _required_imports(ast.iter_child_nodes(node))
 
 
+def _top_level_modules(imports: Iterable[ast.Import | ast.ImportFrom]) -> set[str]:
+    """Return the top-level module of every absolute import among *imports*."""
+    modules: set[str] = set()
+    for node in imports:
+        if isinstance(node, ast.Import):
+            modules.update(alias.name.partition(".")[0] for alias in node.names)
+        elif node.level == 0 and node.module:
+            modules.add(node.module.partition(".")[0])
+    return modules
+
+
 def _required_top_level_modules(sources: Iterable[Path]) -> set[str]:
     """Return the top-level module of every required absolute import in *sources*.
 
@@ -101,13 +144,13 @@ def _required_top_level_modules(sources: Iterable[Path]) -> set[str]:
     """
     modules: set[str] = set()
     for source in sources:
-        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        for node in _required_imports([tree]):
-            if isinstance(node, ast.Import):
-                modules.update(alias.name.partition(".")[0] for alias in node.names)
-            elif node.level == 0 and node.module:
-                modules.add(node.module.partition(".")[0])
+        modules |= _top_level_modules(_required_imports([_parse(source)]))
     return modules
+
+
+def _third_party_modules(modules: set[str]) -> set[str]:
+    """Return *modules* without the standard library and the first-party solar_challenge package."""
+    return modules - sys.stdlib_module_names - {"solar_challenge"}
 
 
 def _third_party_distributions(modules: set[str]) -> set[str]:
@@ -115,7 +158,7 @@ def _third_party_distributions(modules: set[str]) -> set[str]:
 
     Standard-library modules and the first-party solar_challenge package are dropped.
     """
-    third_party = modules - sys.stdlib_module_names - {"solar_challenge"}
+    third_party = _third_party_modules(modules)
     providers = packages_distributions()
     unprovided = sorted(module for module in third_party if module not in providers)
     assert not unprovided, (
@@ -125,33 +168,55 @@ def _third_party_distributions(modules: set[str]) -> set[str]:
     return {canonicalize_name(dist) for module in third_party for dist in providers[module]}
 
 
-@pytest.mark.parametrize(
-    ("select_sources", "extras"),
-    [
-        pytest.param(_core_sources, (), id="outside-web"),
-        pytest.param(_web_sources, (_WEB,), id="web"),
-    ],
-)
+def _import_guards(sources: Iterable[Path]) -> Iterator[tuple[Path, ast.Try]]:
+    """Yield every try block in *sources* that handles ImportError, with the file it is in."""
+    for source in sources:
+        for node in ast.walk(_parse(source)):
+            if isinstance(node, ast.Try) and _handles_import_failure(node):
+                yield source, node
+
+
+def _guarded_imports(guard: ast.Try) -> Iterator[ast.Import | ast.ImportFrom]:
+    """Yield the imports in *guard*'s body, the only part of a try its handlers guard."""
+    for statement in guard.body:
+        for node in ast.walk(statement):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                yield node
+
+
+def _dead_import_guards(
+    sources: Iterable[Path],
+    declared: set[str],
+) -> list[tuple[Path, int, list[str]]]:
+    """Return (file, line, guarded modules) for every ImportError guard whose guarded
+    third-party imports are all provided by *declared* distributions.
+
+    A guard over no third-party import, such as web/app.py's first-party blueprint
+    guards, is not judged.
+    """
+    providers = packages_distributions()
+    dead: list[tuple[Path, int, list[str]]] = []
+    for source, guard in _import_guards(sources):
+        guarded = _third_party_modules(_top_level_modules(_guarded_imports(guard)))
+        if guarded and all(
+            any(canonicalize_name(dist) in declared for dist in providers.get(module, ()))
+            for module in guarded
+        ):
+            dead.append((source, guard.lineno, sorted(guarded)))
+    return sorted(dead)
+
+
+@pytest.mark.parametrize(("select_sources", "extras"), _SOURCE_SCOPES)
 def test_sources_import_only_declared_dependencies(
     project_root: Path,
     select_sources: Callable[[Path], list[Path]],
     extras: tuple[str, ...],
 ) -> None:
     """Every third-party distribution a source scope requires must be declared for that scope."""
-    extra_requirements = _extra_requirements(project_root, extras)
-    uninstalled = _uninstalled(extra_requirements)
-    if uninstalled:
-        install_flags = "".join(f" --extra {extra}" for extra in extras)
-        pytest.skip(
-            "imports can be mapped to distributions only where the extras this source scope may "
-            f"use are installed; not installed: {uninstalled}. "
-            f"Install them, e.g. with `uv run --extra dev{install_flags} pytest`"
-        )
+    declared = _declared_distributions_or_skip(project_root, extras)
     required = _third_party_distributions(
         _required_top_level_modules(select_sources(project_root / "src" / "solar_challenge"))
     )
-    allowed = [*_core_requirements(project_root), *extra_requirements]
-    declared = {canonicalize_name(r.name) for r in allowed}
 
     undeclared = sorted(required - declared)
     groups = ", ".join(
@@ -162,6 +227,74 @@ def test_sources_import_only_declared_dependencies(
         f"undeclared: {undeclared}; required={sorted(required)}. "
         "Declare them in one of those groups in pyproject.toml, or make the import optional "
         "inside a try block that handles ImportError"
+    )
+
+
+@pytest.mark.parametrize(("select_sources", "extras"), _SOURCE_SCOPES)
+def test_import_guards_guard_an_undeclared_dependency(
+    project_root: Path,
+    select_sources: Callable[[Path], list[Path]],
+    extras: tuple[str, ...],
+) -> None:
+    """Every try that handles ImportError must guard a distribution its source scope does not declare.
+
+    Its handler runs only if a guarded import fails, and a declared distribution always
+    imports in a valid install, so a guard over declared distributions only is dead code.
+    """
+    declared = _declared_distributions_or_skip(project_root, extras)
+    sources = select_sources(project_root / "src" / "solar_challenge")
+    dead = [
+        f"{source.relative_to(project_root)}:{line} guards {modules}"
+        for source, line, modules in _dead_import_guards(sources, declared)
+    ]
+    assert not dead, (
+        f"these ImportError guards are dead code: {dead}. Each guards only distributions its "
+        "source scope declares, and a declared distribution always imports in a valid install, "
+        "so the except branch can never run. Delete the guard and its fallback, or, if the "
+        "import is meant to be optional, stop declaring the distribution"
+    )
+
+
+def _write_import_guard(path: Path, *body_lines: str) -> Path:
+    """Write *path* as a module whose one function runs *body_lines* in a try that handles
+    ImportError, and return *path*. The try is on line 2.
+    """
+    body = "".join(f"        {line}\n" for line in body_lines)
+    path.write_text(
+        f"def render():\n    try:\n{body}    except ImportError:\n        return None\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_dead_import_guards_flags_only_guards_wholly_over_declared_distributions(
+    tmp_path: Path,
+) -> None:
+    """A guard is dead only when declared distributions provide every third-party module it guards.
+
+    Once src/ holds no dead guard, test_import_guards_guard_an_undeclared_dependency passes
+    for a detector that flags nothing, so this checks the detector on guards of known verdict.
+    """
+    unprovided = "no_installed_distribution_provides_this_module"
+    dead_import = _write_import_guard(tmp_path / "dead_import.py", "import yaml")
+    dead_nested_from_import = _write_import_guard(
+        tmp_path / "dead_nested_from_import.py",
+        "if sys.version_info >= (3, 11):",
+        "    from yaml import safe_load",
+    )
+    live_unprovided = _write_import_guard(tmp_path / "live_unprovided.py", f"import {unprovided}")
+    live_partly_declared = _write_import_guard(
+        tmp_path / "live_partly_declared.py", "import yaml", f"import {unprovided}"
+    )
+
+    dead = _dead_import_guards(
+        [dead_import, dead_nested_from_import, live_unprovided, live_partly_declared],
+        declared={"pyyaml"},
+    )
+
+    assert dead == [(dead_import, 2, ["yaml"]), (dead_nested_from_import, 2, ["yaml"])], (
+        "the dead-guard detector misjudged a synthetic guard: the dead_* guards import only the "
+        "declared pyyaml, and each live_* guard imports a module no declared distribution provides"
     )
 
 

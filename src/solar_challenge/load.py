@@ -14,20 +14,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# richardsonpy is a hard (non-optional) dependency since task #13.
-# RICHARDSONPY_AVAILABLE is kept for backward compatibility but is always True
-# after richardsonpy was promoted from the optional [stochastic] extra to
-# [project].dependencies.  The Elexon profile remains as a *defensive* fallback
-# for any richardsonpy runtime error — it is no longer the silent default when
-# the extra is absent.
-_richardsonpy_module: Any = None
-try:
-    import richardsonpy as _rpy
-    _richardsonpy_module = _rpy
-except ImportError:  # pragma: no cover — only hit in broken install environments
-    pass
-RICHARDSONPY_AVAILABLE: bool = _richardsonpy_module is not None
-
 
 # Ofgem Typical Domestic Consumption Values (TDCV) by household size
 # Values in kWh/year for electricity (excluding electric heating)
@@ -244,9 +230,8 @@ def _try_richardsonpy_profile(
     seasonal daily energy target used by the Elexon path:
     target_window_kwh = Σ_days (annual/365 × SEASONAL_FACTORS[month]).
 
-    richardsonpy is now a hard dependency, so RICHARDSONPY_AVAILABLE is always
-    True.  The Elexon path remains as a defensive fallback in case richardsonpy
-    raises a runtime error (any exception → return None → Elexon fallback).
+    The Elexon path is a defensive fallback in case richardsonpy raises a
+    runtime error (any exception → return None → Elexon fallback).
 
     Args:
         config: Load configuration
