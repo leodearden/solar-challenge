@@ -931,6 +931,20 @@ class TestSuggestConfig:
 # Slice ③ — tool surface tests (step-5)
 # ---------------------------------------------------------------------------
 
+def dispatch_dependencies(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
+    """The db_path, job_manager and data_dir ``_dispatch_tool`` requires, rooted in *tmp_path*.
+
+    For tests that do not care which values they pass; keyword *overrides*
+    replace individual entries for those that do.
+    """
+    return {
+        "db_path": tmp_path / "assistant.db",
+        "job_manager": MagicMock(spec=JobManager),
+        "data_dir": tmp_path,
+        **overrides,
+    }
+
+
 class TestToolSurface:
     """Tests for _TOOLS list and _dispatch_tool router."""
 
@@ -981,9 +995,7 @@ class TestToolSurface:
         result = _dispatch_tool(
             "explain_metric",
             {"metric": "self_consumption_ratio"},
-            db_path=tmp_path / "assistant.db",
-            job_manager=MagicMock(spec=JobManager),
-            data_dir=tmp_path,
+            **dispatch_dependencies(tmp_path),
         )
         expected = explain_metric("self_consumption_ratio")
         assert result == expected, (
@@ -997,9 +1009,7 @@ class TestToolSurface:
         result = _dispatch_tool(
             "suggest_config",
             {"annual_consumption_kwh": 3100, "goal": "self_sufficiency"},
-            db_path=tmp_path / "assistant.db",
-            job_manager=MagicMock(spec=JobManager),
-            data_dir=tmp_path,
+            **dispatch_dependencies(tmp_path),
         )
         expected = suggest_config(3100, "self_sufficiency")
         assert result == expected, (
@@ -1014,9 +1024,7 @@ class TestToolSurface:
             result = _dispatch_tool(
                 "nonexistent_tool",
                 {},
-                db_path=tmp_path / "assistant.db",
-                job_manager=MagicMock(spec=JobManager),
-                data_dir=tmp_path,
+                **dispatch_dependencies(tmp_path),
             )
         except Exception as exc:
             raise AssertionError(
@@ -1790,9 +1798,7 @@ class TestSlice4ToolSurface:
         result = _dispatch_tool(
             "get_run_results",
             {"run_id_or_name": "disp-run-001"},
-            db_path=str(db_path),
-            job_manager=MagicMock(spec=JobManager),
-            data_dir=tmp_path,
+            **dispatch_dependencies(tmp_path, db_path=str(db_path)),
         )
         expected = get_run_results("disp-run-001", db_path)
 
@@ -1815,9 +1821,7 @@ class TestSlice4ToolSurface:
         result = _dispatch_tool(
             "list_recent_runs",
             {"limit": 5},
-            db_path=str(db_path),
-            job_manager=MagicMock(spec=JobManager),
-            data_dir=tmp_path,
+            **dispatch_dependencies(tmp_path, db_path=str(db_path)),
         )
         expected = list_recent_runs(5, db_path)
 
