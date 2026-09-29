@@ -13,14 +13,7 @@ from pathlib import Path
 from typing import Any, Iterator, Literal, Optional, Union, cast
 
 import pandas as pd
-
-# Import yaml with fallback
-try:
-    import yaml
-    YAML_AVAILABLE = True
-except ImportError:
-    yaml = None
-    YAML_AVAILABLE = False
+import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
@@ -1869,11 +1862,6 @@ def load_config_yaml(path: Union[str, Path]) -> dict[str, Any]:
     Raises:
         ConfigurationError: If file cannot be read or parsed
     """
-    if not YAML_AVAILABLE:
-        raise ConfigurationError(
-            "YAML support requires pyyaml: pip install pyyaml"
-        )
-
     path = Path(path)
     if not path.exists():
         raise ConfigurationError(f"Configuration file not found: {path}")

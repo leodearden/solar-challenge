@@ -6,7 +6,6 @@ import pytest
 from solar_challenge.load import (
     LoadConfig,
     OFGEM_TDCV_BY_OCCUPANTS,
-    RICHARDSONPY_AVAILABLE,
     calculate_annual_consumption,
     generate_load_profile,
     scale_profile_to_annual,
@@ -289,26 +288,6 @@ class TestHouseholdSizeParameter:
 class TestRichardsonpyIntegration:
     """Test LOAD-001: richardsonpy integration."""
 
-    def test_richardsonpy_availability_flag(self):
-        """RICHARDSONPY_AVAILABLE correctly indicates availability."""
-        # This test just documents the current state
-        assert isinstance(RICHARDSONPY_AVAILABLE, bool)
-
-    def test_fallback_to_elexon_when_unavailable(self):
-        """Falls back to Elexon profile when richardsonpy unavailable."""
-        # Even with use_stochastic=True, should fall back gracefully
-        config = LoadConfig(
-            annual_consumption_kwh=3400.0,
-            use_stochastic=True,
-        )
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
-
-        # Should not raise, should return valid profile
-        profile = generate_load_profile(config, start, end)
-        assert isinstance(profile, pd.Series)
-        assert len(profile) == 1440
-
     def test_disable_stochastic_uses_elexon(self):
         """use_stochastic=False always uses Elexon profile."""
         config = LoadConfig(
@@ -360,10 +339,6 @@ class TestWindowedStochasticGeneration:
             return _original(*args, **kwargs)
 
         monkeypatch.setattr(_app_mod, "run_application_simulation", _counting_wrapper)
-
-        assert RICHARDSONPY_AVAILABLE is True, (
-            "richardsonpy must be a hard dependency so this path is always exercised"
-        )
 
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
         start = pd.Timestamp("2024-06-21")
