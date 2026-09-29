@@ -191,8 +191,7 @@ def _dead_import_guards(
     """Return (file, line, guarded modules) for every ImportError guard whose guarded
     third-party imports are all provided by *declared* distributions.
 
-    A guard over no third-party import, such as web/app.py's first-party blueprint
-    guards, is not judged.
+    A guard over no third-party import is not judged.
     """
     providers = packages_distributions()
     dead: list[tuple[Path, int, list[str]]] = []
