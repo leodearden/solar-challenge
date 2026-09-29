@@ -16,6 +16,8 @@ from flask.testing import FlaskClient
 from solar_challenge.web.app import create_app
 from solar_challenge.web.jobs import JobManager
 
+from tests._sse import parse_sse_events
+
 
 # ---------------------------------------------------------------------------
 # Slice ② helpers & fixtures
@@ -414,38 +416,30 @@ class TestChatDegradation:
         assert "text/event-stream" in resp.content_type
 
         body = resp.get_data(as_text=True)
-        assert "event: error" in body
-        assert "event: delta" not in body
-        assert "event: done" not in body
+        events = parse_sse_events(body)
+        assert [e.event for e in events] == ["error"], f"Expected a lone error frame; got: {events}"
 
     def test_missing_api_key_error_frame_has_message_field(
         self,
         client: FlaskClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The error SSE frame carries a JSON data payload with a 'message' field."""
-        import json as _json
-
+        """The error SSE frame carries a JSON data payload whose 'message' names ANTHROPIC_API_KEY."""
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
         resp = client.post("/assistant/chat", json={"message": "hi"})
         body = resp.get_data(as_text=True)
 
-        # Find the data line after the error event
-        error_data = None
-        lines = body.splitlines()
-        for i, line in enumerate(lines):
-            if line.strip() == "event: error" and i + 1 < len(lines):
-                data_line = lines[i + 1]
-                if data_line.startswith("data: "):
-                    try:
-                        error_data = _json.loads(data_line[6:])
-                    except _json.JSONDecodeError:
-                        pass
-                break
-
-        assert error_data is not None, "Could not find error data payload"
-        assert "message" in error_data, f"Error payload missing 'message': {error_data}"
+        events = parse_sse_events(body)
+        error_frames = [e for e in events if e.event == "error"]
+        assert error_frames, f"Could not find error data payload; events: {events}"
+        error_data = error_frames[0].data
+        assert isinstance(error_data, dict) and "message" in error_data, (
+            f"Error payload missing 'message': {error_data}"
+        )
+        assert "ANTHROPIC_API_KEY" in error_data["message"], (
+            f"Expected the error message to name ANTHROPIC_API_KEY; got: {error_data['message']!r}"
+        )
 
     def test_client_construction_failure_returns_error_frame_and_saves_no_turn(
         self,
@@ -465,10 +459,11 @@ class TestChatDegradation:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.content_type
         body = resp.get_data(as_text=True)
-        assert "event: error" in body
-        assert malformed_port in body
-        assert "event: delta" not in body
-        assert "event: done" not in body
+        events = parse_sse_events(body)
+        assert [e.event for e in events] == ["error"], f"Expected a lone error frame; got: {events}"
+        assert malformed_port in events[0].data["message"], (
+            f"Expected the error message to name {malformed_port!r}; got: {events[0].data}"
+        )
         assert client.get("/assistant/history").get_json() == {"messages": []}
 
 
