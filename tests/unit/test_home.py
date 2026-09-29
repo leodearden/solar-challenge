@@ -1,5 +1,8 @@
 """Tests for home simulation."""
 
+import time
+
+import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
@@ -321,6 +324,25 @@ class TestSimulateHomeSEGNonRegression:
         assert summary.total_export_revenue_gbp == pytest.approx(expected_revenue, rel=1e-3)
 
 
+@pytest.fixture
+def tmy_minute_year() -> pd.Series:
+    """A UTC 1990 year at 1-minute resolution, the shape of a PVGIS TMY after interpolation.
+
+    Every value is distinct and non-zero, so an aligned 0.0 can only mean "no TMY match".
+    """
+    index = pd.date_range("1990-01-01", periods=525_600, freq="1min", tz="UTC")
+    return pd.Series(np.arange(1, len(index) + 1, dtype=float), index=index)
+
+
+def _london_minute_demand(first: str, last: str) -> pd.Series:
+    return pd.Series(1.0, index=pd.date_range(first, last, freq="1min", tz="Europe/London"))
+
+
+def _expected_alignment(demand: pd.Series, *value_runs: pd.Series | np.ndarray) -> pd.Series:
+    """The aligned series that carries value_runs, in order, on the demand's index."""
+    return pd.Series(np.concatenate(value_runs), index=demand.index, name="generation_kw")
+
+
 class TestAlignTMYToDemand:
     """Test TMY data alignment."""
 
@@ -355,6 +377,86 @@ class TestAlignTMYToDemand:
 
         # Most values should be zero since TMY data doesn't cover this time
         assert aligned.iloc[0] == 0.0
+
+    def test_leap_day_has_no_tmy_match_and_maps_to_zero(self, tmy_minute_year):
+        demand = _london_minute_demand("2024-02-28 00:00", "2024-03-01 23:59")
+
+        aligned = _align_tmy_to_demand(tmy_minute_year, demand)
+
+        expected = _expected_alignment(
+            demand,
+            tmy_minute_year.loc["1990-02-28"],
+            np.zeros(1440),
+            tmy_minute_year.loc["1990-03-01"],
+        )
+        pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
+    def test_spring_forward_day_matches_tmy_by_wall_clock(self, tmy_minute_year):
+        demand = _london_minute_demand("2024-03-31 00:00", "2024-03-31 23:59")
+        assert len(demand) == 1380
+
+        aligned = _align_tmy_to_demand(tmy_minute_year, demand)
+
+        expected = _expected_alignment(
+            demand,
+            tmy_minute_year.loc["1990-03-31 00:00":"1990-03-31 00:59"],
+            tmy_minute_year.loc["1990-03-31 02:00":"1990-03-31 23:59"],
+        )
+        pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
+    def test_fall_back_day_repeated_hour_reuses_the_same_tmy_values(self, tmy_minute_year):
+        demand = _london_minute_demand("2024-10-27 00:00", "2024-10-27 23:59")
+        assert len(demand) == 1500
+
+        aligned = _align_tmy_to_demand(tmy_minute_year, demand)
+
+        expected = _expected_alignment(
+            demand,
+            tmy_minute_year.loc["1990-10-27 00:00":"1990-10-27 01:59"],
+            tmy_minute_year.loc["1990-10-27 01:00":"1990-10-27 01:59"],
+            tmy_minute_year.loc["1990-10-27 02:00":"1990-10-27 23:59"],
+        )
+        pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
+    def test_range_crossing_year_end_wraps_to_start_of_tmy_year(self, tmy_minute_year):
+        demand = _london_minute_demand("2024-12-31 00:00", "2025-01-01 23:59")
+
+        aligned = _align_tmy_to_demand(tmy_minute_year, demand)
+
+        expected = _expected_alignment(
+            demand,
+            tmy_minute_year.loc["1990-12-31"],
+            tmy_minute_year.loc["1990-01-01"],
+        )
+        pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
+    def test_repeated_tmy_wall_clock_minute_keeps_the_later_value(self):
+        earlier = pd.Series(
+            np.arange(1, 1441, dtype=float),
+            index=pd.date_range("1990-06-21", periods=1440, freq="1min"),
+        )
+        later = pd.Series(
+            np.arange(10_001, 11_441, dtype=float),
+            index=pd.date_range("1991-06-21", periods=1440, freq="1min"),
+        )
+        demand = pd.Series(1.0, index=pd.date_range("2024-06-21", periods=1440, freq="1min"))
+
+        aligned = _align_tmy_to_demand(pd.concat([earlier, later]), demand)
+
+        pd.testing.assert_series_equal(aligned, _expected_alignment(demand, later), check_exact=True)
+
+    def test_full_year_minute_tmy_aligns_within_cpu_budget(self, tmy_minute_year):
+        demand = _london_minute_demand("2024-06-01 00:00", "2024-06-01 23:59")
+        budget_cpu_seconds = 1.0
+
+        started = time.thread_time()
+        _align_tmy_to_demand(tmy_minute_year, demand)
+        cpu_seconds = time.thread_time() - started
+
+        assert cpu_seconds < budget_cpu_seconds, (
+            f"aligning a full-year minute TMY took {cpu_seconds:.2f} s of CPU; "
+            f"the budget is {budget_cpu_seconds} s"
+        )
 
 
 class TestCalculateSummary:
