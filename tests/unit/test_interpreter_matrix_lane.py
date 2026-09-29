@@ -6,9 +6,15 @@ Every Python minor requires-python admits is re-verified recurrently: the
 orchestrator offline lane's interpreter-matrix job (tests/interpreter_matrix).
 """
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from tests._interpreters import admitted_minor_versions, python_version_pin, requires_python
 from tests._orchestrator_config import load_orchestrator_config
 
 _MATRIX_JOB = "interpreter-matrix"
@@ -53,4 +59,40 @@ def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Pa
     )
     assert matrix_jobs[0].get("enabled", True) is True, (
         f"the {_MATRIX_JOB!r} lane job is disabled, so the off-pin interpreters are never re-verified"
+    )
+
+
+def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(project_root: Path) -> None:
+    """Run as the lane runs it, the interpreter-matrix job collects one case per off-pin admitted minor.
+
+    Each case's node-id must name its interpreter: that node-id is the only
+    attribution a fix task filed by the lane carries.
+    """
+    if shutil.which("uv") is None:
+        pytest.skip("uv is not installed; the interpreter-matrix job runs through it")
+    command = _matrix_jobs(_git_config(project_root))[0]["command"]
+
+    result = subprocess.run(
+        command,
+        shell=True,
+        cwd=project_root,
+        env={**os.environ, "PYTEST_ADDOPTS": "--collect-only -q -o addopts="},
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+    assert result.returncode == 0, (
+        f"the {_MATRIX_JOB!r} lane job {command!r} failed to collect (exit {result.returncode})\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    pin = python_version_pin(project_root)
+    off_pin = admitted_minor_versions(requires_python(project_root)) - {(pin.major, pin.minor)}
+    expected = sorted(f"{major}.{minor}" for major, minor in off_pin)
+    node_ids = [line for line in result.stdout.splitlines() if "::" in line]
+    collected = sorted(node_id.rpartition("[")[2].removesuffix("]") for node_id in node_ids)
+    assert collected == expected, (
+        f"the {_MATRIX_JOB!r} lane job collected {node_ids}; expected exactly one case per minor "
+        f"requires-python admits other than the .python-version pin {pin}, each node-id ending "
+        f"in its interpreter: {expected}"
     )
