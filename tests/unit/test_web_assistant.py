@@ -313,8 +313,9 @@ class TestChatEndpointHappyPath:
         assert "text/event-stream" in resp.content_type
 
         body = resp.get_data(as_text=True)
-        assert "event: delta" in body
-        assert "event: done" in body
+        event_types = [e.event for e in parse_sse_events(body)]
+        assert "delta" in event_types, f"Expected delta frames; got: {event_types}"
+        assert "done" in event_types, f"Expected done frame; got: {event_types}"
 
     def test_chat_delta_frames_reconstruct_reply(
         self,
@@ -573,11 +574,13 @@ class TestChatLiveSmoke:
         resp = client.post("/assistant/chat", json={"message": "Reply with exactly one word: hello"})
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
-        assert "event: delta" in body, "Expected at least one delta frame"
-        assert "event: done" in body, "Expected done frame"
-        assert "event: error" not in body, f"Unexpected error frame: {body[:500]}"
+        events = parse_sse_events(body)
+        event_types = [e.event for e in events]
+        assert "delta" in event_types, "Expected at least one delta frame"
+        assert "done" in event_types, "Expected done frame"
+        assert "error" not in event_types, f"Unexpected error frame: {body[:500]}"
 
-        reconstructed = reply_text(parse_sse_events(body))
+        reconstructed = reply_text(events)
         assert len(reconstructed) > 0, "Expected non-empty reconstructed reply"
 
     def test_second_turn_shows_cache_hit(self, client: FlaskClient) -> None:
@@ -1946,9 +1949,10 @@ class TestRunContextInjection:
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
-        assert "event: delta" in body, "Expected delta frames for unknown run_id"
-        assert "event: done" in body, "Expected done frame for unknown run_id"
-        assert "event: error" not in body, f"Unexpected error frame for unknown run_id: {body[:300]}"
+        event_types = [e.event for e in parse_sse_events(body)]
+        assert "delta" in event_types, "Expected delta frames for unknown run_id"
+        assert "done" in event_types, "Expected done frame for unknown run_id"
+        assert "error" not in event_types, f"Unexpected error frame for unknown run_id: {body[:300]}"
 
         # Messages sent to API must NOT contain injected run context for unknown id
         msgs = mock_anthropic["state"]["last_kwargs"]["messages"]
