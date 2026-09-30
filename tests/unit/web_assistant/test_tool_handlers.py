@@ -152,6 +152,13 @@ class TestSuggestConfig:
             f"Expected at least one string value containing 'run a simulation': {result}"
         )
 
+    def test_note_does_not_cite_the_prd(self) -> None:
+        """The model relays the note to the user, who cannot open the project's PRD."""
+        from solar_challenge.web.assistant import suggest_config
+
+        note = suggest_config(3100.0, "self_sufficiency")["note"]
+        assert "PRD" not in note, f"note cites the internal PRD: {note!r}"
+
     def test_accepts_self_sufficiency_goal(self) -> None:
         """suggest_config with goal='self_sufficiency' must not raise."""
         from solar_challenge.web.assistant import suggest_config
