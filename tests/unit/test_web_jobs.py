@@ -56,6 +56,11 @@ class _RecordingSimulation:
         return _an_hour_at(config.pv_config.capacity_kw)
 
 
+def _a_failing_simulation(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+    """Stands in for simulate_home: every job it runs fails."""
+    raise RuntimeError("the simulation failed")
+
+
 class _BlockingSimulation:
     """Stands in for simulate_home: every job waits inside the simulation until release(), then gets an hour at its home's PV size.
 
@@ -613,26 +618,33 @@ def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
         time.sleep(0.01)
 
 
-def _submit_home_job(manager: JobManager, tmp_path: Path) -> None:
+def _status_of(manager: JobManager, job_id: str) -> str | None:
+    job = manager.get_job_status(job_id)
+    return None if job is None else str(job["status"])
+
+
+def _submit_home_job(manager: JobManager, tmp_path: Path) -> str:
     storage = _run_storage(tmp_path)
-    manager.submit_home_job(
+    job_id, _ = manager.submit_home_job(
         config=_A_HOME,
         start_date=_JUNE_1,
         end_date=_JUNE_2,
         db_path=str(storage.db_path),
         data_dir=str(storage.data_dir),
     )
+    return job_id
 
 
-def _submit_fleet_job(manager: JobManager, tmp_path: Path) -> None:
+def _submit_fleet_job(manager: JobManager, tmp_path: Path) -> str:
     storage = _run_storage(tmp_path)
-    manager.submit_fleet_job(
+    job_id, _ = manager.submit_fleet_job(
         configs=[_A_HOME],
         start_date=_JUNE_1,
         end_date=_JUNE_2,
         db_path=str(storage.db_path),
         data_dir=str(storage.data_dir),
     )
+    return job_id
 
 
 class TestJobManagerSimulation:
@@ -694,7 +706,7 @@ class TestJobManagerShutdown:
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_refused_job_leaves_no_run_in_the_history(
-        self, submit_job: Callable[[JobManager, Path], None], tmp_path: Path
+        self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
     ) -> None:
         manager = JobManager(max_workers=1)
         manager.shutdown()
@@ -727,6 +739,66 @@ class TestJobManagerShutdown:
         # Suppress "local variable 'jm' assigned but never used" lint; the
         # strong reference is the point — it keeps jm alive through both calls.
         del jm
+
+
+class TestJobManagerWaitUntilIdle:
+    """Tests for JobManager.wait_until_idle, which blocks until no job is queued or running."""
+
+    def test_a_manager_never_given_a_job_is_idle(self) -> None:
+        assert JobManager(max_workers=1).wait_until_idle(timeout=0) is True
+
+    def test_waiting_returns_false_when_the_timeout_passes_while_a_job_runs(
+        self, blocking_simulation: _BlockingSimulation, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+
+        assert manager.wait_until_idle(timeout=0.05) is False
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_waiting_returns_true_once_every_submitted_job_has_finished(
+        self,
+        submit_job: Callable[[JobManager, Path], str],
+        blocking_simulation: _BlockingSimulation,
+        tmp_path: Path,
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_ids = [submit_job(manager, tmp_path), submit_job(manager, tmp_path)]
+        blocking_simulation.wait_until_started()
+
+        blocking_simulation.release()
+
+        assert manager.wait_until_idle(timeout=30) is True
+        assert [_status_of(manager, job_id) for job_id in job_ids] == ["completed", "completed"]
+
+    def test_a_failed_job_counts_as_finished(self, tmp_path: Path) -> None:
+        manager = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
+        job_id = _submit_home_job(manager, tmp_path)
+
+        assert manager.wait_until_idle(timeout=30) is True
+        assert _status_of(manager, job_id) == "failed"
+
+    def test_a_job_dropped_by_shutdown_does_not_keep_the_manager_busy(
+        self, blocking_simulation: _BlockingSimulation, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        _submit_home_job(manager, tmp_path)
+        _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+
+        manager.shutdown()
+        blocking_simulation.release()
+
+        assert manager.wait_until_idle(timeout=30) is True
+
+    def test_a_job_the_manager_refused_does_not_keep_it_busy(self, tmp_path: Path) -> None:
+        manager = JobManager(max_workers=1)
+        manager.shutdown()
+        with pytest.raises(RuntimeError, match="after shutdown"):
+            _submit_home_job(manager, tmp_path)
+
+        assert manager.wait_until_idle(timeout=0) is True
 
 
 class TestLiveManagers:
