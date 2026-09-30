@@ -321,11 +321,21 @@ def _inverters_with_wiring(
 
 
 def _ranking_key(
-    target_w: float, inverter: _CecInverter, wiring: _Wiring
-) -> tuple[float, int, str]:
-    """Nearest rating first, then the simplest wiring, then the name so the catalogue's column order never decides."""
+    target_w: float, module_vmp_v: float, inverter: _CecInverter, wiring: _Wiring
+) -> tuple[float, int, float, str]:
+    """Nearest rating, then the simplest wiring, then the nominal voltage nearest the strings', then the name.
+
+    The name comes last so the catalogue's column order never decides a tie.
+    """
     string_count = sum(group.strings for group in wiring)
-    return (abs(inverter.paco_w - target_w), string_count, inverter.name)
+    module_count = sum(group.modules_per_string * group.strings for group in wiring)
+    mean_string_vmp_v = module_count / string_count * module_vmp_v
+    return (
+        abs(inverter.paco_w - target_w),
+        string_count,
+        abs(inverter.vdco_v - mean_string_vmp_v),
+        inverter.name,
+    )
 
 
 def _voltage_matched_cec_inverter(
@@ -339,7 +349,9 @@ def _voltage_matched_cec_inverter(
             f"No CEC inverter's MPPT window admits a series string of {module_count} "
             f"modules at V_mp_ref={module_vmp_v} V"
         )
-    best, wiring = min(candidates, key=lambda pair: _ranking_key(target_w, *pair))
+    best, wiring = min(
+        candidates, key=lambda pair: _ranking_key(target_w, module_vmp_v, *pair)
+    )
     return dict(_sam_library("CECInverter")[best.name]), wiring
 
 
