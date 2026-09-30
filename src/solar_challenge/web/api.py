@@ -416,13 +416,13 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
         form_to_fleet_distribution_config,
     )
     from solar_challenge.config import (  # noqa: PLC0415
-        _parse_fleet_distribution_config,
+        parse_fleet_distribution_config,
         generate_homes_from_distribution,
     )
 
     try:
         cfg_dict = form_to_fleet_distribution_config(data)
-        fleet_cfg = _parse_fleet_distribution_config(cfg_dict)
+        fleet_cfg = parse_fleet_distribution_config(cfg_dict)
         loc = resolve_location(data.get("location", "bristol"))
         configs = generate_homes_from_distribution(fleet_cfg, loc)
         # Apply fleet-wide overlay (tariff / dispatch / SEG) — mirrors single-home contract.

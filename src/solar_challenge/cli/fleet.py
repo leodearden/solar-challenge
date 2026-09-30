@@ -30,8 +30,9 @@ from solar_challenge.config import (
     load_community_config,
     load_config,
     load_fleet_config,
+    parse_fleet_distribution_config,
+    parse_location_block,
     substitute_config_variables,
-    _parse_fleet_distribution_config,
 )
 from solar_challenge.fleet import (
     FleetConfig,
@@ -369,8 +370,7 @@ def sweep(
     # Get location
     location_data = raw_config.get("location")
     if location_data:
-        from solar_challenge.config import _parse_location
-        location = _parse_location(location_data)
+        location = parse_location_block(location_data)
     else:
         location = Location.bristol()
 
@@ -407,7 +407,7 @@ def sweep(
                 raise ConfigurationError(
                     "Sweep requires fleet_distribution config"
                 )
-            dist_config = _parse_fleet_distribution_config(
+            dist_config = parse_fleet_distribution_config(
                 substituted["fleet_distribution"]
             )
             homes = generate_homes_from_distribution(dist_config, location)
@@ -420,7 +420,7 @@ def sweep(
             raise ConfigurationError(
                 "Sweep requires fleet_distribution config"
             )
-        dist_config = _parse_fleet_distribution_config(
+        dist_config = parse_fleet_distribution_config(
             raw_config["fleet_distribution"]
         )
         sweep_spec = detect_sweep_spec(dist_config)  # type: ignore[assignment]

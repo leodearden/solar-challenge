@@ -600,8 +600,8 @@ class SweepResult:
     results: Union[SimulationResults, FleetResults]
 
 
-def _parse_location(data: dict[str, Any]) -> Location:
-    """Parse location from config data."""
+def parse_location_block(data: dict[str, Any]) -> Location:
+    """Parse a ``location:`` block into a Location."""
     return Location(
         latitude=data.get("latitude", 51.45),
         longitude=data.get("longitude", -2.58),
@@ -1193,7 +1193,7 @@ def _parse_ev_distribution_config(
     )
 
 
-def _parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionConfig:
+def parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionConfig:
     """Parse fleet distribution configuration from config data."""
     if "n_homes" not in data:
         raise ConfigurationError("Fleet distribution config requires 'n_homes'")
@@ -1708,7 +1708,7 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         raise ConfigurationError(f"Scenario '{data['name']}' must have a 'period' field")
 
     location_data = data.get("location")
-    location = _parse_location(location_data) if location_data else Location.bristol()
+    location = parse_location_block(location_data) if location_data else Location.bristol()
 
     homes: list[HomeConfig] = []
     home: Optional[HomeConfig] = None
@@ -1996,7 +1996,7 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
     # Check for home section or parse entire config as home
     home_data = config.get("home", config)
     location_data = config.get("location")
-    location = _parse_location(location_data) if location_data else Location.bristol()
+    location = parse_location_block(location_data) if location_data else Location.bristol()
 
     return _parse_home_config(home_data, location)
 
@@ -2020,11 +2020,11 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     config = load_config(path)
 
     location_data = config.get("location")
-    location = _parse_location(location_data) if location_data else Location.bristol()
+    location = parse_location_block(location_data) if location_data else Location.bristol()
 
     # Check for fleet_distribution (new format)
     if "fleet_distribution" in config:
-        dist_config = _parse_fleet_distribution_config(config["fleet_distribution"])
+        dist_config = parse_fleet_distribution_config(config["fleet_distribution"])
         # Thread scenario-level tariff and fleet battery grid_charging (Seam 1, §9.1).
         # parse_tariff_config returns None when the key is absent → calibration-safe.
         fleet_tariff = parse_tariff_config(config.get("tariff"))
