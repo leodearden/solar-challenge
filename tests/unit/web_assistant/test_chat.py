@@ -18,7 +18,9 @@ from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
     make_end_turn_stream,
+    make_tool_use_stream_from_blocks,
     seed_run,
+    tool_use_block,
 )
 
 
@@ -313,6 +315,49 @@ class TestChatEndpointHappyPath:
         assert messages[1]["content"] == "mock reply"
         assert messages[1]["metadata"]["cache_creation_input_tokens"] == 0
         assert messages[1]["metadata"]["cache_read_input_tokens"] == 0
+
+    def test_tool_use_turn_sums_cache_tokens_over_its_calls_counting_none_as_0(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A tool-use turn's metadata sums each cache-token count over the turn's API
+        calls, a call that reports None adding 0, and records the model it called."""
+        explain = {"metric": "self_sufficiency"}
+        anthropic_api.set_streams(
+            [
+                make_tool_use_stream_from_blocks(
+                    [tool_use_block("toolu_usage_1", "explain_metric", explain)],
+                    cache_creation_input_tokens=40,
+                    cache_read_input_tokens=3,
+                ),
+                make_tool_use_stream_from_blocks(
+                    [tool_use_block("toolu_usage_2", "explain_metric", explain)],
+                    cache_creation_input_tokens=None,
+                    cache_read_input_tokens=None,
+                ),
+                make_end_turn_stream(
+                    ["mock reply"],
+                    cache_creation_input_tokens=2,
+                    cache_read_input_tokens=50,
+                ),
+            ]
+        )
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "none-usage-tool-use-sid"
+
+        resp = client.post("/assistant/chat", json={"message": "explain self-sufficiency"})
+        events = parse_sse_events(resp.get_data(as_text=True))
+
+        event_types = [e.event for e in events]
+        assert "error" not in event_types, f"Unexpected error frame: {events}"
+        assert event_types[-1] == "done"
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert [m["role"] for m in messages] == ["user", "assistant"]
+        metadata = messages[1]["metadata"]
+        assert metadata["cache_creation_input_tokens"] == 40 + 2
+        assert metadata["cache_read_input_tokens"] == 3 + 50
+        assert metadata["model"] == anthropic_api.last_kwargs["model"]
 
 
 class TestChatDegradation:
