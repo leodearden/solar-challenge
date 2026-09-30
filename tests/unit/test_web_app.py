@@ -115,7 +115,7 @@ def test_the_session_cookie_is_not_marked_secure(
 ) -> None:
     """The session cookie is not Secure, in debug mode or out of it: `solar-challenge web start` serves plain HTTP, also to the LAN with --host 0.0.0.0, and browsers withhold a Secure cookie from a non-localhost plain-HTTP origin, so the assistant would lose its chat session on every request."""
     monkeypatch.setenv("FLASK_DEBUG", flask_debug)
-    app = _build_app(tmp_path)
+    app = build_test_app(tmp_path)
     client = app.test_client()
 
     assert client.get("/assistant/history").status_code == 200
