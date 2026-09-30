@@ -223,22 +223,6 @@ def flat_tariff_no_gc_home_config() -> HomeConfig:
     )
 
 
-@pytest.fixture
-def night_weather_for_gc() -> pd.DataFrame:
-    """Purely nocturnal weather (zero irradiance) to isolate grid-charge cost from PV."""
-    index = pd.date_range("2024-06-21 00:00", periods=24, freq="1h", tz="Europe/London")
-    return pd.DataFrame(
-        {
-            "ghi": [0.0] * 24,
-            "dni": [0.0] * 24,
-            "dhi": [0.0] * 24,
-            "temp_air": [12.0] * 24,
-            "wind_speed": [2.0] * 24,
-        },
-        index=index,
-    )
-
-
 class TestSimulationResultsGridChargeCost:
     """RED tests for the new SimulationResults.grid_charge_cost field (CR2 step-3a)."""
 
@@ -325,7 +309,7 @@ class TestSimulateHomeGridChargeCost:
     def test_tou_grid_charging_home_produces_nonzero_cost(
         self,
         tou_grid_charge_home_config: HomeConfig,
-        night_weather_for_gc: pd.DataFrame,
+        night_weather_data: pd.DataFrame,
     ) -> None:
         """(c) TOU tariff + grid_charging battery → total_grid_charge_cost_gbp > 0."""
         results = simulate_home(
@@ -333,7 +317,7 @@ class TestSimulateHomeGridChargeCost:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_for_gc,
+            weather_data=night_weather_data,
         )
         assert results.grid_charge_cost is not None, (
             "grid_charge_cost should be a Series when tariff_config is set"
@@ -346,7 +330,7 @@ class TestSimulateHomeGridChargeCost:
     def test_tou_grid_charging_cost_priced_at_offpeak_rate(
         self,
         tou_grid_charge_home_config: HomeConfig,
-        night_weather_for_gc: pd.DataFrame,
+        night_weather_data: pd.DataFrame,
         economy7_tariff_config: TariffConfig,
     ) -> None:
         """(c-ii) grid_charge_cost only occurs at off-peak rate timesteps.
@@ -360,7 +344,7 @@ class TestSimulateHomeGridChargeCost:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_for_gc,
+            weather_data=night_weather_data,
         )
         assert results.grid_charge_cost is not None
 
@@ -394,7 +378,7 @@ class TestSimulateHomeGridChargeCost:
     def test_grid_charge_cost_numerical_pricing_formula(
         self,
         tou_grid_charge_home_config: HomeConfig,
-        night_weather_for_gc: pd.DataFrame,
+        night_weather_data: pd.DataFrame,
     ) -> None:
         """Per-timestep grid_charge_cost == battery_charge_kWh × rate in a zero-PV scenario.
 
@@ -415,7 +399,7 @@ class TestSimulateHomeGridChargeCost:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_for_gc,
+            weather_data=night_weather_data,
         )
         assert results.grid_charge_cost is not None
 
@@ -436,7 +420,7 @@ class TestSimulateHomeGridChargeCost:
     def test_flat_no_grid_charging_produces_zero_cost(
         self,
         flat_tariff_no_gc_home_config: HomeConfig,
-        night_weather_for_gc: pd.DataFrame,
+        night_weather_data: pd.DataFrame,
     ) -> None:
         """(d) Flat-rate tariff, no grid_charging → total_grid_charge_cost_gbp == 0.0 (H5)."""
         results = simulate_home(
@@ -444,7 +428,7 @@ class TestSimulateHomeGridChargeCost:
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             validate_balance=True,
-            weather_data=night_weather_for_gc,
+            weather_data=night_weather_data,
         )
         summary = calculate_summary(results)
         assert summary.total_grid_charge_cost_gbp == pytest.approx(0.0), (
