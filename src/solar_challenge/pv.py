@@ -2,7 +2,9 @@
 """PV system configuration and modelling."""
 
 import functools
+import math
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -233,43 +235,175 @@ def create_simple_inverter_params(
     }
 
 
-def _get_cec_inverter(capacity_kw: float) -> dict[str, float]:
-    """Get a CEC inverter sized for the given system capacity.
+@dataclass(frozen=True)
+class _StringGroup:
+    """Equal series strings that share one MPPT input."""
 
-    Args:
-        capacity_kw: Target AC capacity in kW
+    modules_per_string: int
+    strings: int
 
-    Returns:
-        Inverter parameters from CEC database
+
+_Wiring = tuple[_StringGroup, ...]
+
+
+@dataclass(frozen=True)
+class _CecInverter:
+    """The catalogue numbers that decide whether a CEC inverter suits an array."""
+
+    name: str
+    paco_w: float
+    vdco_v: float
+    mppt_low_v: float
+    mppt_high_v: float
+
+    def admits(self, string_voltage_v: float) -> bool:
+        return self.mppt_low_v <= string_voltage_v <= self.mppt_high_v
+
+
+@functools.cache
+def _cec_inverters() -> tuple[_CecInverter, ...]:
+    """CEC inverters with a positive finite rating, start-up power, nominal voltage and MPPT window.
+
+    Read once per process. A positive start-up power (Pso) keeps pvlib's
+    multi-input Sandia model finite where the DC power is zero.
     """
-    inverter_params = _sam_library("CECInverter")
-    target_watts = capacity_kw * 1000
+    catalogue = _shared_sam_library("CECInverter")
+    numbers = catalogue.loc[["Paco", "Pso", "Vdco", "Mppt_low", "Mppt_high"]].T.apply(
+        pd.to_numeric, errors="coerce"
+    )
+    usable = numbers[((numbers > 0) & (numbers < float("inf"))).all(axis=1)]
+    return tuple(
+        _CecInverter(name, paco_w, vdco_v, mppt_low_v, mppt_high_v)
+        for name, paco_w, vdco_v, mppt_low_v, mppt_high_v in zip(
+            usable.index,
+            usable["Paco"],
+            usable["Vdco"],
+            usable["Mppt_low"],
+            usable["Mppt_high"],
+        )
+    )
 
-    # Find inverter closest to target capacity
-    best_match = None
-    best_diff = float("inf")
 
-    for col in inverter_params.columns:
-        params = inverter_params[col]
-        paco = params.get("Paco", 0)  # AC power output rating
-        if paco > 0:
-            diff = abs(paco - target_watts)
-            if diff < best_diff:
-                best_diff = diff
-                best_match = col
+def _wiring_within_window(
+    module_count: int, module_vmp_v: float, inverter: _CecInverter
+) -> Optional[_Wiring]:
+    """The fewest near-equal series strings that keep every string inside the inverter's MPPT window.
 
-    if best_match:
-        return dict(inverter_params[best_match])
+    Fewer strings are longer strings, so if the shortest of these misses the
+    window's floor, every other near-equal split does too.
+    """
+    longest = math.floor(inverter.mppt_high_v / module_vmp_v)
+    if longest < 1:
+        return None
+    string_count = math.ceil(module_count / longest)
+    shorter, longer_count = divmod(module_count, string_count)
+    wiring = tuple(
+        group
+        for group in (
+            _StringGroup(shorter + 1, longer_count),
+            _StringGroup(shorter, string_count - longer_count),
+        )
+        if group.strings > 0
+    )
+    if all(inverter.admits(group.modules_per_string * module_vmp_v) for group in wiring):
+        return wiring
+    return None
 
-    # Fallback: return first inverter
-    return dict(inverter_params.iloc[:, 0])
+
+def _inverters_with_wiring(
+    module_count: int, module_vmp_v: float
+) -> Iterator[tuple[_CecInverter, _Wiring]]:
+    """Each CEC inverter whose MPPT window takes the strings, with that wiring."""
+    for inverter in _cec_inverters():
+        wiring = _wiring_within_window(module_count, module_vmp_v, inverter)
+        if wiring is not None:
+            yield inverter, wiring
+
+
+def _ranking_key(
+    target_w: float, inverter: _CecInverter, wiring: _Wiring
+) -> tuple[float, int, str]:
+    """Nearest rating first, then the simplest wiring, then the name so the catalogue's column order never decides."""
+    string_count = sum(group.strings for group in wiring)
+    return (abs(inverter.paco_w - target_w), string_count, inverter.name)
+
+
+def _voltage_matched_cec_inverter(
+    ac_capacity_kw: float, module_count: int, module_vmp_v: float
+) -> tuple[dict[str, float], _Wiring]:
+    """The CEC inverter rated nearest the AC capacity whose MPPT window takes the strings, and that wiring."""
+    target_w = ac_capacity_kw * 1000
+    candidates = list(_inverters_with_wiring(module_count, module_vmp_v))
+    if not candidates:
+        raise ValueError(
+            f"No CEC inverter's MPPT window admits a series string of {module_count} "
+            f"modules at V_mp_ref={module_vmp_v} V"
+        )
+    best, wiring = min(candidates, key=lambda pair: _ranking_key(target_w, *pair))
+    return dict(_sam_library("CECInverter")[best.name]), wiring
+
+
+def _module_parameters(config: PVConfig) -> dict[str, float]:
+    """The custom module parameters, or the CEC module with the configured temperature coefficient."""
+    if config.custom_module_params is not None:
+        return config.custom_module_params
+    module_params = _get_cec_module()
+    if config.temperature_coefficient != -0.004:
+        module_params["gamma_pdc"] = config.temperature_coefficient
+    return module_params
+
+
+def _inverter_and_wiring(
+    config: PVConfig, module_params: dict[str, float], module_count: int
+) -> tuple[dict[str, float], _Wiring]:
+    """The inverter parameters and how to wire the modules to them.
+
+    Custom inverter parameters take one string of every module. A CEC inverter
+    is voltage-matched to the module, so the module must have a V_mp_ref.
+    """
+    if config.custom_inverter_params is not None:
+        return config.custom_inverter_params, (_StringGroup(module_count, 1),)
+    if "V_mp_ref" not in module_params:
+        raise ValueError(
+            "Module parameters have no V_mp_ref, so no CEC inverter can be "
+            "voltage-matched to the strings; supply PVConfig.custom_inverter_params"
+        )
+    inverter_params, wiring = _voltage_matched_cec_inverter(
+        config.effective_inverter_capacity_kw, module_count, module_params["V_mp_ref"]
+    )
+    if config.inverter_efficiency != 0.96:
+        inverter_params["Pdco"] = inverter_params["Paco"] / config.inverter_efficiency
+    return inverter_params, wiring
+
+
+def _arrays(
+    config: PVConfig, module_params: dict[str, float], wiring: _Wiring
+) -> list[Array]:
+    """One array, so one MPPT input, for each group of strings."""
+    mount = FixedMount(surface_tilt=config.tilt, surface_azimuth=config.azimuth)
+    temperature_model = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"][
+        "open_rack_glass_glass"
+    ]
+    return [
+        Array(
+            mount=mount,
+            module_parameters=module_params,
+            modules_per_string=group.modules_per_string,
+            strings=group.strings,
+            temperature_model_parameters=temperature_model,
+        )
+        for group in wiring
+    ]
 
 
 def create_pv_system(config: PVConfig) -> PVSystem:
     """Create a pvlib PVSystem from configuration.
 
-    Creates a PVSystem with an Array configured using CEC module and inverter
-    databases for realistic modelling parameters, or custom parameters if provided.
+    Creates a PVSystem using CEC module and inverter databases for realistic
+    modelling parameters, or custom parameters if provided. The CEC inverter is
+    the one rated nearest the AC capacity whose MPPT window takes the strings.
+    The modules are wired as the fewest near-equal series strings that fit that
+    window: up to two groups of equal strings, one Array (one MPPT input) each.
 
     Args:
         config: PV system configuration with capacity, azimuth, tilt, and
@@ -278,65 +412,24 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     Returns:
         pvlib PVSystem ready for use in ModelChain simulation
 
+    Raises:
+        ValueError: If the module parameters have no V_mp_ref and no custom
+            inverter parameters are given, or if no CEC inverter's MPPT window
+            admits a string of the module's voltage.
+
     Example:
         >>> config = PVConfig(capacity_kw=4.0, azimuth=180, tilt=35)
         >>> system = create_pv_system(config)
         >>> system.arrays[0].mount.surface_tilt
         35.0
     """
-    # Get module parameters (custom or CEC database)
-    if config.custom_module_params is not None:
-        module_params = config.custom_module_params
-    else:
-        # Get CEC module and optionally modify with config's efficiency/temp coeff
-        module_params = _get_cec_module()
-        # Update temperature coefficient if different from typical CEC value
-        if config.temperature_coefficient != -0.004:
-            module_params["gamma_pdc"] = config.temperature_coefficient
-
-    # Get inverter parameters (custom or CEC database)
-    inverter_capacity_kw = config.effective_inverter_capacity_kw
-    if config.custom_inverter_params is not None:
-        inverter_params = config.custom_inverter_params
-    else:
-        # Get CEC inverter sized for configured capacity
-        inverter_params = _get_cec_inverter(inverter_capacity_kw)
-        # Apply efficiency scaling if different from typical
-        if config.inverter_efficiency != 0.96:
-            # Scale Paco based on efficiency difference
-            if "Paco" in inverter_params:
-                # Adjust Pdco to achieve target efficiency
-                inverter_params["Pdco"] = inverter_params["Paco"] / config.inverter_efficiency
-
-    # Calculate number of modules needed for target capacity
-    module_power = module_params.get("STC", 400)  # Watts at STC
-    target_power = config.capacity_kw * 1000  # Convert to watts
-    modules_per_string = max(1, round(target_power / module_power))
-
-    # Create mount with configuration's orientation
-    mount = FixedMount(
-        surface_tilt=config.tilt,
-        surface_azimuth=config.azimuth
-    )
-
-    # Create array with module parameters
-    array = Array(
-        mount=mount,
-        module_parameters=module_params,
-        modules_per_string=modules_per_string,
-        strings=1,
-        temperature_model_parameters=pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS[
-            "sapm"
-        ]["open_rack_glass_glass"],
-    )
-
-    # Create PVSystem with array and inverter
-    system = PVSystem(
-        arrays=[array],
+    module_params = _module_parameters(config)
+    module_count = max(1, round(config.capacity_kw * 1000 / module_params.get("STC", 400)))
+    inverter_params, wiring = _inverter_and_wiring(config, module_params, module_count)
+    return PVSystem(
+        arrays=_arrays(config, module_params, wiring),
         inverter_parameters=inverter_params,
     )
-
-    return system
 
 
 def create_model_chain(
