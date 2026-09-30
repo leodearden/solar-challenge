@@ -7,6 +7,7 @@ battery and its dispatch strategies, the heat pump, the import tariff and
 SEG export pricing.
 """
 
+import re
 from dataclasses import dataclass
 
 import pytest
@@ -24,23 +25,18 @@ pytestmark = pytest.mark.e2e
 def test_form_loads_with_defaults(page: Page, live_server: str) -> None:
     """PV capacity defaults to 4 (or 4.0) and consumption to 3500."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     # PV input is on the default PV tab, so it is visible
     pv_input = page.locator("#pv_kw")
     expect(pv_input).to_be_visible()
-    pv_value = pv_input.input_value()
-    assert pv_value in ("4", "4.0"), f"Expected PV default '4' or '4.0', got '{pv_value}'"
+    expect(pv_input).to_have_value(re.compile(r"^4(\.0)?$"))
 
     # Consumption input is on the Load tab -- navigate there first
     open_tab(page, "Load")
 
     consumption_input = page.locator("#consumption_kwh")
     expect(consumption_input).to_be_visible()
-    consumption_value = consumption_input.input_value()
-    assert consumption_value == "3500", (
-        f"Expected consumption default '3500', got '{consumption_value}'"
-    )
+    expect(consumption_input).to_have_value("3500")
 
 
 # ── Preset selector ──────────────────────────────────────────────────
@@ -49,7 +45,6 @@ def test_form_loads_with_defaults(page: Page, live_server: str) -> None:
 def test_preset_selector_loads(page: Page, live_server: str) -> None:
     """The preset <select> dropdown exists and has at least the default option."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     preset_select = page.locator("#preset_select")
     expect(preset_select).to_be_visible()
@@ -194,7 +189,6 @@ def test_seg_custom_rate_form_submission_is_accepted(
 def test_tab_navigation(page: Page, live_server: str) -> None:
     """Clicking each tab (PV, Battery, Load, Location, Period) activates it."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     tab_labels = ["PV", "Battery", "Load", "Location", "Period"]
 
@@ -211,17 +205,11 @@ def test_tab_navigation(page: Page, live_server: str) -> None:
 def test_submit_button_exists(page: Page, live_server: str) -> None:
     """The 'Run Simulation' submit button exists and is not disabled by default."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     submit_btn = page.locator("button[type='submit']")
     expect(submit_btn).to_be_visible()
     expect(submit_btn).to_be_enabled()
-
-    # Verify button text
-    btn_text = submit_btn.text_content() or ""
-    assert "Run Simulation" in btn_text, (
-        f"Expected button text to contain 'Run Simulation', got '{btn_text}'"
-    )
+    expect(submit_btn).to_contain_text("Run Simulation")
 
 
 # ── Form validation (PV range) ──────────────────────────────────────
@@ -230,7 +218,6 @@ def test_submit_button_exists(page: Page, live_server: str) -> None:
 def test_form_validation_pv_range(page: Page, live_server: str) -> None:
     """The PV capacity input enforces min/max constraints via HTML attributes."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     pv_input = page.locator("#pv_kw")
     expect(pv_input).to_be_visible()
