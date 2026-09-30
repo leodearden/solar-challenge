@@ -403,13 +403,14 @@ def _make_interior_fleet_cr6(
       debt = 66250 × 0.25 = £16,562.50; single-year debt_svc ≈ £1,820/yr
       (the loan runs 15 years)
       opex = 5 × £131 = £655/yr
-      project_economics averages surplus over the 25-year asset life, so the
-      effective annual cost is opex + debt_svc × 15/25
-      ≈ 655 + 1,820 × 15/25 ≈ £1,747/yr (not the single-year £2,475; see
-      docs/cost-recovery-finance-model.md §7.4)
+      project_economics (solar_challenge.finance) charges debt service only in
+      the 15 loan years but averages surplus over the 25-year asset life
+      (ProjectEconomics.per_year_surplus_gbp, mean_fleet_surplus_per_year_gbp),
+      so the effective annual cost is opex + debt_svc × 15/25
+      ≈ 655 + 1,820 × 15/25 ≈ £1,747/yr
       required_revenue = 1747 + 50×5 ≈ £1,997/yr
-      r* = (1997 − 0) / (10000/100) ≈ 19.96p (measured 19.96p)
-      retail=30p → interior: 0 < 19.96 < 30 ✓
+      r* = (1997 − 0) / (10000/100) ≈ 20p
+      retail=30p → interior: 0 < r* ≈ 20p < 30p ✓
 
     No-flex: no grid charging, export_revenue=0.
     """
@@ -440,7 +441,7 @@ def _make_finance_interior_cr6(
       over 15 years) ≈ 655 + 1820 × 15/25 ≈ £1,747/yr
       At r=0: surplus ≈ −1747/5 ≈ −349/home << floor=50
       At r=retail=30p: surplus ≈ (30×10000/100−1747)/5 ≈ 251/home >> floor=50
-    ∴ interior ✓ (measured r* = 19.96p)
+    ∴ interior ✓ (r* derived in _make_interior_fleet_cr6)
     """
     return _make_finance_cr6(
         retained_cash_floor=retained_cash_floor,
