@@ -22,6 +22,7 @@ from tests._css_classes import (
 )
 
 WEB_DIR = Path(solar_challenge.web.__file__).parent
+BASE_TEMPLATE = WEB_DIR / "templates" / "base.html"
 
 
 def _read(path: Path) -> str:
@@ -34,7 +35,7 @@ def _relative(path: Path) -> str:
 
 def _served_classes() -> set[str]:
     """Classes named by the stylesheets base.html links; every page template extends base.html."""
-    stylesheets = linked_stylesheets(_read(WEB_DIR / "templates" / "base.html"))
+    stylesheets = linked_stylesheets(_read(BASE_TEMPLATE))
     return {
         name
         for stylesheet in stylesheets
@@ -56,7 +57,10 @@ def test_every_class_the_dashboard_applies_is_named_by_a_served_stylesheet() -> 
     applied = _applied_classes_by_source()
     served = _served_classes()
 
-    assert applied, f"found no dashboard templates or scripts under {WEB_DIR}"
+    assert applied.get(_relative(BASE_TEMPLATE)), (
+        f"read no classes from {_relative(BASE_TEMPLATE)}, the layout every page extends, among "
+        f"{len(applied)} templates and scripts under {WEB_DIR}, so this guard would pass vacuously"
+    )
     unstyled = {
         source: sorted(classes - served) for source, classes in applied.items() if classes - served
     }
