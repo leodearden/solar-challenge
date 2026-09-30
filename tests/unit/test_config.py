@@ -1,7 +1,6 @@
 """Tests for configuration file support."""
 
 import json
-import random
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -32,7 +31,6 @@ from solar_challenge.config import (
     _parse_community_config,
     _modify_pv_config,
     load_community_config,
-    _sample_from_distribution,
     generate_homes_from_distribution,
     load_config,
     load_config_json,
@@ -1453,61 +1451,48 @@ class TestDistributionParsing:
 
 
 class TestDistributionSampling:
-    """Tests for _sample_from_distribution function."""
+    """How generate_homes_from_distribution samples each home's value from a spec."""
 
     def test_sample_none_returns_none(self) -> None:
-        """Test sampling None returns None."""
-        rng = random.Random(42)
-        assert _sample_from_distribution(None, rng) is None
-
-    def test_sample_scalar_returns_float(self) -> None:
-        """Test sampling scalar returns float."""
-        rng = random.Random(42)
-        assert _sample_from_distribution(4.0, rng) == 4.0
-        assert _sample_from_distribution(5, rng) == 5.0
-
-    def test_sample_weighted_discrete(self) -> None:
-        """Test sampling from weighted discrete distribution."""
-        rng = random.Random(42)
-        dist = WeightedDiscreteDistribution(
-            values=(3.0, 4.0, 5.0),
-            weights=(1.0, 1.0, 1.0),
+        """A None spec samples no value, so every home's annual consumption stays unset."""
+        config = FleetDistributionConfig(
+            n_homes=5,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(annual_consumption_kwh=None),
+            seed=42,
         )
-        samples = [_sample_from_distribution(dist, rng) for _ in range(100)]
-        assert all(s in (3.0, 4.0, 5.0) for s in samples)
-
-    def test_sample_weighted_discrete_can_return_none(self) -> None:
-        """Test weighted discrete can return None."""
-        rng = random.Random(42)
-        dist = WeightedDiscreteDistribution(
-            values=(None, 5.0),
-            weights=(50.0, 50.0),
-        )
-        samples = [_sample_from_distribution(dist, rng) for _ in range(100)]
-        assert None in samples
-        assert 5.0 in samples
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        assert len(homes) == 5
+        for home in homes:
+            assert home.load_config.annual_consumption_kwh is None
 
     def test_sample_normal(self) -> None:
         """Test sampling from normal distribution."""
-        rng = random.Random(42)
-        dist = NormalDistribution(mean=100.0, std=10.0)
-        samples = [_sample_from_distribution(dist, rng) for _ in range(1000)]
-        mean = sum(s for s in samples if s is not None) / len(samples)
+        config = FleetDistributionConfig(
+            n_homes=1000,
+            pv=PVDistributionConfig(
+                capacity_kw=4.0, azimuth=NormalDistribution(mean=100.0, std=10.0)
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        mean = sum(home.pv_config.azimuth for home in homes) / len(homes)
         assert 95.0 <= mean <= 105.0  # Should be close to 100
 
     def test_sample_normal_respects_bounds(self) -> None:
         """Test normal distribution respects min/max bounds."""
-        rng = random.Random(42)
-        dist = NormalDistribution(mean=100.0, std=50.0, min=80.0, max=120.0)
-        samples = [_sample_from_distribution(dist, rng) for _ in range(100)]
-        assert all(s is not None and 80.0 <= s <= 120.0 for s in samples)
-
-    def test_sample_uniform(self) -> None:
-        """Test sampling from uniform distribution."""
-        rng = random.Random(42)
-        dist = UniformDistribution(min=0.0, max=10.0)
-        samples = [_sample_from_distribution(dist, rng) for _ in range(100)]
-        assert all(s is not None and 0.0 <= s <= 10.0 for s in samples)
+        config = FleetDistributionConfig(
+            n_homes=100,
+            pv=PVDistributionConfig(
+                capacity_kw=4.0,
+                azimuth=NormalDistribution(mean=100.0, std=50.0, min=80.0, max=120.0),
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        assert all(80.0 <= home.pv_config.azimuth <= 120.0 for home in homes)
 
 
 class TestFleetDistributionConfig:
