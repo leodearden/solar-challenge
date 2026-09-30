@@ -53,7 +53,10 @@ _STRING_LITERAL = re.compile(r"""'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|`((?:[^
 _CLASS_NAME_ASSIGNMENT = re.compile(r"\.className\s*\+?=(?!=)\s*([^;]*);")
 _CLASS_LIST_MUTATION = re.compile(r"\.classList\.(?:add|remove|toggle|replace)\(([^)]*)\)")
 
-_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_CSS_COMMENT_STRING_OR_URL = re.compile(
+    r"""(?P<escape>\\.)|/\*.*?\*/|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?i:url)\((?:[^"'()\\]|\\.)*\)""",
+    re.DOTALL,
+)
 _INNERMOST_BLOCK = re.compile(r"\{[^{}]*\}")
 _CSS_ESCAPE = r"\\([0-9a-fA-F]{1,6})\s?|\\([^0-9a-fA-F\n])"
 _ESCAPED_CODE_POINT = re.compile(_CSS_ESCAPE)
@@ -89,12 +92,13 @@ def applied_classes_in_script(source: str) -> set[str]:
 def selector_classes(stylesheet: str) -> set[str]:
     """Classes the selectors of *stylesheet* name, with CSS escapes decoded.
 
-    Comments and declaration blocks are dropped first, so dotted text in them
-    (a URL, a file name) is never read as a class; neither is a number such as
-    ``.5rem`` in an at-rule prelude, because an identifier cannot start with a digit.
+    Comments, strings, url()s and declaration blocks are dropped first, so dotted text
+    in them (a URL, a file name, an attribute value) is never read as a class; neither
+    is a number such as ``.5rem`` in an at-rule prelude, because an identifier cannot
+    start with a digit.
     """
-    uncommented = _CSS_COMMENT.sub(" ", stylesheet)
-    selectors_and_preludes = _INNERMOST_BLOCK.sub(" ", uncommented)
+    literal_free = _CSS_COMMENT_STRING_OR_URL.sub(_blank_unless_escape, stylesheet)
+    selectors_and_preludes = _INNERMOST_BLOCK.sub(" ", literal_free)
     return {
         _unescape(match["identifier"]) for match in _CLASS_SELECTOR.finditer(selectors_and_preludes)
     }
@@ -225,6 +229,11 @@ def _is_static_url_for(call: nodes.Call) -> bool:
         and len(call.args) > 0
         and _string_value(call.args[0]) == "static"
     )
+
+
+def _blank_unless_escape(token: re.Match[str]) -> str:
+    """A space for a comment, string or url(); an escape unchanged, so an escaped quote opens no string."""
+    return token["escape"] or " "
 
 
 def _unescape(identifier: str) -> str:

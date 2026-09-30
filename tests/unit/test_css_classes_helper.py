@@ -133,6 +133,18 @@ def test_selector_classes_decode_escapes_and_skip_comments_preludes_and_declarat
     }
 
 
+def test_selector_classes_skip_strings_and_url_tokens() -> None:
+    """Neither '.css' nor '.pdf' is a class: they sit in a url() and an attribute string.
+    The escaped quotes of content-[''] open no string."""
+    stylesheet = (
+        r"@import url(vendor/reset.css);"
+        r'a[href$=".pdf"]{color:red}'
+        r".content-\[\'\'\]{--tw-content:''}"
+    )
+
+    assert selector_classes(stylesheet) == {"content-['']"}
+
+
 def test_linked_stylesheets_are_the_static_css_files_in_source_order() -> None:
     source = (
         "<link rel=\"icon\" href=\"{{ url_for('static', filename='favicon.svg') }}\" type=\"image/svg+xml\">"
