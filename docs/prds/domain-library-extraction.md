@@ -6,6 +6,10 @@
   re-implements it). Authored 2026-06-20.
 - **Status:** active · authored 2026-06-20 · **P0 — the foundation gate** (serial; Wave 0). The
   `solar-challenge-platform` repo's foundational PRDs (P1+) are blocked on this seam.
+- **Superseded transport:** the consumer pin's transport moved from `git+file` to this repository's
+  GitHub remote (`solar-challenge-platform` commit 8c79b29, 2026-07-03). The tag-pin decision in §3.4
+  and §4 still stands; read every `git+file` URL or mention in this PRD as superseded. The live
+  recipe is `docs/domain-library-consumption.md`.
 - **Owner seam (G4):** **this PRD OWNS the `solar_challenge` public-API seam.** It owns (a) the **frozen
   top-level public surface** (`solar_challenge.__all__` + a lazy, typed re-export `__init__`), (b) the
   **buildable, `py.typed` wheel**, (c) the **documented dependency mechanism** an external repo uses to

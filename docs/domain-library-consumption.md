@@ -1,8 +1,8 @@
 # Domain Library Consumption Guide
 
 This document is the consumer-facing recipe for depending on the
-`solar_challenge` domain library from a separate repository (e.g. the
-`solar_challenge_platform` worktree) using the **git+file pinned** model.
+`solar_challenge` domain library from a separate repository (e.g.
+`solar-challenge-platform`) as a **git dependency pinned to a release tag**.
 
 The authoritative public surface is `solar_challenge.__all__` (defined in
 `src/solar_challenge/__init__.py`), which is frozen and contract-tested by
@@ -17,21 +17,20 @@ Add the following line to the consuming project's `pyproject.toml`
 
 ```toml
 dependencies = [
-  "solar-challenge @ git+file:///home/leo/src/my-solar-challenge@<release-tag>",
+  "solar-challenge @ git+https://github.com/leodearden/solar-challenge.git@<release-tag>",
 ]
 ```
 
-> **Portability note:** The `file://` path above (`/home/leo/src/my-solar-challenge`)
-> is the canonical location used in this orchestrator environment.  On any other
-> host — including CI runners and other developer machines — replace it with the
-> absolute path to your local clone of `my-solar-challenge` before running
-> `uv lock`.
+The URL is this repository's public GitHub remote, so the pin resolves the same
+way on any host that can reach GitHub — developer machines, CI runners and
+container builds alike.  Do not substitute a `git+file://` URL: it resolves only
+on a host that has a clone at that exact path.
 
 **Worked example** (current release tag):
 
 ```toml
 dependencies = [
-  "solar-challenge @ git+file:///home/leo/src/my-solar-challenge@solar-challenge-v0.5.0",
+  "solar-challenge @ git+https://github.com/leodearden/solar-challenge.git@solar-challenge-v0.5.0",
 ]
 ```
 
@@ -43,12 +42,12 @@ leave it uncommitted.
 
 ## Why pinned, not an editable path
 
-An editable `pip install -e /path/to/my-solar-challenge` (or a `path =`
+An editable `pip install -e /path/to/solar-challenge` (or a `path =`
 dependency) resolves against the **live main checkout** shared by all
 worktrees.  Any `git merge` into `main` deploys the change underneath every
 in-flight worktree immediately — no review step, no lockfile bump, no CI gate.
 
-The git+file pin **insulates** each consuming worktree:
+The tag pin **insulates** each consuming worktree:
 
 - The resolved wheel is content-addressed at the tag SHA, not the tip of main.
 - Breaking API changes on main cannot reach the consumer until a deliberate
@@ -60,15 +59,13 @@ The git+file pin **insulates** each consuming worktree:
 
 ## Upgrade workflow
 
-1. Cut (or check out) the new release tag on `my-solar-challenge`
+1. Cut the new release tag in this repository and push it to `origin`
    (see [Tag / release convention](#tag--release-convention) below).
-2. In the consuming project, update the tag in `pyproject.toml`:
-
-   ```toml
-   "solar-challenge @ git+file:///home/leo/src/my-solar-challenge@solar-challenge-vX.Y.Z"
-   ```
-
-3. Run `uv lock` — this re-resolves the wheel from the new tag SHA.
+2. In the consuming project's `pyproject.toml`, change the release tag at the
+   end of the [dependency line](#pinned-dependency-recipe) to
+   `solar-challenge-vX.Y.Z`.
+3. Run `uv lock` — this re-resolves the wheel from the new tag SHA, and fails
+   if the tag is not on `origin`.
 4. Commit both `pyproject.toml` and `uv.lock` together as a single reviewed
    platform commit with a message like:
    `chore(deps): bump solar-challenge to solar-challenge-vX.Y.Z`.
@@ -81,7 +78,7 @@ The git+file pin **insulates** each consuming worktree:
 Tags use the prefix `solar-challenge-` followed by a semantic version:
 
 ```
-solar-challenge-v0.2.0   ← first pinnable release (API freeze)
+solar-challenge-v0.2.0   ← API freeze (first release tag)
 solar-challenge-v0.3.0   ← next minor (additive surface changes)
 solar-challenge-v0.4.0   ← basis-C cost-recovery + arbitrage
 solar-challenge-v0.5.0   ← current release (CBS amount due: own-use VAT + collectable total)
@@ -90,6 +87,15 @@ solar-challenge-v1.0.0   ← first stable / breaking-change boundary (future)
 
 **The first freeze tag** (`solar-challenge-v0.2.0`) IS the literal API freeze, i.e.
 `solar_challenge.__all__` is considered stable from that point.
+
+**A tag is a consumable release only once it is on `origin`.**  Consumers
+resolve the pin from GitHub, never from a local clone, and `git push` does not
+send tags by default, so push each release tag explicitly and confirm it arrived:
+
+```bash
+git push origin solar-challenge-vX.Y.Z
+git ls-remote --tags origin solar-challenge-vX.Y.Z   # must print the tag
+```
 
 **v0.5.0 is additive for readers of `BillBreakdown`, but not for its
 constructors.** The two new fields are **required** and have no defaults — a
