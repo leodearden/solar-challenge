@@ -36,8 +36,9 @@ def test_the_app_runs_in_testing_mode_with_its_data_under_the_given_directory(
 
 
 @pytest.fixture
-def exported_secret_key(monkeypatch: pytest.MonkeyPatch) -> str:
-    """A SECRET_KEY exported in the environment: create_app's own key lookup takes it before any key persisted under the home directory."""
+def exported_secret_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+    """A SECRET_KEY exported in the environment, with HOME pointed at tmp_path so create_app's own key lookup cannot reach the real home directory."""
+    monkeypatch.setenv("HOME", str(tmp_path))
     key = "a-key-from-the-environment"
     monkeypatch.setenv("SECRET_KEY", key)
     return key
