@@ -3,7 +3,10 @@
 
 ``install_fake_anthropic`` stands a ``FakeAnthropic`` in for the Anthropic API;
 the fake's ``set_streams`` and ``set_chunks`` script its replies with the
-``make_*_stream`` builders. ``seed_run`` inserts a row into the runs table.
+``make_*_stream`` builders. ``thinking_block``, ``redacted_thinking_block``,
+``text_block`` and ``tool_use_block`` build the content blocks a
+``make_tool_use_stream_from_blocks`` reply carries. ``seed_run`` inserts a row
+into the runs table.
 
 Usage::
 
@@ -27,7 +30,7 @@ Usage::
 """
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -119,28 +122,28 @@ def make_tool_use_stream(
     tool_name: str,
     tool_input: dict[str, Any],
 ) -> MagicMock:
+    """Build a ``make_tool_use_stream_from_blocks`` stream whose final message's
+    content is one tool_use block."""
+    return make_tool_use_stream_from_blocks([tool_use_block(tool_id, tool_name, tool_input)])
+
+
+def make_tool_use_stream_from_blocks(blocks: Sequence[SimpleNamespace]) -> MagicMock:
     """Build a context-manager mock for a stream that ends with stop_reason='tool_use'.
 
-    The fake stream yields no text chunks; get_final_message() returns a
-    SimpleNamespace with stop_reason='tool_use' and a content list containing
-    one tool_use block.
+    Like the real ``text_stream``, the fake streams the text of *blocks*' text blocks
+    and none of their thinking; get_final_message() returns a SimpleNamespace with
+    stop_reason='tool_use' whose content lists *blocks* in order.
     """
     final_message = SimpleNamespace(
         stop_reason="tool_use",
-        content=[
-            SimpleNamespace(
-                type="tool_use",
-                id=tool_id,
-                name=tool_name,
-                input=tool_input,
-            ),
-        ],
+        content=list(blocks),
         usage=SimpleNamespace(
             cache_creation_input_tokens=50,
             cache_read_input_tokens=0,
         ),
     )
-    return _stream_manager([], final_message)
+    text_chunks = [block.text for block in blocks if block.type == "text"]
+    return _stream_manager(text_chunks, final_message)
 
 
 def make_end_turn_stream(text_chunks: list[str]) -> MagicMock:
@@ -154,6 +157,26 @@ def make_end_turn_stream(text_chunks: list[str]) -> MagicMock:
         ),
     )
     return _stream_manager(text_chunks, final_message)
+
+
+def thinking_block(thinking: str, signature: str) -> SimpleNamespace:
+    """A content block shaped like the SDK's ``ThinkingBlock``."""
+    return SimpleNamespace(type="thinking", thinking=thinking, signature=signature)
+
+
+def redacted_thinking_block(data: str) -> SimpleNamespace:
+    """A content block shaped like the SDK's ``RedactedThinkingBlock``."""
+    return SimpleNamespace(type="redacted_thinking", data=data)
+
+
+def text_block(text: str) -> SimpleNamespace:
+    """A content block shaped like the SDK's ``TextBlock``."""
+    return SimpleNamespace(type="text", text=text)
+
+
+def tool_use_block(tool_id: str, tool_name: str, tool_input: dict[str, Any]) -> SimpleNamespace:
+    """A content block shaped like the SDK's ``ToolUseBlock``."""
+    return SimpleNamespace(type="tool_use", id=tool_id, name=tool_name, input=tool_input)
 
 
 def _stream_manager(text_chunks: list[str], final_message: SimpleNamespace) -> MagicMock:
