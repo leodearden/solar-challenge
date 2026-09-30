@@ -7,7 +7,7 @@ flat-rate tariffs, and preset UK tariff configurations.
 
 from dataclasses import dataclass
 from datetime import time
-from typing import Optional
+from typing import ClassVar, Optional
 
 import pandas as pd
 
@@ -27,18 +27,23 @@ class TariffPeriod:
     end_time: str
     rate_per_kwh: float
     name: str = ""
+    # Parsed once in __post_init__; ClassVar keeps them out of dataclass fields().
+    _start: ClassVar[time]
+    _end: ClassVar[time]
 
     def __post_init__(self) -> None:
-        """Validate tariff period parameters."""
+        """Validate tariff period parameters and cache the parsed times."""
         if self.rate_per_kwh < 0:
             raise ValueError(f"Rate cannot be negative, got {self.rate_per_kwh} £/kWh")
 
         # Validate time format
         try:
-            self._parse_time(self.start_time)
-            self._parse_time(self.end_time)
+            start = self._parse_time(self.start_time)
+            end = self._parse_time(self.end_time)
         except ValueError as e:
             raise ValueError(f"Invalid time format: {e}")
+        object.__setattr__(self, "_start", start)
+        object.__setattr__(self, "_end", end)
 
     @staticmethod
     def _parse_time(time_str: str) -> time:
@@ -69,11 +74,17 @@ class TariffPeriod:
 
     def get_start_time(self) -> time:
         """Get start time as time object."""
-        return self._parse_time(self.start_time)
+        try:
+            return self._start
+        except AttributeError:
+            return self._parse_time(self.start_time)
 
     def get_end_time(self) -> time:
         """Get end time as time object."""
-        return self._parse_time(self.end_time)
+        try:
+            return self._end
+        except AttributeError:
+            return self._parse_time(self.end_time)
 
     def matches_time(self, timestamp: pd.Timestamp) -> bool:
         """Check if a timestamp falls within this period.
