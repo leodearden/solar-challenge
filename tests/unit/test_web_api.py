@@ -250,7 +250,12 @@ class TestSimulateHomeAPI:
 
     @pytest.mark.parametrize(
         ("body", "type_name"),
-        [pytest.param([1], "list", id="array"), pytest.param("x", "str", id="string")],
+        [
+            pytest.param([1], "list", id="array"),
+            pytest.param("x", "str", id="string"),
+            pytest.param(1, "int", id="number"),
+            pytest.param(True, "bool", id="boolean"),
+        ],
     )
     def test_body_that_is_not_a_json_object_returns_400_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: MagicMock, body: object, type_name: str
