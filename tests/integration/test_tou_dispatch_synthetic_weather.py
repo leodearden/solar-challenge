@@ -19,43 +19,17 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
+from tests._synthetic_weather import synthetic_june_weather
 
 pytestmark = pytest.mark.integration
 
 SUNNY_DAY = pd.Timestamp("2024-06-21")
-SUNLESS_DAY = pd.Timestamp("2024-06-22")
-
-# Hourly W/m² of a clear June day, copied from tests/unit/test_home.py::june21_weather_data.
-CLEAR_JUNE_DAY_IRRADIANCE = {
-    "ghi": [
-        0, 0, 0, 0, 0, 50, 150, 300, 500, 650, 780, 850,
-        870, 850, 780, 650, 500, 300, 150, 50, 0, 0, 0, 0,
-    ],
-    "dni": [
-        0, 0, 0, 0, 0, 100, 250, 450, 650, 800, 900, 950,
-        970, 950, 900, 800, 650, 450, 250, 100, 0, 0, 0, 0,
-    ],
-    "dhi": [
-        0, 0, 0, 0, 0, 30, 70, 130, 180, 200, 200, 200,
-        200, 200, 200, 200, 180, 130, 70, 30, 0, 0, 0, 0,
-    ],
-}
+SUNLESS_DAY = SUNNY_DAY + pd.Timedelta(days=1)
 
 
 def _sunny_then_sunless_weather() -> pd.DataFrame:
-    """Hourly weather for SUNNY_DAY, a clear June day, then SUNLESS_DAY, with no irradiance at all.
-
-    Indexed in Europe/London, the timezone of the simulated demand.
-    """
-    index = pd.date_range(SUNNY_DAY, periods=48, freq="h", tz="Europe/London")
-    irradiance = {
-        column: [*clear_day, *[0.0] * len(clear_day)]
-        for column, clear_day in CLEAR_JUNE_DAY_IRRADIANCE.items()
-    }
-    return pd.DataFrame(
-        {**irradiance, "temp_air": 15.0, "wind_speed": 2.0},
-        index=index,
-    )
+    """Hourly weather where SUNNY_DAY has a clear day's sun and SUNLESS_DAY has none."""
+    return synthetic_june_weather(SUNNY_DAY, irradiance_scale_per_day=(1.0, 0.0))
 
 
 @pytest.fixture(scope="module")
