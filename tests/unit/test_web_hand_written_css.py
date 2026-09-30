@@ -69,7 +69,7 @@ def test_every_class_the_hand_written_stylesheet_styles_is_applied_by_the_dashbo
         f"applies: {' '.join(sorted(unapplied))}\n"
         "Delete their rules. If the dashboard does apply one, through a channel "
         "tests/_css_classes.py does not read (its docstring lists the known gaps), extend that "
-        "reader instead."
+        "reader and pin the new channel in tests/unit/test_css_classes_helper.py instead."
     )
 
 
@@ -82,7 +82,10 @@ def test_every_custom_property_the_hand_written_stylesheet_declares_is_read() ->
     assert unread == set(), (
         f"static/{HAND_WRITTEN_STYLESHEET} declares custom properties that no var() in a served "
         f"stylesheet, template or script reads: {' '.join(sorted(unread))}\n"
-        "Delete every declaration of them."
+        "Delete every declaration of them. If the dashboard does read one, through a channel "
+        "other than var() (a script's getPropertyValue(), say), extend custom_property_references "
+        "in tests/_css_classes.py and pin the new channel in tests/unit/test_css_classes_helper.py "
+        "instead."
     )
 
 
