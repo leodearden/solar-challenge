@@ -85,10 +85,12 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     default_data_dir = Path.home() / ".solar-challenge"
     default_db_path = default_data_dir / "solar-challenge.db"
 
-    # Default configuration
+    # Default configuration.  Why the session cookie is not Secure:
+    # tests/unit/test_web_app.py::test_the_session_cookie_is_not_marked_secure
     app.config.from_mapping(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=False,
         DATA_DIR=str(default_data_dir),
         DATABASE=str(default_db_path),
     )
@@ -100,10 +102,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     # Consult the persisted key only when no config source supplied one
     if app.secret_key is None:
         app.secret_key = _get_secret_key(default_data_dir)
-
-    # Secure session cookie when not in debug mode
-    if "SESSION_COOKIE_SECURE" not in app.config:
-        app.config["SESSION_COOKIE_SECURE"] = not app.debug
 
     # Ensure template and static directories exist
     for folder in (template_folder, static_folder):
