@@ -201,6 +201,13 @@ def explain_metric(metric: str) -> dict[str, str]:
     }
 
 
+# Rule-of-thumb sizing behind suggest_config.  Its returned note quotes these
+# figures, so the arithmetic and the note share one source.
+_UK_YIELD_KWH_PER_KWP = 950.0
+_BATTERY_DAILY_DEMAND_COVERAGE = 0.5
+_BATTERY_USABLE_CAPACITY_HEADROOM = 1.2
+
+
 def suggest_config(
     annual_consumption_kwh: float,
     goal: str,
@@ -229,13 +236,14 @@ def suggest_config(
         Never raises.
     """
     # Base heuristics (PRD §11.4)
-    uk_yield_kwh_per_kwp = 950.0
-    pv_kwp: float = annual_consumption_kwh / uk_yield_kwh_per_kwp
+    pv_kwp: float = annual_consumption_kwh / _UK_YIELD_KWH_PER_KWP
 
-    # Battery: cover ~50 % of daily demand (rule-of-thumb shortfall for a typical
-    # house without PV self-consumption): daily shortfall ≈ consumption/365 × 0.5
+    # Battery: cover a share of daily demand (rule-of-thumb shortfall for a typical
+    # house without PV self-consumption), with headroom for usable capacity
     daily_kwh = annual_consumption_kwh / 365.0
-    battery_kwh: float = daily_kwh * 0.5 * 1.2  # 1.2 for usable-capacity headroom
+    battery_kwh: float = (
+        daily_kwh * _BATTERY_DAILY_DEMAND_COVERAGE * _BATTERY_USABLE_CAPACITY_HEADROOM
+    )
 
     # Goal-aware nudging — reuse the shared key normalizer for consistency
     normalised_goal = _normalize_metric_key(goal)
@@ -248,8 +256,11 @@ def suggest_config(
         "recommended_pv_kwp": round(pv_kwp, 2),
         "recommended_battery_kwh": round(battery_kwh, 2),
         "note": (
-            "These figures are indicative estimates based on the PRD §11.4 rule-of-thumb "
-            "(PV kWp ≈ annual_consumption / 950; battery ≈ 50 % of daily demand × 1.2). "
+            "These figures are indicative estimates from a simple rule of thumb: "
+            f"PV kWp ≈ annual consumption in kWh / {_UK_YIELD_KWH_PER_KWP:g}, and "
+            f"battery kWh ≈ {_BATTERY_DAILY_DEMAND_COVERAGE * 100:g} % of daily demand "
+            f"× {_BATTERY_USABLE_CAPACITY_HEADROOM:g}, "
+            "both sized up slightly when the goal is self-sufficiency. "
             "Please run a simulation to confirm sizing for your specific site."
         ),
     }
