@@ -206,7 +206,10 @@ def create_simple_inverter_params(
     """Create simplified inverter parameters from basic specifications.
 
     Uses a simple efficiency model. When DC power exceeds inverter
-    capacity, output is clipped to the rated capacity.
+    capacity, output is clipped to the rated capacity. Its Sandia-form
+    parameters read the DC voltage, so they suit a module with a voltage model
+    such as the default CEC module; a create_simple_module_params module takes
+    the automatic PVWatts inverter instead.
 
     Args:
         efficiency: Inverter efficiency as fraction (e.g., 0.96 for 96%)
@@ -457,6 +460,24 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     )
 
 
+def _require_compatible_dc_and_ac_models(model_chain: ModelChain) -> None:
+    """Refuse a model chain whose inverter model can not read its DC model's output.
+
+    PVWatts DC gives power alone, which only the PVWatts inverter takes; every
+    other DC model gives the voltage that the Sandia and ADR inverters read.
+    """
+    dc_is_pvwatts = model_chain.dc_model == model_chain.pvwatts_dc
+    ac_is_pvwatts = model_chain.ac_model == model_chain.pvwatts_inverter
+    if dc_is_pvwatts != ac_is_pvwatts:
+        raise ValueError(
+            f"pvlib cannot feed its {model_chain.dc_model.__name__} DC model to its "
+            f"{model_chain.ac_model.__name__} inverter model: PVWatts module "
+            "parameters (pdc0, gamma_pdc) go only with PVWatts inverter parameters "
+            "(pdc0, eta_inv_nom), and a module with a voltage model needs a Sandia "
+            "or ADR inverter"
+        )
+
+
 def create_model_chain(
     config: PVConfig,
     location: "Location",
@@ -469,6 +490,11 @@ def create_model_chain(
 
     Returns:
         ModelChain ready to run simulations with weather data
+
+    Raises:
+        ValueError: If pvlib infers an inverter model that can not read its DC
+            model's output, e.g. custom Sandia inverter parameters with PVWatts
+            module parameters.
     """
     pv_system = create_pv_system(config)
 
@@ -488,6 +514,7 @@ def create_model_chain(
         aoi_model="physical",
         spectral_model="no_loss",
     )
+    _require_compatible_dc_and_ac_models(model_chain)
 
     return model_chain
 
