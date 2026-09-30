@@ -13,7 +13,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from solar_challenge.seg import SEG_PRESETS
-from tests.e2e._home_form import submit_two_day_run
+from tests.e2e._home_form import open_tab, submit_two_day_run
 
 pytestmark = pytest.mark.e2e
 
@@ -33,12 +33,7 @@ def test_form_loads_with_defaults(page: Page, live_server: str) -> None:
     assert pv_value in ("4", "4.0"), f"Expected PV default '4' or '4.0', got '{pv_value}'"
 
     # Consumption input is on the Load tab -- navigate there first
-    load_tab = page.locator(
-        'nav[aria-label="Configuration tabs"] button',
-        has_text="Load",
-    )
-    load_tab.click()
-    page.wait_for_timeout(300)
+    open_tab(page, "Load")
 
     consumption_input = page.locator("#consumption_kwh")
     expect(consumption_input).to_be_visible()
@@ -100,7 +95,7 @@ def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
 
 
 def _switch_on(page: Page, tab: str, switch_name: str) -> None:
-    page.get_by_role("tab", name=tab, exact=True).click()
+    open_tab(page, tab)
     switch = page.get_by_role("switch", name=switch_name, exact=True)
     switch.click()
     expect(switch).to_be_checked()
@@ -214,19 +209,10 @@ def test_tab_navigation(page: Page, live_server: str) -> None:
     tab_labels = ["PV", "Battery", "Load", "Location", "Period"]
 
     for label in tab_labels:
-        tab_btn = page.locator(
-            'nav[aria-label="Configuration tabs"] button',
-            has_text=label,
-        )
-        tab_btn.click()
-        page.wait_for_timeout(200)
+        open_tab(page, label)
 
-        # The active tab should have aria-selected="true"
-        selected = tab_btn.get_attribute("aria-selected")
-        assert selected == "true", (
-            f"Tab '{label}' should be selected (aria-selected='true'), "
-            f"got '{selected}'"
-        )
+        # The active tab should be the one tab with aria-selected="true"
+        expect(page.get_by_role("tab", selected=True)).to_have_text(label)
 
 
 # ── Submit button ────────────────────────────────────────────────────

@@ -9,6 +9,8 @@ it just as clicking the switch does.
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
+from tests.e2e._home_form import open_tab
+
 pytestmark = pytest.mark.e2e
 
 
@@ -43,7 +45,7 @@ def test_home_switch_shows_and_hides_its_settings(
     page: Page, live_server: str, tab: str, switch_name: str, variant_select_name: str
 ) -> None:
     page.goto(live_server + "/simulate/home")
-    page.get_by_role("tab", name=tab, exact=True).click()
+    open_tab(page, tab)
 
     _assert_switch_shows_and_hides(
         page.get_by_role("switch", name=switch_name, exact=True),
@@ -71,7 +73,7 @@ def test_fleet_switch_shows_and_hides_its_settings(
 
 def test_clicking_a_switch_label_flips_the_switch(page: Page, live_server: str) -> None:
     page.goto(live_server + "/simulate/home")
-    page.get_by_role("tab", name="Battery", exact=True).click()
+    open_tab(page, "Battery")
 
     _assert_switch_shows_and_hides(
         page.get_by_role("switch", name="Enable Battery", exact=True),
