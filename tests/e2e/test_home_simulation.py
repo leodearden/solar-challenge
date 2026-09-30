@@ -10,9 +10,10 @@ SEG export pricing.
 from dataclasses import dataclass
 
 import pytest
-from playwright.sync_api import Page, Response, expect
+from playwright.sync_api import Page, expect
 
 from solar_challenge.seg import SEG_PRESETS
+from tests.e2e._home_form import submit_two_day_run
 
 pytestmark = pytest.mark.e2e
 
@@ -105,23 +106,11 @@ def _switch_on(page: Page, tab: str, switch_name: str) -> None:
     expect(switch).to_be_checked()
 
 
-def _submit_one_day_run(page: Page) -> Response:
-    """Submit the form for a one-day run and return the server's answer."""
-    # No preset button is shorter than 7 days; one day keeps this submission's job short.
-    page.evaluate("""() => {
-        const el = document.querySelector('[x-data="homeSimulator()"]');
-        Alpine.$data(el).formData.period_days = 1;
-    }""")
-    with page.expect_response("**/api/simulate/home") as submission:
-        page.get_by_role("button", name="Run Simulation").click()
-    return submission.value
-
-
 def test_battery_on_form_submission_is_accepted(page: Page, live_server: str) -> None:
     """Run with the battery switch on: /api/simulate/home accepts what the form sends (201)."""
     page.goto(live_server + "/simulate/home")
     _switch_on(page, "Battery", "Enable Battery")
-    response = _submit_one_day_run(page)
+    response = submit_two_day_run(page)
 
     assert response.request.post_data_json["battery_kwh"] > 0, (
         "The submitted payload carries no battery, so the server never built one "
@@ -181,7 +170,7 @@ def test_optional_block_form_submission_is_accepted(
     page.goto(live_server + "/simulate/home")
     _switch_on(page, block.tab, block.switch_name)
     page.locator(block.variant_select).select_option(value=variant)
-    response = _submit_one_day_run(page)
+    response = submit_two_day_run(page)
 
     sent_block = response.request.post_data_json.get(block.payload_key) or {}
     assert sent_block.get(block.variant_key) == variant, (
@@ -199,7 +188,7 @@ def test_seg_custom_rate_form_submission_is_accepted(
     _switch_on(page, _SEG.tab, _SEG.switch_name)
     page.locator(_SEG.variant_select).select_option(value="custom")
     page.locator("#seg_rate_pence_per_kwh").fill("5.5")
-    response = _submit_one_day_run(page)
+    response = submit_two_day_run(page)
 
     sent_seg = response.request.post_data_json.get(_SEG.payload_key) or {}
     assert sent_seg.get("rate_pence_per_kwh") == 5.5, (
