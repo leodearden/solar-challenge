@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the tool-use path of the AI assistant's chat.
 
-That is the TOOLS surface the chat offers the model, _dispatch_tool's routing to
+That is the TOOLS surface the chat offers the model, dispatch_tool's routing to
 the handlers, and the tool-use loop in POST /assistant/chat that runs the model's
 tool calls.
 """
@@ -30,7 +30,7 @@ from tests.unit.web_assistant._fakes import (
 
 
 def dispatch_dependencies(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
-    """The db_path, job_manager and data_dir ``_dispatch_tool`` requires, rooted in *tmp_path*.
+    """The db_path, job_manager and data_dir ``dispatch_tool`` requires, rooted in *tmp_path*.
 
     For tests that do not care which values they pass; keyword *overrides*
     replace individual entries for those that do.
@@ -50,7 +50,7 @@ def anthropic_api(monkeypatch: pytest.MonkeyPatch) -> FakeAnthropic:
 
 
 class TestToolSurface:
-    """Tests for TOOLS list and _dispatch_tool router."""
+    """Tests for TOOLS list and dispatch_tool router."""
 
     def test_tools_fixed_order_for_cache_stability(self) -> None:
         """TOOLS names its tools in one fixed order, which keeps the cached prompt prefix stable."""
@@ -93,46 +93,46 @@ class TestToolSurface:
             )
 
     def test_dispatch_explain_metric(self, tmp_path: Path) -> None:
-        """_dispatch_tool('explain_metric', {...}) returns the same dict as explain_metric()."""
-        from solar_challenge.web.assistant import _dispatch_tool, explain_metric
+        """dispatch_tool('explain_metric', {...}) returns the same dict as explain_metric()."""
+        from solar_challenge.web.assistant import dispatch_tool, explain_metric
 
-        result = _dispatch_tool(
+        result = dispatch_tool(
             "explain_metric",
             {"metric": "self_consumption_ratio"},
             **dispatch_dependencies(tmp_path),
         )
         expected = explain_metric("self_consumption_ratio")
         assert result == expected, (
-            f"_dispatch_tool result mismatch: {result!r} vs {expected!r}"
+            f"dispatch_tool result mismatch: {result!r} vs {expected!r}"
         )
 
     def test_dispatch_suggest_config(self, tmp_path: Path) -> None:
-        """_dispatch_tool('suggest_config', {...}) returns the same dict as suggest_config()."""
-        from solar_challenge.web.assistant import _dispatch_tool, suggest_config
+        """dispatch_tool('suggest_config', {...}) returns the same dict as suggest_config()."""
+        from solar_challenge.web.assistant import dispatch_tool, suggest_config
 
-        result = _dispatch_tool(
+        result = dispatch_tool(
             "suggest_config",
             {"annual_consumption_kwh": 3100, "goal": "self_sufficiency"},
             **dispatch_dependencies(tmp_path),
         )
         expected = suggest_config(3100, "self_sufficiency")
         assert result == expected, (
-            f"_dispatch_tool result mismatch: {result!r} vs {expected!r}"
+            f"dispatch_tool result mismatch: {result!r} vs {expected!r}"
         )
 
     def test_dispatch_unknown_returns_error_dict(self, tmp_path: Path) -> None:
-        """_dispatch_tool with unknown name returns a dict with 'error' key, does NOT raise."""
-        from solar_challenge.web.assistant import _dispatch_tool
+        """dispatch_tool with unknown name returns a dict with 'error' key, does NOT raise."""
+        from solar_challenge.web.assistant import dispatch_tool
 
         try:
-            result = _dispatch_tool(
+            result = dispatch_tool(
                 "nonexistent_tool",
                 {},
                 **dispatch_dependencies(tmp_path),
             )
         except Exception as exc:
             raise AssertionError(
-                f"_dispatch_tool should not raise for unknown tool; got: {exc!r}"
+                f"dispatch_tool should not raise for unknown tool; got: {exc!r}"
             ) from exc
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "error" in result, f"Expected 'error' key in result: {result}"
@@ -340,8 +340,8 @@ class TestRunLookupToolSurface:
         )
 
     def test_dispatch_get_run_results_with_db_path(self, tmp_path: Path) -> None:
-        """_dispatch_tool('get_run_results', {...}, db_path) returns same dict as handler."""
-        from solar_challenge.web.assistant import _dispatch_tool, get_run_results
+        """dispatch_tool('get_run_results', {...}, db_path) returns same dict as handler."""
+        from solar_challenge.web.assistant import dispatch_tool, get_run_results
 
         db_path = tmp_path / "disp_grr_test.db"
         seed_run(
@@ -353,7 +353,7 @@ class TestRunLookupToolSurface:
             summary={"total_generation_kwh": 500.0},
         )
 
-        result = _dispatch_tool(
+        result = dispatch_tool(
             "get_run_results",
             {"run_id_or_name": "disp-run-001"},
             **dispatch_dependencies(tmp_path, db_path=str(db_path)),
@@ -363,8 +363,8 @@ class TestRunLookupToolSurface:
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
 
     def test_dispatch_list_recent_runs_with_db_path(self, tmp_path: Path) -> None:
-        """_dispatch_tool('list_recent_runs', {'limit': 5}, db_path) returns same dict as handler."""
-        from solar_challenge.web.assistant import _dispatch_tool, list_recent_runs
+        """dispatch_tool('list_recent_runs', {'limit': 5}, db_path) returns same dict as handler."""
+        from solar_challenge.web.assistant import dispatch_tool, list_recent_runs
 
         db_path = tmp_path / "disp_lrr_test.db"
         seed_run(
@@ -376,7 +376,7 @@ class TestRunLookupToolSurface:
             summary={"self_consumption_ratio": 0.55},
         )
 
-        result = _dispatch_tool(
+        result = dispatch_tool(
             "list_recent_runs",
             {"limit": 5},
             **dispatch_dependencies(tmp_path, db_path=str(db_path)),
@@ -476,8 +476,8 @@ class TestSimulationToolSurface:
         )
 
     def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
-        """_dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
-        from solar_challenge.web.assistant import _dispatch_tool, run_home_simulation
+        """dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
+        from solar_challenge.web.assistant import dispatch_tool, run_home_simulation
 
         jm = MagicMock()
         jm.submit_home_job.return_value = ("job-h", "run-h")
@@ -487,7 +487,7 @@ class TestSimulationToolSurface:
 
         jm2 = MagicMock()
         jm2.submit_home_job.return_value = ("job-h", "run-h")
-        via_dispatch = _dispatch_tool(
+        via_dispatch = dispatch_tool(
             "run_home_simulation",
             params,
             db_path=str(tmp_path / "t.db"),
@@ -500,8 +500,8 @@ class TestSimulationToolSurface:
         )
 
     def test_dispatch_run_fleet_simulation(self, tmp_path: Path) -> None:
-        """_dispatch_tool('run_fleet_simulation', {...}, job_manager=mock) returns handler result."""
-        from solar_challenge.web.assistant import _dispatch_tool, run_fleet_simulation
+        """dispatch_tool('run_fleet_simulation', {...}, job_manager=mock) returns handler result."""
+        from solar_challenge.web.assistant import dispatch_tool, run_fleet_simulation
 
         params = {"n_homes": 2, "pv_kw": 4, "location": "bristol", "days": 7}
 
@@ -511,7 +511,7 @@ class TestSimulationToolSurface:
 
         jm2 = MagicMock()
         jm2.submit_fleet_job.return_value = ("job-f", "run-f")
-        via_dispatch = _dispatch_tool(
+        via_dispatch = dispatch_tool(
             "run_fleet_simulation",
             params,
             db_path=str(tmp_path / "t.db"),
