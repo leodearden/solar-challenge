@@ -153,44 +153,14 @@ def test_custom_location_fields_appear(page: Page, live_server: str) -> None:
 
 
 def test_custom_date_range_fields(page: Page, live_server: str) -> None:
-    """Click 'Custom range' radio -> #start_date / #end_date visible."""
+    """Check the 'Custom range' radio -> #start_date and #end_date, hidden until then, become visible."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
+    page.get_by_role("tab", name="Period", exact=True).click()
+    date_inputs = [page.locator("#start_date"), page.locator("#end_date")]
+    for date_input in date_inputs:
+        expect(date_input).to_be_hidden()
 
-    # Navigate to the Period tab
-    period_tab = page.locator(
-        'nav[aria-label="Configuration tabs"] button',
-        has_text="Period",
-    )
-    period_tab.click()
-    page.wait_for_timeout(300)
+    page.get_by_role("radio", name="Custom range", exact=True).check()
 
-    # Look for "Custom range" radio or button
-    custom_radio = page.locator('input[type="radio"][value="custom"]')
-    custom_btn = page.locator("button", has_text="Custom")
-
-    if custom_radio.count() > 0:
-        custom_radio.first.click()
-    elif custom_btn.count() > 0:
-        custom_btn.first.click()
-    else:
-        # Set via Alpine data directly
-        page.evaluate("""() => {
-            const el = document.querySelector('[x-data="homeSimulator()"]');
-            Alpine.$data(el).formData.period_type = 'custom';
-        }""")
-
-    page.wait_for_timeout(500)
-
-    # At least one date input should now be visible
-    start_date = page.locator("#start_date")
-    end_date = page.locator("#end_date")
-
-    # Check that the date inputs exist (attached to DOM)
-    has_start = start_date.count() > 0
-    has_end = end_date.count() > 0
-
-    assert has_start or has_end, (
-        "Expected #start_date or #end_date to appear after selecting custom range"
-    )
+    for date_input in date_inputs:
+        expect(date_input).to_be_visible()
