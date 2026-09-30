@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Structured read access to the CSS classes the dashboard applies, and to the
-classes a stylesheet's selectors name.
+"""Structured read access to the CSS names the dashboard and its stylesheets share:
+the classes templates and scripts apply and selectors name, the custom properties
+stylesheets declare and var() reads, and the @keyframes stylesheets define.
 
 Usage::
 
@@ -23,8 +24,12 @@ A template applies classes through:
   ``classes`` or ending ``_class``.
 
 Two gaps are known and unchecked: classes returned by Alpine methods or getters
-defined in JS, and classes composed inside other Jinja expressions. Both are
-false negatives, never false positives.
+defined in JS, and classes composed inside other Jinja expressions. Both make
+applied_classes_in_template miss a class the page does apply.
+
+A custom property counts as read only through a ``var()`` in some source: a
+script's ``getPropertyValue()`` read is not counted, and a ``var()`` inside a
+comment is.
 """
 
 import re
@@ -63,6 +68,9 @@ _ESCAPED_CODE_POINT = re.compile(_CSS_ESCAPE)
 _CLASS_SELECTOR = re.compile(
     rf"\.(?P<identifier>(?:[^\W\d]|-|{_CSS_ESCAPE})(?:[\w-]|{_CSS_ESCAPE})*)"
 )
+_CUSTOM_PROPERTY_DECLARATION = re.compile(r"(?<![\w-])(--[\w-]+)\s*:")
+_CUSTOM_PROPERTY_REFERENCE = re.compile(r"\bvar\(\s*(--[\w-]+)")
+_KEYFRAMES_RULE = re.compile(r"@(?:-[a-zA-Z]+-)?keyframes\s+([\w-]+)")
 
 
 def applied_classes_in_template(source: str) -> set[str]:
@@ -97,11 +105,28 @@ def selector_classes(stylesheet: str) -> set[str]:
     is a number such as ``.5rem`` in an at-rule prelude, because an identifier cannot
     start with a digit.
     """
-    literal_free = _CSS_COMMENT_STRING_OR_URL.sub(_blank_unless_escape, stylesheet)
-    selectors_and_preludes = _INNERMOST_BLOCK.sub(" ", literal_free)
+    selectors_and_preludes = _INNERMOST_BLOCK.sub(" ", _literal_free(stylesheet))
     return {
         _unescape(match["identifier"]) for match in _CLASS_SELECTOR.finditer(selectors_and_preludes)
     }
+
+
+def declared_custom_properties(stylesheet: str) -> set[str]:
+    """Custom properties *stylesheet* declares outside comments, strings and url()s; the ``--lg``
+    of a class such as ``.spinner--lg:hover`` is not a declaration."""
+    return set(_CUSTOM_PROPERTY_DECLARATION.findall(_literal_free(stylesheet)))
+
+
+def custom_property_references(source: str) -> set[str]:
+    """Custom properties a ``var()`` in *source* reads, fallbacks included. *source* is read raw,
+    because a template or script puts var() inside attribute values and JS strings."""
+    return set(_CUSTOM_PROPERTY_REFERENCE.findall(source))
+
+
+def keyframes_names(stylesheet: str) -> set[str]:
+    """Names the ``@keyframes`` rules of *stylesheet* define, vendor-prefixed ones included;
+    an ``animation`` that only names one does not count."""
+    return set(_KEYFRAMES_RULE.findall(_literal_free(stylesheet)))
 
 
 def linked_stylesheets(template_source: str) -> list[str]:
@@ -229,6 +254,11 @@ def _is_static_url_for(call: nodes.Call) -> bool:
         and len(call.args) > 0
         and _string_value(call.args[0]) == "static"
     )
+
+
+def _literal_free(stylesheet: str) -> str:
+    """*stylesheet* with every comment, string and url() blanked; escapes kept."""
+    return _CSS_COMMENT_STRING_OR_URL.sub(_blank_unless_escape, stylesheet)
 
 
 def _blank_unless_escape(token: re.Match[str]) -> str:
