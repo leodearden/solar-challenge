@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
+from solar_challenge.cli.utils import parse_location
 from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS
 
@@ -531,10 +532,15 @@ home:
         return cfg_path
 
     def _run_home(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, seg_yaml: str
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        seg_yaml: str,
+        *extra_args: str,
     ) -> tuple[Result, dict[str, HomeConfig]]:
         """Run `home run --report` for 21 June on a config ending in *seg_yaml*.
 
+        *extra_args* are appended to the command line after ``--report``.
         Returns the CLI result and the spy's capture; ``captured["home_config"]``
         is the HomeConfig passed to simulate_home, absent if it was never called.
         """
@@ -562,6 +568,7 @@ home:
                 "--start", "2024-06-21",
                 "--end", "2024-06-21",
                 "--report",
+                *extra_args,
             ],
             catch_exceptions=False,
         )
@@ -616,3 +623,18 @@ home:
         assert result.exit_code == 1
         assert "Nonexistent" in result.output
         assert "home_config" not in captured
+
+    def test_home_run_location_option_reaches_home_config(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``--location`` places the simulated home where parse_location puts it."""
+        result, captured = self._run_home(
+            monkeypatch,
+            tmp_path,
+            "seg:\n  rate_pence_per_kwh: 15.0\n",
+            "--location",
+            "55.95,-3.19",
+        )
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        assert captured["home_config"].location == parse_location("55.95,-3.19")

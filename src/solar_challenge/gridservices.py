@@ -89,7 +89,7 @@ class GridServicesRateBand:
             re-introduce the import cycle this module was designed to avoid.
             Callers that parse user-supplied rates through a config dict
             receive errors wrapped as ``ConfigurationError`` by the
-            :func:`~solar_challenge.config._parse_finance_config` layer.
+            :func:`~solar_challenge.config.parse_finance_config` layer.
             This mirrors the convention in :class:`~solar_challenge.flex.FlexibilityValueBand`.
         """
         if self.availability_gbp_per_kw_per_event < 0:

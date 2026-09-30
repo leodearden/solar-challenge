@@ -31,17 +31,13 @@ from solar_challenge.config import (
     _parse_battery_config,
     _parse_grid_charge_config,
     _parse_community_config,
-    _parse_dispatch_strategy_config,
     _parse_ev_config,
-    _parse_finance_config,
     _parse_heat_pump_config,
-    _parse_home_config,
     _parse_pv_config,
     _parse_pv_distribution_config,
     _modify_pv_config,
     load_community_config,
     _parse_distribution_spec,
-    _parse_fleet_distribution_config,
     _sample_from_distribution,
     generate_homes_from_distribution,
     load_config,
@@ -50,6 +46,13 @@ from solar_challenge.config import (
     load_fleet_config,
     load_home_config,
     load_scenarios,
+    parse_dispatch_strategy_config,
+    parse_finance_config,
+    parse_fleet_distribution_config,
+    parse_home_block,
+    parse_location_block,
+    parse_seg_rate,
+    parse_tariff_config,
 )
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
@@ -58,7 +61,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, calculate_degradation_factor
 from solar_challenge.seg import SEG_PRESETS
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 
 class TestSimulationPeriod:
@@ -622,17 +625,17 @@ home:
 
 
 class TestDispatchStrategyParsing:
-    """Tests for _parse_dispatch_strategy_config function."""
+    """Tests for parse_dispatch_strategy_config function."""
 
     def test_parse_none(self) -> None:
         """Test parsing None returns None."""
-        result = _parse_dispatch_strategy_config(None)
+        result = parse_dispatch_strategy_config(None)
         assert result is None
 
     def test_parse_self_consumption(self) -> None:
         """Test parsing self-consumption strategy."""
         data = {"strategy_type": "self_consumption"}
-        result = _parse_dispatch_strategy_config(data)
+        result = parse_dispatch_strategy_config(data)
         assert result is not None
         assert result.strategy_type == "self_consumption"
         assert result.peak_hours is None
@@ -644,7 +647,7 @@ class TestDispatchStrategyParsing:
             "strategy_type": "tou_optimized",
             "peak_hours": [[16, 20], [7, 9]],
         }
-        result = _parse_dispatch_strategy_config(data)
+        result = parse_dispatch_strategy_config(data)
         assert result is not None
         assert result.strategy_type == "tou_optimized"
         assert result.peak_hours == [(16, 20), (7, 9)]
@@ -655,7 +658,7 @@ class TestDispatchStrategyParsing:
             "strategy_type": "peak_shaving",
             "import_limit_kw": 5.0,
         }
-        result = _parse_dispatch_strategy_config(data)
+        result = parse_dispatch_strategy_config(data)
         assert result is not None
         assert result.strategy_type == "peak_shaving"
         assert result.import_limit_kw == 5.0
@@ -663,12 +666,12 @@ class TestDispatchStrategyParsing:
     def test_parse_missing_strategy_type_raises(self) -> None:
         """Test parsing without strategy_type raises error."""
         with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
-            _parse_dispatch_strategy_config({})
+            parse_dispatch_strategy_config({})
 
     def test_parse_empty_strategy_type_raises(self) -> None:
         """Test parsing with empty strategy_type raises error."""
         with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
-            _parse_dispatch_strategy_config({"strategy_type": ""})
+            parse_dispatch_strategy_config({"strategy_type": ""})
 
     def test_parse_tou_with_null_peak_hours(self) -> None:
         """Test parsing TOU strategy with null peak_hours raises error."""
@@ -677,7 +680,62 @@ class TestDispatchStrategyParsing:
             "peak_hours": None,
         }
         with pytest.raises(ConfigurationError, match="requires 'peak_hours'"):
-            _parse_dispatch_strategy_config(data)
+            parse_dispatch_strategy_config(data)
+
+
+class TestTariffConfigParsing:
+    """Tests for parse_tariff_config's public contract."""
+
+    def test_absent_block_parses_to_no_tariff(self) -> None:
+        """parse_tariff_config(None) returns None (no tariff block)."""
+        assert parse_tariff_config(None) is None
+
+    def test_flat_rate_block_matches_the_flat_rate_preset(self) -> None:
+        """A flat_rate block parses to TariffConfig.flat_rate at its rate."""
+        parsed = parse_tariff_config({"type": "flat_rate", "rate_per_kwh": 0.25})
+        assert parsed == TariffConfig.flat_rate(rate_per_kwh=0.25)
+
+    def test_bare_economy_7_block_matches_the_economy_7_preset(self) -> None:
+        """An economy_7 block without overrides parses to TariffConfig.economy_7()."""
+        assert parse_tariff_config({"type": "economy_7"}) == TariffConfig.economy_7()
+
+    def test_custom_block_keeps_its_periods_in_order(self) -> None:
+        """A custom block parses each period, in order, under the block's name."""
+        data = {
+            "type": "custom",
+            "name": "Two-rate",
+            "periods": [
+                {
+                    "start_time": "00:00",
+                    "end_time": "07:00",
+                    "rate_per_kwh": 0.10,
+                    "name": "Night",
+                },
+                {
+                    "start_time": "07:00",
+                    "end_time": "00:00",
+                    "rate_per_kwh": 0.30,
+                    "name": "Day",
+                },
+            ],
+        }
+        assert parse_tariff_config(data) == TariffConfig(
+            periods=(
+                TariffPeriod("00:00", "07:00", 0.10, "Night"),
+                TariffPeriod("07:00", "00:00", 0.30, "Day"),
+            ),
+            name="Two-rate",
+        )
+
+    def test_missing_type_raises(self) -> None:
+        """A tariff block without 'type' raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="requires 'type'"):
+            parse_tariff_config({})
+
+    def test_unknown_type_raises(self) -> None:
+        """An unrecognised tariff type raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Unknown tariff type"):
+            parse_tariff_config({"type": "bogus"})
 
 
 class TestLoadConfigYaml:
@@ -892,6 +950,67 @@ class TestLoadScenarios:
             assert scenarios[1].name == "Scenario 2"
         finally:
             path.unlink()
+
+
+class TestLocationBlockParsing:
+    """Tests for parse_location_block's public contract."""
+
+    def test_full_block_parses_every_field(self) -> None:
+        """Every key of a location block reaches the Location."""
+        block = {
+            "latitude": 55.95,
+            "longitude": -3.19,
+            "timezone": "Europe/London",
+            "altitude": 47.0,
+            "name": "Edinburgh",
+        }
+        assert parse_location_block(block) == Location(
+            latitude=55.95,
+            longitude=-3.19,
+            timezone="Europe/London",
+            altitude=47.0,
+            name="Edinburgh",
+        )
+
+    @pytest.mark.parametrize(
+        "block", [pytest.param(None, id="absent"), pytest.param({}, id="empty")]
+    )
+    def test_absent_or_empty_block_is_bristol(self, block: dict[str, object] | None) -> None:
+        """A config that gives no location simulates Bristol."""
+        assert parse_location_block(block) == Location.bristol()
+
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            pytest.param(
+                {"name": "Clifton"},
+                Location(
+                    latitude=51.45,
+                    longitude=-2.58,
+                    timezone="Europe/London",
+                    altitude=11.0,
+                    name="Clifton",
+                ),
+                id="name-only",
+            ),
+            pytest.param(
+                {"latitude": 55.95, "longitude": -3.19},
+                Location(
+                    latitude=55.95,
+                    longitude=-3.19,
+                    timezone="Europe/London",
+                    altitude=11.0,
+                    name="",
+                ),
+                id="coordinates-only",
+            ),
+        ],
+    )
+    def test_omitted_keys_take_bristol_values_except_the_name(
+        self, block: dict[str, object], expected: Location
+    ) -> None:
+        """Omitted coordinates, timezone and altitude are Bristol's; an omitted name stays empty."""
+        assert parse_location_block(block) == expected
 
 
 class TestLoadHomeConfig:
@@ -1405,7 +1524,7 @@ class TestFleetDistributionConfig:
             },
             "load": {},
         }
-        config = _parse_fleet_distribution_config(data)
+        config = parse_fleet_distribution_config(data)
         assert config.n_homes == 10
         assert config.pv.capacity_kw == 4.0
         assert config.battery is None
@@ -1441,7 +1560,7 @@ class TestFleetDistributionConfig:
                 },
             },
         }
-        config = _parse_fleet_distribution_config(data)
+        config = parse_fleet_distribution_config(data)
         assert config.n_homes == 100
         assert config.seed == 42
         assert isinstance(config.pv.capacity_kw, WeightedDiscreteDistribution)
@@ -1453,12 +1572,12 @@ class TestFleetDistributionConfig:
     def test_parse_missing_n_homes_raises(self) -> None:
         """Test parsing without n_homes raises."""
         with pytest.raises(ConfigurationError, match="requires 'n_homes'"):
-            _parse_fleet_distribution_config({"pv": {"capacity_kw": 4.0}})
+            parse_fleet_distribution_config({"pv": {"capacity_kw": 4.0}})
 
     def test_parse_missing_pv_raises(self) -> None:
         """Test parsing without pv raises."""
         with pytest.raises(ConfigurationError, match="requires 'pv'"):
-            _parse_fleet_distribution_config({"n_homes": 10})
+            parse_fleet_distribution_config({"n_homes": 10})
 
     def test_fleet_distribution_config_validation(self) -> None:
         """Test FleetDistributionConfig validation."""
@@ -2391,11 +2510,11 @@ class TestCommunityConfigFrozenPicklable:
             cfg.billing.seg_rate_pence_per_kwh = 0.0  # type: ignore[misc]
 
 
-class TestParseHomeConfigHeatPumpEV:
-    """Tests that _parse_home_config honours heat_pump and ev blocks (step-1/step-2)."""
+class TestParseHomeBlockHeatPumpEV:
+    """Tests that parse_home_block honours heat_pump and ev blocks (step-1/step-2)."""
 
-    def test_parse_home_config_with_heat_pump_and_ev(self) -> None:
-        """_parse_home_config populates heat_pump_config and ev_config when blocks present."""
+    def test_parse_home_block_with_heat_pump_and_ev(self) -> None:
+        """parse_home_block populates heat_pump_config and ev_config when blocks present."""
         data: dict = {
             "pv": {"capacity_kw": 4.0},
             "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
@@ -2411,7 +2530,7 @@ class TestParseHomeConfigHeatPumpEV:
                 "required_charge_kwh": 35,
             },
         }
-        result = _parse_home_config(data, Location.bristol())
+        result = parse_home_block(data, Location.bristol())
 
         assert result.heat_pump_config is not None, "heat_pump_config should not be None"
         assert isinstance(result.heat_pump_config, HeatPumpConfig)
@@ -2423,13 +2542,13 @@ class TestParseHomeConfigHeatPumpEV:
         assert result.ev_config.charger_type == "7kW"
         assert result.ev_config.arrival_hour == 18
 
-    def test_parse_home_config_without_heat_pump_ev_yields_none(self) -> None:
-        """_parse_home_config backward-compat: absent heat_pump/ev keys yield None."""
+    def test_parse_home_block_without_heat_pump_ev_yields_none(self) -> None:
+        """parse_home_block backward-compat: absent heat_pump/ev keys yield None."""
         data: dict = {
             "pv": {"capacity_kw": 4.0},
             "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
         }
-        result = _parse_home_config(data, Location.bristol())
+        result = parse_home_block(data, Location.bristol())
 
         assert result.heat_pump_config is None, "heat_pump_config should be None when key absent"
         assert result.ev_config is None, "ev_config should be None when key absent"
@@ -2459,15 +2578,15 @@ class TestParseHeatPumpEvConfigErrors:
         with pytest.raises(ConfigurationError, match="arrival_hour"):
             _parse_ev_config({"charger_type": "7kW"})
 
-    def test_heat_pump_missing_type_via_parse_home_config(self) -> None:
-        """_parse_home_config raises ConfigurationError for partial heat_pump block."""
+    def test_heat_pump_missing_type_via_parse_home_block(self) -> None:
+        """parse_home_block raises ConfigurationError for partial heat_pump block."""
         data: dict = {
             "pv": {"capacity_kw": 4.0},
             "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
             "heat_pump": {"thermal_capacity_kw": 8.0},  # missing heat_pump_type
         }
         with pytest.raises(ConfigurationError, match="heat_pump_type"):
-            _parse_home_config(data, Location.bristol())
+            parse_home_block(data, Location.bristol())
 
 
 class TestParsePVConfig:
@@ -3009,20 +3128,20 @@ class TestFinanceConfigValidation:
 
 
 # ---------------------------------------------------------------------------
-# _parse_finance_config tests (step-5)
+# parse_finance_config tests (step-5)
 # ---------------------------------------------------------------------------
 
 
 class TestFinanceConfigParsing:
-    """Tests for _parse_finance_config parser function."""
+    """Tests for parse_finance_config parser function."""
 
     def test_none_returns_none(self) -> None:
-        """_parse_finance_config(None) returns None (no finance block in YAML)."""
-        assert _parse_finance_config(None) is None
+        """parse_finance_config(None) returns None (no finance block in YAML)."""
+        assert parse_finance_config(None) is None
 
     def test_minimal_dict_uses_defaults(self) -> None:
         """Dict with only standing_charge_pence_per_day uses all other defaults."""
-        result = _parse_finance_config({"standing_charge_pence_per_day": 60.0})
+        result = parse_finance_config({"standing_charge_pence_per_day": 60.0})
         assert result is not None
         assert result.standing_charge_pence_per_day == 60.0
         assert result.vat_rate == 0.05
@@ -3063,7 +3182,7 @@ class TestFinanceConfigParsing:
             "retained_cash_floor_per_home_per_year_gbp": 30.0,
             "grid_services_income_per_kw_per_year_gbp": 5.0,
         }
-        result = _parse_finance_config(data)
+        result = parse_finance_config(data)
         assert result is not None
         assert result.standing_charge_pence_per_day == 70.0
         assert result.vat_rate == 0.08
@@ -3085,13 +3204,13 @@ class TestFinanceConfigParsing:
 
     def test_inverter_cost_omission_defaults_zero(self) -> None:
         """Parser with no inverter_cost_per_kw_gbp key returns 0.0 (acceptance guard)."""
-        result = _parse_finance_config({"standing_charge_pence_per_day": 60.0})
+        result = parse_finance_config({"standing_charge_pence_per_day": 60.0})
         assert result is not None
         assert result.inverter_cost_per_kw_gbp == 0.0
 
     def test_inverter_cost_key_round_trips(self) -> None:
         """inverter_cost_per_kw_gbp in dict is reflected on the returned FinanceConfig."""
-        result = _parse_finance_config(
+        result = parse_finance_config(
             {"standing_charge_pence_per_day": 60.0, "inverter_cost_per_kw_gbp": 200.0}
         )
         assert result is not None
@@ -3100,20 +3219,20 @@ class TestFinanceConfigParsing:
     def test_negative_inverter_cost_propagates_configuration_error(self) -> None:
         """negative inverter_cost_per_kw_gbp in dict raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config(
+            parse_finance_config(
                 {"standing_charge_pence_per_day": 60.0, "inverter_cost_per_kw_gbp": -5.0}
             )
 
     def test_out_of_range_propagates_configuration_error(self) -> None:
         """An out-of-range field (vat_rate=2.0) raises ConfigurationError via __post_init__."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config(
+            parse_finance_config(
                 {"standing_charge_pence_per_day": 60.0, "vat_rate": 2.0}
             )
 
     def test_zero_grant_accepted(self) -> None:
         """grant_gbp=0 is accepted by the parser (non-negative allowed)."""
-        result = _parse_finance_config(
+        result = parse_finance_config(
             {"standing_charge_pence_per_day": 60.0, "grant_gbp": 0.0}
         )
         assert result is not None
@@ -3122,11 +3241,11 @@ class TestFinanceConfigParsing:
     def test_missing_standing_charge_raises(self) -> None:
         """Finance block without standing_charge_pence_per_day raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="standing_charge_pence_per_day"):
-            _parse_finance_config({"vat_rate": 0.05})
+            parse_finance_config({"vat_rate": 0.05})
 
     def test_int_coercion_of_year_fields(self) -> None:
         """loan_term_years/asset_life_years given as floats in the dict are coerced to int."""
-        result = _parse_finance_config(
+        result = parse_finance_config(
             {
                 "standing_charge_pence_per_day": 60.0,
                 "loan_term_years": 20.0,
@@ -3142,21 +3261,21 @@ class TestFinanceConfigParsing:
     def test_non_numeric_value_raises_configuration_error(self) -> None:
         """A non-numeric string for a numeric field raises ConfigurationError (not ValueError)."""
         with pytest.raises(ConfigurationError, match="non-numeric"):
-            _parse_finance_config(
+            parse_finance_config(
                 {"standing_charge_pence_per_day": 60.0, "vat_rate": "not-a-number"}
             )
 
     def test_negative_own_use_rate_propagates_configuration_error(self) -> None:
         """negative own_use_rate_pence_per_kwh in dict raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config(
+            parse_finance_config(
                 {"standing_charge_pence_per_day": 60.0, "own_use_rate_pence_per_kwh": -1.0}
             )
 
     def test_negative_retained_cash_floor_propagates_configuration_error(self) -> None:
         """negative retained_cash_floor_per_home_per_year_gbp in dict raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config(
+            parse_finance_config(
                 {
                     "standing_charge_pence_per_day": 60.0,
                     "retained_cash_floor_per_home_per_year_gbp": -1.0,
@@ -3166,7 +3285,7 @@ class TestFinanceConfigParsing:
     def test_negative_grid_services_income_propagates_configuration_error(self) -> None:
         """negative grid_services_income_per_kw_per_year_gbp in dict raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config(
+            parse_finance_config(
                 {
                     "standing_charge_pence_per_day": 60.0,
                     "grid_services_income_per_kw_per_year_gbp": -1.0,
@@ -3335,11 +3454,14 @@ class TestScenarioSegBlock:
         pytest.param(True, id="boolean"),
     ]
 
-    @pytest.fixture(params=["scenario", "community billing"])
+    @pytest.fixture(params=["scenario", "community billing", "parse_seg_rate"])
     def read_seg_rate(
         self, request: pytest.FixtureRequest, tmp_path: Path
     ) -> Callable[[object], float | None]:
-        """Write a ``seg`` block into a YAML document and read its rate back through a public loader."""
+        """Read a ``seg`` block's rate through a public entry point.
+
+        The entry points are a scenario file, a community-billing file, and parse_seg_rate itself.
+        """
         path = tmp_path / "seg.yaml"
 
         def through_scenario(seg: object) -> float | None:
@@ -3354,7 +3476,11 @@ class TestScenarioSegBlock:
             assert config.billing is not None
             return config.billing.seg_rate_pence_per_kwh
 
-        readers = {"scenario": through_scenario, "community billing": through_community_billing}
+        readers = {
+            "scenario": through_scenario,
+            "community billing": through_community_billing,
+            "parse_seg_rate": parse_seg_rate,
+        }
         return readers[request.param]
 
     @pytest.mark.parametrize("preset", sorted(SEG_PRESETS))
@@ -3424,6 +3550,10 @@ class TestScenarioSegBlock:
         path = tmp_path / "no-seg.yaml"
         path.write_text(yaml.safe_dump(self._SCENARIO))
         assert load_scenarios(path)[0].seg_tariff_pence_per_kwh is None
+
+    def test_absent_block_parses_to_no_seg_rate(self) -> None:
+        """parse_seg_rate reads an absent ``seg:`` block as no SEG rate."""
+        assert parse_seg_rate(None) is None
 
 
 class TestGenerateHomesFromDistributionFlex:
@@ -3624,7 +3754,7 @@ fleet_distribution:
         Mirrors the shape of scenarios/bristol-fin-calibration.yaml (fleet_distribution +
         battery + seg + finance, no top-level tariff:, no battery.grid_charging).  Asserts
         that load_fleet_config produces tariff_config=None and battery.grid_charging=None on
-        every home — i.e. the β threading is disjoint from _parse_finance_config.
+        every home — i.e. the β threading is disjoint from parse_finance_config.
         """
         yaml_content = """
 name: Theta Calibration Guard
@@ -3802,18 +3932,18 @@ class TestFinanceConfigGridServicesModel:
 
 
 # ---------------------------------------------------------------------------
-# _parse_finance_config: grid_services_model + nested grid_services_events (step-13)
+# parse_finance_config: grid_services_model + nested grid_services_events (step-13)
 # ---------------------------------------------------------------------------
 
 
 class TestFinanceConfigParsingGridServices:
-    """Tests for _parse_finance_config with grid_services_model + grid_services_events."""
+    """Tests for parse_finance_config with grid_services_model + grid_services_events."""
 
     _BASE = {"standing_charge_pence_per_day": 60.0}
 
     def test_omitting_model_defaults_flat(self) -> None:
         """Finance dict omitting grid_services_model yields 'flat' + None events."""
-        result = _parse_finance_config(self._BASE)
+        result = parse_finance_config(self._BASE)
         assert result is not None
         assert result.grid_services_model == "flat"
         assert result.grid_services_events is None
@@ -3841,7 +3971,7 @@ class TestFinanceConfigParsingGridServices:
                 ],
             },
         }
-        result = _parse_finance_config(data)
+        result = parse_finance_config(data)
         assert result is not None
         assert result.grid_services_model == "capacity_at_events"
         assert isinstance(result.grid_services_events, GridServicesEventsConfig)
@@ -3863,12 +3993,12 @@ class TestFinanceConfigParsingGridServices:
     def test_unknown_model_raises_configuration_error(self) -> None:
         """Unknown grid_services_model in dict raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config({**self._BASE, "grid_services_model": "unknown"})
+            parse_finance_config({**self._BASE, "grid_services_model": "unknown"})
 
     def test_nested_negative_override_raises(self) -> None:
         """Negative availability override in nested block raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config({
+            parse_finance_config({
                 **self._BASE,
                 "grid_services_model": "capacity_at_events",
                 "grid_services_events": {
@@ -3886,7 +4016,7 @@ class TestFinanceConfigParsingGridServices:
     def test_nested_aggregator_share_one_raises(self) -> None:
         """aggregator_share=1 in nested block raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config({
+            parse_finance_config({
                 **self._BASE,
                 "grid_services_model": "capacity_at_events",
                 "grid_services_events": {
@@ -3903,7 +4033,7 @@ class TestFinanceConfigParsingGridServices:
     def test_nested_empty_event_windows_raises(self) -> None:
         """Empty event_windows list in nested block raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config({
+            parse_finance_config({
                 **self._BASE,
                 "grid_services_model": "capacity_at_events",
                 "grid_services_events": {
@@ -3917,7 +4047,7 @@ class TestFinanceConfigParsingGridServices:
     def test_nested_unknown_band_raises(self) -> None:
         """Unknown band in nested block raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config({
+            parse_finance_config({
                 **self._BASE,
                 "grid_services_model": "capacity_at_events",
                 "grid_services_events": {
@@ -3936,7 +4066,7 @@ class TestFinanceConfigParsingGridServices:
     def test_non_dict_grid_services_events_raises(self) -> None:
         """grid_services_events as a string (not a dict) raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="mapping"):
-            _parse_finance_config({
+            parse_finance_config({
                 **self._BASE,
                 "grid_services_model": "capacity_at_events",
                 "grid_services_events": "central",  # wrong type
@@ -3945,7 +4075,7 @@ class TestFinanceConfigParsingGridServices:
     def test_non_numeric_event_hours_raises(self) -> None:
         """event_hours='abc' (non-numeric string) raises ConfigurationError, not raw ValueError."""
         with pytest.raises(ConfigurationError):
-            _parse_finance_config({
+            parse_finance_config({
                 **self._BASE,
                 "grid_services_model": "capacity_at_events",
                 "grid_services_events": {
@@ -3962,7 +4092,7 @@ class TestFinanceConfigParsingGridServices:
     def test_missing_required_event_window_key_raises(self) -> None:
         """event_window dict missing a required key raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="requires 'hours'"):
-            _parse_finance_config({
+            parse_finance_config({
                 **self._BASE,
                 "grid_services_model": "capacity_at_events",
                 "grid_services_events": {
@@ -3980,7 +4110,7 @@ class TestFinanceConfigParsingGridServices:
     def test_non_dict_event_window_entry_raises(self) -> None:
         """A non-dict entry in event_windows list raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="mapping"):
-            _parse_finance_config({
+            parse_finance_config({
                 **self._BASE,
                 "grid_services_model": "capacity_at_events",
                 "grid_services_events": {

@@ -2,12 +2,30 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Optimize CLI commands for W3 discrete install-config sweep (task E / PRD §3.6 / §10-E)."""
 
+import dataclasses
 from pathlib import Path
 from typing import Annotated, Optional
 
+import pandas as pd
 import typer
 
 from solar_challenge.cli.utils import console, handle_errors, print_info
+from solar_challenge.config import (
+    ConfigurationError,
+    ScenarioConfig,
+    SimulationPeriod,
+    load_config,
+    load_fleet_config,
+    parse_finance_config,
+    parse_seg_rate,
+)
+from solar_challenge.optimize import (
+    enumerate_configs,
+    run_sweep,
+    sensitivity_panel,
+)
+from solar_challenge.output import generate_config_ranking_report
+from solar_challenge.seg import SEGTariff
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands (W3)")
 
@@ -166,27 +184,6 @@ def configs(
             --retained-floor 27 --sensitivity retained_floor,grid_services \\
             --start 2024-01-01 --end 2024-01-07
     """
-    import dataclasses
-
-    import pandas as pd
-
-    from solar_challenge.config import (
-        ConfigurationError,
-        ScenarioConfig,
-        SimulationPeriod,
-        _parse_finance_config,
-        _parse_seg_config,
-        load_config,
-        load_fleet_config,
-    )
-    from solar_challenge.optimize import (
-        enumerate_configs,
-        run_sweep,
-        sensitivity_panel,
-    )
-    from solar_challenge.output import generate_config_ranking_report
-    from solar_challenge.seg import SEGTariff
-
     # ---- Parse dim lists ----------------------------------------------------
     pv_list = _parse_float_list(pv, "pv")
     battery_list = _parse_float_list(battery, "battery")
@@ -205,7 +202,7 @@ def configs(
 
     # ---- Load raw config + finance block ------------------------------------
     raw = load_config(scenario)
-    finance = _parse_finance_config(raw.get("finance"))
+    finance = parse_finance_config(raw.get("finance"))
     if finance is None:
         raise ConfigurationError(
             "No 'finance:' block found in the scenario file. "
@@ -223,7 +220,7 @@ def configs(
     fleet_config = load_fleet_config(scenario)
 
     # Thread SEG tariff onto each home
-    seg_rate = _parse_seg_config(raw.get("seg"))
+    seg_rate = parse_seg_rate(raw.get("seg"))
     if seg_rate is not None:
         seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
         homes_with_seg = [

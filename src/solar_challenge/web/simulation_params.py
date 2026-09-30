@@ -10,8 +10,8 @@ import pandas as pd
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ConfigurationError,
-    _parse_dispatch_strategy_config,
-    _parse_tariff_config,
+    parse_dispatch_strategy_config,
+    parse_tariff_config,
 )
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
@@ -97,7 +97,7 @@ def parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
 def parse_seg_tariff(seg_data: dict[str, Any] | None) -> SEGTariff | None:
     """Parse a 'seg' sub-dict from the request body into a SEGTariff.
 
-    Resolution priority (mirrors config._parse_tariff_config naming convention):
+    Resolution priority (mirrors config.parse_tariff_config naming convention):
     1. ``{"preset": "<key>"}`` — resolved via :func:`resolve_seg_tariff`; raises
        ``ValueError`` for unknown presets.
     2. ``{"rate_pence_per_kwh": <float>}`` — constructs
@@ -213,7 +213,7 @@ def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, p
         try:
             dispatch_data = params["dispatch_strategy"]
             if dispatch_data:
-                battery_kwargs["dispatch_strategy"] = _parse_dispatch_strategy_config(dispatch_data)
+                battery_kwargs["dispatch_strategy"] = parse_dispatch_strategy_config(dispatch_data)
         except ConfigurationError as exc:
             raise ValueError(str(exc)) from exc
         battery_config = BatteryConfig(**battery_kwargs)
@@ -240,7 +240,7 @@ def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, p
 
     # Build optional tariff config
     try:
-        tariff_config = _parse_tariff_config(params["tariff"])
+        tariff_config = parse_tariff_config(params["tariff"])
     except ConfigurationError as exc:
         raise ValueError(str(exc)) from exc
 

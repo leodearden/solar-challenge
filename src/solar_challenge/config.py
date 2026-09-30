@@ -600,13 +600,16 @@ class SweepResult:
     results: Union[SimulationResults, FleetResults]
 
 
-def _parse_location(data: dict[str, Any]) -> Location:
-    """Parse location from config data."""
+def parse_location_block(data: Optional[dict[str, Any]]) -> Location:
+    """Parse a ``location:`` block into a Location; an absent or empty block is Bristol."""
+    bristol = Location.bristol()
+    if not data:
+        return bristol
     return Location(
-        latitude=data.get("latitude", 51.45),
-        longitude=data.get("longitude", -2.58),
-        timezone=data.get("timezone", "Europe/London"),
-        altitude=data.get("altitude", 11.0),
+        latitude=data.get("latitude", bristol.latitude),
+        longitude=data.get("longitude", bristol.longitude),
+        timezone=data.get("timezone", bristol.timezone),
+        altitude=data.get("altitude", bristol.altitude),
         name=data.get("name", ""),
     )
 
@@ -656,7 +659,7 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
     # Parse dispatch strategy if present
     dispatch_strategy = None
     if "dispatch_strategy" in data:
-        dispatch_strategy = _parse_dispatch_strategy_config(data["dispatch_strategy"])
+        dispatch_strategy = parse_dispatch_strategy_config(data["dispatch_strategy"])
 
     # Parse grid-charging config if present
     grid_charging = _parse_grid_charge_config(data.get("grid_charging"))
@@ -694,7 +697,7 @@ def _parse_load_config(data: dict[str, Any]) -> LoadConfig:
     )
 
 
-def _parse_dispatch_strategy_config(
+def parse_dispatch_strategy_config(
     data: Optional[dict[str, Any]]
 ) -> Optional[DispatchStrategyConfig]:
     """Parse dispatch strategy configuration from config data."""
@@ -719,7 +722,7 @@ def _parse_dispatch_strategy_config(
     )
 
 
-def _parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig]:
+def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig]:
     """Parse tariff configuration from config data.
 
     Supports preset tariffs (flat_rate, economy_7, economy_10) and custom
@@ -883,8 +886,8 @@ def _parse_ev_config(data: Optional[dict[str, Any]]) -> Optional[EVConfig]:
     )
 
 
-def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
-    """Parse home configuration from config data."""
+def parse_home_block(data: dict[str, Any], location: Location) -> HomeConfig:
+    """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*."""
     pv_data = data.get("pv", {})
     battery_data = data.get("battery")
     load_data = data.get("load", {})
@@ -897,7 +900,7 @@ def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
         load_config=_parse_load_config(load_data),
         location=location,
         name=data.get("name", ""),
-        tariff_config=_parse_tariff_config(tariff_data),
+        tariff_config=parse_tariff_config(tariff_data),
         dispatch_strategy=dispatch_strategy,
         heat_pump_config=_parse_heat_pump_config(data.get("heat_pump")),
         ev_config=_parse_ev_config(data.get("ev")),
@@ -1193,7 +1196,7 @@ def _parse_ev_distribution_config(
     )
 
 
-def _parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionConfig:
+def parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionConfig:
     """Parse fleet distribution configuration from config data."""
     if "n_homes" not in data:
         raise ConfigurationError("Fleet distribution config requires 'n_homes'")
@@ -1518,7 +1521,7 @@ def generate_homes_from_distribution(
     return homes
 
 
-def _parse_seg_config(data: object, *, block_path: str = "seg") -> Optional[float]:
+def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
     """Read the SEG export rate in pence/kWh from a ``seg:`` block.
 
     The block names exactly one of a :data:`~solar_challenge.seg.SEG_PRESETS`
@@ -1562,7 +1565,7 @@ def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
         raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
 
 
-def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConfig]:
+def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConfig]:
     """Parse finance configuration from config data.
 
     Args:
@@ -1597,7 +1600,7 @@ def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceCon
             )
         gs_data = gs_events_raw
         # Parse event_windows list-of-dicts -> tuple[EventWindow, ...]
-        # mirroring _parse_tariff_config 'custom' branch.
+        # mirroring parse_tariff_config 'custom' branch.
         ew_raw_list = gs_data.get("event_windows", [])
         if not isinstance(ew_raw_list, list):
             raise ConfigurationError(
@@ -1707,17 +1710,16 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
     if "period" not in data:
         raise ConfigurationError(f"Scenario '{data['name']}' must have a 'period' field")
 
-    location_data = data.get("location")
-    location = _parse_location(location_data) if location_data else Location.bristol()
+    location = parse_location_block(data.get("location"))
 
     homes: list[HomeConfig] = []
     home: Optional[HomeConfig] = None
 
     if "homes" in data:
         for home_data in data["homes"]:
-            homes.append(_parse_home_config(home_data, location))
+            homes.append(parse_home_block(home_data, location))
     elif "home" in data:
-        home = _parse_home_config(data["home"], location)
+        home = parse_home_block(data["home"], location)
     else:
         raise ConfigurationError(
             f"Scenario '{data['name']}' must define either 'home' or 'homes'"
@@ -1731,9 +1733,9 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         homes=homes,
         home=home,
         output=_parse_output_config(data.get("output")),
-        seg_tariff_pence_per_kwh=_parse_seg_config(data.get("seg")),
-        tariff_config=_parse_tariff_config(data.get("tariff_config")),
-        finance=_parse_finance_config(data.get("finance")),
+        seg_tariff_pence_per_kwh=parse_seg_rate(data.get("seg")),
+        tariff_config=parse_tariff_config(data.get("tariff_config")),
+        finance=parse_finance_config(data.get("finance")),
     )
 
 
@@ -1995,10 +1997,9 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
 
     # Check for home section or parse entire config as home
     home_data = config.get("home", config)
-    location_data = config.get("location")
-    location = _parse_location(location_data) if location_data else Location.bristol()
+    location = parse_location_block(config.get("location"))
 
-    return _parse_home_config(home_data, location)
+    return parse_home_block(home_data, location)
 
 
 def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
@@ -2019,15 +2020,14 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     """
     config = load_config(path)
 
-    location_data = config.get("location")
-    location = _parse_location(location_data) if location_data else Location.bristol()
+    location = parse_location_block(config.get("location"))
 
     # Check for fleet_distribution (new format)
     if "fleet_distribution" in config:
-        dist_config = _parse_fleet_distribution_config(config["fleet_distribution"])
+        dist_config = parse_fleet_distribution_config(config["fleet_distribution"])
         # Thread scenario-level tariff and fleet battery grid_charging (Seam 1, §9.1).
-        # _parse_tariff_config returns None when the key is absent → calibration-safe.
-        fleet_tariff = _parse_tariff_config(config.get("tariff"))
+        # parse_tariff_config returns None when the key is absent → calibration-safe.
+        fleet_tariff = parse_tariff_config(config.get("tariff"))
         # grid_charging lives under fleet_distribution.battery.grid_charging
         battery_data = config["fleet_distribution"].get("battery")
         fleet_grid_charging = (
@@ -2065,7 +2065,7 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
         homes_data = config["homes"]
         if not homes_data:
             raise ConfigurationError("Fleet 'homes' list cannot be empty")
-        homes = [_parse_home_config(h, location) for h in homes_data]
+        homes = [parse_home_block(h, location) for h in homes_data]
     else:
         raise ConfigurationError(
             "Fleet configuration requires either 'homes' list or 'fleet_distribution'"
@@ -2311,7 +2311,7 @@ def _parse_community_billing_config(
     if data is None:
         return None
 
-    tariff = _parse_tariff_config(data.get("tariff"))
+    tariff = parse_tariff_config(data.get("tariff"))
 
     # Resolve SEG rate (three mutually-exclusive forms)
     direct_rate: Optional[float] = None
@@ -2332,7 +2332,7 @@ def _parse_community_billing_config(
     seg_rate = (
         direct_rate
         if direct_rate is not None
-        else _parse_seg_config(seg_block, block_path="community.billing.seg")
+        else parse_seg_rate(seg_block, block_path="community.billing.seg")
     )
 
     # Normalise an all-None result to None so callers can reliably test ``is None``
