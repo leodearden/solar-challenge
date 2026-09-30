@@ -49,7 +49,7 @@ _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
 })
 
 
-def parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
+def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     """Extract a (start, end) date-string pair from a JSON request body.
 
     Three resolution modes (checked in order):
@@ -132,7 +132,7 @@ def parse_seg_tariff(seg_data: dict[str, Any] | None) -> SEGTariff | None:
     return None
 
 
-def _refuse_unrecognised_keys(data: dict[str, Any]) -> None:
+def _refuse_unrecognised_keys(data: Mapping[str, Any]) -> None:
     recognised = _HOME_CONFIG_DEFAULTS.keys() | _DATE_RANGE_DEFAULTS.keys()
     unrecognised = sorted(data.keys() - recognised)
     if unrecognised:
@@ -142,20 +142,23 @@ def _refuse_unrecognised_keys(data: dict[str, Any]) -> None:
         )
 
 
-def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
+def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
     """Parse JSON request body into HomeConfig and date range.
 
     Args:
-        data: Parsed JSON body from the request.
+        data: The home config, a parsed JSON value that must be an object.
 
     Returns:
         Tuple of (HomeConfig, start_date, end_date, name).
 
     Raises:
-        ValueError: If required fields are missing or invalid, or if *data*
-            has a top-level key outside the recognised set; the error names
-            each such key.
+        ValueError: If *data* is not a JSON object (the error names the type
+            received), if it has a top-level key outside the recognised set
+            (the error names each such key), or if required fields are
+            missing or invalid.
     """
+    if not isinstance(data, Mapping):
+        raise ValueError(f"Home config must be a JSON object, got {type(data).__name__}")
     _refuse_unrecognised_keys(data)
     params = {**_HOME_CONFIG_DEFAULTS, **data}
     pv_kw = float(params["pv_kw"])
