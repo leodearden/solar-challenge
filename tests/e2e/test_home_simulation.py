@@ -2,7 +2,9 @@
 
 Verifies form defaults, tab navigation, preset selector, submit button,
 detects Bug B4 (buildPayload missing form fields), and checks that the
-server accepts what the form submits with the battery switch on.
+server accepts what the form submits with each optional setting on: the
+battery and its dispatch strategies, the heat pump, the import tariff and
+SEG export pricing.
 """
 
 from dataclasses import dataclass
