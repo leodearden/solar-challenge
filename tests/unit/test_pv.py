@@ -704,6 +704,32 @@ class TestInverterMatchesStringVoltage:
             config.effective_inverter_capacity_kw * 1000
         )
 
+    def test_equally_rated_candidates_break_ties_on_nominal_voltage(self) -> None:
+        system = create_pv_system(PVConfig.default_4kw())
+        assert [array.strings for array in system.arrays] == [1], (
+            f"the default array should be wired as one string, got {_wiring(system)}"
+        )
+        array = system.arrays[0]
+        string_vmp = array.modules_per_string * array.module_parameters["V_mp_ref"]
+        chosen = system.inverter_parameters
+
+        catalogue = pvlib.pvsystem.retrieve_sam("CECInverter")
+        numbers = catalogue.loc[["Paco", "Vdco", "Mppt_low", "Mppt_high"]].T.apply(pd.to_numeric)
+        equally_rated = numbers[
+            (numbers["Paco"] == chosen["Paco"])
+            & (numbers["Mppt_low"] <= string_vmp)
+            & (string_vmp <= numbers["Mppt_high"])
+        ]
+        assert len(equally_rated) > 1, "the tie-break needs several equally rated inverters"
+
+        chosen_distance_v = abs(chosen["Vdco"] - string_vmp)
+        nearest_distance_v = (equally_rated["Vdco"] - string_vmp).abs().min()
+        assert chosen_distance_v == pytest.approx(nearest_distance_v), (
+            f"the {string_vmp:.0f} V string is {chosen_distance_v:.0f} V from the chosen "
+            f"inverter's Vdco of {chosen['Vdco']:.0f} V, but {nearest_distance_v:.0f} V "
+            "from the nearest equally rated candidate's"
+        )
+
     @pytest.mark.parametrize("config", SYSTEM_SIZE_CONFIGS, ids=_config_id)
     @pytest.mark.parametrize(
         ("day", "floor"),
