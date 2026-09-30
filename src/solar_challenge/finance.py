@@ -910,8 +910,7 @@ class YearPoint:
     ``fleet_revenue_gbp`` is the CBS revenue:
     own-use savings (own_use_rate × fleet_self_consumption_kwh / 100)
     + SEG export income (Σ seg_export_income_gbp per home)
-    + grid-services topper (grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw)
-    − CBS grid-charge cost (Σ total_grid_charge_cost_gbp per home).
+    + grid-services topper (grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw).
     """
 
     year: int
@@ -950,7 +949,7 @@ class YearPoint:
     """Total grid import by the fleet that year (kWh, ≥ 0)."""
 
     fleet_revenue_gbp: float
-    """CBS revenue (own-use + SEG + grid-services topper − CBS grid-charge cost) (£)."""
+    """CBS revenue (own-use + SEG + grid-services topper) (£)."""
 
     def __post_init__(self) -> None:
         if self.year < 0:
@@ -1345,7 +1344,7 @@ class _NodeData(NamedTuple):
     """Mean battery state-of-health across the fleet (fraction, 0–1)."""
 
     fleet_revenue: float
-    """Fleet total (self-consumption saving + SEG export income) (£, annualised)."""
+    """CBS fleet revenue: own-use + SEG + grid-services (£)."""
 
 
 def _aged_homes(
@@ -1511,8 +1510,9 @@ def project_multi_year(
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100   (fleet_sc = basis C)
         #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)
         #   grid_services   = model-dependent (flat or capacity_at_events)
-        #   cbs_grid_charge = Σ summary.total_grid_charge_cost_gbp
-        #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services − cbs_grid_charge
+        #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
+        # Grid-charge energy is paid by the householder inside grid import, not a CBS
+        # outgoing (docs/cost-recovery-finance-model.md §4).
         # CR3: SEG revenue is extracted via _seg_export_income_gbp (honours
         # self_consumption_override and seg scaling automatically); householder_bill
         # is no longer called here since seg_export_income_gbp was removed from it.
@@ -1537,8 +1537,7 @@ def project_multi_year(
                 for h in homes
                 if h.battery_config is not None
             )
-        cbs_grid_charge_cost = sum(s.total_grid_charge_cost_gbp for s in per_home_summaries)
-        fleet_revenue = own_use_revenue + seg_revenue + grid_services - cbs_grid_charge_cost
+        fleet_revenue = own_use_revenue + seg_revenue + grid_services
 
         # PV SOH: mean of calculate_degradation_factor over all homes
         pv_sohs = [
@@ -2163,17 +2162,16 @@ def solve_cost_recovery_rate(
 
     **Affine-line precondition** (Suggestion 3 / robustness note):
 
-    Step 2 is exact when ``project_multi_year`` does *not* clamp any year's
-    ``fleet_revenue_gbp`` to zero.  The code stores
-    ``fleet_revenue_gbp = max(0.0, rev_per_year[y])``, so if any year's raw
-    revenue is negative (e.g. in severely loss-making scenarios where CBS
-    grid-charge cost exceeds all income at the configured r0), the base node
-    is clamped and the linear reconstruction diverges from a true re-sim by a
-    bounded error.  In practice this only occurs in scenarios well outside the
-    viable parameter range (surplus at the configured r0 is deeply negative);
-    the solved rate may then be a few pence off the true breakeven.  Callers
-    that need bit-exact results under such conditions should re-simulate at the
-    returned rate.
+    Step 2 is exact while the ``max(0.0, rev_per_year[y])`` clamp that
+    ``project_multi_year`` applies to ``fleet_revenue_gbp`` does not bind.  It
+    cannot bind today: every CBS revenue term is non-negative (own-use = rate
+    (≥ 0) × basis-C kWh (clamped at 0); SEG ≥ 0; grid-services ≥ 0 under both
+    models, the event model paying gross × (1 − aggregator_share)), and the
+    PCHIP / Fritsch–Carlson interpolation is shape-preserving, so no
+    interpolated year falls below its non-negative nodes.  A future negative
+    revenue term would reintroduce a bounded error in the linear
+    reconstruction; callers needing exact results would then re-simulate at
+    the returned rate.
 
     **Cost note** (Suggestion 4 / performance):
 

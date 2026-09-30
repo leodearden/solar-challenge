@@ -55,7 +55,6 @@ def _make_sim_results_cr6(
     export_kwh: float,
     import_kwh: float,
     n_steps: int = 8760,  # hourly resolution; energy = sum*(1/60) still correct
-    grid_charge_cost_per_home_gbp: float | None = None,
 ) -> "SimulationResults":  # type: ignore[name-defined]
     """Build a synthetic SimulationResults.
 
@@ -64,8 +63,8 @@ def _make_sim_results_cr6(
       home.py computes total_kwh = series.sum() * (1/60)
       sc_kw = self_kwh / (n_steps/60)  →  sum*1/60 = self_kwh  ✓
 
-    grid_charge_cost_per_home_gbp=None → total_grid_charge_cost_gbp==0.0 (home.py:154),
-    so a flat-rate fleet has cbs_grid_charge_cost==0 by construction.
+    No battery grid-charging: grid_import is all load import.
+    Untariffed: import_cost is zero and grid_charge_cost is None.
     export_revenue=0 → SEG income = 0 in _seg_export_income_gbp (physics path).
     """
     import pandas as pd
@@ -79,13 +78,6 @@ def _make_sim_results_cr6(
     demand_kw = sc_kw + imp_kw
     zeros = pd.Series(0.0, index=idx)
 
-    if grid_charge_cost_per_home_gbp is not None:
-        # home.py sums grid_charge_cost directly (£, not kW): sum = gbp ✓
-        charge_per_step = grid_charge_cost_per_home_gbp / n_steps
-        grid_charge_cost: pd.Series | None = pd.Series(charge_per_step, index=idx)
-    else:
-        grid_charge_cost = None  # flat-rate → cbs_grid_charge_cost==0
-
     return SimulationResults(
         generation=pd.Series(gen_kw, index=idx),
         demand=pd.Series(demand_kw, index=idx),
@@ -98,7 +90,7 @@ def _make_sim_results_cr6(
         import_cost=zeros.copy(),
         export_revenue=zeros.copy(),  # SEG=0 → no-flex CBS-revenue identity holds
         tariff_rate=zeros.copy(),
-        grid_charge_cost=grid_charge_cost,
+        grid_charge_cost=None,
     )
 
 
@@ -116,7 +108,7 @@ def _make_fleet_results_fin_cr6(
       - Required revenue = opex(13100) + debt_svc(14410) + floor×n(2700) = £30,210
       - r* = 30210 / (200000/100) = 15.1 p/kWh → interior 'floor' regime, feasible=True
 
-    No-flex by construction: grid_charge_cost=None, export_revenue=0, grid_services=0.
+    No-flex by construction: no grid charging, export_revenue=0, grid_services=0.
     """
     from solar_challenge.fleet import FleetResults
 
@@ -240,7 +232,7 @@ class TestNoFlexAnchorReconciliation:
     Hard-asserts structural/by-construction properties only:
     - sol.feasible is True
     - No-flex CBS-revenue identity: fleet_revenue = own_use_rate × fleet_sc / 100
-      (grid_services=0, cbs_grid_charge=0)
+      (grid_services=0, SEG=0)
     - 0 ≤ sol.own_use_rate ≤ retail (valid clamped range)
 
     REPORTS (printed, NOT asserted): solved rate ≈15p, saving ≈£324,
@@ -268,9 +260,8 @@ class TestNoFlexAnchorReconciliation:
     def test_no_flex_cbs_revenue_identity(self) -> None:
         """No-flex identity: fleet_revenue_gbp == own_use_rate × fleet_sc / 100.
 
-        With flat-rate tariff (grid_charge_cost=None → total_grid_charge_cost=0),
-        grid_services=0, and export_revenue=0 (SEG=0 in synthetic):
-          fleet_revenue = own_use × sc / 100 + 0 + 0 − 0 (by construction)
+        With grid_services=0 and export_revenue=0 (SEG=0 in synthetic):
+          fleet_revenue = own_use × sc / 100 + 0 + 0 (by construction)
         """
         from solar_challenge.finance import project_multi_year
 
@@ -281,7 +272,7 @@ class TestNoFlexAnchorReconciliation:
         year0 = curve.points[0]
 
         # No-flex CBS-revenue identity (by construction of the synthetic fleet)
-        # SEG=0 (export_revenue=0 in _make_sim_results_cr6), grid_services=0, grid_charge=0
+        # SEG=0 (export_revenue=0 in _make_sim_results_cr6), grid_services=0
         expected_revenue = (
             finance.own_use_rate_pence_per_kwh
             * year0.fleet_self_consumption_kwh
@@ -375,29 +366,19 @@ def _make_arbitrage_fleet_cr6(
     self_kwh: float = 2400.0,    # elevated sc vs flat-rate 2000 kWh
     export_kwh: float = 400.0,
     import_kwh: float = 800.0,
-    grid_charge_cost_per_home_gbp: float = 50.0,  # CBS pays to charge battery from grid
 ) -> "FleetResults":  # type: ignore[name-defined]
     """Build an 'arbitrage-on' synthetic FleetResults representing W1 TOU time-shift.
 
-    Arbitrage on: elevated self-consumption (TOU charging of battery raises sc)
-    + CBS grid-charge cost (cbs_grid_charge_cost > 0 from a non-None grid_charge_cost series).
-
-    Net benefit direction at r = retail = 30p:
-      uplift_sc = (2400 − 2000) × 30/100 = £120/home
-      grid_charge = £50/home
-      net_benefit = £70/home > 0 → revenue higher → rate lower ✓
-
-    Reuses _make_sim_results_cr6 with grid_charge_cost_per_home_gbp set,
-    avoiding duplication of the series-building block.
+    Arbitrage on: higher basis-C own-use than the flat-rate fleet (2400 vs 2000
+    kWh/home at the same demand), so the CBS earns more own-use revenue and needs
+    a lower r*.  Grid-charge energy is paid by the householder inside grid import
+    (docs/cost-recovery-finance-model.md §4 and §8.2); it is not a CBS term.
     """
     from solar_challenge.fleet import FleetResults
 
     homes = [_make_home_config_fin_cr6() for _ in range(n_homes)]
     per_home = [
-        _make_sim_results_cr6(
-            self_kwh, export_kwh, import_kwh,
-            grid_charge_cost_per_home_gbp=grid_charge_cost_per_home_gbp,
-        )
+        _make_sim_results_cr6(self_kwh, export_kwh, import_kwh)
         for _ in range(n_homes)
     ]
     return FleetResults(per_home_results=per_home, home_configs=homes)
@@ -425,7 +406,7 @@ def _make_interior_fleet_cr6(
       r* = (2725 − 0) / (10000/100) = £2,725 / 100 = 27.25p
       BUT retail=30p → interior: 0 < 27.25 < 30 ✓
 
-    No-flex: grid_charge_cost=None, export_revenue=0.
+    No-flex: no grid charging, export_revenue=0.
     """
     from solar_challenge.fleet import FleetResults
 
@@ -591,8 +572,8 @@ class TestFlexLowersSolvedRate:
 
     Two independent flex channels:
     (a) grid-services income (exogenous £/kW/yr): adding grid_services lowers r*.
-    (b) arbitrage/time-shift (endogenous physics): elevated sc minus CBS grid-charge
-        cost lowers r* relative to flat-rate fleet.
+    (b) arbitrage/time-shift (endogenous physics): higher basis-C own-use → higher
+        CBS own-use revenue → lower r* relative to flat-rate fleet.
 
     Both are demonstrated on the SAME interior fleet.
     RED until both channels are tuned in step-8.
@@ -651,10 +632,9 @@ class TestFlexLowersSolvedRate:
     def test_arbitrage_lowers_solved_rate(self) -> None:
         """(b) Arbitrage/time-shift: arbitrage-on fleet gives lower r* than flat-rate fleet.
 
-        'Arbitrage-on' is modelled by an elevated self_kwh and a non-zero
-        CBS grid-charge cost (cbs_grid_charge_cost > 0 → from a non-None grid_charge_cost
-        series in SimulationResults). The net uplift (extra_sc × own_use − grid_charge)
-        exceeds zero so the CBS earns more net revenue, requiring a lower solved r*.
+        'Arbitrage-on' is modelled by an elevated self_kwh at the same demand, i.e.
+        higher basis-C own-use, so the CBS earns more own-use revenue and needs a
+        lower solved r*.
 
         RED until the arbitrage-on synthetic aggregates are tuned in step-8.
         """
@@ -662,13 +642,11 @@ class TestFlexLowersSolvedRate:
 
         scenario, n_homes = self._build_base_interior()
 
-        # Flat-rate fleet (baseline): grid_charge_cost=None → cbs_grid_charge=0
+        # Flat-rate fleet (baseline): grid_charge_cost=None
         fr_flat = _make_interior_fleet_cr6(n_homes=n_homes, self_kwh=2000.0)
         simulate_flat = lambda fc, s, e: fr_flat  # noqa: E731
 
-        # Arbitrage-on fleet: elevated sc + CBS grid-charge cost (time-shift economics)
-        # Net benefit = (uplift_sc × r) / 100 − grid_charge_cost
-        # We need net_benefit > 0 at r=retail → uplift_sc × retail/100 > grid_charge/home
+        # Arbitrage-on fleet: higher basis-C own-use → more CBS own-use revenue
         fr_arb = _make_arbitrage_fleet_cr6(n_homes=n_homes)
         simulate_arb = lambda fc, s, e: fr_arb  # noqa: E731
 
@@ -752,7 +730,6 @@ def _make_grid_charge_sim_results_cr6(
     export_kwh: float,
     import_to_load_kwh: float,
     grid_charge_kwh: float,
-    grid_charge_cost_per_home_gbp: float,
     n_steps: int = 8760,
 ) -> "SimulationResults":  # type: ignore[name-defined]
     """Build a synthetic SimulationResults for grid-charging (arbitrage) homes.
@@ -765,7 +742,8 @@ def _make_grid_charge_sim_results_cr6(
     This exposes the B-vs-C gap: total_self_consumption (B-style, discharge-inclusive)
     is self_kwh, while demand − import is self_kwh − grid_charge_kwh.
 
-    grid_charge_cost series is non-None so total_grid_charge_cost_gbp > 0 in the summary.
+    Untariffed, like _make_sim_results_cr6: import_cost is zero and grid_charge_cost
+    is None.
     """
     import pandas as pd
     from solar_challenge.home import SimulationResults
@@ -780,8 +758,6 @@ def _make_grid_charge_sim_results_cr6(
     total_imp_kw = imp_to_load_kw + grid_charge_kw  # inflated by grid_charge
     zeros = pd.Series(0.0, index=idx)
 
-    charge_per_step = grid_charge_cost_per_home_gbp / n_steps
-
     return SimulationResults(
         generation=pd.Series(gen_kw, index=idx),
         demand=pd.Series(demand_kw, index=idx),
@@ -794,7 +770,7 @@ def _make_grid_charge_sim_results_cr6(
         import_cost=zeros.copy(),
         export_revenue=zeros.copy(),
         tariff_rate=zeros.copy(),
-        grid_charge_cost=pd.Series(charge_per_step, index=idx),
+        grid_charge_cost=None,
     )
 
 
@@ -804,7 +780,6 @@ def _make_grid_charge_fleet_cr6(
     export_kwh: float = 400.0,
     import_to_load_kwh: float = 800.0,
     grid_charge_kwh: float = 200.0,
-    grid_charge_cost_per_home_gbp: float = 30.0,
 ) -> "FleetResults":  # type: ignore[name-defined]
     """Build a grid-charging FleetResults for basis-C reconciliation tests.
 
@@ -824,7 +799,6 @@ def _make_grid_charge_fleet_cr6(
             export_kwh=export_kwh,
             import_to_load_kwh=import_to_load_kwh,
             grid_charge_kwh=grid_charge_kwh,
-            grid_charge_cost_per_home_gbp=grid_charge_cost_per_home_gbp,
         )
         for _ in range(n_homes)
     ]
@@ -921,7 +895,7 @@ class TestArbitrageBasisCReconciliation:
         from solar_challenge.finance import _cbs_own_use_kwh
         from solar_challenge.home import calculate_summary
 
-        # Use the existing flat-rate builder (grid_charge_cost=None)
+        # Use the existing flat-rate builder
         flat_sr = _make_sim_results_cr6(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
         s = calculate_summary(flat_sr)
         # No grid charging → demand - import = sc + import - import = sc
@@ -932,7 +906,7 @@ class TestArbitrageBasisCReconciliation:
 
         Interior-tuned: self_kwh=2800, grid_charge_kwh=200 → basis C = 2600/home
         fleet_sc (basis C) = 5 × 2600 = 13,000 kWh
-        r* = (floor×n + opex + debt_svc + cbs_gc) / (fleet_sc/100) ≈ 21.2p < retail=30p
+        r* = (floor×n + opex + debt_svc) / (fleet_sc/100) ≈ 14.5p < retail = 30p
         → binding='floor', feasible=True.
         """
         from solar_challenge.config import ScenarioConfig, SimulationPeriod
@@ -954,7 +928,6 @@ class TestArbitrageBasisCReconciliation:
             export_kwh=400.0,
             import_to_load_kwh=800.0,
             grid_charge_kwh=200.0,   # → basis C = 2800 - 200 = 2600 kWh/home
-            grid_charge_cost_per_home_gbp=30.0,
         )
         summaries = [calculate_summary(r) for r in fr.per_home_results]
         return scenario, finance, fr, summaries

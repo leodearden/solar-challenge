@@ -2,9 +2,10 @@
 
 **Task**: W2-CR + task-84 §6 — authoritative specification (CR6, task/62; basis-C amendment, task/84)
 **Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/output.py`
-**Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate)
+**Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_projection.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4)
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
 **Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
+**Unreleased on main** (task 219): CBS revenue no longer deducts the grid-charge cost (§4); the 0.5.0 tag still does.
 
 ---
 
@@ -34,7 +35,7 @@ relationship to the system has three components:
 |-----------|------------------|---------------|
 | Self-consumed solar | Householder pays CBS at `own_use_rate` p/kWh | `householder_bill()` `own_use_payment_gbp` |
 | Grid export (SEG) | CBS receives; not passed to householder | `project_multi_year()` `fleet_revenue_gbp` (SEG rate reconciled from `ScenarioConfig.seg_tariff_pence_per_kwh` onto homes) |
-| Grid import | Householder pays retailer at `retail_baseline_rate` p/kWh | `householder_bill()` `import_cost_gbp` |
+| Grid import (including off-peak energy a battery grid-charges) | Householder pays retailer at the home's tariff rate (`retail_baseline_rate` p/kWh fallback when no tariff is configured) | `householder_bill()` `import_cost_gbp` |
 
 The householder carries no debt, no capital obligation, and no export-MPAN risk.
 The CBS bears all capex, debt service, and battery-cycling costs.
@@ -50,8 +51,9 @@ solve.  Raising `r` increases both:
 - **Householder outlay** — each home's annual bill rises by `Δr × own_use_kwh / 100`.
 
 The solve finds the **minimum** `r` that lets the CBS meet a retained-cash-floor
-target, minimising the householder cost.  When flex revenue (grid services or
-TOU arbitrage) is present, the CBS needs a lower `r` to reach the same floor.
+target, minimising the householder cost.  When grid-services revenue is present,
+the CBS needs a lower `r` to reach the same floor.  TOU arbitrage is not CBS
+revenue: its time-shift value reaches the householder through import cost (§8.2).
 
 ### Own-Use Basis (Basis C) — task-84 §6
 
@@ -170,7 +172,6 @@ At each projection year, the CBS fleet revenue is:
 fleet_revenue_gbp = own_use_revenue
                   + seg_revenue
                   + grid_services_income
-                  − cbs_grid_charge_cost
 ```
 
 Where each term is:
@@ -196,22 +197,42 @@ seg_revenue       = Σ_homes _seg_export_income_gbp(home, finance, sim_days)
 grid_services_income = grid_services_income_per_kw_per_year_gbp
                        × Σ_homes battery.max_discharge_kw
                     (field from FinanceConfig; W1 fills the non-zero value)
-
-cbs_grid_charge_cost = Σ_homes summary.total_grid_charge_cost_gbp
-                    (= Σ home.grid_charge_cost.sum() when grid_charge_cost is not None,
-                     0.0 when grid_charge_cost is None — i.e., flat-rate homes)
 ```
 
 **No-flex identity** (flat-rate fleet, grid_services = 0):
 
-When `grid_charge_cost=None` and `grid_services_income_per_kw_per_year_gbp=0.0`
-and `export_revenue=0` (synthetic SEG-free fleet):
+When `grid_services_income_per_kw_per_year_gbp=0.0` and `export_revenue=0`
+(synthetic SEG-free fleet):
 
 ```
 fleet_revenue_gbp = own_use_rate × fleet_sc / 100
 ```
 
 This identity is hard-asserted in `TestNoFlexAnchorReconciliation::test_no_flex_cbs_revenue_identity`.
+
+### Grid-charge energy is householder import, not a CBS outgoing
+
+Energy a battery grid-charges passes the home's grid meter, so it is inside
+`total_grid_import_kwh` and its cost is inside `total_import_cost_gbp`.  The
+householder pays the retailer for it as part of `import_cost_gbp` (§3).  Basis C
+(§2) excludes it from own-use, so the CBS neither bills nor pays for it and bears
+only the battery round-trip loss.
+
+`SummaryStatistics.total_grid_charge_cost_gbp` is the slice of
+`total_import_cost_gbp` spent charging the battery.  It is informational and
+appears in no CBS equation.  Each grid-charged kWh is paid once:
+
+```
+Σ_homes import_cost_gbp (householder)  +  0 (CBS)  =  Σ_homes total_import_cost_gbp
+(full-year physics path with a configured tariff; hard-asserted in
+ tests/unit/test_finance_projection.py::TestGridChargeEnergyPaidOnce)
+```
+
+This is the basis-C ruling (Leo, 2026-06-22; platform `billing-engine-s4-s5.md`
+decision B and register rule D15: grid-charge energy is "grid energy the member
+already paid the retailer for").  Until task 219, `project_multi_year` also
+subtracted `Σ total_grid_charge_cost_gbp` from CBS revenue (CR2), which paid
+each grid-charged kWh twice.
 
 ---
 
@@ -227,7 +248,7 @@ net_surplus(r) = [Σ_years (r × sc_y/100 + C_y − opex − debt_y)] / (N_years
 
 where `sc_y` is the **basis-C** fleet own-use at year `y`
 (`YearPoint.fleet_self_consumption_kwh = Σ_homes (demand − import)` after degradation
-interpolation), and `C_y` is rate-independent (SEG + grid-services − grid-charge, fixed by physics).
+interpolation), and `C_y` is rate-independent (SEG + grid-services, fixed by physics).
 PCHIP interpolation and `project_economics` are both linear in per-year revenue,
 so the affine form is preserved end-to-end.
 
@@ -313,7 +334,8 @@ The correct statement is:
 
 > At **zero flex** (grid_services = 0, flat-rate tariff), the cost-recovery solve
 > finds the own-use rate needed to retain exactly £27/home/yr surplus.
-> Flex (grid-services + TOU arbitrage, W1) **lowers** the required rate from this baseline.
+> Grid-services income (W1) **lowers** the required rate from this baseline, and the
+> TOU time-shift reaches the householder as import cost (§8.2).
 
 ### 7.2 [FIN] Synthetic No-Flex Calibration
 
@@ -326,7 +348,7 @@ Synthetic energy inputs (per home, annual):
   self_kwh           = 2,000 kWh   (constant power series; B-style sc)
   export_kwh         = 3,775 kWh   (constant power series)
   import_kwh         = 1,400 kWh
-  grid_charge_cost   = None         (flat-rate → cbs_grid_charge_cost = 0)
+  grid_charge_cost   = None         (flat-rate; no battery grid-charging)
   export_revenue     = £0           (SEG = 0, CBS retains all export)
   grid_services      = £0/kW/yr     (no-flex)
 
@@ -415,7 +437,7 @@ figures reported for transparency; no test pins them to specific digits.
 | Assertion | Status | Rationale |
 |-----------|--------|-----------|
 | `sol.feasible is True` | **HARD asserted** | Robust: 'floor' and 'rate_clamped_zero' are both feasible |
-| No-flex CBS-revenue identity | **HARD asserted** | By construction (grid_charge=None, grid_services=0) |
+| No-flex CBS-revenue identity | **HARD asserted** | By construction (grid_services=0, SEG=0) |
 | `0 ≤ r* ≤ retail` | **HARD asserted** | Valid clamped range |
 | H1: `surplus == floor` (interior regime) | **HARD asserted** | Exact by the affine solve algebra |
 | H2: capex → rate + outlay monotone | **HARD asserted** | Exact by affine algebra |
@@ -428,8 +450,9 @@ figures reported for transparency; no test pins them to specific digits.
 
 ## 8. The Flex Seam (W1 integration points)
 
-When W1 (flexibility-value finance integration, task/52–56) is complete, two
-exogenous revenue terms move the solved rate:
+W1 (flexibility-value finance integration, task/52–56) reaches the model two ways:
+an exogenous CBS revenue term (§8.1) and endogenous physics that moves the energy
+aggregates (§8.2).
 
 ### 8.1 Grid-Services Income (Exogenous £/kW/yr)
 
@@ -453,9 +476,10 @@ This directional property is hard-asserted in
 
 ### 8.2 TOU Arbitrage / Time-Shift (Endogenous Physics) — Basis C
 
-W1's TOU+grid-charging dispatch raises per-home B-style self-consumption (battery
-charges at cheap off-peak rates, discharges at peak) while introducing a CBS
-grid-charge cost (`total_grid_charge_cost_gbp` from `SimulationResults.grid_charge_cost`).
+W1's TOU + grid-charging dispatch buys off-peak grid energy into the battery
+through the home's meter and discharges it at peak.  The householder pays the
+off-peak import and avoids the peak import it displaces, so the time-shift value
+lands in the householder's `import_cost_gbp` (§3), not in CBS revenue.
 
 **Basis C and TOU arbitrage**: grid-charged battery energy crosses the grid boundary on
 the way *in*, so it inflates `total_grid_import_kwh` and does *not* inflate
@@ -465,18 +489,17 @@ the way *in*, so it inflates `total_grid_import_kwh` and does *not* inflate
 own_use_kwh (basis C) = sc_kwh (B-style) − grid_charge_kwh
 ```
 
-So even though B-style self-consumption rises with TOU discharge, the CBS's own-use
-*rate-base* (basis C) only rises by `sc_uplift − grid_charge` — the net net of the
-battery round-trip.  The CBS bears the round-trip loss (absorbed into the solved rate).
+So the CBS neither bills nor pays for grid-charged energy (§4) and bears only the
+battery round-trip loss, absorbed into the solved rate.  The solved rate therefore
+moves with arbitrage only through basis-C own-use (`fleet_sc` in `project_multi_year`).
 
-Both effects flow through `project_multi_year` (fleet_sc is basis C after task-84 §6):
-- Higher basis-C own-use → more own-use revenue at any given rate.
-- CBS grid-charge cost → deducted from `fleet_revenue_gbp`.
-
-Net effect: if (uplift_basis_c × r) / 100 > grid_charge_cost/home, the CBS earns more
-net revenue, so the solver accepts a lower rate.  This is hard-asserted in
-`TestFlexLowersSolvedRate::test_arbitrage_lowers_solved_rate` and the new
-`TestArbitrageBasisCReconciliation` class (task-84 §6 gate).
+Gates: `TestArbitrageBasisCReconciliation` pins the basis (fleet_sc is basis C on a
+grid-charging fleet, task-84 §6), and `TestGridChargeEnergyPaidOnce` pins that each
+grid-charged kWh is paid once, on householder import.
+`TestFlexLowersSolvedRate::test_arbitrage_lowers_solved_rate` hard-asserts the
+direction on a synthetic arbitrage fleet whose basis-C own-use is higher than the
+flat-rate fleet's (2,400 vs 2,000 kWh/home), so it earns more own-use revenue and
+solves at a lower rate.
 
 ---
 
@@ -523,7 +546,8 @@ fleet median — the board's single-home summary figure.
 | Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `householder_bill()` |
 | Saving | `baseline_bill − total_outlay` | `householder_bill()` |
 | CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ basis-C own_use) | `project_multi_year()` |
-| CBS revenue (full) | `own_use_rev + seg_rev + gs_income − cbs_grid_charge` | `project_multi_year()` |
+| CBS revenue (full) | `own_use_rev + seg_rev + gs_income` | `project_multi_year()` |
+| Grid-charge energy | in householder `import_cost_gbp`; no CBS term (§4) | `householder_bill()` |
 | Solve rate-base | `fleet_sc = Σ_homes (demand − import)` (basis C; §2) | `_simulate_age()` |
 | Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` |
 | Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost)` | `project_economics()` |
