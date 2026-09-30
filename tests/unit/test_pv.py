@@ -515,11 +515,7 @@ class TestConfigurablePanelParameters:
             efficiency=0.22,
             temperature_coefficient=-0.003
         )
-        config = PVConfig(
-            capacity_kw=4.0,
-            custom_module_params=custom_params,
-            custom_inverter_params=create_simple_inverter_params(),
-        )
+        config = PVConfig(capacity_kw=4.0, custom_module_params=custom_params)
         system = create_pv_system(config)
         array_params = system.arrays[0].module_parameters
         assert array_params["gamma_pdc"] == -0.003
@@ -770,12 +766,6 @@ class TestInverterMatchesStringVoltage:
             f"(physical range {floor} to {ceiling:.4f})"
         )
 
-    def test_a_module_without_a_voltage_model_needs_an_explicit_inverter(self) -> None:
-        config = PVConfig(capacity_kw=4.0, custom_module_params=create_simple_module_params())
-
-        with pytest.raises(ValueError, match="V_mp_ref"):
-            create_pv_system(config)
-
     def test_a_module_voltage_beyond_every_mppt_window_is_rejected(self) -> None:
         module = dict(create_pv_system(PVConfig(capacity_kw=4.0)).arrays[0].module_parameters)
         highest_mppt_ceiling_v = pd.to_numeric(
@@ -785,3 +775,62 @@ class TestInverterMatchesStringVoltage:
 
         with pytest.raises(ValueError, match="MPPT window"):
             create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=module))
+
+
+class TestPVWattsModule:
+    """A module without a voltage model runs on pvlib's PVWatts DC and inverter models."""
+
+    @pytest.mark.parametrize("module_power_w", [250.0, 400.0, 500.0])
+    @pytest.mark.parametrize("day", ["clear_june_day", "overcast_january_day"])
+    def test_yields_the_energy_per_kwp_of_the_default_module(
+        self, request: pytest.FixtureRequest, module_power_w: float, day: str
+    ) -> None:
+        """Each rating divides 4 kW exactly, so every system wires the same 4 kW as the default's 10 x 400.4 W."""
+        weather = request.getfixturevalue(day)
+        default = PVConfig(capacity_kw=4.0)
+        pvwatts = dataclasses.replace(
+            default,
+            custom_module_params=create_simple_module_params(module_power_w=module_power_w),
+        )
+
+        default_kwh = simulate_pv_output(default, Location.bristol(), weather).sum()
+        pvwatts_kwh = simulate_pv_output(pvwatts, Location.bristol(), weather).sum()
+
+        ratio = pvwatts_kwh / default_kwh
+        assert 0.9 <= ratio <= 1.1, (
+            f"4 kW of {module_power_w:.0f} W PVWatts modules on the {day} gave "
+            f"{pvwatts_kwh:.3f} kWh, {ratio:.3f} of the default module's {default_kwh:.3f} kWh"
+        )
+
+    def test_the_automatic_inverter_clips_at_the_configured_ac_capacity(
+        self, clear_june_day: pd.DataFrame
+    ) -> None:
+        config = PVConfig(
+            capacity_kw=4.0,
+            inverter_capacity_kw=3.0,
+            custom_module_params=create_simple_module_params(),
+        )
+
+        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_day).max()
+
+        assert peak_kw == pytest.approx(3.0), (
+            f"a 3 kW inverter on 4 kW of modules peaked at {peak_kw:.3f} kW"
+        )
+
+    def test_the_automatic_inverter_runs_at_the_configured_efficiency(
+        self, clear_june_day: pd.DataFrame
+    ) -> None:
+        at_96_percent = PVConfig(
+            capacity_kw=4.0,
+            inverter_efficiency=0.96,
+            custom_module_params=create_simple_module_params(),
+        )
+        at_90_percent = dataclasses.replace(at_96_percent, inverter_efficiency=0.90)
+
+        kwh_at_96_percent = simulate_pv_output(at_96_percent, Location.bristol(), clear_june_day).sum()
+        kwh_at_90_percent = simulate_pv_output(at_90_percent, Location.bristol(), clear_june_day).sum()
+
+        assert kwh_at_90_percent / kwh_at_96_percent == pytest.approx(0.90 / 0.96, rel=0.01), (
+            f"a 90% inverter gave {kwh_at_90_percent:.3f} kWh against "
+            f"{kwh_at_96_percent:.3f} kWh at 96%"
+        )
