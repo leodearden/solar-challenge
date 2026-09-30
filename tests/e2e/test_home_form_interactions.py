@@ -20,6 +20,17 @@ def _form_data(page: Page) -> dict[str, object]:
     }""")
 
 
+def _open_location_tab(page: Page) -> None:
+    """Open the form's Location tab, where the simulated site is chosen."""
+    page.get_by_role("tab", name="Location", exact=True).click()
+
+
+def _choose_location(page: Page, location: str) -> None:
+    """Open the Location tab and select the #location option whose value is `location`."""
+    _open_location_tab(page)
+    page.locator("#location").select_option(value=location)
+
+
 # -- Preset populates form values -------------------------------------------
 
 
@@ -57,31 +68,9 @@ def test_preset_populates_form_values(page: Page, live_server: str) -> None:
 def test_location_preset_updates_formdata(page: Page, live_server: str) -> None:
     """Select Edinburgh on Location tab -> formData.location === 'edinburgh'."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
+    _choose_location(page, "edinburgh")
 
-    # Navigate to the Location tab
-    loc_tab = page.locator(
-        'nav[aria-label="Configuration tabs"] button',
-        has_text="Location",
-    )
-    loc_tab.click()
-    page.wait_for_timeout(300)
-
-    # Select Edinburgh from the location dropdown
-    loc_select = page.locator('select[x-model="formData.location"]')
-    if loc_select.count() == 0:
-        # May use a different selector pattern
-        loc_select = page.locator("#location_preset")
-    expect(loc_select).to_be_visible()
-    loc_select.select_option(value="edinburgh")
-    page.wait_for_timeout(300)
-
-    location = page.evaluate("""() => {
-        const el = document.querySelector('[x-data="homeSimulator()"]');
-        return Alpine.$data(el).formData.location;
-    }""")
-
+    location = _form_data(page)["location"]
     assert location == "edinburgh", f"Expected location='edinburgh', got '{location}'"
 
 
@@ -107,24 +96,7 @@ def test_period_day_buttons(page: Page, live_server: str) -> None:
 def test_custom_location_fields_appear(page: Page, live_server: str) -> None:
     """Select 'custom' location -> #custom_lat / #custom_lon visible."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
-
-    # Navigate to the Location tab
-    loc_tab = page.locator(
-        'nav[aria-label="Configuration tabs"] button',
-        has_text="Location",
-    )
-    loc_tab.click()
-    page.wait_for_timeout(300)
-
-    # Select "custom" location
-    loc_select = page.locator('select[x-model="formData.location"]')
-    if loc_select.count() == 0:
-        loc_select = page.locator("#location_preset")
-    expect(loc_select).to_be_visible()
-    loc_select.select_option(value="custom")
-    page.wait_for_timeout(500)
+    _choose_location(page, "custom")
 
     # Custom lat/lon fields should now be visible
     lat_input = page.locator("#custom_lat")
