@@ -12,6 +12,14 @@ from tests.e2e._home_form import choose_custom_range, open_period_tab
 pytestmark = pytest.mark.e2e
 
 
+def _form_data(page: Page) -> dict[str, object]:
+    """The home form's Alpine formData, as the page holds it now."""
+    return page.evaluate("""() => {
+        const el = document.querySelector('[x-data="homeSimulator()"]');
+        return { ...Alpine.$data(el).formData };
+    }""")
+
+
 # -- Preset populates form values -------------------------------------------
 
 
@@ -83,40 +91,14 @@ def test_location_preset_updates_formdata(page: Page, live_server: str) -> None:
 def test_period_day_buttons(page: Page, live_server: str) -> None:
     """Click '7 days' then '1 year' -> formData.period_days updates."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
+    open_period_tab(page)
 
-    # Navigate to the Period tab
-    period_tab = page.locator(
-        'nav[aria-label="Configuration tabs"] button',
-        has_text="Period",
-    )
-    period_tab.click()
-    page.wait_for_timeout(300)
-
-    # Click "7 days" button
-    btn_7d = page.locator("button", has_text="7 days")
-    if btn_7d.count() > 0:
-        btn_7d.first.click()
-        page.wait_for_timeout(300)
-
-        period = page.evaluate("""() => {
-            const el = document.querySelector('[x-data="homeSimulator()"]');
-            return Alpine.$data(el).formData.period_days;
-        }""")
-        assert period == 7, f"Expected period_days=7 after clicking '7 days', got {period}"
-
-    # Click "1 year" button
-    btn_1y = page.locator("button", has_text="1 year")
-    if btn_1y.count() > 0:
-        btn_1y.first.click()
-        page.wait_for_timeout(300)
-
-        period = page.evaluate("""() => {
-            const el = document.querySelector('[x-data="homeSimulator()"]');
-            return Alpine.$data(el).formData.period_days;
-        }""")
-        assert period == 365, f"Expected period_days=365 after clicking '1 year', got {period}"
+    for label, days in (("7 days", 7), ("1 year", 365)):
+        page.get_by_role("button", name=label, exact=True).click()
+        period_days = _form_data(page)["period_days"]
+        assert period_days == days, (
+            f"Expected period_days={days} after clicking {label!r}, got {period_days}"
+        )
 
 
 # -- Custom location fields appear ------------------------------------------
