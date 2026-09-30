@@ -823,6 +823,8 @@ def cold_january15_tmy_weather() -> pd.DataFrame:
     """A dark, cold 15 January in the shape of a PVGIS TMY: hourly rows indexed in UTC for 1990.
 
     Every hour is below the heat pump's 15.5 °C base temperature, so the heat pump runs all day.
+    The night is the coldest part (1 °C from 02:00 to 05:00 UTC),
+    the afternoon the warmest (7 °C from 12:00 to 14:00 UTC).
     """
     return pd.DataFrame(
         {
@@ -840,7 +842,10 @@ def cold_january15_tmy_weather() -> pd.DataFrame:
 
 
 class TestSimulateHomeAddsHeatPumpLoad:
-    """simulate_home adds a heat pump's electrical load to the household demand (synthetic weather, no network)."""
+    """simulate_home adds a heat pump's electrical load, driven by the TMY temperature, to the household demand.
+
+    Synthetic weather, no network.
+    """
 
     def test_heat_pump_load_is_added_to_household_demand_minute_by_minute(self, cold_january15_tmy_weather):
         load_config = LoadConfig(annual_consumption_kwh=3000.0, seed=42)
@@ -866,6 +871,9 @@ class TestSimulateHomeAddsHeatPumpLoad:
         assert (heat_pump_load > 0).all()
         pd.testing.assert_index_equal(heat_pump_load.index, with_heat_pump.demand.index)
         pd.testing.assert_series_equal(with_heat_pump.demand, household_only.demand + heat_pump_load, check_names=False)
+        warm_hour_load = heat_pump_load.loc["2024-01-15 13:00":"2024-01-15 13:59"]
+        cold_hour_load = heat_pump_load.loc["2024-01-15 03:00":"2024-01-15 03:59"]
+        assert warm_hour_load.max() < cold_hour_load.min()
 
 
 @pytest.mark.slow
