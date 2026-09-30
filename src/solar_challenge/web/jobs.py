@@ -7,6 +7,7 @@ tracking via SQLite and SSE event queues.
 """
 
 import collections
+import functools
 import json
 import sqlite3
 import threading
@@ -70,6 +71,7 @@ class JobManager:
         _executor: Thread pool for background job execution.
         _jobs: In-memory dict tracking job metadata.
         _event_queues: Per-job deques of SSE event dicts.
+        _unfinished_job_count: Number of jobs queued or running; wait_until_idle waits for it to reach 0.
     """
 
     def __init__(self, max_workers: int = 2, *, simulate_home: HomeSimulator = _default_simulate_home) -> None:
@@ -83,6 +85,8 @@ class JobManager:
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._simulate_home = simulate_home
         self._lock = threading.Lock()
+        self._idle = threading.Condition(self._lock)
+        self._unfinished_job_count = 0
         self._jobs: dict[str, dict[str, Any]] = {}
         self._event_queues: dict[str, collections.deque[dict[str, Any]]] = {}
         _active_managers.add(self)
@@ -98,6 +102,20 @@ class JobManager:
             wait: If True, block until the running jobs finish before returning.
         """
         self._executor.shutdown(wait=wait, cancel_futures=True)
+
+    def wait_until_idle(self, timeout: float) -> bool:
+        """Block until no job is queued or running, or until *timeout* seconds have passed.
+
+        A job stops counting once it completes, fails, or is dropped by shutdown.
+
+        Args:
+            timeout: Longest wait in seconds; 0 only checks.
+
+        Returns:
+            True if the manager is idle, False if the timeout passed first.
+        """
+        with self._idle:
+            return self._idle.wait_for(lambda: self._unfinished_job_count == 0, timeout)
 
     def submit_home_job(
         self,
@@ -197,8 +215,11 @@ class JobManager:
             )
 
         # Submit to thread pool
-        try:
-            self._executor.submit(
+        self._schedule(
+            job_id,
+            run_id,
+            db_path,
+            functools.partial(
                 self._run_home_simulation,
                 job_id,
                 run_id,
@@ -209,10 +230,8 @@ class JobManager:
                 data_dir,
                 name,
                 created_at,
-            )
-        except RuntimeError:
-            self._forget_job(job_id, run_id, db_path)
-            raise
+            ),
+        )
 
         return job_id, run_id
 
@@ -314,8 +333,11 @@ class JobManager:
             )
 
         # Submit to thread pool
-        try:
-            self._executor.submit(
+        self._schedule(
+            job_id,
+            run_id,
+            db_path,
+            functools.partial(
                 self._run_fleet_simulation,
                 job_id,
                 run_id,
@@ -326,10 +348,8 @@ class JobManager:
                 data_dir,
                 name,
                 created_at,
-            )
-        except RuntimeError:
-            self._forget_job(job_id, run_id, db_path)
-            raise
+            ),
+        )
 
         return job_id, run_id
 
@@ -392,6 +412,31 @@ class JobManager:
             for jid in expired:
                 del self._jobs[jid]
                 self._event_queues.pop(jid, None)
+
+    def _schedule(self, job_id: str, run_id: str, db_path: str, job: Callable[[], None]) -> None:
+        """Queue *job* on the thread pool, counting it as unfinished until it completes, fails or is dropped by shutdown.
+
+        Raises:
+            RuntimeError: If the manager has shut down; the refused job leaves no record.
+        """
+        with self._idle:
+            self._unfinished_job_count += 1
+        # Hold no lock from here on: the executor may run the done-callback, which takes self._lock,
+        # under its own shutdown lock or at once in this thread.
+        try:
+            future = self._executor.submit(job)
+        except RuntimeError:
+            self._stop_counting_job()
+            self._forget_job(job_id, run_id, db_path)
+            raise
+        future.add_done_callback(lambda _future: self._stop_counting_job())
+
+    def _stop_counting_job(self) -> None:
+        """Stop counting one job as unfinished, waking every wait_until_idle caller once none is left."""
+        with self._idle:
+            self._unfinished_job_count -= 1
+            if self._unfinished_job_count == 0:
+                self._idle.notify_all()
 
     def _forget_job(self, job_id: str, run_id: str, db_path: str) -> None:
         """Erase every record of a job that the executor refused to schedule."""
