@@ -90,7 +90,7 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # Flask's Blueprint/app decorators are untyped; suppress untyped-decorator noise
-# and related unused-ignore warnings across the entire web sub-package.
+# across the entire web sub-package. Unused type-ignores are still rejected here
+# (strict = true), as everywhere else in the package.
 module = ["solar_challenge.web.*"]
 disallow_untyped_decorators = false
-warn_unused_ignores = false
