@@ -15,6 +15,17 @@ def form_data(page: Page) -> dict[str, object]:
     }""")
 
 
+def open_location_tab(page: Page) -> None:
+    """Open the form's Location tab, where the simulated site is chosen."""
+    page.get_by_role("tab", name="Location", exact=True).click()
+
+
+def choose_location(page: Page, location: str) -> None:
+    """Open the Location tab and select the #location option whose value is `location`."""
+    open_location_tab(page)
+    page.locator("#location").select_option(value=location)
+
+
 def open_period_tab(page: Page) -> None:
     """Open the form's Period tab, where the simulated dates are chosen."""
     page.get_by_role("tab", name="Period", exact=True).click()
