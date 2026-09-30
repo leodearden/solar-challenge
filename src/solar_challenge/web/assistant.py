@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """AI assistant Blueprint for the Solar Challenge web interface.
 
-Slice ①: registers the blueprint and serves the static chat shell page.
-Slice ②: adds streaming SSE chat endpoint (POST /assistant/chat),
-  per-session history endpoint (GET /assistant/history), and
-  chat_messages persistence via database.py helpers.
+Serves the chat page (GET /assistant), streams the model's replies as
+Server-Sent Events (POST /assistant/chat) and returns the session's stored
+conversation (GET /assistant/history).  User and assistant turns persist in
+chat_messages through database.py.  While replying, the model can call tools
+that explain metrics, suggest system sizes, look up past runs and submit
+simulation jobs.
+
+The design is specified in docs/prds/web-ai-assistant.md.
 
 The Anthropic SDK is imported only inside _create_client(); its docstring
 gives the reason.
@@ -60,9 +64,10 @@ _MAX_HISTORY_TURNS = 20
 _MAX_TOOL_ITERATIONS = 10
 
 # ---------------------------------------------------------------------------
-# Grounded metric table — canonical UK benchmark bands (slice ③)
+# Grounded metric table — canonical UK benchmark bands
 # Keyed by normalized metric id (lowercase, spaces/hyphens → underscores).
-# Owned by this leaf so benchmark numbers are never hallucinated (PRD §9 ③, G6).
+# explain_metric answers from this table so the model quotes these benchmark
+# numbers instead of hallucinating them.
 # ---------------------------------------------------------------------------
 _METRIC_TABLE: dict[str, dict[str, str]] = {
     "self_consumption_ratio": {
@@ -249,10 +254,12 @@ def suggest_config(
 
 
 # ---------------------------------------------------------------------------
-# Tool definitions — fixed order for prompt-cache stability (slice ③)
-# Slice ④ appends get_run_results and list_recent_runs after the first two.
+# Tool definitions — fixed order for prompt-cache stability.  The tools render
+# ahead of the cached system block, so they belong to the cached prompt prefix;
+# any change in their order or content between requests misses the cache.
 # ---------------------------------------------------------------------------
 _TOOLS: list[dict[str, Any]] = [
+    # --- Advisory tools: answered in-process, no database or job access ---
     {
         "name": "explain_metric",
         "description": (
@@ -304,7 +311,7 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["annual_consumption_kwh", "goal"],
         },
     },
-    # --- Slice ④: read-only DB tools (appended after the first two) ---
+    # --- Read-only DB tools: look up past runs in the runs table ---
     {
         "name": "get_run_results",
         "description": (
@@ -347,7 +354,7 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["limit"],
         },
     },
-    # --- Slice ⑤: trigger tools (appended after slice ④ read-only tools) ---
+    # --- Trigger tools: submit home and fleet simulation jobs to the JobManager ---
     {
         "name": "run_home_simulation",
         "description": (
@@ -636,12 +643,11 @@ def run_fleet_simulation(
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
-    # Build the homogeneous configs list.  HomeConfig is a frozen dataclass so all
-    # N references can safely share the same immutable object — re-parsing N times
-    # adds no diversity and just wastes CPU.
-    # Intentional design: for this slice the fleet is homogeneous (identical params
-    # for every home).  Per-home variation (diverse seeds/capacities via distribution
-    # configs) is deferred to the P2 distribution-runner path.
+    # The fleet is homogeneous by design (PRD §4, "Fleet trigger scope"): every
+    # home gets the same parameters; fleets that vary per home come from
+    # distribution configs, which this tool does not take.  HomeConfig is a frozen
+    # dataclass, so all N entries can share one immutable object — re-parsing N
+    # times would add no diversity and only waste CPU.
     configs: list[Any] = [home_config_0] * n_homes
 
     try:
@@ -762,11 +768,13 @@ def _create_client() -> Any:
 def chat() -> Response:
     """Stream an AI assistant reply as Server-Sent Events.
 
-    Request JSON body: ``{"message": "<user text>"}``
+    Request JSON body: ``{"message": "<user text>", "run_id": "<optional>"}``.
+    A ``run_id`` puts that run's summary in front of the message as context.
 
-    SSE frame contract (slice ②):
-    - ``event: delta`` / ``data: {"text": "<token>"}`` — streamed token
-    - ``event: done``  / ``data: {}``                  — stream complete
+    SSE frame contract:
+    - ``event: delta`` / ``data: {"text": "<token>"}``  — streamed token
+    - ``event: tool``  / ``data: {"name": "<tool>"}``   — the model called a tool
+    - ``event: done``  / ``data: {}``                   — stream complete
     - ``event: error`` / ``data: {"message": "<msg>"}`` — error (no 500)
 
     Returns:
@@ -827,7 +835,7 @@ def chat() -> Response:
         while messages and messages[0]["role"] != "user":
             messages.pop(0)
 
-        # Run-context injection (slice ④): when the request carries a run_id,
+        # Run-context injection: when the request carries a run_id,
         # prepend a compact preamble to the final (user) message in-memory ONLY.
         # - NOT written to chat_messages (keeps stored history clean).
         # - NOT placed in the cached system block (preserves prompt-cache stability).
@@ -894,9 +902,9 @@ def chat() -> Response:
                         )
                         usage_meta["model"] = model
 
-                # Anything other than "tool_use" (incl. None — preserves slice-②
-                # behaviour where get_final_message() has no stop_reason attr)
-                # terminates the loop.
+                # Only "tool_use" means the model is waiting for tool results.
+                # Any other stop_reason ends the loop — including None, which
+                # getattr returns when the final message has no stop_reason.
                 stop_reason: Any = getattr(final_msg, "stop_reason", None)
                 if stop_reason != "tool_use":
                     break
