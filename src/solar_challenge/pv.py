@@ -220,7 +220,7 @@ def create_simple_inverter_params(
         Dict of inverter parameters for a simple efficiency model
 
     Example:
-        >>> params = create_simple_inverter_params(efficiency=0.97, capacity_w=5000)
+        >>> params = create_simple_inverter_params(efficiency=0.97, capacity_w=5000.0)
         >>> params['Paco']
         5000.0
     """
@@ -491,7 +491,7 @@ def create_pv_system(config: PVConfig) -> PVSystem:
             voltage.
 
     Example:
-        >>> config = PVConfig(capacity_kw=4.0, azimuth=180, tilt=35)
+        >>> config = PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0)
         >>> system = create_pv_system(config)
         >>> system.arrays[0].mount.surface_tilt
         35.0
@@ -673,7 +673,7 @@ def apply_degradation(
         >>> import pandas as pd
         >>> gen = pd.Series([1.0, 2.0, 3.0])
         >>> degraded = apply_degradation(gen, system_age_years=10)
-        >>> (degraded == gen * 0.95).all()
+        >>> degraded.equals(gen * 0.95)
         True
     """
     factor = calculate_degradation_factor(system_age_years, degradation_rate_per_year)
