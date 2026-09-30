@@ -7,6 +7,7 @@ flat-rate tariffs, and preset UK tariff configurations.
 
 from dataclasses import dataclass
 from datetime import time
+from functools import cached_property
 from typing import Optional
 
 import pandas as pd
@@ -29,14 +30,14 @@ class TariffPeriod:
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Validate tariff period parameters."""
+        """Validate tariff period parameters and parse the times once."""
         if self.rate_per_kwh < 0:
             raise ValueError(f"Rate cannot be negative, got {self.rate_per_kwh} £/kWh")
 
-        # Validate time format
+        # Validate time format (this also fills the parsed-time caches)
         try:
-            self._parse_time(self.start_time)
-            self._parse_time(self.end_time)
+            self.get_start_time()
+            self.get_end_time()
         except ValueError as e:
             raise ValueError(f"Invalid time format: {e}")
 
@@ -67,13 +68,24 @@ class TariffPeriod:
         except (ValueError, AttributeError) as e:
             raise ValueError(f"Invalid time format '{time_str}': {e}")
 
+    # cached_property, not dataclass fields: the parsed times go in the instance
+    # __dict__ and stay out of fields(). web/storage.py's JSON round-trip walks
+    # fields() and cannot encode a datetime.time.
+    @cached_property
+    def _parsed_start(self) -> time:
+        return self._parse_time(self.start_time)
+
+    @cached_property
+    def _parsed_end(self) -> time:
+        return self._parse_time(self.end_time)
+
     def get_start_time(self) -> time:
         """Get start time as time object."""
-        return self._parse_time(self.start_time)
+        return self._parsed_start
 
     def get_end_time(self) -> time:
         """Get end time as time object."""
-        return self._parse_time(self.end_time)
+        return self._parsed_end
 
     def matches_time(self, timestamp: pd.Timestamp) -> bool:
         """Check if a timestamp falls within this period.
