@@ -243,6 +243,7 @@ def simulate_home(
         heat_pump_load_series = generate_heat_pump_load(
             config.heat_pump_config,
             aligned_temperature,
+            annual_temperature_c=aligned_temperature,
         )
 
         # Add heat pump load to household demand
