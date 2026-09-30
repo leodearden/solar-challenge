@@ -220,6 +220,35 @@ class TestSimulateHomeAPI:
         config = call_kwargs.kwargs.get("config") or call_kwargs[0][0]
         assert config.battery_config is None
 
+    def test_home_form_battery_on_payload_returns_201(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A snapshot of home.html buildPayload() with the battery on and form defaults is accepted."""
+        payload = {
+            "pv_kw": 4.0,
+            "azimuth": 180.0,
+            "tilt": 35.0,
+            "system_age_years": 0.0,
+            "degradation_rate_per_year": 0.005,
+            "battery_kwh": 5.0,
+            "max_charge_kw": 3.6,
+            "max_discharge_kw": 3.6,
+            "efficiency_pct": 90.0,
+            "consumption_kwh": 3500.0,
+            "occupants": 3,
+            "stochastic": False,
+            "location": "bristol",
+            "name": "Web Simulation",
+            "days": 30,
+        }
+        resp = client.post("/api/simulate/home", json=payload)
+        assert resp.status_code == 201, resp.get_json()
+        mock_job_manager.submit_home_job.assert_called_once()
+        call_kwargs = mock_job_manager.submit_home_job.call_args
+        config = call_kwargs.kwargs.get("config") or call_kwargs[0][0]
+        assert config.battery_config is not None
+        assert config.battery_config.efficiency == pytest.approx(0.9)
+
 
 # ===================================================================
 # POST /api/simulate/fleet
