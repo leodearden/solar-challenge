@@ -168,33 +168,34 @@ def create_simple_module_params(
 ) -> dict[str, float]:
     """Create simplified module parameters from basic specifications.
 
-    Uses the PVWatts model which only requires efficiency and temp coefficient.
-    This allows users to specify custom panel characteristics without
-    needing the full CEC parameter set.
+    Uses the PVWatts model, which needs only each module's power at STC and its
+    temperature coefficient. This allows users to specify custom panel
+    characteristics without needing the full CEC parameter set.
 
     Args:
         efficiency: Module efficiency as fraction (e.g., 0.20 for 20%)
         temperature_coefficient: Power temperature coefficient per °C
             (e.g., -0.004 for -0.4%/°C)
-        module_power_w: Nominal module power in watts (for reference)
+        module_power_w: Each module's power at STC in watts. A system holds
+            capacity_kw / module_power_w modules, and pvlib's PVWatts DC model
+            scales this rating by that module count.
 
     Returns:
         Dict of module parameters compatible with pvlib PVWatts model
 
     Example:
         >>> params = create_simple_module_params(efficiency=0.22, temperature_coefficient=-0.003)
-        >>> params['pdc0']  # Nominal power at STC
-        1000.0
+        >>> params['pdc0']  # Each module's power at STC
+        400.0
     """
     # PVWatts model parameters
-    # pdc0 is the nominal DC power at STC (1000 W/m² irradiance)
+    # pdc0 is each module's nominal DC power at STC (1000 W/m² irradiance)
     # gamma_pdc is the temperature coefficient (negative)
     return {
-        "pdc0": 1000.0,  # Normalized to 1 kW for easy scaling
+        "pdc0": module_power_w,
         "gamma_pdc": temperature_coefficient,
-        # Store efficiency for reference (used in array sizing)
         "efficiency": efficiency,
-        "STC": module_power_w,  # For compatibility with existing code
+        "STC": module_power_w,
     }
 
 
@@ -205,7 +206,11 @@ def create_simple_inverter_params(
     """Create simplified inverter parameters from basic specifications.
 
     Uses a simple efficiency model. When DC power exceeds inverter
-    capacity, output is clipped to the rated capacity.
+    capacity, output is clipped to the rated capacity. Its Sandia-form
+    parameters read the DC voltage, so they suit a module with a voltage model
+    such as the default CEC module; a create_simple_module_params module takes
+    the automatic PVWatts inverter instead, or the parameters that
+    create_pvwatts_inverter_params returns.
 
     Args:
         efficiency: Inverter efficiency as fraction (e.g., 0.96 for 96%)
@@ -232,6 +237,36 @@ def create_simple_inverter_params(
         "C3": 0.0,  # Coefficient for C1 formula
         "Pnt": 0.0,  # Night tare loss (watts)
         "efficiency": efficiency,  # Store for reference
+    }
+
+
+def create_pvwatts_inverter_params(
+    efficiency: float = 0.96,
+    capacity_w: float = 4000.0,
+) -> dict[str, float]:
+    """Create pvlib PVWatts inverter parameters from basic specifications.
+
+    pvlib's PVWatts inverter reads no DC voltage, so it is the inverter for a
+    create_simple_module_params module. When DC power exceeds the inverter's
+    capacity, output is clipped to capacity_w.
+
+    Args:
+        efficiency: Inverter nominal efficiency as fraction (e.g., 0.96 for 96%)
+        capacity_w: AC power capacity in watts
+
+    Returns:
+        Dict of inverter parameters compatible with pvlib PVWatts inverter model
+
+    Example:
+        >>> params = create_pvwatts_inverter_params(efficiency=0.97, capacity_w=5000)
+        >>> params['eta_inv_nom']
+        0.97
+    """
+    # pvlib caps AC output at eta_inv_nom x pdc0, so pdc0 is the DC power at
+    # which the inverter reaches capacity_w
+    return {
+        "pdc0": capacity_w / efficiency,
+        "eta_inv_nom": efficiency,
     }
 
 
@@ -359,6 +394,17 @@ def _voltage_matched_cec_inverter(
     return dict(_sam_library("CECInverter")[best.name]), wiring
 
 
+_PVWATTS_MODULE_KEYS = frozenset({"pdc0", "gamma_pdc"})
+
+
+def _pvwatts_inverter(config: PVConfig) -> dict[str, float]:
+    """pvlib's PVWatts inverter at the configured AC capacity and nominal efficiency."""
+    return create_pvwatts_inverter_params(
+        efficiency=config.inverter_efficiency,
+        capacity_w=config.effective_inverter_capacity_kw * 1000,
+    )
+
+
 def _module_parameters(config: PVConfig) -> dict[str, float]:
     """The custom module parameters, or the CEC module with the configured temperature coefficient."""
     if config.custom_module_params is not None:
@@ -374,15 +420,23 @@ def _inverter_and_wiring(
 ) -> tuple[dict[str, float], _Wiring]:
     """The inverter parameters and how to wire the modules to them.
 
-    Custom inverter parameters take one string of every module. A CEC inverter
-    is voltage-matched to the module, so the module must have a V_mp_ref.
+    Custom inverter parameters take one string of every module, as does the
+    PVWatts inverter that a module with PVWatts parameters gets, because
+    pvlib's PVWatts models ignore voltage. PVWatts parameters are the keys
+    pvlib infers its PVWatts DC model from. A module with a V_mp_ref gets a CEC
+    inverter voltage-matched to its strings. Any other module needs custom
+    inverter parameters.
     """
+    one_string = (_StringGroup(module_count, 1),)
     if config.custom_inverter_params is not None:
-        return config.custom_inverter_params, (_StringGroup(module_count, 1),)
+        return config.custom_inverter_params, one_string
+    if _PVWATTS_MODULE_KEYS <= module_params.keys():
+        return _pvwatts_inverter(config), one_string
     if "V_mp_ref" not in module_params:
         raise ValueError(
-            "Module parameters have no V_mp_ref, so no CEC inverter can be "
-            "voltage-matched to the strings; supply PVConfig.custom_inverter_params"
+            "Module parameters have neither pdc0 and gamma_pdc, for a PVWatts "
+            "inverter, nor a V_mp_ref, to voltage-match a CEC inverter to the "
+            "strings; supply PVConfig.custom_inverter_params"
         )
     inverter_params, wiring = _voltage_matched_cec_inverter(
         config.effective_inverter_capacity_kw, module_count, module_params["V_mp_ref"]
@@ -418,7 +472,10 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     Creates a PVSystem using CEC module and inverter databases for realistic
     modelling parameters, or custom parameters if provided. The CEC inverter is
     voltage-matched to the strings; see _ranking_key and _wiring_within_window
-    for how it is chosen and how the modules are wired to it.
+    for how it is chosen and how the modules are wired to it. A module with
+    PVWatts parameters (pdc0 and gamma_pdc, e.g. one from
+    create_simple_module_params) gets pvlib's PVWatts inverter at the
+    configured AC capacity and efficiency instead.
 
     Args:
         config: PV system configuration with capacity, azimuth, tilt, and
@@ -428,9 +485,10 @@ def create_pv_system(config: PVConfig) -> PVSystem:
         pvlib PVSystem ready for use in ModelChain simulation
 
     Raises:
-        ValueError: If the module parameters have no V_mp_ref and no custom
-            inverter parameters are given, or if no CEC inverter's MPPT window
-            admits a string of the module's voltage.
+        ValueError: If the module parameters have neither PVWatts parameters
+            nor a V_mp_ref and no custom inverter parameters are given, or if
+            no CEC inverter's MPPT window admits a string of the module's
+            voltage.
 
     Example:
         >>> config = PVConfig(capacity_kw=4.0, azimuth=180, tilt=35)
@@ -447,6 +505,24 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     )
 
 
+def _require_compatible_dc_and_ac_models(model_chain: ModelChain) -> None:
+    """Refuse a model chain whose inverter model can not read its DC model's output.
+
+    PVWatts DC gives power alone, which only the PVWatts inverter takes; every
+    other DC model gives the voltage that the Sandia and ADR inverters read.
+    """
+    dc_is_pvwatts = model_chain.dc_model == model_chain.pvwatts_dc
+    ac_is_pvwatts = model_chain.ac_model == model_chain.pvwatts_inverter
+    if dc_is_pvwatts != ac_is_pvwatts:
+        raise ValueError(
+            f"pvlib cannot feed its {model_chain.dc_model.__name__} DC model to its "
+            f"{model_chain.ac_model.__name__} inverter model: PVWatts module "
+            "parameters (pdc0, gamma_pdc) go only with PVWatts inverter parameters "
+            "(pdc0, eta_inv_nom), and a module with a voltage model needs a Sandia "
+            "or ADR inverter"
+        )
+
+
 def create_model_chain(
     config: PVConfig,
     location: "Location",
@@ -459,6 +535,11 @@ def create_model_chain(
 
     Returns:
         ModelChain ready to run simulations with weather data
+
+    Raises:
+        ValueError: If pvlib infers an inverter model that can not read its DC
+            model's output, e.g. custom Sandia inverter parameters with PVWatts
+            module parameters.
     """
     pv_system = create_pv_system(config)
 
@@ -478,6 +559,7 @@ def create_model_chain(
         aoi_model="physical",
         spectral_model="no_loss",
     )
+    _require_compatible_dc_and_ac_models(model_chain)
 
     return model_chain
 
