@@ -15,24 +15,14 @@ pytestmark = pytest.mark.e2e
 
 
 def test_toast_success_appears_and_dismisses(page: Page, live_server: str) -> None:
-    """Alpine.store('toast').success(msg) -> visible -> auto-dismiss after 4s."""
+    """.success(msg) shows the message, then the toast dismisses itself without a click."""
     page.goto(live_server + "/")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(500)
 
-    # Trigger a success toast via Alpine store
     page.evaluate("() => Alpine.store('toast').success('Test success message')")
-    page.wait_for_timeout(300)
 
-    # Toast should be visible with the message text
-    toast_text = page.locator("text=Test success message")
-    expect(toast_text).to_be_visible()
-
-    # Wait for auto-dismiss (default 4s + buffer)
-    page.wait_for_timeout(5000)
-
-    # Toast should no longer be visible
-    expect(toast_text).not_to_be_visible()
+    toast_message = page.get_by_text("Test success message", exact=True)
+    expect(toast_message).to_be_visible()
+    expect(toast_message).to_be_hidden(timeout=10_000)
 
 
 # -- Toast error appears ----------------------------------------------------
