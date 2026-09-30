@@ -81,3 +81,19 @@ def test_templates_import_exactly_the_library_macros_they_call(library: str) -> 
             }
 
     assert mismatches == {}
+
+
+@pytest.mark.parametrize("library", MACRO_LIBRARIES)
+def test_every_library_macro_is_called_by_some_template(library: str) -> None:
+    templates = _parse_templates()
+    defined = _defined_macros(templates[library])
+    called_somewhere = {
+        macro
+        for tree in templates.values()
+        for macro, local in _imports_from(tree, library)
+        if local in _called_names(tree)
+    }
+
+    assert sorted(defined - called_somewhere) == [], (
+        f"{library} defines macros no template calls"
+    )
