@@ -351,6 +351,8 @@
 
 <script>
 function runBrowser() {
+    let latestRunsRequestId = 0;
+
     return {
         runs: [],
         loading: true,
@@ -365,6 +367,7 @@ function runBrowser() {
         deleteTarget: null,
 
         async fetchRuns() {
+            const requestId = ++latestRunsRequestId;
             this.loading = true;
             const params = new URLSearchParams({
                 page: this.pagination.page,
@@ -377,15 +380,19 @@ function runBrowser() {
             if (this.filters.date_from) params.set('date_from', this.filters.date_from);
             if (this.filters.date_to) params.set('date_to', this.filters.date_to);
 
+            let runs = [];
+            let pagination = this.pagination;
             try {
                 const resp = await fetch('/api/history/runs?' + params.toString());
                 const data = await resp.json();
-                this.runs = data.runs || [];
-                this.pagination = data.pagination || this.pagination;
+                runs = data.runs || [];
+                pagination = data.pagination || pagination;
             } catch (e) {
                 console.error('Failed to fetch runs:', e);
-                this.runs = [];
             }
+            if (requestId !== latestRunsRequestId) return;
+            this.runs = runs;
+            this.pagination = pagination;
             this.loading = false;
         },
 
