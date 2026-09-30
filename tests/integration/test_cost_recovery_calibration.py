@@ -400,11 +400,16 @@ def _make_interior_fleet_cr6(
     Interior guarantee (with _make_finance_interior_cr6 defaults):
       fleet_sc = n_homes × self_kwh = 5 × 2000 = 10,000 kWh
       capex = 5 × (5.5×£2000 + £1000 + 5×£250) = 5 × £13,250 = £66,250
-      debt = 66250 × 0.25 = £16,562.50; debt_svc ≈ £1,820/yr
-      opex = 5 × £131 = £655/yr; total_costs ≈ £2,475/yr
-      required_revenue = 2475 + 50×5 = £2,725/yr
-      r* = (2725 − 0) / (10000/100) = £2,725 / 100 = 27.25p
-      BUT retail=30p → interior: 0 < 27.25 < 30 ✓
+      debt = 66250 × 0.25 = £16,562.50; single-year debt_svc ≈ £1,820/yr
+      (the loan runs 15 years)
+      opex = 5 × £131 = £655/yr
+      project_economics averages surplus over the 25-year asset life, so the
+      effective annual cost is opex + debt_svc × 15/25
+      ≈ 655 + 1,820 × 15/25 ≈ £1,747/yr (not the single-year £2,475; see
+      docs/cost-recovery-finance-model.md §7.4)
+      required_revenue = 1747 + 50×5 ≈ £1,997/yr
+      r* = (1997 − 0) / (10000/100) ≈ 19.96p (measured 19.96p)
+      retail=30p → interior: 0 < 19.96 < 30 ✓
 
     No-flex: no grid charging, export_revenue=0.
     """
@@ -431,9 +436,11 @@ def _make_finance_interior_cr6(
 
     With n=5 homes, self=2000kWh:
       fleet_sc = 10,000 kWh
-      At r=0: surplus = (0−opex−debt)/5 ≈ (0−655−1820)/5 ≈ −495/home << floor=50
-      At r=retail=30p: surplus = (30×10000/100−2475)/5 ≈ (3000−2475)/5 ≈ 105/home >> floor=50
-    ∴ interior ✓
+      Effective annual cost (surplus averaged over the 25-year asset life, loan
+      over 15 years) ≈ 655 + 1820 × 15/25 ≈ £1,747/yr
+      At r=0: surplus ≈ −1747/5 ≈ −349/home << floor=50
+      At r=retail=30p: surplus ≈ (30×10000/100−1747)/5 ≈ 251/home >> floor=50
+    ∴ interior ✓ (measured r* = 19.96p)
     """
     return _make_finance_cr6(
         retained_cash_floor=retained_cash_floor,
