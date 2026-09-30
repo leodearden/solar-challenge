@@ -853,12 +853,7 @@ class TestPVWattsModule:
 
 
 class TestInverterModelMatchesModuleModel:
-    """pvlib's PVWatts inverter model takes only the PVWatts DC model's power; its Sandia and ADR inverter models read the DC voltage that PVWatts DC does not give.
-
-    Measured on pvlib 0.15.1: PVWatts DC with a Sandia inverter raises KeyError
-    'p_mp' inside run_model, and CEC DC with a PVWatts inverter silently returns
-    a 7-column DataFrame as results.ac.
-    """
+    """pvlib's PVWatts inverter model takes only the PVWatts DC model's power; its Sandia and ADR inverter models read the DC voltage that PVWatts DC does not give."""
 
     @pytest.mark.parametrize(
         "config",
