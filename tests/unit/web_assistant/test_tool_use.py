@@ -25,7 +25,11 @@ from tests.unit.web_assistant._fakes import (
     make_end_turn_stream,
     make_fake_stream,
     make_tool_use_stream,
+    make_tool_use_stream_from_blocks,
+    redacted_thinking_block,
     seed_run,
+    thinking_block,
+    tool_use_block,
 )
 
 
@@ -317,6 +321,51 @@ class TestToolUseLoop:
         assert "delta" in event_types, f"Expected delta frames; got: {event_types}"
         assert "done" in event_types, f"Expected done frame; got: {event_types}"
         assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+
+    def test_thinking_before_a_tool_call_is_replayed_unchanged(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """When the model thinks before it calls a tool, the next request replays that
+        turn exactly as the model returned it: its thinking blocks, signature included,
+        ahead of the tool_use block."""
+        TOOL_ID = "toolu_think_001"
+        thinking = thinking_block(
+            "They want self-sufficiency explained; explain_metric has its UK band.",
+            signature="sig",
+        )
+        redacted = redacted_thinking_block("EmwKAhgBEgy3va3pzix/LafPsn4a")
+        tool_call = tool_use_block(TOOL_ID, "explain_metric", {"metric": "self_sufficiency"})
+
+        anthropic_api.set_streams([
+            make_tool_use_stream_from_blocks([thinking, redacted, tool_call]),
+            make_end_turn_stream(["Self-sufficiency is the share of demand met on site."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "what is self-sufficiency?"})
+        assert resp.status_code == 200
+        event_types = [e.event for e in parse_sse_events(resp.get_data(as_text=True))]
+        assert "done" in event_types, f"Expected done frame; got: {event_types}"
+        assert "error" not in event_types, f"Unexpected error frame; got: {event_types}"
+
+        calls = anthropic_api.calls
+        assert len(calls) == 2, f"Expected stream() called exactly 2 times; got {len(calls)}"
+        assistant_turn, tool_result_turn = calls[1]["messages"][-2:]
+        assert assistant_turn["role"] == "assistant", (
+            f"Expected the assistant turn second to last in the 2nd call; got {assistant_turn!r}"
+        )
+        assert list(assistant_turn["content"]) == [thinking, redacted, tool_call], (
+            "Expected the assistant turn to replay the model's blocks unchanged and in order.\n"
+            f"Returned: {[thinking, redacted, tool_call]!r}\n"
+            f"Replayed: {assistant_turn['content']!r}"
+        )
+        assert tool_result_turn["role"] == "user", (
+            f"Expected the tool_result turn last in the 2nd call; got {tool_result_turn!r}"
+        )
+        assert [b["tool_use_id"] for b in tool_result_turn["content"]] == [TOOL_ID], (
+            f"Expected one tool_result, answering {TOOL_ID!r}; got {tool_result_turn['content']!r}"
+        )
 
 
 class TestRunLookupToolSurface:
