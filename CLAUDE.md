@@ -50,15 +50,24 @@ The simulation flows through these core modules:
 1. **`location.py`** — Frozen dataclass for geographic coordinates (Bristol default: 51.45°N, 2.58°W)
 2. **`weather.py`** — Fetches TMY/hourly irradiance from PVGIS via pvlib; caches results to disk (MD5-keyed by location)
 3. **`pv.py`** — Models PV generation using pvlib; interpolates hourly output to 1-minute resolution
-4. **`load.py`** — Generates household consumption profiles; optional stochastic mode via richardsonpy (UK CREST model), fallback to Ofgem TDCV benchmarks
+4. **`load.py`** — Generates household consumption profiles; stochastic mode via richardsonpy (UK CREST model, a core dependency), with a defensive fallback to Elexon/Ofgem benchmark shapes
 5. **`battery.py`** — Tracks state of charge with configurable power limits, efficiency, and SOC constraints
 6. **`flow.py`** — Per-timestep energy dispatch: self-consumption → battery charge → grid export; grid import for shortfalls
 7. **`home.py`** — Orchestrates a single home simulation combining PV + Load + Battery + Weather → `SimulationResults`
 8. **`fleet.py`** — Runs multiple homes in parallel via `ProcessPoolExecutor`; aggregates results
 
-### Configuration System (`config.py`, ~1500 lines)
+### Finance & Community Layer
 
-The largest module. Key concepts:
+Built on top of simulation results; this is the board-facing decision layer:
+
+- `finance.py` — Per-householder bills, fleet bill distributions, multi-year projections
+- `optimize.py` — Discrete install-config sweeps ranked by cost recovery
+- `flex.py` / `gridservices.py` — Flexibility value model and grid-services event-window pricing
+- `community.py` — Post-hoc peer-to-peer community netting over `FleetResults` (homes are not re-simulated)
+
+### Configuration System (`config.py`)
+
+One of the largest modules. Key concepts:
 - **Distribution types** for fleet diversity: `WeightedDiscreteDistribution`, `NormalDistribution`, `UniformDistribution`, `ShuffledPoolDistribution`, `ProportionalDistribution`
 - **`ScenarioConfig`** — Complete simulation specification parsed from YAML
 - **Parameter sweeps** — Geometric/linear sweep specs with cross-sweep parallel execution
@@ -67,7 +76,7 @@ The largest module. Key concepts:
 
 ### CLI (`cli/`)
 
-Typer-based with subcommands: `home run|quick`, `fleet run|sweep`, `config template|validate`, `validate`.
+Typer-based; subcommand groups are registered in `cli/main.py` (run `solar-challenge --help` for the authoritative list).
 
 ### Output & Validation
 
@@ -84,8 +93,7 @@ Typer-based with subcommands: `home run|quick`, `fleet run|sweep`, `config templ
 
 ## Optional Dependencies
 
-- `stochastic` extra: `richardsonpy` for realistic UK load profiles
-- `web` extra: Flask + Plotly for dashboard
+See `[project.optional-dependencies]` in `pyproject.toml` for the authoritative list. `richardsonpy` is a core dependency (the `stochastic` extra is an empty back-compat alias). The `web` extra covers the dashboard and its assistant; `e2e` covers the Playwright browser suite.
 
 ## Dark Factory
 
