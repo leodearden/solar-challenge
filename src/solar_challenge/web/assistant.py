@@ -666,7 +666,7 @@ def run_fleet_simulation(
     return {"run_id": run_id, "results_url": f"/results/fleet/{run_id}"}
 
 
-def _dispatch_tool(
+def dispatch_tool(
     name: str,
     tool_input: dict[str, Any],
     *,
@@ -938,7 +938,7 @@ def chat() -> Response:
                         )
 
                         # Dispatch to the handler and collect the result.
-                        tool_result = _dispatch_tool(
+                        tool_result = dispatch_tool(
                             block_name,
                             block_input,
                             db_path=db_path,
