@@ -121,16 +121,11 @@ def test_results_download_csv_returns_200(
     """Follow CSV link -> status 200, content-type text/csv."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
 
-    # Find the CSV download link
-    csv_link = page.locator("a", has_text="Download CSV")
-    if csv_link.count() == 0:
-        csv_link = page.locator("a", has_text="CSV")
+    csv_link = page.get_by_role("link", name="Download CSV", exact=True)
+    expect(csv_link).to_be_visible()
 
-    expect(csv_link.first).to_be_visible()
-
-    href = csv_link.first.get_attribute("href") or ""
+    href = csv_link.get_attribute("href") or ""
     assert href, "CSV download link has no href"
 
     # Fetch the URL directly
@@ -152,18 +147,11 @@ def test_results_download_yaml_returns_200(
     """Follow YAML link -> status 200."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
 
-    # Find the YAML download link
-    yaml_link = page.locator("a", has_text="Download Config")
-    if yaml_link.count() == 0:
-        yaml_link = page.locator("a", has_text="YAML")
-    if yaml_link.count() == 0:
-        yaml_link = page.locator("a", has_text="Config")
+    yaml_link = page.get_by_role("link", name="Download Config (YAML)", exact=True)
+    expect(yaml_link).to_be_visible()
 
-    expect(yaml_link.first).to_be_visible()
-
-    href = yaml_link.first.get_attribute("href") or ""
+    href = yaml_link.get_attribute("href") or ""
     assert href, "YAML download link has no href"
 
     yaml_url = href if href.startswith("http") else live_server + href

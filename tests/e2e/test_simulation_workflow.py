@@ -163,23 +163,9 @@ def test_results_page_has_download_buttons(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """'Download CSV' and 'Download Config' links visible."""
+    """'Download CSV' and 'Download Config (YAML)' links visible."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
 
-    csv_link = page.locator("a", has_text="Download CSV")
-    if csv_link.count() == 0:
-        csv_link = page.locator("a", has_text="CSV")
-
-    config_link = page.locator("a", has_text="Download Config")
-    if config_link.count() == 0:
-        config_link = page.locator("a", has_text="YAML")
-    if config_link.count() == 0:
-        config_link = page.locator("a", has_text="Config")
-
-    assert csv_link.count() > 0, "Expected a 'Download CSV' link on results page"
-    assert config_link.count() > 0, "Expected a 'Download Config' link on results page"
-
-    expect(csv_link.first).to_be_visible()
-    expect(config_link.first).to_be_visible()
+    for name in ("Download CSV", "Download Config (YAML)"):
+        expect(page.get_by_role("link", name=name, exact=True)).to_be_visible()
