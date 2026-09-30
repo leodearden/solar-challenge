@@ -7,20 +7,15 @@ and conditional field visibility.
 import pytest
 from playwright.sync_api import Page, expect
 
-from tests.e2e._home_form import choose_custom_range, form_data, open_period_tab
+from tests.e2e._home_form import (
+    choose_custom_range,
+    choose_location,
+    form_data,
+    open_location_tab,
+    open_period_tab,
+)
 
 pytestmark = pytest.mark.e2e
-
-
-def _open_location_tab(page: Page) -> None:
-    """Open the form's Location tab, where the simulated site is chosen."""
-    page.get_by_role("tab", name="Location", exact=True).click()
-
-
-def _choose_location(page: Page, location: str) -> None:
-    """Open the Location tab and select the #location option whose value is `location`."""
-    _open_location_tab(page)
-    page.locator("#location").select_option(value=location)
 
 
 # -- Preset populates form values -------------------------------------------
@@ -48,7 +43,7 @@ def test_preset_populates_form_values(page: Page, live_server: str) -> None:
 def test_location_preset_updates_formdata(page: Page, live_server: str) -> None:
     """Select Edinburgh on Location tab -> formData.location === 'edinburgh'."""
     page.goto(live_server + "/simulate/home")
-    _choose_location(page, "edinburgh")
+    choose_location(page, "edinburgh")
 
     location = form_data(page)["location"]
     assert location == "edinburgh", f"Expected location='edinburgh', got '{location}'"
@@ -76,12 +71,12 @@ def test_period_day_buttons(page: Page, live_server: str) -> None:
 def test_custom_location_fields_appear(page: Page, live_server: str) -> None:
     """Select the 'custom' location -> #custom_lat and #custom_lon, hidden until then, become visible."""
     page.goto(live_server + "/simulate/home")
-    _open_location_tab(page)
+    open_location_tab(page)
     coordinate_inputs = [page.locator("#custom_lat"), page.locator("#custom_lon")]
     for coordinate_input in coordinate_inputs:
         expect(coordinate_input).to_be_hidden()
 
-    _choose_location(page, "custom")
+    choose_location(page, "custom")
 
     for coordinate_input in coordinate_inputs:
         expect(coordinate_input).to_be_visible()
