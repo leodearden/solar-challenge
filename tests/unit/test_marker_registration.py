@@ -136,17 +136,26 @@ class TestIntegrationSuiteExcludedUnderNotSlow:
 
 
 class TestNetworkedUnitClassesExcludedButPureKept:
-    """Verify selective ``slow`` marking in test_home.py and test_fleet.py.
+    """Verify selective ``slow`` marking in the home and fleet unit tests.
 
-    NOTE — hand-maintained allowlists: NETWORKED_UNIT_CLASSES and PURE_UNIT_CLASSES
-    are enumerated here rather than derived dynamically because test_home.py and
-    test_fleet.py mix slow and fast classes in the same file, so a whole-file
-    "count must be zero" assertion is not possible.  The trade-off is that a newly
-    added network-touching class that lacks ``@pytest.mark.slow`` will NOT be
-    detected unless someone also adds it to NETWORKED_UNIT_CLASSES.  Reviewers
-    adding new simulation-driven test classes to these files should update the
-    list below to keep the guard effective.
+    NOTE — hand-maintained allowlists: UNIT_TEST_FILES, NETWORKED_UNIT_CLASSES and
+    PURE_UNIT_CLASSES are enumerated here rather than derived dynamically because
+    test_home_heat_pump.py and test_fleet.py mix slow and fast classes in the same
+    file, so a whole-file "count must be zero" assertion is not possible.  The
+    trade-off is that a newly added network-touching class that lacks
+    ``@pytest.mark.slow`` will NOT be detected unless someone also adds it to
+    NETWORKED_UNIT_CLASSES.  Reviewers adding new simulation-driven test classes to
+    these files should update the list below to keep the guard effective.  Anyone
+    moving a listed class to another module must add that module to UNIT_TEST_FILES,
+    because a NETWORKED class outside those files passes its check vacuously.
     """
+
+    # The modules that define every class named in the two lists below.
+    UNIT_TEST_FILES = [
+        "tests/unit/test_home.py",
+        "tests/unit/test_home_heat_pump.py",
+        "tests/unit/test_fleet.py",
+    ]
 
     # Network-touching classes in the unit suite — must be deselected.
     NETWORKED_UNIT_CLASSES = [
@@ -161,7 +170,7 @@ class TestNetworkedUnitClassesExcludedButPureKept:
     # Pure-logic classes — must remain selected (guard against over-marking).
     PURE_UNIT_CLASSES = [
         "TestCalculateSummary",  # test_home.py
-        "TestHeatPumpConfig",    # test_home.py — pure config construction, no network
+        "TestHeatPumpConfig",    # test_home_heat_pump.py — pure config construction, no network
         "TestFleetSummary",      # test_fleet.py
     ]
 
@@ -176,13 +185,17 @@ class TestNetworkedUnitClassesExcludedButPureKept:
                 "-q",
                 "-m",
                 "not slow",
-                "tests/unit/test_home.py",
-                "tests/unit/test_fleet.py",
+                *self.UNIT_TEST_FILES,
             ],
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
             timeout=120,
+        )
+        assert result.returncode == 0, (
+            f"Collecting {self.UNIT_TEST_FILES} under ``-m 'not slow'`` failed with exit "
+            f"code {result.returncode}, so the class checks below would be vacuous.\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         output = result.stdout
 
