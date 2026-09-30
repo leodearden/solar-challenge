@@ -1,8 +1,10 @@
 """End-to-end tests for the dashboard's enable/disable switches.
 
 Each switch is found by role and by the accessible name its label gives it,
-and each one shows, then hides, the settings it enables. Clicking a switch's
-label flips it just as clicking the switch does.
+and each one shows, then hides, the settings it enables. The Battery switch's
+Dispatch Strategy select is found the same way, by role and by the accessible
+name its label gives it. Clicking a switch's label flips it just as clicking
+the switch does.
 """
 
 import pytest
@@ -47,6 +49,19 @@ def test_home_switch_shows_and_hides_its_settings(
     _assert_switch_shows_and_hides(
         page.get_by_role("switch", name=switch_name, exact=True),
         page.locator(settings_selector),
+    )
+
+
+def test_battery_switch_shows_and_hides_the_dispatch_strategy_select(
+    page: Page, live_server: str
+) -> None:
+    """The select the Battery switch reveals is found by role and by the name its "Dispatch Strategy" label gives it."""
+    page.goto(live_server + "/simulate/home")
+    page.get_by_role("tab", name="Battery", exact=True).click()
+
+    _assert_switch_shows_and_hides(
+        page.get_by_role("switch", name="Enable Battery", exact=True),
+        page.get_by_role("combobox", name="Dispatch Strategy", exact=True),
     )
 
 
