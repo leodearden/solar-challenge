@@ -413,9 +413,11 @@ def create_pv_system(config: PVConfig) -> PVSystem:
 
     Creates a PVSystem using CEC module and inverter databases for realistic
     modelling parameters, or custom parameters if provided. The CEC inverter is
-    the one rated nearest the AC capacity whose MPPT window takes the strings.
-    The modules are wired as the fewest near-equal series strings that fit that
-    window: up to two groups of equal strings, one Array (one MPPT input) each.
+    the one rated nearest the AC capacity whose MPPT window takes the strings;
+    equally rated candidates are ranked by fewest strings, then by nominal DC
+    voltage nearest the strings' V_mp. The modules are wired as the fewest
+    near-equal series strings that fit that window: up to two groups of equal
+    strings, one Array (one MPPT input) each.
 
     Args:
         config: PV system configuration with capacity, azimuth, tilt, and
