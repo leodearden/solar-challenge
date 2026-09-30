@@ -119,3 +119,18 @@ def test_without_a_supplied_secret_key_the_app_keeps_one_under_the_home_director
     key_file = home / ".solar-challenge" / ".secret_key"
     assert first.secret_key
     assert first.secret_key == second.secret_key == key_file.read_text()
+
+
+@pytest.mark.parametrize("flask_debug", ["0", "1"], ids=["debug_off", "debug_on"])
+def test_the_session_cookie_is_not_marked_secure(
+    flask_debug: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The session cookie is not Secure, in debug mode or out of it: `solar-challenge web start` serves plain HTTP, also to the LAN with --host 0.0.0.0, and browsers withhold a Secure cookie from a non-localhost plain-HTTP origin, so the assistant would lose its chat session on every request."""
+    monkeypatch.setenv("FLASK_DEBUG", flask_debug)
+    app = _build_app(tmp_path)
+    client = app.test_client()
+
+    assert client.get("/assistant/history").status_code == 200
+    cookie = client.get_cookie(app.config["SESSION_COOKIE_NAME"])
+    assert cookie is not None
+    assert not cookie.secure
