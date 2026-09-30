@@ -780,6 +780,17 @@ def _create_client() -> Any:
     return anthropic.Anthropic()
 
 
+def _add_cache_usage(totals: Mapping[str, int], usage: Any) -> dict[str, int]:
+    """Return the running cache-token sums *totals* with one API call's *usage* added.
+
+    The SDK types both counts ``Optional[int]``; a count it reports as None adds 0.
+    """
+    return {
+        field: totals.get(field, 0) + (getattr(usage, field, None) or 0)
+        for field in ("cache_creation_input_tokens", "cache_read_input_tokens")
+    }
+
+
 @bp.route("/chat", methods=["POST"])
 def chat() -> Response:
     """Stream an AI assistant reply as Server-Sent Events.
@@ -886,7 +897,7 @@ def chat() -> Response:
         }
 
         accumulated = ""
-        usage_meta: dict[str, Any] = {}
+        cache_usage: dict[str, int] = {}
         invoked_tools: list[str] = []
 
         try:
@@ -905,15 +916,7 @@ def chat() -> Response:
                         # Accumulate across all loop iterations so the persisted
                         # metadata reflects the full turn's token cost, not just
                         # the final API call.
-                        usage_meta["cache_creation_input_tokens"] = (
-                            usage_meta.get("cache_creation_input_tokens", 0)
-                            + getattr(usage, "cache_creation_input_tokens", 0)
-                        )
-                        usage_meta["cache_read_input_tokens"] = (
-                            usage_meta.get("cache_read_input_tokens", 0)
-                            + getattr(usage, "cache_read_input_tokens", 0)
-                        )
-                        usage_meta["model"] = model
+                        cache_usage = _add_cache_usage(cache_usage, usage)
 
                 # Only "tool_use" means the model is waiting for tool results.
                 # Any other stop_reason ends the loop — including None, which
@@ -996,7 +999,7 @@ def chat() -> Response:
             return
 
         # Persist assistant turn on success; record any invoked tool names.
-        final_meta: dict[str, Any] = dict(usage_meta) if usage_meta else {}
+        final_meta: dict[str, Any] = {**cache_usage, "model": model} if cache_usage else {}
         if invoked_tools:
             final_meta["invoked_tools"] = invoked_tools
         database.save_chat_message(
