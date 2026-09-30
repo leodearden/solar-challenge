@@ -62,7 +62,7 @@ _MAX_HISTORY_TURNS = 20
 
 # Maximum number of tool-use iterations per request; prevents a runaway model
 # from looping and streaming forever (hanging the single worker / test suite).
-_MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 10
 
 # ---------------------------------------------------------------------------
 # Grounded metric table — canonical UK benchmark bands
@@ -878,11 +878,11 @@ def chat() -> Response:
         invoked_tools: list[str] = []
 
         try:
-            # Manual agentic loop — bounded by _MAX_TOOL_ITERATIONS so a
+            # Manual agentic loop — bounded by MAX_TOOL_ITERATIONS so a
             # runaway model cannot hang the single Flask worker or the test suite.
             # The manual loop is REQUIRED for per-token SSE streaming WITH tools:
             # the SDK tool_runner returns complete messages, not deltas.
-            for _iteration in range(_MAX_TOOL_ITERATIONS):
+            for _iteration in range(MAX_TOOL_ITERATIONS):
                 with client.messages.stream(**params) as stream:  # type: ignore[arg-type]
                     for text in stream.text_stream:
                         accumulated += text
