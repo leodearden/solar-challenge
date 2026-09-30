@@ -118,6 +118,24 @@ class TestParseHomeConfigKeys:
         assert "start" in message
 
     @pytest.mark.parametrize(
+        ("home_config", "type_name"),
+        [
+            pytest.param([1], "list", id="array"),
+            pytest.param("x", "str", id="string"),
+            pytest.param(1, "int", id="number"),
+            pytest.param(True, "bool", id="boolean"),
+            pytest.param(None, "NoneType", id="null"),
+        ],
+    )
+    def test_home_config_that_is_not_an_object_is_refused_naming_its_type(
+        self, home_config: object, type_name: str
+    ) -> None:
+        """A JSON value that is not an object is refused with a ValueError that names the type sent."""
+        with pytest.raises(ValueError, match=rf"\b{type_name}\b") as exc_info:
+            parse_home_config(home_config)
+        assert "JSON object" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
         "payload",
         [
             pytest.param(FORM_PAYLOAD_BATTERY_ON, id="battery-on"),
