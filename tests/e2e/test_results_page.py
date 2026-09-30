@@ -43,21 +43,12 @@ def test_results_chart_containers_exist(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """#chart-sankey or #chart-daily-balance div present."""
+    """Overview tab shows both chart containers: #chart-sankey, #chart-daily-balance."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
 
-    # Look for chart container divs
-    sankey = page.locator("#chart-sankey")
-    daily_balance = page.locator("#chart-daily-balance")
-
-    has_sankey = sankey.count() > 0
-    has_daily = daily_balance.count() > 0
-
-    assert has_sankey or has_daily, (
-        "Expected at least one chart container (#chart-sankey or #chart-daily-balance)"
-    )
+    for chart_id in ("#chart-sankey", "#chart-daily-balance"):
+        expect(page.locator(chart_id)).to_be_visible()
 
 
 # -- Tab switching ----------------------------------------------------------
