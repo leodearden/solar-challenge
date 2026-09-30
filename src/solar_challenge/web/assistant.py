@@ -907,11 +907,11 @@ def chat() -> Response:
                         # the final API call.
                         usage_meta["cache_creation_input_tokens"] = (
                             usage_meta.get("cache_creation_input_tokens", 0)
-                            + getattr(usage, "cache_creation_input_tokens", 0)
+                            + (getattr(usage, "cache_creation_input_tokens", None) or 0)
                         )
                         usage_meta["cache_read_input_tokens"] = (
                             usage_meta.get("cache_read_input_tokens", 0)
-                            + getattr(usage, "cache_read_input_tokens", 0)
+                            + (getattr(usage, "cache_read_input_tokens", None) or 0)
                         )
                         usage_meta["model"] = model
 

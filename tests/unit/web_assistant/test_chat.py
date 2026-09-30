@@ -14,7 +14,12 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from tests._sse import SseFrame, parse_sse_events
-from tests.unit.web_assistant._fakes import FakeAnthropic, install_fake_anthropic, seed_run
+from tests.unit.web_assistant._fakes import (
+    FakeAnthropic,
+    install_fake_anthropic,
+    make_end_turn_stream,
+    seed_run,
+)
 
 
 def reply_text(events: list[SseFrame]) -> str:
@@ -278,6 +283,36 @@ class TestChatEndpointHappyPath:
         assert messages[0]["content"] == "hi there"
         assert messages[1]["role"] == "assistant"
         assert "mock reply" in messages[1]["content"]
+
+    def test_chat_completes_when_sdk_reports_cache_tokens_as_none(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """The SDK types both cache-token usage fields Optional[int]; None counts as 0."""
+        anthropic_api.set_streams(
+            [
+                make_end_turn_stream(
+                    ["mock reply"],
+                    cache_creation_input_tokens=None,
+                    cache_read_input_tokens=None,
+                )
+            ]
+        )
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "none-usage-sid"
+
+        resp = client.post("/assistant/chat", json={"message": "hi there"})
+        events = parse_sse_events(resp.get_data(as_text=True))
+
+        event_types = [e.event for e in events]
+        assert "error" not in event_types, f"Unexpected error frame: {events}"
+        assert event_types[-1] == "done"
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert [m["role"] for m in messages] == ["user", "assistant"]
+        assert messages[1]["content"] == "mock reply"
+        assert messages[1]["metadata"]["cache_creation_input_tokens"] == 0
+        assert messages[1]["metadata"]["cache_read_input_tokens"] == 0
 
 
 class TestChatDegradation:

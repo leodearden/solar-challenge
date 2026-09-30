@@ -146,14 +146,23 @@ def make_tool_use_stream_from_blocks(blocks: Sequence[SimpleNamespace]) -> Magic
     return _stream_manager(text_chunks, final_message)
 
 
-def make_end_turn_stream(text_chunks: list[str]) -> MagicMock:
-    """Build a context-manager mock for a stream that ends with stop_reason='end_turn'."""
+def make_end_turn_stream(
+    text_chunks: list[str],
+    *,
+    cache_creation_input_tokens: int | None = 0,
+    cache_read_input_tokens: int | None = 80,
+) -> MagicMock:
+    """Build a context-manager mock for a stream that ends with stop_reason='end_turn'.
+
+    The usage counts default to ints; pass ``None`` to mirror the real SDK's
+    ``Optional[int]`` cache-token fields when the API leaves them out.
+    """
     final_message = SimpleNamespace(
         stop_reason="end_turn",
         content=[SimpleNamespace(type="text", text="".join(text_chunks))],
         usage=SimpleNamespace(
-            cache_creation_input_tokens=0,
-            cache_read_input_tokens=80,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
         ),
     )
     return _stream_manager(text_chunks, final_message)
