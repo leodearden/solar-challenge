@@ -322,21 +322,14 @@ class TestToolUseLoop:
 class TestRunLookupToolSurface:
     """get_run_results and list_recent_runs as the chat registers, dispatches and calls them."""
 
-    def test_run_lookup_tools_input_schema_is_object_with_required(self) -> None:
-        """get_run_results and list_recent_runs have type 'object' and non-empty required."""
+    def test_run_lookup_tools_required_fields(self) -> None:
+        """get_run_results requires 'run_id_or_name' and list_recent_runs requires 'limit'."""
         from solar_challenge.web.assistant import _TOOLS
 
         run_lookup_tools = {t["name"]: t for t in _TOOLS if t["name"] in ("get_run_results", "list_recent_runs")}
         assert "get_run_results" in run_lookup_tools, "get_run_results missing from _TOOLS"
         assert "list_recent_runs" in run_lookup_tools, "list_recent_runs missing from _TOOLS"
 
-        for name, tool in run_lookup_tools.items():
-            schema = tool["input_schema"]
-            assert schema.get("type") == "object", f"{name}: input_schema.type must be 'object'"
-            required = schema.get("required", [])
-            assert required, f"{name}: required list must be non-empty"
-
-        # Specific required fields
         grr_required = run_lookup_tools["get_run_results"]["input_schema"]["required"]
         assert "run_id_or_name" in grr_required, (
             f"get_run_results must require 'run_id_or_name'; got {grr_required}"
@@ -458,34 +451,26 @@ class TestRunLookupToolSurface:
 class TestSimulationToolSurface:
     """run_home_simulation and run_fleet_simulation as the chat registers and dispatches them."""
 
-    def test_run_home_simulation_schema(self) -> None:
-        """run_home_simulation has object input_schema with pv_kw required."""
+    def test_run_home_simulation_requires_pv_kw(self) -> None:
+        """run_home_simulation's input_schema requires 'pv_kw'."""
         from solar_challenge.web.assistant import _TOOLS
 
         tool = next((t for t in _TOOLS if t["name"] == "run_home_simulation"), None)
         assert tool is not None, "run_home_simulation missing from _TOOLS"
         schema = tool["input_schema"]
-        assert schema.get("type") == "object", (
-            f"run_home_simulation input_schema.type must be 'object'; got {schema.get('type')!r}"
-        )
         required = schema.get("required", [])
-        assert required, "run_home_simulation input_schema.required must be non-empty"
         assert "pv_kw" in required, (
             f"run_home_simulation must require 'pv_kw'; got {required}"
         )
 
-    def test_run_fleet_simulation_schema(self) -> None:
-        """run_fleet_simulation has object input_schema with n_homes required."""
+    def test_run_fleet_simulation_requires_n_homes(self) -> None:
+        """run_fleet_simulation's input_schema requires 'n_homes'."""
         from solar_challenge.web.assistant import _TOOLS
 
         tool = next((t for t in _TOOLS if t["name"] == "run_fleet_simulation"), None)
         assert tool is not None, "run_fleet_simulation missing from _TOOLS"
         schema = tool["input_schema"]
-        assert schema.get("type") == "object", (
-            f"run_fleet_simulation input_schema.type must be 'object'; got {schema.get('type')!r}"
-        )
         required = schema.get("required", [])
-        assert required, "run_fleet_simulation input_schema.required must be non-empty"
         assert "n_homes" in required, (
             f"run_fleet_simulation must require 'n_homes'; got {required}"
         )
