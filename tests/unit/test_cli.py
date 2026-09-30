@@ -2,16 +2,20 @@
 
 import io
 import tempfile
+import types
 from pathlib import Path
-from unittest.mock import patch
 
 import pandas as pd
 import pytest
+import yaml
+from rich.console import Console
 from typer.testing import CliRunner, Result
 
+import solar_challenge.cli.home as _cli_home_module
+import solar_challenge.home as _home_module
 from solar_challenge.cli.main import app
-from solar_challenge.cli.utils import parse_location
-from solar_challenge.home import HomeConfig
+from solar_challenge.cli.utils import create_summary_table, parse_location
+from solar_challenge.home import HomeConfig, SummaryStatistics
 from solar_challenge.seg import SEG_PRESETS
 
 runner = CliRunner()
@@ -332,8 +336,6 @@ class TestCLIOutputFormats:
 
     def test_template_generates_valid_yaml(self) -> None:
         """Test that generated templates are valid YAML."""
-        import yaml
-
         for template_type in ["home", "fleet", "scenario"]:
             result = runner.invoke(app, ["config", "template", template_type])
             assert result.exit_code == 0
@@ -360,31 +362,23 @@ class TestLocationParsing:
 
     def test_parse_bristol_preset(self) -> None:
         """Test parsing 'bristol' preset."""
-        from solar_challenge.cli.utils import parse_location
-
         loc = parse_location("bristol")
         assert loc.latitude == 51.45
         assert loc.longitude == -2.58
 
     def test_parse_bristol_case_insensitive(self) -> None:
         """Test parsing 'BRISTOL' is case-insensitive."""
-        from solar_challenge.cli.utils import parse_location
-
         loc = parse_location("BRISTOL")
         assert loc.latitude == 51.45
 
     def test_parse_lat_lon(self) -> None:
         """Test parsing lat,lon format."""
-        from solar_challenge.cli.utils import parse_location
-
         loc = parse_location("51.50,-0.12")
         assert loc.latitude == 51.50
         assert loc.longitude == -0.12
 
     def test_parse_lat_lon_altitude(self) -> None:
         """Test parsing lat,lon,altitude format."""
-        from solar_challenge.cli.utils import parse_location
-
         loc = parse_location("51.50,-0.12,25")
         assert loc.latitude == 51.50
         assert loc.longitude == -0.12
@@ -392,15 +386,11 @@ class TestLocationParsing:
 
     def test_parse_invalid_location(self) -> None:
         """Test parsing invalid location raises error."""
-        from solar_challenge.cli.utils import parse_location
-
         with pytest.raises(ValueError, match="Invalid location"):
             parse_location("invalid")
 
     def test_parse_invalid_coordinates(self) -> None:
         """Test parsing invalid coordinates raises error."""
-        from solar_challenge.cli.utils import parse_location
-
         with pytest.raises(ValueError, match="Invalid coordinates"):
             parse_location("abc,def")
 
@@ -408,10 +398,8 @@ class TestLocationParsing:
 class TestCreateSummaryTableFinancials:
     """Tests that create_summary_table renders financial/SEG rows (step-5/step-6)."""
 
-    def _make_summary_with_financials(self) -> "SummaryStatistics":  # type: ignore[name-defined]
+    def _make_summary_with_financials(self) -> SummaryStatistics:
         """Construct a SummaryStatistics with all financial fields populated."""
-        from solar_challenge.home import SummaryStatistics
-
         return SummaryStatistics(
             total_generation_kwh=10.0,
             total_demand_kwh=8.0,
@@ -434,10 +422,6 @@ class TestCreateSummaryTableFinancials:
 
     def _render_table(self, summary: object) -> str:
         """Render create_summary_table to a string via Rich Console."""
-        import io
-        from rich.console import Console
-        from solar_challenge.cli.utils import create_summary_table
-
         buf = io.StringIO()
         console_obj = Console(file=buf, width=200, highlight=False)
         table = create_summary_table(summary)
@@ -460,8 +444,6 @@ class TestCreateSummaryTableFinancials:
 
     def test_no_seg_row_when_seg_revenue_is_none(self) -> None:
         """No SEG Revenue row when seg_revenue_gbp is None."""
-        from solar_challenge.home import SummaryStatistics
-
         summary = SummaryStatistics(
             total_generation_kwh=10.0,
             total_demand_kwh=8.0,
@@ -486,7 +468,6 @@ class TestCreateSummaryTableFinancials:
 
     def test_no_financial_rows_for_fleet_summary_like_object(self) -> None:
         """Objects without financial fields (e.g. FleetSummary) render without SEG row, no error."""
-        import types
         # Minimal FleetSummary-like namespace with n_homes but no financial fields
         fleet_like = types.SimpleNamespace(
             total_generation_kwh=100.0,
@@ -544,9 +525,6 @@ home:
         Returns the CLI result and the spy's capture; ``captured["home_config"]``
         is the HomeConfig passed to simulate_home, absent if it was never called.
         """
-        import solar_challenge.home as _home_module
-        import solar_challenge.cli.home as _cli_home_module
-
         # Capture the home_config passed to simulate_home by wrapping the real function
         captured: dict[str, HomeConfig] = {}
         real_simulate_home = _home_module.simulate_home
