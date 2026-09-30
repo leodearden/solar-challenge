@@ -58,7 +58,7 @@ the numbers mean in practical terms (bill savings, self-sufficiency rates, etc.)
 
 # Maximum number of prior turns to replay to the model on each request;
 # prevents unbounded context growth and eventual context-window exhaustion.
-_MAX_HISTORY_TURNS = 20
+MAX_HISTORY_TURNS = 20
 
 # Maximum number of tool-use iterations per request; prevents a runaway model
 # from looping and streaming forever (hanging the single worker / test suite).
@@ -823,15 +823,15 @@ def chat() -> Response:
 
         # Build conversation history for the API.  The just-saved user turn is
         # intentionally included as the final message in the request.
-        # Cap to _MAX_HISTORY_TURNS to prevent unbounded context growth.
+        # Cap to MAX_HISTORY_TURNS to prevent unbounded context growth.
         all_turns = database.get_chat_history(db_path, sid)
         messages: list[dict[str, Any]] = [
             {"role": row["role"], "content": row["content"]}
-            for row in all_turns[-_MAX_HISTORY_TURNS:]
+            for row in all_turns[-MAX_HISTORY_TURNS:]
         ]
         # API invariant: the first message must be role=user and roles must
         # strictly alternate.  After the even-width tail-slice, the window can
-        # start on an assistant row once the history exceeds _MAX_HISTORY_TURNS.
+        # start on an assistant row once the history exceeds MAX_HISTORY_TURNS.
         # Drop any leading non-user turns to restore the invariant.
         while messages and messages[0]["role"] != "user":
             messages.pop(0)
