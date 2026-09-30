@@ -24,7 +24,7 @@ def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple
 
     Mirrors the canonical consumer path in cli/finance.py::
 
-        load_config → _parse_finance_config → load_fleet_config → ScenarioConfig
+        load_config → parse_finance_config → load_fleet_config → ScenarioConfig
 
     Args:
         scenario_name: Optional name for the constructed ``ScenarioConfig``
@@ -33,16 +33,16 @@ def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple
     Returns:
         Tuple of ``(ScenarioConfig, FinanceConfig)`` for the board scenario.
     """
-    from solar_challenge.config import (  # type: ignore[attr-defined]
+    from solar_challenge.config import (
         ScenarioConfig,
         SimulationPeriod,
-        _parse_finance_config,
         load_config,
         load_fleet_config,
+        parse_finance_config,
     )
 
     cfg = load_config(SCENARIO)
-    finance = _parse_finance_config(cfg.get("finance"))
+    finance = parse_finance_config(cfg.get("finance"))
     fleet = load_fleet_config(SCENARIO)
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
     scenario = ScenarioConfig(

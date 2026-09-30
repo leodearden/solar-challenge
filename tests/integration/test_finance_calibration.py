@@ -269,7 +269,7 @@ class TestFinCalibrationScenarioParses:
 
     The scenario uses fleet_distribution format (100 identical homes), which is
     parsed via load_fleet_config (matching how the finance CLI loads scenarios).
-    Finance block is parsed separately via _parse_finance_config + load_config,
+    Finance block is parsed separately via parse_finance_config + load_config,
     exactly as the finance CLI does internally.
     """
 
@@ -278,7 +278,7 @@ class TestFinCalibrationScenarioParses:
     def _load_finance(self) -> "FinanceConfig":  # type: ignore[name-defined]
         """Parse the finance block from the calibration scenario YAML."""
         from pathlib import Path
-        from solar_challenge.config import _parse_finance_config, load_config
+        from solar_challenge.config import load_config, parse_finance_config
 
         path = Path(self._SCENARIO_PATH)
         if not path.exists():
@@ -287,7 +287,7 @@ class TestFinCalibrationScenarioParses:
                 "Create it with step-4 impl."
             )
         raw = load_config(path)
-        finance = _parse_finance_config(raw.get("finance"))
+        finance = parse_finance_config(raw.get("finance"))
         assert finance is not None, "Expected finance block in scenario, got None"
         return finance
 

@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Integration tests: W2 seam gate — grid-services band fills board scenario finance (task/55 δ).
 
-Tests the cross-task seam: board scenario YAML → _parse_finance_config →
+Tests the cross-task seam: board scenario YAML → parse_finance_config →
 project_multi_year → project_economics.mean_fleet_surplus_per_year_gbp.
 
 Step-1 (RED) → Step-2 (GREEN): field-fill assertion on the YAML literal.
@@ -36,7 +36,7 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
     Also asserts the scenario's flex_band key lowers to "central" to document
     provenance: the value derives from this band.
     """
-    from solar_challenge.config import _parse_finance_config, load_config  # type: ignore[attr-defined]
+    from solar_challenge.config import load_config, parse_finance_config
     from solar_challenge.flex import resolve_grid_services_band
 
     cfg = load_config(SCENARIO)
@@ -45,7 +45,7 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
     assert cfg["flex_band"].lower() == "central"
 
     # The finance field must match the resolved central band value (no magic numbers)
-    finance = _parse_finance_config(cfg.get("finance"))
+    finance = parse_finance_config(cfg.get("finance"))
     assert finance is not None
     assert finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(
         resolve_grid_services_band("central")
@@ -111,18 +111,18 @@ def _board_econ_scenario() -> tuple:  # type: ignore[return]
     """Build (scenario, finance_loaded) from the board YAML.
 
     Mirrors the canonical consumer path in cli/finance.py:
-      load_config → _parse_finance_config → load_fleet_config → ScenarioConfig
+      load_config → parse_finance_config → load_fleet_config → ScenarioConfig
     """
-    from solar_challenge.config import (  # type: ignore[attr-defined]
+    from solar_challenge.config import (
         ScenarioConfig,
         SimulationPeriod,
-        _parse_finance_config,
         load_config,
         load_fleet_config,
+        parse_finance_config,
     )
 
     cfg = load_config(SCENARIO)
-    finance = _parse_finance_config(cfg.get("finance"))
+    finance = parse_finance_config(cfg.get("finance"))
     # The board YAML ships capacity_at_events after task-76 ε flip; pin flat
     # model so these seam tests continue verifying flat-rate arithmetic before
     # and after that flip.  The pin is a no-op while the YAML is still flat.
@@ -263,14 +263,14 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     Non-tautological: finance_base (from the board YAML) carries 12.0, so the
     two omitted-path configs (finance_omitted, finance_dataclass_default) must
     resolve to 0.0 via their respective defaults — not 12.0 — to pass.  A future
-    change that shifts _parse_finance_config's data.get fallback OR
+    change that shifts parse_finance_config's data.get fallback OR
     FinanceConfig's grid_services_income_per_kw_per_year_gbp field default
     away from 0.0 would be caught here.
     """
-    from solar_challenge.config import (  # type: ignore[attr-defined]
+    from solar_challenge.config import (
         FinanceConfig,
-        _parse_finance_config,
         load_config,
+        parse_finance_config,
     )
 
     scenario, finance_base = _board_econ_scenario()
@@ -289,7 +289,7 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     surplus_explicit = _surplus_at(scenario, finance_explicit_zero, simulate)
 
     # Path 1 — production-parser omitted path: pop the key from the finance dict
-    # and drive _parse_finance_config's data.get(..., 0.0) fallback.
+    # and drive parse_finance_config's data.get(..., 0.0) fallback.
     cfg = load_config(SCENARIO)
     finance_dict = dict(cfg["finance"])
     finance_dict.pop("grid_services_income_per_kw_per_year_gbp")
@@ -301,10 +301,10 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     assert "grid_services_income_per_kw_per_year_gbp" not in finance_dict, (
         "Key must be absent so the parser fallback fires"
     )
-    finance_omitted = _parse_finance_config(finance_dict)
+    finance_omitted = parse_finance_config(finance_dict)
     assert finance_omitted is not None
     assert finance_omitted.grid_services_income_per_kw_per_year_gbp == 0.0, (
-        "_parse_finance_config's data.get fallback must resolve to 0.0 when key is absent"
+        "parse_finance_config's data.get fallback must resolve to 0.0 when key is absent"
     )
 
     # Path 2 — FinanceConfig dataclass default path: reconstruct from finance_base's
@@ -375,9 +375,9 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     simulate = _constant_simulate(fr)
 
     # Finance config: board-like but with controllable grid_services
-    from solar_challenge.config import _parse_finance_config, load_config  # type: ignore[attr-defined]
+    from solar_challenge.config import load_config, parse_finance_config
     cfg = load_config(SCENARIO)
-    finance_base = _parse_finance_config(cfg.get("finance"))
+    finance_base = parse_finance_config(cfg.get("finance"))
     assert finance_base is not None
     # Pin to flat model: board YAML ships capacity_at_events after task-76 ε
     # flip; this test verifies flat-rate seam math, so decouple from board default.

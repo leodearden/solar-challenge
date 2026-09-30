@@ -688,7 +688,7 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     from typer.testing import CliRunner
 
     from solar_challenge.cli.main import app
-    from solar_challenge.config import _parse_finance_config, load_config  # type: ignore[attr-defined]
+    from solar_challenge.config import load_config, parse_finance_config
     from solar_challenge.gridservices import compute_grid_services_at_events
 
     scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
@@ -717,7 +717,7 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     # Supersede inequality (only checkable after ε flips the board YAML to
     # capacity_at_events; skips gracefully if still flat)
     raw = load_config(scenario_path)
-    finance = _parse_finance_config(raw.get("finance"))
+    finance = parse_finance_config(raw.get("finance"))
     assert finance is not None
     if finance.grid_services_events is not None:
         flat_rate = finance.grid_services_income_per_kw_per_year_gbp
