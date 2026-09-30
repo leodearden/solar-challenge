@@ -1,6 +1,7 @@
 """End-to-end tests for the Fleet Simulation page (/simulate/fleet).
 
-Verifies page loading, n_homes controls, distribution cards, and detects
+Verifies page loading, n_homes controls, distribution cards, that the
+fleet-wide Dispatch Strategy select is named by its label, and detects
 Bug B1 (Alpine race condition) and Bug B2 (wrong results URL).
 """
 
@@ -91,6 +92,22 @@ def test_fleet_distribution_cards(page: Page, live_server: str) -> None:
     # Load distribution card (red accent)
     load_card = page.locator("h3", has_text="Annual Consumption")
     expect(load_card).to_be_visible()
+
+
+# ── Fleet-wide dispatch strategy ─────────────────────────────────────
+
+
+def test_fleet_dispatch_strategy_select_is_named_by_its_label(
+    page: Page, live_server: str
+) -> None:
+    """The Dispatch Strategy select is found by the name its "Dispatch Strategy" label gives it.
+
+    It shows only while the battery is enabled, which it is by default.
+    """
+    page.goto(live_server + "/simulate/fleet")
+
+    dispatch_select = page.get_by_role("combobox", name="Dispatch Strategy", exact=True)
+    expect(dispatch_select).to_be_visible()
 
 
 # ── Bug B2: fleet results URL points to wrong path ───────────────────

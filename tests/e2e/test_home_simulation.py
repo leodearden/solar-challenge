@@ -121,26 +121,31 @@ def test_battery_on_form_submission_is_accepted(page: Page, live_server: str) ->
 
 @dataclass(frozen=True)
 class _OptionalBlock:
-    """A block buildPayload() sends only while a switch is on, and the select that picks its variant."""
+    """A block buildPayload() sends only while a switch is on, and the accessible name of the select that picks its variant."""
 
     tab: str
     switch_name: str
-    variant_select: str
+    variant_select_name: str
     payload_key: str
     variant_key: str
 
 
+def _choose_variant(page: Page, block: _OptionalBlock, variant: str) -> None:
+    select = page.get_by_role("combobox", name=block.variant_select_name, exact=True)
+    select.select_option(value=variant)
+
+
 _HEAT_PUMP = _OptionalBlock(
-    "Heat Pump", "Enable Heat Pump", "#heat_pump_type", "heat_pump", "type"
+    "Heat Pump", "Enable Heat Pump", "Heat Pump Type", "heat_pump", "type"
 )
-_TARIFF = _OptionalBlock("Tariff", "Enable Tariff", "#tariff_type", "tariff", "type")
+_TARIFF = _OptionalBlock("Tariff", "Enable Tariff", "Tariff Type", "tariff", "type")
 _SEG = _OptionalBlock(
-    "Tariff", "Enable SEG Export Pricing", "#seg_preset", "seg", "preset"
+    "Tariff", "Enable SEG Export Pricing", "Supplier Preset", "seg", "preset"
 )
 _DISPATCH_STRATEGY = _OptionalBlock(
     "Battery",
     "Enable Battery",
-    "#dispatch_strategy_type",
+    "Dispatch Strategy",
     "dispatch_strategy",
     "strategy_type",
 )
@@ -169,7 +174,7 @@ def test_optional_block_form_submission_is_accepted(
     """Run with an optional block on and a variant picked: /api/simulate/home accepts what the form sends (201)."""
     page.goto(live_server + "/simulate/home")
     _switch_on(page, block.tab, block.switch_name)
-    page.locator(block.variant_select).select_option(value=variant)
+    _choose_variant(page, block, variant)
     response = submit_two_day_run(page)
 
     sent_block = response.request.post_data_json.get(block.payload_key) or {}
@@ -186,7 +191,7 @@ def test_seg_custom_rate_form_submission_is_accepted(
     """Run with SEG export pricing on at a typed custom rate: /api/simulate/home accepts what the form sends (201)."""
     page.goto(live_server + "/simulate/home")
     _switch_on(page, _SEG.tab, _SEG.switch_name)
-    page.locator(_SEG.variant_select).select_option(value="custom")
+    _choose_variant(page, _SEG, "custom")
     page.locator("#seg_rate_pence_per_kwh").fill("5.5")
     response = submit_two_day_run(page)
 
