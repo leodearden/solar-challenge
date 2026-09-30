@@ -10,6 +10,8 @@ PVGIS API call and is marked slow.
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e._home_form import submit_two_day_run
+
 pytestmark = pytest.mark.e2e
 
 
@@ -98,19 +100,8 @@ def test_simulation_completes_and_shows_view_results(
 ) -> None:
     """'View Results' link appears within 120s (real PVGIS call)."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1500)
-
-    # Set to 1-day simulation for speed
-    page.evaluate("""() => {
-        const el = document.querySelector('[x-data="homeSimulator()"]');
-        const data = Alpine.$data(el);
-        data.formData.period_days = 1;
-    }""")
-    page.wait_for_timeout(300)
-
-    submit_btn = page.locator("button[type='submit']")
-    submit_btn.click()
+    response = submit_two_day_run(page)
+    assert response.status == 201, response.text()
 
     # Wait for "View Results" link to appear (up to 120s for PVGIS)
     view_results = page.locator("a", has_text="View Results")
@@ -127,18 +118,8 @@ def test_view_results_link_navigates_to_results_page(
 ) -> None:
     """Click 'View Results' -> URL contains /results/home/."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1500)
-
-    page.evaluate("""() => {
-        const el = document.querySelector('[x-data="homeSimulator()"]');
-        const data = Alpine.$data(el);
-        data.formData.period_days = 1;
-    }""")
-    page.wait_for_timeout(300)
-
-    submit_btn = page.locator("button[type='submit']")
-    submit_btn.click()
+    response = submit_two_day_run(page)
+    assert response.status == 201, response.text()
 
     # Wait for "View Results" link
     view_results = page.locator("a", has_text="View Results")
