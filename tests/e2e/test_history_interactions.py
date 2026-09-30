@@ -10,7 +10,7 @@ from collections.abc import Callable
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from playwright.sync_api import Page, Route, expect
+from playwright.sync_api import Locator, Page, Route, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -81,6 +81,20 @@ def test_type_filter_dropdown_filters(
     expect(empty_msg).to_be_visible()
 
 
+# -- Finding a seeded run --------------------------------------------------
+
+
+def _search_for_run_row(page: Page, run_name: str) -> Locator:
+    """Search the open Run History page for run_name and return that run's table row once it shows.
+
+    A search lists the run on the first page, whatever else the shared session DB holds.
+    """
+    page.get_by_label("Search", exact=True).fill(run_name)
+    run_row = page.get_by_role("row").filter(has_text=run_name)
+    expect(run_row).to_be_visible()
+    return run_row
+
+
 # -- Select runs shows compare button --------------------------------------
 
 
@@ -89,26 +103,19 @@ def test_select_runs_shows_compare_button(
     live_server: str,
     seeded_home_runs_pair: list[tuple[str, str]],
 ) -> None:
-    """Check 2 checkboxes -> 'Compare Selected' link visible."""
+    """Checking two runs' boxes shows the 'Compare Selected' link to their comparison.
+
+    Each run is found by searching its name; the first stays selected through the second search.
+    """
+    (id_a, _), (id_b, _) = seeded_home_runs_pair
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(2000)
 
-    # Find checkboxes in the table rows
-    checkboxes = page.locator("tbody input[type='checkbox']")
+    for _, run_name in seeded_home_runs_pair:
+        _search_for_run_row(page, run_name).get_by_role("checkbox").check()
 
-    if checkboxes.count() < 2:
-        pytest.skip(f"Expected at least 2 checkboxes, found {checkboxes.count()}")
-
-    # Check the first two checkboxes
-    checkboxes.nth(0).check()
-    page.wait_for_timeout(200)
-    checkboxes.nth(1).check()
-    page.wait_for_timeout(500)
-
-    # The "Compare Selected" link should now be visible
-    compare_btn = page.locator("a", has_text="Compare Selected")
-    expect(compare_btn).to_be_visible()
+    compare_link = page.get_by_role("link", name="Compare Selected")
+    expect(compare_link).to_be_visible()
+    expect(compare_link).to_have_attribute("href", f"/history/compare?ids={id_a},{id_b}")
 
 
 # -- Delete run with confirmation ------------------------------------------
@@ -119,30 +126,16 @@ def test_delete_run_with_confirmation(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Click delete -> confirm dialog shows; click Cancel -> dialog closes."""
+    """Click a run's delete -> the 'Delete Run' dialog shows; click Cancel -> it closes."""
+    _, run_name = seeded_home_run
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(2000)
 
-    delete_btn = page.locator('button[title="Delete"]')
-    if delete_btn.count() == 0:
-        pytest.skip("No delete buttons found in history table")
+    _search_for_run_row(page, run_name).get_by_role("button", name="Delete").click()
 
-    delete_btn.first.click()
-    page.wait_for_timeout(500)
-
-    # Confirm dialog should appear
-    dialog_title = page.locator("h3", has_text="Delete Run")
+    dialog_title = page.get_by_role("heading", name="Delete Run")
     expect(dialog_title).to_be_visible()
-
-    # Cancel button should be present
-    cancel_btn = page.locator("button", has_text="Cancel")
-    expect(cancel_btn).to_be_visible()
-
-    # Click Cancel -> dialog should close
-    cancel_btn.click()
-    page.wait_for_timeout(500)
-    expect(dialog_title).not_to_be_visible()
+    page.get_by_role("button", name="Cancel").click()
+    expect(dialog_title).to_be_hidden()
 
 
 # -- Rename run inline -----------------------------------------------------
@@ -153,21 +146,15 @@ def test_rename_run_inline(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Click rename -> input[x-model='editName'] visible."""
+    """Click a run's rename -> an inline input holding its name replaces the name."""
+    _, run_name = seeded_home_run
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(2000)
 
-    rename_btn = page.locator('button[title="Rename"]')
-    if rename_btn.count() == 0:
-        pytest.skip("No rename buttons found in history table")
+    _search_for_run_row(page, run_name).get_by_role("button", name="Rename").click()
 
-    rename_btn.first.click()
-    page.wait_for_timeout(500)
-
-    # An inline edit input should appear
     edit_input = page.locator('input[x-model="editName"]')
     expect(edit_input).to_be_visible()
+    expect(edit_input).to_have_value(run_name)
 
 
 # -- Pagination controls exist ---------------------------------------------

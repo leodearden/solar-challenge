@@ -93,64 +93,16 @@ def test_sweep_configuration_form(page: Page, live_server: str) -> None:
 
 
 def test_sweep_preview_updates(page: Page, live_server: str) -> None:
-    """Filling in min=1, max=10, steps=5 shows 5 preview values.
-
-    The ``parameterSweep()`` component is loaded from an external JS file
-    via ``defer``.  Due to the Alpine race condition (Bug B1), the
-    component may fail to register before Alpine evaluates the x-data.
-    We handle this by checking whether Alpine.$data exposes the
-    ``previewValues`` getter and falling back gracefully.
-    """
+    """Filling in min=1, max=10, steps=5 previews the five linear sweep values from 1 to 10."""
     page.goto(live_server + "/scenarios/sweep")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1500)
 
-    # Check whether the Alpine component actually initialised.
-    # If parameterSweep() wasn't registered in time, Alpine.$data won't
-    # have the previewValues property.
-    component_alive = page.evaluate("""() => {
-        try {
-            const el = document.querySelector('[x-data="parameterSweep()"]');
-            if (!el || typeof Alpine === 'undefined') return false;
-            const data = Alpine.$data(el);
-            return data && typeof data.previewValues !== 'undefined';
-        } catch { return false; }
-    }""")
+    page.locator('input[x-model="minVal"]').fill("1")
+    page.locator('input[x-model="maxVal"]').fill("10")
+    page.locator('input[x-model="steps"]').fill("5")
 
-    if not component_alive:
-        pytest.skip(
-            "parameterSweep() component did not initialise "
-            "(Alpine race condition Bug B1)"
-        )
-
-    # Set the sweep parameters directly on the Alpine component data.
-    page.evaluate("""() => {
-        const el = document.querySelector('[x-data="parameterSweep()"]');
-        const data = Alpine.$data(el);
-        data.minVal = 1;
-        data.maxVal = 10;
-        data.steps = 5;
-        data.mode = 'linear';
-    }""")
-
-    # Wait for Alpine reactivity to update the DOM
-    page.wait_for_timeout(500)
-
-    # The description text below "Sweep Point Preview" heading should
-    # indicate "5 values will be tested" (rendered via x-text on a <p>).
-    preview_p = page.locator('p[x-text*="values will be tested"]')
-    preview_text = preview_p.text_content() or ""
-    assert "5 values will be tested" in preview_text, (
-        f"Expected '5 values will be tested', got '{preview_text}'"
-    )
-
-    # There should be exactly 5 value badges in the preview values list
-    # (the flex-wrap gap-2 container inside the preview card)
-    value_badges = page.locator(
-        '.flex.flex-wrap.gap-2 span.rounded-full'
-    )
-    assert value_badges.count() == 5, (
-        f"Expected 5 preview value badges, got {value_badges.count()}"
+    expect(page.get_by_text("5 values will be tested", exact=True)).to_be_visible()
+    expect(page.locator(".flex.flex-wrap.gap-2 span.rounded-full")).to_have_text(
+        ["1", "3.25", "5.5", "7.75", "10"]
     )
 
 

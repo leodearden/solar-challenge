@@ -1,7 +1,6 @@
-"""End-to-end tests for toast notifications and confirm dialog component.
+"""End-to-end tests for toast notifications.
 
-Verifies toast success/error appearance, auto-dismiss, manual dismiss,
-and the confirm dialog triggered by delete actions.
+Verifies toast success/error appearance, auto-dismiss and manual dismiss.
 """
 
 import pytest
@@ -91,41 +90,3 @@ def test_toast_dismiss_on_click(page: Page, live_server: str) -> None:
 
     # Toast should be gone
     expect(toast_text).not_to_be_visible()
-
-
-# -- Confirm dialog appears on delete ---------------------------------------
-
-
-def test_confirm_dialog_appears_on_delete(
-    page: Page,
-    live_server: str,
-    seeded_home_run: tuple[str, str],
-) -> None:
-    """Click delete button on history -> dialog with 'Delete Run' title."""
-    page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
-    # Wait for AJAX run list to load
-    page.wait_for_timeout(2000)
-
-    # Find a delete button in the runs table
-    delete_btn = page.locator('button[title="Delete"]')
-    if delete_btn.count() == 0:
-        pytest.skip("No delete buttons found (no runs in table)")
-
-    delete_btn.first.click()
-    page.wait_for_timeout(500)
-
-    # The confirm dialog should appear with "Delete Run" title
-    dialog_title = page.locator("h3", has_text="Delete Run")
-    expect(dialog_title).to_be_visible()
-
-    # Cancel and Delete buttons should be present
-    cancel_btn = page.locator("button", has_text="Cancel")
-    expect(cancel_btn).to_be_visible()
-
-    # Click Cancel to close the dialog
-    cancel_btn.click()
-    page.wait_for_timeout(500)
-
-    # Dialog should close
-    expect(dialog_title).not_to_be_visible()

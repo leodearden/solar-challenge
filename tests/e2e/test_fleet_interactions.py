@@ -15,35 +15,12 @@ pytestmark = pytest.mark.e2e
 
 
 def test_fleet_slider_input_sync(page: Page, live_server: str) -> None:
-    """Set n_homes=50 via Alpine -> #n_homes input shows '50'."""
+    """Moving the Number of Homes slider to 50 shows 50 in the number input beside it."""
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1500)
 
-    # Check if Alpine component initialised
-    alive = page.evaluate("""() => {
-        try {
-            const el = document.querySelector('[x-data="fleetSimulator()"]');
-            if (!el || typeof Alpine === 'undefined') return false;
-            const data = Alpine.$data(el);
-            return data && typeof data.n_homes !== 'undefined';
-        } catch { return false; }
-    }""")
+    page.locator("#n_homes_range").fill("50")
 
-    if not alive:
-        pytest.skip("fleetSimulator() did not initialise (Alpine race condition)")
-
-    # Set n_homes via Alpine data
-    page.evaluate("""() => {
-        const el = document.querySelector('[x-data="fleetSimulator()"]');
-        Alpine.$data(el).n_homes = 50;
-    }""")
-    page.wait_for_timeout(500)
-
-    number_input = page.locator("#n_homes")
-    expect(number_input).to_be_visible()
-    value = number_input.input_value()
-    assert value == "50", f"Expected n_homes input to show '50', got '{value}'"
+    expect(page.get_by_label("Number of Homes", exact=True)).to_have_value("50")
 
 
 # -- Distribution type select ----------------------------------------------

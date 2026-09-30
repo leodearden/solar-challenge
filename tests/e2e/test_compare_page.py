@@ -5,6 +5,8 @@ and the empty state shown when no IDs are given.
 Uses seeded run pair fixtures.
 """
 
+import re
+
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -91,52 +93,18 @@ def test_compare_delta_coloring_direction(
     live_server: str,
     seeded_home_runs_pair: list[tuple[str, str]],
 ) -> None:
-    """Grid Import positive delta should be red (not green).
+    """Grid Import's positive Delta and % Change are styled red: a higher grid import is worse.
 
-    A higher grid import is worse, so positive delta should be styled
-    with a negative/red color, not green.
+    The seeded pair's grid import rises from its first run to its second, so both cells are positive.
     """
     (id1, _), (id2, _) = seeded_home_runs_pair
     page.goto(live_server + f"/history/compare?ids={id1},{id2}")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
-    # Find the Grid Import row's delta cell
-    grid_import_colors = page.evaluate("""() => {
-        const rows = document.querySelectorAll('tr');
-        for (const row of rows) {
-            const cells = row.querySelectorAll('td, th');
-            const label = cells[0]?.textContent || '';
-            if (label.includes('Grid Import')) {
-                // Find cells with color classes
-                const deltaCells = Array.from(cells).slice(1);
-                const colors = deltaCells.map(cell => {
-                    const text = cell.textContent || '';
-                    const classes = cell.className || '';
-                    return { text: text.trim(), classes };
-                });
-                return colors;
-            }
-        }
-        return null;
-    }""")
-
-    if grid_import_colors is None:
-        pytest.skip("Could not find 'Grid Import' row in comparison table")
-
-    # Check if any delta cell with a positive value uses green (incorrect)
-    for cell in grid_import_colors:
-        text = cell.get("text", "")
-        classes = cell.get("classes", "")
-
-        # If this cell shows a positive delta for grid import
-        # and uses green styling, that's a bug
-        if "+" in text and "green" in classes:
-            assert False, (
-                f"Grid Import positive delta '{text}' is styled green. "
-                f"Higher grid import is worse and should be red. "
-                f"Classes: {classes}"
-            )
+    grid_import_row = page.get_by_role("row").filter(has_text="Grid Import")
+    positive_deltas = grid_import_row.get_by_role("cell").filter(has_text="+")
+    expect(positive_deltas).to_have_count(2)
+    for delta in positive_deltas.all():
+        expect(delta).to_have_class(re.compile(r"\btext-red-"))
 
 
 # -- Compare without IDs shows empty state ---------------------------------
