@@ -264,8 +264,8 @@ class TestToolUseLoop:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """A model that always returns tool_use is bounded by _MAX_TOOL_ITERATIONS."""
-        from solar_challenge.web.assistant import _MAX_TOOL_ITERATIONS
+        """A model that always returns tool_use is bounded by MAX_TOOL_ITERATIONS."""
+        from solar_challenge.web.assistant import MAX_TOOL_ITERATIONS
 
         # Build an infinite sequence of tool_use streams
         TOOL_ID_PREFIX = "toolu_inf_"
@@ -275,7 +275,7 @@ class TestToolUseLoop:
                 "explain_metric",
                 {"metric": "self_consumption_ratio"},
             )
-            for i in range(_MAX_TOOL_ITERATIONS + 10)  # more than the cap
+            for i in range(MAX_TOOL_ITERATIONS + 10)  # more than the cap
         ]
         anthropic_api.set_streams(infinite_streams)
 
@@ -283,10 +283,10 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
-        # stream() should be called exactly _MAX_TOOL_ITERATIONS times
+        # stream() should be called exactly MAX_TOOL_ITERATIONS times
         call_count = len(anthropic_api.calls)
-        assert call_count == _MAX_TOOL_ITERATIONS, (
-            f"Expected exactly {_MAX_TOOL_ITERATIONS} stream() calls (loop cap), "
+        assert call_count == MAX_TOOL_ITERATIONS, (
+            f"Expected exactly {MAX_TOOL_ITERATIONS} stream() calls (loop cap), "
             f"got {call_count}"
         )
 
