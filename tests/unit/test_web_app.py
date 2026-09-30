@@ -103,7 +103,7 @@ def test_a_secret_key_in_test_config_leaves_the_home_directory_untouched(
     )
 
     assert app.secret_key == "test-secret-key"
-    assert sorted(path.name for path in home.iterdir()) == []
+    assert [path.name for path in home.iterdir()] == []
 
 
 def test_without_a_supplied_secret_key_the_app_keeps_one_under_the_home_directory(
