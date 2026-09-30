@@ -53,7 +53,7 @@ class TestToolSurface:
     """Tests for _TOOLS list and _dispatch_tool router."""
 
     def test_tools_fixed_order_for_cache_stability(self) -> None:
-        """[t['name'] for t in _TOOLS] == 6-tool order (fixed, cache-safe)."""
+        """_TOOLS names its tools in one fixed order, which keeps the cached prompt prefix stable."""
         from solar_challenge.web.assistant import _TOOLS
 
         names = [t["name"] for t in _TOOLS]
@@ -65,7 +65,7 @@ class TestToolSurface:
             "run_home_simulation",
             "run_fleet_simulation",
         ], (
-            f"Expected fixed 6-tool order, got {names}"
+            f"Expected the fixed tool order, got {names}"
         )
 
     def test_every_tool_entry_has_required_keys(self) -> None:
@@ -457,20 +457,6 @@ class TestRunLookupToolSurface:
 
 class TestSimulationToolSurface:
     """run_home_simulation and run_fleet_simulation as the chat registers and dispatches them."""
-
-    def test_six_tools_fixed_order(self) -> None:
-        """_TOOLS has exactly 6 tools in the fixed cache-stable order."""
-        from solar_challenge.web.assistant import _TOOLS
-
-        names = [t["name"] for t in _TOOLS]
-        assert names == [
-            "explain_metric",
-            "suggest_config",
-            "get_run_results",
-            "list_recent_runs",
-            "run_home_simulation",
-            "run_fleet_simulation",
-        ], f"Expected 6-tool order; got {names}"
 
     def test_run_home_simulation_schema(self) -> None:
         """run_home_simulation has object input_schema with pv_kw required."""
