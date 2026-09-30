@@ -20,6 +20,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
+from tests.integration._peak_rate_energy import off_peak_discharge_kwh, peak_rate_import_kwh
 
 # Float rounding at the battery's SOC floor can differ by ~1e-16 kWh between strategies.
 KWH_ROUNDING_TOLERANCE = 1e-9
@@ -111,11 +112,10 @@ class TestTOUDispatchComparison:
         tou_results = simulate_home(tou_config, start, end)
         tou_summary = calculate_summary(tou_results)
 
-        peak_rate_minutes = tou_results.tariff_rate == tou_results.tariff_rate.max()
-        assert tou_results.battery_discharge[~peak_rate_minutes].sum() == 0.0
+        assert off_peak_discharge_kwh(tou_results) == 0.0
 
-        tou_peak_import_kwh = tou_results.grid_import[peak_rate_minutes].sum() / 60
-        greedy_peak_import_kwh = greedy_results.grid_import[peak_rate_minutes].sum() / 60
+        tou_peak_import_kwh = peak_rate_import_kwh(tou_results)
+        greedy_peak_import_kwh = peak_rate_import_kwh(greedy_results)
         assert tou_peak_import_kwh <= greedy_peak_import_kwh + KWH_ROUNDING_TOLERANCE
 
         # Should have similar energy totals (same PV, load, battery capacity)

@@ -20,6 +20,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 from tests._synthetic_weather import synthetic_june_weather
+from tests.integration._peak_rate_energy import off_peak_discharge_kwh, peak_rate_import_kwh
 
 pytestmark = pytest.mark.integration
 
@@ -50,11 +51,6 @@ def greedy_and_tou() -> tuple[SimulationResults, SimulationResults]:
     )
 
 
-def _peak_rate_minutes(results: SimulationResults) -> pd.Series:
-    """Mask of the minutes billed at the tariff's highest rate."""
-    return results.tariff_rate == results.tariff_rate.max()
-
-
 def test_tou_holds_the_battery_through_the_off_peak_window(
     greedy_and_tou: tuple[SimulationResults, SimulationResults],
 ) -> None:
@@ -64,10 +60,9 @@ def test_tou_holds_the_battery_through_the_off_peak_window(
     is exact: its cheap-period branch never calls discharge.
     """
     greedy, tou = greedy_and_tou
-    off_peak = ~_peak_rate_minutes(tou)
 
-    assert greedy.battery_discharge[off_peak].sum() > 0
-    assert tou.battery_discharge[off_peak].sum() == 0.0
+    assert off_peak_discharge_kwh(greedy) > 0
+    assert off_peak_discharge_kwh(tou) == 0.0
 
 
 def test_tou_imports_less_at_the_peak_rate_than_greedy(
@@ -77,9 +72,8 @@ def test_tou_imports_less_at_the_peak_rate_than_greedy(
 
     The general guarantee is "never more" (see the slow counterpart). The sunless
     day makes it strict here: greedy spent the battery overnight, while TOU spends
-    that charge at the peak rate (about 5.9 against 7.2 kWh imported).
+    that charge at the peak rate.
     """
     greedy, tou = greedy_and_tou
-    peak = _peak_rate_minutes(tou)
 
-    assert tou.grid_import[peak].sum() < greedy.grid_import[peak].sum()
+    assert peak_rate_import_kwh(tou) < peak_rate_import_kwh(greedy)
