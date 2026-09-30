@@ -15,10 +15,10 @@ from solar_challenge.config import (
     ConfigurationError,
     ScenarioConfig,
     SimulationPeriod,
-    _parse_finance_config,
-    _parse_seg_config,
     load_config,
     load_fleet_config,
+    parse_finance_config,
+    parse_seg_rate,
 )
 from solar_challenge.finance import (
     DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
@@ -135,7 +135,7 @@ def run(
     """
     # ---- Load raw config + finance block ------------------------------------
     raw = load_config(scenario)
-    finance = _parse_finance_config(raw.get("finance"))
+    finance = parse_finance_config(raw.get("finance"))
 
     # ---- Resolve flexibility band (CLI flag > scenario key > None) ----------
     # Scenario-level values are normalised to lowercase to match the CLI's
@@ -159,7 +159,7 @@ def run(
     fleet_config = load_fleet_config(scenario)
 
     # Thread SEG tariff onto each home (load_fleet_config does not do this)
-    seg_rate = _parse_seg_config(raw.get("seg"))
+    seg_rate = parse_seg_rate(raw.get("seg"))
     if seg_rate is not None:
         seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
         homes_with_seg = [

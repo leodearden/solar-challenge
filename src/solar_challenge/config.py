@@ -1518,7 +1518,7 @@ def generate_homes_from_distribution(
     return homes
 
 
-def _parse_seg_config(data: object, *, block_path: str = "seg") -> Optional[float]:
+def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
     """Read the SEG export rate in pence/kWh from a ``seg:`` block.
 
     The block names exactly one of a :data:`~solar_challenge.seg.SEG_PRESETS`
@@ -1562,7 +1562,7 @@ def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
         raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
 
 
-def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConfig]:
+def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConfig]:
     """Parse finance configuration from config data.
 
     Args:
@@ -1731,9 +1731,9 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         homes=homes,
         home=home,
         output=_parse_output_config(data.get("output")),
-        seg_tariff_pence_per_kwh=_parse_seg_config(data.get("seg")),
+        seg_tariff_pence_per_kwh=parse_seg_rate(data.get("seg")),
         tariff_config=_parse_tariff_config(data.get("tariff_config")),
-        finance=_parse_finance_config(data.get("finance")),
+        finance=parse_finance_config(data.get("finance")),
     )
 
 
@@ -2332,7 +2332,7 @@ def _parse_community_billing_config(
     seg_rate = (
         direct_rate
         if direct_rate is not None
-        else _parse_seg_config(seg_block, block_path="community.billing.seg")
+        else parse_seg_rate(seg_block, block_path="community.billing.seg")
     )
 
     # Normalise an all-None result to None so callers can reliably test ``is None``

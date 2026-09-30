@@ -19,7 +19,7 @@ from solar_challenge.cli.utils import (
     print_info,
     print_success,
 )
-from solar_challenge.config import _parse_home_config, _parse_seg_config
+from solar_challenge.config import _parse_home_config, parse_seg_rate
 from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -129,7 +129,7 @@ def run(
     home_config = _parse_home_config(config_dict.get("home", {}), loc)
 
     # Parse top-level SEG block (sibling of `home:`) and thread onto config + summaries
-    seg_rate = _parse_seg_config(config_dict.get("seg"))
+    seg_rate = parse_seg_rate(config_dict.get("seg"))
     if seg_rate is not None:
         home_config = dataclasses.replace(
             home_config,
