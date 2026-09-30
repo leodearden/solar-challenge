@@ -856,9 +856,6 @@ def chat() -> Response:
                 messages[-1] = dict(messages[-1])
                 messages[-1]["content"] = preamble + original_content
 
-        # Request params (dict[str, Any] splat to stay mypy --strict compatible
-        # with the installed anthropic 0.97.0 stubs that predate output_config /
-        # adaptive thinking / claude-opus-4-8)
         model = os.environ.get("SOLAR_ASSISTANT_MODEL") or "claude-opus-4-8"
         system_block: list[dict[str, Any]] = [
             {
