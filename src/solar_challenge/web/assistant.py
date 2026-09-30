@@ -70,7 +70,7 @@ _MAX_TOOL_ITERATIONS = 10
 # explain_metric answers from this table so the model quotes these benchmark
 # numbers instead of hallucinating them.
 # ---------------------------------------------------------------------------
-_METRIC_TABLE: dict[str, dict[str, str]] = {
+METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
     "self_consumption_ratio": {
         "definition": (
             "The fraction of PV generation that is consumed directly on-site "
@@ -185,12 +185,12 @@ def explain_metric(metric: str) -> dict[str, str]:
 
     Returns:
         ``{"definition": str, "uk_benchmark_band": str}`` — canonical entry from
-        ``_METRIC_TABLE``, or a graceful unknown-metric dict if not found.
+        ``METRIC_TABLE``, or a graceful unknown-metric dict if not found.
         Never raises.
     """
     key = _normalize_metric_key(metric)
-    if key in _METRIC_TABLE:
-        return dict(_METRIC_TABLE[key])
+    if key in METRIC_TABLE:
+        return dict(METRIC_TABLE[key])
     return {
         "definition": f"Metric '{metric}' is not recognised in the benchmark table.",
         "uk_benchmark_band": (
