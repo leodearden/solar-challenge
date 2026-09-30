@@ -93,7 +93,7 @@ def test_compare_delta_coloring_direction(
     live_server: str,
     seeded_home_runs_pair: list[tuple[str, str]],
 ) -> None:
-    """Grid Import's positive Delta and % Change are not styled green: a higher grid import is worse.
+    """Grid Import's positive Delta and % Change are styled red: a higher grid import is worse.
 
     The seeded pair's grid import rises from its first run to its second, so both cells are positive.
     """
@@ -104,7 +104,7 @@ def test_compare_delta_coloring_direction(
     positive_deltas = grid_import_row.get_by_role("cell").filter(has_text="+")
     expect(positive_deltas).to_have_count(2)
     for delta in positive_deltas.all():
-        expect(delta).not_to_have_class(re.compile("green"))
+        expect(delta).to_have_class(re.compile(r"\btext-red-"))
 
 
 # -- Compare without IDs shows empty state ---------------------------------
