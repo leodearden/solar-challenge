@@ -114,17 +114,6 @@
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                <template x-if="loading">
-                    <tr>
-                        <td colspan="9" class="px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
-                            <svg class="animate-spin h-6 w-6 mx-auto mb-2 text-amber-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            Loading runs...
-                        </td>
-                    </tr>
-                </template>
                 <template x-for="run in runs" :key="run.id">
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                         {# Checkbox #}
@@ -263,6 +252,15 @@
     </div>
 
     {# Loading and empty states: one copy, shown at every width #}
+    <template x-if="loading">
+        <div class="mt-4 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+            <svg class="animate-spin h-6 w-6 mx-auto mb-2 text-amber-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Loading runs...
+        </div>
+    </template>
     <template x-if="!loading && runs.length === 0">
         <div class="mt-4 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-12 text-center">
             <div class="text-slate-400 dark:text-slate-500 mb-2">
