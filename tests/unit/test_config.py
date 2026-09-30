@@ -3,9 +3,11 @@
 import json
 import random
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
@@ -55,6 +57,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, calculate_degradation_factor
+from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig
 
 
@@ -3308,6 +3311,90 @@ class TestScenarioFinance:
             assert fc.loan_term_years == 15
         finally:
             path.unlink()
+
+
+class TestScenarioSegBlock:
+    """The top-level ``seg:`` block and ``community.billing.seg`` accept one grammar: exactly one of a SEG_PRESETS ``preset`` or a non-negative ``rate_pence_per_kwh``."""
+
+    _SCENARIO = {
+        "name": "SEG block",
+        "period": {"start_date": "2024-01-01", "end_date": "2024-01-07"},
+        "home": {"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3400}},
+    }
+
+    @pytest.fixture(params=["scenario", "community billing"])
+    def read_seg_rate(
+        self, request: pytest.FixtureRequest, tmp_path: Path
+    ) -> Callable[[object], float | None]:
+        """Write a ``seg`` block into a YAML document and read its rate back through a public loader."""
+        path = tmp_path / "seg.yaml"
+
+        def through_scenario(seg: object) -> float | None:
+            path.write_text(yaml.safe_dump({**self._SCENARIO, "seg": seg}))
+            return load_scenarios(path)[0].seg_tariff_pence_per_kwh
+
+        def through_community_billing(seg: object) -> float | None:
+            community = {"sharing_mode": "p2p", "billing": {"seg": seg}}
+            path.write_text(yaml.safe_dump({"community": community}))
+            config = load_community_config(path)
+            assert config is not None
+            assert config.billing is not None
+            return config.billing.seg_rate_pence_per_kwh
+
+        readers = {"scenario": through_scenario, "community billing": through_community_billing}
+        return readers[request.param]
+
+    @pytest.mark.parametrize("preset", sorted(SEG_PRESETS))
+    def test_preset_resolves_to_the_supplier_rate(
+        self, read_seg_rate: Callable[[object], float | None], preset: str
+    ) -> None:
+        """Every SEG_PRESETS key resolves to that supplier's export rate."""
+        assert read_seg_rate({"preset": preset}) == SEG_PRESETS[preset].rate_pence_per_kwh
+
+    def test_explicit_rate_is_read_as_a_float(
+        self, read_seg_rate: Callable[[object], float | None]
+    ) -> None:
+        """An integer ``rate_pence_per_kwh`` is read back as a float."""
+        rate = read_seg_rate({"rate_pence_per_kwh": 5})
+        assert rate == 5.0
+        assert isinstance(rate, float)
+
+    @pytest.mark.parametrize(
+        "seg",
+        [
+            pytest.param({"preset": "Octopus", "rate_pence_per_kwh": 5.5}, id="preset-and-rate"),
+            pytest.param({}, id="empty"),
+            pytest.param({"rate": 4.1}, id="unrecognised-key"),
+            pytest.param({"preset": "Nonexistent"}, id="unknown-preset"),
+            pytest.param({"rate_pence_per_kwh": None}, id="null-rate"),
+            pytest.param({"rate_pence_per_kwh": "abc"}, id="non-numeric-rate"),
+            pytest.param({"rate_pence_per_kwh": -1.0}, id="negative-rate"),
+            pytest.param(4.1, id="bare-number"),
+            pytest.param("Octopus", id="bare-string"),
+        ],
+    )
+    def test_malformed_block_is_refused(
+        self, read_seg_rate: Callable[[object], float | None], seg: object
+    ) -> None:
+        """A malformed block raises ConfigurationError: never a silent rate or None, never a raw error."""
+        with pytest.raises(ConfigurationError):
+            read_seg_rate(seg)
+
+    def test_unknown_preset_error_names_the_available_presets(
+        self, read_seg_rate: Callable[[object], float | None]
+    ) -> None:
+        """Refusing an unknown preset names it and every preset that is available."""
+        with pytest.raises(ConfigurationError) as excinfo:
+            read_seg_rate({"preset": "Nonexistent"})
+        message = str(excinfo.value)
+        assert "Nonexistent" in message
+        assert [preset for preset in SEG_PRESETS if preset not in message] == []
+
+    def test_scenario_without_seg_block_has_no_seg_rate(self, tmp_path: Path) -> None:
+        """A scenario with no ``seg:`` block carries no SEG rate."""
+        path = tmp_path / "no-seg.yaml"
+        path.write_text(yaml.safe_dump(self._SCENARIO))
+        assert load_scenarios(path)[0].seg_tariff_pence_per_kwh is None
 
 
 class TestGenerateHomesFromDistributionFlex:
