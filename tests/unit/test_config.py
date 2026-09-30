@@ -39,7 +39,6 @@ from solar_challenge.config import (
     _modify_pv_config,
     load_community_config,
     _parse_distribution_spec,
-    _parse_fleet_distribution_config,
     _sample_from_distribution,
     generate_homes_from_distribution,
     load_config,
@@ -50,6 +49,8 @@ from solar_challenge.config import (
     load_scenarios,
     parse_dispatch_strategy_config,
     parse_finance_config,
+    parse_fleet_distribution_config,
+    parse_location_block,
     parse_seg_rate,
     parse_tariff_config,
 )
@@ -951,6 +952,37 @@ class TestLoadScenarios:
             path.unlink()
 
 
+class TestLocationBlockParsing:
+    """Tests for parse_location_block's public contract."""
+
+    def test_full_block_parses_every_field(self) -> None:
+        """Every key of a location block reaches the Location."""
+        block = {
+            "latitude": 55.95,
+            "longitude": -3.19,
+            "timezone": "Europe/London",
+            "altitude": 47.0,
+            "name": "Edinburgh",
+        }
+        assert parse_location_block(block) == Location(
+            latitude=55.95,
+            longitude=-3.19,
+            timezone="Europe/London",
+            altitude=47.0,
+            name="Edinburgh",
+        )
+
+    def test_empty_block_defaults_to_unnamed_bristol_at_11_m(self) -> None:
+        """An empty block takes Bristol's coordinates, 11 m altitude and no name."""
+        assert parse_location_block({}) == Location(
+            latitude=51.45,
+            longitude=-2.58,
+            timezone="Europe/London",
+            altitude=11.0,
+            name="",
+        )
+
+
 class TestLoadHomeConfig:
     """Tests for loading home configuration."""
 
@@ -1462,7 +1494,7 @@ class TestFleetDistributionConfig:
             },
             "load": {},
         }
-        config = _parse_fleet_distribution_config(data)
+        config = parse_fleet_distribution_config(data)
         assert config.n_homes == 10
         assert config.pv.capacity_kw == 4.0
         assert config.battery is None
@@ -1498,7 +1530,7 @@ class TestFleetDistributionConfig:
                 },
             },
         }
-        config = _parse_fleet_distribution_config(data)
+        config = parse_fleet_distribution_config(data)
         assert config.n_homes == 100
         assert config.seed == 42
         assert isinstance(config.pv.capacity_kw, WeightedDiscreteDistribution)
@@ -1510,12 +1542,12 @@ class TestFleetDistributionConfig:
     def test_parse_missing_n_homes_raises(self) -> None:
         """Test parsing without n_homes raises."""
         with pytest.raises(ConfigurationError, match="requires 'n_homes'"):
-            _parse_fleet_distribution_config({"pv": {"capacity_kw": 4.0}})
+            parse_fleet_distribution_config({"pv": {"capacity_kw": 4.0}})
 
     def test_parse_missing_pv_raises(self) -> None:
         """Test parsing without pv raises."""
         with pytest.raises(ConfigurationError, match="requires 'pv'"):
-            _parse_fleet_distribution_config({"n_homes": 10})
+            parse_fleet_distribution_config({"n_homes": 10})
 
     def test_fleet_distribution_config_validation(self) -> None:
         """Test FleetDistributionConfig validation."""
