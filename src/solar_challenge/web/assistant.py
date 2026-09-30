@@ -16,6 +16,7 @@ gives the reason.
 
 import json
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Generator
 from uuid import uuid4
@@ -258,7 +259,7 @@ def suggest_config(
 # ahead of the cached system block, so they belong to the cached prompt prefix;
 # any change in their order or content between requests misses the cache.
 # ---------------------------------------------------------------------------
-_TOOLS: list[dict[str, Any]] = [
+TOOLS: Sequence[Mapping[str, Any]] = [
     # --- Advisory tools: answered in-process, no database or job access ---
     {
         "name": "explain_metric",
@@ -710,7 +711,7 @@ def _dispatch_tool(
         return run_home_simulation(dict(tool_input), job_manager, db_path, data_dir)
     if name == "run_fleet_simulation":
         return run_fleet_simulation(dict(tool_input), job_manager, db_path, data_dir)
-    all_names = ", ".join(t["name"] for t in _TOOLS)
+    all_names = ", ".join(t["name"] for t in TOOLS)
     return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
 
 
@@ -869,7 +870,7 @@ def chat() -> Response:
             "max_tokens": 4096,
             "system": system_block,
             "messages": messages,
-            "tools": _TOOLS,
+            "tools": TOOLS,
         }
 
         accumulated = ""
