@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Parse the web dashboard's flat simulation-parameter dicts into engine configuration."""
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 import pandas as pd
@@ -17,6 +19,34 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.web.shared import resolve_location
+
+# Each parser's recognised top-level keys, and the value each reads as when absent.
+_DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
+    "days": None,
+    "start": "",
+    "end": "",
+})
+
+_HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
+    "pv_kw": 4.0,
+    "azimuth": 180,
+    "tilt": 35,
+    "system_age_years": 0.0,
+    "degradation_rate_per_year": 0.005,
+    "battery_kwh": 0.0,
+    "max_charge_kw": None,
+    "max_discharge_kw": None,
+    "efficiency_pct": None,
+    "consumption_kwh": None,
+    "occupants": 3,
+    "stochastic": False,
+    "location": "bristol",
+    "name": None,
+    "dispatch_strategy": None,
+    "heat_pump": None,
+    "tariff": None,
+    "seg": None,
+})
 
 
 def parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
@@ -43,9 +73,10 @@ def parse_date_range(data: dict[str, Any]) -> tuple[str, str]:
     Raises:
         ValueError: If ``days`` is present but not a positive integer.
     """
-    days_raw = data.get("days")
-    start_raw = data.get("start", "")
-    end_raw = data.get("end", "")
+    params = {**_DATE_RANGE_DEFAULTS, **data}
+    days_raw = params["days"]
+    start_raw = params["start"]
+    end_raw = params["end"]
 
     if days_raw is not None:
         days = int(days_raw)
@@ -101,6 +132,16 @@ def parse_seg_tariff(seg_data: dict[str, Any] | None) -> SEGTariff | None:
     return None
 
 
+def _refuse_unrecognised_keys(data: dict[str, Any]) -> None:
+    recognised = _HOME_CONFIG_DEFAULTS.keys() | _DATE_RANGE_DEFAULTS.keys()
+    unrecognised = sorted(data.keys() - recognised)
+    if unrecognised:
+        raise ValueError(
+            f"Unrecognised home config keys: {', '.join(map(repr, unrecognised))}; "
+            f"recognised keys: {', '.join(sorted(recognised))}"
+        )
+
+
 def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
     """Parse JSON request body into HomeConfig and date range.
 
@@ -111,26 +152,30 @@ def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, p
         Tuple of (HomeConfig, start_date, end_date, name).
 
     Raises:
-        ValueError: If required fields are missing or invalid.
+        ValueError: If required fields are missing or invalid, or if *data*
+            has a top-level key outside the recognised set; the error names
+            each such key.
     """
-    pv_kw = float(data.get("pv_kw", 4.0))
-    azimuth = float(data.get("azimuth", 180))
-    tilt = float(data.get("tilt", 35))
+    _refuse_unrecognised_keys(data)
+    params = {**_HOME_CONFIG_DEFAULTS, **data}
+    pv_kw = float(params["pv_kw"])
+    azimuth = float(params["azimuth"])
+    tilt = float(params["tilt"])
     # Range validation for system_age_years (>= 0) and degradation_rate_per_year
     # ([0, 1]) is delegated to PVConfig.__post_init__, which raises ValueError.
     # That ValueError propagates out of this function unchanged.
     # PVConfig is the single source of truth for these bounds.
-    system_age_years = float(data.get("system_age_years", 0.0))
-    degradation_rate_per_year = float(data.get("degradation_rate_per_year", 0.005))
-    battery_kwh_val = float(data.get("battery_kwh", 0.0))
-    max_charge_kw_raw = data.get("max_charge_kw")
-    max_discharge_kw_raw = data.get("max_discharge_kw")
-    efficiency_pct_raw = data.get("efficiency_pct")
-    consumption_kwh_raw = data.get("consumption_kwh")
-    occupants = int(data.get("occupants", 3))
-    stochastic = bool(data.get("stochastic", False))
-    location_preset = str(data.get("location", "bristol"))
-    name = data.get("name")
+    system_age_years = float(params["system_age_years"])
+    degradation_rate_per_year = float(params["degradation_rate_per_year"])
+    battery_kwh_val = float(params["battery_kwh"])
+    max_charge_kw_raw = params["max_charge_kw"]
+    max_discharge_kw_raw = params["max_discharge_kw"]
+    efficiency_pct_raw = params["efficiency_pct"]
+    consumption_kwh_raw = params["consumption_kwh"]
+    occupants = int(params["occupants"])
+    stochastic = bool(params["stochastic"])
+    location_preset = str(params["location"])
+    name = params["name"]
 
     # Parse date range using shared helper
     start, end = parse_date_range(data)
@@ -166,7 +211,7 @@ def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, p
                 raise ValueError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
             battery_kwargs["efficiency"] = efficiency_pct / 100
         try:
-            dispatch_data = data.get("dispatch_strategy")
+            dispatch_data = params["dispatch_strategy"]
             if dispatch_data:
                 battery_kwargs["dispatch_strategy"] = _parse_dispatch_strategy_config(dispatch_data)
         except ConfigurationError as exc:
@@ -185,7 +230,7 @@ def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, p
 
     # Web contract uses "type" and defaults; config._parse_heat_pump_config requires the YAML keys
     heat_pump_config: HeatPumpConfig | None = None
-    hp_data = data.get("heat_pump")
+    hp_data = params["heat_pump"]
     if hp_data:
         heat_pump_config = HeatPumpConfig(
             heat_pump_type=hp_data.get("type", "ASHP"),
@@ -195,12 +240,12 @@ def parse_home_config(data: dict[str, Any]) -> tuple[HomeConfig, pd.Timestamp, p
 
     # Build optional tariff config
     try:
-        tariff_config = _parse_tariff_config(data.get("tariff"))
+        tariff_config = _parse_tariff_config(params["tariff"])
     except ConfigurationError as exc:
         raise ValueError(str(exc)) from exc
 
     # Build optional SEG export-rate config (ValueError or TypeError on bad input)
-    seg_tariff = parse_seg_tariff(data.get("seg"))
+    seg_tariff = parse_seg_tariff(params["seg"])
 
     home_config = HomeConfig(
         pv_config=pv_config,
