@@ -1261,6 +1261,29 @@ class TestGridChargeEnergyPaidOnce:
             assert householder_import_gbp == pytest.approx(summary.total_import_cost_gbp)
             assert householder_import_gbp > load_import_only_gbp
 
+    def test_cbs_revenue_has_no_grid_charge_term(self) -> None:
+        """CBS revenue on the grid-charging fleet is own-use + SEG + grid services, nothing else.
+
+        The fleet earns no SEG and no grid services, so year-0 revenue is exactly
+        own_use_rate × Σ basis-C own-use (demand − import) / 100.
+        """
+        from solar_challenge.home import calculate_summary
+
+        scenario, finance = _make_scenario(n_homes=self.N_HOMES, asset_life_years=5)
+        fleet = self._fleet()
+        summaries = [calculate_summary(r) for r in fleet.per_home_results]
+        assert all(s.total_export_revenue_gbp == 0.0 for s in summaries), "premise: no SEG"
+        assert finance.grid_services_income_per_kw_per_year_gbp == 0.0, "premise: no grid services"
+
+        own_use_kwh = sum(s.total_demand_kwh - s.total_grid_import_kwh for s in summaries)
+        own_use_gbp = finance.own_use_rate_pence_per_kwh * own_use_kwh / 100.0
+        cbs_gbp = self._cbs_revenue_at_age_0(fleet, scenario, finance)
+
+        assert cbs_gbp == pytest.approx(own_use_gbp, abs=1e-9), (
+            f"CBS revenue £{cbs_gbp:.2f} != own-use £{own_use_gbp:.2f} + SEG £0 + "
+            f"grid services £0; extra term £{cbs_gbp - own_use_gbp:.2f}"
+        )
+
     def test_grid_charge_energy_paid_once_across_ledgers(self) -> None:
         """Σ householder import cost + grid-charge cost borne by the CBS == metered import cost.
 
