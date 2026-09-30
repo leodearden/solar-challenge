@@ -834,3 +834,58 @@ class TestPVWattsModule:
             f"a 90% inverter gave {kwh_at_90_percent:.3f} kWh against "
             f"{kwh_at_96_percent:.3f} kWh at 96%"
         )
+
+
+def _pvwatts_inverter_params(ac_w: float, efficiency: float = 0.96) -> dict[str, float]:
+    """pvlib's documented PVWatts inverter form: AC output caps at eta_inv_nom x pdc0."""
+    return {"pdc0": ac_w / efficiency, "eta_inv_nom": efficiency}
+
+
+class TestInverterModelMatchesModuleModel:
+    """pvlib's PVWatts inverter model takes only the PVWatts DC model's power; its Sandia and ADR inverter models read the DC voltage that PVWatts DC does not give.
+
+    Measured on pvlib 0.15.1: PVWatts DC with a Sandia inverter raises KeyError
+    'p_mp' inside run_model, and CEC DC with a PVWatts inverter silently returns
+    a 7-column DataFrame as results.ac.
+    """
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(
+                PVConfig(
+                    capacity_kw=4.0,
+                    custom_module_params=create_simple_module_params(),
+                    custom_inverter_params=create_simple_inverter_params(),
+                ),
+                id="pvwatts-module-with-sandia-inverter",
+            ),
+            pytest.param(
+                PVConfig(
+                    capacity_kw=4.0,
+                    custom_inverter_params=_pvwatts_inverter_params(ac_w=4000.0),
+                ),
+                id="cec-module-with-pvwatts-inverter",
+            ),
+        ],
+    )
+    def test_a_mismatched_pair_is_refused_when_the_model_chain_is_built(
+        self, config: PVConfig
+    ) -> None:
+        with pytest.raises(ValueError, match="PVWatts"):
+            create_model_chain(config, Location.bristol())
+
+    def test_a_pvwatts_module_takes_custom_pvwatts_inverter_parameters(
+        self, clear_june_day: pd.DataFrame
+    ) -> None:
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params=create_simple_module_params(),
+            custom_inverter_params=_pvwatts_inverter_params(ac_w=3000.0),
+        )
+
+        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_day).max()
+
+        assert peak_kw == pytest.approx(3.0), (
+            f"a custom 3 kW PVWatts inverter on 4 kW of PVWatts modules peaked at {peak_kw:.3f} kW"
+        )
