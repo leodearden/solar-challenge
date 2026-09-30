@@ -216,12 +216,14 @@ class TestToolUseLoop:
             f"Content: {result_content!r}"
         )
 
-    def test_tools_param_present_and_ordered(
+    def test_tools_param_equals_TOOLS(
         self,
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """stream() kwargs carry 'tools' with 6-tool names in fixed order."""
+        """stream() receives _TOOLS as its 'tools' kwarg; TestToolSurface pins _TOOLS' order."""
+        from solar_challenge.web.assistant import _TOOLS
+
         anthropic_api.set_streams([
             make_end_turn_stream(["reply"]),
         ])
@@ -232,16 +234,8 @@ class TestToolUseLoop:
         assert call_kwargs_list, "Expected at least one stream() call"
         first_kwargs = call_kwargs_list[0]
         assert "tools" in first_kwargs, f"Expected 'tools' in stream() kwargs: {first_kwargs.keys()}"
-        tool_names = [t["name"] for t in first_kwargs["tools"]]
-        assert tool_names == [
-            "explain_metric",
-            "suggest_config",
-            "get_run_results",
-            "list_recent_runs",
-            "run_home_simulation",
-            "run_fleet_simulation",
-        ], (
-            f"Expected 6-tool order, got {tool_names}"
+        assert first_kwargs["tools"] == _TOOLS, (
+            f"Expected stream()'s 'tools' kwarg to equal _TOOLS; got tools {[t['name'] for t in first_kwargs['tools']]}"
         )
 
     def test_done_frame_terminates_stream(
