@@ -120,9 +120,9 @@ conventions:
 
   - rule: >
       Downstream consumers depend on this library pinned to a release TAG, never an editable path,
-      exactly as docs/domain-library-consumption.md prescribes. That recipe is the single statement
-      of the dependency line and the release steps, and it must name the same git remote that
-      solar-challenge-platform actually pins. The consumer's pyproject.toml and uv.lock are
+      exactly as docs/domain-library-consumption.md prescribes. That recipe is the authoritative
+      statement of the dependency line and the release steps, and it must name the same git remote
+      that solar-challenge-platform actually pins. The consumer's pyproject.toml and uv.lock are
       committed together, and a pin bump is a reviewed commit.
     why: >
       An editable/path dependency resolves the live main checkout shared by every worktree, so a

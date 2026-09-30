@@ -61,12 +61,9 @@ The tag pin **insulates** each consuming worktree:
 
 1. Cut the new release tag in this repository and push it to `origin`
    (see [Tag / release convention](#tag--release-convention) below).
-2. In the consuming project, update the tag in `pyproject.toml`:
-
-   ```toml
-   "solar-challenge @ git+https://github.com/leodearden/solar-challenge.git@solar-challenge-vX.Y.Z"
-   ```
-
+2. In the consuming project's `pyproject.toml`, change the release tag at the
+   end of the [dependency line](#pinned-dependency-recipe) to
+   `solar-challenge-vX.Y.Z`.
 3. Run `uv lock` — this re-resolves the wheel from the new tag SHA, and fails
    if the tag is not on `origin`.
 4. Commit both `pyproject.toml` and `uv.lock` together as a single reviewed
