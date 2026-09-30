@@ -1077,6 +1077,24 @@ class TestTouDispatchOnSpreadFreeTariff:
             assert dataclasses.asdict(tou) == pytest.approx(dataclasses.asdict(greedy)), ts
 
     @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
+    def test_grid_charging_battery_is_not_topped_up(
+        self,
+        tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+        grid_charge_battery: Battery,
+    ) -> None:
+        """No spread to arbitrage, so a grid-charging battery below target is not topped up."""
+        result = simulate_timestep_tou(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestamp=off_peak_ts,
+            tariff=tariff,
+            timestep_minutes=60,
+        )
+        assert result.grid_charge == 0.0
+
+    @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
     def test_grid_charge_context_reports_no_cheap_period(
         self,
         tariff: TariffConfig,
