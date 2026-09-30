@@ -5,11 +5,13 @@ Tests cover:
 - C4 regression: heat_pump_load survives home and fleet roundtrips
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
+- Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
 - Corrupted parquet graceful error handling
 - Missing run directory graceful error handling
 - Delete run removes DB record and filesystem files
 """
 
+import dataclasses
 import shutil
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.app import create_app
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
@@ -448,6 +451,57 @@ class TestFullFleetRoundtrip:
         assert runs[0]["name"] == "Full Fleet Test"
         assert runs[0]["type"] == "fleet"
         assert runs[0]["n_homes"] == n_homes
+
+
+class TestTupleFieldRoundtrip:
+    """Tuple-typed config fields survive the storage round-trip.
+
+    A TOU tariff's ``periods`` is annotated ``tuple[TariffPeriod, ...]`` but is
+    stored as a JSON array. Each loader must hand a tuple back, so a loaded
+    frozen config equals, and hashes like, the config that was saved.
+    """
+
+    def test_home_config_with_tou_tariff_roundtrips_equal(self, storage: RunStorage) -> None:
+        """A home config with a TOU tariff loads equal to, and hashing like, the saved one."""
+        config = dataclasses.replace(_make_home_config(), tariff_config=TariffConfig.economy_7())
+
+        storage.save_home_run(
+            run_id="tou-home-001",
+            config=config,
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+        )
+
+        loaded_config, _, _ = storage.load_home_run("tou-home-001")
+
+        assert loaded_config == config
+        assert hash(loaded_config) == hash(config)
+
+    def test_fleet_home_configs_with_tou_tariff_roundtrip_equal(
+        self, storage: RunStorage
+    ) -> None:
+        """Every home config of a saved fleet loads equal to the one that was saved."""
+        home_configs = [
+            dataclasses.replace(
+                _make_home_config(f"Home {i}"), tariff_config=TariffConfig.economy_7()
+            )
+            for i in range(2)
+        ]
+        fleet_results = FleetResults(
+            per_home_results=[_make_simulation_results(_make_index()) for _ in range(2)],
+            home_configs=home_configs,
+        )
+
+        storage.save_fleet_run(
+            run_id="tou-fleet-001",
+            fleet_results=fleet_results,
+            fleet_summary=_make_fleet_summary(n_homes=2),
+            per_home_summaries=[_make_summary() for _ in range(2)],
+        )
+
+        loaded_fleet, _, _ = storage.load_fleet_run("tou-fleet-001")
+
+        assert loaded_fleet.home_configs == home_configs
 
 
 class TestCorruptedParquet:
