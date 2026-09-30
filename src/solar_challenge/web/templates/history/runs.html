@@ -125,19 +125,6 @@
                         </td>
                     </tr>
                 </template>
-                <template x-if="!loading && runs.length === 0">
-                    <tr>
-                        <td colspan="9" class="px-4 py-12 text-center">
-                            <div class="text-slate-400 dark:text-slate-500 mb-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                </svg>
-                            </div>
-                            <p class="text-sm text-slate-500 dark:text-slate-400 font-medium">No simulation runs found</p>
-                            <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Run a simulation to see results here.</p>
-                        </td>
-                    </tr>
-                </template>
                 <template x-for="run in runs" :key="run.id">
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                         {# Checkbox #}
@@ -274,6 +261,19 @@
         </table>
     </div>
     </div>
+
+    {# Loading and empty states: one copy, shown at every width #}
+    <template x-if="!loading && runs.length === 0">
+        <div class="mt-4 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-12 text-center">
+            <div class="text-slate-400 dark:text-slate-500 mb-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            </div>
+            <p class="text-sm text-slate-500 dark:text-slate-400 font-medium">No simulation runs found</p>
+            <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Run a simulation to see results here.</p>
+        </div>
+    </template>
 
     <!-- Mobile card layout -->
     <div class="md:hidden space-y-3 mt-4">
