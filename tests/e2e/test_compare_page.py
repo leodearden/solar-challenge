@@ -58,21 +58,14 @@ def test_compare_page_delta_column_exists(
     live_server: str,
     seeded_home_runs_pair: list[tuple[str, str]],
 ) -> None:
-    """'Delta' and '% Change' column headers visible."""
+    """Comparing two runs shows both a 'Delta' and a '% Change' column header."""
     (id1, _), (id2, _) = seeded_home_runs_pair
     page.goto(live_server + f"/history/compare?ids={id1},{id2}")
-    page.wait_for_load_state("networkidle")
 
-    # Look for Delta or % Change column headers
-    delta_header = page.locator("th", has_text="Delta")
-    pct_header = page.locator("th", has_text="% Change")
-
-    has_delta = delta_header.count() > 0
-    has_pct = pct_header.count() > 0
-
-    assert has_delta or has_pct, (
-        "Expected 'Delta' or '% Change' column header in comparison table"
-    )
+    for header in ("Delta", "% Change"):
+        expect(
+            page.get_by_role("columnheader", name=header, exact=True)
+        ).to_be_visible()
 
 
 # -- Compare delta coloring direction (potential bug) -----------------------
