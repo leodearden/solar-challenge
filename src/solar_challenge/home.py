@@ -203,7 +203,8 @@ def simulate_home(
             fetched for config.location when None. A heat pump's
             annual_heat_demand_kwh is shared out over the heating
             degree-minutes of the air temperature across this whole year,
-            so weather shorter than a year is treated as the whole year.
+            so weather that is not one year is treated as the whole year,
+            with a UserWarning.
 
     Returns:
         SimulationResults with all time series at 1-minute resolution

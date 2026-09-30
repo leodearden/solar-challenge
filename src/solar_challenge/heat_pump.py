@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Heat pump configuration and modelling."""
 
+import warnings
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -14,6 +15,10 @@ HeatPumpType = Literal["ASHP", "GSHP"]
 # Base temperature for heating degree day calculations
 # UK standard base temperature for domestic heating demand
 BASE_TEMPERATURE_C: float = 15.5
+
+
+# One year at 1-minute resolution: 365 to 366 days of rows (366 in a leap year)
+_YEAR_LENGTHS_IN_MINUTES = range(365 * 24 * 60, 366 * 24 * 60 + 1)
 
 
 # COP curve parameters for Air Source Heat Pumps (ASHP)
@@ -194,7 +199,8 @@ def generate_heat_pump_load(
             resolution, over the minutes to generate the load for.
             Must have a DatetimeIndex with timezone info.
         annual_temperature_c: One year of outdoor temperature in degrees
-            Celsius at 1-minute resolution. Only its values are read.
+            Celsius at 1-minute resolution, 365 or 366 days of rows.
+            Only its values are read.
 
     Returns:
         Series of electrical power demand in kW, with same index as temperature_c.
@@ -203,6 +209,11 @@ def generate_heat_pump_load(
     Raises:
         ValueError: If temperature_c doesn't have a DatetimeIndex
         ValueError: If temperature_c index is not timezone-aware
+
+    Warns:
+        UserWarning: If annual_temperature_c is not one year of minutes. The
+            annual demand is still shared out over its rows as if they were
+            the whole year.
 
     Example:
         >>> config = HeatPumpConfig(heat_pump_type="ASHP", thermal_capacity_kw=8.0)
@@ -222,6 +233,15 @@ def generate_heat_pump_load(
         raise ValueError("Temperature series must have a DatetimeIndex")
     if temperature_c.index.tz is None:
         raise ValueError("Temperature series index must be timezone-aware")
+    if len(annual_temperature_c) not in _YEAR_LENGTHS_IN_MINUTES:
+        warnings.warn(
+            f"annual_temperature_c has {len(annual_temperature_c):,} rows, not one year of minutes "
+            f"({_YEAR_LENGTHS_IN_MINUTES.start:,} to {_YEAR_LENGTHS_IN_MINUTES[-1]:,}): "
+            f"annual_heat_demand_kwh={config.annual_heat_demand_kwh:g} is shared out over those rows "
+            "as if they were the whole year.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     annual_degree_minutes = calculate_heating_degree_minutes(annual_temperature_c).sum()
     if annual_degree_minutes == 0:

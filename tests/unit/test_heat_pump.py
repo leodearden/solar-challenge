@@ -511,3 +511,32 @@ class TestGenerateHeatPumpLoadSharesTheAnnualHeatDemand:
         load = generate_heat_pump_load(HeatPumpConfig.default_ashp(), day_at_0c, annual_temperature_c=year_at_20c)
 
         pd.testing.assert_series_equal(load, pd.Series(0.0, index=day_at_0c.index))
+
+
+class TestGenerateHeatPumpLoadWarnsWhenTheReferenceIsNotAYear:
+    """annual_temperature_c must be one year of minutes, 365 or 366 days; anything else is shared out with a warning."""
+
+    @pytest.mark.parametrize(
+        ("rows", "freq"),
+        [
+            pytest.param(1440, "1min", id="one-day-of-minutes"),
+            pytest.param(8760, "1h", id="an-hourly-year"),
+            pytest.param(2 * 525_600, "1min", id="two-years-of-minutes"),
+        ],
+    )
+    def test_a_reference_that_is_not_a_year_of_minutes_warns_with_its_length(self, rows, freq):
+        reference = pd.Series(10.0, index=pd.date_range("1990-01-01", periods=rows, freq=freq, tz="UTC"))
+
+        with pytest.warns(UserWarning, match=f"annual_temperature_c has {rows:,} rows"):
+            generate_heat_pump_load(
+                HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
+            )
+
+    @pytest.mark.filterwarnings("error::UserWarning")
+    @pytest.mark.parametrize("days", [365, 366])
+    def test_a_reference_of_a_whole_year_of_minutes_does_not_warn(self, days):
+        reference = pd.Series(10.0, index=pd.date_range("1992-01-01", periods=days * 1440, freq="1min", tz="UTC"))
+
+        generate_heat_pump_load(
+            HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
+        )
