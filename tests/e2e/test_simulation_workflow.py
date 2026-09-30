@@ -1,6 +1,6 @@
 """End-to-end tests for the full simulation submit-to-results lifecycle.
 
-Verifies API submission, progress bar appearance, completion, navigation
+Verifies API submission, progress tracker appearance, completion, navigation
 to results, stat cards, and download buttons.
 
 Note: test_simulation_completes_and_shows_view_results makes a real
@@ -51,43 +51,21 @@ def test_submit_home_simulation_via_api(
     )
 
 
-# -- Progress bar appears after submit ------------------------------------
+# -- Progress tracker appears after submit ---------------------------------
 
 
-def test_progress_bar_appears_after_submit(
+def test_progress_tracker_appears_after_submit(
     page: Page,
     live_server: str,
 ) -> None:
-    """'Simulation Progress' heading visible after clicking Run."""
+    """The 'Simulation Progress' tracker appears once the server accepts the run."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1500)
+    response = submit_two_day_run(page)
+    assert response.status == 201, response.text()
 
-    # Click the Run Simulation button
-    submit_btn = page.locator("button[type='submit']")
-    expect(submit_btn).to_be_visible()
-    submit_btn.click()
-
-    # Wait for the progress section to appear
-    page.wait_for_timeout(2000)
-
-    # Look for progress-related UI elements
-    progress_heading = page.locator("text=Simulation Progress")
-    progress_bar = page.locator('[role="progressbar"]')
-    running_text = page.locator("text=Running")
-    simulating_text = page.locator("text=Simulating")
-
-    has_progress = (
-        progress_heading.count() > 0
-        or progress_bar.count() > 0
-        or running_text.count() > 0
-        or simulating_text.count() > 0
-    )
-
-    assert has_progress, (
-        "Expected progress indicator (heading, bar, or status text) "
-        "after clicking 'Run Simulation'"
-    )
+    expect(
+        page.get_by_role("heading", name="Simulation Progress", exact=True)
+    ).to_be_visible()
 
 
 # -- Simulation completes and shows View Results (slow, real PVGIS) --------
