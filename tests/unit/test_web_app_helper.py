@@ -46,8 +46,11 @@ def exported_secret_key(monkeypatch: pytest.MonkeyPatch) -> str:
 def test_by_default_the_builder_supplies_the_apps_secret_key(
     exported_secret_key: str, tmp_path: Path
 ) -> None:
-    """A key in test_config keeps create_app from looking one up, and that lookup reads, and can write, a key persisted under the home directory."""
-    assert build_test_app(tmp_path).secret_key != exported_secret_key
+    """By default the app's key comes from the builder, not from create_app's own lookup, which reads, and can write, a key persisted under the home directory."""
+    app = build_test_app(tmp_path)
+
+    assert app.secret_key
+    assert app.secret_key != exported_secret_key
 
 
 @pytest.mark.usefixtures("exported_secret_key")
