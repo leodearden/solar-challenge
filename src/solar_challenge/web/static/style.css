@@ -1,9 +1,7 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 /* ===== Solar Challenge Dashboard — Tailwind Companion CSS ===== */
-/* Only CSS variables, Tailwind overrides, energy colour palette,
+/* Served as-is: base.html links this file directly after dist/style.css, and
+   Tailwind does not compile it.
+   Only CSS variables, Tailwind overrides, energy colour palette,
    chart container sizing, and spinner animation.
    All component-level styling is handled by Tailwind utility classes. */
 
