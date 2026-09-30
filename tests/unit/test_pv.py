@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import pvlib
 import pytest
 from solar_challenge.location import Location
 from solar_challenge.pv import (
@@ -158,6 +159,37 @@ class TestCreatePVSystem:
         system = create_pv_system(config)
         # CEC inverters have Paco (AC power output rating)
         assert "Paco" in system.inverter_parameters
+
+
+class TestCECLibraryReuse:
+    """The CEC module and inverter libraries are parsed once, and each system gets its own parameters."""
+
+    def test_sam_libraries_are_read_at_most_once_across_systems(self, monkeypatch):
+        reads = []
+        real_retrieve_sam = pvlib.pvsystem.retrieve_sam
+
+        def recording_retrieve_sam(name=None, path=None):
+            reads.append(name)
+            return real_retrieve_sam(name, path)
+
+        monkeypatch.setattr(pvlib.pvsystem, "retrieve_sam", recording_retrieve_sam)
+
+        for capacity_kw in (3.0, 4.0, 5.0):
+            create_pv_system(PVConfig(capacity_kw=capacity_kw))
+
+        assert reads.count("CECMod") <= 1, f"SAM library reads: {reads}"
+        assert reads.count("CECInverter") <= 1, f"SAM library reads: {reads}"
+
+    def test_customised_system_leaves_later_default_systems_unchanged(self):
+        baseline = create_pv_system(PVConfig(capacity_kw=4.0))
+        create_pv_system(
+            PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003, inverter_efficiency=0.90)
+        )
+
+        later = create_pv_system(PVConfig(capacity_kw=4.0))
+
+        assert "gamma_pdc" not in later.arrays[0].module_parameters
+        assert later.inverter_parameters["Pdco"] == baseline.inverter_parameters["Pdco"]
 
 
 class TestCreateModelChain:

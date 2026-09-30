@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """PV system configuration and modelling."""
 
+import functools
 import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
@@ -118,6 +119,17 @@ class PVConfig:
         )
 
 
+@functools.cache
+def _shared_sam_library(name: str) -> pd.DataFrame:
+    """pvlib's parsed SAM parameter library `name`, read once per process and shared by every _sam_library call."""
+    return pvlib.pvsystem.retrieve_sam(name)
+
+
+def _sam_library(name: str) -> pd.DataFrame:
+    """SAM parameter library `name` as the caller's own frame: under pandas copy-on-write, its edits never reach the shared one."""
+    return _shared_sam_library(name).copy(deep=False)
+
+
 def _get_cec_module() -> dict[str, float]:
     """Get a representative CEC module for simulation.
 
@@ -125,7 +137,7 @@ def _get_cec_module() -> dict[str, float]:
     """
     # Use Canadian Solar CS6K-400MS as representative modern module
     # Parameters for a ~400W module with ~20% efficiency
-    module_params = pvlib.pvsystem.retrieve_sam("CECMod")
+    module_params = _sam_library("CECMod")
 
     # Find a suitable module around 400W
     # Canadian_Solar_Inc__CS6K_400MS or similar
@@ -230,7 +242,7 @@ def _get_cec_inverter(capacity_kw: float) -> dict[str, float]:
     Returns:
         Inverter parameters from CEC database
     """
-    inverter_params = pvlib.pvsystem.retrieve_sam("CECInverter")
+    inverter_params = _sam_library("CECInverter")
     target_watts = capacity_kw * 1000
 
     # Find inverter closest to target capacity

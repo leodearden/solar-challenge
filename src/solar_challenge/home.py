@@ -414,32 +414,27 @@ def simulate_home(
     )
 
 
+def _time_of_year_keys(index: pd.DatetimeIndex) -> pd.Index:
+    """Each timestamp's wall-clock month, day, hour and minute in its own timezone, packed as MMDDhhmm."""
+    return ((index.month * 100 + index.day) * 100 + index.hour) * 100 + index.minute
+
+
 def _align_tmy_to_demand(
     tmy_generation: pd.Series,
     demand: pd.Series,
 ) -> pd.Series:
-    """Align TMY generation data to demand index by time-of-year.
+    """Map a TMY series onto the demand's timestamps by wall-clock time of year.
 
-    TMY data has a synthetic year (often 2024 or similar), but we need
-    to map it to the actual simulation dates. We do this by matching
-    month-day-hour-minute.
-
-    Args:
-        tmy_generation: Generation series with TMY dates
-        demand: Demand series with actual simulation dates
-
-    Returns:
-        Generation series reindexed to match demand index
+    Each demand timestamp takes the TMY value with the same month, day, hour
+    and minute, each read in its own index's timezone. A demand timestamp with
+    no match (e.g. 29 February against a non-leap TMY year) maps to 0.0. Where
+    the TMY repeats a wall-clock minute, the later value wins. The result
+    carries the demand's index and is named generation_kw.
     """
-    # Create a time-of-year key for TMY data (month, day, hour, minute)
-    tmy_keys = tmy_generation.index.strftime("%m-%d %H:%M")
-    tmy_lookup = dict(zip(tmy_keys, tmy_generation.values, strict=False))
-
-    # Map demand timestamps to TMY values
-    demand_keys = demand.index.strftime("%m-%d %H:%M")
-    aligned_values = [tmy_lookup.get(key, 0.0) for key in demand_keys]
-
-    return pd.Series(aligned_values, index=demand.index, name="generation_kw")
+    lookup = tmy_generation.set_axis(_time_of_year_keys(tmy_generation.index))
+    lookup = lookup[~lookup.index.duplicated(keep="last")]
+    aligned = lookup.reindex(_time_of_year_keys(demand.index), fill_value=0.0)
+    return pd.Series(aligned.to_numpy(), index=demand.index, name="generation_kw")
 
 
 def calculate_summary(
