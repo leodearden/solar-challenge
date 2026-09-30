@@ -5,6 +5,7 @@ import random
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -28,8 +29,6 @@ from solar_challenge.config import (
     SimulationPeriod,
     UniformDistribution,
     WeightedDiscreteDistribution,
-    _parse_battery_config,
-    _parse_grid_charge_config,
     _parse_community_config,
     _parse_ev_config,
     _parse_heat_pump_config,
@@ -62,6 +61,11 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, calculate_degradation_factor
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+
+
+def _parsed_home(**blocks: Any) -> HomeConfig:
+    """Parse a ``home:`` block holding only *blocks*, at the Bristol default location."""
+    return parse_home_block(blocks, Location.bristol())
 
 
 class TestSimulationPeriod:
@@ -380,26 +384,19 @@ class TestGridChargeConfig:
 
 
 class TestBatteryGridChargeParsing:
-    """Tests for _parse_battery_config grid_charging support."""
-
-    def test_parse_grid_charging_sets_target_soc(self) -> None:
-        """_parse_battery_config parses nested grid_charging dict."""
-        result = _parse_battery_config(
-            {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 0.8}}
-        )
-        assert result is not None
-        assert result.grid_charging is not None
-        assert result.grid_charging.target_soc_fraction == 0.8
+    """The home battery block's grid_charging support, read through parse_home_block."""
 
     def test_parse_absent_grid_charging_is_none(self) -> None:
         """Absent grid_charging block -> grid_charging is None."""
-        result = _parse_battery_config({"capacity_kwh": 5.0})
+        result = _parsed_home(battery={"capacity_kwh": 5.0}).battery_config
         assert result is not None
         assert result.grid_charging is None
 
     def test_parse_empty_grid_charging_uses_default(self) -> None:
         """Empty grid_charging dict -> default target_soc_fraction == 0.9."""
-        result = _parse_battery_config({"capacity_kwh": 5.0, "grid_charging": {}})
+        result = _parsed_home(
+            battery={"capacity_kwh": 5.0, "grid_charging": {}}
+        ).battery_config
         assert result is not None
         assert result.grid_charging is not None
         assert result.grid_charging.target_soc_fraction == 0.9
@@ -407,24 +404,32 @@ class TestBatteryGridChargeParsing:
     def test_parse_out_of_range_raises(self) -> None:
         """Out-of-range target_soc_fraction propagates ConfigurationError."""
         with pytest.raises(ConfigurationError, match="target_soc_fraction"):
-            _parse_battery_config(
-                {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 1.5}}
+            _parsed_home(
+                battery={
+                    "capacity_kwh": 5.0,
+                    "grid_charging": {"target_soc_fraction": 1.5},
+                }
             )
 
-    def test_parse_grid_charging_non_mapping_raises(self) -> None:
-        """grid_charging supplied as a scalar raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping"):
-            _parse_battery_config({"capacity_kwh": 5.0, "grid_charging": 0.8})
-
-    def test_parse_grid_charge_config_non_mapping_raises_directly(self) -> None:
-        """_parse_grid_charge_config raises ConfigurationError for non-dict input directly."""
-        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping, got str"):
-            _parse_grid_charge_config("not-a-dict")  # type: ignore[arg-type]
-
-    def test_parse_grid_charge_config_list_raises_directly(self) -> None:
-        """_parse_grid_charge_config raises ConfigurationError for list input."""
-        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping, got list"):
-            _parse_grid_charge_config([1, 2])  # type: ignore[arg-type]
+    @pytest.mark.parametrize(
+        ("grid_charging", "type_name"),
+        [
+            pytest.param(0.8, "float", id="number"),
+            pytest.param("not-a-dict", "str", id="string"),
+            pytest.param([1, 2], "list", id="list"),
+        ],
+    )
+    def test_parse_grid_charging_non_mapping_raises(
+        self, grid_charging: object, type_name: str
+    ) -> None:
+        """grid_charging supplied as a number, string or list raises ConfigurationError."""
+        with pytest.raises(
+            ConfigurationError,
+            match=f"grid_charging must be a mapping, got {type_name}",
+        ):
+            _parsed_home(
+                battery={"capacity_kwh": 5.0, "grid_charging": grid_charging}
+            )
 
     def test_yaml_round_trip_grid_charging(self) -> None:
         """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""
@@ -456,38 +461,28 @@ home:
 
 
 class TestBatterySOCEfficiencyParsing:
-    """Tests for _parse_battery_config SOC + efficiency key forwarding."""
+    """Tests for parse_home_block battery SOC + efficiency key forwarding."""
 
     def test_parse_explicit_soc_and_eff_keys(self) -> None:
         """All five SOC/eff keys are forwarded to BatteryConfig."""
-        result = _parse_battery_config(
-            {
+        result = _parsed_home(
+            battery={
                 "capacity_kwh": 5.0,
                 "min_soc_fraction": 0.2,
                 "max_soc_fraction": 0.85,
                 "charge_efficiency": 0.96,
                 "discharge_efficiency": 0.97,
             }
-        )
+        ).battery_config
         assert result is not None
         assert result.min_soc_fraction == 0.2
         assert result.max_soc_fraction == 0.85
         assert result.charge_efficiency == 0.96
         assert result.discharge_efficiency == 0.97
 
-    def test_parse_efficiency_splits_via_sqrt(self) -> None:
-        """efficiency key is forwarded and split as sqrt by BatteryConfig.__post_init__."""
-        import math
-
-        result = _parse_battery_config({"capacity_kwh": 5.0, "efficiency": 0.95})
-        assert result is not None
-        assert result.efficiency == 0.95
-        assert result.charge_efficiency == pytest.approx(math.sqrt(0.95))
-        assert result.discharge_efficiency == pytest.approx(math.sqrt(0.95))
-
     def test_absent_keys_use_defaults(self) -> None:
         """Absent SOC/eff keys yield the correct defaults."""
-        result = _parse_battery_config({"capacity_kwh": 5.0})
+        result = _parsed_home(battery={"capacity_kwh": 5.0}).battery_config
         assert result is not None
         assert result.min_soc_fraction == 0.1
         assert result.max_soc_fraction == 0.9
@@ -498,14 +493,18 @@ class TestBatterySOCEfficiencyParsing:
     def test_out_of_range_soc_raises_value_error(self) -> None:
         """Out-of-range SOC fractions propagate as ValueError."""
         with pytest.raises(ValueError, match="SOC"):
-            _parse_battery_config(
-                {"capacity_kwh": 5.0, "min_soc_fraction": 0.9, "max_soc_fraction": 0.5}
+            _parsed_home(
+                battery={
+                    "capacity_kwh": 5.0,
+                    "min_soc_fraction": 0.9,
+                    "max_soc_fraction": 0.5,
+                }
             )
 
     def test_out_of_range_efficiency_raises_value_error(self) -> None:
         """Out-of-range efficiency propagates as ValueError."""
         with pytest.raises(ValueError, match="[Cc]harge"):
-            _parse_battery_config({"capacity_kwh": 5.0, "charge_efficiency": 0.0})
+            _parsed_home(battery={"capacity_kwh": 5.0, "charge_efficiency": 0.0})
 
     def test_yaml_round_trip_efficiency(self) -> None:
         """YAML with battery.efficiency round-trips into home.battery_config.charge_efficiency."""
@@ -563,12 +562,12 @@ home:
 
 
 class TestBatterySOHParsing:
-    """Tests for _parse_battery_config SOH/aging key forwarding."""
+    """Tests for parse_home_block battery SOH/aging key forwarding."""
 
     def test_parse_explicit_soh_keys(self) -> None:
         """All five SOH keys are forwarded to BatteryConfig."""
-        result = _parse_battery_config(
-            {
+        result = _parsed_home(
+            battery={
                 "capacity_kwh": 5.0,
                 "system_age_years": 8.0,
                 "calendar_fade_rate_per_year": 0.025,
@@ -576,7 +575,7 @@ class TestBatterySOHParsing:
                 "soh_floor": 0.6,
                 "soh": 0.85,
             }
-        )
+        ).battery_config
         assert result is not None
         assert result.system_age_years == 8.0
         assert result.calendar_fade_rate_per_year == 0.025
@@ -586,7 +585,7 @@ class TestBatterySOHParsing:
 
     def test_absent_soh_keys_use_defaults(self) -> None:
         """Absent SOH keys yield the correct BatteryConfig defaults."""
-        result = _parse_battery_config({"capacity_kwh": 5.0})
+        result = _parsed_home(battery={"capacity_kwh": 5.0}).battery_config
         assert result is not None
         assert result.system_age_years == 0.0
         assert result.calendar_fade_rate_per_year == 0.02
@@ -621,7 +620,7 @@ home:
     def test_out_of_range_system_age_raises(self) -> None:
         """Negative system_age_years surfaces as ValueError."""
         with pytest.raises(ValueError, match="system_age_years"):
-            _parse_battery_config({"capacity_kwh": 5.0, "system_age_years": -1.0})
+            _parsed_home(battery={"capacity_kwh": 5.0, "system_age_years": -1.0})
 
 
 class TestDispatchStrategyParsing:
