@@ -10,6 +10,16 @@
   parameter is **replaced** by a **grid-services-only, per-kW-of-battery-power** field (firm flex capacity
   is a power product); the **time-shift portion is endogenous physics** (W1's fleet TOU + grid-charging),
   not a parameter. *(Leo, 2026-06-17 — "keep W1 physics; per-kW grid-services.")*
+- **Amendment (2026-09-30, task 219):** grid-charge energy is **householder import, not a CBS
+  outgoing**. The §2.3/§3.2 accounting (the CBS pays the off-peak grid-charge cost and bills the
+  discharge at the own-use rate) is the "basis B2" scheme rejected on 2026-06-22, when billing moved to
+  **basis C** (own_use = demand − import; task 84; platform `billing-engine-s4-s5.md` decision B;
+  register rule D15: grid-charge energy is "grid energy the member already paid the retailer for").
+  Under basis C the householder pays the retailer for grid-charge energy inside `import_cost_gbp`, and
+  the CBS bears only the battery round-trip loss through basis-C own-use. CR2's `cbs_grid_charge_cost`
+  deduction therefore paid each grid-charged kWh twice; task 219 removed it, so
+  `fleet_revenue = own_use + SEG + grid_services`. H5/H9 (§9) are read as amended; passages marked
+  **[Superseded 2026-09-30, task 219 — see header amendment.]** are kept for the record.
 - **Relationship to W2:** **successor/amendment** to the merged W2 finance layer
   (`docs/prds/financial-layer-battery-fidelity.md`, tasks #43–#49 `done`). This is **additive new
   capability that also fixes one load-bearing defect in W2's revenue/bill definition** — so it is a
@@ -121,7 +131,8 @@ distinct** parts that this PRD treats **differently** (reconciled with the W1 PR
   **endogenous physics**, owned by **W1** (a fleet-wide TOU tariff + grid-charging threaded onto the
   fleet; W1 tasks β/γ). It reaches this model through the **energy aggregates** the cost-recovery solve
   already consumes: off-peak grid-charging + peak discharge lowers peak grid import and raises battery
-  self-consumption. It is **not** a `FinanceConfig` field. **Accounting (the W2-owned correction):** the
+  self-consumption. It is **not** a `FinanceConfig` field. **[Superseded 2026-09-30, task 219 — see
+  header amendment.]** **Accounting (the W2-owned correction):** the
   CBS operates the battery, so the **off-peak grid-charge cost is a CBS outgoing**, not householder grid
   import; the battery discharge is self-consumed at the own-use rate (CBS revenue). The CBS thus captures
   the arbitrage margin (own-use − off-peak rate) while the householder gains the avoided-peak-import
@@ -208,8 +219,8 @@ may be retained for back-compat or renamed in T3 — tactical, §12).
 ### 3.2 CBS revenue — fixed in place — `project_multi_year`
 
 In `_simulate_age` (finance.py:864–877), replace the retail-valued self-consumption term with the
-**own-use + SEG + grid-services** CBS revenue (net of the CBS grid-charge cost), reusing energy
-aggregates already computed:
+**own-use + SEG + grid-services** CBS revenue (net of the CBS grid-charge cost **[Superseded
+2026-09-30, task 219 — see header amendment.]**), reusing energy aggregates already computed:
 
 ```python
 own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc / 100.0      # fleet_sc already computed
@@ -225,7 +236,8 @@ is not touched** — it keeps consuming `curve.points[y].fleet_revenue_gbp`.
 
 **Time-shift (endogenous, §2.3).** When the scenario runs **W1's TOU + grid-charging** board fleet, the
 arbitrage value is already present in the **energy aggregates** (`fleet_sc` rises, per-home peak import
-falls). **CR2 also owns the self-consumption-inflation correction:** aggregate the off-peak CBS
+falls). **[Superseded 2026-09-30, task 219 — see header amendment.]** **CR2 also owns the
+self-consumption-inflation correction:** aggregate the off-peak CBS
 grid-charge energy and reassign it from householder import to a **CBS outgoing** (`cbs_grid_charge_cost`,
 priced at the off-peak rate), netting `fleet_revenue −= cbs_grid_charge_cost`, so the arbitrage margin is
 counted **once**. This aggregate is **novel substrate produced in CR2** — today `flow.py` tracks
@@ -252,7 +264,8 @@ def solve_cost_recovery_rate(
 Find the **minimum own-use rate** such that **CBS mean surplus per home/yr ≥
 `retained_cash_floor_per_home_per_year_gbp`** over the asset life. CBS surplus is **linear in the
 own-use rate** (`surplus(r) = r × Σ_y fleet_sc_y/100 / (N_years·n_homes) + (SEG + grid_services −
-cbs_grid_charge_cost − opex − debt averaged)`), so this is a **near-closed-form solve, not a search**: evaluate
+cbs_grid_charge_cost − opex − debt averaged)`; **[Superseded 2026-09-30, task 219 — see header
+amendment.]**), so this is a **near-closed-form solve, not a search**: evaluate
 `project_economics(project_multi_year(...))` at two trial rates (or read the energy curve directly and
 recompute revenue analytically via `dataclasses.replace` on `YearPoint`s — no re-sim), fit the line,
 solve `surplus(r*) = floor`, then **clamp `r*` to `[0, retail_baseline_rate]`** and set `binding`:
@@ -333,7 +346,7 @@ standard TDD leaf — see §10 CR7 + the decompose hand-back.)
 | `bill_distribution` maps `householder_bill`, selects median representative, returns `BillDistribution` | grep:`finance.py:636–685` wired |
 | `scenario.seg_tariff_pence_per_kwh` + per-home SEG already priced into `seg_export_income_gbp` | grep:`finance.py:855,875` + `home.py:333–344` wired (#2, landed) |
 | Resolved fleet homes expose `battery_config.max_discharge_kw` (for grid_services = Σ kW × £/kW rate) | grep:`config.py:2160` + `finance.py:888–896` wired |
-| `flow.py` tracks per-timestep `grid_charge_stored_kwh` (to aggregate into `cbs_grid_charge_cost`, CR2) | grep:`flow.py:262–286` wired (aggregate is novel — produced in CR2) |
+| `flow.py` tracks per-timestep `grid_charge_stored_kwh` (to aggregate into `cbs_grid_charge_cost`, CR2) **[Superseded 2026-09-30, task 219 — see header amendment.]** | grep:`flow.py:262–286` wired (aggregate is novel — produced in CR2) |
 | finance CLI `run` + `--project` flag pattern + `generate_finance_report` (extend with `--cost-recovery`) | grep:`cli/finance.py:46–206`, `output.py` `generate_finance_report` wired |
 | θ hard gate isolated from physics path (`spreadsheet_revenue_curve → project_economics`) | grep:`tests/integration/test_finance_calibration.py:397–591` wired |
 | `[FIN]`/`[FEAS]` golden references for the reconciliation anchor | `docs/finance-spreadsheet-reconciliation.md` + survey §3 |
@@ -341,7 +354,8 @@ standard TDD leaf — see §10 CR7 + the decompose hand-back.)
 **Novel substrate introduced (queued within this batch, not assumed):** three `FinanceConfig` fields;
 `BillBreakdown` cost-recovery fields; `CostRecoverySolution`; `solve_cost_recovery_rate`; the fixed
 `project_multi_year` revenue line; the **CBS grid-charge-cost aggregate** (`cbs_grid_charge_cost` — the
-self-consumption-inflation correction, §2.3/§3.2, CR2); the `--cost-recovery` CLI + report block;
+self-consumption-inflation correction, §2.3/§3.2, CR2; **[Superseded 2026-09-30, task 219 — see header
+amendment.]**); the `--cost-recovery` CLI + report block;
 `docs/cost-recovery-finance-model.md`; the adversarial gate. Each produced by a named task (§10),
 consumed by a named downstream task / the CLI / W3 / the board doc. **G3 verdict: PASS.**
 
@@ -382,9 +396,9 @@ own-use rate is monotone non-decreasing in capex (fixed energy mix); θ hard ass
 | H2 | **Capex→own-use coupling (the headline)** | two configs, higher-capex one | higher-capex config has **higher solved own-use rate** AND **higher `representative_outlay_gbp`** (fixed energy mix) — the coupling, observable |
 | H3 | **Householder-saving identity** | a home at own-use `r` vs baseline | `saving_vs_baseline == self_consumed × (retail − r) × (1+vat)` to ε; `total_outlay` has **no** SEG term; `r = retail` ⟹ saving == 0 |
 | H4 | **Feasibility clamps** | a runaway-cheap config and a runaway-expensive one | over-feasible ⟹ `binding='rate_clamped_zero'`, `r==0`, surplus ≥ floor; under-feasible ⟹ `feasible==False`, `binding='infeasible_above_retail'` |
-| H5 | **CBS-revenue fix** | injected fleet through `project_multi_year` | `YearPoint.fleet_revenue_gbp == own_use×self + seg + grid_services − cbs_grid_charge_cost` (not retail self-consumption saving); grid_services == `Σ battery max_discharge_kw × £/kW rate`; flat-rate fleet ⟹ `cbs_grid_charge_cost == 0` |
+| H5 | **CBS-revenue fix** *(amended 2026-09-30, task 219)* | injected fleet through `project_multi_year` | `YearPoint.fleet_revenue_gbp == own_use×self + seg + grid_services` (no grid-charge term; not retail self-consumption saving); grid_services == `Σ battery max_discharge_kw × £/kW rate` |
 | H6 | **[FEAS] reconciliation (reported, no-flex)** | [FIN]/[FEAS] assumption inputs, grid_services=0, flat-rate (no arbitrage), floor=£27 | solved own-use rate ≈ 15p and saving ≈ £324 **within documented tolerance** (REPORTED, not hard-pinned); a Central grid-services + TOU/arbitrage run shows a **lower** solved rate (value to householder) |
-| H9 | **Time-shift no double-count** | injected fleet, TOU + grid-charging ON vs flat-rate | the off-peak grid-charge energy appears as a **CBS outgoing** (`cbs_grid_charge_cost`), not householder import; the CBS arbitrage margin == `(own_use − off_peak)` on time-shifted kWh; no kWh is charged to the householder twice (own-use **and** import) |
+| H9 | **Time-shift no double-count** *(amended 2026-09-30, task 219)* | injected fleet, TOU + grid-charging ON vs flat-rate | grid-charge energy is paid **once**, on householder import (retailer), and CBS revenue carries no grid-charge term: Σ householder `import_cost` + CBS grid-charge outgoing (0) == metered grid-import cost; no kWh is charged to the householder twice (own-use **and** import), because basis C excludes grid-charged discharge from own-use; the time-shift margin accrues to the householder via import, and the CBS bears the round-trip loss |
 | H7 | **θ stays green** | the W2 calibration suite | `capex==£775,000±£1`, `min_dscr≥1.20`, `equity_irr>0` unchanged; physics column re-derived/reported |
 | H8 | **CLI end-to-end (G2 surface)** | `finance run --cost-recovery scenarios/bristol-phase1.yaml` | prints solved own-use rate + householder total outlay (rep + distribution) + CBS surplus = floor + feasibility; real-PVGIS variant marked `slow` |
 
@@ -407,13 +421,15 @@ everything, edits nothing. Per-task tests in distinct modules.
 
 #### CR2 — CBS-revenue fix in `project_multi_year`
 - **Modules:** `finance.py` (`_simulate_age` revenue line) (+ recalibrate `tests/unit/test_finance_projection.py` injected-revenue assertions)
-- **Work:** `fleet_revenue = own_use_rate×fleet_sc/100 + Σ seg_export_income + grid_services −
+- **Work:** **[Superseded 2026-09-30, task 219 — see header amendment.]**
+  `fleet_revenue = own_use_rate×fleet_sc/100 + Σ seg_export_income + grid_services −
   cbs_grid_charge_cost` (§3.2); `grid_services == Σ battery max_discharge_kw × grid_services_income_per_kw_per_year_gbp`;
   redefine `YearPoint.fleet_revenue_gbp` docstring to "CBS revenue." **Also implement the
   self-consumption-inflation correction (§2.3):** aggregate the off-peak CBS grid-charge energy and
   reassign it from householder import to `cbs_grid_charge_cost` (priced at the off-peak rate; **0** for
   flat-rate fleets).
-- **Signal (G2/H5/H9):** injected-fleet `fleet_revenue_gbp == own_use×self + seg + grid_services −
+- **Signal (G2/H5/H9):** **[Superseded 2026-09-30, task 219 — see header amendment.]**
+  injected-fleet `fleet_revenue_gbp == own_use×self + seg + grid_services −
   cbs_grid_charge_cost`; flat-rate fleet ⟹ `cbs_grid_charge_cost==0`; TOU+grid-charging fleet ⟹ no kWh
   double-charged (H9); θ hard assertions green (H7).
 - **Prereqs:** CR1.
@@ -489,7 +505,8 @@ everything, edits nothing. Per-task tests in distinct modules.
 
 ## 12. Open questions (tactical — deferred, not design-blocking)
 
-1. **Time-shift accounting granularity (CR2).** The self-consumption-inflation correction reassigns the
+1. **Time-shift accounting granularity (CR2).** **[Superseded 2026-09-30, task 219 — see header
+   amendment.]** The self-consumption-inflation correction reassigns the
    off-peak grid-charge cost to the CBS (§2.3). Open: aggregate `cbs_grid_charge_cost` fleet-wide from
    per-timestep `grid_charge_stored_kwh`, or expose a per-home grid-charge-cost summary field — either
    reproduces the same `fleet_revenue`; pick the cleaner aggregation at CR2. *(The per-kWh-linearity
@@ -526,7 +543,8 @@ everything, edits nothing. Per-task tests in distinct modules.
   rest" latitude. The **no-flex** framing (grid_services=0 **and** flat-rate, no arbitrage) corrects the
   brief's internally-inconsistent "15p + Central flex → £27" premise ([FEAS]'s £27 is a no-flex figure;
   Central flex would push surplus far higher or the solved rate far below 15p). **False premise avoided.**
-- **"Time-shift accrues without double-count" (H9):** the off-peak grid-charge cost is reassigned to a
+- **"Time-shift accrues without double-count" (H9):** **[Superseded 2026-09-30, task 219 — see header
+  amendment.]** the off-peak grid-charge cost is reassigned to a
   CBS outgoing (CR2), so the arbitrage margin is counted once; backed by the explicit `cbs_grid_charge_cost`
   term + the flat-rate ⟹ 0 invariant. **Producible by CR2.**
 - **Feasibility / clamp assertions (H4):** backed by the explicit clamp-to-`[0, retail]` + `binding`

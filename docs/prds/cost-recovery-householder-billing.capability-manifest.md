@@ -27,6 +27,10 @@ premise is corrected to the **no-flex** (grid_services=0 ∧ flat-rate) framing
 (G6 §13). θ hard assertions stay green throughout (fix isolated from the
 `spreadsheet_revenue_curve → project_economics` path).
 
+Amended 2026-09-30 (task 219): the `cbs_grid_charge_cost` aggregate was removed —
+grid-charge energy stays on householder import under basis C; the rows below that
+cite it are historical (decompose-time 2026-06-17).
+
 ## CR1 — `FinanceConfig` cost-recovery fields + parser — intermediate (unlocks CR2, CR3, CR4)
 
 | Capability asserted by signal | Evidence binding | Status |
