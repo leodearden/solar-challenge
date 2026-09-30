@@ -1,10 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Submit the single-home simulation form at /simulate/home through its UI, as a user would."""
+"""Drive the single-home simulation form at /simulate/home through its UI, as a user would."""
 
 from playwright.sync_api import Page, Response
 
 _FIRST_DAY = "2024-06-01"
 _LAST_DAY = "2024-06-02"
+
+
+def open_period_tab(page: Page) -> None:
+    """Open the form's Period tab, where the simulated dates are chosen."""
+    page.get_by_role("tab", name="Period", exact=True).click()
+
+
+def choose_custom_range(page: Page) -> None:
+    """Open the Period tab and check its "Custom range" radio, which reveals #start_date and #end_date."""
+    open_period_tab(page)
+    page.get_by_role("radio", name="Custom range", exact=True).check()
 
 
 def submit_two_day_run(page: Page) -> Response:
@@ -13,14 +24,13 @@ def submit_two_day_run(page: Page) -> Response:
     Two days is the shortest run the form offers: its quick presets start at 7 days, and a
     custom range needs an end date after its start date.
     """
-    page.get_by_role("tab", name="Period", exact=True).click()
-    page.get_by_role("radio", name="Custom range", exact=True).check()
+    choose_custom_range(page)
     page.locator("#start_date").fill(_FIRST_DAY)
     page.locator("#end_date").fill(_LAST_DAY)
     with page.expect_response("**/api/simulate/home") as submission:
         page.get_by_role("button", name="Run Simulation").click()
     response = submission.value
-    sent = response.request.post_data_json
+    sent = response.request.post_data_json or {}
     sent_period = {key: sent.get(key) for key in ("days", "start", "end")}
     chosen_period = {"days": None, "start": _FIRST_DAY, "end": _LAST_DAY}
     assert sent_period == chosen_period, (

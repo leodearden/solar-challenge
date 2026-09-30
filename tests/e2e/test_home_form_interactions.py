@@ -7,6 +7,8 @@ and conditional field visibility.
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e._home_form import choose_custom_range, open_period_tab
+
 pytestmark = pytest.mark.e2e
 
 
@@ -155,12 +157,12 @@ def test_custom_location_fields_appear(page: Page, live_server: str) -> None:
 def test_custom_date_range_fields(page: Page, live_server: str) -> None:
     """Check the 'Custom range' radio -> #start_date and #end_date, hidden until then, become visible."""
     page.goto(live_server + "/simulate/home")
-    page.get_by_role("tab", name="Period", exact=True).click()
+    open_period_tab(page)
     date_inputs = [page.locator("#start_date"), page.locator("#end_date")]
     for date_input in date_inputs:
         expect(date_input).to_be_hidden()
 
-    page.get_by_role("radio", name="Custom range", exact=True).check()
+    choose_custom_range(page)
 
     for date_input in date_inputs:
         expect(date_input).to_be_visible()
