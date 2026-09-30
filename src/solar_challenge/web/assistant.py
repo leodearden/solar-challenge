@@ -916,60 +916,47 @@ def chat() -> Response:
 
                 # Process each tool_use block emitted by the model.
                 content_blocks: Any = getattr(final_msg, "content", [])
-                assistant_content: list[dict[str, Any]] = []
+                tool_calls = [
+                    block for block in content_blocks
+                    if getattr(block, "type", None) == "tool_use"
+                ]
                 tool_result_content: list[dict[str, Any]] = []
 
-                for block in content_blocks:
-                    block_type: Any = getattr(block, "type", None)
-                    if block_type == "tool_use":
-                        block_id: str = str(getattr(block, "id", ""))
-                        block_name: str = str(getattr(block, "name", ""))
-                        raw_input: Any = getattr(block, "input", {})
-                        block_input: dict[str, Any] = dict(raw_input) if raw_input else {}
+                for block in tool_calls:
+                    block_id: str = str(getattr(block, "id", ""))
+                    block_name: str = str(getattr(block, "name", ""))
+                    raw_input: Any = getattr(block, "input", {})
+                    block_input: dict[str, Any] = dict(raw_input) if raw_input else {}
 
-                        # Serialize to plain dict — keeps messages list mypy --strict clean.
-                        assistant_content.append({
-                            "type": "tool_use",
-                            "id": block_id,
-                            "name": block_name,
-                            "input": block_input,
-                        })
+                    # Emit the `tool` SSE frame (§8 contract).
+                    yield (
+                        f"event: tool\n"
+                        f"data: {json.dumps({'name': block_name})}\n\n"
+                    )
 
-                        # Emit the `tool` SSE frame (§8 contract).
-                        yield (
-                            f"event: tool\n"
-                            f"data: {json.dumps({'name': block_name})}\n\n"
-                        )
+                    # Dispatch to the handler and collect the result.
+                    tool_result = dispatch_tool(
+                        block_name,
+                        block_input,
+                        db_path=db_path,
+                        job_manager=job_manager,
+                        data_dir=data_dir,
+                    )
+                    invoked_tools.append(block_name)
 
-                        # Dispatch to the handler and collect the result.
-                        tool_result = dispatch_tool(
-                            block_name,
-                            block_input,
-                            db_path=db_path,
-                            job_manager=job_manager,
-                            data_dir=data_dir,
-                        )
-                        invoked_tools.append(block_name)
+                    tool_result_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": block_id,
+                        # tool_result content must be a text string.
+                        # ensure_ascii=False preserves Unicode characters
+                        # (e.g. em-dashes in benchmark band strings).
+                        "content": json.dumps(tool_result, ensure_ascii=False),
+                    })
 
-                        tool_result_content.append({
-                            "type": "tool_result",
-                            "tool_use_id": block_id,
-                            # tool_result content must be a text string.
-                            # ensure_ascii=False preserves Unicode characters
-                            # (e.g. em-dashes in benchmark band strings).
-                            "content": json.dumps(tool_result, ensure_ascii=False),
-                        })
-
-                    elif block_type == "text":
-                        assistant_content.append({
-                            "type": "text",
-                            "text": str(getattr(block, "text", "")),
-                        })
-
-                # Append the assistant tool_use turn and the user tool_result
-                # turn to the in-memory messages for the next iteration.
+                # Replay the turn exactly as the model sent it: with thinking on,
+                # the API needs its thinking blocks back unchanged.
                 cur_messages: list[dict[str, Any]] = list(params["messages"])
-                cur_messages.append({"role": "assistant", "content": assistant_content})
+                cur_messages.append({"role": "assistant", "content": list(content_blocks)})
                 cur_messages.append({"role": "user", "content": tool_result_content})
                 params["messages"] = cur_messages
             else:
