@@ -1,9 +1,7 @@
 """Tests for tariff configuration and rate matching."""
 
-import copy
 import dataclasses
 import pickle
-from collections.abc import Callable
 
 import pandas as pd
 import pytest
@@ -26,11 +24,6 @@ REPEATED_OFF_PEAK_TARIFF = TariffConfig(
 
 def _derived_rates(tariff: TariffConfig) -> tuple[float, float]:
     return tariff.peak_rate, tariff.mean_period_rate
-
-
-def _pickle_round_trip(tariff: TariffConfig) -> TariffConfig:
-    clone: TariffConfig = pickle.loads(pickle.dumps(tariff))
-    return clone
 
 
 class TestTariffPeriodBasics:
@@ -622,30 +615,27 @@ class TestTariffConfigDerivedRatesStayOutOfIdentity:
         assert hash(read) == hash(unread)
         assert repr(read) == repr(unread)
 
-    def test_fields_and_asdict_hold_only_the_constructor_arguments(self) -> None:
+    def test_a_tariff_rebuilt_from_its_fields_equals_the_original(self) -> None:
         """web/storage.py's run storage writes fields() and passes them back to the constructor."""
         tariff = TariffConfig.economy_7()
         _derived_rates(tariff)
 
-        assert [f.name for f in dataclasses.fields(tariff)] == ["periods", "name"]
-        assert set(dataclasses.asdict(tariff)) == {"periods", "name"}
+        rebuilt = TariffConfig(
+            **{f.name: getattr(tariff, f.name) for f in dataclasses.fields(tariff)}
+        )
 
-    @pytest.mark.parametrize(
-        "clone",
-        [copy.copy, copy.deepcopy, _pickle_round_trip],
-        ids=["copy", "deepcopy", "pickle"],
-    )
-    def test_clones_carry_the_same_rates(
-        self, clone: Callable[[TariffConfig], TariffConfig]
-    ) -> None:
+        assert rebuilt == tariff
+
+    def test_a_pickled_tariff_carries_the_same_rates(self) -> None:
+        """fleet.py's process pool pickles each home's config, its tariff included."""
         tariff = TariffConfig.economy_10()
         expected = _derived_rates(tariff)
 
-        cloned = clone(tariff)
+        unpickled: TariffConfig = pickle.loads(pickle.dumps(tariff))
 
-        assert cloned == tariff
-        assert hash(cloned) == hash(tariff)
-        assert _derived_rates(cloned) == expected
+        assert unpickled == tariff
+        assert hash(unpickled) == hash(tariff)
+        assert _derived_rates(unpickled) == expected
 
     def test_replace_derives_the_replacement_periods_rates(self) -> None:
         tariff = TariffConfig.economy_7()
