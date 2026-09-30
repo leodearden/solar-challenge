@@ -5,7 +5,7 @@ import functools
 import math
 import warnings
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 import pandas as pd
