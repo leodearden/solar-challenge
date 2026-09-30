@@ -28,8 +28,9 @@ def test_history_page_loads(page: Page, live_server: str) -> None:
 # -- Table structure -------------------------------------------------------
 
 
+@pytest.mark.usefixtures("seeded_home_run")
 def test_history_table_exists(page: Page, live_server: str) -> None:
-    """The runs table exists with the expected column headers."""
+    """With runs to list, the runs table shows the expected column headers."""
     page.goto(live_server + "/history/runs")
     page.wait_for_load_state("networkidle")
 
@@ -62,21 +63,23 @@ def test_history_table_exists(page: Page, live_server: str) -> None:
 
 @pytest.mark.usefixtures("runs_api_returns_no_runs")
 def test_history_empty_state(page: Page, live_server: str) -> None:
-    """'No simulation runs found' shows when the runs API returns its empty-database response.
+    """'No simulation runs found' shows in place of the runs table when the runs API returns no runs.
 
     The API is stubbed, so this holds whatever runs the shared session DB has accumulated.
     """
     page.goto(live_server + "/history/runs")
 
     expect(page.get_by_text("No simulation runs found")).to_be_visible()
+    expect(page.locator("table")).to_be_hidden()
 
 
 @pytest.mark.usefixtures("runs_api_never_answers")
 def test_history_loading_state(page: Page, live_server: str) -> None:
-    """'Loading runs...' shows while the runs API has not answered."""
+    """'Loading runs...' shows in place of the runs table while the runs API has not answered."""
     page.goto(live_server + "/history/runs")
 
     expect(page.get_by_text("Loading runs...")).to_be_visible()
+    expect(page.locator("table")).to_be_hidden()
 
 
 # -- Filter controls -------------------------------------------------------
@@ -143,6 +146,7 @@ def test_type_filter_dropdown(page: Page, live_server: str) -> None:
 # -- Column sorting --------------------------------------------------------
 
 
+@pytest.mark.usefixtures("seeded_home_run")
 def test_sort_columns(page: Page, live_server: str) -> None:
     """Click the 'Name' column header and verify a sort indicator appears."""
     page.goto(live_server + "/history/runs")

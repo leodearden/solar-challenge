@@ -77,7 +77,7 @@
     </div>
 
     {# Runs table #}
-    <div class="hidden md:block">
+    <div class="hidden md:block" x-show="runs.length > 0" x-cloak>
     <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
             <thead class="bg-slate-50 dark:bg-slate-700/50">
