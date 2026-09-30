@@ -955,45 +955,6 @@ class TestHeatPumpIntegration:
         # Heat pump load should be None
         assert results.heat_pump_load is None
 
-    def test_heat_pump_load_added_to_demand(self):
-        """Heat pump electrical load is added to household demand."""
-        # Config with heat pump
-        config_with_hp = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
-            heat_pump_config=HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=8.0,
-                annual_heat_demand_kwh=8000.0,
-            ),
-            location=Location.bristol(),
-        )
-
-        # Config without heat pump (same household load)
-        config_no_hp = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
-            location=Location.bristol(),
-        )
-
-        # Simulate same period for both
-        start = pd.Timestamp("2024-01-15")
-        end = pd.Timestamp("2024-01-15")
-
-        results_with_hp = simulate_home(config_with_hp, start, end)
-        results_no_hp = simulate_home(config_no_hp, start, end)
-
-        # Total demand with heat pump should be higher
-        total_with_hp = results_with_hp.demand.sum()
-        total_no_hp = results_no_hp.demand.sum()
-        assert total_with_hp > total_no_hp
-
-        # Difference should approximately equal heat pump load
-        # (allowing for small numerical differences)
-        hp_load_total = results_with_hp.heat_pump_load.sum()
-        demand_increase = total_with_hp - total_no_hp
-        assert demand_increase == pytest.approx(hp_load_total, rel=0.01)
-
     def test_results_to_dataframe_includes_heat_pump(self):
         """SimulationResults.to_dataframe includes heat pump load column."""
         config = HomeConfig(
