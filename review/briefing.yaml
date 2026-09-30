@@ -6,7 +6,7 @@
 #
 # READ THIS FIRST — repo posture and known_gaps semantics for THIS project:
 #
-#   POSTURE (user-confirmed 2026-06-29): my-solar-challenge is now a
+#   POSTURE (user-confirmed 2026-06-29): solar-challenge is now a
 #   FEATURE-COMPLETE, FROZEN-API DOMAIN LIBRARY, and active FEATURE development
 #   has moved to a SEPARATE repo, `solar-challenge-platform` (project_id
 #   `solar_challenge_platform`), which imports this package pinned to a git tag.
