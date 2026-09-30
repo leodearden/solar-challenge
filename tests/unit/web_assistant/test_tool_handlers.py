@@ -90,11 +90,11 @@ class TestExplainMetric:
             ) from exc
 
     def test_all_known_metrics_have_both_keys(self) -> None:
-        """Every entry in _METRIC_TABLE has non-empty definition and uk_benchmark_band."""
-        from solar_challenge.web.assistant import _METRIC_TABLE
+        """Every entry in METRIC_TABLE has non-empty definition and uk_benchmark_band."""
+        from solar_challenge.web.assistant import METRIC_TABLE
 
-        assert _METRIC_TABLE, "Expected _METRIC_TABLE to be non-empty"
-        for name, entry in _METRIC_TABLE.items():
+        assert METRIC_TABLE, "Expected METRIC_TABLE to be non-empty"
+        for name, entry in METRIC_TABLE.items():
             assert "definition" in entry, f"Entry {name!r} missing 'definition'"
             assert "uk_benchmark_band" in entry, f"Entry {name!r} missing 'uk_benchmark_band'"
             assert entry["definition"], f"Entry {name!r} has empty definition"

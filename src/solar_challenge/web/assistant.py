@@ -16,7 +16,9 @@ gives the reason.
 
 import json
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Generator
 from uuid import uuid4
 
@@ -57,11 +59,11 @@ the numbers mean in practical terms (bill savings, self-sufficiency rates, etc.)
 
 # Maximum number of prior turns to replay to the model on each request;
 # prevents unbounded context growth and eventual context-window exhaustion.
-_MAX_HISTORY_TURNS = 20
+MAX_HISTORY_TURNS = 20
 
 # Maximum number of tool-use iterations per request; prevents a runaway model
 # from looping and streaming forever (hanging the single worker / test suite).
-_MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 10
 
 # ---------------------------------------------------------------------------
 # Grounded metric table — canonical UK benchmark bands
@@ -69,8 +71,8 @@ _MAX_TOOL_ITERATIONS = 10
 # explain_metric answers from this table so the model quotes these benchmark
 # numbers instead of hallucinating them.
 # ---------------------------------------------------------------------------
-_METRIC_TABLE: dict[str, dict[str, str]] = {
-    "self_consumption_ratio": {
+METRIC_TABLE: Mapping[str, Mapping[str, str]] = MappingProxyType({
+    "self_consumption_ratio": MappingProxyType({
         "definition": (
             "The fraction of PV generation that is consumed directly on-site "
             "(by the household or stored in the battery), rather than exported "
@@ -82,8 +84,8 @@ _METRIC_TABLE: dict[str, dict[str, str]] = {
             "With a 5–10 kWh battery: 55–70 %. "
             "Source: Solar Energy UK / BEIS smart export data 2022–2024."
         ),
-    },
-    "self_sufficiency": {
+    }),
+    "self_sufficiency": MappingProxyType({
         "definition": (
             "The fraction of total household electricity demand that is met by "
             "on-site PV generation and/or battery discharge, rather than imported "
@@ -94,8 +96,8 @@ _METRIC_TABLE: dict[str, dict[str, str]] = {
             "With a 5–10 kWh battery: 40–60 %. "
             "Source: EST / Solar Energy UK 2023 residential survey."
         ),
-    },
-    "solar_fraction": {
+    }),
+    "solar_fraction": MappingProxyType({
         "definition": (
             "The proportion of annual energy demand covered by solar PV (generation "
             "used on-site + battery discharge).  Equivalent to self-sufficiency when "
@@ -105,8 +107,8 @@ _METRIC_TABLE: dict[str, dict[str, str]] = {
             "20–60 % depending on system size and household demand profile; "
             "higher in summer-heavy usage patterns."
         ),
-    },
-    "grid_import": {
+    }),
+    "grid_import": MappingProxyType({
         "definition": (
             "Total electrical energy (kWh) drawn from the public grid over the "
             "simulation period, i.e. demand not met by on-site generation or battery."
@@ -115,8 +117,8 @@ _METRIC_TABLE: dict[str, dict[str, str]] = {
             "Ofgem TDCV benchmarks: low 1,900 kWh/yr, medium 2,700 kWh/yr, "
             "high 4,100 kWh/yr (net of solar for a typical 3-4 kWp system)."
         ),
-    },
-    "grid_export": {
+    }),
+    "grid_export": MappingProxyType({
         "definition": (
             "Total electrical energy (kWh) fed back into the public grid — "
             "generation surplus after self-consumption and battery charging. "
@@ -127,8 +129,8 @@ _METRIC_TABLE: dict[str, dict[str, str]] = {
             "With storage: 600–1,000 kWh/yr (more energy retained on-site). "
             "Source: MCS / BEIS SEG statistics 2023."
         ),
-    },
-    "battery_cycles": {
+    }),
+    "battery_cycles": MappingProxyType({
         "definition": (
             "The number of full equivalent charge-discharge cycles the battery "
             "completes over the simulation period.  One full cycle = discharging "
@@ -139,8 +141,8 @@ _METRIC_TABLE: dict[str, dict[str, str]] = {
             "Warranted life: typically 3,000–6,000 cycles (≈ 10–20 years at 1 cycle/day). "
             "Source: manufacturer datasheets (Tesla Powerwall, Givenergy, SolarEdge)."
         ),
-    },
-    "annual_consumption": {
+    }),
+    "annual_consumption": MappingProxyType({
         "definition": (
             "Total household electricity consumption (kWh) over a full year, "
             "covering all appliances, heating, and lighting."
@@ -149,8 +151,8 @@ _METRIC_TABLE: dict[str, dict[str, str]] = {
             "Ofgem Typical Domestic Consumption Values (TDCVs) 2023: "
             "low 1,900 kWh/yr, medium 2,900 kWh/yr, high 4,200 kWh/yr."
         ),
-    },
-    "pv_generation": {
+    }),
+    "pv_generation": MappingProxyType({
         "definition": (
             "Total AC electrical energy (kWh) produced by the PV array over the "
             "simulation period, after inverter losses."
@@ -160,8 +162,8 @@ _METRIC_TABLE: dict[str, dict[str, str]] = {
             "Bristol latitude (~51.5°N) typically 900–970 kWh/kWp/yr. "
             "Source: PVGIS TMY data, EC JRC."
         ),
-    },
-}
+    }),
+})
 
 
 def _normalize_metric_key(key: str) -> str:
@@ -184,12 +186,12 @@ def explain_metric(metric: str) -> dict[str, str]:
 
     Returns:
         ``{"definition": str, "uk_benchmark_band": str}`` — canonical entry from
-        ``_METRIC_TABLE``, or a graceful unknown-metric dict if not found.
+        ``METRIC_TABLE``, or a graceful unknown-metric dict if not found.
         Never raises.
     """
     key = _normalize_metric_key(metric)
-    if key in _METRIC_TABLE:
-        return dict(_METRIC_TABLE[key])
+    if key in METRIC_TABLE:
+        return dict(METRIC_TABLE[key])
     return {
         "definition": f"Metric '{metric}' is not recognised in the benchmark table.",
         "uk_benchmark_band": (
@@ -257,8 +259,11 @@ def suggest_config(
 # Tool definitions — fixed order for prompt-cache stability.  The tools render
 # ahead of the cached system block, so they belong to the cached prompt prefix;
 # any change in their order or content between requests misses the cache.
+# TOOLS is a tuple so its order cannot change at runtime.  Its entries stay
+# plain dicts: the SDK hands nested schema values to JSON encoding as they
+# are, and JSON encoding rejects read-only mappings.
 # ---------------------------------------------------------------------------
-_TOOLS: list[dict[str, Any]] = [
+TOOLS: Sequence[Mapping[str, Any]] = (
     # --- Advisory tools: answered in-process, no database or job access ---
     {
         "name": "explain_metric",
@@ -427,7 +432,7 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["n_homes"],
         },
     },
-]
+)
 
 
 def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any]:
@@ -665,7 +670,7 @@ def run_fleet_simulation(
     return {"run_id": run_id, "results_url": f"/results/fleet/{run_id}"}
 
 
-def _dispatch_tool(
+def dispatch_tool(
     name: str,
     tool_input: dict[str, Any],
     *,
@@ -710,7 +715,7 @@ def _dispatch_tool(
         return run_home_simulation(dict(tool_input), job_manager, db_path, data_dir)
     if name == "run_fleet_simulation":
         return run_fleet_simulation(dict(tool_input), job_manager, db_path, data_dir)
-    all_names = ", ".join(t["name"] for t in _TOOLS)
+    all_names = ", ".join(t["name"] for t in TOOLS)
     return {"error": f"Unknown tool '{name}'. Available tools: {all_names}."}
 
 
@@ -822,15 +827,15 @@ def chat() -> Response:
 
         # Build conversation history for the API.  The just-saved user turn is
         # intentionally included as the final message in the request.
-        # Cap to _MAX_HISTORY_TURNS to prevent unbounded context growth.
+        # Cap to MAX_HISTORY_TURNS to prevent unbounded context growth.
         all_turns = database.get_chat_history(db_path, sid)
         messages: list[dict[str, Any]] = [
             {"role": row["role"], "content": row["content"]}
-            for row in all_turns[-_MAX_HISTORY_TURNS:]
+            for row in all_turns[-MAX_HISTORY_TURNS:]
         ]
         # API invariant: the first message must be role=user and roles must
         # strictly alternate.  After the even-width tail-slice, the window can
-        # start on an assistant row once the history exceeds _MAX_HISTORY_TURNS.
+        # start on an assistant row once the history exceeds MAX_HISTORY_TURNS.
         # Drop any leading non-user turns to restore the invariant.
         while messages and messages[0]["role"] != "user":
             messages.pop(0)
@@ -869,7 +874,7 @@ def chat() -> Response:
             "max_tokens": 4096,
             "system": system_block,
             "messages": messages,
-            "tools": _TOOLS,
+            "tools": TOOLS,
         }
 
         accumulated = ""
@@ -877,11 +882,11 @@ def chat() -> Response:
         invoked_tools: list[str] = []
 
         try:
-            # Manual agentic loop — bounded by _MAX_TOOL_ITERATIONS so a
+            # Manual agentic loop — bounded by MAX_TOOL_ITERATIONS so a
             # runaway model cannot hang the single Flask worker or the test suite.
             # The manual loop is REQUIRED for per-token SSE streaming WITH tools:
             # the SDK tool_runner returns complete messages, not deltas.
-            for _iteration in range(_MAX_TOOL_ITERATIONS):
+            for _iteration in range(MAX_TOOL_ITERATIONS):
                 with client.messages.stream(**params) as stream:  # type: ignore[arg-type]
                     for text in stream.text_stream:
                         accumulated += text
@@ -937,7 +942,7 @@ def chat() -> Response:
                         )
 
                         # Dispatch to the handler and collect the result.
-                        tool_result = _dispatch_tool(
+                        tool_result = dispatch_tool(
                             block_name,
                             block_input,
                             db_path=db_path,
