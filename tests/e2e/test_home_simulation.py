@@ -63,21 +63,11 @@ def test_preset_selector_loads(page: Page, live_server: str) -> None:
 
 
 def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
-    """buildPayload() should include azimuth, tilt, battery charge/discharge
-    rates, efficiency, and stochastic flag.
+    """The body the form submits, built by buildPayload(), includes azimuth,
+    tilt, battery charge/discharge rates, efficiency, and stochastic flag.
     """
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-
-    # Wait for Alpine.js to fully initialise the component
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1500)
-
-    payload = page.evaluate("""() => {
-        const el = document.querySelector('[x-data="homeSimulator()"]');
-        const data = Alpine.$data(el);
-        return data.buildPayload();
-    }""")
+    payload = submit_two_day_run(page).request.post_data_json
 
     missing_keys = []
     for key in ("azimuth", "tilt", "max_charge_kw", "max_discharge_kw",
@@ -86,8 +76,8 @@ def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
             missing_keys.append(key)
 
     assert not missing_keys, (
-        f"buildPayload() is missing keys: {missing_keys}.  "
-        f"Payload keys returned: {sorted(payload.keys())}"
+        f"The submitted payload is missing keys: {missing_keys}.  "
+        f"Payload keys sent: {sorted(payload.keys())}"
     )
 
 
