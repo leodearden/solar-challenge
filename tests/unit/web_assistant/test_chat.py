@@ -488,7 +488,7 @@ class TestHistoryWindowAlternation:
     """The replayed messages window must always start with a user turn.
 
     After 11 complete exchanges (22 DB rows) the handler adds a 23rd user
-    row, then slices all_turns[-_MAX_HISTORY_TURNS:].  With _MAX_HISTORY_TURNS=20
+    row, then slices all_turns[-MAX_HISTORY_TURNS:].  With MAX_HISTORY_TURNS=20
     the tail starts at DB-row index 3 which is an assistant row — violating the
     Anthropic Messages API's "first message must be role=user" invariant.
     """
@@ -500,7 +500,7 @@ class TestHistoryWindowAlternation:
         app: Flask,
     ) -> None:
         """msgs[0]["role"] must be 'user' even when the tail starts on an assistant row."""
-        from solar_challenge.web.assistant import _MAX_HISTORY_TURNS
+        from solar_challenge.web.assistant import MAX_HISTORY_TURNS
         from solar_challenge.web.database import save_chat_message
 
         db_path = app.config["DATABASE"]
@@ -530,8 +530,8 @@ class TestHistoryWindowAlternation:
         )
 
         # Window must not exceed the cap
-        assert len(msgs) <= _MAX_HISTORY_TURNS, (
-            f"Expected <= {_MAX_HISTORY_TURNS} messages, got {len(msgs)}"
+        assert len(msgs) <= MAX_HISTORY_TURNS, (
+            f"Expected <= {MAX_HISTORY_TURNS} messages, got {len(msgs)}"
         )
 
         # Roles must strictly alternate throughout the window
