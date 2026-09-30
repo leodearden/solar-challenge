@@ -40,20 +40,10 @@ def test_fleet_distribution_type_select(page: Page, live_server: str) -> None:
 
 
 def test_fleet_export_yaml_button(page: Page, live_server: str) -> None:
-    """'Export YAML' button attached in DOM."""
+    """The fleet page shows an 'Export YAML' button."""
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
 
-    export_btn = page.locator("button", has_text="Export YAML")
-    if export_btn.count() == 0:
-        export_btn = page.locator("button", has_text="Download YAML")
-    if export_btn.count() == 0:
-        export_btn = page.locator("button", has_text="Export")
-
-    assert export_btn.count() > 0, (
-        "Expected an 'Export YAML' or 'Download YAML' button on fleet page"
-    )
-    expect(export_btn.first).to_be_attached()
+    expect(page.get_by_role("button", name="Export YAML", exact=True)).to_be_visible()
 
 
 # -- Simulation name reaches the submitted run -----------------------------
