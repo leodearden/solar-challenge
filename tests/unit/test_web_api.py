@@ -223,7 +223,7 @@ class TestSimulateHomeAPI:
     def test_home_form_battery_on_payload_returns_201(
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
-        """The payload the home form sends with the battery switch on is accepted."""
+        """A snapshot of home.html buildPayload() with the battery on and form defaults is accepted."""
         payload = {
             "pv_kw": 4.0,
             "azimuth": 180.0,
