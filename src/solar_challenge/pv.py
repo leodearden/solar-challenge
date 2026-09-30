@@ -209,7 +209,8 @@ def create_simple_inverter_params(
     capacity, output is clipped to the rated capacity. Its Sandia-form
     parameters read the DC voltage, so they suit a module with a voltage model
     such as the default CEC module; a create_simple_module_params module takes
-    the automatic PVWatts inverter instead.
+    the automatic PVWatts inverter instead, or the parameters that
+    create_pvwatts_inverter_params returns.
 
     Args:
         efficiency: Inverter efficiency as fraction (e.g., 0.96 for 96%)
@@ -236,6 +237,36 @@ def create_simple_inverter_params(
         "C3": 0.0,  # Coefficient for C1 formula
         "Pnt": 0.0,  # Night tare loss (watts)
         "efficiency": efficiency,  # Store for reference
+    }
+
+
+def create_pvwatts_inverter_params(
+    efficiency: float = 0.96,
+    capacity_w: float = 4000.0,
+) -> dict[str, float]:
+    """Create pvlib PVWatts inverter parameters from basic specifications.
+
+    pvlib's PVWatts inverter reads no DC voltage, so it is the inverter for a
+    create_simple_module_params module. When DC power exceeds the inverter's
+    capacity, output is clipped to capacity_w.
+
+    Args:
+        efficiency: Inverter nominal efficiency as fraction (e.g., 0.96 for 96%)
+        capacity_w: AC power capacity in watts
+
+    Returns:
+        Dict of inverter parameters compatible with pvlib PVWatts inverter model
+
+    Example:
+        >>> params = create_pvwatts_inverter_params(efficiency=0.97, capacity_w=5000)
+        >>> params['eta_inv_nom']
+        0.97
+    """
+    # pvlib caps AC output at eta_inv_nom x pdc0, so pdc0 is the DC power at
+    # which the inverter reaches capacity_w
+    return {
+        "pdc0": capacity_w / efficiency,
+        "eta_inv_nom": efficiency,
     }
 
 
@@ -367,11 +398,11 @@ _PVWATTS_MODULE_KEYS = frozenset({"pdc0", "gamma_pdc"})
 
 
 def _pvwatts_inverter(config: PVConfig) -> dict[str, float]:
-    """pvlib's PVWatts inverter at the configured AC capacity and nominal efficiency; it needs no DC voltage."""
-    return {
-        "pdc0": config.effective_inverter_capacity_kw * 1000 / config.inverter_efficiency,
-        "eta_inv_nom": config.inverter_efficiency,
-    }
+    """pvlib's PVWatts inverter at the configured AC capacity and nominal efficiency."""
+    return create_pvwatts_inverter_params(
+        efficiency=config.inverter_efficiency,
+        capacity_w=config.effective_inverter_capacity_kw * 1000,
+    )
 
 
 def _module_parameters(config: PVConfig) -> dict[str, float]:

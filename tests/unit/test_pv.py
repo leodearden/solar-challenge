@@ -13,6 +13,7 @@ from solar_challenge.pv import (
     calculate_degradation_factor,
     create_model_chain,
     create_pv_system,
+    create_pvwatts_inverter_params,
     create_simple_inverter_params,
     create_simple_module_params,
     interpolate_to_minute_resolution,
@@ -575,6 +576,14 @@ class TestConfigurableInverterParameters:
         assert params["Paco"] == 5000.0
         assert params["efficiency"] == 0.97
 
+    def test_create_pvwatts_inverter_params(self):
+        """create_pvwatts_inverter_params describes a PVWatts inverter that clips at capacity_w."""
+        params = create_pvwatts_inverter_params(efficiency=0.97, capacity_w=5000)
+        overload_w = 1.5 * params["pdc0"]
+
+        assert params["eta_inv_nom"] == 0.97
+        assert pvlib.inverter.pvwatts(overload_w, **params) == pytest.approx(5000.0)
+
     def test_custom_inverter_params_used_in_system(self):
         """Custom inverter parameters are used when creating PVSystem."""
         custom_params = create_simple_inverter_params(
@@ -843,11 +852,6 @@ class TestPVWattsModule:
         )
 
 
-def _pvwatts_inverter_params(ac_w: float, efficiency: float = 0.96) -> dict[str, float]:
-    """pvlib's documented PVWatts inverter form: AC output caps at eta_inv_nom x pdc0."""
-    return {"pdc0": ac_w / efficiency, "eta_inv_nom": efficiency}
-
-
 class TestInverterModelMatchesModuleModel:
     """pvlib's PVWatts inverter model takes only the PVWatts DC model's power; its Sandia and ADR inverter models read the DC voltage that PVWatts DC does not give.
 
@@ -870,7 +874,7 @@ class TestInverterModelMatchesModuleModel:
             pytest.param(
                 PVConfig(
                     capacity_kw=4.0,
-                    custom_inverter_params=_pvwatts_inverter_params(ac_w=4000.0),
+                    custom_inverter_params=create_pvwatts_inverter_params(capacity_w=4000.0),
                 ),
                 id="cec-module-with-pvwatts-inverter",
             ),
@@ -888,7 +892,7 @@ class TestInverterModelMatchesModuleModel:
         config = PVConfig(
             capacity_kw=4.0,
             custom_module_params=create_simple_module_params(),
-            custom_inverter_params=_pvwatts_inverter_params(ac_w=3000.0),
+            custom_inverter_params=create_pvwatts_inverter_params(capacity_w=3000.0),
         )
 
         peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_day).max()
