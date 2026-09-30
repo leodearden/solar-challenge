@@ -26,7 +26,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 
@@ -1517,21 +1517,33 @@ def generate_homes_from_distribution(
     return homes
 
 
-def _parse_seg_config(data: Optional[dict[str, Any]]) -> Optional[float]:
-    """Parse SEG (Smart Export Guarantee) configuration from config data.
+def _parse_seg_config(data: object, *, block_path: str = "seg") -> Optional[float]:
+    """Read the SEG export rate in pence/kWh from a ``seg:`` block.
 
-    Args:
-        data: SEG config dict with 'rate_pence_per_kwh', or None
-
-    Returns:
-        SEG tariff rate in pence per kWh, or None if not configured
+    The block names exactly one of a :data:`~solar_challenge.seg.SEG_PRESETS`
+    ``preset`` or a non-negative ``rate_pence_per_kwh``.  ``None`` means no SEG;
+    any other shape raises :exc:`ConfigurationError` naming *block_path*.
     """
     if data is None:
         return None
-    rate = data.get("rate_pence_per_kwh")
-    if rate is None:
-        return None
-    return float(rate)
+    if not isinstance(data, dict):
+        raise ConfigurationError(
+            f"'{block_path}' must be a mapping with 'preset' or "
+            f"'rate_pence_per_kwh', got {data!r}"
+        )
+    if ("preset" in data) == ("rate_pence_per_kwh" in data):
+        raise ConfigurationError(
+            f"'{block_path}' must specify exactly one of 'preset' or "
+            f"'rate_pence_per_kwh', got {data!r}"
+        )
+    try:
+        if "preset" in data:
+            tariff = resolve_seg_tariff(data["preset"])
+        else:
+            tariff = SEGTariff(name="", rate_pence_per_kwh=float(data["rate_pence_per_kwh"]))
+    except (ValueError, TypeError) as exc:
+        raise ConfigurationError(f"'{block_path}' block {data!r} is invalid: {exc}") from exc
+    return tariff.rate_pence_per_kwh
 
 
 def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConfig]:
@@ -2277,7 +2289,7 @@ def _parse_community_billing_config(
         ``CommunityBillingConfig`` when *data* is a dict; ``None`` otherwise.
 
     Raises:
-        ConfigurationError: For ambiguous SEG specification or unknown preset.
+        ConfigurationError: For an ambiguous SEG specification or a malformed ``seg`` block.
     """
     if data is None:
         return None
@@ -2297,33 +2309,11 @@ def _parse_community_billing_config(
             "or 'seg' block — not both."
         )
 
-    seg_rate: Optional[float] = None
-    if direct_rate is not None:
-        seg_rate = direct_rate
-    elif seg_block is not None:
-        # Guard: seg must be a mapping, not a bare scalar/string
-        if not isinstance(seg_block, dict):
-            raise ConfigurationError(
-                "community billing: 'seg' must be a mapping with 'preset' or "
-                "'rate_pence_per_kwh', not a bare scalar."
-            )
-        if "preset" in seg_block:
-            # Reject ambiguous combination of preset + explicit rate
-            if "rate_pence_per_kwh" in seg_block:
-                raise ConfigurationError(
-                    "community billing: 'seg' block must specify either 'preset' "
-                    "or 'rate_pence_per_kwh' — not both."
-                )
-            preset_name = seg_block["preset"]
-            if preset_name not in SEG_PRESETS:
-                available = ", ".join(sorted(SEG_PRESETS))
-                raise ConfigurationError(
-                    f"Unknown SEG preset {preset_name!r}. "
-                    f"Available presets: {available}"
-                )
-            seg_rate = SEG_PRESETS[preset_name].rate_pence_per_kwh
-        else:
-            seg_rate = _parse_seg_config(seg_block)
+    seg_rate = (
+        direct_rate
+        if direct_rate is not None
+        else _parse_seg_config(seg_block, block_path="community.billing.seg")
+    )
 
     # Normalise an all-None result to None so callers can reliably test ``is None``
     # for "no billing configured" without distinguishing an empty block from an
