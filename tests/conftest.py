@@ -39,9 +39,9 @@ def _shutdown_job_managers() -> Generator[None, None, None]:
 
     Autouse fixtures are set up after every broader-scoped fixture and before
     the other fixtures of their own scope. So a manager owned by a
-    broader-scoped fixture (e.g. tests/e2e/conftest.py::live_server) already
-    exists at setup and stays running for later tests; the fixture that owns
-    it must shut it down in its own teardown.
+    broader-scoped fixture (e.g. tests/e2e/conftest.py::_e2e_job_manager)
+    already exists at setup and stays running for later tests; the fixture
+    that owns it must shut it down in its own teardown.
 
     The web jobs module is looked up in sys.modules, never imported, so runs
     that never touch the web stack never load it.
