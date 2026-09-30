@@ -1,12 +1,16 @@
 """End-to-end tests for History page interactive features (/history/runs).
 
 Verifies search filtering, type dropdown filtering, multi-select compare,
-delete confirmation, inline rename, and pagination controls.
+delete confirmation, inline rename, pagination controls, and that a late
+superseded list request cannot replace search results.
 Uses seeded data fixtures.
 """
 
+from collections.abc import Callable
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page, Route, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -187,3 +191,49 @@ def test_pagination_controls_exist(
 
     expect(prev_btn.first).to_be_attached()
     expect(next_btn.first).to_be_attached()
+
+
+# -- Late superseded request does not replace search results ---------------
+
+
+def _is_unfiltered_runs_request(url: str) -> bool:
+    parts = urlsplit(url)
+    return parts.path == "/api/history/runs" and "q" not in parse_qs(parts.query)
+
+
+@pytest.mark.usefixtures("seeded_home_runs_pair")
+@pytest.mark.parametrize(
+    "settle_superseded_request",
+    [Route.continue_, Route.abort],
+    ids=["lands-late", "fails-late"],
+)
+def test_late_superseded_request_does_not_replace_search_results(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    settle_superseded_request: Callable[[Route], None],
+) -> None:
+    """The initial list request, answered or failed after the search's, leaves the search results showing.
+
+    The seeded pair puts runs the search excludes in the unfiltered list, so a stale list is observable.
+    """
+    run_id, run_name = seeded_home_run
+    held_requests: list[Route] = []
+
+    def hold(route: Route) -> None:
+        held_requests.append(route)
+
+    page.route(_is_unfiltered_runs_request, hold)
+    page.goto(live_server + "/history/runs")
+    page.get_by_label("Search", exact=True).fill(run_name)
+
+    result_links = page.get_by_role("link", name="View results")
+    expect(result_links).to_have_count(1)
+
+    (superseded_request,) = held_requests
+    settle_superseded_request(superseded_request)
+    # networkidle cannot fire while the held request is in flight, and fires 500 ms after it settles
+    page.wait_for_load_state("networkidle")
+
+    expect(result_links).to_have_count(1)
+    expect(result_links).to_have_attribute("href", f"/results/home/{run_id}")
