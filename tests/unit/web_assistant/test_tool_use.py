@@ -50,7 +50,7 @@ def anthropic_api(monkeypatch: pytest.MonkeyPatch) -> FakeAnthropic:
 
 
 class TestToolSurface:
-    """Tests for TOOLS list and dispatch_tool router."""
+    """Tests for the TOOLS surface and the dispatch_tool router."""
 
     def test_tools_fixed_order_for_cache_stability(self) -> None:
         """TOOLS names its tools in one fixed order, which keeps the cached prompt prefix stable."""

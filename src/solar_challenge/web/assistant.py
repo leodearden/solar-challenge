@@ -18,6 +18,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Generator
 from uuid import uuid4
 
@@ -70,8 +71,8 @@ MAX_TOOL_ITERATIONS = 10
 # explain_metric answers from this table so the model quotes these benchmark
 # numbers instead of hallucinating them.
 # ---------------------------------------------------------------------------
-METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
-    "self_consumption_ratio": {
+METRIC_TABLE: Mapping[str, Mapping[str, str]] = MappingProxyType({
+    "self_consumption_ratio": MappingProxyType({
         "definition": (
             "The fraction of PV generation that is consumed directly on-site "
             "(by the household or stored in the battery), rather than exported "
@@ -83,8 +84,8 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
             "With a 5–10 kWh battery: 55–70 %. "
             "Source: Solar Energy UK / BEIS smart export data 2022–2024."
         ),
-    },
-    "self_sufficiency": {
+    }),
+    "self_sufficiency": MappingProxyType({
         "definition": (
             "The fraction of total household electricity demand that is met by "
             "on-site PV generation and/or battery discharge, rather than imported "
@@ -95,8 +96,8 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
             "With a 5–10 kWh battery: 40–60 %. "
             "Source: EST / Solar Energy UK 2023 residential survey."
         ),
-    },
-    "solar_fraction": {
+    }),
+    "solar_fraction": MappingProxyType({
         "definition": (
             "The proportion of annual energy demand covered by solar PV (generation "
             "used on-site + battery discharge).  Equivalent to self-sufficiency when "
@@ -106,8 +107,8 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
             "20–60 % depending on system size and household demand profile; "
             "higher in summer-heavy usage patterns."
         ),
-    },
-    "grid_import": {
+    }),
+    "grid_import": MappingProxyType({
         "definition": (
             "Total electrical energy (kWh) drawn from the public grid over the "
             "simulation period, i.e. demand not met by on-site generation or battery."
@@ -116,8 +117,8 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
             "Ofgem TDCV benchmarks: low 1,900 kWh/yr, medium 2,700 kWh/yr, "
             "high 4,100 kWh/yr (net of solar for a typical 3-4 kWp system)."
         ),
-    },
-    "grid_export": {
+    }),
+    "grid_export": MappingProxyType({
         "definition": (
             "Total electrical energy (kWh) fed back into the public grid — "
             "generation surplus after self-consumption and battery charging. "
@@ -128,8 +129,8 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
             "With storage: 600–1,000 kWh/yr (more energy retained on-site). "
             "Source: MCS / BEIS SEG statistics 2023."
         ),
-    },
-    "battery_cycles": {
+    }),
+    "battery_cycles": MappingProxyType({
         "definition": (
             "The number of full equivalent charge-discharge cycles the battery "
             "completes over the simulation period.  One full cycle = discharging "
@@ -140,8 +141,8 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
             "Warranted life: typically 3,000–6,000 cycles (≈ 10–20 years at 1 cycle/day). "
             "Source: manufacturer datasheets (Tesla Powerwall, Givenergy, SolarEdge)."
         ),
-    },
-    "annual_consumption": {
+    }),
+    "annual_consumption": MappingProxyType({
         "definition": (
             "Total household electricity consumption (kWh) over a full year, "
             "covering all appliances, heating, and lighting."
@@ -150,8 +151,8 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
             "Ofgem Typical Domestic Consumption Values (TDCVs) 2023: "
             "low 1,900 kWh/yr, medium 2,900 kWh/yr, high 4,200 kWh/yr."
         ),
-    },
-    "pv_generation": {
+    }),
+    "pv_generation": MappingProxyType({
         "definition": (
             "Total AC electrical energy (kWh) produced by the PV array over the "
             "simulation period, after inverter losses."
@@ -161,8 +162,8 @@ METRIC_TABLE: Mapping[str, Mapping[str, str]] = {
             "Bristol latitude (~51.5°N) typically 900–970 kWh/kWp/yr. "
             "Source: PVGIS TMY data, EC JRC."
         ),
-    },
-}
+    }),
+})
 
 
 def _normalize_metric_key(key: str) -> str:
@@ -258,8 +259,11 @@ def suggest_config(
 # Tool definitions — fixed order for prompt-cache stability.  The tools render
 # ahead of the cached system block, so they belong to the cached prompt prefix;
 # any change in their order or content between requests misses the cache.
+# TOOLS is a tuple so its order cannot change at runtime.  Its entries stay
+# plain dicts: the SDK hands nested schema values to JSON encoding as they
+# are, and JSON encoding rejects read-only mappings.
 # ---------------------------------------------------------------------------
-TOOLS: Sequence[Mapping[str, Any]] = [
+TOOLS: Sequence[Mapping[str, Any]] = (
     # --- Advisory tools: answered in-process, no database or job access ---
     {
         "name": "explain_metric",
@@ -428,7 +432,7 @@ TOOLS: Sequence[Mapping[str, Any]] = [
             "required": ["n_homes"],
         },
     },
-]
+)
 
 
 def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any]:
