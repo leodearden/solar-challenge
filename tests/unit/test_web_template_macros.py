@@ -12,7 +12,9 @@ _ENV = Environment(loader=_LOADER)
 MACRO_LIBRARIES = ["components/macros.html"]
 
 
-def _parse_templates() -> dict[str, nodes.Template]:
+@pytest.fixture(scope="module")
+def templates() -> dict[str, nodes.Template]:
+    """Every dashboard template parsed once, shared by all the checks below."""
     trees: dict[str, nodes.Template] = {}
     for name in _ENV.list_templates(extensions=["html"]):
         source, _, _ = _LOADER.get_source(_ENV, name)
@@ -48,6 +50,12 @@ def _called_names(tree: nodes.Template) -> set[str]:
     }
 
 
+def _called_library_macros(tree: nodes.Template, library: str) -> set[str]:
+    """Macros of ``library`` the template imports by name and calls."""
+    called = _called_names(tree)
+    return {macro for macro, local in _imports_from(tree, library) if local in called}
+
+
 def _defined_macros(tree: nodes.Template) -> set[str]:
     return {macro.name for macro in tree.find_all(nodes.Macro)}
 
@@ -63,8 +71,9 @@ def _bound_names(tree: nodes.Template) -> set[str]:
 
 
 @pytest.mark.parametrize("library", MACRO_LIBRARIES)
-def test_templates_import_exactly_the_library_macros_they_call(library: str) -> None:
-    templates = _parse_templates()
+def test_templates_import_exactly_the_library_macros_they_call(
+    templates: dict[str, nodes.Template], library: str
+) -> None:
     defined = _defined_macros(templates[library])
 
     mismatches: dict[str, dict[str, list[str]]] = {}
@@ -84,14 +93,14 @@ def test_templates_import_exactly_the_library_macros_they_call(library: str) -> 
 
 
 @pytest.mark.parametrize("library", MACRO_LIBRARIES)
-def test_every_library_macro_is_called_by_some_template(library: str) -> None:
-    templates = _parse_templates()
+def test_every_library_macro_is_called_by_some_template(
+    templates: dict[str, nodes.Template], library: str
+) -> None:
     defined = _defined_macros(templates[library])
     called_somewhere = {
         macro
         for tree in templates.values()
-        for macro, local in _imports_from(tree, library)
-        if local in _called_names(tree)
+        for macro in _called_library_macros(tree, library)
     }
 
     assert sorted(defined - called_somewhere) == [], (
