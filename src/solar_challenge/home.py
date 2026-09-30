@@ -199,7 +199,11 @@ def simulate_home(
         start_date: Start of simulation period
         end_date: End of simulation period (inclusive)
         validate_balance: Whether to validate energy balance each timestep
-        weather_data: Pre-fetched weather data (optional, will fetch if None)
+        weather_data: One TMY year of hourly weather, as get_tmy_data returns;
+            fetched for config.location when None. A heat pump's
+            annual_heat_demand_kwh is shared out over the heating
+            degree-minutes of the air temperature across this whole year,
+            so weather shorter than a year is treated as the whole year.
 
     Returns:
         SimulationResults with all time series at 1-minute resolution
@@ -230,23 +234,14 @@ def simulate_home(
     # Generate and add heat pump load if configured
     heat_pump_load_series: Optional[pd.Series] = None
     if config.heat_pump_config is not None:
-        # Extract temperature from weather data
         hourly_temperature = weather_data["temp_air"]
-
-        # Interpolate to 1-minute resolution
         minute_temperature = interpolate_to_minute_resolution(hourly_temperature)
-
-        # Align temperature to demand index (same as generation alignment)
         aligned_temperature = _align_tmy_to_demand(minute_temperature, minute_demand)
-
-        # Generate heat pump electrical load
         heat_pump_load_series = generate_heat_pump_load(
             config.heat_pump_config,
             aligned_temperature,
-            annual_temperature_c=aligned_temperature,
+            annual_temperature_c=minute_temperature,
         )
-
-        # Add heat pump load to household demand
         minute_demand = minute_demand + heat_pump_load_series
 
     aligned_generation = _align_tmy_to_demand(minute_generation, minute_demand)
