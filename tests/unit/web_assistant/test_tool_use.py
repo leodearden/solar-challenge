@@ -171,9 +171,9 @@ class TestToolUseLoop:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """stream() called twice; 2nd call's messages[-1] contains the canonical band string."""
-        from solar_challenge.web.assistant import _METRIC_TABLE
+        from solar_challenge.web.assistant import METRIC_TABLE
         TOOL_ID = "toolu_explain_002"
-        CANONICAL_BAND = _METRIC_TABLE["self_consumption_ratio"]["uk_benchmark_band"]
+        CANONICAL_BAND = METRIC_TABLE["self_consumption_ratio"]["uk_benchmark_band"]
 
         anthropic_api.set_streams([
             make_tool_use_stream(TOOL_ID, "explain_metric", {"metric": "self_consumption_ratio"}),
