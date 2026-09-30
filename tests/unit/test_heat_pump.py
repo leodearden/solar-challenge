@@ -1,8 +1,11 @@
 """Tests for heat pump configuration and modelling."""
 
+import doctest
+
 import numpy as np
 import pandas as pd
 import pytest
+import solar_challenge.heat_pump
 from solar_challenge.heat_pump import (
     HeatPumpConfig,
     BASE_TEMPERATURE_C,
@@ -273,6 +276,42 @@ class TestCalculateHeatingDegreeMinutes:
         assert (degree_mins >= 0).all()
 
 
+def _utc_1990_minute_index() -> pd.DatetimeIndex:
+    """The minutes of a PVGIS TMY year once interpolated to 1-minute resolution."""
+    return pd.date_range("1990-01-01", periods=525_600, freq="1min", tz="UTC")
+
+
+def _days_at(temperature_c: float, first_day: str, days: int = 1) -> pd.Series:
+    """A constant temperature, minute by minute, over *days* whole Europe/London days from *first_day*."""
+    index = pd.date_range(first_day, periods=days * 1440, freq="1min", tz="Europe/London")
+    return pd.Series(temperature_c, index=index)
+
+
+@pytest.fixture(scope="module")
+def year_at_10c() -> pd.Series:
+    """A reference year at a constant 10 °C: 5.5 heating degree-minutes in every minute."""
+    return pd.Series(10.0, index=_utc_1990_minute_index())
+
+
+@pytest.fixture(scope="module")
+def seasonal_year() -> pd.Series:
+    """A reference year that swings with the seasons and with the time of day.
+
+    Its coldest minute is 0 °C at 03:00 on 15 January, its warmest 20 °C mid-afternoon in mid-July,
+    when only the small hours fall below the 15.5 °C base temperature.
+    """
+    index = _utc_1990_minute_index()
+    day_of_year_angle = 2 * np.pi * (index.dayofyear.to_numpy() - 15) / 365
+    minute_of_day_angle = 2 * np.pi * (index.hour.to_numpy() * 60 + index.minute.to_numpy() - 180) / 1440
+    return pd.Series(10.0 - 7.0 * np.cos(day_of_year_angle) - 3.0 * np.cos(minute_of_day_angle), index=index)
+
+
+@pytest.fixture(scope="module")
+def seasonal_year_load(seasonal_year) -> pd.Series:
+    """The default ASHP's load over the whole of seasonal_year."""
+    return generate_heat_pump_load(HeatPumpConfig.default_ashp(), seasonal_year, annual_temperature_c=seasonal_year)
+
+
 class TestGenerateHeatPumpLoad:
     """Test heat pump load profile generation."""
 
@@ -304,40 +343,40 @@ class TestGenerateHeatPumpLoad:
         temps = 19.0 + 3.0 * np.sin(np.linspace(0, 2*np.pi, 1440))
         return pd.Series(temps, index=index)
 
-    def test_returns_series_with_correct_index(self, ashp_config, winter_temps):
+    def test_returns_series_with_correct_index(self, ashp_config, winter_temps, year_at_10c):
         """Output has same index as input temperature."""
-        load = generate_heat_pump_load(ashp_config, winter_temps)
+        load = generate_heat_pump_load(ashp_config, winter_temps, annual_temperature_c=year_at_10c)
 
         assert isinstance(load, pd.Series)
         assert len(load) == len(winter_temps)
         assert load.index.equals(winter_temps.index)
 
-    def test_output_in_kw(self, ashp_config, winter_temps):
+    def test_output_in_kw(self, ashp_config, winter_temps, year_at_10c):
         """Output values are electrical power in kW."""
-        load = generate_heat_pump_load(ashp_config, winter_temps)
+        load = generate_heat_pump_load(ashp_config, winter_temps, annual_temperature_c=year_at_10c)
 
         # Typical domestic heat pump electrical load is 1-5 kW
         assert load.max() < 10.0  # Reasonable upper bound
         assert load.mean() > 0.1  # Non-trivial consumption in winter
 
-    def test_no_negative_values(self, ashp_config, winter_temps):
+    def test_no_negative_values(self, ashp_config, winter_temps, year_at_10c):
         """Output has no negative values."""
-        load = generate_heat_pump_load(ashp_config, winter_temps)
+        load = generate_heat_pump_load(ashp_config, winter_temps, annual_temperature_c=year_at_10c)
         assert (load >= 0).all()
 
-    def test_summer_has_zero_load(self, ashp_config, summer_temps):
+    def test_summer_has_zero_load(self, ashp_config, summer_temps, year_at_10c):
         """Summer temperatures above base temp produce zero load."""
-        load = generate_heat_pump_load(ashp_config, summer_temps)
+        load = generate_heat_pump_load(ashp_config, summer_temps, annual_temperature_c=year_at_10c)
         # All temperatures above base, so no heating needed
         assert load.sum() == 0.0
 
-    def test_winter_has_positive_load(self, ashp_config, winter_temps):
+    def test_winter_has_positive_load(self, ashp_config, winter_temps, year_at_10c):
         """Winter temperatures below base temp produce positive load."""
-        load = generate_heat_pump_load(ashp_config, winter_temps)
+        load = generate_heat_pump_load(ashp_config, winter_temps, annual_temperature_c=year_at_10c)
         assert load.sum() > 0.0
         assert load.max() > 0.0
 
-    def test_colder_weather_higher_load(self, ashp_config):
+    def test_colder_weather_higher_load(self, ashp_config, year_at_10c):
         """Colder weather produces higher electrical load."""
         # Very cold day
         cold_index = pd.date_range("2024-01-15", periods=1440, freq="1min", tz="UTC")
@@ -347,28 +386,30 @@ class TestGenerateHeatPumpLoad:
         mild_index = pd.date_range("2024-03-15", periods=1440, freq="1min", tz="UTC")
         mild_temps = pd.Series([10.0] * 1440, index=mild_index)
 
-        cold_load = generate_heat_pump_load(ashp_config, cold_temps)
-        mild_load = generate_heat_pump_load(ashp_config, mild_temps)
+        cold_load = generate_heat_pump_load(ashp_config, cold_temps, annual_temperature_c=year_at_10c)
+        mild_load = generate_heat_pump_load(ashp_config, mild_temps, annual_temperature_c=year_at_10c)
 
         # Cold day should have higher average load
         assert cold_load.mean() > mild_load.mean()
 
-    def test_capacity_limiting(self, winter_temps):
-        """Load is capped at thermal capacity / COP."""
-        # Use very high annual demand to test capacity limiting
+    def test_capacity_limiting(self, year_at_10c):
+        """Heat is capped at the thermal capacity.
+
+        Each minute of a -5 °C day would get 8.51 kW of heat from 20,000 kWh a year shared over a 10 °C year,
+        more than the 5 kW capacity, so it draws 5 kW / COP.
+        """
         config = HeatPumpConfig(
             heat_pump_type="ASHP",
-            thermal_capacity_kw=5.0,  # Small capacity
-            annual_heat_demand_kwh=20000.0  # High demand
+            thermal_capacity_kw=5.0,
+            annual_heat_demand_kwh=20000.0,
         )
-        load = generate_heat_pump_load(config, winter_temps)
+        day_at_minus_5c = _days_at(-5.0, "2025-01-15")
 
-        # Electrical load should not exceed thermal_capacity / COP_min
-        # With ASHP_COP_MIN = 1.8, max electrical load ≈ 5.0 / 1.8 ≈ 2.78 kW
-        max_theoretical = config.thermal_capacity_kw / ASHP_COP_MIN
-        assert load.max() <= max_theoretical * 1.01  # Small tolerance
+        load = generate_heat_pump_load(config, day_at_minus_5c, annual_temperature_c=year_at_10c)
 
-    def test_gshp_vs_ashp_efficiency(self):
+        pd.testing.assert_series_equal(load, pd.Series(5.0 / calculate_cop("ASHP", -5.0), index=day_at_minus_5c.index))
+
+    def test_gshp_vs_ashp_efficiency(self, year_at_10c):
         """GSHP uses less electricity than ASHP for same thermal output."""
         # Cold weather where COP difference is significant
         index = pd.date_range("2024-01-15", periods=1440, freq="1min", tz="UTC")
@@ -385,55 +426,130 @@ class TestGenerateHeatPumpLoad:
             annual_heat_demand_kwh=8000.0
         )
 
-        ashp_load = generate_heat_pump_load(ashp_config, temps)
-        gshp_load = generate_heat_pump_load(gshp_config, temps)
+        ashp_load = generate_heat_pump_load(ashp_config, temps, annual_temperature_c=year_at_10c)
+        gshp_load = generate_heat_pump_load(gshp_config, temps, annual_temperature_c=year_at_10c)
 
         # GSHP should use less electricity due to higher COP
         assert gshp_load.sum() < ashp_load.sum()
 
-    def test_requires_datetime_index(self, ashp_config):
+    def test_requires_datetime_index(self, ashp_config, year_at_10c):
         """Raises error if temperature doesn't have DatetimeIndex."""
         temps = pd.Series([10.0, 12.0, 14.0])  # No DatetimeIndex
 
         with pytest.raises(ValueError, match="DatetimeIndex"):
-            generate_heat_pump_load(ashp_config, temps)
+            generate_heat_pump_load(ashp_config, temps, annual_temperature_c=year_at_10c)
 
-    def test_requires_timezone_aware_index(self, ashp_config):
+    def test_requires_timezone_aware_index(self, ashp_config, year_at_10c):
         """Raises error if index is not timezone-aware."""
         index = pd.date_range("2024-01-15", periods=1440, freq="1min")  # No tz
         temps = pd.Series([10.0] * 1440, index=index)
 
         with pytest.raises(ValueError, match="timezone-aware"):
-            generate_heat_pump_load(ashp_config, temps)
+            generate_heat_pump_load(ashp_config, temps, annual_temperature_c=year_at_10c)
 
-    def test_multi_day_profile(self, ashp_config):
+    def test_multi_day_profile(self, ashp_config, year_at_10c):
         """Generates profile for multiple days."""
         # 3 days of cold winter weather
         index = pd.date_range("2024-01-15", periods=3*1440, freq="1min", tz="UTC")
         temps = pd.Series([5.0] * (3*1440), index=index)
 
-        load = generate_heat_pump_load(ashp_config, temps)
+        load = generate_heat_pump_load(ashp_config, temps, annual_temperature_c=year_at_10c)
 
         assert len(load) == 3 * 1440
         assert load.sum() > 0.0
 
-    def test_load_respects_annual_demand_parameter(self):
-        """Load generation respects the annual_heat_demand_kwh parameter."""
-        # Verify that the annual demand parameter affects the output
-        index = pd.date_range("2024-01-15", periods=1440, freq="1min", tz="UTC")
-        temps = pd.Series([10.0] * 1440, index=index)  # Constant mild temp
 
+class TestGenerateHeatPumpLoadSharesTheAnnualHeatDemand:
+    """Each minute gets the annual heat demand in proportion to its share of the reference year's heating degree-minutes.
+
+    Delivered heat is recovered from the electrical load as load × COP.
+    """
+
+    @pytest.mark.parametrize("days", [1, 30])
+    def test_a_window_gets_its_days_share_of_a_constant_years_heat(self, days, year_at_10c):
         config = HeatPumpConfig(
             heat_pump_type="ASHP",
             thermal_capacity_kw=20.0,
-            annual_heat_demand_kwh=8000.0
+            annual_heat_demand_kwh=12000.0,
+        )
+        window = _days_at(10.0, "2025-01-15", days)
+
+        load = generate_heat_pump_load(config, window, annual_temperature_c=year_at_10c)
+
+        heat_delivered_kwh = (load * calculate_cop("ASHP", 10.0)).sum() / 60
+        assert heat_delivered_kwh == pytest.approx(days * 12000.0 / 365)
+
+    @pytest.mark.parametrize(
+        ("first_minute", "last_minute"),
+        [
+            pytest.param("1990-01-15", "1990-01-15 23:59", id="one-january-day"),
+            pytest.param("1990-01-01", "1990-01-30 23:59", id="thirty-january-days"),
+            pytest.param("1990-07-15", "1990-07-15 23:59", id="one-july-day"),
+        ],
+    )
+    def test_a_window_draws_the_same_load_as_those_minutes_of_the_full_year_run(
+        self, first_minute, last_minute, seasonal_year, seasonal_year_load
+    ):
+        window = seasonal_year.loc[first_minute:last_minute]
+
+        load = generate_heat_pump_load(HeatPumpConfig.default_ashp(), window, annual_temperature_c=seasonal_year)
+
+        pd.testing.assert_series_equal(load, seasonal_year_load.loc[first_minute:last_minute])
+
+    def test_a_summer_day_with_one_cool_hour_draws_only_that_hours_share(self, year_at_10c):
+        summer_day = _days_at(20.0, "2025-07-15")
+        summer_day.iloc[180:240] = 14.5
+
+        load = generate_heat_pump_load(HeatPumpConfig.default_ashp(), summer_day, annual_temperature_c=year_at_10c)
+
+        year_heating_degree_minutes = 5.5 * 525_600
+        cool_hour_heating_degree_minutes = 1.0 * 60
+        cool_hour_heat_kwh = 8000.0 * cool_hour_heating_degree_minutes / year_heating_degree_minutes
+        assert load.sum() / 60 == pytest.approx(cool_hour_heat_kwh / calculate_cop("ASHP", 14.5))
+
+    def test_a_year_that_never_needs_heating_gives_no_load(self):
+        year_at_20c = pd.Series(20.0, index=_utc_1990_minute_index())
+        day_at_0c = _days_at(0.0, "2025-01-15")
+
+        load = generate_heat_pump_load(HeatPumpConfig.default_ashp(), day_at_0c, annual_temperature_c=year_at_20c)
+
+        pd.testing.assert_series_equal(load, pd.Series(0.0, index=day_at_0c.index))
+
+
+class TestGenerateHeatPumpLoadWarnsWhenTheReferenceIsNotAYear:
+    """annual_temperature_c must be one year of minutes, 365 or 366 days; anything else is shared out with a warning."""
+
+    @pytest.mark.parametrize(
+        ("rows", "freq"),
+        [
+            pytest.param(1440, "1min", id="one-day-of-minutes"),
+            pytest.param(8760, "1h", id="an-hourly-year"),
+            pytest.param(2 * 525_600, "1min", id="two-years-of-minutes"),
+        ],
+    )
+    def test_a_reference_that_is_not_a_year_of_minutes_warns_with_its_length(self, rows, freq):
+        reference = pd.Series(10.0, index=pd.date_range("1990-01-01", periods=rows, freq=freq, tz="UTC"))
+
+        with pytest.warns(UserWarning, match=f"annual_temperature_c has {rows:,} rows"):
+            generate_heat_pump_load(
+                HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
+            )
+
+    @pytest.mark.filterwarnings("error::UserWarning")
+    @pytest.mark.parametrize("days", [365, 366])
+    def test_a_reference_of_a_whole_year_of_minutes_does_not_warn(self, days):
+        reference = pd.Series(10.0, index=pd.date_range("1992-01-01", periods=days * 1440, freq="1min", tz="UTC"))
+
+        generate_heat_pump_load(
+            HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
         )
 
-        load = generate_heat_pump_load(config, temps)
 
-        # Verify load is generated (non-zero, since 10°C < 15.5°C base temp)
-        assert load.sum() > 0.0
+class TestHeatPumpDocstringExamples:
+    """The examples in solar_challenge.heat_pump's docstrings run and hold."""
 
-        # Verify load values are reasonable (not all zeros or all maxed out)
-        assert load.mean() > 0.0
-        assert load.max() < config.thermal_capacity_kw / ASHP_COP_MIN
+    def test_every_example_holds(self):
+        failed, attempted = doctest.testmod(solar_challenge.heat_pump, verbose=False)
+
+        assert attempted > 0
+        assert failed == 0
