@@ -887,7 +887,7 @@ def chat() -> Response:
             # The manual loop is REQUIRED for per-token SSE streaming WITH tools:
             # the SDK tool_runner returns complete messages, not deltas.
             for _iteration in range(MAX_TOOL_ITERATIONS):
-                with client.messages.stream(**params) as stream:  # type: ignore[arg-type]
+                with client.messages.stream(**params) as stream:
                     for text in stream.text_stream:
                         accumulated += text
                         yield f"event: delta\ndata: {json.dumps({'text': text})}\n\n"
