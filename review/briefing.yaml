@@ -32,7 +32,7 @@
 #   still surface them as findings (they are real work-to-do, not excused
 #   omissions). Confirmed correctness risks are encoded as conventions-with-teeth.
 
-project: my-solar-challenge   # canonical orchestrator project_id: my_solar_challenge
+project: solar-challenge   # canonical orchestrator project_id: solar_challenge (repo renamed from my-solar-challenge on 2026-07-08)
 # NOTE: this repo is a single Python package (src/solar_challenge) with one
 # pyproject.toml. It is split below into THREE LOGICAL subprojects — the physics
 # simulation core, the finance/economics layer, and the web dashboard — purely to
@@ -119,9 +119,11 @@ conventions:
       "tidy" any of this away.
 
   - rule: >
-      Downstream consumers depend on this library via a git+file dependency pinned to a TAG
-      (`solar-challenge @ git+file:///…@solar-challenge-vX.Y.Z`), never an editable path; the
-      consumer's pyproject.toml and uv.lock are committed together and a pin bump is a reviewed commit.
+      Downstream consumers depend on this library pinned to a release TAG, never an editable path,
+      exactly as docs/domain-library-consumption.md prescribes. That recipe is the single statement
+      of the dependency line and the release steps, and it must name the same git remote that
+      solar-challenge-platform actually pins. The consumer's pyproject.toml and uv.lock are
+      committed together, and a pin bump is a reviewed commit.
     why: >
       An editable/path dependency resolves the live main checkout shared by every worktree, so a
       sim `main` merge would change bytes underneath all in-flight consumer worktrees (flaky
