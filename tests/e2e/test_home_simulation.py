@@ -5,8 +5,10 @@ detects Bug B4 (buildPayload missing form fields), and checks that the
 server accepts what the form submits with the battery switch on.
 """
 
+from dataclasses import dataclass
+
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page, Response, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -89,30 +91,112 @@ def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
     )
 
 
-# ── Battery-on submission is accepted by the server ──────────────────
+# ── Submissions with optional settings on are accepted by the server ────
 
 
-def test_battery_on_form_submission_is_accepted(page: Page, live_server: str) -> None:
-    """Run with the battery switch on: /api/simulate/home accepts what the form sends (201)."""
-    page.goto(live_server + "/simulate/home")
-    page.get_by_role("tab", name="Battery", exact=True).click()
-    battery_switch = page.get_by_role("switch", name="Enable Battery", exact=True)
-    battery_switch.click()
-    expect(battery_switch).to_be_checked()
+def _switch_on(page: Page, tab: str, switch_name: str) -> None:
+    page.get_by_role("tab", name=tab, exact=True).click()
+    switch = page.get_by_role("switch", name=switch_name, exact=True)
+    switch.click()
+    expect(switch).to_be_checked()
 
+
+def _submit_one_day_run(page: Page) -> Response:
+    """Submit the form for a one-day run and return the server's answer."""
     # No preset button is shorter than 7 days; one day keeps this submission's job short.
     page.evaluate("""() => {
         const el = document.querySelector('[x-data="homeSimulator()"]');
         Alpine.$data(el).formData.period_days = 1;
     }""")
-
     with page.expect_response("**/api/simulate/home") as submission:
         page.get_by_role("button", name="Run Simulation").click()
-    response = submission.value
+    return submission.value
+
+
+def test_battery_on_form_submission_is_accepted(page: Page, live_server: str) -> None:
+    """Run with the battery switch on: /api/simulate/home accepts what the form sends (201)."""
+    page.goto(live_server + "/simulate/home")
+    _switch_on(page, "Battery", "Enable Battery")
+    response = _submit_one_day_run(page)
 
     assert response.request.post_data_json["battery_kwh"] > 0, (
         "The submitted payload carries no battery, so the server never built one "
         "and a 201 would say nothing about the battery path."
+    )
+    assert response.status == 201, response.text()
+
+
+@dataclass(frozen=True)
+class _OptionalBlock:
+    """A block buildPayload() sends only while a switch is on, and the select that picks its variant."""
+
+    tab: str
+    switch_name: str
+    variant_select: str
+    payload_key: str
+    variant_key: str
+
+
+_HEAT_PUMP = _OptionalBlock(
+    "Heat Pump", "Enable Heat Pump", "#heat_pump_type", "heat_pump", "type"
+)
+_TARIFF = _OptionalBlock("Tariff", "Enable Tariff", "#tariff_type", "tariff", "type")
+_SEG = _OptionalBlock(
+    "Tariff", "Enable SEG Export Pricing", "#seg_preset", "seg", "preset"
+)
+_DISPATCH_STRATEGY = _OptionalBlock(
+    "Battery",
+    "Enable Battery",
+    "#dispatch_strategy_type",
+    "dispatch_strategy",
+    "strategy_type",
+)
+
+
+@pytest.mark.parametrize(
+    ("block", "variant"),
+    [
+        pytest.param(_HEAT_PUMP, "ASHP", id="heat_pump-ASHP"),
+        pytest.param(_HEAT_PUMP, "GSHP", id="heat_pump-GSHP"),
+        pytest.param(_TARIFF, "flat_rate", id="tariff-flat_rate"),
+        pytest.param(_TARIFF, "economy_7", id="tariff-economy_7"),
+        pytest.param(_TARIFF, "economy_10", id="tariff-economy_10"),
+        pytest.param(_SEG, "Octopus", id="seg-Octopus"),
+        pytest.param(_DISPATCH_STRATEGY, "tou_optimized", id="dispatch-tou_optimized"),
+        pytest.param(_DISPATCH_STRATEGY, "peak_shaving", id="dispatch-peak_shaving"),
+    ],
+)
+def test_optional_block_form_submission_is_accepted(
+    page: Page, live_server: str, block: _OptionalBlock, variant: str
+) -> None:
+    """Run with an optional block on and a variant picked: /api/simulate/home accepts what the form sends (201)."""
+    page.goto(live_server + "/simulate/home")
+    _switch_on(page, block.tab, block.switch_name)
+    page.locator(block.variant_select).select_option(value=variant)
+    response = _submit_one_day_run(page)
+
+    sent_block = response.request.post_data_json.get(block.payload_key) or {}
+    assert sent_block.get(block.variant_key) == variant, (
+        f"The submitted payload's {block.payload_key!r} block does not carry "
+        f"{block.variant_key}={variant!r}, so a 201 would say nothing about that variant."
+    )
+    assert response.status == 201, response.text()
+
+
+def test_seg_custom_rate_form_submission_is_accepted(
+    page: Page, live_server: str
+) -> None:
+    """Run with SEG export pricing on at a typed custom rate: /api/simulate/home accepts what the form sends (201)."""
+    page.goto(live_server + "/simulate/home")
+    _switch_on(page, _SEG.tab, _SEG.switch_name)
+    page.locator(_SEG.variant_select).select_option(value="custom")
+    page.locator("#seg_rate_pence_per_kwh").fill("5.5")
+    response = _submit_one_day_run(page)
+
+    sent_seg = response.request.post_data_json.get(_SEG.payload_key) or {}
+    assert sent_seg.get("rate_pence_per_kwh") == 5.5, (
+        "The submitted 'seg' block does not carry the typed custom rate, "
+        "so a 201 would say nothing about the custom-rate path."
     )
     assert response.status == 201, response.text()
 
