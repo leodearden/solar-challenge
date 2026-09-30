@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the tool-use path of the AI assistant's chat.
 
-That is the _TOOLS surface the chat offers the model, _dispatch_tool's routing to
+That is the TOOLS surface the chat offers the model, _dispatch_tool's routing to
 the handlers, and the tool-use loop in POST /assistant/chat that runs the model's
 tool calls.
 """
@@ -50,13 +50,13 @@ def anthropic_api(monkeypatch: pytest.MonkeyPatch) -> FakeAnthropic:
 
 
 class TestToolSurface:
-    """Tests for _TOOLS list and _dispatch_tool router."""
+    """Tests for TOOLS list and _dispatch_tool router."""
 
     def test_tools_fixed_order_for_cache_stability(self) -> None:
-        """_TOOLS names its tools in one fixed order, which keeps the cached prompt prefix stable."""
-        from solar_challenge.web.assistant import _TOOLS
+        """TOOLS names its tools in one fixed order, which keeps the cached prompt prefix stable."""
+        from solar_challenge.web.assistant import TOOLS
 
-        names = [t["name"] for t in _TOOLS]
+        names = [t["name"] for t in TOOLS]
         assert names == [
             "explain_metric",
             "suggest_config",
@@ -69,19 +69,19 @@ class TestToolSurface:
         )
 
     def test_every_tool_entry_has_required_keys(self) -> None:
-        """Every entry in _TOOLS has 'name', 'description', and 'input_schema'."""
-        from solar_challenge.web.assistant import _TOOLS
+        """Every entry in TOOLS has 'name', 'description', and 'input_schema'."""
+        from solar_challenge.web.assistant import TOOLS
 
-        for tool in _TOOLS:
+        for tool in TOOLS:
             assert "name" in tool, f"Missing 'name' in tool: {tool}"
             assert "description" in tool, f"Missing 'description' in tool: {tool}"
             assert "input_schema" in tool, f"Missing 'input_schema' in tool: {tool}"
 
     def test_every_tool_input_schema_is_object_with_required(self) -> None:
         """Every input_schema has type=='object' and a non-empty 'required' list."""
-        from solar_challenge.web.assistant import _TOOLS
+        from solar_challenge.web.assistant import TOOLS
 
-        for tool in _TOOLS:
+        for tool in TOOLS:
             schema = tool["input_schema"]
             assert isinstance(schema, dict), f"input_schema must be dict for {tool['name']!r}"
             assert schema.get("type") == "object", (
@@ -221,8 +221,8 @@ class TestToolUseLoop:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """stream() receives _TOOLS as its 'tools' kwarg; TestToolSurface pins _TOOLS' order."""
-        from solar_challenge.web.assistant import _TOOLS
+        """stream() receives TOOLS as its 'tools' kwarg; TestToolSurface pins TOOLS' order."""
+        from solar_challenge.web.assistant import TOOLS
 
         anthropic_api.set_streams([
             make_end_turn_stream(["reply"]),
@@ -234,8 +234,8 @@ class TestToolUseLoop:
         assert call_kwargs_list, "Expected at least one stream() call"
         first_kwargs = call_kwargs_list[0]
         assert "tools" in first_kwargs, f"Expected 'tools' in stream() kwargs: {first_kwargs.keys()}"
-        assert first_kwargs["tools"] == _TOOLS, (
-            f"Expected stream()'s 'tools' kwarg to equal _TOOLS; got tools {[t['name'] for t in first_kwargs['tools']]}"
+        assert first_kwargs["tools"] == TOOLS, (
+            f"Expected stream()'s 'tools' kwarg to equal TOOLS; got tools {[t['name'] for t in first_kwargs['tools']]}"
         )
 
     def test_done_frame_terminates_stream(
@@ -324,11 +324,11 @@ class TestRunLookupToolSurface:
 
     def test_run_lookup_tools_required_fields(self) -> None:
         """get_run_results requires 'run_id_or_name' and list_recent_runs requires 'limit'."""
-        from solar_challenge.web.assistant import _TOOLS
+        from solar_challenge.web.assistant import TOOLS
 
-        run_lookup_tools = {t["name"]: t for t in _TOOLS if t["name"] in ("get_run_results", "list_recent_runs")}
-        assert "get_run_results" in run_lookup_tools, "get_run_results missing from _TOOLS"
-        assert "list_recent_runs" in run_lookup_tools, "list_recent_runs missing from _TOOLS"
+        run_lookup_tools = {t["name"]: t for t in TOOLS if t["name"] in ("get_run_results", "list_recent_runs")}
+        assert "get_run_results" in run_lookup_tools, "get_run_results missing from TOOLS"
+        assert "list_recent_runs" in run_lookup_tools, "list_recent_runs missing from TOOLS"
 
         grr_required = run_lookup_tools["get_run_results"]["input_schema"]["required"]
         assert "run_id_or_name" in grr_required, (
@@ -453,10 +453,10 @@ class TestSimulationToolSurface:
 
     def test_run_home_simulation_requires_pv_kw(self) -> None:
         """run_home_simulation's input_schema requires 'pv_kw'."""
-        from solar_challenge.web.assistant import _TOOLS
+        from solar_challenge.web.assistant import TOOLS
 
-        tool = next((t for t in _TOOLS if t["name"] == "run_home_simulation"), None)
-        assert tool is not None, "run_home_simulation missing from _TOOLS"
+        tool = next((t for t in TOOLS if t["name"] == "run_home_simulation"), None)
+        assert tool is not None, "run_home_simulation missing from TOOLS"
         schema = tool["input_schema"]
         required = schema.get("required", [])
         assert "pv_kw" in required, (
@@ -465,10 +465,10 @@ class TestSimulationToolSurface:
 
     def test_run_fleet_simulation_requires_n_homes(self) -> None:
         """run_fleet_simulation's input_schema requires 'n_homes'."""
-        from solar_challenge.web.assistant import _TOOLS
+        from solar_challenge.web.assistant import TOOLS
 
-        tool = next((t for t in _TOOLS if t["name"] == "run_fleet_simulation"), None)
-        assert tool is not None, "run_fleet_simulation missing from _TOOLS"
+        tool = next((t for t in TOOLS if t["name"] == "run_fleet_simulation"), None)
+        assert tool is not None, "run_fleet_simulation missing from TOOLS"
         schema = tool["input_schema"]
         required = schema.get("required", [])
         assert "n_homes" in required, (
