@@ -1,7 +1,8 @@
 """End-to-end tests for the Single Home Simulation page (/simulate/home).
 
 Verifies form defaults, tab navigation, preset selector, submit button,
-and detects Bug B4 (buildPayload missing form fields).
+detects Bug B4 (buildPayload missing form fields), and checks that the
+server accepts what the form submits with the battery switch on.
 """
 
 import pytest
@@ -61,7 +62,7 @@ def test_preset_selector_loads(page: Page, live_server: str) -> None:
 
 def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
     """buildPayload() should include azimuth, tilt, battery charge/discharge
-    rates, efficiency, and stochastic flag.  Currently these are omitted.
+    rates, efficiency, and stochastic flag.
     """
     page.goto(live_server + "/simulate/home")
     page.wait_for_load_state("networkidle")
@@ -86,6 +87,34 @@ def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
         f"buildPayload() is missing keys: {missing_keys}.  "
         f"Payload keys returned: {sorted(payload.keys())}"
     )
+
+
+# ── Battery-on submission is accepted by the server ──────────────────
+
+
+def test_battery_on_form_submission_is_accepted(page: Page, live_server: str) -> None:
+    """Run with the battery switch on: /api/simulate/home accepts what the form sends (201)."""
+    page.goto(live_server + "/simulate/home")
+    page.get_by_role("tab", name="Battery", exact=True).click()
+    battery_switch = page.get_by_role("switch", name="Enable Battery", exact=True)
+    battery_switch.click()
+    expect(battery_switch).to_be_checked()
+
+    # No preset button is shorter than 7 days; one day keeps this submission's job short.
+    page.evaluate("""() => {
+        const el = document.querySelector('[x-data="homeSimulator()"]');
+        Alpine.$data(el).formData.period_days = 1;
+    }""")
+
+    with page.expect_response("**/api/simulate/home") as submission:
+        page.get_by_role("button", name="Run Simulation").click()
+    response = submission.value
+
+    assert response.request.post_data_json["battery_kwh"] > 0, (
+        "The submitted payload carries no battery, so the server never built one "
+        "and a 201 would say nothing about the battery path."
+    )
+    assert response.status == 201, response.text()
 
 
 # ── Tab navigation ───────────────────────────────────────────────────
