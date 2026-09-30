@@ -3,6 +3,8 @@
 Verifies toast success/error appearance, auto-dismiss and manual dismiss.
 """
 
+import re
+
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -37,30 +39,15 @@ def test_toast_success_appears_and_dismisses(page: Page, live_server: str) -> No
 
 
 def test_toast_error_appears(page: Page, live_server: str) -> None:
-    """.error(msg) -> visible with red/error styling classes."""
+    """.error(msg) shows the message in a toast styled red."""
     page.goto(live_server + "/")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(500)
 
-    # Trigger an error toast
     page.evaluate("() => Alpine.store('toast').error('Something went wrong')")
-    page.wait_for_timeout(300)
 
-    # Toast message should be visible
-    toast_text = page.locator("text=Something went wrong")
-    expect(toast_text).to_be_visible()
-
-    # Check for red/error styling on the toast container
-    # The toast item should have a red-related class
-    toast_container = toast_text.locator("xpath=ancestor::div[contains(@class, 'red') or contains(@class, 'error')]")
-    if toast_container.count() == 0:
-        # Alternative: check that the toast store recorded the error type
-        toast_type = page.evaluate("""() => {
-            const items = Alpine.store('toast').items;
-            const match = items.find(t => t.message === 'Something went wrong');
-            return match ? match.type : null;
-        }""")
-        assert toast_type == "error", f"Expected toast type 'error', got '{toast_type}'"
+    toast_message = page.get_by_text("Something went wrong", exact=True)
+    expect(toast_message).to_be_visible()
+    toast = toast_message.locator("..")
+    expect(toast).to_have_class(re.compile(r"\bbg-red-"))
 
 
 # -- Toast dismiss on click -------------------------------------------------
