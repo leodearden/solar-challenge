@@ -632,6 +632,15 @@ def _wiring(system: pvlib.pvsystem.PVSystem) -> list[tuple[int, int]]:
     return [(array.modules_per_string, array.strings) for array in system.arrays]
 
 
+def _usable_cec_inverters() -> pd.DataFrame:
+    """The CEC catalogue's inverters with a positive finite rating, start-up power, nominal voltage and MPPT window, as numbers."""
+    catalogue = pvlib.pvsystem.retrieve_sam("CECInverter")
+    numbers = catalogue.loc[["Paco", "Pso", "Vdco", "Mppt_low", "Mppt_high"]].T.apply(
+        pd.to_numeric, errors="coerce"
+    )
+    return numbers[((numbers > 0) & np.isfinite(numbers)).all(axis=1)]
+
+
 @pytest.fixture
 def clear_june_day() -> pd.DataFrame:
     """Hourly weather for a cloudless midsummer day, 06:00-17:00 London time."""
@@ -713,14 +722,16 @@ class TestInverterMatchesStringVoltage:
         string_vmp = array.modules_per_string * array.module_parameters["V_mp_ref"]
         chosen = system.inverter_parameters
 
-        catalogue = pvlib.pvsystem.retrieve_sam("CECInverter")
-        numbers = catalogue.loc[["Paco", "Vdco", "Mppt_low", "Mppt_high"]].T.apply(pd.to_numeric)
-        equally_rated = numbers[
-            (numbers["Paco"] == chosen["Paco"])
-            & (numbers["Mppt_low"] <= string_vmp)
-            & (string_vmp <= numbers["Mppt_high"])
+        usable = _usable_cec_inverters()
+        equally_rated = usable[
+            (usable["Paco"] == chosen["Paco"])
+            & (usable["Mppt_low"] <= string_vmp)
+            & (string_vmp <= usable["Mppt_high"])
         ]
-        assert len(equally_rated) > 1, "the tie-break needs several equally rated inverters"
+        assert len(equally_rated) > 1, (
+            f"the tie-break needs several usable inverters rated {chosen['Paco']:.0f} W "
+            f"whose MPPT window takes the {string_vmp:.0f} V string"
+        )
 
         chosen_distance_v = abs(chosen["Vdco"] - string_vmp)
         nearest_distance_v = (equally_rated["Vdco"] - string_vmp).abs().min()
