@@ -380,22 +380,16 @@ def _is_runs_list_request(url: str) -> bool:
 
 
 @pytest.fixture
-def runs_api_returns_no_runs(page) -> None:
-    """Answer the Run History page's runs-list requests with the API's empty-database response."""
-    empty_database_response = {
-        "runs": [],
-        "pagination": {
-            "page": 1,
-            "per_page": 20,
-            "total": 0,
-            "total_pages": 1,
-            "has_next": False,
-            "has_prev": False,
-        },
-    }
+def runs_api_returns_no_runs(page, live_server: str) -> None:
+    """Answer the Run History page's runs-list requests as the live API answers a search no run matches."""
+    no_runs_response = page.request.get(
+        live_server + "/api/history/runs",
+        params={"q": uuid.uuid4().hex},
+        fail_on_status_code=True,
+    ).json()
     page.route(
         _is_runs_list_request,
-        lambda route: route.fulfill(json=empty_database_response),
+        lambda route: route.fulfill(json=no_runs_response),
     )
 
 
