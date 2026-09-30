@@ -7,9 +7,11 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
+from solar_challenge.home import HomeConfig
+from solar_challenge.seg import SEG_PRESETS
 
 runner = CliRunner()
 
@@ -504,14 +506,14 @@ class TestCreateSummaryTableFinancials:
 class TestHomeRunFullConfigParity:
     """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
 
-    def _write_home_config(self, tmpdir: str) -> Path:
-        """Write a temp YAML config with tariff and top-level SEG block.
+    def _write_home_config(self, tmp_dir: Path, seg_yaml: str) -> Path:
+        """Write a temp YAML config with tariff, followed by *seg_yaml*.
 
         Uses economy_7 (not flat_rate) because flat_rate has a known gap at 23:59
         that causes a simulation error on a full-day run; economy_7 fully covers
         all 24 hours via a midnight-crossing peak period.
         """
-        cfg_path = Path(tmpdir) / "home_seg.yaml"
+        cfg_path = tmp_dir / "home_seg.yaml"
         cfg_path.write_text(
             """
 home:
@@ -523,19 +525,24 @@ home:
   tariff:
     type: economy_7
 
-seg:
-  rate_pence_per_kwh: 15.0
 """
+            + seg_yaml
         )
         return cfg_path
 
-    def test_home_run_threads_tariff_and_seg(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """home run passes tariff + seg to simulate_home and reports SEG Revenue."""
+    def _run_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, seg_yaml: str
+    ) -> tuple[Result, dict[str, HomeConfig]]:
+        """Run `home run --report` for 21 June on a config ending in *seg_yaml*.
+
+        Returns the CLI result and the spy's capture; ``captured["home_config"]``
+        is the HomeConfig passed to simulate_home, absent if it was never called.
+        """
         import solar_challenge.home as _home_module
         import solar_challenge.cli.home as _cli_home_module
 
         # Capture the home_config passed to simulate_home by wrapping the real function
-        captured: dict = {}
+        captured: dict[str, HomeConfig] = {}
         real_simulate_home = _home_module.simulate_home
 
         def spy_simulate_home(home_config, start_date, end_date, progress_callback=None):  # type: ignore[no-untyped-def]
@@ -547,18 +554,26 @@ seg:
         # Patch simulate_home in the CLI module (local binding)
         monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg_path = self._write_home_config(tmpdir)
-            result = runner.invoke(
-                app,
-                [
-                    "home", "run", str(cfg_path),
-                    "--start", "2024-06-21",
-                    "--end", "2024-06-21",
-                    "--report",
-                ],
-                catch_exceptions=False,
-            )
+        cfg_path = self._write_home_config(tmp_path, seg_yaml)
+        result = runner.invoke(
+            app,
+            [
+                "home", "run", str(cfg_path),
+                "--start", "2024-06-21",
+                "--end", "2024-06-21",
+                "--report",
+            ],
+            catch_exceptions=False,
+        )
+        return result, captured
+
+    def test_home_run_threads_tariff_and_seg(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """home run passes tariff + seg to simulate_home and reports SEG Revenue."""
+        result, captured = self._run_home(
+            monkeypatch, tmp_path, "seg:\n  rate_pence_per_kwh: 15.0\n"
+        )
 
         assert result.exit_code == 0, f"CLI failed: {result.stdout}"
 
@@ -579,3 +594,25 @@ seg:
         assert "SEG Revenue" in result.stdout, (
             "generate_summary_report must include a SEG Revenue section"
         )
+
+    def test_home_run_resolves_seg_preset(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A top-level ``seg: {preset: Octopus}`` block prices exports at Octopus's rate."""
+        result, captured = self._run_home(monkeypatch, tmp_path, "seg:\n  preset: Octopus\n")
+
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        seg_tariff = captured["home_config"].seg_tariff
+        assert seg_tariff is not None
+        assert seg_tariff.rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
+        assert "SEG Revenue" in result.stdout
+
+    def test_home_run_rejects_unknown_seg_preset(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """An unknown SEG preset is refused with exit 1 before anything is simulated."""
+        result, captured = self._run_home(monkeypatch, tmp_path, "seg:\n  preset: Nonexistent\n")
+
+        assert result.exit_code == 1
+        assert "Nonexistent" in result.output
+        assert "home_config" not in captured
