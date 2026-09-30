@@ -4,7 +4,7 @@
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.heat_pump import HeatPumpConfig, calculate_cop
 from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -97,6 +97,49 @@ class TestSimulateHomeAddsHeatPumpLoad:
         warm_hour_load = heat_pump_load.loc["2024-01-15 13:00":"2024-01-15 13:59"]
         cold_hour_load = heat_pump_load.loc["2024-01-15 03:00":"2024-01-15 03:59"]
         assert warm_hour_load.max() < cold_hour_load.min()
+
+
+@pytest.fixture
+def constant_10c_tmy_weather() -> pd.DataFrame:
+    """A dark year at a constant 10 °C in the shape of a PVGIS TMY: 8760 hourly rows indexed in UTC for 1990.
+
+    Every minute is 5.5 °C below the heat pump's 15.5 °C base temperature, so every day of the year needs the same heat.
+    """
+    return pd.DataFrame(
+        {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 10.0, "wind_speed": 3.0},
+        index=pd.date_range("1990-01-01 00:00", periods=8760, freq="1h", tz="UTC"),
+    )
+
+
+class TestSimulateHomeSharesTheAnnualHeatDemandOverTheTMYYear:
+    """simulate_home shares a heat pump's annual heat demand over the whole TMY year, whatever the run's length.
+
+    Synthetic weather, no network. Delivered heat is recovered from the electrical load as load × COP.
+    """
+
+    @pytest.mark.parametrize(
+        ("last_day", "days"),
+        [
+            pytest.param("2025-01-15", 1, id="one-day"),
+            pytest.param("2025-01-21", 7, id="one-week"),
+        ],
+    )
+    def test_a_run_delivers_its_days_share_of_the_annual_heat_demand(self, last_day, days, constant_10c_tmy_weather):
+        heat_pump = HeatPumpConfig.default_ashp()
+        home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            heat_pump_config=heat_pump,
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            home, pd.Timestamp("2025-01-15"), pd.Timestamp(last_day), weather_data=constant_10c_tmy_weather
+        )
+
+        assert results.heat_pump_load is not None
+        heat_delivered_kwh = (results.heat_pump_load * calculate_cop("ASHP", 10.0)).sum() / 60
+        assert heat_delivered_kwh == pytest.approx(days * heat_pump.annual_heat_demand_kwh / 365)
 
 
 @pytest.mark.slow
