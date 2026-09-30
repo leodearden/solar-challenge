@@ -249,6 +249,15 @@ class TestSimulateHomeAPI:
         assert config.battery_config is not None
         assert config.battery_config.efficiency == pytest.approx(0.9)
 
+    def test_unrecognised_key_returns_400_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A body carrying a key the API does not read is refused by name, not simulated without it."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "period_days": 1})
+        assert resp.status_code == 400
+        assert "period_days" in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
+
 
 # ===================================================================
 # POST /api/simulate/fleet

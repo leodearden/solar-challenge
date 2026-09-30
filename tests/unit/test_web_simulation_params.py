@@ -20,6 +20,47 @@ VALID_HOME_PAYLOAD: dict = {
     "name": "Test Home",
 }
 
+FORM_PAYLOAD_BATTERY_ON: dict = {
+    "pv_kw": 4.0,
+    "azimuth": 180.0,
+    "tilt": 35.0,
+    "system_age_years": 5.0,
+    "degradation_rate_per_year": 0.005,
+    "battery_kwh": 5.0,
+    "max_charge_kw": 2.5,
+    "max_discharge_kw": 2.5,
+    "efficiency_pct": 90.0,
+    "consumption_kwh": 3200.0,
+    "occupants": 3,
+    "stochastic": False,
+    "location": "bristol",
+    "name": "Every panel",
+    "days": 7,
+    "heat_pump": {"type": "ASHP", "thermal_capacity_kw": 8.0, "annual_heat_demand_kwh": 8000.0},
+    "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
+    "seg": {"preset": "Octopus"},
+    "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]},
+}
+
+FORM_PAYLOAD_BATTERY_OFF: dict = {
+    "pv_kw": 4.0,
+    "azimuth": 180.0,
+    "tilt": 35.0,
+    "system_age_years": 0.0,
+    "degradation_rate_per_year": 0.005,
+    "battery_kwh": 0,
+    "max_charge_kw": None,
+    "max_discharge_kw": None,
+    "efficiency_pct": None,
+    "consumption_kwh": 3200.0,
+    "occupants": 3,
+    "stochastic": False,
+    "location": "bristol",
+    "name": "Web Simulation",
+    "start": "2024-03-01",
+    "end": "2024-03-05",
+}
+
 
 class TestParseDateRange:
     """Unit tests for the parse_date_range(data) helper."""
@@ -29,6 +70,10 @@ class TestParseDateRange:
         start, end = parse_date_range({"days": 7})
         assert start == "2024-06-01"
         assert end == "2024-06-07"
+
+    def test_days_one_is_a_single_day_window(self) -> None:
+        """days=1 starts and ends on the same day."""
+        assert parse_date_range({"days": 1}) == ("2024-06-01", "2024-06-01")
 
     def test_days_365_returns_full_year(self) -> None:
         """days=365 is the special case: returns the full 2024 calendar year."""
@@ -57,6 +102,32 @@ class TestParseDateRange:
         """Negative days must raise ValueError."""
         with pytest.raises(ValueError, match="positive"):
             parse_date_range({"days": -7})
+
+
+class TestParseHomeConfigKeys:
+    """Which top-level keys parse_home_config accepts."""
+
+    def test_unrecognised_keys_are_refused_by_name(self) -> None:
+        """The home form's Alpine field names are refused by name, and the error lists the recognised keys."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "period_days": 1, "battery_enabled": False})
+        message = str(exc_info.value)
+        assert "period_days" in message
+        assert "battery_enabled" in message
+        assert "battery_kwh" in message
+        assert "start" in message
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param(FORM_PAYLOAD_BATTERY_ON, id="battery-on"),
+            pytest.param(FORM_PAYLOAD_BATTERY_OFF, id="battery-off"),
+        ],
+    )
+    def test_payloads_of_recognised_keys_are_accepted(self, payload: dict) -> None:
+        """Bodies shaped like the home form's, which between them send every recognised key, parse."""
+        _home_config, _start, _end, name = parse_home_config(payload)
+        assert name == payload["name"]
 
 
 class TestParseSegTariff:
