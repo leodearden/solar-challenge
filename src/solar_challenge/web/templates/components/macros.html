@@ -4,7 +4,7 @@
     All macros use Tailwind utility classes and support both light and dark mode.
 
     Usage:
-        {% from "components/macros.html" import card, stat_card, form_group, form_select, form_range, toggle_switch, chart_container, data_table %}
+        {% from "components/macros.html" import card, stat_card, toggle_switch, chart_container %}
 #}
 
 
@@ -52,78 +52,6 @@
 {% endmacro %}
 
 
-{# Form input group with label and help text #}
-{% macro form_group(label, name, type='text', value='', help_text='', required=false, min='', max='', step='', placeholder='') %}
-<div class="space-y-1.5">
-    <label for="{{ name }}" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ label }}</label>
-    <input
-        type="{{ type }}"
-        id="{{ name }}"
-        name="{{ name }}"
-        value="{{ value }}"
-        {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}
-        {% if required %}required{% endif %}
-        {% if min != '' %}min="{{ min }}"{% endif %}
-        {% if max != '' %}max="{{ max }}"{% endif %}
-        {% if step != '' %}step="{{ step }}"{% endif %}
-        class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
-    >
-    {% if help_text %}
-    <p class="text-xs text-slate-500 dark:text-slate-400">{{ help_text }}</p>
-    {% endif %}
-</div>
-{% endmacro %}
-
-
-{# Form select dropdown #}
-{% macro form_select(label, name, options, selected='') %}
-<div class="space-y-1.5">
-    <label for="{{ name }}" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ label }}</label>
-    <select
-        id="{{ name }}"
-        name="{{ name }}"
-        class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
-    >
-        {% for option in options %}
-        {% if option is mapping %}
-        <option value="{{ option.value }}" {% if option.value|string == selected|string %}selected{% endif %}>{{ option.label }}</option>
-        {% else %}
-        <option value="{{ option }}" {% if option|string == selected|string %}selected{% endif %}>{{ option }}</option>
-        {% endif %}
-        {% endfor %}
-    </select>
-</div>
-{% endmacro %}
-
-
-{# Range slider with live value display #}
-{% macro form_range(label, name, min=0, max=100, step=1, value=50, unit='') %}
-<div class="space-y-1.5" x-data="{ rangeValue: {{ value }} }">
-    <div class="flex items-center justify-between">
-        <label for="{{ name }}" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ label }}</label>
-        <span class="text-sm font-medium text-amber-600 dark:text-amber-400">
-            <span x-text="rangeValue"></span>{% if unit %} {{ unit }}{% endif %}
-        </span>
-    </div>
-    <input
-        type="range"
-        id="{{ name }}"
-        name="{{ name }}"
-        min="{{ min }}"
-        max="{{ max }}"
-        step="{{ step }}"
-        x-model="rangeValue"
-        :value="rangeValue"
-        class="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
-    >
-    <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
-        <span>{{ min }}{% if unit %} {{ unit }}{% endif %}</span>
-        <span>{{ max }}{% if unit %} {{ unit }}{% endif %}</span>
-    </div>
-</div>
-{% endmacro %}
-
-
 {# Labelled on/off switch; state is the Alpine expression it shows and flips #}
 {% macro toggle_switch(id, label, state) %}
 <div class="flex items-center gap-3">
@@ -155,40 +83,5 @@
     </div>
     {% endif %}
     <div id="{{ id }}" style="width: 100%; min-height: {{ height }};" class="chart-container"></div>
-</div>
-{% endmacro %}
-
-
-{# Data table with optional sorting #}
-{% macro data_table(columns, rows, id='', sortable=false) %}
-<div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
-    <table {% if id %}id="{{ id }}"{% endif %} class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-        <thead class="bg-slate-50 dark:bg-slate-700/50">
-            <tr>
-                {% for col in columns %}
-                <th scope="col" class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider {% if sortable %}cursor-pointer hover:text-slate-700 dark:hover:text-slate-200{% endif %}">
-                    {{ col }}
-                </th>
-                {% endfor %}
-            </tr>
-        </thead>
-        <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-            {% if rows %}
-                {% for row in rows %}
-                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                    {% for cell in row %}
-                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">{{ cell }}</td>
-                    {% endfor %}
-                </tr>
-                {% endfor %}
-            {% else %}
-                <tr>
-                    <td colspan="{{ columns|length }}" class="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                        No data available.
-                    </td>
-                </tr>
-            {% endif %}
-        </tbody>
-    </table>
 </div>
 {% endmacro %}
