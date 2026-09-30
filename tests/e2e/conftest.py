@@ -77,10 +77,17 @@ def _e2e_app(_e2e_db_path: Path, _e2e_data_dir: Path) -> Flask:
 
 
 @pytest.fixture(scope="session")
-def _e2e_job_manager(_e2e_app: Flask) -> JobManager:
-    """The JobManager that runs the live server's simulation jobs."""
+def _e2e_job_manager(_e2e_app: Flask) -> Iterator[JobManager]:
+    """The JobManager that runs the live server's simulation jobs.
+
+    It lives for the whole session: the per-test drain in tests/conftest.py
+    leaves it alone, _jobs_finish_within_their_test waits for each test's jobs,
+    and this fixture shuts it down at session end.
+    """
     with _e2e_app.app_context():
-        return get_job_manager()
+        manager = get_job_manager()
+    yield manager
+    manager.shutdown(wait=True)
 
 
 @pytest.fixture(scope="session")
@@ -90,10 +97,9 @@ def live_server(_e2e_app: Flask, _e2e_job_manager: JobManager) -> Iterator[str]:
     Each connection is served on its own thread so that open SSE progress
     streams do not stall other requests.
 
-    Yields the base URL (e.g. ``http://127.0.0.1:54321``).  The app's
-    JobManager lives for the whole session: the per-test drain in
-    tests/conftest.py leaves it alone, _jobs_finish_within_their_test waits
-    for each test's jobs, and this fixture shuts it down at session end.
+    Yields the base URL (e.g. ``http://127.0.0.1:54321``).  It requests
+    _e2e_job_manager so that pytest stops this server before shutting down
+    the manager its requests submit jobs to.
     """
     port = _find_free_port()
     server = make_server("127.0.0.1", port, _e2e_app, threaded=True)
@@ -103,7 +109,6 @@ def live_server(_e2e_app: Flask, _e2e_job_manager: JobManager) -> Iterator[str]:
     yield f"http://127.0.0.1:{port}"
 
     server.shutdown()
-    _e2e_job_manager.shutdown(wait=True)
 
 
 _JOBS_FINISH_TIMEOUT_S = 120
