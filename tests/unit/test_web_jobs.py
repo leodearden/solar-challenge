@@ -4,7 +4,7 @@ import collections
 import json
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -20,8 +20,63 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.app import create_app
 from solar_challenge.web.database import init_db
-from solar_challenge.web.jobs import JobManager, live_managers, shutdown_all_managers
+from solar_challenge.web.jobs import HomeSimulator, JobManager, live_managers, shutdown_all_managers
 from solar_challenge.web.storage import RunStorage
+
+
+def _an_hour_at(generation_kw: float) -> SimulationResults:
+    index = pd.date_range("2024-06-01 12:00", periods=60, freq="1min")
+
+    def constant(kw: float) -> pd.Series:
+        return pd.Series([kw] * 60, index=index)
+
+    return SimulationResults(
+        generation=constant(generation_kw),
+        demand=constant(1.0),
+        self_consumption=constant(1.0),
+        battery_charge=constant(0.0),
+        battery_discharge=constant(0.0),
+        battery_soc=constant(0.0),
+        grid_import=constant(0.0),
+        grid_export=constant(generation_kw - 1.0),
+        import_cost=constant(0.0),
+        export_revenue=constant(0.0),
+        tariff_rate=constant(0.25),
+    )
+
+
+class _RecordingSimulation:
+    """Stands in for simulate_home: records each home it is asked to simulate and returns an hour at the home's PV size."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
+
+    def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        self.calls.append((config, start_date, end_date))
+        return _an_hour_at(config.pv_config.capacity_kw)
+
+
+class _BlockingSimulation:
+    """Stands in for simulate_home: every job waits inside the simulation until release(), then gets an hour at its home's PV size.
+
+    wait_until_started() returns once the first job is inside the simulation.
+    """
+
+    def __init__(self) -> None:
+        self._started = threading.Event()
+        self._released = threading.Event()
+
+    def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        self._started.set()
+        self._released.wait()
+        return _an_hour_at(config.pv_config.capacity_kw)
+
+    def wait_until_started(self) -> None:
+        if not self._started.wait(timeout=30):
+            pytest.fail("no job entered the simulation within 30 s")
+
+    def release(self) -> None:
+        self._released.set()
 
 
 @pytest.fixture
@@ -41,10 +96,36 @@ def app(tmp_path) -> Flask:
     return test_app
 
 
+def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
+    """Install a JobManager that runs *simulation* as the app's job manager, and return a client of the app."""
+    app.extensions["job_manager"] = JobManager(simulate_home=simulation)
+    return app.test_client()
+
+
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
+    """A client whose jobs run a fake simulation that returns at once, so the teardown drain has nothing to wait for."""
+    return _client_whose_jobs_run(app, _RecordingSimulation())
+
+
+@pytest.fixture
+def real_simulation_client(app: Flask) -> FlaskClient:
+    """A client of the JobManager create_app built, whose jobs run the real simulate_home."""
     return app.test_client()
+
+
+@pytest.fixture
+def blocking_simulation() -> Iterator[_BlockingSimulation]:
+    """A _BlockingSimulation released at teardown, before tests/conftest.py drains the job managers."""
+    simulation = _BlockingSimulation()
+    yield simulation
+    simulation.release()
+
+
+@pytest.fixture
+def blocking_client(app: Flask, blocking_simulation: _BlockingSimulation) -> FlaskClient:
+    """A client whose jobs wait inside blocking_simulation until it is released."""
+    return _client_whose_jobs_run(app, blocking_simulation)
 
 
 class TestSimulateHomeEndpoint:
@@ -183,10 +264,11 @@ class TestJobProgressEndpoint:
 class TestJobResultsEndpoint:
     """Tests for GET /api/jobs/<id>/results."""
 
-    def test_results_returns_409_while_running(self, client: FlaskClient) -> None:
+    def test_results_returns_409_while_running(
+        self, blocking_client: FlaskClient, blocking_simulation: _BlockingSimulation
+    ) -> None:
         """Test GET /api/jobs/<id>/results returns 409 while job is running."""
-        # Submit a job
-        submit_resp = client.post(
+        submit_resp = blocking_client.post(
             "/api/simulate/home",
             json={
                 "pv_kw": 4.0,
@@ -198,12 +280,12 @@ class TestJobResultsEndpoint:
         )
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
+        blocking_simulation.wait_until_started()
 
-        # Immediately check results - should be 409 (not complete yet)
-        # or possibly 200 if it completed very fast
-        results_resp = client.get(f"/api/jobs/{job_id}/results")
-        # It should either be 409 (still running) or 200 (completed very fast)
-        assert results_resp.status_code in (200, 409)
+        results_resp = blocking_client.get(f"/api/jobs/{job_id}/results")
+
+        assert results_resp.status_code == 409
+        assert results_resp.get_json()["status"] == "running"
 
     def test_results_returns_404_unknown_job(self, client: FlaskClient) -> None:
         """Test GET /api/jobs/<unknown_id>/results returns 404."""
@@ -214,10 +296,10 @@ class TestJobResultsEndpoint:
 class TestJobCompletion:
     """Test that a job completes successfully end-to-end."""
 
-    def test_home_job_completes(self, client: FlaskClient) -> None:
+    def test_home_job_completes(self, real_simulation_client: FlaskClient) -> None:
         """Test that a submitted home job eventually completes with results."""
         # Submit a minimal 1-day simulation
-        submit_resp = client.post(
+        submit_resp = real_simulation_client.post(
             "/api/simulate/home",
             json={
                 "pv_kw": 4.0,
@@ -236,7 +318,7 @@ class TestJobCompletion:
         deadline = time.monotonic() + 120  # 120 second timeout
         status = "queued"
         while time.monotonic() < deadline:
-            status_resp = client.get(f"/api/jobs/{job_id}")
+            status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
             assert status_resp.status_code == 200
             status_data = status_resp.get_json()
             status = status_data["status"]
@@ -247,16 +329,16 @@ class TestJobCompletion:
         assert status == "completed", f"Job did not complete in time, last status: {status}"
 
         # Now fetch results
-        results_resp = client.get(f"/api/jobs/{job_id}/results")
+        results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
         assert results_resp.status_code == 200
         results_data = results_resp.get_json()
         assert results_data["run_id"] == run_id
         assert "summary" in results_data
         assert results_data["summary"].get("total_generation_kwh") is not None
 
-    def test_home_job_with_battery_completes(self, client: FlaskClient) -> None:
+    def test_home_job_with_battery_completes(self, real_simulation_client: FlaskClient) -> None:
         """Test that a home job with battery completes successfully."""
-        submit_resp = client.post(
+        submit_resp = real_simulation_client.post(
             "/api/simulate/home",
             json={
                 "pv_kw": 4.0,
@@ -274,7 +356,7 @@ class TestJobCompletion:
         deadline = time.monotonic() + 120
         status = "queued"
         while time.monotonic() < deadline:
-            status_resp = client.get(f"/api/jobs/{job_id}")
+            status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
             status_data = status_resp.get_json()
             status = status_data["status"]
             if status in ("completed", "failed"):
@@ -516,38 +598,6 @@ def _run_storage(tmp_path: Path) -> RunStorage:
     storage = RunStorage(db_path=tmp_path / "jobs.db", data_dir=tmp_path / "data")
     init_db(storage.db_path)
     return storage
-
-
-def _an_hour_at(generation_kw: float) -> SimulationResults:
-    index = pd.date_range("2024-06-01 12:00", periods=60, freq="1min")
-
-    def constant(kw: float) -> pd.Series:
-        return pd.Series([kw] * 60, index=index)
-
-    return SimulationResults(
-        generation=constant(generation_kw),
-        demand=constant(1.0),
-        self_consumption=constant(1.0),
-        battery_charge=constant(0.0),
-        battery_discharge=constant(0.0),
-        battery_soc=constant(0.0),
-        grid_import=constant(0.0),
-        grid_export=constant(generation_kw - 1.0),
-        import_cost=constant(0.0),
-        export_revenue=constant(0.0),
-        tariff_rate=constant(0.25),
-    )
-
-
-class _RecordingSimulation:
-    """Stands in for simulate_home: records each home it is asked to simulate and returns an hour at the home's PV size."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
-
-    def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
-        self.calls.append((config, start_date, end_date))
-        return _an_hour_at(config.pv_config.capacity_kw)
 
 
 def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
