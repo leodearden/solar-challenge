@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """TOU-optimized against greedy dispatch on Economy 7, with injected synthetic weather.
 
-No PVGIS and not slow, so verify runs it. Non-slow counterpart of
+No PVGIS and not slow, so verify runs it. Total cost is deliberately not asserted: TOU
+guarantees only what it imports at the peak rate. The home has no seg_tariff, so
+simulate_home's warning that export revenue is 0.0 is ignored.
+
+Non-slow counterpart of
 tests/integration/test_tou_dispatch.py::TestTOUDispatchComparison::test_tou_dispatch_never_imports_more_at_peak_rate
-Total cost is deliberately not asserted: TOU guarantees only what it imports at the peak rate.
 """
 
 from __future__ import annotations
@@ -22,7 +25,10 @@ from solar_challenge.tariff import TariffConfig
 from tests._synthetic_weather import synthetic_june_weather
 from tests.integration._peak_rate_energy import off_peak_discharge_kwh, peak_rate_import_kwh
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.filterwarnings("ignore:tariff_config is set but seg_tariff is None:UserWarning"),
+]
 
 SUNNY_DAY = pd.Timestamp("2024-06-21")
 SUNLESS_DAY = SUNNY_DAY + pd.Timedelta(days=1)
