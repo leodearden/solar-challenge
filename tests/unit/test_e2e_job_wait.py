@@ -2,6 +2,8 @@
 
 What one test's teardown did is only visible from a later test, so the scenarios
 run in order inside a separate pytest session under a copy of the e2e conftest.
+The job must complete: a failing job can end before the next test starts even
+with no wait, so a 'failed' status would not show that the wait happened.
 """
 
 from pathlib import Path
@@ -35,13 +37,13 @@ SCENARIOS = """
             jobs_submitted_by_earlier_tests.append(json.load(response)["job_id"])
 
 
-    def test_the_next_test_starts_after_that_job_has_finished(live_server):
+    def test_the_next_test_starts_after_that_job_has_completed(live_server):
         job_id = jobs_submitted_by_earlier_tests[0]
 
         with LOCALHOST.open(live_server + f"/api/jobs/{job_id}", timeout=30) as response:
-            status = json.load(response)["status"]
+            job = json.load(response)
 
-        assert status in ("completed", "failed")
+        assert job["status"] == "completed", job
 """
 
 
