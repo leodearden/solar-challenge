@@ -54,26 +54,15 @@ def test_toast_error_appears(page: Page, live_server: str) -> None:
 
 
 def test_toast_dismiss_on_click(page: Page, live_server: str) -> None:
-    """Click dismiss button -> toast hidden."""
+    """Clicking a toast's Dismiss button hides it long before its 30 s duration ends."""
     page.goto(live_server + "/")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(500)
 
-    # Trigger a toast (use longer duration so it doesn't auto-dismiss)
     page.evaluate("() => Alpine.store('toast').success('Dismiss me', 30000)")
-    page.wait_for_timeout(300)
 
-    toast_text = page.locator("text=Dismiss me")
-    expect(toast_text).to_be_visible()
-
-    # Click the dismiss button (X button inside the toast)
-    dismiss_btn = page.locator('button[aria-label="Dismiss"]')
-    if dismiss_btn.count() == 0:
-        # Try close button near the toast
-        dismiss_btn = toast_text.locator("xpath=ancestor::div//button")
-    expect(dismiss_btn.first).to_be_visible()
-    dismiss_btn.first.click()
-    page.wait_for_timeout(500)
-
-    # Toast should be gone
-    expect(toast_text).not_to_be_visible()
+    toast_message = page.get_by_text("Dismiss me", exact=True)
+    expect(toast_message).to_be_visible()
+    toast = toast_message.locator("..")
+    dismiss_button = toast.get_by_role("button", name="Dismiss", exact=True)
+    expect(dismiss_button).to_be_visible()
+    dismiss_button.click()
+    expect(toast_message).to_be_hidden()
