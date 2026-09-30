@@ -248,8 +248,10 @@ def suggest_config(
         "recommended_pv_kwp": round(pv_kwp, 2),
         "recommended_battery_kwh": round(battery_kwh, 2),
         "note": (
-            "These figures are indicative estimates based on the PRD §11.4 rule-of-thumb "
-            "(PV kWp ≈ annual_consumption / 950; battery ≈ 50 % of daily demand × 1.2). "
+            "These figures are indicative estimates from a simple rule of thumb: "
+            "PV kWp ≈ annual consumption in kWh / 950, and "
+            "battery kWh ≈ 50 % of daily demand × 1.2, "
+            "both sized up slightly when the goal is self-sufficiency. "
             "Please run a simulation to confirm sizing for your specific site."
         ),
     }
