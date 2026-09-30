@@ -33,7 +33,6 @@ from solar_challenge.config import (
     _parse_community_config,
     _parse_ev_config,
     _parse_heat_pump_config,
-    _parse_home_config,
     _parse_pv_config,
     _parse_pv_distribution_config,
     _modify_pv_config,
@@ -50,6 +49,7 @@ from solar_challenge.config import (
     parse_dispatch_strategy_config,
     parse_finance_config,
     parse_fleet_distribution_config,
+    parse_home_block,
     parse_location_block,
     parse_seg_rate,
     parse_tariff_config,
@@ -2480,11 +2480,11 @@ class TestCommunityConfigFrozenPicklable:
             cfg.billing.seg_rate_pence_per_kwh = 0.0  # type: ignore[misc]
 
 
-class TestParseHomeConfigHeatPumpEV:
-    """Tests that _parse_home_config honours heat_pump and ev blocks (step-1/step-2)."""
+class TestParseHomeBlockHeatPumpEV:
+    """Tests that parse_home_block honours heat_pump and ev blocks (step-1/step-2)."""
 
-    def test_parse_home_config_with_heat_pump_and_ev(self) -> None:
-        """_parse_home_config populates heat_pump_config and ev_config when blocks present."""
+    def test_parse_home_block_with_heat_pump_and_ev(self) -> None:
+        """parse_home_block populates heat_pump_config and ev_config when blocks present."""
         data: dict = {
             "pv": {"capacity_kw": 4.0},
             "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
@@ -2500,7 +2500,7 @@ class TestParseHomeConfigHeatPumpEV:
                 "required_charge_kwh": 35,
             },
         }
-        result = _parse_home_config(data, Location.bristol())
+        result = parse_home_block(data, Location.bristol())
 
         assert result.heat_pump_config is not None, "heat_pump_config should not be None"
         assert isinstance(result.heat_pump_config, HeatPumpConfig)
@@ -2512,13 +2512,13 @@ class TestParseHomeConfigHeatPumpEV:
         assert result.ev_config.charger_type == "7kW"
         assert result.ev_config.arrival_hour == 18
 
-    def test_parse_home_config_without_heat_pump_ev_yields_none(self) -> None:
-        """_parse_home_config backward-compat: absent heat_pump/ev keys yield None."""
+    def test_parse_home_block_without_heat_pump_ev_yields_none(self) -> None:
+        """parse_home_block backward-compat: absent heat_pump/ev keys yield None."""
         data: dict = {
             "pv": {"capacity_kw": 4.0},
             "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
         }
-        result = _parse_home_config(data, Location.bristol())
+        result = parse_home_block(data, Location.bristol())
 
         assert result.heat_pump_config is None, "heat_pump_config should be None when key absent"
         assert result.ev_config is None, "ev_config should be None when key absent"
@@ -2548,15 +2548,15 @@ class TestParseHeatPumpEvConfigErrors:
         with pytest.raises(ConfigurationError, match="arrival_hour"):
             _parse_ev_config({"charger_type": "7kW"})
 
-    def test_heat_pump_missing_type_via_parse_home_config(self) -> None:
-        """_parse_home_config raises ConfigurationError for partial heat_pump block."""
+    def test_heat_pump_missing_type_via_parse_home_block(self) -> None:
+        """parse_home_block raises ConfigurationError for partial heat_pump block."""
         data: dict = {
             "pv": {"capacity_kw": 4.0},
             "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
             "heat_pump": {"thermal_capacity_kw": 8.0},  # missing heat_pump_type
         }
         with pytest.raises(ConfigurationError, match="heat_pump_type"):
-            _parse_home_config(data, Location.bristol())
+            parse_home_block(data, Location.bristol())
 
 
 class TestParsePVConfig:
