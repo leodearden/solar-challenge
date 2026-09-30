@@ -37,25 +37,13 @@ def _choose_location(page: Page, location: str) -> None:
 def test_preset_populates_form_values(page: Page, live_server: str) -> None:
     """Select 'Large with Battery' preset -> PV=6, battery=10, consumption=4500."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
     # Select the "Large with Battery" preset
     preset_select = page.locator("#preset_select")
     expect(preset_select).to_be_visible()
     preset_select.select_option(label="Large with Battery")
-    page.wait_for_timeout(500)
 
-    # Read Alpine formData values directly
-    form_data = page.evaluate("""() => {
-        const el = document.querySelector('[x-data="homeSimulator()"]');
-        const data = Alpine.$data(el);
-        return {
-            pv_kw: data.formData.pv_kw,
-            battery_kwh: data.formData.battery_kwh,
-            consumption_kwh: data.formData.consumption_kwh,
-        };
-    }""")
+    form_data = _form_data(page)
 
     assert form_data["pv_kw"] == 6, f"Expected pv_kw=6, got {form_data['pv_kw']}"
     assert form_data["battery_kwh"] == 10, f"Expected battery_kwh=10, got {form_data['battery_kwh']}"
