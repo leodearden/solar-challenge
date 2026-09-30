@@ -14,6 +14,7 @@ pytest configuration, not just TOML parsing.  These tests must NOT be marked
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -145,9 +146,7 @@ class TestNetworkedUnitClassesExcludedButPureKept:
     trade-off is that a newly added network-touching class that lacks
     ``@pytest.mark.slow`` will NOT be detected unless someone also adds it to
     NETWORKED_UNIT_CLASSES.  Reviewers adding new simulation-driven test classes to
-    these files should update the list below to keep the guard effective.  Anyone
-    moving a listed class to another module must add that module to UNIT_TEST_FILES,
-    because a NETWORKED class outside those files passes its check vacuously.
+    these files should update the list below to keep the guard effective.
     """
 
     # The modules that define every class named in the two lists below.
@@ -174,17 +173,20 @@ class TestNetworkedUnitClassesExcludedButPureKept:
         "TestFleetSummary",      # test_fleet.py
     ]
 
-    def test_networked_unit_classes_excluded_but_pure_kept(self):
-        """Networked unit classes deselected; pure-logic classes still collected."""
+    def _collected_classes(self, *pytest_args: str) -> set[str]:
+        """Names of the test classes pytest collects from UNIT_TEST_FILES.
+
+        ``--verbosity=0`` overrides the ``-v`` in addopts, so the output is always the
+        collection tree whose ``<Class Name>`` nodes are read here.
+        """
         result = subprocess.run(
             [
                 sys.executable,
                 "-m",
                 "pytest",
                 "--collect-only",
-                "-q",
-                "-m",
-                "not slow",
+                "--verbosity=0",
+                *pytest_args,
                 *self.UNIT_TEST_FILES,
             ],
             cwd=str(REPO_ROOT),
@@ -193,22 +195,37 @@ class TestNetworkedUnitClassesExcludedButPureKept:
             timeout=120,
         )
         assert result.returncode == 0, (
-            f"Collecting {self.UNIT_TEST_FILES} under ``-m 'not slow'`` failed with exit "
-            f"code {result.returncode}, so the class checks below would be vacuous.\n"
+            f"Collecting {self.UNIT_TEST_FILES} with {list(pytest_args)} failed with exit "
+            f"code {result.returncode}, so the class checks would be vacuous.\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        output = result.stdout
+        return set(re.findall(r"<Class (\w+)>", result.stdout))
+
+    def test_networked_unit_classes_excluded_but_pure_kept(self):
+        """Networked unit classes deselected; pure-logic classes still collected."""
+        # Positive control: collect WITHOUT the filter, so a listed class that moved out
+        # of UNIT_TEST_FILES or was renamed fails here instead of passing vacuously below.
+        collected = self._collected_classes()
+        for class_name in [*self.NETWORKED_UNIT_CLASSES, *self.PURE_UNIT_CLASSES]:
+            assert class_name in collected, (
+                f"Listed class {class_name!r} is not collected from {self.UNIT_TEST_FILES} "
+                "even without a marker filter, so its slow-marker check would be vacuous. "
+                "If it moved, add its module to UNIT_TEST_FILES; if it was renamed or "
+                "deleted, update NETWORKED_UNIT_CLASSES or PURE_UNIT_CLASSES."
+            )
+
+        not_slow = self._collected_classes("-m", "not slow")
 
         # Network-touching classes must be DESELECTED.
         for class_name in self.NETWORKED_UNIT_CLASSES:
-            assert class_name not in output, (
+            assert class_name not in not_slow, (
                 f"Networked unit class {class_name!r} was still collected under "
                 "``-m 'not slow'`` — add ``@pytest.mark.slow`` to that class."
             )
 
         # Pure-logic classes must still be COLLECTED.
         for class_name in self.PURE_UNIT_CLASSES:
-            assert class_name in output, (
+            assert class_name in not_slow, (
                 f"Pure unit class {class_name!r} was NOT collected under "
                 "``-m 'not slow'`` — do NOT mark it slow."
             )
