@@ -30,14 +30,29 @@ def _imported_pairs(statement: nodes.FromImport) -> list[tuple[str, str]]:
     ]
 
 
+def _imports_library(statement: nodes.FromImport | nodes.Import, library: str) -> bool:
+    return (
+        isinstance(statement.template, nodes.Const)
+        and statement.template.value == library
+    )
+
+
 def _imports_from(tree: nodes.Template, library: str) -> list[tuple[str, str]]:
     """(macro, local name) for each name the template imports from ``library``."""
     return [
         pair
         for statement in tree.find_all(nodes.FromImport)
-        if isinstance(statement.template, nodes.Const)
-        and statement.template.value == library
+        if _imports_library(statement, library)
         for pair in _imported_pairs(statement)
+    ]
+
+
+def _namespace_aliases(tree: nodes.Template, library: str) -> list[str]:
+    """Aliases the template binds with ``{% import "<library>" as alias %}``."""
+    return [
+        statement.target
+        for statement in tree.find_all(nodes.Import)
+        if _imports_library(statement, library)
     ]
 
 
@@ -68,6 +83,22 @@ def _bound_names(tree: nodes.Template) -> set[str]:
         for _, local in _imported_pairs(statement)
     }
     return imported | _defined_macros(tree)
+
+
+@pytest.mark.parametrize("library", MACRO_LIBRARIES)
+def test_templates_import_library_macros_by_name(
+    templates: dict[str, nodes.Template], library: str
+) -> None:
+    namespace_importers = {
+        name: aliases
+        for name, tree in templates.items()
+        if (aliases := _namespace_aliases(tree, library))
+    }
+
+    assert namespace_importers == {}, (
+        f"{library} macros must be imported with {{% from %}}; "
+        "the checks here cannot follow a {% import %} alias"
+    )
 
 
 @pytest.mark.parametrize("library", MACRO_LIBRARIES)
