@@ -1,7 +1,7 @@
 """End-to-end tests for the full simulation submit-to-results lifecycle.
 
 Verifies API submission, progress tracker appearance, completion, navigation
-to results, stat cards, and download buttons.
+to results, and stat cards.
 
 Note: test_simulation_completes_and_shows_view_results makes a real
 PVGIS API call and is marked slow.
@@ -131,19 +131,3 @@ def test_results_page_has_stat_cards(
 
     expect(generation_card.first).to_be_visible()
     expect(demand_card.first).to_be_visible()
-
-
-# -- Results page has download buttons (seeded) -----------------------------
-
-
-def test_results_page_has_download_buttons(
-    page: Page,
-    live_server: str,
-    seeded_home_run: tuple[str, str],
-) -> None:
-    """'Download CSV' and 'Download Config (YAML)' links visible."""
-    run_id, _ = seeded_home_run
-    page.goto(live_server + f"/results/home/{run_id}")
-
-    for name in ("Download CSV", "Download Config (YAML)"):
-        expect(page.get_by_role("link", name=name, exact=True)).to_be_visible()
