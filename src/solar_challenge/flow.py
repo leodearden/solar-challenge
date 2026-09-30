@@ -139,15 +139,19 @@ class EnergyFlowResult:
 
 
 def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:
-    """Return True if *current_rate* is at or below the average of all tariff period rates.
+    """Return True if *current_rate* is below the tariff's peak rate and at or below its mean period rate.
+
+    A tariff whose periods share one rate has no cheap period, so TOU dispatch on
+    it is plain self-consumption.
 
     This is the single source of truth for cheap-period classification.  Both
     :func:`simulate_timestep_tou` and :func:`_build_grid_charge_context` call
     this helper so the two dispatch paths always classify cheap vs. expensive
     periods identically (PRD §4).
     """
-    avg_rate = sum(p.rate_per_kwh for p in tariff.periods) / len(tariff.periods)
-    return current_rate <= avg_rate
+    rates = [p.rate_per_kwh for p in tariff.periods]
+    mean_rate = sum(rates) / len(rates)
+    return current_rate < max(rates) and current_rate <= mean_rate
 
 
 def _build_grid_charge_context(
@@ -311,11 +315,15 @@ def simulate_timestep_tou(
 
     TOU-optimized energy flow strategy:
     1. PV generation meets demand directly (self-consumption)
-    2. Determine if current period is cheap or expensive
+    2. Classify the current period as cheap or expensive with
+       :func:`_is_cheap_period`.  A tariff with no rate spread has no cheap
+       period, so every step takes the expensive-period branch, which is
+       plain self-consumption.
     3. During cheap periods (off-peak):
        - Excess PV charges battery aggressively
        - Remaining excess exports to grid
-       - Battery may charge from grid if rate is very low (future enhancement)
+       - When ``battery.config.grid_charging`` is set, the battery tops up from
+         the grid by the power :func:`compute_grid_charge_power_kw` returns
     4. During expensive periods (peak):
        - Discharge battery to meet demand before importing from grid
        - Excess PV charges battery (saving for later peak use)
