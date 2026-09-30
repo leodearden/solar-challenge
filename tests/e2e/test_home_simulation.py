@@ -12,6 +12,8 @@ from dataclasses import dataclass
 import pytest
 from playwright.sync_api import Page, Response, expect
 
+from solar_challenge.seg import SEG_PRESETS
+
 pytestmark = pytest.mark.e2e
 
 
@@ -163,7 +165,11 @@ _DISPATCH_STRATEGY = _OptionalBlock(
         pytest.param(_TARIFF, "flat_rate", id="tariff-flat_rate"),
         pytest.param(_TARIFF, "economy_7", id="tariff-economy_7"),
         pytest.param(_TARIFF, "economy_10", id="tariff-economy_10"),
-        pytest.param(_SEG, "Octopus", id="seg-Octopus"),
+        # Ids contain no spaces: the offline lane reads a failing node id only up to its first space.
+        *(
+            pytest.param(_SEG, preset, id=f"seg-{preset.replace(' ', '_')}")
+            for preset in SEG_PRESETS
+        ),
         pytest.param(_DISPATCH_STRATEGY, "tou_optimized", id="dispatch-tou_optimized"),
         pytest.param(_DISPATCH_STRATEGY, "peak_shaving", id="dispatch-peak_shaving"),
     ],
