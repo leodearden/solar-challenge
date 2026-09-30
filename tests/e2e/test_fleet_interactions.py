@@ -1,8 +1,8 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
 Verifies slider-input sync, distribution type selects, export YAML button,
-that the simulation name reaches the submitted run, and detects a missing
-period selector.
+that the simulation name reaches the submitted run, and that the period
+selector offers presets and a custom date range.
 """
 
 import pytest
@@ -65,27 +65,18 @@ def test_fleet_simulation_name_is_submitted(page: Page, live_server: str) -> Non
     assert submission.value.post_data_json["name"] == "Bristol Fleet Trial"
 
 
-# -- Missing period selector (potential bug) --------------------------------
+# -- Period selector -------------------------------------------------------
 
 
-def test_fleet_missing_period_selector(page: Page, live_server: str) -> None:
-    """Fleet page should have period/date range controls."""
+def test_fleet_period_selector_offers_presets_and_custom_range(
+    page: Page, live_server: str
+) -> None:
+    """The Simulation Period offers presets from '7 days' to '1 year', and Custom range shows Start Date and End Date."""
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
-    # Search for period-related controls
-    period_controls = page.locator(
-        'input[x-model*="period"], '
-        'input[x-model*="days"], '
-        'select[x-model*="period"], '
-        'button:has-text("7 days"), '
-        'button:has-text("1 year"), '
-        '#period_days, '
-        '#start_date'
-    )
+    for preset in ("7 days", "1 year"):
+        expect(page.get_by_role("button", name=preset, exact=True)).to_be_visible()
 
-    assert period_controls.count() > 0, (
-        "Fleet simulation page is missing period/date range controls. "
-        "Users cannot configure the simulation time period."
-    )
+    page.get_by_role("radio", name="Custom range", exact=True).check()
+    for boundary in ("Start Date", "End Date"):
+        expect(page.get_by_label(boundary, exact=True)).to_be_visible()
