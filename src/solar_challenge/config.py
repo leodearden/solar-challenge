@@ -656,7 +656,7 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
     # Parse dispatch strategy if present
     dispatch_strategy = None
     if "dispatch_strategy" in data:
-        dispatch_strategy = _parse_dispatch_strategy_config(data["dispatch_strategy"])
+        dispatch_strategy = parse_dispatch_strategy_config(data["dispatch_strategy"])
 
     # Parse grid-charging config if present
     grid_charging = _parse_grid_charge_config(data.get("grid_charging"))
@@ -694,7 +694,7 @@ def _parse_load_config(data: dict[str, Any]) -> LoadConfig:
     )
 
 
-def _parse_dispatch_strategy_config(
+def parse_dispatch_strategy_config(
     data: Optional[dict[str, Any]]
 ) -> Optional[DispatchStrategyConfig]:
     """Parse dispatch strategy configuration from config data."""
@@ -719,7 +719,7 @@ def _parse_dispatch_strategy_config(
     )
 
 
-def _parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig]:
+def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig]:
     """Parse tariff configuration from config data.
 
     Supports preset tariffs (flat_rate, economy_7, economy_10) and custom
@@ -897,7 +897,7 @@ def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
         load_config=_parse_load_config(load_data),
         location=location,
         name=data.get("name", ""),
-        tariff_config=_parse_tariff_config(tariff_data),
+        tariff_config=parse_tariff_config(tariff_data),
         dispatch_strategy=dispatch_strategy,
         heat_pump_config=_parse_heat_pump_config(data.get("heat_pump")),
         ev_config=_parse_ev_config(data.get("ev")),
@@ -1597,7 +1597,7 @@ def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConf
             )
         gs_data = gs_events_raw
         # Parse event_windows list-of-dicts -> tuple[EventWindow, ...]
-        # mirroring _parse_tariff_config 'custom' branch.
+        # mirroring parse_tariff_config 'custom' branch.
         ew_raw_list = gs_data.get("event_windows", [])
         if not isinstance(ew_raw_list, list):
             raise ConfigurationError(
@@ -1732,7 +1732,7 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         home=home,
         output=_parse_output_config(data.get("output")),
         seg_tariff_pence_per_kwh=parse_seg_rate(data.get("seg")),
-        tariff_config=_parse_tariff_config(data.get("tariff_config")),
+        tariff_config=parse_tariff_config(data.get("tariff_config")),
         finance=parse_finance_config(data.get("finance")),
     )
 
@@ -2026,8 +2026,8 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     if "fleet_distribution" in config:
         dist_config = _parse_fleet_distribution_config(config["fleet_distribution"])
         # Thread scenario-level tariff and fleet battery grid_charging (Seam 1, §9.1).
-        # _parse_tariff_config returns None when the key is absent → calibration-safe.
-        fleet_tariff = _parse_tariff_config(config.get("tariff"))
+        # parse_tariff_config returns None when the key is absent → calibration-safe.
+        fleet_tariff = parse_tariff_config(config.get("tariff"))
         # grid_charging lives under fleet_distribution.battery.grid_charging
         battery_data = config["fleet_distribution"].get("battery")
         fleet_grid_charging = (
@@ -2311,7 +2311,7 @@ def _parse_community_billing_config(
     if data is None:
         return None
 
-    tariff = _parse_tariff_config(data.get("tariff"))
+    tariff = parse_tariff_config(data.get("tariff"))
 
     # Resolve SEG rate (three mutually-exclusive forms)
     direct_rate: Optional[float] = None

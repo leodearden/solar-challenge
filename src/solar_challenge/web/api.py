@@ -19,8 +19,8 @@ from flask import Blueprint, Response, current_app, jsonify, request, stream_wit
 
 from solar_challenge.config import (
     ConfigurationError,
-    _parse_dispatch_strategy_config,
-    _parse_tariff_config,
+    parse_dispatch_strategy_config,
+    parse_tariff_config,
 )
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.database import get_db
@@ -426,8 +426,8 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
         loc = resolve_location(data.get("location", "bristol"))
         configs = generate_homes_from_distribution(fleet_cfg, loc)
         # Apply fleet-wide overlay (tariff / dispatch / SEG) — mirrors single-home contract.
-        tariff_config = _parse_tariff_config(data.get("tariff"))
-        dispatch_strategy = _parse_dispatch_strategy_config(data.get("dispatch_strategy"))
+        tariff_config = parse_tariff_config(data.get("tariff"))
+        dispatch_strategy = parse_dispatch_strategy_config(data.get("dispatch_strategy"))
         seg_tariff = parse_seg_tariff(data.get("seg"))
         configs = apply_fleet_overlay(
             configs,
