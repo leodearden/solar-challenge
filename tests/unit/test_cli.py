@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
+from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS
 
 runner = CliRunner()
@@ -531,7 +532,7 @@ home:
 
     def _run_home(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, seg_yaml: str
-    ) -> tuple[Result, dict]:
+    ) -> tuple[Result, dict[str, HomeConfig]]:
         """Run `home run --report` for 21 June on a config ending in *seg_yaml*.
 
         Returns the CLI result and the spy's capture; ``captured["home_config"]``
@@ -541,7 +542,7 @@ home:
         import solar_challenge.cli.home as _cli_home_module
 
         # Capture the home_config passed to simulate_home by wrapping the real function
-        captured: dict = {}
+        captured: dict[str, HomeConfig] = {}
         real_simulate_home = _home_module.simulate_home
 
         def spy_simulate_home(home_config, start_date, end_date, progress_callback=None):  # type: ignore[no-untyped-def]
