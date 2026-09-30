@@ -1,7 +1,8 @@
 """End-to-end tests for the Single Home Simulation page (/simulate/home).
 
 Verifies form defaults, tab navigation, preset selector, submit button,
-and detects Bug B4 (buildPayload missing form fields).
+detects Bug B4 (buildPayload missing form fields), and checks that the
+server accepts what the form submits with the battery switch on.
 """
 
 import pytest
@@ -61,7 +62,7 @@ def test_preset_selector_loads(page: Page, live_server: str) -> None:
 
 def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
     """buildPayload() should include azimuth, tilt, battery charge/discharge
-    rates, efficiency, and stochastic flag.  Currently these are omitted.
+    rates, efficiency, and stochastic flag.
     """
     page.goto(live_server + "/simulate/home")
     page.wait_for_load_state("networkidle")
