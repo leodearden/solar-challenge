@@ -600,13 +600,16 @@ class SweepResult:
     results: Union[SimulationResults, FleetResults]
 
 
-def parse_location_block(data: dict[str, Any]) -> Location:
-    """Parse a ``location:`` block into a Location."""
+def parse_location_block(data: Optional[dict[str, Any]]) -> Location:
+    """Parse a ``location:`` block into a Location; an absent or empty block is Bristol."""
+    bristol = Location.bristol()
+    if not data:
+        return bristol
     return Location(
-        latitude=data.get("latitude", 51.45),
-        longitude=data.get("longitude", -2.58),
-        timezone=data.get("timezone", "Europe/London"),
-        altitude=data.get("altitude", 11.0),
+        latitude=data.get("latitude", bristol.latitude),
+        longitude=data.get("longitude", bristol.longitude),
+        timezone=data.get("timezone", bristol.timezone),
+        altitude=data.get("altitude", bristol.altitude),
         name=data.get("name", ""),
     )
 
@@ -1707,8 +1710,7 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
     if "period" not in data:
         raise ConfigurationError(f"Scenario '{data['name']}' must have a 'period' field")
 
-    location_data = data.get("location")
-    location = parse_location_block(location_data) if location_data else Location.bristol()
+    location = parse_location_block(data.get("location"))
 
     homes: list[HomeConfig] = []
     home: Optional[HomeConfig] = None
@@ -1995,8 +1997,7 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
 
     # Check for home section or parse entire config as home
     home_data = config.get("home", config)
-    location_data = config.get("location")
-    location = parse_location_block(location_data) if location_data else Location.bristol()
+    location = parse_location_block(config.get("location"))
 
     return parse_home_block(home_data, location)
 
@@ -2019,8 +2020,7 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     """
     config = load_config(path)
 
-    location_data = config.get("location")
-    location = parse_location_block(location_data) if location_data else Location.bristol()
+    location = parse_location_block(config.get("location"))
 
     # Check for fleet_distribution (new format)
     if "fleet_distribution" in config:

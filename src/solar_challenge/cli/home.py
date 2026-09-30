@@ -112,8 +112,7 @@ def run(
     )
 
     # Parse location
-    loc_data = config_dict.get("location")
-    loc = parse_location_block(loc_data) if loc_data else Location.bristol()
+    loc = parse_location_block(config_dict.get("location"))
 
     # Build home config via canonical parser (honours tariff, dispatch_strategy,
     # heat_pump, ev, pv-age, etc. — previously silently dropped by hand-built path)

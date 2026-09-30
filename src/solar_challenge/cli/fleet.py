@@ -43,7 +43,6 @@ from solar_challenge.fleet import (
     simulate_multi_sweep_iter,
 )
 from solar_challenge.home import SimulationResults
-from solar_challenge.location import Location
 from solar_challenge.output import compute_community_metrics, generate_community_report
 
 app = typer.Typer(help="Fleet simulation commands")
@@ -368,11 +367,7 @@ def sweep(
     raw_config = load_config(config)
 
     # Get location
-    location_data = raw_config.get("location")
-    if location_data:
-        location = parse_location_block(location_data)
-    else:
-        location = Location.bristol()
+    location = parse_location_block(raw_config.get("location"))
 
     # Parse dates
     start_date = pd.Timestamp(start, tz=location.timezone)
