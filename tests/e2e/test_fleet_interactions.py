@@ -27,21 +27,13 @@ def test_fleet_slider_input_sync(page: Page, live_server: str) -> None:
 
 
 def test_fleet_distribution_type_select(page: Page, live_server: str) -> None:
-    """select[x-model='dist.type'] exists on distribution cards."""
+    """The PV, battery and consumption cards each show a distribution-type select offering 'Normal (Gaussian)'."""
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1500)
 
-    # Look for distribution type selects (one per distribution card)
-    dist_selects = page.locator('select[x-model="dist.type"]')
-
-    if dist_selects.count() == 0:
-        # Alternative selector patterns
-        dist_selects = page.locator('select[x-model*="type"]')
-
-    assert dist_selects.count() > 0, (
-        "Expected at least one distribution type <select> on fleet page"
+    distribution_type_selects = page.get_by_role("combobox").filter(
+        has=page.get_by_role("option", name="Normal (Gaussian)", exact=True)
     )
+    expect(distribution_type_selects).to_have_count(3)
 
 
 # -- Export YAML button -----------------------------------------------------
