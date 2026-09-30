@@ -397,3 +397,14 @@ def runs_api_returns_no_runs(page) -> None:
         _is_runs_list_request,
         lambda route: route.fulfill(json=empty_database_response),
     )
+
+
+@pytest.fixture
+def runs_api_never_answers(page) -> Iterator[None]:
+    """Hold the Run History page's runs-list requests unanswered for the whole test, then abort them."""
+    held_requests = []
+    page.route(_is_runs_list_request, lambda route: held_requests.append(route))
+    yield
+    assert held_requests, "the page made no runs-list request for runs_api_never_answers to hold"
+    for route in held_requests:
+        route.abort()

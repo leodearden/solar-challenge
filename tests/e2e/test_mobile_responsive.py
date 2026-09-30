@@ -174,3 +174,12 @@ def test_mobile_history_shows_empty_state(page: Page, live_server: str) -> None:
     page.goto(live_server + "/history/runs")
 
     expect(page.get_by_text("No simulation runs found")).to_be_visible()
+
+
+@pytest.mark.usefixtures("runs_api_never_answers")
+def test_mobile_history_shows_loading_state(page: Page, live_server: str) -> None:
+    """Below the md breakpoint, 'Loading runs...' shows while the runs API has not answered."""
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+    page.goto(live_server + "/history/runs")
+
+    expect(page.get_by_text("Loading runs...")).to_be_visible()

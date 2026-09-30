@@ -1,7 +1,7 @@
 """End-to-end tests for the Run History page (/history/runs).
 
-Verifies page loading, table structure, empty state, filter controls,
-type filter options, column sorting, and compare button visibility.
+Verifies page loading, table structure, loading and empty states, filter
+controls, type filter options, column sorting, and compare button visibility.
 """
 
 import pytest
@@ -57,7 +57,7 @@ def test_history_table_exists(page: Page, live_server: str) -> None:
         )
 
 
-# -- Empty state -----------------------------------------------------------
+# -- Loading and empty states ----------------------------------------------
 
 
 @pytest.mark.usefixtures("runs_api_returns_no_runs")
@@ -69,6 +69,14 @@ def test_history_empty_state(page: Page, live_server: str) -> None:
     page.goto(live_server + "/history/runs")
 
     expect(page.get_by_text("No simulation runs found")).to_be_visible()
+
+
+@pytest.mark.usefixtures("runs_api_never_answers")
+def test_history_loading_state(page: Page, live_server: str) -> None:
+    """'Loading runs...' shows while the runs API has not answered."""
+    page.goto(live_server + "/history/runs")
+
+    expect(page.get_by_text("Loading runs...")).to_be_visible()
 
 
 # -- Filter controls -------------------------------------------------------
