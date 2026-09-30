@@ -1,5 +1,6 @@
 """Tests for energy flow calculations."""
 
+import dataclasses
 from datetime import datetime
 from typing import Optional
 
@@ -16,7 +17,7 @@ from solar_challenge.flow import (
     EnergyFlowResult,
 )
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.config import GridChargeConfig
 from solar_challenge.dispatch import (
     DispatchDecision,
@@ -460,6 +461,19 @@ class TestEnergyBalanceValidation:
 # Shared scaffolding for grid-charge tests (pre-1)
 # ---------------------------------------------------------------------------
 
+# One day of hourly PV output and household demand, midnight to 23:00.
+HOURLY_GENERATION_KW = [
+    0.0, 0.0, 0.0, 0.0, 0.2, 0.5, 1.5, 2.5,
+    3.0, 3.5, 4.0, 3.8, 3.0, 2.0, 1.5, 1.0,
+    0.5, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+]
+HOURLY_DEMAND_KW = [
+    0.3, 0.3, 0.3, 0.3, 0.4, 0.5, 0.6, 0.7,
+    0.8, 1.0, 1.0, 1.0, 0.9, 0.8, 0.7, 0.8,
+    1.2, 1.5, 2.0, 1.8, 1.5, 1.0, 0.6, 0.4,
+]
+
+
 @pytest.fixture
 def economy7_tariff() -> TariffConfig:
     """Economy 7 tariff (off-peak 0.09 @ 00:30-07:30, peak 0.25)."""
@@ -620,17 +634,7 @@ class TestSimulateTimestepTouGridCharge:
         )
         battery = Battery(config, initial_soc_kwh=2.0)
         timestamps = pd.date_range("2024-01-01 00:00", periods=24, freq="h")
-        gen_kw = [
-            0.0, 0.0, 0.0, 0.0, 0.2, 0.5, 1.5, 2.5,
-            3.0, 3.5, 4.0, 3.8, 3.0, 2.0, 1.5, 1.0,
-            0.5, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        ]
-        dem_kw = [
-            0.3, 0.3, 0.3, 0.3, 0.4, 0.5, 0.6, 0.7,
-            0.8, 1.0, 1.0, 1.0, 0.9, 0.8, 0.7, 0.8,
-            1.2, 1.5, 2.0, 1.8, 1.5, 1.0, 0.6, 0.4,
-        ]
-        for ts, gen, dem in zip(timestamps, gen_kw, dem_kw):
+        for ts, gen, dem in zip(timestamps, HOURLY_GENERATION_KW, HOURLY_DEMAND_KW):
             result = simulate_timestep_tou(
                 generation_kw=gen, demand_kw=dem, battery=battery,
                 timestamp=ts, tariff=economy7_tariff, timestep_minutes=60,
@@ -985,3 +989,167 @@ class TestEnergyFlowResultGridCharge:
             timestep_minutes=60,
         )
         assert result.grid_charge <= result.grid_import + 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Cheap-period classification: a tariff with no rate spread has no cheap period
+# ---------------------------------------------------------------------------
+
+SPREAD_FREE_TARIFFS = [
+    pytest.param(TariffConfig.flat_rate(0.25), id="flat_rate"),
+    pytest.param(
+        TariffConfig.economy_7(off_peak_rate=0.25, peak_rate=0.25),
+        id="two_periods_one_rate",
+    ),
+    # The float mean of these six rates is 0.10000000000000002, above the shared rate.
+    pytest.param(
+        TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
+        id="six_periods_one_rate",
+    ),
+]
+
+# Mean rate 0.25, so the 0.30 day rate sits above it.
+THREE_TIER_TARIFF = TariffConfig(
+    periods=(
+        TariffPeriod(start_time="00:00", end_time="07:00", rate_per_kwh=0.10, name="Night"),
+        TariffPeriod(start_time="07:00", end_time="16:00", rate_per_kwh=0.30, name="Day"),
+        TariffPeriod(start_time="16:00", end_time="00:00", rate_per_kwh=0.35, name="Evening peak"),
+    ),
+    name="Three tier",
+)
+
+
+def _tou_shortfall_step(tariff: TariffConfig, timestamp: pd.Timestamp) -> EnergyFlowResult:
+    """One TOU step with a 2 kW shortfall against a fresh default battery (2.5 kWh stored)."""
+    return simulate_timestep_tou(
+        generation_kw=0.0,
+        demand_kw=2.0,
+        battery=Battery(BatteryConfig.default_5kwh()),
+        timestamp=timestamp,
+        tariff=tariff,
+        timestep_minutes=60,
+    )
+
+
+class TestTouDispatchOnSpreadFreeTariff:
+    """A tariff whose periods share one rate has no cheap period, so TOU dispatch is
+    self-consumption.
+    """
+
+    @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
+    def test_shortfall_step_discharges_like_self_consumption(
+        self, tariff: TariffConfig, off_peak_ts: pd.Timestamp
+    ) -> None:
+        """03:00 is the hour Economy 7 holds the battery through; a spread-free tariff must not."""
+        tou = _tou_shortfall_step(tariff, off_peak_ts)
+        greedy = simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=2.0,
+            battery=Battery(BatteryConfig.default_5kwh()),
+            timestep_minutes=60,
+        )
+        assert tou.battery_discharge > 0.0
+        assert dataclasses.asdict(tou) == pytest.approx(dataclasses.asdict(greedy))
+
+    @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
+    def test_day_of_dispatch_matches_self_consumption(self, tariff: TariffConfig) -> None:
+        """Every hour of a day, with the state of charge carried over, equals greedy dispatch."""
+        tou_battery = Battery(BatteryConfig.default_5kwh())
+        greedy_battery = Battery(BatteryConfig.default_5kwh())
+        timestamps = pd.date_range("2024-01-01 00:00", periods=24, freq="h")
+        for ts, gen, dem in zip(
+            timestamps, HOURLY_GENERATION_KW, HOURLY_DEMAND_KW, strict=True
+        ):
+            tou = simulate_timestep_tou(
+                generation_kw=gen,
+                demand_kw=dem,
+                battery=tou_battery,
+                timestamp=ts,
+                tariff=tariff,
+                timestep_minutes=60,
+            )
+            greedy = simulate_timestep(
+                generation_kw=gen,
+                demand_kw=dem,
+                battery=greedy_battery,
+                timestep_minutes=60,
+            )
+            assert dataclasses.asdict(tou) == pytest.approx(dataclasses.asdict(greedy)), ts
+
+    @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
+    def test_grid_charging_battery_is_not_topped_up(
+        self,
+        tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+        grid_charge_battery: Battery,
+    ) -> None:
+        """No spread to arbitrage, so a grid-charging battery below target is not topped up."""
+        result = simulate_timestep_tou(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestamp=off_peak_ts,
+            tariff=tariff,
+            timestep_minutes=60,
+        )
+        assert result.grid_charge == 0.0
+
+    @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
+    def test_grid_charge_context_reports_no_cheap_period(
+        self,
+        tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+        grid_charge_battery: Battery,
+    ) -> None:
+        """The strategy path classifies periods the same way as the TOU function path."""
+        stub = _RecordingStrategy()
+        simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestep_minutes=60,
+            timestamp=off_peak_ts.to_pydatetime(),
+            strategy=stub,
+            tariff=tariff,
+        )
+        assert stub.received_ctx is not None
+        assert stub.received_ctx.is_cheap_period is False
+
+
+class TestTouDispatchOnTieredTariff:
+    """Tariffs with a rate spread keep the mean-rate classification: TOU holds the
+    battery in cheap windows and discharges elsewhere.
+    """
+
+    @pytest.mark.parametrize(
+        ("tariff", "time_of_day"),
+        [
+            pytest.param(TariffConfig.economy_7(), "03:00", id="economy_7-off_peak"),
+            pytest.param(TariffConfig.economy_10(), "03:00", id="economy_10-night"),
+            pytest.param(TariffConfig.economy_10(), "14:00", id="economy_10-afternoon"),
+            pytest.param(TariffConfig.economy_10(), "21:00", id="economy_10-evening"),
+            pytest.param(THREE_TIER_TARIFF, "03:00", id="three_tier-night"),
+        ],
+    )
+    def test_holds_the_battery_in_cheap_windows(
+        self, tariff: TariffConfig, time_of_day: str
+    ) -> None:
+        result = _tou_shortfall_step(tariff, pd.Timestamp(f"2024-01-01 {time_of_day}"))
+        assert result.battery_discharge == 0.0
+
+    @pytest.mark.parametrize(
+        ("tariff", "time_of_day"),
+        [
+            pytest.param(TariffConfig.economy_7(), "18:00", id="economy_7-peak"),
+            pytest.param(TariffConfig.economy_10(), "09:00", id="economy_10-morning"),
+            pytest.param(TariffConfig.economy_10(), "17:00", id="economy_10-late_afternoon"),
+            pytest.param(TariffConfig.economy_10(), "23:00", id="economy_10-late"),
+            pytest.param(THREE_TIER_TARIFF, "10:00", id="three_tier-day_above_mean"),
+            pytest.param(THREE_TIER_TARIFF, "18:00", id="three_tier-evening_peak"),
+        ],
+    )
+    def test_discharges_outside_cheap_windows(
+        self, tariff: TariffConfig, time_of_day: str
+    ) -> None:
+        result = _tou_shortfall_step(tariff, pd.Timestamp(f"2024-01-01 {time_of_day}"))
+        assert result.battery_discharge > 0.0
