@@ -3314,13 +3314,26 @@ class TestScenarioFinance:
 
 
 class TestScenarioSegBlock:
-    """The top-level ``seg:`` block and ``community.billing.seg`` accept one grammar: exactly one of a SEG_PRESETS ``preset`` or a non-negative ``rate_pence_per_kwh``."""
+    """One grammar for the top-level ``seg:`` block and ``community.billing.seg``.
+
+    A block names exactly one of a SEG_PRESETS ``preset`` or a finite, non-negative
+    ``rate_pence_per_kwh``; billing's scalar ``seg_rate_pence_per_kwh`` reads rates the same way.
+    """
 
     _SCENARIO = {
         "name": "SEG block",
         "period": {"start_date": "2024-01-01", "end_date": "2024-01-07"},
         "home": {"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3400}},
     }
+
+    _MALFORMED_RATES = [
+        pytest.param(None, id="null"),
+        pytest.param("abc", id="non-numeric"),
+        pytest.param(-1.0, id="negative"),
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="infinite"),
+        pytest.param(True, id="boolean"),
+    ]
 
     @pytest.fixture(params=["scenario", "community billing"])
     def read_seg_rate(
@@ -3366,9 +3379,6 @@ class TestScenarioSegBlock:
             pytest.param({}, id="empty"),
             pytest.param({"rate": 4.1}, id="unrecognised-key"),
             pytest.param({"preset": "Nonexistent"}, id="unknown-preset"),
-            pytest.param({"rate_pence_per_kwh": None}, id="null-rate"),
-            pytest.param({"rate_pence_per_kwh": "abc"}, id="non-numeric-rate"),
-            pytest.param({"rate_pence_per_kwh": -1.0}, id="negative-rate"),
             pytest.param(4.1, id="bare-number"),
             pytest.param("Octopus", id="bare-string"),
         ],
@@ -3379,6 +3389,25 @@ class TestScenarioSegBlock:
         """A malformed block raises ConfigurationError: never a silent rate or None, never a raw error."""
         with pytest.raises(ConfigurationError):
             read_seg_rate(seg)
+
+    @pytest.mark.parametrize("rate", _MALFORMED_RATES)
+    def test_malformed_rate_is_refused(
+        self, read_seg_rate: Callable[[object], float | None], rate: object
+    ) -> None:
+        """A ``rate_pence_per_kwh`` that is not a finite, non-negative number is refused by name."""
+        with pytest.raises(ConfigurationError, match="rate_pence_per_kwh"):
+            read_seg_rate({"rate_pence_per_kwh": rate})
+
+    @pytest.mark.parametrize("rate", _MALFORMED_RATES)
+    def test_billing_scalar_rate_refuses_what_the_block_refuses(
+        self, tmp_path: Path, rate: object
+    ) -> None:
+        """``community.billing.seg_rate_pence_per_kwh`` refuses every rate the ``seg`` block refuses."""
+        path = tmp_path / "seg.yaml"
+        community = {"sharing_mode": "p2p", "billing": {"seg_rate_pence_per_kwh": rate}}
+        path.write_text(yaml.safe_dump({"community": community}))
+        with pytest.raises(ConfigurationError, match="seg_rate_pence_per_kwh"):
+            load_community_config(path)
 
     def test_unknown_preset_error_names_the_available_presets(
         self, read_seg_rate: Callable[[object], float | None]

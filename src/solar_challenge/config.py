@@ -6,6 +6,7 @@ scenario definitions, and parameter sweep functionality.
 """
 
 import json
+import math
 import random
 import warnings
 from dataclasses import dataclass, field
@@ -1521,8 +1522,9 @@ def _parse_seg_config(data: object, *, block_path: str = "seg") -> Optional[floa
     """Read the SEG export rate in pence/kWh from a ``seg:`` block.
 
     The block names exactly one of a :data:`~solar_challenge.seg.SEG_PRESETS`
-    ``preset`` or a non-negative ``rate_pence_per_kwh``.  ``None`` means no SEG;
-    any other shape raises :exc:`ConfigurationError` naming *block_path*.
+    ``preset`` or a ``rate_pence_per_kwh`` that :func:`_parse_seg_rate_scalar`
+    accepts.  ``None`` means no SEG; any other shape raises
+    :exc:`ConfigurationError` naming *block_path*.
     """
     if data is None:
         return None
@@ -1536,14 +1538,28 @@ def _parse_seg_config(data: object, *, block_path: str = "seg") -> Optional[floa
             f"'{block_path}' must specify exactly one of 'preset' or "
             f"'rate_pence_per_kwh', got {data!r}"
         )
+    if "rate_pence_per_kwh" in data:
+        return _parse_seg_rate_scalar(
+            data["rate_pence_per_kwh"], key_path=f"{block_path}.rate_pence_per_kwh"
+        )
     try:
-        if "preset" in data:
-            tariff = resolve_seg_tariff(data["preset"])
-        else:
-            tariff = SEGTariff(name="", rate_pence_per_kwh=float(data["rate_pence_per_kwh"]))
+        return resolve_seg_tariff(data["preset"]).rate_pence_per_kwh
     except (ValueError, TypeError) as exc:
         raise ConfigurationError(f"'{block_path}' block {data!r} is invalid: {exc}") from exc
-    return tariff.rate_pence_per_kwh
+
+
+def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
+    """Read a SEG export rate in pence/kWh: a finite number that :class:`SEGTariff` accepts."""
+    try:
+        rate = float(value)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ConfigurationError(f"'{key_path}' must be a number, got {value!r}") from exc
+    if isinstance(value, bool) or not math.isfinite(rate):
+        raise ConfigurationError(f"'{key_path}' must be a finite number, got {value!r}")
+    try:
+        return SEGTariff(name="", rate_pence_per_kwh=rate).rate_pence_per_kwh
+    except ValueError as exc:
+        raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
 
 
 def _parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConfig]:
@@ -2289,7 +2305,8 @@ def _parse_community_billing_config(
         ``CommunityBillingConfig`` when *data* is a dict; ``None`` otherwise.
 
     Raises:
-        ConfigurationError: For an ambiguous SEG specification or a malformed ``seg`` block.
+        ConfigurationError: For an ambiguous SEG specification, a malformed ``seg``
+            block or an invalid ``seg_rate_pence_per_kwh``.
     """
     if data is None:
         return None
@@ -2299,7 +2316,10 @@ def _parse_community_billing_config(
     # Resolve SEG rate (three mutually-exclusive forms)
     direct_rate: Optional[float] = None
     if "seg_rate_pence_per_kwh" in data:
-        direct_rate = float(data["seg_rate_pence_per_kwh"])
+        direct_rate = _parse_seg_rate_scalar(
+            data["seg_rate_pence_per_kwh"],
+            key_path="community.billing.seg_rate_pence_per_kwh",
+        )
 
     seg_block = data.get("seg")
 
