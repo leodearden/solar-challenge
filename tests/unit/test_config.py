@@ -31,7 +31,6 @@ from solar_challenge.config import (
     _parse_battery_config,
     _parse_grid_charge_config,
     _parse_community_config,
-    _parse_dispatch_strategy_config,
     _parse_ev_config,
     _parse_heat_pump_config,
     _parse_home_config,
@@ -49,8 +48,10 @@ from solar_challenge.config import (
     load_fleet_config,
     load_home_config,
     load_scenarios,
+    parse_dispatch_strategy_config,
     parse_finance_config,
     parse_seg_rate,
+    parse_tariff_config,
 )
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
@@ -59,7 +60,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, calculate_degradation_factor
 from solar_challenge.seg import SEG_PRESETS
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 
 class TestSimulationPeriod:
@@ -623,17 +624,17 @@ home:
 
 
 class TestDispatchStrategyParsing:
-    """Tests for _parse_dispatch_strategy_config function."""
+    """Tests for parse_dispatch_strategy_config function."""
 
     def test_parse_none(self) -> None:
         """Test parsing None returns None."""
-        result = _parse_dispatch_strategy_config(None)
+        result = parse_dispatch_strategy_config(None)
         assert result is None
 
     def test_parse_self_consumption(self) -> None:
         """Test parsing self-consumption strategy."""
         data = {"strategy_type": "self_consumption"}
-        result = _parse_dispatch_strategy_config(data)
+        result = parse_dispatch_strategy_config(data)
         assert result is not None
         assert result.strategy_type == "self_consumption"
         assert result.peak_hours is None
@@ -645,7 +646,7 @@ class TestDispatchStrategyParsing:
             "strategy_type": "tou_optimized",
             "peak_hours": [[16, 20], [7, 9]],
         }
-        result = _parse_dispatch_strategy_config(data)
+        result = parse_dispatch_strategy_config(data)
         assert result is not None
         assert result.strategy_type == "tou_optimized"
         assert result.peak_hours == [(16, 20), (7, 9)]
@@ -656,7 +657,7 @@ class TestDispatchStrategyParsing:
             "strategy_type": "peak_shaving",
             "import_limit_kw": 5.0,
         }
-        result = _parse_dispatch_strategy_config(data)
+        result = parse_dispatch_strategy_config(data)
         assert result is not None
         assert result.strategy_type == "peak_shaving"
         assert result.import_limit_kw == 5.0
@@ -664,12 +665,12 @@ class TestDispatchStrategyParsing:
     def test_parse_missing_strategy_type_raises(self) -> None:
         """Test parsing without strategy_type raises error."""
         with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
-            _parse_dispatch_strategy_config({})
+            parse_dispatch_strategy_config({})
 
     def test_parse_empty_strategy_type_raises(self) -> None:
         """Test parsing with empty strategy_type raises error."""
         with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
-            _parse_dispatch_strategy_config({"strategy_type": ""})
+            parse_dispatch_strategy_config({"strategy_type": ""})
 
     def test_parse_tou_with_null_peak_hours(self) -> None:
         """Test parsing TOU strategy with null peak_hours raises error."""
@@ -678,7 +679,62 @@ class TestDispatchStrategyParsing:
             "peak_hours": None,
         }
         with pytest.raises(ConfigurationError, match="requires 'peak_hours'"):
-            _parse_dispatch_strategy_config(data)
+            parse_dispatch_strategy_config(data)
+
+
+class TestTariffConfigParsing:
+    """Tests for parse_tariff_config's public contract."""
+
+    def test_absent_block_parses_to_no_tariff(self) -> None:
+        """parse_tariff_config(None) returns None (no tariff block)."""
+        assert parse_tariff_config(None) is None
+
+    def test_flat_rate_block_matches_the_flat_rate_preset(self) -> None:
+        """A flat_rate block parses to TariffConfig.flat_rate at its rate."""
+        parsed = parse_tariff_config({"type": "flat_rate", "rate_per_kwh": 0.25})
+        assert parsed == TariffConfig.flat_rate(rate_per_kwh=0.25)
+
+    def test_bare_economy_7_block_matches_the_economy_7_preset(self) -> None:
+        """An economy_7 block without overrides parses to TariffConfig.economy_7()."""
+        assert parse_tariff_config({"type": "economy_7"}) == TariffConfig.economy_7()
+
+    def test_custom_block_keeps_its_periods_in_order(self) -> None:
+        """A custom block parses each period, in order, under the block's name."""
+        data = {
+            "type": "custom",
+            "name": "Two-rate",
+            "periods": [
+                {
+                    "start_time": "00:00",
+                    "end_time": "07:00",
+                    "rate_per_kwh": 0.10,
+                    "name": "Night",
+                },
+                {
+                    "start_time": "07:00",
+                    "end_time": "00:00",
+                    "rate_per_kwh": 0.30,
+                    "name": "Day",
+                },
+            ],
+        }
+        assert parse_tariff_config(data) == TariffConfig(
+            periods=(
+                TariffPeriod("00:00", "07:00", 0.10, "Night"),
+                TariffPeriod("07:00", "00:00", 0.30, "Day"),
+            ),
+            name="Two-rate",
+        )
+
+    def test_missing_type_raises(self) -> None:
+        """A tariff block without 'type' raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="requires 'type'"):
+            parse_tariff_config({})
+
+    def test_unknown_type_raises(self) -> None:
+        """An unrecognised tariff type raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Unknown tariff type"):
+            parse_tariff_config({"type": "bogus"})
 
 
 class TestLoadConfigYaml:
