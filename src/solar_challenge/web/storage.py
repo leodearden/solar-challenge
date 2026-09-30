@@ -16,10 +16,12 @@ Storage structure:
 import json
 import re
 import shutil
+import sys
 from dataclasses import asdict, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Type, TypeVar, Union, get_type_hints
+from types import UnionType
+from typing import Any, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
@@ -79,7 +81,8 @@ def _serialize_dataclass(obj: Any) -> dict[str, Any]:
 def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
     """Recursively deserialize a dict to a dataclass instance.
 
-    Handles nested dataclasses, pd.Timestamp deserialization, and optional fields.
+    Each field is rebuilt as its annotation declares: nested dataclasses,
+    lists and tuples of them, pd.Timestamp values and optional members.
 
     Args:
         cls: The dataclass type to instantiate
@@ -93,8 +96,6 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
 
     # Use get_type_hints() to resolve string annotations to real types.
     # Pass the defining module's globals so forward references resolve correctly.
-    import sys
-
     cls_module = sys.modules.get(cls.__module__, None)
     cls_globals = getattr(cls_module, "__dict__", None)
     try:
@@ -114,41 +115,40 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
             # Field not in dataclass definition, skip
             continue
 
-        # Handle Optional[T] / Union types (unwrap to inner type)
-        origin = getattr(field_type, "__origin__", None)
-        if origin is Union:
-            # Get non-None type from Optional[T]
-            args = getattr(field_type, "__args__", ())
-            field_type = next((arg for arg in args if arg is not type(None)), field_type)
-
-        # Handle nested dataclasses (dict -> dataclass)
-        if isinstance(value, dict):
-            if isinstance(field_type, type) and is_dataclass(field_type):
-                kwargs[field_name] = _deserialize_dataclass(field_type, value)
-            else:
-                kwargs[field_name] = value
-        # Handle lists (may contain nested dataclasses)
-        elif isinstance(value, list):
-            list_origin = getattr(field_type, "__origin__", None)
-            if list_origin in (list, tuple) and len(value) > 0 and isinstance(value[0], dict):
-                list_args = getattr(field_type, "__args__", ())
-                if list_args:
-                    inner_type = list_args[0]
-                    if isinstance(inner_type, type) and is_dataclass(inner_type):
-                        kwargs[field_name] = [_deserialize_dataclass(inner_type, item) for item in value]
-                    else:
-                        kwargs[field_name] = value
-                else:
-                    kwargs[field_name] = value
-            else:
-                kwargs[field_name] = value
-        # Handle pd.Timestamp strings
-        elif isinstance(value, str) and isinstance(field_type, type) and issubclass(field_type, pd.Timestamp):
-            kwargs[field_name] = pd.Timestamp(value)
-        else:
-            kwargs[field_name] = value
+        kwargs[field_name] = _deserialize_value(value, field_type)
 
     return cls(**kwargs)
+
+
+def _deserialize_value(value: Any, annotation: Any) -> Any:
+    """Rebuild one JSON-decoded value as its annotation declares.
+
+    A union is read as its first non-None member. A dict becomes a dataclass.
+    An array becomes a list or a tuple, with every item rebuilt the same way.
+    An ISO string becomes a pd.Timestamp. Anything else is returned unchanged.
+    """
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        member = next((arg for arg in get_args(annotation) if arg is not type(None)), Any)
+        return _deserialize_value(value, member)
+    if isinstance(value, dict) and isinstance(annotation, type) and is_dataclass(annotation):
+        return _deserialize_dataclass(annotation, value)
+    if isinstance(value, list) and origin in (list, tuple):
+        item_annotation = _item_annotation(annotation)
+        items = [_deserialize_value(item, item_annotation) for item in value]
+        return tuple(items) if origin is tuple else items
+    if isinstance(value, str) and isinstance(annotation, type) and issubclass(annotation, pd.Timestamp):
+        return pd.Timestamp(value)
+    return value
+
+
+def _item_annotation(sequence_annotation: Any) -> Any:
+    """Return the annotation shared by every item of list[X], tuple[X, ...] or tuple[X, X].
+
+    Any when the items do not share one annotation, as in tuple[A, B].
+    """
+    item_annotations = {arg for arg in get_args(sequence_annotation) if arg is not Ellipsis}
+    return item_annotations.pop() if len(item_annotations) == 1 else Any
 
 
 class RunStorage:
