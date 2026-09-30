@@ -17,7 +17,7 @@ import json
 import re
 import shutil
 import sys
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import UnionType
@@ -33,9 +33,9 @@ T = TypeVar("T")
 
 
 def _serialize_dataclass(obj: Any) -> dict[str, Any]:
-    """Recursively serialize a dataclass to JSON-compatible dict.
+    """Serialize a dataclass instance to a JSON-compatible dict.
 
-    Handles nested dataclasses and converts special types like pd.Timestamp.
+    Each field is emitted as _serialize_value emits it.
 
     Args:
         obj: Dataclass instance to serialize
@@ -46,36 +46,28 @@ def _serialize_dataclass(obj: Any) -> dict[str, Any]:
     if not is_dataclass(obj):
         raise TypeError(f"Expected dataclass, got {type(obj)}")
 
-    result: dict[str, Any] = {}
-    for field_info in fields(obj):
-        value = getattr(obj, field_info.name)
+    return {
+        field_info.name: _serialize_value(getattr(obj, field_info.name))
+        for field_info in fields(obj)
+    }
 
-        # Handle None
-        if value is None:
-            result[field_info.name] = None
-        # Handle nested dataclasses
-        elif is_dataclass(value):
-            result[field_info.name] = _serialize_dataclass(value)
-        # Handle pd.Timestamp
-        elif isinstance(value, pd.Timestamp):
-            result[field_info.name] = value.isoformat()
-        # Handle lists/tuples (may contain dataclasses)
-        elif isinstance(value, (list, tuple)):
-            result[field_info.name] = [
-                _serialize_dataclass(item) if is_dataclass(item) else item
-                for item in value
-            ]
-        # Handle dicts (may contain dataclasses)
-        elif isinstance(value, dict):
-            result[field_info.name] = {
-                k: _serialize_dataclass(v) if is_dataclass(v) else v
-                for k, v in value.items()
-            }
-        # Primitive types (int, float, str, bool)
-        else:
-            result[field_info.name] = value
 
-    return result
+def _serialize_value(value: Any) -> Any:
+    """Emit one value in its JSON-compatible form.
+
+    A dataclass becomes a dict. A pd.Timestamp becomes its ISO string. A list or
+    tuple becomes a list, and a dict keeps its keys, with every item serialized the
+    same way. Anything else, None included, is returned unchanged.
+    """
+    if is_dataclass(value):
+        return _serialize_dataclass(value)
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (list, tuple)):
+        return [_serialize_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _serialize_value(item) for key, item in value.items()}
+    return value
 
 
 def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:

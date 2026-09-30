@@ -6,14 +6,17 @@ Tests cover:
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
 - Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
+- Every saved config and summary is written as its dataclass field tree in JSON
 - Corrupted parquet graceful error handling
 - Missing run directory graceful error handling
 - Delete run removes DB record and filesystem files
 """
 
 import dataclasses
+import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -22,11 +25,14 @@ pytest.importorskip("flask")
 from flask import Flask
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.ev import EVConfig
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.app import create_app
 from solar_challenge.web.database import get_db
@@ -162,6 +168,44 @@ def _make_fleet_summary(n_homes: int = 2) -> FleetSummary:
         per_home_self_consumption_ratio_mean=0.6,
         simulation_days=1,
     )
+
+
+def _make_home_config_with_every_field_shape(name: str = "Every Shape") -> HomeConfig:
+    """Create a HomeConfig whose stored form holds every field shape a save reaches.
+
+    Those are nested dataclasses, a tuple of dataclasses (the tariff periods), a list
+    of tuples (the battery peak hours), a dict (the PV custom module params), and None
+    (the heat pump and the unset optionals).
+    """
+    return HomeConfig(
+        pv_config=PVConfig(
+            capacity_kw=4.0,
+            custom_module_params={"pdc0": 250.0, "gamma_pdc": -0.004},
+        ),
+        load_config=LoadConfig(annual_consumption_kwh=3200.0),
+        battery_config=BatteryConfig(
+            capacity_kwh=5.0,
+            dispatch_strategy=DispatchStrategyConfig(
+                "tou_optimized", peak_hours=[(16, 19), (20, 22)]
+            ),
+            grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+        ),
+        ev_config=EVConfig(charger_type="7kW", arrival_hour=18),
+        location=Location.bristol(),
+        name=name,
+        tariff_config=TariffConfig.economy_7(),
+        seg_tariff=SEGTariff(name="Octopus Outgoing", rate_pence_per_kwh=15.0),
+    )
+
+
+def _json_field_tree(obj: Any) -> Any:
+    """Return a dataclass's field tree as JSON gives it back."""
+    return json.loads(json.dumps(dataclasses.asdict(obj)))
+
+
+def _read_json(path: Path) -> Any:
+    """Decode a JSON file."""
+    return json.loads(path.read_text())
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +546,70 @@ class TestTupleFieldRoundtrip:
         loaded_fleet, _, _ = storage.load_fleet_run("tou-fleet-001")
 
         assert loaded_fleet.home_configs == home_configs
+
+
+class TestPersistedJson:
+    """Each save writes every dataclass as its field tree in JSON.
+
+    Runs already on disk were written in this form and are read back from it, so it
+    must not change: a nested dataclass is an object, a tuple or list an array, a
+    dict an object, None null.
+    """
+
+    def test_home_run_writes_config_and_summary_as_field_trees(
+        self, storage: RunStorage
+    ) -> None:
+        """A home run's config and summary, as files and as DB columns, are their field trees."""
+        config = _make_home_config_with_every_field_shape()
+        summary = _make_summary()
+
+        storage.save_home_run(
+            run_id="json-home-001",
+            config=config,
+            results=_make_simulation_results(),
+            summary=summary,
+        )
+
+        run_dir = storage.data_dir / "runs" / "json-home-001"
+        [run] = storage.list_runs()
+        assert _read_json(run_dir / "config.json") == _json_field_tree(config)
+        assert json.loads(run["config_json"]) == _json_field_tree(config)
+        assert _read_json(run_dir / "summary.json") == _json_field_tree(summary)
+        assert json.loads(run["summary_json"]) == _json_field_tree(summary)
+
+    def test_fleet_run_writes_configs_and_summaries_as_field_trees(
+        self, storage: RunStorage
+    ) -> None:
+        """A fleet run's configs and summaries, as files and as DB columns, are their field trees."""
+        home_configs = [
+            _make_home_config_with_every_field_shape(f"Home {i}") for i in range(2)
+        ]
+        home_summaries = [_make_summary(), _make_summary(include_heat_pump=True)]
+        fleet_summary = _make_fleet_summary(n_homes=2)
+
+        storage.save_fleet_run(
+            run_id="json-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results() for _ in range(2)],
+                home_configs=home_configs,
+            ),
+            fleet_summary=fleet_summary,
+            per_home_summaries=home_summaries,
+        )
+
+        run_dir = storage.data_dir / "runs" / "json-fleet-001"
+        [run] = storage.list_runs()
+        expected_config = {
+            "homes": [_json_field_tree(config) for config in home_configs],
+            "n_homes": 2,
+        }
+        assert _read_json(run_dir / "config.json") == expected_config
+        assert json.loads(run["config_json"]) == expected_config
+        assert _read_json(run_dir / "summary.json") == _json_field_tree(fleet_summary)
+        assert json.loads(run["summary_json"]) == _json_field_tree(fleet_summary)
+        for i, home_summary in enumerate(home_summaries):
+            home_summary_path = run_dir / "homes" / f"home_{i}_summary.json"
+            assert _read_json(home_summary_path) == _json_field_tree(home_summary)
 
 
 class TestCorruptedParquet:
