@@ -4,6 +4,7 @@ What one test's teardown did is only visible from a later test, so the scenarios
 run in order inside a separate pytest session under a copy of the root conftest.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -16,28 +17,18 @@ ROOT_CONFTEST = Path(__file__).parents[1] / "conftest.py"
 SCENARIOS = """
     import pytest
 
-    from solar_challenge.web.app import create_app
     from solar_challenge.web.shared import get_job_manager
+
+    from tests._web_app import build_test_app
 
     HOME_JOB = {"pv_kw": 4.0, "battery_kwh": 0, "occupants": 3, "location": "bristol", "days": 1}
 
     apps_built_inside_earlier_tests = []
 
 
-    def build_app(data_dir):
-        return create_app(
-            test_config={
-                "TESTING": True,
-                "SECRET_KEY": "drain-scope-test-secret",
-                "DATABASE": str(data_dir / "test.db"),
-                "DATA_DIR": str(data_dir),
-            }
-        )
-
-
     @pytest.fixture(scope="module")
     def module_app(tmp_path_factory):
-        app = build_app(tmp_path_factory.mktemp("module_app"))
+        app = build_test_app(tmp_path_factory.mktemp("module_app"))
         yield app
         with app.app_context():
             get_job_manager().shutdown(wait=True)
@@ -46,7 +37,7 @@ SCENARIOS = """
     def test_an_earlier_test_uses_the_module_app_and_builds_its_own_app(module_app, tmp_path):
         assert module_app.test_client().get("/").status_code == 200
 
-        apps_built_inside_earlier_tests.append(build_app(tmp_path))
+        apps_built_inside_earlier_tests.append(build_test_app(tmp_path))
 
 
     def test_module_app_still_accepts_a_job_after_an_earlier_tests_teardown(module_app):
@@ -67,11 +58,14 @@ def test_the_per_test_drain_stops_only_the_managers_a_test_created(
     pytester: pytest.Pytester,
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
+    project_root: Path,
 ) -> None:
     pytester.makeconftest(ROOT_CONFTEST.read_text(encoding="utf-8"))
     scenarios = pytester.makepyfile(SCENARIOS)
     # The scenarios' job reads the weather cache relative to cwd, so run where the suite runs.
     monkeypatch.chdir(request.config.invocation_params.dir)
+    # The scenarios build their apps with tests/_web_app.py, whatever directory the suite runs from.
+    monkeypatch.setenv("PYTHONPATH", str(project_root), prepend=os.pathsep)
 
     result = pytester.runpytest_subprocess(scenarios)
 
