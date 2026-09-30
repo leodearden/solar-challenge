@@ -30,9 +30,6 @@ from solar_challenge.config import (
     UniformDistribution,
     WeightedDiscreteDistribution,
     _parse_community_config,
-    _parse_ev_config,
-    _parse_heat_pump_config,
-    _parse_pv_config,
     _parse_pv_distribution_config,
     _modify_pv_config,
     load_community_config,
@@ -2553,43 +2550,32 @@ class TestParseHomeBlockHeatPumpEV:
         assert result.ev_config is None, "ev_config should be None when key absent"
 
 
-class TestParseHeatPumpEvConfigErrors:
-    """Tests that _parse_heat_pump_config / _parse_ev_config raise ConfigurationError
-    for malformed blocks (amendment: suggestion 1 + 2)."""
+class TestHeatPumpEvBlockErrors:
+    """parse_home_block refuses a heat_pump or ev block that lacks a required field, naming the field."""
 
     def test_heat_pump_missing_heat_pump_type_raises(self) -> None:
         """heat_pump block without heat_pump_type raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="heat_pump_type"):
-            _parse_heat_pump_config({"thermal_capacity_kw": 8.0})
+            _parsed_home(heat_pump={"thermal_capacity_kw": 8.0})
 
     def test_heat_pump_missing_thermal_capacity_raises(self) -> None:
         """heat_pump block without thermal_capacity_kw raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="thermal_capacity_kw"):
-            _parse_heat_pump_config({"heat_pump_type": "ASHP"})
+            _parsed_home(heat_pump={"heat_pump_type": "ASHP"})
 
     def test_ev_missing_charger_type_raises(self) -> None:
         """ev block without charger_type raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="charger_type"):
-            _parse_ev_config({"arrival_hour": 18})
+            _parsed_home(ev={"arrival_hour": 18})
 
     def test_ev_missing_arrival_hour_raises(self) -> None:
         """ev block without arrival_hour raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="arrival_hour"):
-            _parse_ev_config({"charger_type": "7kW"})
-
-    def test_heat_pump_missing_type_via_parse_home_block(self) -> None:
-        """parse_home_block raises ConfigurationError for partial heat_pump block."""
-        data: dict = {
-            "pv": {"capacity_kw": 4.0},
-            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-            "heat_pump": {"thermal_capacity_kw": 8.0},  # missing heat_pump_type
-        }
-        with pytest.raises(ConfigurationError, match="heat_pump_type"):
-            parse_home_block(data, Location.bristol())
+            _parsed_home(ev={"charger_type": "7kW"})
 
 
-class TestParsePVConfig:
-    """Tests that _parse_pv_config threads degradation keys through to PVConfig."""
+class TestPVBlockParsing:
+    """parse_home_block threads the pv: block's degradation keys through to PVConfig."""
 
     def test_explicit_degradation_keys_are_passed_through(self) -> None:
         """system_age_years and degradation_rate_per_year from data reach PVConfig."""
@@ -2598,14 +2584,14 @@ class TestParsePVConfig:
             "system_age_years": 15.0,
             "degradation_rate_per_year": 0.008,
         }
-        pv = _parse_pv_config(data)
+        pv = _parsed_home(pv=data).pv_config
         assert pv.system_age_years == 15.0
         assert pv.degradation_rate_per_year == 0.008
 
     def test_missing_keys_yield_dataclass_defaults(self) -> None:
         """Omitting both keys gives PVConfig defaults (age 0.0, rate 0.005)."""
         data = {"capacity_kw": 4.0}
-        pv = _parse_pv_config(data)
+        pv = _parsed_home(pv=data).pv_config
         assert pv.system_age_years == 0.0
         assert pv.degradation_rate_per_year == 0.005
 
