@@ -239,12 +239,6 @@ def simulate_home(
         # Align temperature to demand index (same as generation alignment)
         aligned_temperature = _align_tmy_to_demand(minute_temperature, minute_demand)
 
-        # Ensure temperature has timezone info matching demand
-        if aligned_temperature.index.tz is None and minute_demand.index.tz is not None:
-            aligned_temperature.index = aligned_temperature.index.tz_localize(minute_demand.index.tz)
-        elif aligned_temperature.index.tz != minute_demand.index.tz:
-            aligned_temperature.index = aligned_temperature.index.tz_convert(minute_demand.index.tz)
-
         # Generate heat pump electrical load
         heat_pump_load_series = generate_heat_pump_load(
             config.heat_pump_config,
