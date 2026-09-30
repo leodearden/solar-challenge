@@ -61,6 +61,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 solar_challenge = ["py.typed"]
+"solar_challenge.web" = ["templates/**/*", "static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
