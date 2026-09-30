@@ -363,6 +363,9 @@ def _voltage_matched_cec_inverter(
     return dict(_sam_library("CECInverter")[best.name]), wiring
 
 
+_PVWATTS_MODULE_KEYS = frozenset({"pdc0", "gamma_pdc"})
+
+
 def _pvwatts_inverter(config: PVConfig) -> dict[str, float]:
     """pvlib's PVWatts inverter at the configured AC capacity and nominal efficiency; it needs no DC voltage."""
     return {
@@ -387,15 +390,23 @@ def _inverter_and_wiring(
     """The inverter parameters and how to wire the modules to them.
 
     Custom inverter parameters take one string of every module, as does the
-    PVWatts inverter that a module without a V_mp_ref gets, because pvlib's
-    PVWatts models ignore voltage. A module with a V_mp_ref gets a CEC inverter
-    voltage-matched to its strings.
+    PVWatts inverter that a module with PVWatts parameters gets, because
+    pvlib's PVWatts models ignore voltage. PVWatts parameters are the keys
+    pvlib infers its PVWatts DC model from. A module with a V_mp_ref gets a CEC
+    inverter voltage-matched to its strings. Any other module needs custom
+    inverter parameters.
     """
     one_string = (_StringGroup(module_count, 1),)
     if config.custom_inverter_params is not None:
         return config.custom_inverter_params, one_string
-    if "V_mp_ref" not in module_params:
+    if _PVWATTS_MODULE_KEYS <= module_params.keys():
         return _pvwatts_inverter(config), one_string
+    if "V_mp_ref" not in module_params:
+        raise ValueError(
+            "Module parameters have neither pdc0 and gamma_pdc, for a PVWatts "
+            "inverter, nor a V_mp_ref, to voltage-match a CEC inverter to the "
+            "strings; supply PVConfig.custom_inverter_params"
+        )
     inverter_params, wiring = _voltage_matched_cec_inverter(
         config.effective_inverter_capacity_kw, module_count, module_params["V_mp_ref"]
     )
@@ -430,9 +441,10 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     Creates a PVSystem using CEC module and inverter databases for realistic
     modelling parameters, or custom parameters if provided. The CEC inverter is
     voltage-matched to the strings; see _ranking_key and _wiring_within_window
-    for how it is chosen and how the modules are wired to it. A module without
-    a V_mp_ref (e.g. one from create_simple_module_params) gets pvlib's PVWatts
-    inverter at the configured AC capacity and efficiency instead.
+    for how it is chosen and how the modules are wired to it. A module with
+    PVWatts parameters (pdc0 and gamma_pdc, e.g. one from
+    create_simple_module_params) gets pvlib's PVWatts inverter at the
+    configured AC capacity and efficiency instead.
 
     Args:
         config: PV system configuration with capacity, azimuth, tilt, and
@@ -442,8 +454,10 @@ def create_pv_system(config: PVConfig) -> PVSystem:
         pvlib PVSystem ready for use in ModelChain simulation
 
     Raises:
-        ValueError: If no CEC inverter's MPPT window admits a string of the
-            module's voltage.
+        ValueError: If the module parameters have neither PVWatts parameters
+            nor a V_mp_ref and no custom inverter parameters are given, or if
+            no CEC inverter's MPPT window admits a string of the module's
+            voltage.
 
     Example:
         >>> config = PVConfig(capacity_kw=4.0, azimuth=180, tilt=35)

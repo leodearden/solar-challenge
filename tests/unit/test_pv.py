@@ -776,6 +776,13 @@ class TestInverterMatchesStringVoltage:
         with pytest.raises(ValueError, match="MPPT window"):
             create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=module))
 
+    def test_a_sapm_module_needs_an_explicit_inverter(self) -> None:
+        """A SAPM module has no V_mp_ref to voltage-match a CEC inverter to, and no pdc0 and gamma_pdc for a PVWatts inverter."""
+        sapm_module = dict(pvlib.pvsystem.retrieve_sam("SandiaMod").iloc[:, 0])
+
+        with pytest.raises(ValueError, match="custom_inverter_params"):
+            create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=sapm_module))
+
 
 class TestPVWattsModule:
     """A module without a voltage model runs on pvlib's PVWatts DC and inverter models."""
