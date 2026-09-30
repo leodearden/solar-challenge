@@ -1,10 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Drive the single-home simulation form at /simulate/home through its UI, as a user would."""
+"""Drive the single-home simulation form at /simulate/home through its UI, as a user would, and read back its Alpine formData."""
 
 from playwright.sync_api import Page, Response
 
 _FIRST_DAY = "2024-06-01"
 _LAST_DAY = "2024-06-02"
+
+
+def form_data(page: Page) -> dict[str, object]:
+    """The home form's Alpine formData, as the page holds it now."""
+    return page.evaluate("""() => {
+        const el = document.querySelector('[x-data="homeSimulator()"]');
+        return { ...Alpine.$data(el).formData };
+    }""")
 
 
 def open_period_tab(page: Page) -> None:
