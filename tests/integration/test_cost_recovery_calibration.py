@@ -63,7 +63,8 @@ def _make_sim_results_cr6(
       home.py computes total_kwh = series.sum() * (1/60)
       sc_kw = self_kwh / (n_steps/60)  →  sum*1/60 = self_kwh  ✓
 
-    No battery grid-charging (grid_charge_cost=None).
+    No battery grid-charging: grid_import is all load import.
+    Untariffed: import_cost is zero and grid_charge_cost is None.
     export_revenue=0 → SEG income = 0 in _seg_export_income_gbp (physics path).
     """
     import pandas as pd
@@ -107,7 +108,7 @@ def _make_fleet_results_fin_cr6(
       - Required revenue = opex(13100) + debt_svc(14410) + floor×n(2700) = £30,210
       - r* = 30210 / (200000/100) = 15.1 p/kWh → interior 'floor' regime, feasible=True
 
-    No-flex by construction: grid_charge_cost=None, export_revenue=0, grid_services=0.
+    No-flex by construction: no grid charging, export_revenue=0, grid_services=0.
     """
     from solar_challenge.fleet import FleetResults
 
@@ -405,7 +406,7 @@ def _make_interior_fleet_cr6(
       r* = (2725 − 0) / (10000/100) = £2,725 / 100 = 27.25p
       BUT retail=30p → interior: 0 < 27.25 < 30 ✓
 
-    No-flex: grid_charge_cost=None, export_revenue=0.
+    No-flex: no grid charging, export_revenue=0.
     """
     from solar_challenge.fleet import FleetResults
 
@@ -729,7 +730,6 @@ def _make_grid_charge_sim_results_cr6(
     export_kwh: float,
     import_to_load_kwh: float,
     grid_charge_kwh: float,
-    grid_charge_cost_per_home_gbp: float,
     n_steps: int = 8760,
 ) -> "SimulationResults":  # type: ignore[name-defined]
     """Build a synthetic SimulationResults for grid-charging (arbitrage) homes.
@@ -742,7 +742,8 @@ def _make_grid_charge_sim_results_cr6(
     This exposes the B-vs-C gap: total_self_consumption (B-style, discharge-inclusive)
     is self_kwh, while demand − import is self_kwh − grid_charge_kwh.
 
-    grid_charge_cost series is non-None so total_grid_charge_cost_gbp > 0 in the summary.
+    Untariffed, like _make_sim_results_cr6: import_cost is zero and grid_charge_cost
+    is None.
     """
     import pandas as pd
     from solar_challenge.home import SimulationResults
@@ -757,8 +758,6 @@ def _make_grid_charge_sim_results_cr6(
     total_imp_kw = imp_to_load_kw + grid_charge_kw  # inflated by grid_charge
     zeros = pd.Series(0.0, index=idx)
 
-    charge_per_step = grid_charge_cost_per_home_gbp / n_steps
-
     return SimulationResults(
         generation=pd.Series(gen_kw, index=idx),
         demand=pd.Series(demand_kw, index=idx),
@@ -771,7 +770,7 @@ def _make_grid_charge_sim_results_cr6(
         import_cost=zeros.copy(),
         export_revenue=zeros.copy(),
         tariff_rate=zeros.copy(),
-        grid_charge_cost=pd.Series(charge_per_step, index=idx),
+        grid_charge_cost=None,
     )
 
 
@@ -781,7 +780,6 @@ def _make_grid_charge_fleet_cr6(
     export_kwh: float = 400.0,
     import_to_load_kwh: float = 800.0,
     grid_charge_kwh: float = 200.0,
-    grid_charge_cost_per_home_gbp: float = 30.0,
 ) -> "FleetResults":  # type: ignore[name-defined]
     """Build a grid-charging FleetResults for basis-C reconciliation tests.
 
@@ -801,7 +799,6 @@ def _make_grid_charge_fleet_cr6(
             export_kwh=export_kwh,
             import_to_load_kwh=import_to_load_kwh,
             grid_charge_kwh=grid_charge_kwh,
-            grid_charge_cost_per_home_gbp=grid_charge_cost_per_home_gbp,
         )
         for _ in range(n_homes)
     ]
@@ -898,7 +895,7 @@ class TestArbitrageBasisCReconciliation:
         from solar_challenge.finance import _cbs_own_use_kwh
         from solar_challenge.home import calculate_summary
 
-        # Use the existing flat-rate builder (grid_charge_cost=None)
+        # Use the existing flat-rate builder
         flat_sr = _make_sim_results_cr6(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
         s = calculate_summary(flat_sr)
         # No grid charging → demand - import = sc + import - import = sc
@@ -931,7 +928,6 @@ class TestArbitrageBasisCReconciliation:
             export_kwh=400.0,
             import_to_load_kwh=800.0,
             grid_charge_kwh=200.0,   # → basis C = 2800 - 200 = 2600 kWh/home
-            grid_charge_cost_per_home_gbp=30.0,
         )
         summaries = [calculate_summary(r) for r in fr.per_home_results]
         return scenario, finance, fr, summaries
