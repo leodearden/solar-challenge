@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_css_classes.py, the reader of the CSS classes the dashboard
-applies and of the classes a stylesheet's selectors name.
+"""Unit tests for tests/_css_classes.py, the reader of the CSS names the dashboard
+uses and its stylesheets define: classes, custom properties and @keyframes.
 
-Each test pins one extraction rule, so an edit that weakens a channel fails here
-instead of letting the repository guard in test_web_compiled_css.py pass vacuously.
+Each test pins one extraction rule, so an edit that weakens a reader fails here
+instead of letting a repository guard that uses it pass vacuously.
 """
 
 import pytest
@@ -12,6 +12,9 @@ pytest.importorskip("jinja2")
 from tests._css_classes import (
     applied_classes_in_script,
     applied_classes_in_template,
+    custom_property_references,
+    declared_custom_properties,
+    keyframes_names,
     linked_stylesheets,
     selector_classes,
 )
@@ -143,6 +146,49 @@ def test_selector_classes_skip_strings_and_url_tokens() -> None:
     )
 
     assert selector_classes(stylesheet) == {"content-['']"}
+
+
+def test_declared_custom_properties_skip_comments_strings_var_reads_and_bem_modifiers() -> None:
+    """None of '--commented-out', '--in-a-string', '--only-read' or '--lg' is declared: they sit
+    in a comment, a string, a var() read and a BEM class name."""
+    stylesheet = (
+        "/* --commented-out: red; */"
+        ":root{--color-primary:#f59e0b;--tw-content:'--in-a-string: 1'}"
+        "html.dark { --color-primary : #fbbf24 }"
+        ".spinner--lg:hover{color:var(--only-read)}"
+    )
+
+    assert declared_custom_properties(stylesheet) == {"--color-primary", "--tw-content"}
+
+
+def test_custom_property_references_are_the_var_reads_of_any_source_including_nested_fallbacks() -> None:
+    """'--color-unread' is only declared, never read."""
+    source = (
+        "input::-moz-range-thumb{background:var(--color-primary)}"
+        "*{box-shadow:var(--tw-ring-offset-shadow,var( --tw-ring-shadow ))}"
+        '<div style="color: var(--color-generation)"></div>'
+        ":root{--color-unread:#fff}"
+    )
+
+    assert custom_property_references(source) == {
+        "--color-primary",
+        "--tw-ring-offset-shadow",
+        "--tw-ring-shadow",
+        "--color-generation",
+    }
+
+
+def test_keyframes_names_count_keyframes_rules_including_vendor_prefixed_but_not_animations_or_comments() -> None:
+    """Neither 'banner' nor 'bounce' is defined: one sits in a comment, the other is only
+    named by an animation."""
+    stylesheet = (
+        "/*! @keyframes banner */"
+        "@keyframes spin{to{transform:rotate(1turn)}}"
+        "@-webkit-keyframes pulse { 50% { opacity: .5 } }"
+        ".animate-bounce{animation:bounce 1s infinite}"
+    )
+
+    assert keyframes_names(stylesheet) == {"spin", "pulse"}
 
 
 def test_linked_stylesheets_are_the_static_css_files_in_source_order() -> None:
