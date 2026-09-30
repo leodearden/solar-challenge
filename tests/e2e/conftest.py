@@ -5,6 +5,11 @@ configures Playwright's base_url so tests can use relative paths.
 
 Includes data-seeding fixtures for tests that need pre-existing
 simulation runs (results pages, history interactions, compare page).
+Also stubs the Run History page's runs-list API for tests that need it
+empty or unanswered.
+
+It imports nothing from playwright: tests/unit/test_e2e_job_wait.py runs
+a copy of this module in the verify environment, which lacks the e2e extra.
 """
 
 import json
@@ -14,6 +19,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import numpy as np
 import pandas as pd
@@ -362,3 +368,37 @@ def seeded_home_runs_pair(_e2e_db_path, _e2e_data_dir, live_server):
         },
     )
     return [r1, r2]
+
+
+# ---------------------------------------------------------------------------
+# Run History API stubs
+# ---------------------------------------------------------------------------
+
+
+def _is_runs_list_request(url: str) -> bool:
+    return urlsplit(url).path == "/api/history/runs"
+
+
+@pytest.fixture
+def runs_api_returns_no_runs(page, live_server: str) -> None:
+    """Answer the Run History page's runs-list requests as the live API answers a search no run matches."""
+    no_runs_response = page.request.get(
+        live_server + "/api/history/runs",
+        params={"q": uuid.uuid4().hex},
+        fail_on_status_code=True,
+    ).json()
+    page.route(
+        _is_runs_list_request,
+        lambda route: route.fulfill(json=no_runs_response),
+    )
+
+
+@pytest.fixture
+def runs_api_never_answers(page) -> Iterator[None]:
+    """Hold the Run History page's runs-list requests unanswered for the whole test, then abort them."""
+    held_requests = []
+    page.route(_is_runs_list_request, lambda route: held_requests.append(route))
+    yield
+    assert held_requests, "the page made no runs-list request for runs_api_never_answers to hold"
+    for route in held_requests:
+        route.abort()

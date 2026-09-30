@@ -162,3 +162,24 @@ def test_mobile_history_lists_runs_as_cards(
     expect(view_links).to_have_count(1)
     expect(view_links).to_have_attribute("href", f"/results/home/{run_id}")
     expect(page.locator("table")).to_be_hidden()
+
+
+# -- History shows its empty and loading states on mobile ------------------
+
+
+@pytest.mark.usefixtures("runs_api_returns_no_runs")
+def test_mobile_history_shows_empty_state(page: Page, live_server: str) -> None:
+    """Below the md breakpoint, 'No simulation runs found' shows when the runs API returns no runs."""
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+    page.goto(live_server + "/history/runs")
+
+    expect(page.get_by_text("No simulation runs found")).to_be_visible()
+
+
+@pytest.mark.usefixtures("runs_api_never_answers")
+def test_mobile_history_shows_loading_state(page: Page, live_server: str) -> None:
+    """Below the md breakpoint, 'Loading runs...' shows while the runs API has not answered."""
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+    page.goto(live_server + "/history/runs")
+
+    expect(page.get_by_text("Loading runs...")).to_be_visible()
