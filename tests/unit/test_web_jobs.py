@@ -18,10 +18,11 @@ from flask.testing import FlaskClient
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.app import create_app
 from solar_challenge.web.database import init_db
 from solar_challenge.web.jobs import HomeSimulator, JobManager, live_managers, shutdown_all_managers
 from solar_challenge.web.storage import RunStorage
+
+from tests._web_app import build_test_app
 
 
 def _an_hour_at(generation_kw: float) -> SimulationResults:
@@ -85,20 +86,9 @@ class _BlockingSimulation:
 
 
 @pytest.fixture
-def app(tmp_path) -> Flask:
+def app(tmp_path: Path) -> Flask:
     """Create a test Flask application with temporary database."""
-    db_path = str(tmp_path / "test.db")
-    data_dir = str(tmp_path / "data")
-    test_app = create_app(
-        test_config={
-            "TESTING": True,
-            "SECRET_KEY": "test-secret-key",
-            "WTF_CSRF_ENABLED": False,
-            "DATABASE": db_path,
-            "DATA_DIR": data_dir,
-        }
-    )
-    return test_app
+    return build_test_app(tmp_path)
 
 
 def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:

@@ -6,6 +6,7 @@ The job must complete: a failing job can end before the next test starts even
 with no wait, so a 'failed' status would not show that the wait happened.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -51,11 +52,14 @@ def test_each_e2e_tests_live_server_jobs_finish_before_the_next_test_starts(
     pytester: pytest.Pytester,
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
+    project_root: Path,
 ) -> None:
     pytester.makeconftest(E2E_CONFTEST.read_text(encoding="utf-8"))
     scenarios = pytester.makepyfile(SCENARIOS)
     # The scenarios' job reads the weather cache relative to cwd, so run where the suite runs.
     monkeypatch.chdir(request.config.invocation_params.dir)
+    # The e2e conftest builds its app with tests/_web_app.py, whatever directory the suite runs from.
+    monkeypatch.setenv("PYTHONPATH", str(project_root), prepend=os.pathsep)
 
     result = pytester.runpytest_subprocess(scenarios)
 

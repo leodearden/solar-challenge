@@ -23,7 +23,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.app import create_app
+from tests._web_app import build_test_app
 
 
 # ---------------------------------------------------------------------------
@@ -58,18 +58,7 @@ _SKIP_REASON = (
 @pytest.fixture
 def app(tmp_path: Path) -> Flask:
     """Create a real Flask app with temporary database and data dir."""
-    db_path = str(tmp_path / "test_dist.db")
-    data_dir = str(tmp_path / "data")
-    test_app = create_app(
-        test_config={
-            "TESTING": True,
-            "SECRET_KEY": "test-secret-key-dist",
-            "WTF_CSRF_ENABLED": False,
-            "DATABASE": db_path,
-            "DATA_DIR": data_dir,
-        }
-    )
-    return test_app
+    return build_test_app(tmp_path)
 
 
 @pytest.fixture

@@ -28,10 +28,11 @@ pytest.importorskip("werkzeug")
 from flask import Flask
 from werkzeug.serving import make_server
 
-from solar_challenge.web.app import create_app
 from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager
+
+from tests._web_app import build_test_app
 
 
 def _find_free_port() -> int:
@@ -42,44 +43,26 @@ def _find_free_port() -> int:
 
 
 # ---------------------------------------------------------------------------
-# Shared temp directory and paths
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def _e2e_tmp_dir(tmp_path_factory):
-    """Session-scoped temp directory shared by all e2e fixtures."""
-    return tmp_path_factory.mktemp("e2e")
-
-
-@pytest.fixture(scope="session")
-def _e2e_db_path(_e2e_tmp_dir):
-    """Path to the shared e2e test database."""
-    return _e2e_tmp_dir / "test.db"
-
-
-@pytest.fixture(scope="session")
-def _e2e_data_dir(_e2e_tmp_dir):
-    """Root data directory for run storage."""
-    return _e2e_tmp_dir
-
-
-# ---------------------------------------------------------------------------
 # Live server
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
-def _e2e_app(_e2e_db_path: Path, _e2e_data_dir: Path) -> Flask:
+def _e2e_app(tmp_path_factory: pytest.TempPathFactory) -> Flask:
     """The Flask app the live server serves."""
-    return create_app(
-        test_config={
-            "TESTING": True,
-            "SECRET_KEY": "e2e-test-secret",
-            "DATABASE": str(_e2e_db_path),
-            "DATA_DIR": str(_e2e_data_dir),
-        }
-    )
+    return build_test_app(tmp_path_factory.mktemp("e2e"))
+
+
+@pytest.fixture(scope="session")
+def _e2e_db_path(_e2e_app: Flask) -> Path:
+    """Path to the database the live server's app reads."""
+    return Path(_e2e_app.config["DATABASE"])
+
+
+@pytest.fixture(scope="session")
+def _e2e_data_dir(_e2e_app: Flask) -> Path:
+    """Root data directory for the live server's run storage."""
+    return Path(_e2e_app.config["DATA_DIR"])
 
 
 @pytest.fixture(scope="session")
