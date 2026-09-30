@@ -30,10 +30,8 @@ from solar_challenge.config import (
     UniformDistribution,
     WeightedDiscreteDistribution,
     _parse_community_config,
-    _parse_pv_distribution_config,
     _modify_pv_config,
     load_community_config,
-    _parse_distribution_spec,
     _sample_from_distribution,
     generate_homes_from_distribution,
     load_config,
@@ -63,6 +61,11 @@ from solar_challenge.tariff import TariffConfig, TariffPeriod
 def _parsed_home(**blocks: Any) -> HomeConfig:
     """Parse a ``home:`` block holding only *blocks*, at the Bristol default location."""
     return parse_home_block(blocks, Location.bristol())
+
+
+def _parsed_fleet_distribution(**sections: Any) -> FleetDistributionConfig:
+    """Parse a one-home ``fleet_distribution:`` block holding *sections*."""
+    return parse_fleet_distribution_config({"n_homes": 1, **sections})
 
 
 class TestSimulationPeriod:
@@ -1302,21 +1305,16 @@ class TestDistributionDataclasses:
 
 
 class TestDistributionParsing:
-    """Tests for _parse_distribution_spec function."""
+    """The distribution-spec grammar, read as a fleet distribution's pv.capacity_kw."""
 
     def test_parse_none(self) -> None:
         """Test parsing None value."""
-        result = _parse_distribution_spec(None, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": None}).pv.capacity_kw
         assert result is None
-
-    def test_parse_scalar_float(self) -> None:
-        """Test parsing scalar float."""
-        result = _parse_distribution_spec(4.0, "test")
-        assert result == 4.0
 
     def test_parse_scalar_int(self) -> None:
         """Test parsing scalar int converts to float."""
-        result = _parse_distribution_spec(5, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": 5}).pv.capacity_kw
         assert result == 5.0
         assert isinstance(result, float)
 
@@ -1327,7 +1325,7 @@ class TestDistributionParsing:
             "values": [3.0, 4.0, 5.0],
             "weights": [20, 50, 30],
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, WeightedDiscreteDistribution)
         assert result.values == (3.0, 4.0, 5.0)
         assert result.weights == (20.0, 50.0, 30.0)
@@ -1339,7 +1337,7 @@ class TestDistributionParsing:
             "values": [None, 5.0, 10.0],
             "weights": [40, 40, 20],
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, WeightedDiscreteDistribution)
         assert result.values == (None, 5.0, 10.0)
 
@@ -1351,7 +1349,7 @@ class TestDistributionParsing:
             "values": [3.0, 4.0, 5.0, 6.0],
             "counts": [20, 40, 30, 10],
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, ShuffledPoolDistribution)
         assert result.values == (3.0, 4.0, 5.0, 6.0)
         assert result.counts == (20, 40, 30, 10)
@@ -1364,15 +1362,15 @@ class TestDistributionParsing:
             "values": [None, 5.0, 10.0],
             "counts": [40, 40, 20],
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, ShuffledPoolDistribution)
         assert result.values == (None, 5.0, 10.0)
 
     def test_parse_shuffled_pool_missing_counts_raises(self) -> None:
         """Test parsing shuffled_pool without counts raises."""
         with pytest.raises(ConfigurationError, match="requires 'values' and 'counts'"):
-            _parse_distribution_spec(
-                {"type": "shuffled_pool", "values": [1, 2, 3]}, "test"
+            _parsed_fleet_distribution(
+                pv={"capacity_kw": {"type": "shuffled_pool", "values": [1, 2, 3]}}
             )
 
     def test_parse_normal(self) -> None:
@@ -1382,7 +1380,7 @@ class TestDistributionParsing:
             "mean": 3400,
             "std": 800,
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, NormalDistribution)
         assert result.mean == 3400.0
         assert result.std == 800.0
@@ -1396,7 +1394,7 @@ class TestDistributionParsing:
             "min": 2000,
             "max": 6000,
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, NormalDistribution)
         assert result.min == 2000.0
         assert result.max == 6000.0
@@ -1408,7 +1406,7 @@ class TestDistributionParsing:
             "min": 3.0,
             "max": 6.0,
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, UniformDistribution)
         assert result.min == 3.0
         assert result.max == 6.0
@@ -1419,35 +1417,39 @@ class TestDistributionParsing:
             "type": "fixed",
             "value": 4.5,
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert result == 4.5
 
     def test_parse_missing_type_raises(self) -> None:
         """Test parsing dict without type raises error."""
         with pytest.raises(ConfigurationError, match="requires 'type'"):
-            _parse_distribution_spec({"values": [1, 2, 3]}, "test")
+            _parsed_fleet_distribution(pv={"capacity_kw": {"values": [1, 2, 3]}})
 
     def test_parse_unknown_type_raises(self) -> None:
         """Test parsing unknown type raises error."""
         with pytest.raises(ConfigurationError, match="Unknown distribution type"):
-            _parse_distribution_spec({"type": "unknown"}, "test")
+            _parsed_fleet_distribution(pv={"capacity_kw": {"type": "unknown"}})
 
     def test_parse_weighted_discrete_missing_values_raises(self) -> None:
         """Test parsing weighted_discrete without values raises."""
         with pytest.raises(ConfigurationError, match="requires 'values' and 'weights'"):
-            _parse_distribution_spec(
-                {"type": "weighted_discrete", "weights": [1, 2]}, "test"
+            _parsed_fleet_distribution(
+                pv={"capacity_kw": {"type": "weighted_discrete", "weights": [1, 2]}}
             )
 
     def test_parse_normal_missing_std_raises(self) -> None:
         """Test parsing normal without std raises."""
         with pytest.raises(ConfigurationError, match="requires 'mean' and 'std'"):
-            _parse_distribution_spec({"type": "normal", "mean": 100}, "test")
+            _parsed_fleet_distribution(
+                pv={"capacity_kw": {"type": "normal", "mean": 100}}
+            )
 
     def test_parse_uniform_missing_max_raises(self) -> None:
         """Test parsing uniform without max raises."""
         with pytest.raises(ConfigurationError, match="requires 'min' and 'max'"):
-            _parse_distribution_spec({"type": "uniform", "min": 0}, "test")
+            _parsed_fleet_distribution(
+                pv={"capacity_kw": {"type": "uniform", "min": 0}}
+            )
 
 
 class TestDistributionSampling:
@@ -2697,8 +2699,8 @@ class TestGenerateHomesFromDistributionDegradation:
         )
 
 
-class TestParsePVDistributionConfigDegradation:
-    """Tests that _parse_pv_distribution_config threads degradation keys into PVDistributionConfig."""
+class TestPVDistributionDegradationParsing:
+    """parse_fleet_distribution_config threads the pv section's degradation keys into PVDistributionConfig."""
 
     def test_explicit_keys_are_parsed(self) -> None:
         """system_age_years and degradation_rate_per_year from data reach PVDistributionConfig."""
@@ -2707,14 +2709,14 @@ class TestParsePVDistributionConfigDegradation:
             "system_age_years": 20.0,
             "degradation_rate_per_year": 0.008,
         }
-        pv_dist = _parse_pv_distribution_config(data)
+        pv_dist = _parsed_fleet_distribution(pv=data).pv
         assert pv_dist.system_age_years == 20.0
         assert pv_dist.degradation_rate_per_year == 0.008
 
     def test_defaults_apply_when_keys_omitted(self) -> None:
         """Omitting both keys yields defaults: system_age_years=0.0, degradation_rate_per_year=0.005."""
         data = {"capacity_kw": 4.0}
-        pv_dist = _parse_pv_distribution_config(data)
+        pv_dist = _parsed_fleet_distribution(pv=data).pv
         assert pv_dist.system_age_years == 0.0
         assert pv_dist.degradation_rate_per_year == 0.005
 
