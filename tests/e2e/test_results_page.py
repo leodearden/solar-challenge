@@ -59,28 +59,17 @@ def test_results_tab_switching(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Click Overview/Power Flow/Battery & Finance/Analysis -> aria-selected='true'."""
+    """Clicking each chart tab makes it the only selected tab.
+
+    Overview is selected on load, so it is clicked last: only then does
+    its click have to move the selection.
+    """
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
-    # The results page uses a tab nav (may be aria-label="Chart tabs" or similar)
-    tab_labels = ["Overview", "Power Flow", "Battery", "Analysis"]
-
-    for label in tab_labels:
-        tab_btn = page.locator("button", has_text=label)
-        if tab_btn.count() == 0:
-            continue
-
-        tab_btn.first.click()
-        page.wait_for_timeout(300)
-
-        # Check aria-selected on the clicked tab
-        selected = tab_btn.first.get_attribute("aria-selected")
-        assert selected == "true", (
-            f"Tab '{label}' should have aria-selected='true', got '{selected}'"
-        )
+    for name in ("Power Flow", "Battery & Finance", "Analysis", "Overview"):
+        page.get_by_role("tab", name=name, exact=True).click()
+        expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(name)
 
 
 # -- Stat card labels not truncated (potential bug) -------------------------
