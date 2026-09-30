@@ -254,8 +254,6 @@ def simulate_home(
         # Add heat pump load to household demand
         minute_demand = minute_demand + heat_pump_load_series
 
-    # Align generation to demand index (TMY data may have different dates)
-    # TMY data uses a synthetic year, so we map by time-of-year
     aligned_generation = _align_tmy_to_demand(minute_generation, minute_demand)
 
     # Create battery if configured
@@ -414,26 +412,30 @@ def simulate_home(
     )
 
 
-def _time_of_year_keys(index: pd.DatetimeIndex) -> pd.Index:
-    """Each timestamp's wall-clock month, day, hour and minute in its own timezone, packed as MMDDhhmm."""
-    return ((index.month * 100 + index.day) * 100 + index.hour) * 100 + index.minute
+def _utc_time_of_year_keys(index: pd.DatetimeIndex) -> pd.Index:
+    """Each timestamp's UTC month, day, hour and minute packed as MMDDhhmm; a naive index is read as UTC."""
+    utc = index if index.tz is None else index.tz_convert("UTC")
+    return ((utc.month * 100 + utc.day) * 100 + utc.hour) * 100 + utc.minute
 
 
 def _align_tmy_to_demand(
     tmy_generation: pd.Series,
     demand: pd.Series,
 ) -> pd.Series:
-    """Map a TMY series onto the demand's timestamps by wall-clock time of year.
+    """Map a TMY series onto the demand's timestamps by UTC time of year.
 
-    Each demand timestamp takes the TMY value with the same month, day, hour
-    and minute, each read in its own index's timezone. A demand timestamp with
-    no match (e.g. 29 February against a non-leap TMY year) maps to 0.0. Where
-    the TMY repeats a wall-clock minute, the later value wins. The result
-    carries the demand's index and is named generation_kw.
+    Each demand timestamp takes the TMY value from the same UTC month, day,
+    hour and minute, so a TMY hour lands on the same instant whatever the
+    demand's timezone or DST state; pvlib places the sun at the TMY's UTC
+    instants. A naive index on either side is read as UTC, following pvlib's
+    convention. A demand timestamp with no match (e.g. 29 February against a
+    non-leap TMY year) maps to 0.0. Where the TMY repeats a UTC time of year,
+    the later value wins. The result carries the demand's index and is named
+    generation_kw.
     """
-    lookup = tmy_generation.set_axis(_time_of_year_keys(tmy_generation.index))
+    lookup = tmy_generation.set_axis(_utc_time_of_year_keys(tmy_generation.index))
     lookup = lookup[~lookup.index.duplicated(keep="last")]
-    aligned = lookup.reindex(_time_of_year_keys(demand.index), fill_value=0.0)
+    aligned = lookup.reindex(_utc_time_of_year_keys(demand.index), fill_value=0.0)
     return pd.Series(aligned.to_numpy(), index=demand.index, name="generation_kw")
 
 
