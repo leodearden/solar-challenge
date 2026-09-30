@@ -70,27 +70,13 @@ def home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return home_dir
 
 
-def _config_keeping_data_under(data_dir: Path) -> dict[str, object]:
-    """A test_config that keeps the database and data under *data_dir* and supplies no SECRET_KEY."""
-    return {
-        "TESTING": True,
-        "DATABASE": str(data_dir / "test.db"),
-        "DATA_DIR": str(data_dir),
-    }
-
-
 def test_a_secret_key_in_test_config_leaves_the_home_directory_untouched(
     home: Path, tmp_path: Path
 ) -> None:
     """A SECRET_KEY supplied in test_config becomes the app's key, and the build never touches the key persisted under the home directory."""
-    app = importlib.import_module("solar_challenge.web.app").create_app(
-        test_config={
-            **_config_keeping_data_under(tmp_path / "data"),
-            "SECRET_KEY": "test-secret-key",
-        }
-    )
+    app = build_test_app(tmp_path / "data", secret_key="a-key-from-test-config")
 
-    assert app.secret_key == "test-secret-key"
+    assert app.secret_key == "a-key-from-test-config"
     assert [path.name for path in home.iterdir()] == []
 
 
@@ -98,11 +84,8 @@ def test_without_a_supplied_secret_key_the_app_keeps_one_under_the_home_director
     home: Path, tmp_path: Path
 ) -> None:
     """With no SECRET_KEY in test_config or the environment, the app persists a generated key under the home directory and the next build reuses it."""
-    create_app = importlib.import_module("solar_challenge.web.app").create_app
-    test_config = _config_keeping_data_under(tmp_path / "data")
-
-    first = create_app(test_config=test_config)
-    second = create_app(test_config=test_config)
+    first = build_test_app(tmp_path / "data", secret_key=None)
+    second = build_test_app(tmp_path / "data", secret_key=None)
 
     key_file = home / ".solar-challenge" / ".secret_key"
     assert first.secret_key
