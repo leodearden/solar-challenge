@@ -125,7 +125,7 @@ class TestParseHomeConfigKeys:
         ],
     )
     def test_payloads_of_recognised_keys_are_accepted(self, payload: dict) -> None:
-        """Bodies shaped like the home form's, which between them send every recognised key, parse."""
+        """Bodies shaped like the home form's buildPayload() output parse."""
         _home_config, _start, _end, name = parse_home_config(payload)
         assert name == payload["name"]
 
