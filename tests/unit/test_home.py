@@ -818,6 +818,56 @@ class TestHeatPumpConfig:
         assert config.heat_pump_config is None
 
 
+@pytest.fixture
+def cold_january15_tmy_weather() -> pd.DataFrame:
+    """A dark, cold 15 January in the shape of a PVGIS TMY: hourly rows indexed in UTC for 1990.
+
+    Every hour is below the heat pump's 15.5 °C base temperature, so the heat pump runs all day.
+    """
+    return pd.DataFrame(
+        {
+            "ghi": 0.0,
+            "dni": 0.0,
+            "dhi": 0.0,
+            "temp_air": [
+                2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 4.0, 5.0, 6.0,
+                7.0, 7.0, 7.0, 6.0, 5.0, 4.0, 3.0, 3.0, 2.0, 2.0, 2.0, 2.0,
+            ],
+            "wind_speed": 3.0,
+        },
+        index=pd.date_range("1990-01-15 00:00", periods=24, freq="1h", tz="UTC"),
+    )
+
+
+class TestSimulateHomeAddsHeatPumpLoad:
+    """simulate_home adds a heat pump's electrical load to the household demand (synthetic weather, no network)."""
+
+    def test_heat_pump_load_is_added_to_household_demand_minute_by_minute(self, cold_january15_tmy_weather):
+        load_config = LoadConfig(annual_consumption_kwh=3000.0, seed=42)
+        heat_pump_home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=load_config,
+            heat_pump_config=HeatPumpConfig.default_ashp(),
+            location=Location.bristol(),
+        )
+        household_only_home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=load_config,
+            location=Location.bristol(),
+        )
+        day = pd.Timestamp("2024-01-15")
+
+        with_heat_pump = simulate_home(heat_pump_home, day, day, weather_data=cold_january15_tmy_weather)
+        household_only = simulate_home(household_only_home, day, day, weather_data=cold_january15_tmy_weather)
+
+        assert household_only.heat_pump_load is None
+        heat_pump_load = with_heat_pump.heat_pump_load
+        assert heat_pump_load is not None
+        assert (heat_pump_load > 0).all()
+        pd.testing.assert_index_equal(heat_pump_load.index, with_heat_pump.demand.index)
+        pd.testing.assert_series_equal(with_heat_pump.demand, household_only.demand + heat_pump_load, check_names=False)
+
+
 @pytest.mark.slow
 class TestHeatPumpIntegration:
     """Test heat pump integration in home simulation (calls simulate_home — network)."""
