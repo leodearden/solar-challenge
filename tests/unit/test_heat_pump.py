@@ -1,8 +1,11 @@
 """Tests for heat pump configuration and modelling."""
 
+import doctest
+
 import numpy as np
 import pandas as pd
 import pytest
+import solar_challenge.heat_pump
 from solar_challenge.heat_pump import (
     HeatPumpConfig,
     BASE_TEMPERATURE_C,
@@ -540,3 +543,13 @@ class TestGenerateHeatPumpLoadWarnsWhenTheReferenceIsNotAYear:
         generate_heat_pump_load(
             HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
         )
+
+
+class TestHeatPumpDocstringExamples:
+    """The examples in solar_challenge.heat_pump's docstrings run and hold."""
+
+    def test_every_example_holds(self):
+        failed, attempted = doctest.testmod(solar_challenge.heat_pump, verbose=False)
+
+        assert attempted > 0
+        assert failed == 0
