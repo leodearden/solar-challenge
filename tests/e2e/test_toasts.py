@@ -3,90 +3,72 @@
 Verifies toast success/error appearance, auto-dismiss and manual dismiss.
 """
 
+import re
+from typing import Literal
+
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Locator, Page, expect
 
 pytestmark = pytest.mark.e2e
+
+
+# -- Raising a toast --------------------------------------------------------
+
+
+def _raise_toast(
+    page: Page,
+    kind: Literal["success", "error", "info"],
+    message: str,
+    *,
+    duration_ms: int | None = None,
+) -> Locator:
+    """Raise a toast via Alpine.store('toast')[kind] and return it once message shows.
+
+    Without duration_ms, the store's own default duration applies.
+    """
+    store_args = [message] if duration_ms is None else [message, duration_ms]
+    page.evaluate(
+        "([kind, args]) => Alpine.store('toast')[kind](...args)", [kind, store_args]
+    )
+    toast_message = page.get_by_text(message, exact=True)
+    expect(toast_message).to_be_visible()
+    return toast_message.locator("..")
 
 
 # -- Toast success appears and dismisses ------------------------------------
 
 
 def test_toast_success_appears_and_dismisses(page: Page, live_server: str) -> None:
-    """Alpine.store('toast').success(msg) -> visible -> auto-dismiss after 4s."""
+    """.success(msg) shows the message, then the toast dismisses itself without a click."""
     page.goto(live_server + "/")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(500)
 
-    # Trigger a success toast via Alpine store
-    page.evaluate("() => Alpine.store('toast').success('Test success message')")
-    page.wait_for_timeout(300)
+    toast = _raise_toast(page, "success", "Test success message")
 
-    # Toast should be visible with the message text
-    toast_text = page.locator("text=Test success message")
-    expect(toast_text).to_be_visible()
-
-    # Wait for auto-dismiss (default 4s + buffer)
-    page.wait_for_timeout(5000)
-
-    # Toast should no longer be visible
-    expect(toast_text).not_to_be_visible()
+    expect(toast).to_be_hidden(timeout=10_000)
 
 
 # -- Toast error appears ----------------------------------------------------
 
 
 def test_toast_error_appears(page: Page, live_server: str) -> None:
-    """.error(msg) -> visible with red/error styling classes."""
+    """.error(msg) shows the message in a toast styled red."""
     page.goto(live_server + "/")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(500)
 
-    # Trigger an error toast
-    page.evaluate("() => Alpine.store('toast').error('Something went wrong')")
-    page.wait_for_timeout(300)
+    toast = _raise_toast(page, "error", "Something went wrong")
 
-    # Toast message should be visible
-    toast_text = page.locator("text=Something went wrong")
-    expect(toast_text).to_be_visible()
-
-    # Check for red/error styling on the toast container
-    # The toast item should have a red-related class
-    toast_container = toast_text.locator("xpath=ancestor::div[contains(@class, 'red') or contains(@class, 'error')]")
-    if toast_container.count() == 0:
-        # Alternative: check that the toast store recorded the error type
-        toast_type = page.evaluate("""() => {
-            const items = Alpine.store('toast').items;
-            const match = items.find(t => t.message === 'Something went wrong');
-            return match ? match.type : null;
-        }""")
-        assert toast_type == "error", f"Expected toast type 'error', got '{toast_type}'"
+    expect(toast).to_have_class(re.compile(r"\bbg-red-"))
 
 
 # -- Toast dismiss on click -------------------------------------------------
 
 
 def test_toast_dismiss_on_click(page: Page, live_server: str) -> None:
-    """Click dismiss button -> toast hidden."""
+    """Clicking a toast's Dismiss button hides it long before its 30 s duration ends."""
     page.goto(live_server + "/")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(500)
 
-    # Trigger a toast (use longer duration so it doesn't auto-dismiss)
-    page.evaluate("() => Alpine.store('toast').success('Dismiss me', 30000)")
-    page.wait_for_timeout(300)
+    toast = _raise_toast(page, "success", "Dismiss me", duration_ms=30_000)
 
-    toast_text = page.locator("text=Dismiss me")
-    expect(toast_text).to_be_visible()
-
-    # Click the dismiss button (X button inside the toast)
-    dismiss_btn = page.locator('button[aria-label="Dismiss"]')
-    if dismiss_btn.count() == 0:
-        # Try close button near the toast
-        dismiss_btn = toast_text.locator("xpath=ancestor::div//button")
-    expect(dismiss_btn.first).to_be_visible()
-    dismiss_btn.first.click()
-    page.wait_for_timeout(500)
-
-    # Toast should be gone
-    expect(toast_text).not_to_be_visible()
+    dismiss_button = toast.get_by_role("button", name="Dismiss", exact=True)
+    expect(dismiss_button).to_be_visible()
+    dismiss_button.click()
+    expect(toast).to_be_hidden()

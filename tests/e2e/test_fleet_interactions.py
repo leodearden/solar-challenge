@@ -1,8 +1,8 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
 Verifies slider-input sync, distribution type selects, export YAML button,
-that the simulation name reaches the submitted run, and detects a missing
-period selector.
+that the simulation name reaches the submitted run, and that the period
+selector offers presets and a custom date range.
 """
 
 import pytest
@@ -27,41 +27,23 @@ def test_fleet_slider_input_sync(page: Page, live_server: str) -> None:
 
 
 def test_fleet_distribution_type_select(page: Page, live_server: str) -> None:
-    """select[x-model='dist.type'] exists on distribution cards."""
+    """The PV, battery and consumption cards each show a distribution-type select offering 'Normal (Gaussian)'."""
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1500)
 
-    # Look for distribution type selects (one per distribution card)
-    dist_selects = page.locator('select[x-model="dist.type"]')
-
-    if dist_selects.count() == 0:
-        # Alternative selector patterns
-        dist_selects = page.locator('select[x-model*="type"]')
-
-    assert dist_selects.count() > 0, (
-        "Expected at least one distribution type <select> on fleet page"
+    distribution_type_selects = page.get_by_role("combobox").filter(
+        has=page.get_by_role("option", name="Normal (Gaussian)", exact=True)
     )
+    expect(distribution_type_selects).to_have_count(3)
 
 
 # -- Export YAML button -----------------------------------------------------
 
 
 def test_fleet_export_yaml_button(page: Page, live_server: str) -> None:
-    """'Export YAML' button attached in DOM."""
+    """The fleet page shows an 'Export YAML' button."""
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
 
-    export_btn = page.locator("button", has_text="Export YAML")
-    if export_btn.count() == 0:
-        export_btn = page.locator("button", has_text="Download YAML")
-    if export_btn.count() == 0:
-        export_btn = page.locator("button", has_text="Export")
-
-    assert export_btn.count() > 0, (
-        "Expected an 'Export YAML' or 'Download YAML' button on fleet page"
-    )
-    expect(export_btn.first).to_be_attached()
+    expect(page.get_by_role("button", name="Export YAML", exact=True)).to_be_visible()
 
 
 # -- Simulation name reaches the submitted run -----------------------------
@@ -83,27 +65,18 @@ def test_fleet_simulation_name_is_submitted(page: Page, live_server: str) -> Non
     assert submission.value.post_data_json["name"] == "Bristol Fleet Trial"
 
 
-# -- Missing period selector (potential bug) --------------------------------
+# -- Period selector -------------------------------------------------------
 
 
-def test_fleet_missing_period_selector(page: Page, live_server: str) -> None:
-    """Fleet page should have period/date range controls."""
+def test_fleet_period_selector_offers_presets_and_custom_range(
+    page: Page, live_server: str
+) -> None:
+    """The Simulation Period offers presets from '7 days' to '1 year', and Custom range shows Start Date and End Date."""
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
-    # Search for period-related controls
-    period_controls = page.locator(
-        'input[x-model*="period"], '
-        'input[x-model*="days"], '
-        'select[x-model*="period"], '
-        'button:has-text("7 days"), '
-        'button:has-text("1 year"), '
-        '#period_days, '
-        '#start_date'
-    )
+    for preset in ("7 days", "1 year"):
+        expect(page.get_by_role("button", name=preset, exact=True)).to_be_visible()
 
-    assert period_controls.count() > 0, (
-        "Fleet simulation page is missing period/date range controls. "
-        "Users cannot configure the simulation time period."
-    )
+    page.get_by_role("radio", name="Custom range", exact=True).check()
+    for boundary in ("Start Date", "End Date"):
+        expect(page.get_by_label(boundary, exact=True)).to_be_visible()

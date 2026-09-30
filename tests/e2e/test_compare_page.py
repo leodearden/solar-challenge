@@ -41,23 +41,13 @@ def test_compare_page_shows_metrics_table(
     live_server: str,
     seeded_home_runs_pair: list[tuple[str, str]],
 ) -> None:
-    """'Key Metrics' heading + metric rows for Generation/Demand/Self-Consumption."""
+    """The 'Key Metrics' heading and the Total Generation, Total Demand and Self-Consumption rows are shown."""
     (id1, _), (id2, _) = seeded_home_runs_pair
     page.goto(live_server + f"/history/compare?ids={id1},{id2}")
-    page.wait_for_load_state("networkidle")
 
-    # Key Metrics heading or similar
-    metrics_heading = page.locator("h2, h3", has_text="Metrics")
-    if metrics_heading.count() == 0:
-        metrics_heading = page.locator("h2, h3", has_text="Comparison")
-    expect(metrics_heading.first).to_be_visible()
-
-    # Check for specific metric rows
-    for metric_name in ["Generation", "Demand", "Self-Consumption"]:
-        metric_row = page.locator("td, th", has_text=metric_name)
-        assert metric_row.count() > 0, (
-            f"Expected metric row for '{metric_name}' in comparison table"
-        )
+    expect(page.get_by_role("heading", name="Key Metrics", exact=True)).to_be_visible()
+    for metric in ("Total Generation", "Total Demand", "Self-Consumption"):
+        expect(page.get_by_role("cell", name=metric, exact=True)).to_be_visible()
 
 
 # -- Delta column exists ---------------------------------------------------
@@ -68,21 +58,14 @@ def test_compare_page_delta_column_exists(
     live_server: str,
     seeded_home_runs_pair: list[tuple[str, str]],
 ) -> None:
-    """'Delta' and '% Change' column headers visible."""
+    """Comparing two runs shows both a 'Delta' and a '% Change' column header."""
     (id1, _), (id2, _) = seeded_home_runs_pair
     page.goto(live_server + f"/history/compare?ids={id1},{id2}")
-    page.wait_for_load_state("networkidle")
 
-    # Look for Delta or % Change column headers
-    delta_header = page.locator("th", has_text="Delta")
-    pct_header = page.locator("th", has_text="% Change")
-
-    has_delta = delta_header.count() > 0
-    has_pct = pct_header.count() > 0
-
-    assert has_delta or has_pct, (
-        "Expected 'Delta' or '% Change' column header in comparison table"
-    )
+    for header in ("Delta", "% Change"):
+        expect(
+            page.get_by_role("columnheader", name=header, exact=True)
+        ).to_be_visible()
 
 
 # -- Compare delta coloring direction (potential bug) -----------------------
