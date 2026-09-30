@@ -63,7 +63,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
     Args:
         test_config: Optional configuration dict to override defaults.
-            Useful for testing.
+            Useful for testing.  A ``SECRET_KEY`` given here is used as is,
+            and the key persisted under ``~/.solar-challenge`` is then
+            neither read nor written.
 
     Returns:
         Flask: The configured Flask application instance.
@@ -85,7 +87,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
     # Default configuration
     app.config.from_mapping(
-        SECRET_KEY=_get_secret_key(default_data_dir),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         DATA_DIR=str(default_data_dir),
@@ -95,6 +96,10 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     if test_config is not None:
         # Override with test-specific configuration when provided
         app.config.from_mapping(test_config)
+
+    # Consult the persisted key only when no config source supplied one
+    if app.secret_key is None:
+        app.secret_key = _get_secret_key(default_data_dir)
 
     # Secure session cookie when not in debug mode
     if "SESSION_COOKIE_SECURE" not in app.config:
