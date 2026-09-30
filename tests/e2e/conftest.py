@@ -11,6 +11,7 @@ import json
 import socket
 import threading
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,10 +19,12 @@ import numpy as np
 import pandas as pd
 import pytest
 pytest.importorskip("werkzeug")
+from flask import Flask
 from werkzeug.serving import make_server
 
 from solar_challenge.web.app import create_app
 from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager
 
 
@@ -61,17 +64,9 @@ def _e2e_data_dir(_e2e_tmp_dir):
 
 
 @pytest.fixture(scope="session")
-def live_server(_e2e_db_path, _e2e_data_dir):
-    """Start the Flask app on a random port in a daemon thread.
-
-    Each connection is served on its own thread so that open SSE progress
-    streams do not stall other requests.
-
-    Yields the base URL (e.g. ``http://127.0.0.1:54321``).  The app's
-    JobManager lives for the whole session, so the per-test drain in
-    tests/conftest.py leaves it alone and this fixture drains it at teardown.
-    """
-    app = create_app(
+def _e2e_app(_e2e_db_path: Path, _e2e_data_dir: Path) -> Flask:
+    """The Flask app the live server serves."""
+    return create_app(
         test_config={
             "TESTING": True,
             "SECRET_KEY": "e2e-test-secret",
@@ -80,16 +75,52 @@ def live_server(_e2e_db_path, _e2e_data_dir):
         }
     )
 
+
+@pytest.fixture(scope="session")
+def _e2e_job_manager(_e2e_app: Flask) -> JobManager:
+    """The JobManager that runs the live server's simulation jobs."""
+    with _e2e_app.app_context():
+        return get_job_manager()
+
+
+@pytest.fixture(scope="session")
+def live_server(_e2e_app: Flask, _e2e_job_manager: JobManager) -> Iterator[str]:
+    """Start the Flask app on a random port in a daemon thread.
+
+    Each connection is served on its own thread so that open SSE progress
+    streams do not stall other requests.
+
+    Yields the base URL (e.g. ``http://127.0.0.1:54321``).  The app's
+    JobManager lives for the whole session: the per-test drain in
+    tests/conftest.py leaves it alone, _jobs_finish_within_their_test waits
+    for each test's jobs, and this fixture shuts it down at session end.
+    """
     port = _find_free_port()
-    server = make_server("127.0.0.1", port, app, threaded=True)
+    server = make_server("127.0.0.1", port, _e2e_app, threaded=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
     yield f"http://127.0.0.1:{port}"
 
     server.shutdown()
-    with app.app_context():
-        get_job_manager().shutdown(wait=True)
+    _e2e_job_manager.shutdown(wait=True)
+
+
+_JOBS_FINISH_TIMEOUT_S = 120
+
+
+@pytest.fixture(autouse=True)
+def _jobs_finish_within_their_test(_e2e_job_manager: JobManager) -> Iterator[None]:
+    """At teardown, wait until the live server has no job queued or running.
+
+    The jobs run in threads of this pytest process, and jobs left running slow the next test's browser work.
+    """
+    yield
+    if not _e2e_job_manager.wait_until_idle(timeout=_JOBS_FINISH_TIMEOUT_S):
+        pytest.fail(
+            f"jobs submitted during this test were still running on the live server "
+            f"{_JOBS_FINISH_TIMEOUT_S} s after it ended"
+        )
 
 
 @pytest.fixture(scope="session")
