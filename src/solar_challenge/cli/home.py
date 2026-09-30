@@ -19,7 +19,7 @@ from solar_challenge.cli.utils import (
     print_info,
     print_success,
 )
-from solar_challenge.config import _parse_home_config, parse_seg_rate
+from solar_challenge.config import parse_home_block, parse_location_block, parse_seg_rate
 from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -113,20 +113,11 @@ def run(
 
     # Parse location
     loc_data = config_dict.get("location")
-    if loc_data:
-        loc = Location(
-            latitude=loc_data.get("latitude", 51.45),
-            longitude=loc_data.get("longitude", -2.58),
-            timezone=loc_data.get("timezone", "Europe/London"),
-            altitude=loc_data.get("altitude", 11.0),
-            name=loc_data.get("name", ""),
-        )
-    else:
-        loc = Location.bristol()
+    loc = parse_location_block(loc_data) if loc_data else Location.bristol()
 
     # Build home config via canonical parser (honours tariff, dispatch_strategy,
     # heat_pump, ev, pv-age, etc. — previously silently dropped by hand-built path)
-    home_config = _parse_home_config(config_dict.get("home", {}), loc)
+    home_config = parse_home_block(config_dict.get("home", {}), loc)
 
     # Parse top-level SEG block (sibling of `home:`) and thread onto config + summaries
     seg_rate = parse_seg_rate(config_dict.get("seg"))

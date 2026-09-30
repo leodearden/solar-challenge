@@ -883,8 +883,8 @@ def _parse_ev_config(data: Optional[dict[str, Any]]) -> Optional[EVConfig]:
     )
 
 
-def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
-    """Parse home configuration from config data."""
+def parse_home_block(data: dict[str, Any], location: Location) -> HomeConfig:
+    """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*."""
     pv_data = data.get("pv", {})
     battery_data = data.get("battery")
     load_data = data.get("load", {})
@@ -1715,9 +1715,9 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
 
     if "homes" in data:
         for home_data in data["homes"]:
-            homes.append(_parse_home_config(home_data, location))
+            homes.append(parse_home_block(home_data, location))
     elif "home" in data:
-        home = _parse_home_config(data["home"], location)
+        home = parse_home_block(data["home"], location)
     else:
         raise ConfigurationError(
             f"Scenario '{data['name']}' must define either 'home' or 'homes'"
@@ -1998,7 +1998,7 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
     location_data = config.get("location")
     location = parse_location_block(location_data) if location_data else Location.bristol()
 
-    return _parse_home_config(home_data, location)
+    return parse_home_block(home_data, location)
 
 
 def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
@@ -2065,7 +2065,7 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
         homes_data = config["homes"]
         if not homes_data:
             raise ConfigurationError("Fleet 'homes' list cannot be empty")
-        homes = [_parse_home_config(h, location) for h in homes_data]
+        homes = [parse_home_block(h, location) for h in homes_data]
     else:
         raise ConfigurationError(
             "Fleet configuration requires either 'homes' list or 'fleet_distribution'"
