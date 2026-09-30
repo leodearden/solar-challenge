@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("flask")
-from flask import Flask
+
+from tests._web_app import build_test_app
 
 
 def _uncache_module(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
@@ -21,19 +22,6 @@ def _uncache_module(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
     package, _, name = module.rpartition(".")
     monkeypatch.delitem(sys.modules, module, raising=False)
     monkeypatch.delattr(importlib.import_module(package), name, raising=False)
-
-
-def _build_app(tmp_path: Path) -> Flask:
-    """Import the application factory and build an app that keeps its data under *tmp_path*."""
-    app: Flask = importlib.import_module("solar_challenge.web.app").create_app(
-        test_config={
-            "TESTING": True,
-            "SECRET_KEY": "test-secret-key",
-            "DATABASE": str(tmp_path / "test.db"),
-            "DATA_DIR": str(tmp_path),
-        }
-    )
-    return app
 
 
 @pytest.mark.parametrize(
@@ -56,7 +44,7 @@ def test_building_the_app_fails_when_a_module_it_wires_in_cannot_import(
     monkeypatch.setitem(sys.modules, module, None)
     _uncache_module(monkeypatch, "solar_challenge.web.app")
     with pytest.raises(ImportError, match=re.escape(module)):
-        _build_app(tmp_path)
+        build_test_app(tmp_path)
 
 
 def test_building_the_app_does_not_import_the_anthropic_sdk(
@@ -67,7 +55,7 @@ def test_building_the_app_does_not_import_the_anthropic_sdk(
     _uncache_module(monkeypatch, "solar_challenge.web.assistant")
     _uncache_module(monkeypatch, "solar_challenge.web.app")
 
-    app = _build_app(tmp_path)
+    app = build_test_app(tmp_path)
 
     assert app.test_client().get("/assistant").status_code == 200
 
