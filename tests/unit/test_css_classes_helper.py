@@ -154,11 +154,15 @@ def test_declared_custom_properties_skip_comments_strings_var_reads_and_bem_modi
     stylesheet = (
         "/* --commented-out: red; */"
         ":root{--color-primary:#f59e0b;--tw-content:'--in-a-string: 1'}"
-        "html.dark { --color-primary : #fbbf24 }"
+        "html.dark { --spaced-before-colon : #fbbf24 }"
         ".spinner--lg:hover{color:var(--only-read)}"
     )
 
-    assert declared_custom_properties(stylesheet) == {"--color-primary", "--tw-content"}
+    assert declared_custom_properties(stylesheet) == {
+        "--color-primary",
+        "--tw-content",
+        "--spaced-before-colon",
+    }
 
 
 def test_custom_property_references_are_the_var_reads_of_any_source_including_nested_fallbacks() -> None:
