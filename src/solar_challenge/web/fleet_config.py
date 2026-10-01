@@ -161,7 +161,10 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
         Fleet distribution config dict.
 
     Raises:
-        ValueError: If required fields are missing or invalid.
+        ValueError: If required fields are missing or invalid, or if a ``pv``,
+            ``battery`` or ``load`` block is truthy but not a mapping; the
+            error names the block and the type sent. A falsy block reads as
+            absent.
     """
     n_homes = int(form_data.get("n_homes", 100))
     if n_homes < 1:
@@ -173,23 +176,35 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     }
 
     # Process PV distribution
-    pv_data = form_data.get("pv", {})
+    pv_data = _component_block(form_data, "pv")
     config["pv"] = _parse_component_distribution(pv_data, "capacity_kw", default_field="capacity_kw")
 
     # Process Battery distribution
-    battery_data = form_data.get("battery", {})
+    battery_data = _component_block(form_data, "battery")
     if battery_data and battery_data.get("enabled", True):
         config["battery"] = _parse_component_distribution(
             battery_data, "capacity_kwh", default_field="capacity_kwh"
         )
 
     # Process Load distribution
-    load_data = form_data.get("load", {})
+    load_data = _component_block(form_data, "load")
     config["load"] = _parse_component_distribution(
         load_data, "annual_consumption_kwh", default_field="annual_consumption_kwh"
     )
 
     return config
+
+
+def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return the *key* component block of *form_data*, reading an absent or falsy block as empty.
+
+    Raises:
+        ValueError: If the block is truthy but not a mapping; the error names *key* and the type sent.
+    """
+    block = form_data.get(key) or {}
+    if not isinstance(block, dict):
+        raise ValueError(f"{key} must be a mapping, got {type(block).__name__}")
+    return block
 
 
 def _parse_component_distribution(
