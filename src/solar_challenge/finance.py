@@ -985,7 +985,7 @@ class YearPoint:
         NOT the physics self-consumption series.  The name is retained for
         back-compat; read it as "fleet basis-C own-use kWh" on this path.
 
-        **Flat-assumption curve path** (:func:`make_flat_assumption_curve`):
+        **Flat-assumption curve path** (:func:`spreadsheet_revenue_curve`):
         this field holds a fraction-based figure
         (``self_consumption_fraction × gen``), consistent with the
         spreadsheet assumption model; may differ from basis-C on
