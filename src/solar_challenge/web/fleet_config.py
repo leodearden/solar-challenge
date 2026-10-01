@@ -75,7 +75,9 @@ def sample_distribution(
     Args:
         dist_type: Distribution type. One of ``'weighted_discrete'``,
             ``'normal'``, ``'uniform'``, ``'shuffled_pool'``.
-        params: Distribution parameters (varies by type); must be a mapping.
+        params: Distribution parameters (varies by type), read the way
+            :func:`_build_distribution_dict` reads a fleet form's spec; must be
+            a mapping.
         n_samples: Number of samples to generate.
 
     Returns:
@@ -90,57 +92,38 @@ def sample_distribution(
     if n_samples < 1:
         raise ValueError("n_samples must be at least 1")
     params = _require_mapping(params, "params")
+    spec = _build_distribution_dict({**params, "type": dist_type})
 
     rng = random.Random(42)
 
     if dist_type == "normal":
-        mean = float(params.get("mean", 0.0))
-        std = float(params.get("std", 1.0))
-        min_val = params.get("min")
-        max_val = params.get("max")
-        if std < 0:
+        if spec["std"] < 0:
             raise ValueError("Standard deviation cannot be negative")
-        samples = [rng.gauss(mean, std) for _ in range(n_samples)]
-        if min_val is not None:
-            min_val = float(min_val)
-            samples = [max(min_val, s) for s in samples]
-        if max_val is not None:
-            max_val = float(max_val)
-            samples = [min(max_val, s) for s in samples]
+        samples = [rng.gauss(spec["mean"], spec["std"]) for _ in range(n_samples)]
+        if "min" in spec:
+            samples = [max(spec["min"], s) for s in samples]
+        if "max" in spec:
+            samples = [min(spec["max"], s) for s in samples]
         return samples
 
     if dist_type == "uniform":
-        min_val = float(params.get("min", 0.0))
-        max_val = float(params.get("max", 1.0))
-        if min_val > max_val:
+        if spec["min"] > spec["max"]:
             raise ValueError("min cannot be greater than max")
-        return [rng.uniform(min_val, max_val) for _ in range(n_samples)]
+        return [rng.uniform(spec["min"], spec["max"]) for _ in range(n_samples)]
 
     if dist_type == "weighted_discrete":
-        values_raw = _mapping_list(params, "values")
-        if not values_raw:
+        if not spec["values"]:
             raise ValueError("weighted_discrete requires non-empty 'values' list")
-        values = []
-        weights = []
-        for entry in values_raw:
-            values.append(float(entry.get("value", 0)))
-            weights.append(float(entry.get("weight", 1)))
-        if sum(weights) == 0:
+        if sum(spec["weights"]) == 0:
             raise ValueError("Weights cannot all be zero")
-        population = values
-        cum_weights = weights
-        samples = rng.choices(population, weights=cum_weights, k=n_samples)
-        return [float(s) for s in samples]
+        return rng.choices(spec["values"], weights=spec["weights"], k=n_samples)
 
     if dist_type == "shuffled_pool":
-        entries = _mapping_list(params, "entries")
-        if not entries:
+        if not spec["values"]:
             raise ValueError("shuffled_pool requires non-empty 'entries' list")
         pool: list[float] = []
-        for entry in entries:
-            val = float(entry.get("value", 0))
-            count = int(entry.get("count", 1))
-            pool.extend([val] * count)
+        for value, count in zip(spec["values"], spec["counts"]):
+            pool.extend([value] * count)
         if not pool:
             raise ValueError("shuffled_pool produced an empty pool")
         rng.shuffle(pool)
