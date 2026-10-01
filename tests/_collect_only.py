@@ -3,9 +3,10 @@
 
 Usage::
 
-    from tests._collect_only import collected_node_ids, requires_uv, run_collect_only
+    from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
 
     result = run_collect_only(command, project_root)
+    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
     node_ids = collected_node_ids(result.stdout)
 """
 
@@ -50,3 +51,18 @@ def run_collect_only(
 def collected_node_ids(listing: str) -> list[str]:
     """Return the node ids, in order, in a run_collect_only stdout *listing*."""
     return [line for line in listing.splitlines() if "::" in line]
+
+
+_LISTING_TAIL_CHARS = 5000
+
+
+def describe_outcome(result: subprocess.CompletedProcess[str]) -> str:
+    """Describe how a run_collect_only *result* ended, for an assertion message.
+
+    Its stdout is cut to the tail, where pytest reports collection errors and its summary.
+    """
+    return (
+        f"exit {result.returncode}\n"
+        f"stdout tail:\n{result.stdout[-_LISTING_TAIL_CHARS:]}\n"
+        f"stderr:\n{result.stderr}"
+    )
