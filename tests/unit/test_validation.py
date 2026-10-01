@@ -240,6 +240,16 @@ class TestValidatePVGeneration:
         night_check = next(r for r in results if "night" in r.check_name)
         assert night_check.passed is True
 
+    @pytest.mark.parametrize(("days", "checked"), [(364, False), (365, True)])
+    def test_the_annual_yield_check_needs_a_full_year_of_data(
+        self, days: int, checked: bool
+    ) -> None:
+        generation = _create_valid_generation(_create_minute_index(days), capacity_kw=4.0)
+
+        results = validate_pv_generation(generation, capacity_kw=4.0, check_annual=True)
+
+        assert ("annual_yield_range" in [r.check_name for r in results]) is checked
+
 
 class TestAnnualYieldPerWiredKwp:
     """A year's yield is per kWp of the modules the PV model wires, not per configured kW."""
@@ -274,6 +284,33 @@ class TestAnnualYieldPerWiredKwp:
 
         assert result.passed is False
         assert result.value == pytest.approx(kwh_per_wired_kwp)
+
+    def test_0_3_kw_is_judged_per_the_one_400_428_w_module_it_wires(self) -> None:
+        """0.3 kW wires one 400.428 W module, so 400.428 kWh a year is 1000 kWh/kWp."""
+        generation = _year_of_generation(400.428)
+
+        result = _annual_yield_check(
+            validate_pv_generation(generation, capacity_kw=0.3, check_annual=True)
+        )
+
+        assert result.passed is True
+        assert result.value == pytest.approx(1000.0)
+
+    @pytest.mark.parametrize(
+        ("kwh_per_wired_kwp", "passed"),
+        [(699.99, False), (700.01, True), (1099.99, True), (1100.01, False)],
+    )
+    def test_the_uk_benchmark_band_runs_from_700_to_1100(
+        self, kwh_per_wired_kwp: float, passed: bool
+    ) -> None:
+        wired_kw = wired_dc_capacity_kw(PVConfig(capacity_kw=4.0))
+        generation = _year_of_generation(kwh_per_wired_kwp * wired_kw)
+
+        result = _annual_yield_check(
+            validate_pv_generation(generation, capacity_kw=4.0, check_annual=True)
+        )
+
+        assert result.passed is passed
 
 
 class TestValidateConsumption:
