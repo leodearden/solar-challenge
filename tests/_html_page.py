@@ -15,14 +15,29 @@ Usage::
     assert texts_after(page, "Total Demand", 2) == ["12.0", "kWh"]
 """
 
+from collections import Counter
 from html.parser import HTMLParser
 
 _RAW_TEXT_ELEMENTS = frozenset({"script", "style"})
 
 
 def element_ids(page: str) -> set[str]:
-    """The ids the elements of *page* carry; an id inside script text does not count."""
-    return _read(page).ids
+    """The ids the elements of *page* carry; an id inside script text does not count.
+
+    Raises ValueError, rather than count it once, when more than one element carries an
+    id: document.getElementById finds only the first of them.
+    """
+    elements_per_id = Counter(_read(page).ids)
+    repeated = [
+        f"{element_id!r} is on {count} elements"
+        for element_id, count in elements_per_id.items()
+        if count > 1
+    ]
+    if repeated:
+        raise ValueError(
+            f"Expected each id on only one element of the page; {', '.join(repeated)}"
+        )
+    return set(elements_per_id)
 
 
 def texts_after(page: str, label: str, count: int) -> list[str]:
@@ -42,16 +57,16 @@ def texts_after(page: str, label: str, count: int) -> list[str]:
 
 
 class _PageReader(HTMLParser):
-    """Collects the element ids and the texts of one HTML page."""
+    """Collects the element ids and the texts of one HTML page, in document order."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.ids: set[str] = set()
+        self.ids: list[str] = []
         self.texts: list[str] = []
         self._in_raw_text = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.ids.update(
+        self.ids.extend(
             value for name, value in attrs if name == "id" and value is not None
         )
         if tag in _RAW_TEXT_ELEMENTS:
