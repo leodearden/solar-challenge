@@ -95,6 +95,17 @@ VALID_FLEET_PAYLOAD: dict = {
     ],
 }
 
+MALFORMED_SEG_BODIES = [
+    pytest.param({"rate_pence_per_kwh": float("nan")}, id="nan-rate"),
+    pytest.param({"rate_pence_per_kwh": float("inf")}, id="infinite-rate"),
+    pytest.param({"rate_pence_per_kwh": True}, id="boolean-rate"),
+    pytest.param({"rate": 4.0}, id="unrecognised-key"),
+    pytest.param({}, id="empty"),
+    pytest.param({"preset": "Octopus", "rate_pence_per_kwh": 9}, id="preset-and-rate"),
+    pytest.param({"preset": "custom", "rate_pence_per_kwh": 5.5}, id="custom-preset-and-rate"),
+    pytest.param([1, 2], id="array"),
+]
+
 
 # ===================================================================
 # POST /api/simulate/home
@@ -1064,6 +1075,19 @@ class TestFleetFromDistribution:
         assert distribution in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
+    @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
+    def test_malformed_fleet_seg_returns_400_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, seg: object
+    ) -> None:
+        """A malformed fleet-wide seg is a 400 naming seg, never a 500; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "seg": seg},
+        )
+        assert resp.status_code == 400
+        assert "seg" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
 
 # ===================================================================
 # POST /api/fleet/export-yaml
@@ -1411,6 +1435,16 @@ class TestParseHomeConfigSEG:
             json={**VALID_HOME_PAYLOAD, "seg": {"rate_pence_per_kwh": -2}},
         )
         assert resp.status_code == 400
+
+    @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
+    def test_malformed_seg_returns_400_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, seg: object
+    ) -> None:
+        """A malformed seg is a 400 naming seg, never a 500 or a run priced at a rate nobody sent."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "seg": seg})
+        assert resp.status_code == 400
+        assert "seg" in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
 
 
 # ===================================================================
