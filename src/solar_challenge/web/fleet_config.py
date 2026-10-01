@@ -161,9 +161,10 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
         Fleet distribution config dict.
 
     Raises:
-        ValueError: If required fields are missing or invalid, or a
+        ValueError: If required fields are missing or invalid, a
             pv/battery/load block is not a mapping (see
-            :func:`_component_block`).
+            :func:`_component_block`), or a weighted_discrete/shuffled_pool
+            row list is malformed (see :func:`_mapping_list`).
     """
     n_homes = int(form_data.get("n_homes", 100))
     if n_homes < 1:
@@ -198,12 +199,33 @@ def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any]:
     """Return the *key* component block of *form_data*, reading an absent or falsy block as empty.
 
     Raises:
-        ValueError: If the block is truthy but not a mapping; the error names *key* and the type sent.
+        ValueError: If the block is truthy but not a mapping (see :func:`_require_mapping`).
     """
-    block = form_data.get(key) or {}
-    if not isinstance(block, dict):
-        raise ValueError(f"{key} must be a mapping, got {type(block).__name__}")
-    return block
+    return _require_mapping(form_data.get(key) or {}, key)
+
+
+def _require_mapping(value: object, field: str) -> dict[str, Any]:
+    """Return *value*, refusing one that is not a mapping.
+
+    Raises:
+        ValueError: If *value* is not a mapping; the error names *field* and the type sent.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be a mapping, got {type(value).__name__}")
+    return value
+
+
+def _mapping_list(spec: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """Return the *key* row list of *spec*, reading an absent list as empty.
+
+    Raises:
+        ValueError: If the value is not a list (the error names *key* and the type sent),
+            or a row is not a mapping (see :func:`_require_mapping`; the row is named ``key[index]``).
+    """
+    rows = spec.get(key, [])
+    if not isinstance(rows, list):
+        raise ValueError(f"{key} must be a list, got {type(rows).__name__}")
+    return [_require_mapping(row, f"{key}[{index}]") for index, row in enumerate(rows)]
 
 
 def _parse_component_distribution(
@@ -252,6 +274,10 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         Distribution specification dict.
+
+    Raises:
+        ValueError: If a weighted_discrete/shuffled_pool row list is malformed
+            (see :func:`_mapping_list`).
     """
     dist_type = data["type"]
     result: dict[str, Any] = {"type": dist_type}
@@ -269,12 +295,12 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
         result["max"] = float(data.get("max", 1))
 
     elif dist_type == "weighted_discrete":
-        values_raw = data.get("values", [])
+        values_raw = _mapping_list(data, "values")
         result["values"] = [float(v.get("value", 0)) for v in values_raw]
         result["weights"] = [float(v.get("weight", 1)) for v in values_raw]
 
     elif dist_type == "shuffled_pool":
-        entries = data.get("entries", [])
+        entries = _mapping_list(data, "entries")
         result["values"] = [float(e.get("value", 0)) for e in entries]
         result["counts"] = [int(e.get("count", 1)) for e in entries]
 
