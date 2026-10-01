@@ -1,5 +1,6 @@
 """Tests for the Flask web dashboard module."""
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -396,6 +397,15 @@ class TestFleetConfigRoute:
         assert "simulate-fleet" in html_data
 
 
+VALID_DISTRIBUTION_FORM: dict = {
+    "n_homes": 2,
+    "seed": 1,
+    "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
+    "battery": {"capacity_kwh": {"type": "uniform", "min": 3.0, "max": 10.0}},
+    "load": {"annual_consumption_kwh": 3500.0},
+}
+
+
 class TestFleetConfigHelpers:
     """Tests for fleet_config.py helper functions."""
 
@@ -482,6 +492,50 @@ class TestFleetConfigHelpers:
         assert config["n_homes"] == 50
         assert "pv" in config
         assert "load" in config
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            pytest.param("pv", "x", id="pv-str"),
+            pytest.param("pv", [4.0], id="pv-list"),
+            pytest.param("battery", "x", id="battery-str"),
+            pytest.param("battery", True, id="battery-bool"),
+            pytest.param("load", "x", id="load-str"),
+            pytest.param("load", 3500, id="load-int"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_non_mapping_component_block(
+        self, key: str, value: object
+    ) -> None:
+        """A truthy pv/battery/load block that is not a mapping is refused, naming the block and the type sent."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        with pytest.raises(
+            ValueError, match=re.escape(f"{key} must be a mapping, got {type(value).__name__}")
+        ):
+            form_to_fleet_distribution_config({**VALID_DISTRIBUTION_FORM, key: value})
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            pytest.param("pv", None, id="pv-null"),
+            pytest.param("pv", "", id="pv-empty-string"),
+            pytest.param("battery", None, id="battery-null"),
+            pytest.param("battery", False, id="battery-false"),
+            pytest.param("load", None, id="load-null"),
+            pytest.param("load", [], id="load-empty-list"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_reads_a_falsy_component_block_as_absent(
+        self, key: str, value: object
+    ) -> None:
+        """A falsy pv/battery/load block converts exactly as if the block were left out."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        without_block = {k: v for k, v in VALID_DISTRIBUTION_FORM.items() if k != key}
+        assert form_to_fleet_distribution_config(
+            {**VALID_DISTRIBUTION_FORM, key: value}
+        ) == form_to_fleet_distribution_config(without_block)
 
     def test_fleet_distribution_to_yaml(self) -> None:
         """Test converting fleet config to YAML string."""
