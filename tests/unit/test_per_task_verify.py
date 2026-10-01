@@ -6,19 +6,16 @@ task's fresh worktree before merging it, so these tests run it the same way.
 """
 
 import os
-import shlex
-import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
 
+from tests._collect_only import requires_uv, run_collect_only
 from tests._orchestrator_config import load_orchestrator_config
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("uv") is None, reason="uv is not installed; test_command runs through it"
-)
+pytestmark = requires_uv
 
 _WEB_TEST_MODULE = "tests/unit/test_web_app.py"
 
@@ -39,16 +36,7 @@ def _collect_with_test_command(
     command = load_orchestrator_config(project_root)["test_command"]
     env = {name: value for name, value in os.environ.items() if name != "VIRTUAL_ENV"}
     env["UV_PROJECT_ENVIRONMENT"] = str(workdir / "venv")
-    env["PYTEST_ADDOPTS"] = shlex.join(["--collect-only", "--verbosity=-1", *pytest_args])
-    return subprocess.run(
-        command,
-        shell=True,
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    return run_collect_only(command, project_root, *pytest_args, env=env)
 
 
 def _modules_skipped_at_collection(junit_report: Path) -> dict[str, str]:
