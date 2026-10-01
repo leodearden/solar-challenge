@@ -104,7 +104,8 @@ class TestSimulateHomeAddsHeatPumpLoad:
 class TestSimulateHomeNamesTheHeatPumpLoad:
     """simulate_home names its heat_pump_load heat_pump_load_kw, the column to_dataframe gives it.
 
-    That holds whatever the temperature series the load is computed from is called. Synthetic weather, no network.
+    That holds whether or not the TMY year has any heating, so on both of generate_heat_pump_load's return paths.
+    Synthetic weather, no network.
     """
 
     @pytest.mark.parametrize(
