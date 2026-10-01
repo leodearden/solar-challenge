@@ -170,6 +170,25 @@ class TestSimulateHomeSharesTheAnnualHeatDemandOverTheTMYYear:
         assert heat_delivered_kwh == pytest.approx(days * heat_pump.annual_heat_demand_kwh / 365)
 
 
+class TestSimulateHomeRejectsWeatherThatIsNotOneYear:
+    """With a heat pump configured, simulate_home needs weather_data to span one TMY year.
+
+    That is the year the heat pump's annual heat demand is shared out over. Synthetic weather, no network.
+    """
+
+    def test_one_day_of_weather_raises_naming_its_minutes(self):
+        home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            heat_pump_config=HeatPumpConfig.default_ashp(),
+            location=Location.bristol(),
+        )
+        day = pd.Timestamp("2025-01-15")
+
+        with pytest.raises(ValueError, match="annual_temperature_c has 1,440 rows"):
+            simulate_home(home, day, day, weather_data=_dark_tmy_year(10.0).loc["1990-01-15"])
+
+
 @pytest.mark.slow
 class TestHeatPumpIntegration:
     """Test heat pump integration in home simulation (calls simulate_home — network)."""
