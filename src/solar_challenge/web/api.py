@@ -534,12 +534,14 @@ def simulate_sweep() -> tuple[Response, int]:
       - max: float
       - steps: int (>= 2)
       - mode: "linear" | "geometric"
-      - base_config: dict (optional base simulation configuration)
+      - base_config: JSON object (optional, default {}), the home config
+        every sweep point starts from
 
     Returns:
         JSON with sweep_id, parameter, values and job_ids, HTTP 201.
         HTTP 400 for an unsupported parameter (the error lists the supported
-        ones), an invalid range, or a point whose home config is invalid.
+        ones), an invalid range, a base_config that is not a JSON object (the
+        error names the type sent), or a point whose home config is invalid.
         Every 400 comes before any job is submitted.
     """
     import uuid as _uuid  # noqa: PLC0415
@@ -564,6 +566,10 @@ def simulate_sweep() -> tuple[Response, int]:
         return jsonify({"error": "Min must be less than max"}), 400
     mode = str(data.get("mode", "linear"))
     base_config = data.get("base_config", {})
+    if not isinstance(base_config, Mapping):
+        return jsonify({
+            "error": f"base_config must be a JSON object, got {type(base_config).__name__}",
+        }), 400
 
     # Generate sweep points
     if mode == "geometric":
