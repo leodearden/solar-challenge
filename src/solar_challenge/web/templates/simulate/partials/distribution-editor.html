@@ -1,8 +1,11 @@
 {#
     distribution-editor.html -- Reusable distribution editor component.
 
-    This partial renders a distribution editor for a given parameter.
-    It expects to be embedded inside an Alpine.js component that provides
+    Exports distribution_editor(subject). subject is the card's heading text,
+    and every control's accessible name starts with it, e.g.
+    "PV Capacity Distribution Type".
+
+    The macro must be called inside an Alpine.js component that provides
     a `dist` object with the shape:
 
         {
@@ -15,20 +18,24 @@
             entries: [{value: number, count: number}, ...]
         }
 
-    The parent Alpine.js component must expose:
+    The enclosing Alpine.js scope must expose:
         - dist           : the distribution data object (reactive)
         - addRow()       : adds a row to values or entries
         - removeRow(idx) : removes a row from values or entries
+        - onTypeChange() : called when the distribution type changes
 
-    Usage (from fleet.html):
-        <div x-data="pvDistEditor()">
-            {% include "simulate/partials/distribution-editor.html" %}
-        </div>
+    Usage (from fleet.html): import it with
+        {% from "simulate/partials/distribution-editor.html" import distribution_editor %}
+    then call it inside the card's x-data element:
+        {{ distribution_editor('PV Capacity') }}
 #}
 
+{% macro _label_text(subject, text) -%}<span class="sr-only">{{ subject }} </span>{{ text }}{%- endmacro %}
+
+{% macro distribution_editor(subject) %}
 <!-- Distribution type selector -->
-<div class="space-y-1.5 mb-4">
-    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Distribution Type</label>
+<label class="block space-y-1.5 mb-4">
+    <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Distribution Type') }}</span>
     <select
         x-model="dist.type"
         @change="onTypeChange()"
@@ -39,7 +46,7 @@
         <option value="weighted_discrete">Weighted Discrete</option>
         <option value="shuffled_pool">Shuffled Pool</option>
     </select>
-</div>
+</label>
 
 <!-- Normal distribution inputs -->
 <div x-show="dist.type === 'normal'" x-cloak x-transition class="space-y-4">
@@ -161,3 +168,4 @@
         </span>
     </div>
 </div>
+{% endmacro %}
