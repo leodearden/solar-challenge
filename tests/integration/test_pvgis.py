@@ -38,11 +38,7 @@ class TestPVGISTMY:
         assert len(data) >= 8760  # At least 1 year of hours
 
     def test_tmy_irradiance_is_physically_consistent(self):
-        """Irradiance is never negative, GHI never exceeds DNI + DHI, and the year's GHI closes with DNI·cos(zenith) + DHI.
-
-        The closure rejects a dni column that is not beam-normal irradiance: a
-        beam-horizontal one, which is what PVGIS seriescalc's components are, closes at about 0.83.
-        """
+        """TMY irradiance components are non-negative and mutually consistent."""
         location = Location.bristol()
         data = get_tmy_data(location)
 
