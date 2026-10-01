@@ -51,7 +51,7 @@ web = [
     "anthropic>=0.40.0",  # streaming chat endpoint in web/assistant.py (imported lazily)
 ]
 e2e = [
-    "playwright>=1.40.0",
+    "playwright>=1.51.0",
     "pytest-playwright>=0.4.0",
 ]
 
