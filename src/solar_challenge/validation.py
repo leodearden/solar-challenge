@@ -117,6 +117,8 @@ def validate_pv_generation(
     - Peak generation does not exceed system capacity
     - Annual yield per kWp wired within the UK benchmark band (if full year data)
 
+    docs/pv-annual-yield-benchmark.md records the band's source and its denominator.
+
     Args:
         generation: PV generation time series in kW
         capacity_kw: The configured DC capacity (PVConfig.capacity_kw) of a
