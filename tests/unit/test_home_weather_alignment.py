@@ -28,8 +28,8 @@ def _london_minute_demand(first: str, last: str) -> pd.Series:
 
 
 def _expected_alignment(demand: pd.Series, *value_runs: pd.Series | np.ndarray) -> pd.Series:
-    """The aligned series that carries value_runs, in order, on the demand's index."""
-    return pd.Series(np.concatenate(value_runs), index=demand.index, name="generation_kw")
+    """The aligned series of value_runs, in order, on the demand's index; unnamed, like the TMY series aligned here."""
+    return pd.Series(np.concatenate(value_runs), index=demand.index)
 
 
 class TestAlignTMYToDemand:
@@ -182,6 +182,14 @@ class TestAlignTMYToDemand:
 
         expected = _expected_alignment(demand, np.array([np.nan]))
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
+    def test_result_takes_the_tmy_series_name_not_the_demands(self):
+        tmy = pd.Series([7.0], index=pd.to_datetime(["1990-06-21 12:00"]), name="temp_air")
+        demand = pd.Series(1.0, index=pd.to_datetime(["2024-06-21 12:00"]), name="demand_kw")
+
+        aligned = _align_tmy_to_demand(tmy, demand)
+
+        assert aligned.name == "temp_air"
 
     def test_full_year_minute_tmy_aligns_within_cpu_budget(self, tmy_minute_year):
         demand = _london_minute_demand("2024-06-01 00:00", "2024-06-01 23:59")

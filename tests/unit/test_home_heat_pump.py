@@ -101,6 +101,35 @@ class TestSimulateHomeAddsHeatPumpLoad:
         assert warm_hour_load.max() < cold_hour_load.min()
 
 
+class TestSimulateHomeNamesTheHeatPumpLoad:
+    """simulate_home names its heat_pump_load heat_pump_load_kw, the column to_dataframe gives it.
+
+    That holds whether or not the TMY year has any heating, so on both of generate_heat_pump_load's return paths.
+    Synthetic weather, no network.
+    """
+
+    @pytest.mark.parametrize(
+        "temp_air_c",
+        [
+            pytest.param(10.0, id="heating-year"),
+            pytest.param(20.0, id="no-heating-year"),
+        ],
+    )
+    def test_heat_pump_load_is_named_heat_pump_load_kw(self, temp_air_c):
+        home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            heat_pump_config=HeatPumpConfig.default_ashp(),
+            location=Location.bristol(),
+        )
+        day = pd.Timestamp("2024-01-15")
+
+        results = simulate_home(home, day, day, weather_data=_dark_tmy_year(temp_air_c))
+
+        assert results.heat_pump_load is not None
+        assert results.heat_pump_load.name == "heat_pump_load_kw"
+
+
 @pytest.fixture
 def constant_10c_tmy_weather() -> pd.DataFrame:
     """A dark TMY year at a constant 10 °C.
