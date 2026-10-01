@@ -32,16 +32,36 @@ def load_project_table(project_root: Path) -> dict[str, Any]:
 
 
 def declared_floor(requirements: Iterable[str], distribution: str) -> Version | None:
-    """Return the highest >= bound that the PEP 508 *requirements* place on *distribution*, or None if they place none.
+    """Return the >= bound that the PEP 508 *requirements* place on *distribution* wherever it is required, or None.
 
     Distribution names compare canonically, so "Setuptools>=77.0.0" bounds setuptools.
+
+    Environment markers are not evaluated. Unmarked requirements apply in every environment, so when any exist the
+    floor is the highest bound among them. Otherwise at least one marked requirement applies wherever *distribution*
+    is required, so the floor is the lowest of their bounds, or None if any of them has none.
     """
     wanted = canonicalize_name(distribution)
-    floors = [
-        Version(clause.version)
+    naming = [
+        requirement
         for requirement in map(Requirement, requirements)
         if canonicalize_name(requirement.name) == wanted
+    ]
+    unmarked = [requirement for requirement in naming if requirement.marker is None]
+    return _floor_when_all_apply(unmarked) if unmarked else _floor_when_any_applies(naming)
+
+
+def _floor_when_all_apply(requirements: Iterable[Requirement]) -> Version | None:
+    lower_bounds = [
+        Version(clause.version)
+        for requirement in requirements
         for clause in requirement.specifier
         if clause.operator == ">="
     ]
-    return max(floors, default=None)
+    return max(lower_bounds, default=None)
+
+
+def _floor_when_any_applies(requirements: Iterable[Requirement]) -> Version | None:
+    own_floors = [_floor_when_all_apply([requirement]) for requirement in requirements]
+    bounded_floors = [floor for floor in own_floors if floor is not None]
+    every_requirement_is_bounded = len(bounded_floors) == len(own_floors)
+    return min(bounded_floors, default=None) if every_requirement_is_bounded else None
