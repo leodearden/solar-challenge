@@ -48,6 +48,40 @@ def test_fleet_distribution_type_select_is_named_for_its_card(
     ).to_have_count(1)
 
 
+@pytest.mark.parametrize(
+    ("distribution_type", "fields"),
+    [
+        pytest.param(
+            "Normal (Gaussian)", ("Mean", "Std Dev", "Min (clamp)", "Max (clamp)"), id="normal"
+        ),
+        pytest.param("Uniform", ("Min", "Max"), id="uniform"),
+        pytest.param(
+            "Weighted Discrete",
+            ("Value 1", "Weight 1", "Value 2", "Weight 2"),
+            id="weighted_discrete",
+        ),
+        pytest.param(
+            "Shuffled Pool", ("Value 1", "Count 1", "Value 2", "Count 2"), id="shuffled_pool"
+        ),
+    ],
+)
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_parameters_are_named_for_their_card(
+    page: Page, live_server: str, card: str, distribution_type: str, fields: tuple[str, ...]
+) -> None:
+    """Each number input a distribution type shows is named for its card and field, and a row's inputs for their row, e.g. 'PV Capacity Value 2'."""
+    page.goto(live_server + "/simulate/fleet")
+
+    page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True).select_option(
+        label=distribution_type
+    )
+    for field in fields:
+        # to_have_count(1) retries while a type switch's outgoing row list, with the same names, is still shown.
+        expect(
+            page.get_by_role("spinbutton", name=f"{card} {field}", exact=True)
+        ).to_have_count(1)
+
+
 # -- Export YAML button -----------------------------------------------------
 
 
