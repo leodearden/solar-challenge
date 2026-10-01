@@ -369,7 +369,7 @@ Synthetic energy inputs (per home, annual):
   synthetic scf      ≈ 0.346        (2,000 / (2,000 + 3,775))
 ```
 
-**[FIN] finance parameters** (from `FinanceConfig` defaults / `_FIN_GOLDEN`):
+**[FIN] finance parameters** (from `FinanceConfig` defaults / `_FIN_GOLDEN` / the [FIN] fixture builders):
 
 | Parameter | Value |
 |-----------|-------|
@@ -386,7 +386,7 @@ Synthetic energy inputs (per home, annual):
 | `retained_cash_floor_per_home_per_year_gbp` | £27 |
 | `retail_baseline_rate_pence_per_kwh` | 23 p/kWh |
 | `vat_rate` | 5 % |
-| `standing_charge_pence_per_day` | 60 p/day (from `_FIN_GOLDEN` calibration fixture) |
+| `standing_charge_pence_per_day` | 60 p/day (required `FinanceConfig` field; set to 60 in the [FIN] fixture builders) |
 | `grid_services_income_per_kw_per_year_gbp` | £0 (no-flex) |
 | PV degradation rate (`PVConfig.degradation_rate_per_year`) | 0.5 %/yr (0.005, linear; default in `calculate_degradation_factor`) |
 
