@@ -31,6 +31,7 @@
 #}
 
 {% macro _label_text(subject, text) -%}<span class="sr-only">{{ subject }} </span>{{ text }}{%- endmacro %}
+{% macro _row_label_text(subject, text) -%}{{ _label_text(subject, text) }} <span class="sr-only" x-text="idx + 1"></span>{%- endmacro %}
 
 {% macro distribution_editor(subject) %}
 <!-- Distribution type selector -->
@@ -51,44 +52,44 @@
 <!-- Normal distribution inputs -->
 <div x-show="dist.type === 'normal'" x-cloak x-transition class="space-y-4">
     <div class="grid grid-cols-2 gap-4">
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Mean</label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Mean') }}</span>
             <input type="number" step="any" x-model.number="dist.mean"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Std Dev</label>
+        </label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Std Dev') }}</span>
             <input type="number" step="any" min="0" x-model.number="dist.std"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
+        </label>
     </div>
     <div class="grid grid-cols-2 gap-4">
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Min (clamp)</label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Min (clamp)') }}</span>
             <input type="number" step="any" x-model.number="dist.min"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Max (clamp)</label>
+        </label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Max (clamp)') }}</span>
             <input type="number" step="any" x-model.number="dist.max"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
+        </label>
     </div>
 </div>
 
 <!-- Uniform distribution inputs -->
 <div x-show="dist.type === 'uniform'" x-cloak x-transition class="space-y-4">
     <div class="grid grid-cols-2 gap-4">
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Min</label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Min') }}</span>
             <input type="number" step="any" x-model.number="dist.min"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Max</label>
+        </label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Max') }}</span>
             <input type="number" step="any" x-model.number="dist.max"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
+        </label>
     </div>
 </div>
 
@@ -97,16 +98,16 @@
     <div class="text-sm text-slate-500 dark:text-slate-400 mb-2">Define value-weight pairs. Weights are auto-normalised.</div>
     <template x-for="(row, idx) in dist.values" :key="idx">
         <div class="flex items-center gap-3">
-            <div class="flex-1 space-y-1">
-                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400" x-show="idx === 0">Value</label>
+            <label class="flex-1 space-y-1">
+                <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_label_text(subject, 'Value') }}</span>
                 <input type="number" step="any" x-model.number="row.value"
                     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-            </div>
-            <div class="flex-1 space-y-1">
-                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400" x-show="idx === 0">Weight</label>
+            </label>
+            <label class="flex-1 space-y-1">
+                <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_label_text(subject, 'Weight') }}</span>
                 <input type="number" step="any" min="0" x-model.number="row.weight"
                     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-            </div>
+            </label>
             <button type="button" @click="removeRow(idx)"
                 class="mt-auto p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                 :disabled="dist.values.length <= 1"
@@ -133,16 +134,16 @@
     <div class="text-sm text-slate-500 dark:text-slate-400 mb-2">Define exact value-count pairs. Counts should sum to the fleet size.</div>
     <template x-for="(row, idx) in dist.entries" :key="idx">
         <div class="flex items-center gap-3">
-            <div class="flex-1 space-y-1">
-                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400" x-show="idx === 0">Value</label>
+            <label class="flex-1 space-y-1">
+                <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_label_text(subject, 'Value') }}</span>
                 <input type="number" step="any" x-model.number="row.value"
                     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-            </div>
-            <div class="flex-1 space-y-1">
-                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400" x-show="idx === 0">Count</label>
+            </label>
+            <label class="flex-1 space-y-1">
+                <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_label_text(subject, 'Count') }}</span>
                 <input type="number" step="1" min="0" x-model.number="row.count"
                     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-            </div>
+            </label>
             <button type="button" @click="removeRow(idx)"
                 class="mt-auto p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                 :disabled="dist.entries.length <= 1"
