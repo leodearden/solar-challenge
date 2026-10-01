@@ -1037,11 +1037,7 @@ class TestHouseholderBillWrapperEquivalence:
         assert actual == expected
 
     def test_wrapper_equals_bill_annual_override(self) -> None:
-        """householder_bill(365-day, override=0.90) == bill(period_days=365, ...) with hand-computed capped inputs.
-
-        Uses pytest.approx(rel=1e-12, abs=1e-12) to be robust to incidental
-        operand-order drift in the override path's intermediate computations.
-        """
+        """householder_bill(365-day, override=0.90) == bill(period_days=365, ...) with hand-computed capped inputs."""
         from solar_challenge.finance import bill, householder_bill
 
         summary = _make_summary()   # import_rate = 23.0 p/kWh, gen=4000, demand=3400
@@ -1067,33 +1063,8 @@ class TestHouseholderBillWrapperEquivalence:
             baseline_import_cost_gbp=782.0,
             finance=finance,
         )
-        # Field-by-field approximate equality (robust to incidental operand-order drift)
-        assert actual.standing_charge_gbp == pytest.approx(
-            expected.standing_charge_gbp, rel=1e-12, abs=1e-12
-        )
-        assert actual.import_cost_gbp == pytest.approx(
-            expected.import_cost_gbp, rel=1e-12, abs=1e-12
-        )
-        assert actual.own_use_payment_gbp == pytest.approx(
-            expected.own_use_payment_gbp, rel=1e-12, abs=1e-12
-        )
-        assert actual.vat_gbp == pytest.approx(expected.vat_gbp, rel=1e-12, abs=1e-12)
-        assert actual.total_outlay_gbp == pytest.approx(
-            expected.total_outlay_gbp, rel=1e-12, abs=1e-12
-        )
-        assert actual.self_consumption_saving_gbp == pytest.approx(
-            expected.self_consumption_saving_gbp, rel=1e-12, abs=1e-12
-        )
-        assert actual.baseline_bill_gbp == pytest.approx(
-            expected.baseline_bill_gbp, rel=1e-12, abs=1e-12
-        )
-        assert actual.saving_vs_baseline_gbp == pytest.approx(
-            expected.saving_vs_baseline_gbp, rel=1e-12, abs=1e-12
-        )
-        assert actual.saving_pct == pytest.approx(expected.saving_pct, rel=1e-12, abs=1e-12)
-        assert actual.self_consumption_fraction == pytest.approx(
-            expected.self_consumption_fraction, rel=1e-12, abs=1e-12
-        )
+        # Exact frozen-dataclass equality (every field); the literals are exact in binary floating point
+        assert actual == expected
 
     def test_wrapper_standing_still_annual_for_short_period(self) -> None:
         """householder_bill for a short-period sim still annualises standing to 365 days.
