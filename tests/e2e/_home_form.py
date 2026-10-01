@@ -15,9 +15,14 @@ def form_data(page: Page) -> dict[str, object]:
     }""")
 
 
+def open_tab(page: Page, name: str) -> None:
+    """Open the form's tab labelled `name`, such as "Battery"."""
+    page.get_by_role("tab", name=name, exact=True).click()
+
+
 def open_location_tab(page: Page) -> None:
     """Open the form's Location tab, where the simulated site is chosen."""
-    page.get_by_role("tab", name="Location", exact=True).click()
+    open_tab(page, "Location")
 
 
 def choose_location(page: Page, location: str) -> None:
@@ -28,7 +33,7 @@ def choose_location(page: Page, location: str) -> None:
 
 def open_period_tab(page: Page) -> None:
     """Open the form's Period tab, where the simulated dates are chosen."""
-    page.get_by_role("tab", name="Period", exact=True).click()
+    open_tab(page, "Period")
 
 
 def choose_custom_range(page: Page) -> None:

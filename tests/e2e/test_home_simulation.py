@@ -7,13 +7,14 @@ battery and its dispatch strategies, the heat pump, the import tariff and
 SEG export pricing.
 """
 
+import re
 from dataclasses import dataclass
 
 import pytest
 from playwright.sync_api import Page, expect
 
 from solar_challenge.seg import SEG_PRESETS
-from tests.e2e._home_form import submit_two_day_run
+from tests.e2e._home_form import open_tab, submit_two_day_run
 
 pytestmark = pytest.mark.e2e
 
@@ -24,28 +25,18 @@ pytestmark = pytest.mark.e2e
 def test_form_loads_with_defaults(page: Page, live_server: str) -> None:
     """PV capacity defaults to 4 (or 4.0) and consumption to 3500."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     # PV input is on the default PV tab, so it is visible
     pv_input = page.locator("#pv_kw")
     expect(pv_input).to_be_visible()
-    pv_value = pv_input.input_value()
-    assert pv_value in ("4", "4.0"), f"Expected PV default '4' or '4.0', got '{pv_value}'"
+    expect(pv_input).to_have_value(re.compile(r"^4(\.0)?$"))
 
     # Consumption input is on the Load tab -- navigate there first
-    load_tab = page.locator(
-        'nav[aria-label="Configuration tabs"] button',
-        has_text="Load",
-    )
-    load_tab.click()
-    page.wait_for_timeout(300)
+    open_tab(page, "Load")
 
     consumption_input = page.locator("#consumption_kwh")
     expect(consumption_input).to_be_visible()
-    consumption_value = consumption_input.input_value()
-    assert consumption_value == "3500", (
-        f"Expected consumption default '3500', got '{consumption_value}'"
-    )
+    expect(consumption_input).to_have_value("3500")
 
 
 # ── Preset selector ──────────────────────────────────────────────────
@@ -54,7 +45,6 @@ def test_form_loads_with_defaults(page: Page, live_server: str) -> None:
 def test_preset_selector_loads(page: Page, live_server: str) -> None:
     """The preset <select> dropdown exists and has at least the default option."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     preset_select = page.locator("#preset_select")
     expect(preset_select).to_be_visible()
@@ -68,21 +58,11 @@ def test_preset_selector_loads(page: Page, live_server: str) -> None:
 
 
 def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
-    """buildPayload() should include azimuth, tilt, battery charge/discharge
-    rates, efficiency, and stochastic flag.
+    """The body the form submits, built by buildPayload(), includes azimuth,
+    tilt, battery charge/discharge rates, efficiency, and stochastic flag.
     """
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
-
-    # Wait for Alpine.js to fully initialise the component
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1500)
-
-    payload = page.evaluate("""() => {
-        const el = document.querySelector('[x-data="homeSimulator()"]');
-        const data = Alpine.$data(el);
-        return data.buildPayload();
-    }""")
+    payload = submit_two_day_run(page).request.post_data_json
 
     missing_keys = []
     for key in ("azimuth", "tilt", "max_charge_kw", "max_discharge_kw",
@@ -91,8 +71,8 @@ def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
             missing_keys.append(key)
 
     assert not missing_keys, (
-        f"buildPayload() is missing keys: {missing_keys}.  "
-        f"Payload keys returned: {sorted(payload.keys())}"
+        f"The submitted payload is missing keys: {missing_keys}.  "
+        f"Payload keys sent: {sorted(payload.keys())}"
     )
 
 
@@ -100,7 +80,7 @@ def test_all_form_fields_in_payload(page: Page, live_server: str) -> None:
 
 
 def _switch_on(page: Page, tab: str, switch_name: str) -> None:
-    page.get_by_role("tab", name=tab, exact=True).click()
+    open_tab(page, tab)
     switch = page.get_by_role("switch", name=switch_name, exact=True)
     switch.click()
     expect(switch).to_be_checked()
@@ -209,24 +189,14 @@ def test_seg_custom_rate_form_submission_is_accepted(
 def test_tab_navigation(page: Page, live_server: str) -> None:
     """Clicking each tab (PV, Battery, Load, Location, Period) activates it."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     tab_labels = ["PV", "Battery", "Load", "Location", "Period"]
 
     for label in tab_labels:
-        tab_btn = page.locator(
-            'nav[aria-label="Configuration tabs"] button',
-            has_text=label,
-        )
-        tab_btn.click()
-        page.wait_for_timeout(200)
+        open_tab(page, label)
 
-        # The active tab should have aria-selected="true"
-        selected = tab_btn.get_attribute("aria-selected")
-        assert selected == "true", (
-            f"Tab '{label}' should be selected (aria-selected='true'), "
-            f"got '{selected}'"
-        )
+        # The active tab should be the one tab with aria-selected="true"
+        expect(page.get_by_role("tab", selected=True)).to_have_text(label)
 
 
 # ── Submit button ────────────────────────────────────────────────────
@@ -235,17 +205,11 @@ def test_tab_navigation(page: Page, live_server: str) -> None:
 def test_submit_button_exists(page: Page, live_server: str) -> None:
     """The 'Run Simulation' submit button exists and is not disabled by default."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     submit_btn = page.locator("button[type='submit']")
     expect(submit_btn).to_be_visible()
     expect(submit_btn).to_be_enabled()
-
-    # Verify button text
-    btn_text = submit_btn.text_content() or ""
-    assert "Run Simulation" in btn_text, (
-        f"Expected button text to contain 'Run Simulation', got '{btn_text}'"
-    )
+    expect(submit_btn).to_contain_text("Run Simulation")
 
 
 # ── Form validation (PV range) ──────────────────────────────────────
@@ -254,7 +218,6 @@ def test_submit_button_exists(page: Page, live_server: str) -> None:
 def test_form_validation_pv_range(page: Page, live_server: str) -> None:
     """The PV capacity input enforces min/max constraints via HTML attributes."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     pv_input = page.locator("#pv_kw")
     expect(pv_input).to_be_visible()
