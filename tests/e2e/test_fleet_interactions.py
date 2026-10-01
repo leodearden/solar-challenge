@@ -1,8 +1,9 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
-Verifies slider-input sync, distribution type selects, export YAML button,
-that the simulation name reaches the submitted run, and that the period
-selector offers presets and a custom date range.
+Verifies slider-input sync, that each distribution editor's controls are named
+for their card, export YAML button, that the simulation name reaches the
+submitted run, and that the period selector offers presets and a custom date
+range.
 """
 
 import pytest
@@ -23,17 +24,85 @@ def test_fleet_slider_input_sync(page: Page, live_server: str) -> None:
     expect(page.get_by_label("Number of Homes", exact=True)).to_have_value("50")
 
 
-# -- Distribution type select ----------------------------------------------
+# -- Distribution editor control names -------------------------------------
 
 
-def test_fleet_distribution_type_select(page: Page, live_server: str) -> None:
-    """The PV, battery and consumption cards each show a distribution-type select offering 'Normal (Gaussian)'."""
+DISTRIBUTION_CARDS = [
+    pytest.param("PV Capacity", id="pv_capacity"),
+    pytest.param("Battery Capacity", id="battery_capacity"),
+    pytest.param("Annual Consumption", id="annual_consumption"),
+]
+
+
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_type_select_is_named_for_its_card(
+    page: Page, live_server: str, card: str
+) -> None:
+    """Each card's distribution-type select is named for its card, e.g. 'PV Capacity Distribution Type', and offers 'Normal (Gaussian)'."""
     page.goto(live_server + "/simulate/fleet")
 
-    distribution_type_selects = page.get_by_role("combobox").filter(
-        has=page.get_by_role("option", name="Normal (Gaussian)", exact=True)
+    type_select = page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True)
+    expect(type_select).to_be_visible()
+    expect(
+        type_select.get_by_role("option", name="Normal (Gaussian)", exact=True)
+    ).to_have_count(1)
+
+
+@pytest.mark.parametrize(
+    ("distribution_type", "fields"),
+    [
+        pytest.param(
+            "Normal (Gaussian)", ("Mean", "Std Dev", "Min (clamp)", "Max (clamp)"), id="normal"
+        ),
+        pytest.param("Uniform", ("Min", "Max"), id="uniform"),
+        pytest.param(
+            "Weighted Discrete",
+            ("Value 1", "Weight 1", "Value 2", "Weight 2"),
+            id="weighted_discrete",
+        ),
+        pytest.param(
+            "Shuffled Pool", ("Value 1", "Count 1", "Value 2", "Count 2"), id="shuffled_pool"
+        ),
+    ],
+)
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_parameters_are_named_for_their_card(
+    page: Page, live_server: str, card: str, distribution_type: str, fields: tuple[str, ...]
+) -> None:
+    """Each number input a distribution type shows is named for its card and field, and a row's inputs for their row, e.g. 'PV Capacity Value 2'."""
+    page.goto(live_server + "/simulate/fleet")
+
+    page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True).select_option(
+        label=distribution_type
     )
-    expect(distribution_type_selects).to_have_count(3)
+    for field in fields:
+        # to_have_count(1) retries while a type switch's outgoing row list, with the same names, is still shown.
+        expect(
+            page.get_by_role("spinbutton", name=f"{card} {field}", exact=True)
+        ).to_have_count(1)
+
+
+@pytest.mark.parametrize(
+    "distribution_type",
+    [
+        pytest.param("Weighted Discrete", id="weighted_discrete"),
+        pytest.param("Shuffled Pool", id="shuffled_pool"),
+    ],
+)
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_row_buttons_are_named_for_their_card(
+    page: Page, live_server: str, card: str, distribution_type: str
+) -> None:
+    """A row list's Add Row button and each row's remove button are named for the card, e.g. 'PV Capacity Add Row' and 'PV Capacity Remove Row 2'."""
+    page.goto(live_server + "/simulate/fleet")
+
+    page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True).select_option(
+        label=distribution_type
+    )
+    for name in ("Remove Row 1", "Remove Row 2", "Add Row"):
+        expect(
+            page.get_by_role("button", name=f"{card} {name}", exact=True)
+        ).to_have_count(1)
 
 
 # -- Export YAML button -----------------------------------------------------

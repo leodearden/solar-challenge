@@ -1,8 +1,11 @@
 {#
     distribution-editor.html -- Reusable distribution editor component.
 
-    This partial renders a distribution editor for a given parameter.
-    It expects to be embedded inside an Alpine.js component that provides
+    Exports distribution_editor(subject). subject is the card's heading text,
+    and every control's accessible name starts with it, e.g.
+    "PV Capacity Distribution Type".
+
+    The macro must be called inside an Alpine.js component that provides
     a `dist` object with the shape:
 
         {
@@ -15,20 +18,63 @@
             entries: [{value: number, count: number}, ...]
         }
 
-    The parent Alpine.js component must expose:
+    The enclosing Alpine.js scope must expose:
         - dist           : the distribution data object (reactive)
         - addRow()       : adds a row to values or entries
         - removeRow(idx) : removes a row from values or entries
+        - onTypeChange() : called when the distribution type changes
 
-    Usage (from fleet.html):
-        <div x-data="pvDistEditor()">
-            {% include "simulate/partials/distribution-editor.html" %}
-        </div>
+    Usage (from fleet.html): import it with
+        {% from "simulate/partials/distribution-editor.html" import distribution_editor %}
+    then call it inside the card's x-data element:
+        {{ distribution_editor('PV Capacity') }}
 #}
 
+{% macro _label_text(subject, text) -%}<span class="sr-only">{{ subject }} </span>{{ text }}{%- endmacro %}
+{% macro _row_label_text(subject, text) -%}{{ _label_text(subject, text) }} <span class="sr-only" x-text="idx + 1"></span>{%- endmacro %}
+
+{% macro _row_list(subject, rows, paired_key, paired_caption, paired_step) %}
+<template x-for="(row, idx) in {{ rows }}" :key="idx">
+    <div class="flex items-center gap-3">
+        <label class="flex-1 space-y-1">
+            <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_label_text(subject, 'Value') }}</span>
+            <input type="number" step="any" x-model.number="row.value"
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
+        </label>
+        <label class="flex-1 space-y-1">
+            <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_label_text(subject, paired_caption) }}</span>
+            <input type="number" step="{{ paired_step }}" min="0" x-model.number="row.{{ paired_key }}"
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
+        </label>
+        <button type="button" @click="removeRow(idx)"
+            class="mt-auto p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+            :disabled="{{ rows }}.length <= 1"
+            :class="{{ rows }}.length <= 1 ? 'opacity-30 cursor-not-allowed' : ''"
+        >
+            <span class="sr-only">{{ _row_label_text(subject, 'Remove Row') }}</span>
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+            </svg>
+        </button>
+    </div>
+</template>
+<div class="flex items-center justify-between">
+    <button type="button" @click="addRow()"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+    >
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
+        </svg>
+        {{ _label_text(subject, 'Add Row') }}
+    </button>
+    {% if caller is defined %}{{ caller() }}{% endif %}
+</div>
+{% endmacro %}
+
+{% macro distribution_editor(subject) %}
 <!-- Distribution type selector -->
-<div class="space-y-1.5 mb-4">
-    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Distribution Type</label>
+<label class="block space-y-1.5 mb-4">
+    <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Distribution Type') }}</span>
     <select
         x-model="dist.type"
         @change="onTypeChange()"
@@ -39,125 +85,65 @@
         <option value="weighted_discrete">Weighted Discrete</option>
         <option value="shuffled_pool">Shuffled Pool</option>
     </select>
-</div>
+</label>
 
 <!-- Normal distribution inputs -->
 <div x-show="dist.type === 'normal'" x-cloak x-transition class="space-y-4">
     <div class="grid grid-cols-2 gap-4">
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Mean</label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Mean') }}</span>
             <input type="number" step="any" x-model.number="dist.mean"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Std Dev</label>
+        </label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Std Dev') }}</span>
             <input type="number" step="any" min="0" x-model.number="dist.std"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
+        </label>
     </div>
     <div class="grid grid-cols-2 gap-4">
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Min (clamp)</label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Min (clamp)') }}</span>
             <input type="number" step="any" x-model.number="dist.min"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Max (clamp)</label>
+        </label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Max (clamp)') }}</span>
             <input type="number" step="any" x-model.number="dist.max"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
+        </label>
     </div>
 </div>
 
 <!-- Uniform distribution inputs -->
 <div x-show="dist.type === 'uniform'" x-cloak x-transition class="space-y-4">
     <div class="grid grid-cols-2 gap-4">
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Min</label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Min') }}</span>
             <input type="number" step="any" x-model.number="dist.min"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
-        <div class="space-y-1.5">
-            <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Max</label>
+        </label>
+        <label class="block space-y-1.5">
+            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Max') }}</span>
             <input type="number" step="any" x-model.number="dist.max"
                 class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-        </div>
+        </label>
     </div>
 </div>
 
 <!-- Weighted discrete distribution inputs -->
 <div x-show="dist.type === 'weighted_discrete'" x-cloak x-transition class="space-y-3">
     <div class="text-sm text-slate-500 dark:text-slate-400 mb-2">Define value-weight pairs. Weights are auto-normalised.</div>
-    <template x-for="(row, idx) in dist.values" :key="idx">
-        <div class="flex items-center gap-3">
-            <div class="flex-1 space-y-1">
-                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400" x-show="idx === 0">Value</label>
-                <input type="number" step="any" x-model.number="row.value"
-                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-            </div>
-            <div class="flex-1 space-y-1">
-                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400" x-show="idx === 0">Weight</label>
-                <input type="number" step="any" min="0" x-model.number="row.weight"
-                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-            </div>
-            <button type="button" @click="removeRow(idx)"
-                class="mt-auto p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                :disabled="dist.values.length <= 1"
-                :class="dist.values.length <= 1 ? 'opacity-30 cursor-not-allowed' : ''"
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-            </button>
-        </div>
-    </template>
-    <button type="button" @click="addRow()"
-        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-    >
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
-        </svg>
-        Add Row
-    </button>
+    {{ _row_list(subject, rows='dist.values', paired_key='weight', paired_caption='Weight', paired_step='any') }}
 </div>
 
 <!-- Shuffled pool distribution inputs -->
 <div x-show="dist.type === 'shuffled_pool'" x-cloak x-transition class="space-y-3">
     <div class="text-sm text-slate-500 dark:text-slate-400 mb-2">Define exact value-count pairs. Counts should sum to the fleet size.</div>
-    <template x-for="(row, idx) in dist.entries" :key="idx">
-        <div class="flex items-center gap-3">
-            <div class="flex-1 space-y-1">
-                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400" x-show="idx === 0">Value</label>
-                <input type="number" step="any" x-model.number="row.value"
-                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-            </div>
-            <div class="flex-1 space-y-1">
-                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400" x-show="idx === 0">Count</label>
-                <input type="number" step="1" min="0" x-model.number="row.count"
-                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm">
-            </div>
-            <button type="button" @click="removeRow(idx)"
-                class="mt-auto p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                :disabled="dist.entries.length <= 1"
-                :class="dist.entries.length <= 1 ? 'opacity-30 cursor-not-allowed' : ''"
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-            </button>
-        </div>
-    </template>
-    <div class="flex items-center justify-between">
-        <button type="button" @click="addRow()"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-        >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
-            </svg>
-            Add Row
-        </button>
-        <span class="text-xs text-slate-500 dark:text-slate-400">
-            Total: <span x-text="dist.entries.reduce((s, e) => s + (e.count || 0), 0)"></span> homes
-        </span>
-    </div>
+    {% call _row_list(subject, rows='dist.entries', paired_key='count', paired_caption='Count', paired_step='1') %}
+    <span class="text-xs text-slate-500 dark:text-slate-400">
+        Total: <span x-text="dist.entries.reduce((s, e) => s + (e.count || 0), 0)"></span> homes
+    </span>
+    {% endcall %}
 </div>
+{% endmacro %}
