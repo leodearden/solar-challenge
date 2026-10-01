@@ -161,7 +161,7 @@ homes:
 
   # --- TOU-Optimized Strategy (10 homes) ---
   # Peak hours: 16:00-19:00 (typical UK evening peak)
-  # Off-peak hours: 00:00-07:00 (overnight cheap rate)
+  # Every hour outside peak_hours is off-peak for tou_optimized
   - name: TOU-01
     pv:
       capacity_kw: 4.0
@@ -174,7 +174,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3400
 
@@ -190,7 +189,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3200
 
@@ -206,7 +204,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3600
 
@@ -222,7 +219,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3000
 
@@ -238,7 +234,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3800
 
@@ -254,7 +249,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3400
 
@@ -270,7 +264,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3100
 
@@ -286,7 +279,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3500
 
@@ -302,7 +294,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3700
 
@@ -318,7 +309,6 @@ homes:
       dispatch_strategy:
         strategy_type: tou_optimized
         peak_hours: [[16, 19]]
-        off_peak_hours: [[0, 7]]
     load:
       annual_consumption_kwh: 3300
 
