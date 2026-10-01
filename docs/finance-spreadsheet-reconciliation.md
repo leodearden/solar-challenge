@@ -170,4 +170,5 @@ demand).  So 642.5 kWh/home is own-use no household consumes, and pricing it at 
 - The spreadsheet's 0.70 × 5,775 = 4,042.5 kWh/home of own-use exceeds the 3,400 kWh
   TDCV demand by 642.5 kWh (£57.825/home/yr at 15 p rather than 6 p).
   `spreadsheet_revenue_curve` keeps it uncapped for method-agreement; the simulator's
-  override path caps own-use at demand (§4.1)
+  override path caps own-use at demand (`docs/cost-recovery-finance-model.md` §3,
+  *Override (spreadsheet-assumption) path*)
