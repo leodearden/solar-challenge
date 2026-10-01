@@ -518,7 +518,7 @@ class TestGenerateHeatPumpLoadSharesTheAnnualHeatDemand:
 
 
 class TestGenerateHeatPumpLoadRejectsAReferenceThatIsNotAYear:
-    """annual_temperature_c must be one year of minutes, 365 or 366 days; any other length raises ValueError."""
+    """annual_temperature_c must be one year of minutes, 365 to 366 days; any other length raises ValueError."""
 
     @pytest.mark.parametrize(
         ("rows", "freq"),

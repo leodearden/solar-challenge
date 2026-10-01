@@ -16,8 +16,15 @@ HeatPumpType = Literal["ASHP", "GSHP"]
 BASE_TEMPERATURE_C: float = 15.5
 
 
-# One year at 1-minute resolution: 365 to 366 days of rows (366 in a leap year)
-_YEAR_LENGTHS_IN_MINUTES = range(365 * 24 * 60, 366 * 24 * 60 + 1)
+def reference_year_lengths(rows_per_day: int) -> range:
+    """The row counts of one reference year, the year a heat pump's annual heat demand is shared out over.
+
+    That is 365 to 366 days (366 in a leap year) of rows, at rows_per_day rows a day.
+    """
+    return range(365 * rows_per_day, 366 * rows_per_day + 1)
+
+
+_YEAR_LENGTHS_IN_MINUTES = reference_year_lengths(rows_per_day=24 * 60)
 
 
 # COP curve parameters for Air Source Heat Pumps (ASHP)
@@ -198,7 +205,7 @@ def generate_heat_pump_load(
             resolution, over the minutes to generate the load for.
             Must have a DatetimeIndex with timezone info.
         annual_temperature_c: One year of outdoor temperature in degrees
-            Celsius at 1-minute resolution, 365 or 366 days of rows.
+            Celsius at 1-minute resolution, 365 to 366 days of rows.
             Only its values are read.
 
     Returns:
@@ -208,7 +215,7 @@ def generate_heat_pump_load(
     Raises:
         ValueError: If temperature_c doesn't have a DatetimeIndex
         ValueError: If temperature_c index is not timezone-aware
-        ValueError: If annual_temperature_c is not one year of minutes, 365 or
+        ValueError: If annual_temperature_c is not one year of minutes, 365 to
             366 days of rows
 
     Example:
