@@ -53,7 +53,9 @@ class FinanceConfig:
         retail_baseline_rate_pence_per_kwh: Grid import unit rate before project
             (default 23.0 p/kWh).
         self_consumption_override: Optional fixed self-consumption fraction
-            (0, 1]; if None the simulator uses the modelled value.
+            (0, 1]; if None the simulator uses the modelled value.  When set,
+            each home's own-use is min(override × generation, demand) and the
+            surplus generation is counted as export.
         pv_cost_per_kwp_gbp: PV hardware + install cost per kWp (default 1000.0).
         roof_fit_cost_gbp: Fixed per-home roof-fitting cost (default 1000.0).
         battery_cost_per_kwh_gbp: Battery hardware cost per kWh (default 250.0).
@@ -539,6 +541,43 @@ def _annualise_physics(
 
 
 # ---------------------------------------------------------------------------
+# _override_energy_split — one home's energy under self_consumption_override
+# ---------------------------------------------------------------------------
+
+
+class _OverrideEnergySplit(NamedTuple):
+    """One home's own-use, import and export on the override path (kWh)."""
+
+    own_use_kwh: float
+    import_kwh: float
+    export_kwh: float
+    capped_at_demand: bool
+    """True when override × generation exceeded demand, so own-use was cut to demand."""
+
+
+def _override_energy_split(
+    override: float,
+    *,
+    generation_kwh: float,
+    demand_kwh: float,
+) -> _OverrideEnergySplit:
+    """Split a home's generation and demand by the override fraction.
+
+    Own-use is ``min(override × generation, demand)``: a home cannot consume
+    more solar than its demand.  The two balances then hold exactly:
+    ``demand = own_use + import`` and ``generation = own_use + export``.
+    """
+    implied_own_use_kwh = override * generation_kwh
+    own_use_kwh = min(implied_own_use_kwh, demand_kwh)
+    return _OverrideEnergySplit(
+        own_use_kwh=own_use_kwh,
+        import_kwh=demand_kwh - own_use_kwh,
+        export_kwh=generation_kwh - own_use_kwh,
+        capped_at_demand=implied_own_use_kwh > demand_kwh,
+    )
+
+
+# ---------------------------------------------------------------------------
 # _seg_export_income_gbp — CBS SEG revenue helper (extracted from W2 model)
 # ---------------------------------------------------------------------------
 
@@ -561,9 +600,11 @@ def _seg_export_income_gbp(
 
     * **Physics path** (``finance.self_consumption_override`` is None):
       annualised ``summary.total_export_revenue_gbp``.
-    * **Override path**: re-compute override export kWh from the override
-      self-consumption fraction; price at the effective export rate derived
-      from the physics figures (falls back to 0.0 if physics export kWh == 0).
+    * **Override path**: export = generation − min(override × generation,
+      demand) (:func:`_override_energy_split`), priced at the effective
+      export rate derived from the physics figures (falls back to 0.0 if
+      physics export kWh == 0).  Silent when the cap binds, since this runs
+      per home at every sampled age; :func:`householder_bill` warns instead.
 
     Args:
         summary: Per-home simulation output (read-only).
@@ -583,8 +624,9 @@ def _seg_export_income_gbp(
         return float(phys.export_rev_physics)
     else:
         # Spreadsheet path: recompute from override fraction
-        sc_kwh = override * phys.gen_kwh
-        override_export_kwh = max(phys.gen_kwh - sc_kwh, 0.0)
+        override_export_kwh = _override_energy_split(
+            override, generation_kwh=phys.gen_kwh, demand_kwh=phys.demand_kwh
+        ).export_kwh
         if phys.export_kwh > 0.0:
             effective_export_rate_pence = (
                 phys.export_rev_physics / phys.export_kwh
@@ -784,7 +826,9 @@ def householder_bill(
     Responsibilities of this wrapper (not in bill()):
       * Annualise sub-year simulation totals via :func:`_annualise_physics`.
       * Emit a :class:`UserWarning` for short periods (< 360 days).
-      * Resolve the physics/override self-consumption path.
+      * Resolve the physics/override self-consumption path.  The override's
+        own-use is capped at demand (:func:`_override_energy_split`), with a
+        :class:`UserWarning` when the cap binds.
       * Apply the missing-tariff retail fallback with a :class:`UserWarning`.
       * Always call bill(period_days=365, ...) so standing charge is
         annual regardless of the original simulation length.
@@ -794,9 +838,10 @@ def householder_bill(
 
     Args:
         summary: Per-home simulation output (read-only).
-        annual_self_consumption_kwh: Physics self-consumption figure (kWh).
-            When ``finance.self_consumption_override`` is None, this is used
-            directly.  When an override is set, it is used only for scaling.
+        annual_self_consumption_kwh: Physics self-consumption figure (kWh),
+            billed when ``finance.self_consumption_override`` is None.  Ignored
+            when an override is set: own-use then comes from the override,
+            generation and demand.
         finance: FinanceConfig with tariff + assumption parameters.
         simulation_days: Actual simulation length in days; triggers
             annualisation to 365 days when < 360.
@@ -858,7 +903,16 @@ def householder_bill(
             )
     else:
         # Spreadsheet path: override the self-consumption fraction
-        sc_kwh = override * gen_kwh
+        split = _override_energy_split(override, generation_kwh=gen_kwh, demand_kwh=demand_kwh)
+        if split.capped_at_demand:
+            warnings.warn(
+                f"self_consumption_override={override:g} implies more own-use than "
+                f"this home's demand; own-use is capped at demand and the surplus "
+                f"generation is counted as export.",
+                UserWarning,
+                stacklevel=2,
+            )
+        sc_kwh = split.own_use_kwh
 
         # Effective import unit rate from physics (fall back to retail if zero physics import)
         if import_kwh > 0.0:
@@ -866,12 +920,9 @@ def householder_bill(
         else:
             effective_import_rate_pence = retail_rate_pence
 
-        # Recompute import: demand minus self-consumed solar
-        override_import_kwh = max(demand_kwh - sc_kwh, 0.0)
-        import_cost_gbp = override_import_kwh * effective_import_rate_pence / 100.0
-        # Keep import_kwh consistent with import_cost_gbp: on the override path,
-        # import_cost_gbp prices override_import_kwh (not phys.import_kwh).
-        import_kwh_for_bill = override_import_kwh
+        # The override's import, not phys.import_kwh, is what import_cost_gbp prices.
+        import_kwh_for_bill = split.import_kwh
+        import_cost_gbp = import_kwh_for_bill * effective_import_rate_pence / 100.0
 
     # ---- Delegate all bill arithmetic to bill() (single source of truth) ----
     # period_days=365 reproduces the old annual standing-charge hard-code exactly:
@@ -1285,8 +1336,8 @@ def bill_distribution(
             # NOTE: basis C applies only on the physics path (finance.self_consumption_override
             # is None).  When self_consumption_override is set (spreadsheet / override path),
             # householder_bill ignores annual_self_consumption_kwh and recomputes
-            # sc = override × gen; that path remains fraction-based and is unaffected by
-            # this basis-C migration.
+            # sc = min(override × gen, demand); that path remains fraction-based and is
+            # unaffected by this basis-C migration.
             annual_self_consumption_kwh=_cbs_own_use_kwh(s),
             finance=finance,
             simulation_days=simulation_days,

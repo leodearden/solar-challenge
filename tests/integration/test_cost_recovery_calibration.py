@@ -8,6 +8,7 @@ and flex-lowers-rate directionality for solve_cost_recovery_rate.
 Layout:
   - Fast (no-network) classes:
       TestNoFlexAnchorReconciliation — [FIN] no-flex structural anchor
+      TestOverrideOwnUseCappedAtDemand — the anchor under the 0.70 override bills own-use up to demand
       TestStructuralInvariants — H1 (surplus==floor) + H2 (capex monotone)
       TestFlexLowersSolvedRate — directional assert: flex ⟹ strictly lower rate
       TestThetaStaysGreen — in-file θ-isolation smoke (spreadsheet → economics)
@@ -348,6 +349,70 @@ class TestNoFlexAnchorReconciliation:
         )
         assert 0.0 <= sol.own_use_rate_pence_per_kwh <= finance.retail_baseline_rate_pence_per_kwh, (
             f"Solved rate {sol.own_use_rate_pence_per_kwh:.4f} outside [0, {finance.retail_baseline_rate_pence_per_kwh}]"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The [FIN] anchor under the spreadsheet's override: own-use is billed up to demand
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideOwnUseCappedAtDemand:
+    """The [FIN] no-flex solve at self_consumption_override 0.70, where the implied own-use exceeds demand.
+
+    Two anchor fleets: 3,400 kWh demand, 2,000 kWh basis-C own-use and no SEG per home,
+    with 5,775 or 5,000 kWh of generation, so the override implies 4,042.5 or 3,500 kWh
+    of own-use.  The solve's rate base is basis C, so the solved rate cannot depend on
+    generation; capped at demand, the representative home is billed for 3,400 kWh at that
+    rate on both fleets.
+    """
+
+    @pytest.fixture(scope="class")
+    def solutions(self) -> "tuple[CostRecoverySolution, CostRecoverySolution]":  # type: ignore[name-defined]
+        """(5,775 kWh, 5,000 kWh generation) solves; each must warn that the cap binds."""
+        import dataclasses
+
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        scenario = _make_scenario_fin_cr6()
+        finance = dataclasses.replace(_make_finance_fin_cr6(), self_consumption_override=_FIN_SCF)
+
+        def solve(export_kwh: float) -> "CostRecoverySolution":  # type: ignore[name-defined]
+            fleet = _make_fleet_results_fin_cr6(
+                self_kwh=2000.0, export_kwh=export_kwh, import_kwh=1400.0
+            )
+            with pytest.warns(UserWarning, match="capped at demand"):
+                return solve_cost_recovery_rate(scenario, finance, simulate=lambda fc, s, e: fleet)
+
+        return solve(export_kwh=3775.0), solve(export_kwh=3000.0)
+
+    def test_solved_rate_does_not_depend_on_generation(
+        self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"  # type: ignore[name-defined]
+    ) -> None:
+        """Premise: both fleets solve to the same floor-binding rate."""
+        high_gen, low_gen = solutions
+
+        assert high_gen.binding == low_gen.binding == "floor"
+        assert low_gen.own_use_rate_pence_per_kwh == pytest.approx(
+            high_gen.own_use_rate_pence_per_kwh, rel=1e-9
+        )
+
+    def test_representative_own_use_is_billed_at_demand(
+        self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"  # type: ignore[name-defined]
+    ) -> None:
+        for sol in solutions:
+            assert sol.outlay.representative.own_use_payment_gbp == pytest.approx(
+                3400.0 * sol.own_use_rate_pence_per_kwh / 100.0
+            )
+
+    def test_saving_does_not_rise_as_generation_falls(
+        self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"  # type: ignore[name-defined]
+    ) -> None:
+        high_gen, low_gen = solutions
+
+        assert low_gen.saving_vs_baseline_gbp <= high_gen.saving_vs_baseline_gbp + 1e-6, (
+            f"saving rose from £{high_gen.saving_vs_baseline_gbp:.2f} at 5,775 kWh "
+            f"to £{low_gen.saving_vs_baseline_gbp:.2f} at 5,000 kWh of generation"
         )
 
 
