@@ -73,9 +73,10 @@ def test_results_stat_card_labels_not_truncated(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """The seeded battery run's 12 stat card labels are visible, and none is cut short.
+    """The seeded run's stat card labels are all visible, and none is cut short.
 
     The stat_card macro titles each label with its text; no other <p> here has a title.
+    The seed's battery_config adds the battery cards; the expected count includes them.
     A label is cut short when its text needs more room than its box, across or down.
     """
     run_id, _ = seeded_home_run
