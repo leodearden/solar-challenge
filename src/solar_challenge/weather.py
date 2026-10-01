@@ -242,33 +242,3 @@ def get_tmy_data(
 
     except Exception as e:
         raise RuntimeError(f"Failed to retrieve TMY data from PVGIS: {e}") from e
-
-
-def validate_irradiance_data(data: pd.DataFrame) -> None:
-    """Validate irradiance data quality.
-
-    Args:
-        data: DataFrame with ghi, dni, dhi columns
-
-    Raises:
-        ValueError: If validation fails with specific issue identified
-    """
-    required = ["ghi", "dni", "dhi"]
-    for col in required:
-        if col not in data.columns:
-            raise ValueError(f"Missing required column: {col}")
-
-    for col in required:
-        if (data[col] < 0).any():
-            neg_count = (data[col] < 0).sum()
-            raise ValueError(
-                f"Column '{col}' contains {neg_count} negative values"
-            )
-
-    # GHI should approximately equal DNI * cos(zenith) + DHI
-    # For simplicity, check GHI <= DNI + DHI (conservative upper bound)
-    if (data["ghi"] > data["dni"] + data["dhi"] + 1).any():  # 1 W/m² tolerance
-        violations = (data["ghi"] > data["dni"] + data["dhi"] + 1).sum()
-        raise ValueError(
-            f"GHI exceeds DNI + DHI in {violations} rows (physical impossibility)"
-        )
