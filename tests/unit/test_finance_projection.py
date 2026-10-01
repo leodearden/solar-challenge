@@ -2050,7 +2050,8 @@ class TestProjectMultiYearAnnualisesShortWindow:
     """A window under 360 days projects as the 365-day year it samples.
 
     project_multi_year scales each home's window totals to a 365-day year, so a
-    short window at the same daily rates as a full year gives the same curve.
+    short window at the same daily rates as a full year gives the same curve,
+    and it warns once per projection that it did so.
     """
 
     def test_short_window_projects_the_equivalent_full_year_curve(self) -> None:
@@ -2072,3 +2073,36 @@ class TestProjectMultiYearAnnualisesShortWindow:
         assert curve_short.sampled_ages == curve_full.sampled_ages
         for short, full in zip(curve_short.points, curve_full.points, strict=True):
             assert dataclasses.asdict(short) == pytest.approx(dataclasses.asdict(full), rel=1e-9)
+
+    def test_short_window_warns_once_naming_the_window(self) -> None:
+        """Annualising a short window raises one UserWarning per projection, naming its days."""
+        import re
+
+        from solar_challenge.finance import project_multi_year
+
+        scenario, finance, _, _, fleet_short = _make_full_year_and_short_window_fleets()
+        names_the_window = re.compile(rf"\b{_SHORT_WINDOW_DAYS} days\b")
+
+        with pytest.warns(UserWarning, match=names_the_window) as record:
+            curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_short)
+
+        # Premise: several ages are simulated, so a warning raised per node would repeat.
+        assert len(curve.sampled_ages) >= 3
+        window_warnings = [
+            str(w.message) for w in record if names_the_window.search(str(w.message))
+        ]
+        assert len(window_warnings) == 1, window_warnings
+
+    def test_full_year_window_does_not_warn(self) -> None:
+        """A full-year window is not annualised, so a board run stays warning-free."""
+        import warnings
+
+        from solar_challenge.finance import project_multi_year
+
+        scenario, finance, _, fleet_full_year, _ = _make_full_year_and_short_window_fleets()
+
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_full_year)
+
+        assert [str(w.message) for w in record if issubclass(w.category, UserWarning)] == []
