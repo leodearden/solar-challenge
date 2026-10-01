@@ -123,9 +123,11 @@ The **physics column** is run in the `@pytest.mark.slow` suite over a 2-home,
 3-day January window and *reported* alongside the spreadsheet column as a smoke
 check of the physics path. It does **not** document the §2.3 annual
 self-consumption tension: a short winter window cannot show an annual
-self-consumption fraction, and its DSCR/IRR are degenerate (the [FIN] grant
-exceeds the 2-home capex, so financed capex, debt and equity are all zero).
-Documenting the annual tension would need a full-year run.
+self-consumption fraction. The DSCR/IRR that report prints are degenerate in
+**both** columns (the [FIN] grant exceeds the 2-home capex, so financed capex,
+debt and equity are all zero); the ~4.02 / ~10.7% in the table above are the
+100-home spreadsheet-input figures. Documenting the annual tension would need a
+full-year run.
 
 ### 4.1 §2.3 Self-Consumption Tension
 

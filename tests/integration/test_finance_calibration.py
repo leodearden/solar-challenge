@@ -710,10 +710,10 @@ class TestCalibrationPhysicsColumn:
     """
 
     def test_physics_column_structural_sanity(self) -> None:
-        """Physics column: capex still input-driven (== £775k for 5kWh fleet).
+        """Physics column: capex still input-driven (2 homes × £7,750).
 
         The physics column uses the real project_multi_year simulation (2 homes,
-        3-day window). Only STRUCTURAL checks: capex == £775k, physics scf MAY
+        3-day window). Only STRUCTURAL checks: capex == £15,500, physics scf MAY
         differ from 0.70, no physics==spreadsheet assertion.
         """
         from solar_challenge.config import ScenarioConfig, SimulationPeriod
@@ -759,8 +759,9 @@ class TestCalibrationPhysicsColumn:
             f"  Physics self_cons_kwh:   {physics_curve.points[0].fleet_self_consumption_kwh:.1f}\n"
             f"  Physics export_kwh:      {physics_curve.points[0].fleet_export_kwh:.1f}\n"
             f"  Spreadsheet scf=0.70 (named inp: {_FIN_SCF})\n"
-            f"  Note: 3-day window and grant > 2-home capex — values are a smoke\n"
-            f"  report of the physics path, not the annual §2.3 tension."
+            f"  Note: grant > 2-home capex (no debt, no equity), so DSCR/IRR in both\n"
+            f"  columns are degenerate. The 3-day physics values are a smoke report\n"
+            f"  of the physics path, not the annual §2.3 tension."
         )
 
         # STRUCTURAL assertions only (no physics==spreadsheet assertions)
@@ -771,10 +772,9 @@ class TestCalibrationPhysicsColumn:
             f"Physics capex (2 homes × £7,750) expected £{_two_home_capex_gbp:,.2f}, "
             f"got £{physics_econ.total_capex_gbp:,.2f}"
         )
-        # Physics DSCR must be finite and positive (structural sanity)
+        # Physics DSCR must be positive, or inf when debt-free (structural sanity)
         assert physics_econ.min_dscr > 0.0 or physics_econ.min_dscr == float("inf")
-        # Physics IRR: just check it's a float (may be nan for short window)
-        import math
+        # Physics IRR: just check it's a float (nan when no equity is invested, as here)
         # No assertion on physics_irr == spreadsheet_irr (G6: never assert physics == 0.70)
         assert isinstance(physics_econ.equity_irr, float)
 
