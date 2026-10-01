@@ -545,6 +545,89 @@ class TestFleetConfigHelpers:
             {**VALID_DISTRIBUTION_FORM, key: value}
         ) == form_to_fleet_distribution_config(without_block)
 
+    @pytest.mark.parametrize(
+        ("spec", "converted"),
+        [
+            pytest.param(
+                {
+                    "type": "weighted_discrete",
+                    "values": [{"value": 3.0, "weight": 2}, {"value": 5.0}],
+                },
+                {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [2.0, 1.0]},
+                id="weighted-discrete",
+            ),
+            pytest.param(
+                {
+                    "type": "shuffled_pool",
+                    "entries": [{"value": 3.0, "count": 2}, {"value": 5.0}],
+                },
+                {"type": "shuffled_pool", "values": [3.0, 5.0], "counts": [2, 1]},
+                id="shuffled-pool",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_converts_distribution_rows(
+        self, spec: dict, converted: dict
+    ) -> None:
+        """A weighted_discrete/shuffled_pool row list converts to parallel value and weight/count lists, a missing weight or count reading as 1."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        config = form_to_fleet_distribution_config(
+            {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+        )
+        assert config["pv"] == {"capacity_kw": converted}
+
+    @pytest.mark.parametrize(
+        ("spec", "message"),
+        [
+            pytest.param(
+                {"type": "weighted_discrete", "values": ["x"]},
+                "values[0] must be a mapping, got str",
+                id="weighted-discrete-str-row",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "values": [{"value": 4.0, "weight": 1}, 3500]},
+                "values[1] must be a mapping, got int",
+                id="weighted-discrete-int-row-after-a-valid-one",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "entries": [1]},
+                "entries[0] must be a mapping, got int",
+                id="shuffled-pool-int-row",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "entries": [[4.0, 2]]},
+                "entries[0] must be a mapping, got list",
+                id="shuffled-pool-list-row",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "values": "ab"},
+                "values must be a list, got str",
+                id="weighted-discrete-str-values",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "values": {"value": 4.0}},
+                "values must be a list, got dict",
+                id="weighted-discrete-object-values",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "entries": None},
+                "entries must be a list, got NoneType",
+                id="shuffled-pool-null-entries",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_malformed_distribution_rows(
+        self, spec: dict, message: str
+    ) -> None:
+        """A weighted_discrete/shuffled_pool row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        with pytest.raises(ValueError, match=re.escape(message)):
+            form_to_fleet_distribution_config(
+                {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+            )
+
     def test_fleet_distribution_to_yaml(self) -> None:
         """Test converting fleet config to YAML string."""
         from solar_challenge.web.fleet_config import fleet_distribution_to_yaml

@@ -1075,6 +1075,50 @@ class TestFleetFromDistribution:
         assert distribution in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("block", "message"),
+        [
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "weighted_discrete", "values": ["x"]}}},
+                "values[0] must be a mapping, got str",
+                id="pv-weighted-discrete-str-row",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "weighted_discrete", "values": "ab"}}},
+                "values must be a list, got str",
+                id="pv-weighted-discrete-str-values",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "shuffled_pool", "entries": [1]}}},
+                "entries[0] must be a mapping, got int",
+                id="pv-shuffled-pool-int-row",
+            ),
+            pytest.param(
+                {
+                    "load": {
+                        "annual_consumption_kwh": {
+                            "type": "weighted_discrete",
+                            "values": [3500],
+                        }
+                    }
+                },
+                "values[0] must be a mapping, got int",
+                id="load-weighted-discrete-int-row",
+            ),
+        ],
+    )
+    def test_malformed_distribution_rows_return_400_naming_the_field(
+        self, client: FlaskClient, mock_job_manager: MagicMock, block: dict, message: str
+    ) -> None:
+        """A weighted_discrete/shuffled_pool row that is not an object, or a row list that is not an array, is a 400 naming it and the type sent; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, **block},
+        )
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
     def test_malformed_fleet_seg_returns_400_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: MagicMock, seg: object
