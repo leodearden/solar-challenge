@@ -272,9 +272,13 @@ subprojects:
       - what: "BillDistribution.per_home_net_bill_gbp is a deprecated-but-live name that actually holds total_outlay (Task 88's F-NAME-1 explicitly left this out-of-scope; the other two sub-claims formerly bundled here — stale doc line numbers and finance.py's docstring count — were fixed by Task 88's F-DOC-4/F-DOC-5 and are dropped from this gap)."
         why: "Doc/naming drift, not by design — confusing to a maintainer or new consumer expecting the name to match what it holds. Intentional back-compat decision to keep the name, but still worth surfacing. tracking: null"
         tracking: null
-      - what: "solve_cost_recovery_rate's affine reconstruction can be a few pence off true breakeven under severe-loss scenarios (a negative-revenue year clamps the base node)."
-        why: "Documented limitation in the function docstring; acceptable for the operating regime but a reviewer should know the solve is approximate at the edges. tracking: null"
-        tracking: null
+
+    # (RESOLVED — no live gap) The former "solve_cost_recovery_rate's affine
+    # reconstruction can be a few pence off true breakeven under severe-loss
+    # scenarios" gap was retired by Task 219 (merged 2026-09-30), which removed the
+    # negative CBS grid-charge-cost term from fleet revenue. The solve's docstring
+    # ("Affine-line precondition" paragraph) states the current precondition.
+    # /review should NOT re-flag it.
 
     exclude:
       - "finance/ — the investor-pitch .xlsm spreadsheet is the CALIBRATION source-of-truth artifact, not code (the calibration TEST that reconciles against it IS in scope)."
