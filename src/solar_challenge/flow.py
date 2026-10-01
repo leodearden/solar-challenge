@@ -149,9 +149,7 @@ def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:
     this helper so the two dispatch paths always classify cheap vs. expensive
     periods identically (PRD §4).
     """
-    rates = [p.rate_per_kwh for p in tariff.periods]
-    mean_rate = sum(rates) / len(rates)
-    return current_rate < max(rates) and current_rate <= mean_rate
+    return current_rate < tariff.peak_rate and current_rate <= tariff.mean_period_rate
 
 
 def _build_grid_charge_context(
@@ -169,12 +167,11 @@ def _build_grid_charge_context(
     assert battery.config.grid_charging is not None
     gc = battery.config.grid_charging
 
-    all_rates = [p.rate_per_kwh for p in tariff.periods]
     current_rate = tariff.get_rate(timestamp)
 
     return GridChargeContext(
         current_rate=current_rate,
-        peak_rate=max(all_rates),
+        peak_rate=tariff.peak_rate,
         is_cheap_period=_is_cheap_period(tariff, current_rate),
         target_soc_fraction=gc.target_soc_fraction,
         max_charge_kw=battery.config.max_charge_kw,

@@ -134,6 +134,19 @@ class TariffConfig:
             period.get_start_time()
             period.get_end_time()
 
+    # Derived from periods; cached_property keeps them out of fields(), as for
+    # TariffPeriod's parsed times.
+    @cached_property
+    def peak_rate(self) -> float:
+        """Highest period rate in £/kWh."""
+        return max(period.rate_per_kwh for period in self.periods)
+
+    @cached_property
+    def mean_period_rate(self) -> float:
+        """Mean of the period rates in £/kWh, each period counted once whatever its length."""
+        rates = [period.rate_per_kwh for period in self.periods]
+        return sum(rates) / len(rates)
+
     def get_rate(self, timestamp: pd.Timestamp) -> float:
         """Get the electricity rate for a specific timestamp.
 
