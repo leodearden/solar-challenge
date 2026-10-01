@@ -1,4 +1,9 @@
 document.addEventListener('alpine:init', () => {
+    // A scenario value as a form input holds it: '' (a cleared input, which the server reads as absent) for none
+    function inputValue(value) {
+        return value === undefined || value === null ? '' : value;
+    }
+
     Alpine.data('scenarioBuilder', () => ({
         // Form state
         name: '',
@@ -146,76 +151,62 @@ document.addEventListener('alpine:init', () => {
             URL.revokeObjectURL(url);
         },
 
-        // Upload YAML file
+        // Upload YAML file: set the form to the scenario it holds
         async uploadYaml(event) {
             const file = event.target.files[0];
             if (!file) return;
             const text = await file.text();
             this.yamlPreview = text;
             try {
-                const parsed = (typeof jsyaml !== 'undefined') ? jsyaml.load(text) : null;
-                if (!parsed) return;
-                if (parsed.name) this.name = parsed.name;
-                if (parsed.description) this.description = parsed.description;
-                if (parsed.start_date) this.start_date = parsed.start_date;
-                if (parsed.end_date) this.end_date = parsed.end_date;
-                if (parsed.n_homes) this.n_homes = parsed.n_homes;
-                if (parsed.import_rate !== undefined) this.import_rate = parsed.import_rate;
-                if (parsed.export_rate !== undefined) this.export_rate = parsed.export_rate;
-                // Location
-                if (parsed.location) {
-                    if (parsed.location.latitude !== undefined) {
-                        this.location_preset = 'custom';
-                        this.latitude = parsed.location.latitude;
-                        this.longitude = parsed.location.longitude || -2.58;
-                        if (parsed.location.altitude !== undefined) this.altitude = parsed.location.altitude;
-                    }
+                const scenario = (typeof jsyaml !== 'undefined') ? jsyaml.load(text) : null;
+                if (scenario) {
+                    this.applyScenario(scenario);
+                    this.updatePreview();
                 }
-                // PV distribution
-                if (parsed.fleet_distribution && parsed.fleet_distribution.pv_capacity_kw) {
-                    var pv = parsed.fleet_distribution.pv_capacity_kw;
-                    if (typeof pv === 'number') {
-                        this.pv_distribution_type = '';
-                        this.pv_capacity_kw = pv;
-                    } else if (pv.type) {
-                        this.pv_distribution_type = pv.type;
-                        if (pv.mean !== undefined) this.pv_mean = pv.mean;
-                        if (pv.std !== undefined) this.pv_std = pv.std;
-                        if (pv.min !== undefined) this.pv_min = pv.min;
-                        if (pv.max !== undefined) this.pv_max = pv.max;
-                    }
-                }
-                // Battery distribution
-                if (parsed.fleet_distribution && parsed.fleet_distribution.battery_capacity_kwh) {
-                    var batt = parsed.fleet_distribution.battery_capacity_kwh;
-                    if (typeof batt === 'number') {
-                        this.battery_distribution_type = '';
-                        this.battery_capacity_kwh = batt;
-                    } else if (batt.type) {
-                        this.battery_distribution_type = batt.type;
-                        if (batt.mean !== undefined) this.battery_mean = batt.mean;
-                        if (batt.std !== undefined) this.battery_std = batt.std;
-                        if (batt.min !== undefined) this.battery_min = batt.min;
-                        if (batt.max !== undefined) this.battery_max = batt.max;
-                    }
-                }
-                // Load distribution
-                if (parsed.fleet_distribution && parsed.fleet_distribution.annual_consumption_kwh) {
-                    var load = parsed.fleet_distribution.annual_consumption_kwh;
-                    if (typeof load === 'number') {
-                        this.load_distribution_type = '';
-                        this.annual_consumption_kwh = load;
-                    } else if (load.type) {
-                        this.load_distribution_type = load.type;
-                        if (load.mean !== undefined) this.load_mean = load.mean;
-                        if (load.std !== undefined) this.load_std = load.std;
-                        if (load.min !== undefined) this.load_min = load.min;
-                        if (load.max !== undefined) this.load_max = load.max;
-                    }
-                }
-                this.updatePreview();
             } catch (e) { /* ignore parse errors */ }
             event.target.value = '';
+        },
+
+        // Set the form to the one whose preview is `scenario`, a document in the preview's grammar
+        applyScenario(scenario) {
+            const period = scenario.period || {};
+            const fleet = scenario.fleet_distribution || {};
+            const tariff = scenario.tariff || {};
+            this.name = inputValue(scenario.name);
+            this.description = inputValue(scenario.description);
+            this.start_date = inputValue(period.start_date);
+            this.end_date = inputValue(period.end_date);
+            if (scenario.location) {
+                this.location_preset = 'custom';
+                this.latitude = inputValue(scenario.location.latitude);
+                this.longitude = inputValue(scenario.location.longitude);
+                this.altitude = inputValue(scenario.location.altitude);
+            }
+            this.n_homes = inputValue(fleet.n_homes);
+            this.import_rate = tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '';
+            this.seg_rate_pence_per_kwh = inputValue((scenario.seg || {}).rate_pence_per_kwh);
+            this.applyDistribution('pv', 'pv_capacity_kw', (fleet.pv || {}).capacity_kw);
+            this.applyDistribution('battery', 'battery_capacity_kwh', (fleet.battery || {}).capacity_kwh);
+            this.applyDistribution('load', 'annual_consumption_kwh', (fleet.load || {}).annual_consumption_kwh);
+        },
+
+        // Set one component's fields to `spec`: a fixed number, or a distribution
+        applyDistribution(prefix, fixedField, spec) {
+            if (spec === null || typeof spec !== 'object') {
+                this[prefix + '_distribution_type'] = '';
+                this[fixedField] = inputValue(spec);
+                return;
+            }
+            this[prefix + '_distribution_type'] = spec.type;
+            if (spec.type === 'weighted_discrete') {
+                this[prefix + '_wd_values'] = spec.values.map((value, i) => ({ value, weight: spec.weights[i] }));
+            } else if (spec.type === 'shuffled_pool') {
+                this[prefix + '_sp_entries'] = spec.values.map((value, i) => ({ value, count: spec.counts[i] }));
+            } else {
+                for (const key of ['mean', 'std', 'min', 'max']) {
+                    this[prefix + '_' + key] = inputValue(spec[key]);
+                }
+            }
         },
 
         // Load presets list
