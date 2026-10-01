@@ -471,6 +471,28 @@ class TestBuilderScenarioYaml:
         fleet_distribution = parse_fleet_distribution_config(document["fleet_distribution"])
         assert getattr(getattr(fleet_distribution, component), grammar_key) == expected
 
+    @pytest.mark.parametrize(
+        ("rate_field", "block"),
+        [
+            pytest.param("import_rate", "tariff", id="import rate"),
+            pytest.param("seg_rate_pence_per_kwh", "seg", id="SEG rate"),
+        ],
+    )
+    def test_a_cleared_rate_writes_its_block_as_null_and_the_form_validates(
+        self, client: FlaskClient, rate_field: str, block: str
+    ) -> None:
+        """Clearing the import or SEG rate means a scenario with no tariff or no SEG, which the readers accept.
+
+        The block is written as null, the readers' spelling of none, not as an empty block they refuse.
+        """
+        form = {**self._DEFAULT_FORM, rate_field: ""}
+
+        _, document = _preview_document(client, form)
+        validation = client.post("/api/scenarios/validate", json=form).get_json()
+
+        assert document[block] is None
+        assert validation == {"valid": True, "errors": []}
+
     def test_a_form_key_the_builder_does_not_read_is_refused(self, client: FlaskClient) -> None:
         """A key the builder does not read gets 400 naming it, instead of being dropped from the YAML."""
         response = client.post(

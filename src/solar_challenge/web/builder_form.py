@@ -4,7 +4,9 @@
 The builder posts one flat form, the one scenario-builder.js's getFormData() builds.
 A field the form leaves out, or sends as null or '' (a cleared input), is left out
 of the block that carries it, so the loaders report or default it as they would
-for a hand-written scenario file.
+for a hand-written scenario file.  The tariff: and seg: blocks carry nothing but
+their rate, so a form without the import or SEG rate writes that block as null:
+a scenario with no tariff, or no SEG.
 """
 
 import tempfile
@@ -100,13 +102,12 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
     if "location_preset" in fields:
         document["location"] = location_block(_location(fields))
     document["fleet_distribution"] = _fleet_distribution_block(fields)
-    document["tariff"] = {
-        "type": "flat_rate",
-        **_present_numbers(fields, {"rate_per_kwh": "import_rate"}),
-    }
-    document["seg"] = _present_numbers(
-        fields, {"rate_pence_per_kwh": "seg_rate_pence_per_kwh"}
+    import_rate = _optional_number(fields, "import_rate")
+    seg_rate = _optional_number(fields, "seg_rate_pence_per_kwh")
+    document["tariff"] = (
+        None if import_rate is None else {"type": "flat_rate", "rate_per_kwh": import_rate}
     )
+    document["seg"] = None if seg_rate is None else {"rate_pence_per_kwh": seg_rate}
     return document
 
 
@@ -287,6 +288,11 @@ def _distribution_spec(fields: Mapping[str, Any], form_keys: Mapping[str, str]) 
             f"shuffled_pool, got {distribution_type!r}"
         )
     return {"type": distribution_type, **parameters}
+
+
+def _optional_number(fields: Mapping[str, Any], form_key: str) -> Optional[float]:
+    """The form's *form_key* as a number; None when the form leaves it out."""
+    return _as_float(fields[form_key], form_key) if form_key in fields else None
 
 
 def _present_numbers(fields: Mapping[str, Any], form_keys: Mapping[str, str]) -> dict[str, float]:
