@@ -1037,7 +1037,7 @@ class TestHouseholderBillWrapperEquivalence:
         assert actual == expected
 
     def test_wrapper_equals_bill_annual_override(self) -> None:
-        """householder_bill(365-day, override=0.90) == bill(period_days=365, ...) with the capped override inputs.
+        """householder_bill(365-day, override=0.90) == bill(period_days=365, ...) with hand-computed capped inputs.
 
         Uses pytest.approx(rel=1e-12, abs=1e-12) to be robust to incidental
         operand-order drift in the override path's intermediate computations.
@@ -1055,30 +1055,16 @@ class TestHouseholderBillWrapperEquivalence:
                 simulation_days=365,
             )
 
-        # Reproduce wrapper's override path inputs with IDENTICAL expressions
-        gen_kwh = summary.total_generation_kwh
-        demand_kwh = summary.total_demand_kwh
-        import_kwh = summary.total_grid_import_kwh
-        import_cost_physics = summary.total_import_cost_gbp
-        retail_rate = finance.retail_baseline_rate_pence_per_kwh
-
-        sc_kwh = min(finance.self_consumption_override * gen_kwh, demand_kwh)  # type: ignore[operator]  # 3400.0
-        if import_kwh > 0.0:
-            eff_import_rate = (import_cost_physics / import_kwh) * 100.0
-        else:
-            eff_import_rate = retail_rate
-        override_import_kwh = demand_kwh - sc_kwh   # 0.0
-        override_import_cost = override_import_kwh * eff_import_rate / 100.0
-        baseline_import_cost_gbp = demand_kwh * retail_rate / 100.0
-
+        # Hand-computed inputs: implied own-use 0.90 x 4,000 = 3,600 is capped at the
+        # 3,400 kWh demand, so nothing is imported; baseline = 3,400 kWh x 23 p = GBP 782.
         expected = bill(
             period_days=365,
-            generation_kwh=gen_kwh,
-            demand_kwh=demand_kwh,
-            self_consumption_kwh=sc_kwh,
-            import_kwh=override_import_kwh,
-            import_cost_gbp=override_import_cost,
-            baseline_import_cost_gbp=baseline_import_cost_gbp,
+            generation_kwh=4000.0,
+            demand_kwh=3400.0,
+            self_consumption_kwh=3400.0,
+            import_kwh=0.0,
+            import_cost_gbp=0.0,
+            baseline_import_cost_gbp=782.0,
             finance=finance,
         )
         # Field-by-field approximate equality (robust to incidental operand-order drift)
