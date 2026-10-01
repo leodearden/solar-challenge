@@ -6,7 +6,7 @@
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
 **Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
 **Unreleased on main** (task 219): CBS revenue no longer deducts the grid-charge cost (§4); the 0.5.0 tag still does.
-**Unreleased on main** (task 271): on a simulated window under 360 days, `project_multi_year` annualises own-use, export, import and battery-discharge kWh (§4); the 0.5.0 tag sums them over the window.
+**Unreleased on main** (task 271): on a simulated window under 360 days, `project_multi_year` annualises own-use, export, import and battery-discharge kWh (§4, §7.6); the 0.5.0 tag sums them over the window.
 **Unreleased on main** (task 281): with `self_consumption_override` set, each home's own-use is capped at its demand and the surplus generation is counted as export (§3, §4); the 0.5.0 tag bills override × generation uncapped.
 
 ---
@@ -568,6 +568,40 @@ figures reported for transparency; no test pins them to specific digits.
 | θ: capex == £775,000, min_dscr ≥ 1.20 | **HARD asserted** | 4-term build-up exact; covenant floor achievable |
 | Solved rate ≈ 15 p/kWh (no-flex anchor) | *REPORTED only* | ≈15 p matches only the single-year approximation; the solve spreads 15 years of debt service over the 25-year asset life (§7.4); live value: 12.22 p |
 | Saving ≈ £324 vs baseline (no-flex) | *REPORTED only* | Assumption-dependent (scf ≈ 0.346 vs 0.70; §7.3); live value: £226 |
+
+### 7.6 Why the Real-Physics Column Is Not Comparable with the Anchor
+
+Source: `TestPhysicsReconciliationColumn::test_physics_path_reported`
+(`@pytest.mark.slow`; real PVGIS weather), on the fleet
+`_make_physics_column_scenario_cr6` builds.
+
+The physics column solves 2 homes of 5.5 kWp + 5 kWh under the §7.2 [FIN] finance,
+simulated over three January days (2024-01-01 to 2024-01-03).  It hard-asserts only that
+the physics path returns a structurally valid `CostRecoverySolution`; the rate, saving
+and surplus it prints are reported, not pinned.  Its rate cannot be set against the
+anchor's (§7.3), for three reasons:
+
+- **One winter window stands in for a year.**  The window is under 360 days, so
+  `project_multi_year` scales each home's window totals to a 365-day year by
+  `k = 365 / 3 ≈ 121.67` (§4, *Annual basis*).  The rate therefore extrapolates three
+  January days to a whole year: one season's sample, where the anchor's injected
+  aggregates are already annual (`k = 1`).
+- **The fleet carries no debt.**  Its capex,
+  `2 × (5.5 × 1,000 + 1,000 + 5 × 250) = £15,500`, is below the £250,000 [FIN] grant, so
+  financed capex, debt and equity are all zero (§6).  No debt service enters its solve,
+  DSCR is `inf` and the equity IRR is `nan`, where the anchor's 100 homes finance
+  £525,000 and carry £131,250 of debt (§6, §7.4).  `TestPhysicsColumnPremises` asserts
+  this premise in the fast suite.
+- **The homes age.**  The column re-simulates the fleet at sampled ages, so PV
+  degradation and battery fade lower its later-year own-use.  The anchor's injected
+  results are the same at every age (§7.4).
+
+Nor is the printed saving a [FEAS] figure: it is the representative home's §3 saving at
+the column's own solved rate, on its annualised window.
+
+On the 0.5.0 tag, which sums the window's kWh without annualising them, the column sets
+three days of own-use against a year of opex and floor, and its rate clamps at the 23 p
+retail rate (`infeasible_above_retail`).
 
 ---
 
