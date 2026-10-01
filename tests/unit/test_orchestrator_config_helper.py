@@ -1,11 +1,35 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_orchestrator_config.py, the orchestrator contract tests' reader of dark-factory-orchestrator.yaml."""
 
+import textwrap
 from pathlib import Path
 
 import pytest
 
-from tests._orchestrator_config import lane_job_directory, lane_job_enabled
+from tests._orchestrator_config import git_config, lane_job_directory, lane_job_enabled
+
+
+def test_git_config_is_the_git_mapping_of_the_project_roots_orchestrator_config(tmp_path: Path) -> None:
+    (tmp_path / "dark-factory-orchestrator.yaml").write_text(
+        textwrap.dedent(
+            """\
+            test_command: "pytest"
+            git:
+              main_branch: "main"
+              offline_lane_enabled: true
+              offline_lane_commands:
+                - name: probe
+                  command: "pytest"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    assert git_config(tmp_path) == {
+        "main_branch": "main",
+        "offline_lane_enabled": True,
+        "offline_lane_commands": [{"name": "probe", "command": "pytest"}],
+    }
 
 
 def test_a_lane_job_without_a_cwd_runs_in_the_project_root(tmp_path: Path) -> None:
