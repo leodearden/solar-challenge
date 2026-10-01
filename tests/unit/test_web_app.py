@@ -3,6 +3,7 @@
 
 import importlib
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -22,6 +23,23 @@ def _uncache_module(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
     package, _, name = module.rpartition(".")
     monkeypatch.delitem(sys.modules, module, raising=False)
     monkeypatch.delattr(importlib.import_module(package), name, raising=False)
+
+
+_DASHBOARD_FOLDERS = ("templates", "static")
+
+
+def _import_app_from_a_web_package_lacking(
+    missing: str, web_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Make the next import of solar_challenge.web.app load a copy of app.py from *web_dir*, which holds every dashboard folder but *missing*, as from an install whose web package lacks that folder; the real module, imported here if need be, comes back after the test."""
+    web_package = importlib.import_module("solar_challenge.web")
+    importlib.import_module("solar_challenge.web.app")
+    web_dir.mkdir()
+    shutil.copy(Path(web_package.__file__).parent / "app.py", web_dir / "app.py")
+    for folder in set(_DASHBOARD_FOLDERS) - {missing}:
+        (web_dir / folder).mkdir()
+    monkeypatch.setattr(web_package, "__path__", [str(web_dir), *web_package.__path__])
+    _uncache_module(monkeypatch, "solar_challenge.web.app")
 
 
 @pytest.mark.parametrize(
@@ -45,6 +63,18 @@ def test_building_the_app_fails_when_a_module_it_wires_in_cannot_import(
     _uncache_module(monkeypatch, "solar_challenge.web.app")
     with pytest.raises(ImportError, match=re.escape(module)):
         build_test_app(tmp_path)
+
+
+@pytest.mark.parametrize("missing", _DASHBOARD_FOLDERS)
+def test_building_the_app_fails_naming_a_dashboard_folder_the_installed_package_lacks(
+    missing: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An installed web package that lacks templates/ or static/ fails the app build with a FileNotFoundError naming the folder's path, and the build writes nothing into the package: creating the folder instead wrote into site-packages and left every page to fail with TemplateNotFound on its first request."""
+    web_dir = tmp_path / "web"
+    _import_app_from_a_web_package_lacking(missing, web_dir, monkeypatch)
+    with pytest.raises(FileNotFoundError, match=re.escape(str(web_dir / missing))):
+        build_test_app(tmp_path / "data")
+    assert not (web_dir / missing).exists()
 
 
 def test_building_the_app_does_not_import_the_anthropic_sdk(
