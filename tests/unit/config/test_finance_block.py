@@ -24,11 +24,6 @@ from solar_challenge.pv import PVConfig
 class TestFinanceConfig:
     """Tests for FinanceConfig dataclass construction, defaults, and immutability."""
 
-    def test_construction_with_required_arg(self) -> None:
-        """FinanceConfig can be constructed with only standing_charge_pence_per_day."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.standing_charge_pence_per_day == 60.0
-
     _DECLARED_DEFAULTS: dict[str, object] = {
         "vat_rate": 0.05,
         "retail_baseline_rate_pence_per_kwh": 23.0,
@@ -49,6 +44,11 @@ class TestFinanceConfig:
         "grid_services_model": "flat",
         "grid_services_events": None,
     }
+
+    def test_construction_with_required_arg(self) -> None:
+        """FinanceConfig can be constructed with only standing_charge_pence_per_day."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert fc.standing_charge_pence_per_day == 60.0
 
     @pytest.mark.parametrize(
         ("field_name", "declared_default"),
