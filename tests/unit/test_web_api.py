@@ -880,6 +880,34 @@ class TestPreviewDistribution:
         assert resp.status_code == 200
         assert len(resp.get_json()["samples"]) == 100
 
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        [
+            pytest.param(
+                {"type": "normal", "params": "x"},
+                "params must be a mapping, got str",
+                id="normal-str-params",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "params": {"values": ["x"]}},
+                "values[0] must be a mapping, got str",
+                id="weighted-discrete-str-row",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "params": {"entries": [1]}},
+                "entries[0] must be a mapping, got int",
+                id="shuffled-pool-int-row",
+            ),
+        ],
+    )
+    def test_malformed_params_return_400_naming_the_field(
+        self, client: FlaskClient, body: dict, message: str
+    ) -> None:
+        """Params that are not an object, or a distribution row that is not an object, is a 400 naming it and the type sent."""
+        resp = client.post("/api/fleet/preview-distribution", json=body)
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+
 
 # ===================================================================
 # POST /api/simulate/fleet-from-distribution

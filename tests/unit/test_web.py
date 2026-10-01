@@ -473,6 +473,56 @@ class TestFleetConfigHelpers:
         with pytest.raises(ValueError, match="Unknown distribution type"):
             sample_distribution("bogus", {})
 
+    @pytest.mark.parametrize(
+        ("dist_type", "params", "message"),
+        [
+            pytest.param(
+                "normal", "x", "params must be a mapping, got str", id="normal-str-params"
+            ),
+            pytest.param(
+                "uniform",
+                [2.0, 6.0],
+                "params must be a mapping, got list",
+                id="uniform-list-params",
+            ),
+            pytest.param(
+                "normal", None, "params must be a mapping, got NoneType", id="normal-null-params"
+            ),
+            pytest.param(
+                "weighted_discrete",
+                {"values": ["x"]},
+                "values[0] must be a mapping, got str",
+                id="weighted-discrete-str-row",
+            ),
+            pytest.param(
+                "shuffled_pool",
+                {"entries": [{"value": 3.0, "count": 1}, 1]},
+                "entries[1] must be a mapping, got int",
+                id="shuffled-pool-int-row-after-a-valid-one",
+            ),
+            pytest.param(
+                "weighted_discrete",
+                {"values": "ab"},
+                "values must be a list, got str",
+                id="weighted-discrete-str-values",
+            ),
+            pytest.param(
+                "shuffled_pool",
+                {"entries": {"value": 3.0}},
+                "entries must be a list, got dict",
+                id="shuffled-pool-object-entries",
+            ),
+        ],
+    )
+    def test_sample_distribution_refuses_malformed_params(
+        self, dist_type: str, params: object, message: str
+    ) -> None:
+        """Params that are not a mapping, a row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        with pytest.raises(ValueError, match=re.escape(message)):
+            sample_distribution(dist_type, params)
+
     def test_form_to_fleet_distribution_config(self) -> None:
         """Test converting form data to fleet distribution config."""
         from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
