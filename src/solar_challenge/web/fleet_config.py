@@ -68,24 +68,28 @@ def apply_fleet_overlay(
 
 
 def sample_distribution(
-    dist_type: str, params: dict[str, Any], n_samples: int = 100
+    dist_type: str, params: object, n_samples: int = 100
 ) -> list[float]:
     """Generate sample values from a distribution for preview histogram.
 
     Args:
         dist_type: Distribution type. One of ``'weighted_discrete'``,
             ``'normal'``, ``'uniform'``, ``'shuffled_pool'``.
-        params: Distribution parameters (varies by type).
+        params: Distribution parameters (varies by type); must be a mapping.
         n_samples: Number of samples to generate.
 
     Returns:
         List of sampled float values.
 
     Raises:
-        ValueError: If dist_type is unknown or params are invalid.
+        ValueError: If dist_type is unknown or params are invalid, params are
+            not a mapping (see :func:`_require_mapping`), or a
+            weighted_discrete/shuffled_pool row list is malformed (see
+            :func:`_mapping_list`).
     """
     if n_samples < 1:
         raise ValueError("n_samples must be at least 1")
+    params = _require_mapping(params, "params")
 
     rng = random.Random(42)
 
@@ -113,7 +117,7 @@ def sample_distribution(
         return [rng.uniform(min_val, max_val) for _ in range(n_samples)]
 
     if dist_type == "weighted_discrete":
-        values_raw = params.get("values", [])
+        values_raw = _mapping_list(params, "values")
         if not values_raw:
             raise ValueError("weighted_discrete requires non-empty 'values' list")
         values = []
@@ -129,7 +133,7 @@ def sample_distribution(
         return [float(s) for s in samples]
 
     if dist_type == "shuffled_pool":
-        entries = params.get("entries", [])
+        entries = _mapping_list(params, "entries")
         if not entries:
             raise ValueError("shuffled_pool requires non-empty 'entries' list")
         pool: list[float] = []
