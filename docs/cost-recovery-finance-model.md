@@ -2,11 +2,12 @@
 
 **Task**: W2-CR + task-84 §6 — authoritative specification (CR6, task/62; basis-C amendment, task/84)
 **Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/output.py`
-**Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_projection.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4)
+**Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_projection.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4); `tests/integration/test_finance_bill.py::TestOverrideExactValues` (override path, §3)
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
 **Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
 **Unreleased on main** (task 219): CBS revenue no longer deducts the grid-charge cost (§4); the 0.5.0 tag still does.
 **Unreleased on main** (task 271): on a simulated window under 360 days, `project_multi_year` annualises own-use, export, import and battery-discharge kWh (§4); the 0.5.0 tag sums them over the window.
+**Unreleased on main** (task 281): with `self_consumption_override` set, each home's own-use is capped at its demand and the surplus generation is counted as export (§3, §4); the 0.5.0 tag bills override × generation uncapped.
 
 ---
 
@@ -58,11 +59,16 @@ revenue: its time-shift value reaches the householder through import cost (§8.2
 
 ### Own-Use Basis (Basis C) — task-84 §6
 
-All CBS billing (householder bill and cost-recovery solve) uses **basis C**:
+On the physics (default) path, all CBS billing (householder bill and cost-recovery
+solve) uses **basis C**:
 
 ```
 own_use_kwh = total_demand_kwh − total_grid_import_kwh   (≥ 0)
 ```
+
+With `self_consumption_override` set, the householder bill's own-use comes from the
+override instead (§3, *Override (spreadsheet-assumption) path*); the solve's rate
+base stays basis C.
 
 This equals the energy that did **not** cross the grid boundary in the consumption
 direction — the CBS-supplied energy actually used by the home (direct PV + battery
@@ -102,6 +108,8 @@ All monetary values in GBP (£).  VAT is applied to (import + standing + own-use
 as a block; the householder receives **no SEG deduction**.
 
 `own_use_kwh` below is basis C (see §2): `own_use_kwh = total_demand_kwh − total_grid_import_kwh`.
+With `self_consumption_override` set it comes from the override instead (*Override
+(spreadsheet-assumption) path*, below).
 
 ```
 own_use_payment_gbp      = own_use_rate_pence_per_kwh × own_use_kwh / 100
@@ -161,6 +169,54 @@ baseline_bill_gbp   = ((2000+1400) × 23/100 + 219) × 1.05 ≈ £1,051.05/yr
 saving_vs_baseline  ≈ £226/yr             (REPORTED; not pinned — see §7)
 ```
 
+### Override (spreadsheet-assumption) path
+
+Source: `finance.py:householder_bill()` via `_override_energy_split()`.
+
+With `FinanceConfig.self_consumption_override` set (a scenario's `finance:` block, or
+`finance run --assumptions spreadsheet|both`), the bill's own-use comes from the
+override fraction instead of basis C:
+
+```
+own_use_kwh = min(self_consumption_override × generation_kwh, demand_kwh)
+import_kwh  = demand_kwh − own_use_kwh
+              (priced at the home's effective import rate: physics import cost /
+               physics import kWh × 100, or retail when physics import is 0)
+```
+
+Every other identity above is unchanged, applied to this `own_use_kwh`.  A home
+cannot consume more solar than its demand: when `override × generation` exceeds
+demand, own-use is capped at demand, the surplus generation is counted as export
+(§4), `self_consumption_fraction` reports `own_use_kwh / generation_kwh` (below the
+override), and `householder_bill` emits a `UserWarning`.  The cost-recovery solve's
+rate base stays basis C on this path (§4, §5): only the bill's own-use and the SEG
+export follow the override.
+
+**[FIN] override example** (`TestOverrideExactValues`; 5.5 kWp × 1,050 kWh/kWp,
+3,400 kWh demand, override 0.70, own-use 15 p/kWh, retail and effective import
+rate 23 p/kWh):
+
+```
+generation_kwh       = 5.5 × 1,050 = 5,775 kWh/yr
+implied own-use      = 0.70 × 5,775 = 4,042.5 kWh > 3,400 kWh demand
+own_use_kwh          = 3,400 kWh/yr   (capped at demand)
+import_kwh           = 3,400 − 3,400 = 0 kWh/yr
+export_kwh           = 5,775 − 3,400 = 2,375 kWh/yr   (uncapped: 1,732.5)
+own_use_payment_gbp  = 15 × 3,400 / 100 = £510.00/yr
+own_use_vat_gbp      = 0.05 × 510 = £25.50/yr
+cbs_amount_due_gbp   = 510 + 25.50 = £535.50/yr  (invoiced by the CBS)
+standing_charge_gbp  = 60 × 365 / 100 = £219.00/yr
+vat_gbp              = 0.05 × (0 + 219 + 510) = £36.45/yr
+total_outlay_gbp     = (0 + 219 + 510) × 1.05 = £765.45/yr
+baseline_bill_gbp    = (3,400 × 23 / 100 + 219) × 1.05 = £1,051.05/yr
+saving_vs_baseline   = 1,051.05 − 765.45 = £285.60/yr  (27.2%)
+                     = 3,400 × (23 − 15) × 1.05 / 100  (H3, exact)
+self_consumption_fraction = 3,400 / 5,775 = 0.589  (rendered 58.9%)
+```
+
+Uncapped, the 0.5.0 tag bills this home for 4,042.5 kWh: own-use
+15 × 4,042.5 / 100 = £606.375, outlay £866.64, saving £184.41.
+
 ---
 
 ## 4. CBS-Revenue Equation
@@ -185,9 +241,15 @@ own_use_revenue   = own_use_rate_pence_per_kwh × fleet_sc_kwh / 100
                          = 365 / sim_days_h if sim_days_h < 360, else 1)
 
 seg_revenue       = Σ_homes _seg_export_income_gbp(home, finance, sim_days_h)
-                    (= Σ k_h × home.total_export_revenue_gbp on the physics path,
-                    unless self_consumption_override is set; either path is
-                    annualised by the same k_h inside _seg_export_income_gbp)
+                    (= Σ k_h × home.total_export_revenue_gbp on the physics path;
+                    either path is annualised by the same k_h inside
+                    _seg_export_income_gbp)
+
+                    Override path (self_consumption_override set):
+                    export_kwh = generation − min(override × generation, demand)
+                    (§3, override path), priced at the home's effective export
+                    rate = physics export revenue / physics export kWh × 100
+                    (0 when physics export is 0)
 
                     SEG input reconciliation: project_multi_year calls
                     _reconcile_seg_homes() immediately after _resolve_homes().
@@ -203,6 +265,11 @@ grid_services_income = grid_services_income_per_kw_per_year_gbp
                        × Σ_homes battery.max_discharge_kw
                     (field from FinanceConfig; W1 fills the non-zero value)
 ```
+
+**Override path.** `self_consumption_override` reaches CBS revenue only through
+`seg_revenue`: each home exports the generation its capped own-use leaves over.
+`own_use_revenue` stays basis C on both paths
+(`tests/unit/test_finance_projection.py::TestProjectMultiYearRevenue`).
 
 **Annual basis.** Every projection year is a 365-day year.  When a home's
 simulated window is under 360 days, `project_multi_year` scales that home's
@@ -598,6 +665,7 @@ fleet median — the board's single-home summary figure.
 |---------|----------|---------------|
 | Basis-C own-use energy | `own_use_kwh = demand − import` (≥ 0; see §2) | `_cbs_own_use_kwh()` |
 | Own-use payment | `own_use_rate × own_use_kwh / 100` (basis C) | `householder_bill()` |
+| Override own-use | `min(override × generation, demand)`; surplus generation → export (§3, §4) | `householder_bill()`, `_seg_export_income_gbp()` |
 | VAT | `vat_rate × (import + standing + own_use_payment)` | `householder_bill()` |
 | Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `householder_bill()` |
 | Saving | `baseline_bill − total_outlay` | `householder_bill()` |

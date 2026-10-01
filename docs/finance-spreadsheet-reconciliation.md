@@ -141,6 +141,21 @@ expected to differ from this simplified aggregate assumption. That difference is
 This prevents false-precision: the physics column is the better-grounded default
 for real fleet projections.
 
+**The 0.70 assumption bills more own-use than a household consumes.** Applied to the
+named yield, it gives 0.70 × 5.5 × 1,050 = 4,042.5 kWh/home of own-use, but the
+calibration scenario's homes demand 3,400 kWh/yr (UK TDCV,
+`scenarios/bristol-fin-calibration.yaml`; §1's transcribed cells carry no household
+demand).  So 642.5 kWh/home is own-use no household consumes, and pricing it at the
+15 p own-use rate instead of the 6 p export rate credits
+642.5 × (15 − 6) / 100 = £57.825/home/yr (£5,782.50/yr for 100 homes).
+
+- `spreadsheet_revenue_curve` keeps the spreadsheet's uncapped arithmetic on purpose:
+  it has no demand input, and the H6 gate checks method-agreement with the
+  spreadsheet's own cells.
+- The simulator's override path caps own-use at each home's demand and counts the
+  surplus generation as export (`docs/cost-recovery-finance-model.md` §3, *Override
+  (spreadsheet-assumption) path*).
+
 ---
 
 ## 5. Summary
@@ -152,3 +167,7 @@ for real fleet projections.
 - Annual physics self-consumption is expected to differ from the spreadsheet's
   0.70 by design — physics is the correct path for real projections. The slow
   3-day physics column is a smoke report, not evidence of that difference
+- The spreadsheet's 0.70 × 5,775 = 4,042.5 kWh/home of own-use exceeds the 3,400 kWh
+  TDCV demand by 642.5 kWh (£57.825/home/yr at 15 p rather than 6 p).
+  `spreadsheet_revenue_curve` keeps it uncapped for method-agreement; the simulator's
+  override path caps own-use at demand (§4.1)
