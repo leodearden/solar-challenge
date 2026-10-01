@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests._collect_only import collected_node_ids, requires_uv, run_collect_only
+from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
 from tests._interpreters import off_pin_minor_versions, python_version_pin
 from tests._orchestrator_config import load_orchestrator_config, sole_offline_lane_job
 
@@ -65,8 +65,7 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(pro
     result = run_collect_only(command, project_root)
 
     assert result.returncode == pytest.ExitCode.OK, (
-        f"the {_MATRIX_JOB!r} lane job {command!r} failed to collect (exit {result.returncode})\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"the {_MATRIX_JOB!r} lane job {command!r} failed to collect\n{describe_outcome(result)}"
     )
     expected = sorted(f"{major}.{minor}" for major, minor in off_pin_minor_versions(project_root))
     node_ids = collected_node_ids(result.stdout)

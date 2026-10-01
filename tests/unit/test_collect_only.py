@@ -9,7 +9,6 @@ a command that failed before pytest started.
 
 import os
 import shlex
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -30,11 +29,6 @@ _STARTUP_ERROR_MESSAGE = "the command failed before pytest started"
 def _module_of_failing_tests(*names: str) -> str:
     """Return the source of a test module defining one test per name in *names*, each failing if run."""
     return "".join(f"def {name}():\n    raise AssertionError('collect-only ran {name}')\n\n\n" for name in names)
-
-
-def _outcome(result: subprocess.CompletedProcess[str]) -> str:
-    """Describe how *result*'s run ended, for an assertion message."""
-    return f"exit {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 
 @pytest.fixture
@@ -97,23 +91,23 @@ def test_lists_the_node_ids_the_projects_addopts_select_without_running_them(
     """The ini's -v would turn a -q listing into a tree with no node ids; clearing its addopts would collect test_ignored.py."""
     result = run_collect_only(_PYTEST, project_with_ini_addopts)
 
-    assert result.returncode == pytest.ExitCode.OK, _outcome(result)
+    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
     assert collected_node_ids(result.stdout) == [
         "test_kept.py::test_alpha",
         "test_kept.py::test_beta",
         "test_kept.py::test_gamma",
-    ], _outcome(result)
+    ], describe_outcome(result)
 
 
 def test_each_extra_pytest_arg_reaches_pytest_whole(project_with_ini_addopts: Path) -> None:
     """Split on its spaces, the -k expression would leave pytest looking for files named or and beta."""
     result = run_collect_only(_PYTEST, project_with_ini_addopts, "-k", "alpha or beta")
 
-    assert result.returncode == pytest.ExitCode.OK, _outcome(result)
+    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
     assert collected_node_ids(result.stdout) == [
         "test_kept.py::test_alpha",
         "test_kept.py::test_beta",
-    ], _outcome(result)
+    ], describe_outcome(result)
 
 
 def test_by_default_the_command_runs_in_this_process_environment(
@@ -123,8 +117,10 @@ def test_by_default_the_command_runs_in_this_process_environment(
 
     result = run_collect_only(_PYTEST, project_echoing_its_environment)
 
-    assert result.returncode == pytest.ExitCode.OK, _outcome(result)
-    assert collected_node_ids(result.stdout) == ["test_environment.py::test_environment[inherited]"], _outcome(result)
+    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
+    assert collected_node_ids(result.stdout) == [
+        "test_environment.py::test_environment[inherited]",
+    ], describe_outcome(result)
 
 
 def test_a_given_environment_replaces_this_process_environment(
@@ -136,8 +132,10 @@ def test_a_given_environment_replaces_this_process_environment(
 
     result = run_collect_only(_PYTEST, project_echoing_its_environment, env=environment)
 
-    assert result.returncode == pytest.ExitCode.OK, _outcome(result)
-    assert collected_node_ids(result.stdout) == ["test_environment.py::test_environment[unset]"], _outcome(result)
+    assert result.returncode == pytest.ExitCode.OK, describe_outcome(result)
+    assert collected_node_ids(result.stdout) == [
+        "test_environment.py::test_environment[unset]",
+    ], describe_outcome(result)
 
 
 def test_a_failed_collection_is_described_by_its_error_report_however_long_the_listing(

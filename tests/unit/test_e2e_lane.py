@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tests._collect_only import collected_node_ids, requires_uv, run_collect_only
+from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
 from tests._orchestrator_config import sole_offline_lane_job
 
 _E2E_JOB = "e2e"
@@ -39,13 +39,12 @@ def test_e2e_job_collects_the_e2e_suite_and_nothing_else(project_root: Path) -> 
     result = run_collect_only(command, project_root / job.get("cwd", "."))
 
     assert result.returncode == pytest.ExitCode.OK, (
-        f"the {_E2E_JOB!r} lane job {command!r} failed to collect (exit {result.returncode})\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"the {_E2E_JOB!r} lane job {command!r} failed to collect\n{describe_outcome(result)}"
     )
     node_ids = collected_node_ids(result.stdout)
     assert node_ids, (
         f"the {_E2E_JOB!r} lane job {command!r} collected no tests, so the lane stays green "
-        f"while the e2e suite goes unrun\nstdout:\n{result.stdout}"
+        f"while the e2e suite goes unrun\n{describe_outcome(result)}"
     )
     outside_e2e = [node_id for node_id in node_ids if not node_id.startswith("tests/e2e/")]
     assert not outside_e2e, (

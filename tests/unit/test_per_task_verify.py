@@ -12,15 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from tests._collect_only import requires_uv, run_collect_only
+from tests._collect_only import describe_outcome, requires_uv, run_collect_only
 from tests._orchestrator_config import load_orchestrator_config
 
 pytestmark = requires_uv
 
 _WEB_TEST_MODULE = "tests/unit/test_web_app.py"
-
-# The last lines of a collect-only listing carry pytest's errors and summary.
-_OUTPUT_TAIL_CHARS = 5000
 
 
 def _collect_with_test_command(
@@ -68,10 +65,10 @@ def test_verify_collects_the_web_tests_instead_of_skipping_them(project_root: Pa
     result = _collect_with_test_command(project_root, tmp_path, _WEB_TEST_MODULE)
 
     assert result.returncode == pytest.ExitCode.OK, (
-        f"test_command {result.args!r} did not collect {_WEB_TEST_MODULE} (exit {result.returncode}); without "
+        f"test_command {result.args!r} did not collect {_WEB_TEST_MODULE}; without "
         "the web extra that module, like every test module that needs the extra, skips through "
         "pytest.importorskip, so the verify passes while silently dropping their coverage\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"{describe_outcome(result)}"
     )
 
 
@@ -87,8 +84,7 @@ def test_verify_collects_every_test_module_instead_of_skipping_any(project_root:
     result = _collect_with_test_command(project_root, tmp_path, f"--junitxml={junit_report}")
 
     assert result.returncode == pytest.ExitCode.OK, (
-        f"test_command {result.args!r} failed to collect the default suite (exit {result.returncode})\n"
-        f"stdout tail:\n{result.stdout[-_OUTPUT_TAIL_CHARS:]}\nstderr:\n{result.stderr}"
+        f"test_command {result.args!r} failed to collect the default suite\n{describe_outcome(result)}"
     )
     skipped_modules = _modules_skipped_at_collection(junit_report)
     reasons = "\n".join(f"  {module}: {reason}" for module, reason in skipped_modules.items())
