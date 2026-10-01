@@ -82,6 +82,29 @@ def test_fleet_distribution_parameters_are_named_for_their_card(
         ).to_have_count(1)
 
 
+@pytest.mark.parametrize(
+    "distribution_type",
+    [
+        pytest.param("Weighted Discrete", id="weighted_discrete"),
+        pytest.param("Shuffled Pool", id="shuffled_pool"),
+    ],
+)
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_row_buttons_are_named_for_their_card(
+    page: Page, live_server: str, card: str, distribution_type: str
+) -> None:
+    """A row list's Add Row button and each row's remove button are named for the card, e.g. 'PV Capacity Add Row' and 'PV Capacity Remove Row 2'."""
+    page.goto(live_server + "/simulate/fleet")
+
+    page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True).select_option(
+        label=distribution_type
+    )
+    for name in ("Remove Row 1", "Remove Row 2", "Add Row"):
+        expect(
+            page.get_by_role("button", name=f"{card} {name}", exact=True)
+        ).to_have_count(1)
+
+
 # -- Export YAML button -----------------------------------------------------
 
 
