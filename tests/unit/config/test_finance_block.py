@@ -61,13 +61,16 @@ class TestFinanceConfig:
         assert getattr(fc, field_name) == declared_default
 
     def test_declared_defaults_cover_every_optional_field(self) -> None:
-        """Every FinanceConfig field but the required standing charge has a row in _DECLARED_DEFAULTS."""
-        optional_fields = {f.name for f in dataclasses.fields(FinanceConfig)} - {
-            "standing_charge_pence_per_day"
+        """Every FinanceConfig field that declares a default has a row in _DECLARED_DEFAULTS."""
+        optional_fields = {
+            f.name
+            for f in dataclasses.fields(FinanceConfig)
+            if f.default is not dataclasses.MISSING
+            or f.default_factory is not dataclasses.MISSING
         }
         assert set(self._DECLARED_DEFAULTS) == optional_fields, (
-            "every optional FinanceConfig field needs a row in _DECLARED_DEFAULTS, "
-            "and every row must name a FinanceConfig field"
+            "every FinanceConfig field that declares a default needs a row in "
+            "_DECLARED_DEFAULTS, and every row must name such a field"
         )
 
     def test_frozen_raises_on_assignment(self) -> None:
