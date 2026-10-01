@@ -65,6 +65,11 @@ def test_declared_floor_is_none_when_nothing_bounds_the_named_distribution_from_
             id="marked-bound-beside-unbounded-unmarked-ignored",
         ),
         pytest.param(
+            ["setuptools>=77.0.0", "setuptools; python_version < '3.12'"],
+            Version("77.0.0"),
+            id="unbounded-marked-entry-beside-bounded-unmarked-ignored",
+        ),
+        pytest.param(
             ["setuptools>=77.0.0; platform_machine != 'armv7l'"],
             Version("77.0.0"),
             id="single-marked-entry-bounds",
