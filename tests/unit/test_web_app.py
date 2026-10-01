@@ -69,7 +69,7 @@ def test_building_the_app_fails_when_a_module_it_wires_in_cannot_import(
 def test_building_the_app_fails_naming_a_dashboard_folder_the_installed_package_lacks(
     missing: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """An installed web package that lacks templates/ or static/ fails the app build with a FileNotFoundError naming the folder's path, and the build writes nothing into the package: creating the folder instead wrote into site-packages and left every page to fail with TemplateNotFound on its first request."""
+    """An installed web package that lacks templates/ or static/ fails the app build with a FileNotFoundError naming the folder's path, and the build writes nothing into the package."""
     web_dir = tmp_path / "web"
     _import_app_from_a_web_package_lacking(missing, web_dir, monkeypatch)
     with pytest.raises(FileNotFoundError, match=re.escape(str(web_dir / missing))):
