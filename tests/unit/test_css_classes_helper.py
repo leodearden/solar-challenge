@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_css_classes.py, the reader of the CSS names the dashboard
-uses and its stylesheets define: classes, custom properties and @keyframes.
+uses and its stylesheets define: classes, custom properties, @keyframes, and the
+properties class rules declare and inline styles set.
 
 Each test pins one extraction rule, so an edit that weakens a reader fails here
 instead of letting a repository guard that uses it pass vacuously.
@@ -10,10 +11,13 @@ import pytest
 
 pytest.importorskip("jinja2")
 from tests._css_classes import (
+    InlineStyledElement,
     applied_classes_in_script,
     applied_classes_in_template,
     custom_property_references,
     declared_custom_properties,
+    declared_properties_by_class,
+    inline_styled_elements,
     keyframes_names,
     linked_stylesheets,
     selector_classes,
@@ -204,3 +208,70 @@ def test_linked_stylesheets_are_the_static_css_files_in_source_order() -> None:
     )
 
     assert linked_stylesheets(source) == ["dist/style.css", "style.css"]
+
+
+def test_declared_properties_by_class_read_lone_class_rules_at_any_media_depth_but_not_important_declarations() -> None:
+    """A pseudo-class, descendant, pseudo-element or attribute selector is not a lone class, so
+    hover:bg-amber-600, dark, dark:text-white, scrollbar-hide and x-cloak declare nothing here.
+    !mt-0's margin-top is !important, which no inline style overrides."""
+    stylesheet = (
+        r"/*! tailwindcss v3.4.19 | MIT License | https://tailwindcss.com*/"
+        r".chart-container{width:100%}"
+        r"@media (max-width:48rem){.chart-container{min-height:280px}}"
+        r".w-1\/2,.basis-1\/2{flex-basis:50%}"
+        r".hover\:bg-amber-600:hover{background-color:#d97706}"
+        r".dark .dark\:text-white{color:#fff}"
+        r".scrollbar-hide::-webkit-scrollbar{display:none}"
+        r".\!mt-0{margin-top:0!important;padding-top:0}"
+        r"[x-cloak]{display:none !important}"
+    )
+
+    assert declared_properties_by_class(stylesheet) == {
+        "chart-container": {"width", "min-height"},
+        "w-1/2": {"flex-basis"},
+        "basis-1/2": {"flex-basis"},
+        "!mt-0": {"padding-top"},
+    }
+
+
+def test_declared_properties_by_class_tolerate_spacing_an_import_statement_and_a_spaced_upper_case_important() -> None:
+    """Each tolerance has a class of its own: an @import statement just before a rule (sr-only),
+    whitespace before a brace (scrollbar-hide) and around a comma (inset-x-0, inset-y-0). The
+    spaced, upper-case ``! IMPORTANT`` still marks left as important."""
+    stylesheet = (
+        r'@import url("vendor/reset.css");'
+        r".sr-only{position:absolute}"
+        ".scrollbar-hide {\n    scrollbar-width: none;\n}\n"
+        ".inset-x-0 , .inset-y-0 {\n    left: 0 ! IMPORTANT;\n    top: 0;\n}\n"
+    )
+
+    assert declared_properties_by_class(stylesheet) == {
+        "sr-only": {"position"},
+        "scrollbar-hide": {"scrollbar-width"},
+        "inset-x-0": {"top"},
+        "inset-y-0": {"top"},
+    }
+
+
+def test_inline_styled_elements_pair_a_static_style_with_the_classes_its_element_applies() -> None:
+    """The w-full span has no style attribute, and the h-full paragraph's :style binding is not
+    read, so neither is listed. The string 'a;b: c' sets no property b."""
+    source = (
+        '<div id="{{ id }}" class="chart-container {{ extra }}"'
+        ' style="width: 100%; min-height: {{ height }};"></div>'
+        "<div class=\"grid\" :class=\"open ? 'gap-4' : 'gap-2'\""
+        " style=\"grid-template-columns: repeat({{ n }}, 1fr); content: 'a;b: c'\"></div>"
+        '<span class="w-full"></span>'
+        "<p class=\"h-full\" :style=\"'width: ' + pct + '%'\"></p>"
+    )
+
+    assert inline_styled_elements(source) == [
+        InlineStyledElement(
+            classes=frozenset({"chart-container"}),
+            inline_properties=frozenset({"width", "min-height"}),
+        ),
+        InlineStyledElement(
+            classes=frozenset({"grid", "gap-4", "gap-2"}),
+            inline_properties=frozenset({"grid-template-columns", "content"}),
+        ),
+    ]
