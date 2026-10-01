@@ -48,6 +48,18 @@ def _get_secret_key(data_dir: Path) -> str:
     return new_key
 
 
+def _packaged_folder(name: str) -> Path:
+    """Return the *name* folder shipped beside this module; raise FileNotFoundError when the installed package lacks it."""
+    folder = Path(__file__).parent / name
+    if not folder.is_dir():
+        raise FileNotFoundError(
+            "The web dashboard cannot start: the installed solar_challenge package "
+            f"has no {name} folder at {folder}. Reinstall a build of solar-challenge "
+            f"that ships solar_challenge/web/{name}."
+        )
+    return folder
+
+
 def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     """Create and configure the Flask web dashboard application.
 
@@ -69,16 +81,15 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
     Returns:
         Flask: The configured Flask application instance.
-    """
-    # Resolve template and static folder paths relative to this file
-    web_dir = Path(__file__).parent
-    template_folder = str(web_dir / "templates")
-    static_folder = str(web_dir / "static")
 
+    Raises:
+        FileNotFoundError: If the installed package lacks the dashboard's
+            templates or static folder.
+    """
     app = Flask(
         __name__,
-        template_folder=template_folder,
-        static_folder=static_folder,
+        template_folder=_packaged_folder("templates"),
+        static_folder=_packaged_folder("static"),
     )
 
     # Default data directory configuration
@@ -102,10 +113,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     # Consult the persisted key only when no config source supplied one
     if app.secret_key is None:
         app.secret_key = _get_secret_key(default_data_dir)
-
-    # Ensure template and static directories exist
-    for folder in (template_folder, static_folder):
-        os.makedirs(folder, exist_ok=True)
 
     # Initialize database with configured path
     db_path = app.config["DATABASE"]
