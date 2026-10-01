@@ -275,10 +275,9 @@ subprojects:
 
     # (RESOLVED — no live gap) The former "solve_cost_recovery_rate's affine
     # reconstruction can be a few pence off true breakeven under severe-loss
-    # scenarios" gap was retired by Task 219 (merged 2026-09-30): project_multi_year
-    # now computes fleet_revenue = own_use_revenue + seg_revenue + grid_services, so
-    # no CBS revenue term is negative and the max(0.0, rev_per_year[y]) clamp cannot
-    # bind (see the "Affine-line precondition" paragraph in the solve's docstring).
+    # scenarios" gap was retired by Task 219 (merged 2026-09-30), which removed the
+    # negative CBS grid-charge-cost term from fleet revenue. The solve's docstring
+    # ("Affine-line precondition" paragraph) states the current precondition.
     # /review should NOT re-flag it.
 
     exclude:
