@@ -444,13 +444,15 @@ def _make_sim_results(
     export_kwh: float = 48.0,
     import_kwh: float = 12.0,
     discharge_kwh: float = 0.0,
+    export_revenue_gbp: float = 0.0,
     n_steps: int = 8760,
 ) -> "SimulationResults":  # type: ignore[name-defined]
-    """Constant-power SimulationResults whose totals are the kWh arguments; a full year by default.
+    """Constant-power SimulationResults whose totals are the kWh and £ arguments; a full year by default.
 
     Hourly index with kW = kWh / (n_steps / 60), so calculate_summary's 1/60
     integration returns the kWh totals, and the default 8760 steps give
-    simulation_days 365.
+    simulation_days 365.  export_revenue_gbp is spread evenly over the steps,
+    so it is the summary's total_export_revenue_gbp, the physics SEG income.
     """
     import pandas as pd
     from solar_challenge.home import SimulationResults
@@ -475,7 +477,7 @@ def _make_sim_results(
         grid_import=pd.Series(imp_kw, index=idx),
         grid_export=pd.Series(exp_kw, index=idx),
         import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),
+        export_revenue=pd.Series(export_revenue_gbp / n_steps, index=idx),
         tariff_rate=zeros.copy(),
     )
 
@@ -1988,8 +1990,8 @@ def _make_full_year_and_short_window_fleets() -> tuple:
     """Return (scenario, finance, battery_config, fleet_full_year, fleet_short).
 
     Two battery homes at the same daily rates over a full year and over a
-    _SHORT_WINDOW_DAYS window, so the short fleet's kWh totals are the annual
-    ones × _SHORT_WINDOW_DAYS / 365.  Inject either fleet with
+    _SHORT_WINDOW_DAYS window, so the short fleet's kWh and SEG £ totals are
+    the annual ones × _SHORT_WINDOW_DAYS / 365.  Inject either fleet with
     ``simulate=lambda fc, s, e: fleet``.
     """
     from solar_challenge.battery import BatteryConfig
@@ -2036,6 +2038,7 @@ def _make_full_year_and_short_window_fleets() -> tuple:
                     export_kwh=1000.0 * share_of_year,
                     import_kwh=500.0 * share_of_year,
                     discharge_kwh=800.0 * share_of_year,
+                    export_revenue_gbp=150.0 * share_of_year,
                     n_steps=24 * window_days,
                 )
                 for _ in homes
@@ -2064,6 +2067,7 @@ class TestProjectMultiYearAnnualisesShortWindow:
         )
         short_summary = calculate_summary(fleet_short.per_home_results[0])
         assert short_summary.simulation_days == _SHORT_WINDOW_DAYS
+        assert short_summary.total_export_revenue_gbp > 0.0, "premise: the window earns SEG income"
 
         curve_full = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_full_year)
         curve_short = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_short)

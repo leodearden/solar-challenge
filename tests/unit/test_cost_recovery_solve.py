@@ -188,16 +188,19 @@ def _make_sim_results(
     self_kwh: float = 2000.0,
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
-    export_revenue_gbp_per_year: float = 0.0,
+    export_revenue_gbp: float = 0.0,
     n_minutes: int = 525600,  # 365 days
 ) -> "SimulationResults":  # type: ignore[name-defined]
-    """Build a minimal SimulationResults with constant power series (annual-scale).
+    """Build a minimal SimulationResults with constant power series.
+
+    The energy and revenue arguments are totals over the n_minutes series, so
+    they are annual at the default length.
 
     Args:
-        self_kwh: Annual self-consumed solar energy (kWh).
-        export_kwh: Annual grid export energy (kWh).
-        import_kwh: Annual grid import energy (kWh).
-        export_revenue_gbp_per_year: Annual SEG export revenue (£/yr).
+        self_kwh: Self-consumed solar energy (kWh).
+        export_kwh: Grid export energy (kWh).
+        import_kwh: Grid import energy (kWh).
+        export_revenue_gbp: SEG export revenue (£).
             Non-zero values allow ``_seg_export_income_gbp`` to see real SEG income.
         n_minutes: Simulation length in minutes (default 525600 = 365 days).
     """
@@ -213,7 +216,7 @@ def _make_sim_results(
     zeros = pd.Series(0.0, index=idx)
 
     # export_revenue is monetary (£/minute); sum() = total GBP over the period.
-    exp_rev_per_min = export_revenue_gbp_per_year / n_minutes if n_minutes > 0 else 0.0
+    exp_rev_per_min = export_revenue_gbp / n_minutes if n_minutes > 0 else 0.0
     export_revenue_series = pd.Series(exp_rev_per_min, index=idx)
 
     return SimulationResults(
@@ -244,7 +247,7 @@ def _make_fleet_results(
     homes = [_make_home_config() for _ in range(n_homes)]
     per_home = [
         _make_sim_results(self_kwh, export_kwh, import_kwh,
-                          export_revenue_gbp_per_year=export_revenue_gbp_per_year)
+                          export_revenue_gbp=export_revenue_gbp_per_year)
         for _ in range(n_homes)
     ]
     return FleetResults(
@@ -781,8 +784,9 @@ class TestSolveCostRecoveryRateDegenerate:
 class TestSolveCostRecoveryRateShortWindow:
     """A window under 360 days solves like the full year with the same daily rates.
 
-    The projection annualises the window, so its own-use rate base and revenue
-    sit on the same 365-day basis as the annual opex, debt and floor.
+    The projection annualises the window, so its own-use rate base and its
+    revenue, SEG income included, sit on the same 365-day basis as the annual
+    opex, debt and floor.
     """
 
     def test_short_window_solves_like_the_equivalent_full_year(self) -> None:
@@ -802,7 +806,11 @@ class TestSolveCostRecoveryRateShortWindow:
             n_homes=n_homes,
         )
         fleet_full_year = _make_fleet_results(
-            n_homes=n_homes, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0
+            n_homes=n_homes,
+            self_kwh=2000.0,
+            export_kwh=800.0,
+            import_kwh=1200.0,
+            export_revenue_gbp_per_year=40.0,
         )
         share_of_year = window_days / 365
         fleet_short = FleetResults(
@@ -811,6 +819,7 @@ class TestSolveCostRecoveryRateShortWindow:
                     2000.0 * share_of_year,
                     800.0 * share_of_year,
                     1200.0 * share_of_year,
+                    export_revenue_gbp=40.0 * share_of_year,
                     n_minutes=window_days * 1440,
                 )
                 for _ in scenario.homes
