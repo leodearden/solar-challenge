@@ -72,7 +72,7 @@ def test_results_tab_switching(
         expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(name)
 
 
-# -- Stat card labels not truncated (potential bug) -------------------------
+# -- Stat card labels not truncated ----------------------------------------
 
 
 def test_results_stat_card_labels_not_truncated(
@@ -80,34 +80,26 @@ def test_results_stat_card_labels_not_truncated(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """p.truncate label scrollWidth <= clientWidth (text fits)."""
+    """The seeded battery run's 12 stat card labels are visible, and none is cut short.
+
+    The stat_card macro titles each label with its text; no other <p> here has a title.
+    A label is cut short when its text needs more room than its box, across or down.
+    """
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
-    truncated = page.evaluate("""() => {
-        const labels = document.querySelectorAll('p.truncate');
-        const problems = [];
-        labels.forEach(el => {
-            if (el.scrollWidth > el.clientWidth) {
-                problems.push({
-                    text: el.textContent.trim(),
-                    scrollWidth: el.scrollWidth,
-                    clientWidth: el.clientWidth,
-                });
-            }
-        });
-        return problems;
-    }""")
+    stat_card_labels = page.locator("p[title]").filter(visible=True)
+    expect(stat_card_labels).to_have_count(12)
 
-    if not truncated:
-        return  # All labels fit
-
-    descriptions = [f"'{t['text']}' (scroll={t['scrollWidth']}, client={t['clientWidth']})" for t in truncated]
-    assert not truncated, (
-        f"Stat card labels are truncated: {', '.join(descriptions)}"
-    )
+    cut_short = stat_card_labels.evaluate_all("""labels => labels
+        .filter(label => label.scrollWidth > label.clientWidth
+            || label.scrollHeight > label.clientHeight)
+        .map(label => ({
+            label: label.textContent.trim(),
+            text_size: [label.scrollWidth, label.scrollHeight],
+            box_size: [label.clientWidth, label.clientHeight],
+        }))""")
+    assert cut_short == [], f"Stat card labels are cut short: {cut_short}"
 
 
 # -- Download CSV returns 200 ----------------------------------------------
