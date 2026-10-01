@@ -11,13 +11,14 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ConfigurationError,
     parse_dispatch_strategy_config,
+    parse_seg_rate,
     parse_tariff_config,
 )
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.seg import SEGTariff, resolve_seg_tariff
+from solar_challenge.seg import SEGTariff
 from solar_challenge.web.shared import resolve_location
 
 # Each parser's recognised top-level keys, and the value each reads as when absent.
@@ -94,42 +95,19 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     return start, end
 
 
-def parse_seg_tariff(seg_data: dict[str, Any] | None) -> SEGTariff | None:
-    """Parse a 'seg' sub-dict from the request body into a SEGTariff.
+def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
+    """Read a request body's ``seg`` value with :func:`~solar_challenge.config.parse_seg_rate`'s grammar.
 
-    Resolution priority (mirrors config.parse_tariff_config naming convention):
-    1. ``{"preset": "<key>"}`` — resolved via :func:`resolve_seg_tariff`; raises
-       ``ValueError`` for unknown presets.
-    2. ``{"rate_pence_per_kwh": <float>}`` — constructs
-       ``SEGTariff(name="Custom", rate_pence_per_kwh=float(rate))``;
-       :class:`SEGTariff`'s ``__post_init__`` raises ``ValueError`` for negative
-       rates, which this function lets propagate.
-    3. Absent or falsy ``seg_data`` → ``None`` (back-compatible default).
-
-    Args:
-        seg_data: The value of ``data.get("seg")`` from the request body, or None.
-
-    Returns:
-        A :class:`SEGTariff` instance, or ``None`` if *seg_data* is absent/falsy.
-
-    Raises:
-        ValueError: For unknown preset keys or negative rates.
+    ``None`` means no SEG.  A value that grammar refuses raises ``ValueError``
+    carrying its message, the error every web caller answers with HTTP 400.
     """
-    if not seg_data:
+    try:
+        rate = parse_seg_rate(seg_data)
+    except ConfigurationError as exc:
+        raise ValueError(str(exc)) from exc
+    if rate is None:
         return None
-    preset = seg_data.get("preset")
-    # "custom" is the UI sentinel meaning "use explicit rate_pence_per_kwh instead of
-    # a named preset".  Treat it as absent so direct API callers sending
-    # {"preset": "custom", "rate_pence_per_kwh": 5.5} get the same fall-through
-    # behaviour as the front-end rather than an HTTP 400 from resolve_seg_tariff.
-    if preset and str(preset) != "custom":
-        return resolve_seg_tariff(str(preset))
-    if "rate_pence_per_kwh" in seg_data:
-        # Use key-presence check (not value-is-not-None) so that a null/NaN value
-        # serialised by the browser as JSON null triggers float(None) → TypeError
-        # → HTTP 400, rather than silently ignoring the user's SEG selection.
-        return SEGTariff(name="Custom", rate_pence_per_kwh=float(seg_data["rate_pence_per_kwh"]))
-    return None
+    return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
 def _refuse_unrecognised_keys(data: Mapping[str, Any]) -> None:
@@ -247,7 +225,6 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     except ConfigurationError as exc:
         raise ValueError(str(exc)) from exc
 
-    # Build optional SEG export-rate config (ValueError or TypeError on bad input)
     seg_tariff = parse_seg_tariff(params["seg"])
 
     home_config = HomeConfig(
