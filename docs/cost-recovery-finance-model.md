@@ -6,6 +6,7 @@
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
 **Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
 **Unreleased on main** (task 219): CBS revenue no longer deducts the grid-charge cost (§4); the 0.5.0 tag still does.
+**Unreleased on main** (task 271): on a simulated window under 360 days, `project_multi_year` annualises own-use, export, import and battery-discharge kWh (§4); the 0.5.0 tag sums them over the window.
 
 ---
 
@@ -178,11 +179,15 @@ Where each term is:
 
 ```
 own_use_revenue   = own_use_rate_pence_per_kwh × fleet_sc_kwh / 100
-                    (fleet_sc_kwh = Σ_homes _cbs_own_use_kwh(s) = Σ (demand − import); basis C)
+                    (fleet_sc_kwh = Σ_homes k_h × _cbs_own_use_kwh(s_h)
+                                  = Σ_homes k_h × (demand − import); basis C)
+                    (k_h = _annualisation_scale(sim_days_h)
+                         = 365 / sim_days_h if sim_days_h < 360, else 1)
 
-seg_revenue       = Σ_homes _seg_export_income_gbp(home, finance, sim_days)
-                    (= Σ home.total_export_revenue_gbp on the physics path,
-                    unless self_consumption_override is set)
+seg_revenue       = Σ_homes _seg_export_income_gbp(home, finance, sim_days_h)
+                    (= Σ k_h × home.total_export_revenue_gbp on the physics path,
+                    unless self_consumption_override is set; either path is
+                    annualised by the same k_h inside _seg_export_income_gbp)
 
                     SEG input reconciliation: project_multi_year calls
                     _reconcile_seg_homes() immediately after _resolve_homes().
@@ -198,6 +203,15 @@ grid_services_income = grid_services_income_per_kw_per_year_gbp
                        × Σ_homes battery.max_discharge_kw
                     (field from FinanceConfig; W1 fills the non-zero value)
 ```
+
+**Annual basis.** Every projection year is a 365-day year.  When a home's
+simulated window is under 360 days, `project_multi_year` scales that home's
+own-use, export, import and battery-discharge kWh, and its SEG income, by
+`k_h = 365 / sim_days_h`, and emits one `UserWarning` per projection.  The
+annualised discharge is the yearly throughput that battery cycle ageing
+integrates.  Grid-services income is already annual.  Full-year windows are
+unchanged (`k_h = 1`).  A short window is still one season's sample, so board
+figures want `scenario.period` to cover about one full year.
 
 **No-flex identity** (flat-rate fleet, grid_services = 0):
 
@@ -247,8 +261,9 @@ net_surplus(r) = [Σ_years (r × sc_y/100 + C_y − opex − debt_y)] / (N_years
 ```
 
 where `sc_y` is the **basis-C** fleet own-use at year `y`
-(`YearPoint.fleet_self_consumption_kwh = Σ_homes (demand − import)` after degradation
-interpolation), and `C_y` is rate-independent (SEG + grid-services, fixed by physics).
+(`YearPoint.fleet_self_consumption_kwh = Σ_homes k_h × (demand − import)`, annualised
+as in §4, after degradation interpolation), and `C_y` is rate-independent (SEG +
+grid-services, fixed by physics).
 `opex` is the fleet opex (`opex_per_home_per_year_gbp × N_homes`).  `debt_y` is
 `annual_debt_svc` (§6) in the loan years `y < loan_term_years` and **0 afterwards**,
 while the sum runs over all `N_years = asset_life_years`.  With the defaults
@@ -586,10 +601,10 @@ fleet median — the board's single-home summary figure.
 | VAT | `vat_rate × (import + standing + own_use_payment)` | `householder_bill()` |
 | Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `householder_bill()` |
 | Saving | `baseline_bill − total_outlay` | `householder_bill()` |
-| CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ basis-C own_use) | `project_multi_year()` |
+| CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ basis-C own_use, annualised; §4) | `project_multi_year()` |
 | CBS revenue (full) | `own_use_rev + seg_rev + gs_income` | `project_multi_year()` |
 | Grid-charge energy | in householder `import_cost_gbp`; no CBS term (§4) | `householder_bill()` |
-| Solve rate-base | `fleet_sc = Σ_homes (demand − import)` (basis C; §2) | `_simulate_age()` |
+| Solve rate-base | `fleet_sc = Σ_homes k_h × (demand − import)` (basis C, annualised; §2, §4) | `_simulate_age()` |
 | Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` |
 | Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost)` | `project_economics()` |
 | Net surplus | `mean(surplus_y) / n_homes` over 25 yr | `project_economics()` |
