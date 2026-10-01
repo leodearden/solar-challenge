@@ -220,23 +220,11 @@ class TestSimulatePVOutput:
     """Test simulate_pv_output function."""
 
     @pytest.fixture
-    def sample_weather_data(self) -> pd.DataFrame:
-        """Create sample weather data for testing."""
-        index = pd.date_range(
-            "2024-06-21 06:00",
-            periods=12,
-            freq="1h",
-            tz="Europe/London"
-        )
-        return pd.DataFrame(
-            {
-                "ghi": [100, 300, 500, 700, 800, 850, 800, 700, 500, 300, 100, 0],
-                "dni": [150, 400, 600, 800, 900, 950, 900, 800, 600, 400, 150, 0],
-                "dhi": [50, 100, 150, 200, 200, 200, 200, 200, 150, 100, 50, 0],
-                "temp_air": [15, 17, 19, 21, 23, 24, 24, 23, 21, 19, 17, 15],
-                "wind_speed": [2, 2, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2],
-            },
-            index=index,
+    def sample_weather_data(self, clear_june_day: pd.DataFrame) -> pd.DataFrame:
+        """The clear June daytime, with air temperature and wind that rise and fall through the day."""
+        return clear_june_day.assign(
+            temp_air=[15, 17, 19, 21, 23, 24, 24, 23, 21, 19, 17, 15],
+            wind_speed=[2, 2, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2],
         )
 
     def test_returns_series_with_same_index(self, sample_weather_data):
