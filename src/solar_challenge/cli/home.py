@@ -30,6 +30,34 @@ from solar_challenge.seg import SEGTariff
 app = typer.Typer(help="Single home simulation commands")
 
 
+def home_config_for_run(
+    config: Optional[Path],
+    *,
+    pv_kw: Optional[float] = None,
+    battery_kwh: Optional[float] = None,
+    consumption_kwh: Optional[float] = None,
+    location_str: Optional[str] = None,
+) -> HomeConfig:
+    """The HomeConfig `home run` simulates: the file's home: block at its location:,
+    with its seg: block and the command-line overrides applied."""
+    config_dict = load_config_with_overrides(
+        config,
+        pv_kw=pv_kw,
+        battery_kwh=battery_kwh,
+        consumption_kwh=consumption_kwh,
+        location_str=location_str,
+    )
+    loc = parse_location_block(config_dict.get("location"))
+    home_config = parse_home_block(config_dict.get("home", {}), loc)
+    seg_rate = parse_seg_rate(config_dict.get("seg"))
+    if seg_rate is not None:
+        home_config = dataclasses.replace(
+            home_config,
+            seg_tariff=SEGTariff(name="", rate_pence_per_kwh=seg_rate),
+        )
+    return home_config
+
+
 @app.command()
 @handle_errors
 def run(
@@ -102,33 +130,22 @@ def run(
 
     If no config file is provided, uses default values with any CLI overrides.
     """
-    # Build config dict with CLI overrides merged in
-    config_dict = load_config_with_overrides(
+    home_config = home_config_for_run(
         config,
         pv_kw=pv_kw,
         battery_kwh=battery_kwh,
         consumption_kwh=consumption_kwh,
         location_str=location,
     )
-
-    # Parse location
-    loc = parse_location_block(config_dict.get("location"))
-
-    # Build home config via canonical parser (honours tariff, dispatch_strategy,
-    # heat_pump, ev, pv-age, etc. — previously silently dropped by hand-built path)
-    home_config = parse_home_block(config_dict.get("home", {}), loc)
-
-    # Parse top-level SEG block (sibling of `home:`) and thread onto config + summaries
-    seg_rate = parse_seg_rate(config_dict.get("seg"))
-    if seg_rate is not None:
-        home_config = dataclasses.replace(
-            home_config,
-            seg_tariff=SEGTariff(name="", rate_pence_per_kwh=seg_rate),
-        )
+    seg_rate = (
+        home_config.seg_tariff.rate_pence_per_kwh
+        if home_config.seg_tariff is not None
+        else None
+    )
 
     # Parse dates
-    start_date = pd.Timestamp(start, tz=loc.timezone)
-    end_date = pd.Timestamp(end, tz=loc.timezone)
+    start_date = pd.Timestamp(start, tz=home_config.location.timezone)
+    end_date = pd.Timestamp(end, tz=home_config.location.timezone)
 
     # Calculate simulation duration for progress display
     days_count = (end_date - start_date).days + 1

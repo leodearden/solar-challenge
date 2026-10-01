@@ -1,4 +1,84 @@
 document.addEventListener('alpine:init', () => {
+    // A scenario value as a form input holds it: '' (a cleared input, which the server reads as absent) for none
+    function inputValue(value) {
+        return value === undefined || value === null ? '' : value;
+    }
+
+    // Whether `value` is a YAML mapping, as a scenario document and each of its blocks is
+    function isMapping(value) {
+        return value !== null && typeof value === 'object' && !Array.isArray(value);
+    }
+
+    // The form fields whose preview is `scenario`, a document in the preview's grammar.
+    // Throws, saying why, for a document the form cannot hold.
+    function scenarioFormFields(scenario) {
+        if (!isMapping(scenario)) {
+            throw new Error('it does not hold a YAML mapping');
+        }
+        const fleet = scenario.fleet_distribution;
+        if (!isMapping(fleet)) {
+            throw new Error('it has no fleet_distribution: block for the builder to edit (a run export lists its homes instead)');
+        }
+        const period = scenario.period || {};
+        const tariff = scenario.tariff || {};
+        const fields = {
+            name: inputValue(scenario.name),
+            description: inputValue(scenario.description),
+            start_date: inputValue(period.start_date),
+            end_date: inputValue(period.end_date),
+            n_homes: inputValue(fleet.n_homes),
+            import_rate: tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '',
+            seg_rate_pence_per_kwh: inputValue((scenario.seg || {}).rate_pence_per_kwh),
+            ...componentFields(fleet, 'pv', 'pv_capacity_kw', 'capacity_kw'),
+            ...componentFields(fleet, 'battery', 'battery_capacity_kwh', 'capacity_kwh'),
+            ...componentFields(fleet, 'load', 'annual_consumption_kwh', 'annual_consumption_kwh'),
+        };
+        if (scenario.location) {
+            fields.location_preset = 'custom';
+            fields.latitude = inputValue(scenario.location.latitude);
+            fields.longitude = inputValue(scenario.location.longitude);
+            fields.altitude = inputValue(scenario.location.altitude);
+        }
+        return fields;
+    }
+
+    // One component's form fields, read from its spec at fleet[prefix][key]: a fixed number, or a distribution.
+    // Throws, naming the spec, for one the form cannot hold.
+    function componentFields(fleet, prefix, fixedField, key) {
+        const spec = (fleet[prefix] || {})[key];
+        const path = 'fleet_distribution.' + prefix + '.' + key;
+        if (spec === undefined || spec === null || typeof spec === 'number') {
+            return { [prefix + '_distribution_type']: '', [fixedField]: inputValue(spec) };
+        }
+        if (!isMapping(spec)) {
+            throw new Error(path + ' must be a number or a distribution, got ' + JSON.stringify(spec));
+        }
+        const fields = { [prefix + '_distribution_type']: spec.type };
+        if (spec.type === 'weighted_discrete') {
+            fields[prefix + '_wd_values'] = distributionRows(spec, 'weights', 'weight', path);
+        } else if (spec.type === 'shuffled_pool') {
+            fields[prefix + '_sp_entries'] = distributionRows(spec, 'counts', 'count', path);
+        } else if (spec.type === 'normal' || spec.type === 'uniform') {
+            for (const parameter of ['mean', 'std', 'min', 'max']) {
+                fields[prefix + '_' + parameter] = inputValue(spec[parameter]);
+            }
+        } else {
+            throw new Error(path + ' has distribution type ' + JSON.stringify(spec.type) + ', which the builder does not offer');
+        }
+        return fields;
+    }
+
+    // The form's rows of a distribution: each of its values, with the same entry of its `listKey` list as `rowKey`.
+    // Throws, naming `path`, unless both are lists of the same length.
+    function distributionRows(spec, listKey, rowKey, path) {
+        const values = spec.values;
+        const column = spec[listKey];
+        if (!Array.isArray(values) || !Array.isArray(column) || values.length !== column.length) {
+            throw new Error(path + ' needs values and ' + listKey + ' lists of the same length');
+        }
+        return values.map((value, i) => ({ value, [rowKey]: column[i] }));
+    }
+
     Alpine.data('scenarioBuilder', () => ({
         // Form state
         name: '',
@@ -29,11 +109,11 @@ document.addEventListener('alpine:init', () => {
         load_min: 2000,
         load_max: 5000,
         import_rate: 0.245,
-        export_rate: 0.15,
+        seg_rate_pence_per_kwh: 15.0,
 
         // Weighted discrete / shuffled pool arrays
         pv_wd_values: [{ value: 3.0, weight: 20 }, { value: 4.0, weight: 40 }, { value: 5.0, weight: 30 }],
-        pv_sp_entries: [{ value: 3.0, count: 20 }, { value: 4.0, count: 40 }, { value: 5.0, count: 30 }],
+        pv_sp_entries: [{ value: 3.0, count: 20 }, { value: 4.0, count: 40 }, { value: 5.0, count: 30 }, { value: 6.0, count: 10 }],
         battery_wd_values: [{ value: 0, weight: 40 }, { value: 5.0, weight: 40 }, { value: 10.0, weight: 20 }],
         battery_sp_entries: [{ value: 0, count: 40 }, { value: 5.0, count: 40 }, { value: 10.0, count: 20 }],
         load_wd_values: [{ value: 2900, weight: 30 }, { value: 3500, weight: 40 }, { value: 4500, weight: 30 }],
@@ -86,7 +166,7 @@ document.addEventListener('alpine:init', () => {
                     body: JSON.stringify(formData)
                 });
                 const result = await resp.json();
-                this.yamlPreview = result.yaml || '# Error generating preview';
+                this.yamlPreview = result.yaml !== undefined ? result.yaml : '# ' + result.error;
             } catch (e) {
                 this.yamlPreview = '# Error: could not generate preview';
             }
@@ -146,76 +226,23 @@ document.addEventListener('alpine:init', () => {
             URL.revokeObjectURL(url);
         },
 
-        // Upload YAML file
+        // Upload YAML file: set the form to the scenario it holds, or, for one the form cannot hold,
+        // leave every field as it is and say why in the preview
         async uploadYaml(event) {
             const file = event.target.files[0];
             if (!file) return;
             const text = await file.text();
-            this.yamlPreview = text;
-            try {
-                const parsed = (typeof jsyaml !== 'undefined') ? jsyaml.load(text) : null;
-                if (!parsed) return;
-                if (parsed.name) this.name = parsed.name;
-                if (parsed.description) this.description = parsed.description;
-                if (parsed.start_date) this.start_date = parsed.start_date;
-                if (parsed.end_date) this.end_date = parsed.end_date;
-                if (parsed.n_homes) this.n_homes = parsed.n_homes;
-                if (parsed.import_rate !== undefined) this.import_rate = parsed.import_rate;
-                if (parsed.export_rate !== undefined) this.export_rate = parsed.export_rate;
-                // Location
-                if (parsed.location) {
-                    if (parsed.location.latitude !== undefined) {
-                        this.location_preset = 'custom';
-                        this.latitude = parsed.location.latitude;
-                        this.longitude = parsed.location.longitude || -2.58;
-                        if (parsed.location.altitude !== undefined) this.altitude = parsed.location.altitude;
-                    }
-                }
-                // PV distribution
-                if (parsed.fleet_distribution && parsed.fleet_distribution.pv_capacity_kw) {
-                    var pv = parsed.fleet_distribution.pv_capacity_kw;
-                    if (typeof pv === 'number') {
-                        this.pv_distribution_type = '';
-                        this.pv_capacity_kw = pv;
-                    } else if (pv.type) {
-                        this.pv_distribution_type = pv.type;
-                        if (pv.mean !== undefined) this.pv_mean = pv.mean;
-                        if (pv.std !== undefined) this.pv_std = pv.std;
-                        if (pv.min !== undefined) this.pv_min = pv.min;
-                        if (pv.max !== undefined) this.pv_max = pv.max;
-                    }
-                }
-                // Battery distribution
-                if (parsed.fleet_distribution && parsed.fleet_distribution.battery_capacity_kwh) {
-                    var batt = parsed.fleet_distribution.battery_capacity_kwh;
-                    if (typeof batt === 'number') {
-                        this.battery_distribution_type = '';
-                        this.battery_capacity_kwh = batt;
-                    } else if (batt.type) {
-                        this.battery_distribution_type = batt.type;
-                        if (batt.mean !== undefined) this.battery_mean = batt.mean;
-                        if (batt.std !== undefined) this.battery_std = batt.std;
-                        if (batt.min !== undefined) this.battery_min = batt.min;
-                        if (batt.max !== undefined) this.battery_max = batt.max;
-                    }
-                }
-                // Load distribution
-                if (parsed.fleet_distribution && parsed.fleet_distribution.annual_consumption_kwh) {
-                    var load = parsed.fleet_distribution.annual_consumption_kwh;
-                    if (typeof load === 'number') {
-                        this.load_distribution_type = '';
-                        this.annual_consumption_kwh = load;
-                    } else if (load.type) {
-                        this.load_distribution_type = load.type;
-                        if (load.mean !== undefined) this.load_mean = load.mean;
-                        if (load.std !== undefined) this.load_std = load.std;
-                        if (load.min !== undefined) this.load_min = load.min;
-                        if (load.max !== undefined) this.load_max = load.max;
-                    }
-                }
-                this.updatePreview();
-            } catch (e) { /* ignore parse errors */ }
             event.target.value = '';
+            let fields;
+            try {
+                fields = scenarioFormFields(jsyaml.load(text));
+            } catch (e) {
+                this.yamlPreview = '# ' + file.name + ' was not loaded: ' + e.message;
+                return;
+            }
+            Object.assign(this, fields);
+            this.yamlPreview = text;
+            this.updatePreview();
         },
 
         // Load presets list
@@ -261,7 +288,7 @@ document.addEventListener('alpine:init', () => {
                 location_preset: this.location_preset,
                 n_homes: this.n_homes,
                 import_rate: this.import_rate,
-                export_rate: this.export_rate,
+                seg_rate_pence_per_kwh: this.seg_rate_pence_per_kwh,
             };
             if (this.location_preset === 'custom') {
                 data.latitude = this.latitude;

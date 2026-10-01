@@ -73,6 +73,7 @@ One of the largest modules. Key concepts:
 - **Parameter sweeps** — Geometric/linear sweep specs with cross-sweep parallel execution
 - **Variable substitution** — `${VAR}` syntax in config files
 - **`generate_homes_from_distribution()`** — Creates heterogeneous fleet configs from distributions
+- **`scenario_writer.py`** — Writes HomeConfigs back as scenario YAML, the inverse of config.py's parsers; change both together
 
 ### CLI (`cli/`)
 

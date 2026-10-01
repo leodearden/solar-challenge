@@ -17,6 +17,7 @@ import json
 import re
 import shutil
 import sys
+from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -141,6 +142,16 @@ def _item_annotation(sequence_annotation: Any) -> Any:
     """
     item_annotations = {arg for arg in get_args(sequence_annotation) if arg is not Ellipsis}
     return item_annotations.pop() if len(item_annotations) == 1 else Any
+
+
+def stored_home_config(config: Mapping[str, Any]) -> HomeConfig:
+    """The HomeConfig a home run's stored config holds, as save_home_run wrote it."""
+    return _deserialize_dataclass(HomeConfig, dict(config))
+
+
+def stored_fleet_home_configs(config: Mapping[str, Any]) -> list[HomeConfig]:
+    """The HomeConfigs a fleet run's stored config holds, as save_fleet_run wrote it."""
+    return [stored_home_config(home) for home in config["homes"]]
 
 
 class RunStorage:
@@ -321,7 +332,7 @@ class RunStorage:
             raise FileNotFoundError(f"Config file not found: {config_path}")
         with config_path.open("r") as f:
             config_dict = json.load(f)
-        config = _deserialize_dataclass(HomeConfig, config_dict)
+        config = stored_home_config(config_dict)
 
         # Load summary from JSON
         summary_path = run_dir / "summary.json"
@@ -495,11 +506,7 @@ class RunStorage:
         with config_path.open("r") as f:
             fleet_config_dict = json.load(f)
 
-        # Deserialize home configs
-        home_configs = [
-            _deserialize_dataclass(HomeConfig, home_dict)
-            for home_dict in fleet_config_dict["homes"]
-        ]
+        home_configs = stored_fleet_home_configs(fleet_config_dict)
 
         # Load fleet summary from JSON
         summary_path = run_dir / "summary.json"

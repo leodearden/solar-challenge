@@ -52,16 +52,3 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
     {"name": "Medium Suburban", "pv_kw": 4.0, "battery_kwh": 5.0, "consumption_kwh": 3500},
     {"name": "Large with Battery", "pv_kw": 6.0, "battery_kwh": 10.0, "consumption_kwh": 4500},
 ]
-
-
-def location_presets_as_dicts() -> dict[str, dict[str, Any]]:
-    """Return location presets as plain dicts (for scenarios.py compatibility)."""
-    return {
-        key: {
-            "latitude": loc.latitude,
-            "longitude": loc.longitude,
-            "altitude": loc.altitude,
-            "name": loc.name,
-        }
-        for key, loc in LOCATION_PRESETS.items()
-    }

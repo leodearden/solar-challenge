@@ -23,9 +23,12 @@ from solar_challenge.config import (
     parse_tariff_config,
 )
 from solar_challenge.home import HomeConfig
+from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
+from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import get_job_manager, get_storage, resolve_location
 from solar_challenge.web.simulation_params import parse_date_range, parse_home_config, parse_seg_tariff
+from solar_challenge.web.storage import stored_fleet_home_configs, stored_home_config
 
 logger = logging.getLogger(__name__)
 
@@ -894,19 +897,20 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
 
 @api_bp.route("/history/runs/<run_id>/export/yaml")
 def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
-    """Export run config as YAML download.
+    """Export a run's config as the scenario YAML that `home run` or load_fleet_config reads back.
 
     Args:
         run_id: Unique run identifier.
 
     Returns:
-        YAML file response, or 404 if not found.
+        YAML file response; 404 if the run or its config is missing, 500 if the
+        stored config does not decode, 422 if the scenario grammar cannot express it.
     """
     db_path = current_app.config["DATABASE"]
 
     with get_db(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, config_json FROM runs WHERE id = ?", (run_id,))
+        cursor.execute("SELECT id, name, type, config_json FROM runs WHERE id = ?", (run_id,))
         row = cursor.fetchone()
 
     if row is None:
@@ -917,19 +921,31 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
         return jsonify({"error": "No config data available"}), 404
 
     try:
-        config_dict = json.loads(config_json)
+        config = json.loads(config_json)
     except (json.JSONDecodeError, TypeError):
         return jsonify({"error": "Invalid config data"}), 500
 
-    # Convert to YAML format
-    yaml_data = _yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+    is_fleet = row["type"] == "fleet"
+    try:
+        homes = stored_fleet_home_configs(config) if is_fleet else [stored_home_config(config)]
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        return jsonify({"error": f"Invalid config data: {exc}"}), 500
 
     run_name = row["name"] or "run"
+    try:
+        document = (
+            fleet_scenario(homes, name=run_name)
+            if is_fleet
+            else home_scenario(homes[0], name=run_name)
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 422
+
     safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in run_name)
     filename = f"{safe_name}_{run_id[:8]}.yaml"
 
     return Response(
-        yaml_data,
+        scenario_yaml(document),
         mimetype="text/yaml",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -949,176 +965,36 @@ def _scenarios_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "scenarios"
 
 
-def _form_to_yaml_dict(data: dict[str, Any]) -> dict[str, Any]:
-    """Convert form/JSON data into a scenario YAML-compatible dict.
-
-    Args:
-        data: Parsed request data from the builder form.
-
-    Returns:
-        Dictionary suitable for YAML serialisation.
-    """
-    from solar_challenge.web.shared import location_presets_as_dicts  # noqa: PLC0415
-
-    result: dict[str, Any] = {}
-
-    # General section
-    if data.get("name"):
-        result["name"] = str(data["name"])
-    if data.get("description"):
-        result["description"] = str(data["description"])
-
-    # Location section
-    location: dict[str, Any] = {}
-    loc_preset = data.get("location_preset", "")
-    if loc_preset == "custom":
-        location["latitude"] = float(data.get("latitude", 51.45))
-        location["longitude"] = float(data.get("longitude", -2.58))
-        if data.get("altitude"):
-            location["altitude"] = float(data["altitude"])
-    elif loc_preset:
-        presets = location_presets_as_dicts()
-        location = dict(presets.get(loc_preset, presets["bristol"]))
-    location["timezone"] = "Europe/London"
-    if location:
-        result["location"] = location
-
-    # Period section
-    if data.get("start_date"):
-        result["start_date"] = str(data["start_date"])
-    if data.get("end_date"):
-        result["end_date"] = str(data["end_date"])
-
-    # Fleet distribution section
-    fleet: dict[str, Any] = {}
-    if data.get("n_homes"):
-        fleet["n_homes"] = int(data["n_homes"])
-
-    # PV distribution
-    pv: dict[str, Any] = {}
-    if data.get("pv_capacity_kw"):
-        pv["capacity_kw"] = float(data["pv_capacity_kw"])
-    elif data.get("pv_distribution_type"):
-        pv["capacity_kw"] = {
-            "type": data["pv_distribution_type"],
-        }
-        if data.get("pv_mean"):
-            pv["capacity_kw"]["mean"] = float(data["pv_mean"])
-        if data.get("pv_std"):
-            pv["capacity_kw"]["std"] = float(data["pv_std"])
-        if data.get("pv_min"):
-            pv["capacity_kw"]["min"] = float(data["pv_min"])
-        if data.get("pv_max"):
-            pv["capacity_kw"]["max"] = float(data["pv_max"])
-    if pv:
-        fleet["pv"] = pv
-
-    # Battery distribution
-    battery: dict[str, Any] = {}
-    if data.get("battery_capacity_kwh"):
-        battery["capacity_kwh"] = float(data["battery_capacity_kwh"])
-    elif data.get("battery_distribution_type"):
-        battery["capacity_kwh"] = {
-            "type": data["battery_distribution_type"],
-        }
-        if data.get("battery_mean"):
-            battery["capacity_kwh"]["mean"] = float(data["battery_mean"])
-        if data.get("battery_std"):
-            battery["capacity_kwh"]["std"] = float(data["battery_std"])
-        if data.get("battery_min"):
-            battery["capacity_kwh"]["min"] = float(data["battery_min"])
-        if data.get("battery_max"):
-            battery["capacity_kwh"]["max"] = float(data["battery_max"])
-    if battery:
-        fleet["battery"] = battery
-
-    # Load distribution
-    load: dict[str, Any] = {}
-    if data.get("annual_consumption_kwh"):
-        load["annual_consumption_kwh"] = float(data["annual_consumption_kwh"])
-    elif data.get("load_distribution_type"):
-        load["annual_consumption_kwh"] = {
-            "type": data["load_distribution_type"],
-        }
-        if data.get("load_mean"):
-            load["annual_consumption_kwh"]["mean"] = float(data["load_mean"])
-        if data.get("load_std"):
-            load["annual_consumption_kwh"]["std"] = float(data["load_std"])
-        if data.get("load_min"):
-            load["annual_consumption_kwh"]["min"] = float(data["load_min"])
-        if data.get("load_max"):
-            load["annual_consumption_kwh"]["max"] = float(data["load_max"])
-    if load:
-        fleet["load"] = load
-
-    if fleet:
-        result["fleet_distribution"] = fleet
-
-    # Tariff section
-    tariff: dict[str, Any] = {}
-    if data.get("import_rate"):
-        tariff["import_rate"] = float(data["import_rate"])
-    if data.get("export_rate"):
-        tariff["export_rate"] = float(data["export_rate"])
-    if tariff:
-        result["tariff"] = tariff
-
-    return result
-
-
 @api_bp.route("/scenarios/preview-yaml", methods=["POST"])
 def scenarios_preview_yaml() -> tuple[Response, int]:
-    """Convert form data to a YAML string preview.
+    """The YAML text of the fleet scenario a builder form describes.
 
-    Expects a JSON body with scenario builder form fields.
+    Expects a JSON body with the scenario builder's form fields.
 
     Returns:
-        JSON with ``yaml`` string, HTTP 200 on success.
+        JSON with the ``yaml`` text, HTTP 200; or the ``error``, HTTP 400, for a
+        form the builder does not send.
     """
     data = request.get_json(silent=True) or {}
-    scenario_dict = _form_to_yaml_dict(data)
-    yaml_str = _yaml.dump(scenario_dict, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    return jsonify({"yaml": yaml_str}), 200
+    try:
+        document = scenario_from_builder_form(data)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"yaml": scenario_yaml(document)}), 200
 
 
 @api_bp.route("/scenarios/validate", methods=["POST"])
 def scenarios_validate_scenario() -> tuple[Response, int]:
-    """Validate scenario data against basic rules.
+    """Validate a builder form against the dashboard's limits and the scenario readers.
 
-    Expects a JSON body with scenario fields. Performs lightweight
-    validation (not a full ScenarioConfig parse since the form data
-    may be incomplete).
+    Expects a JSON body with the scenario builder's form fields.
 
     Returns:
-        JSON with ``valid`` boolean and optional ``errors`` list, HTTP 200.
+        JSON with ``valid`` and the ``errors`` list, empty for a valid form, HTTP 200.
     """
     data = request.get_json(silent=True) or {}
-    errors: list[str] = []
-
-    if not data.get("name"):
-        errors.append("Scenario name is required.")
-
-    n_homes = data.get("n_homes")
-    if n_homes is not None:
-        try:
-            n = int(n_homes)
-            if n < 1 or n > 10000:
-                errors.append("Number of homes must be between 1 and 10,000.")
-        except (ValueError, TypeError):
-            errors.append("Number of homes must be an integer.")
-
-    pv_kw = data.get("pv_capacity_kw")
-    if pv_kw is not None:
-        try:
-            kw = float(pv_kw)
-            if kw < 0.5 or kw > 20.0:
-                errors.append("PV capacity must be between 0.5 and 20 kW.")
-        except (ValueError, TypeError):
-            errors.append("PV capacity must be a number.")
-
-    if errors:
-        return jsonify({"valid": False, "errors": errors}), 200
-    return jsonify({"valid": True, "errors": []}), 200
+    errors = builder_form_errors(data)
+    return jsonify({"valid": not errors, "errors": errors}), 200
 
 
 @api_bp.route("/scenarios/save", methods=["POST"])
