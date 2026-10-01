@@ -1059,12 +1059,24 @@ def _parse_output_config(data: Optional[dict[str, Any]]) -> Optional[OutputConfi
 # --- Distribution Parsing and Sampling ---
 
 
+_DISTRIBUTION_SPEC_KEYS: Mapping[str, frozenset[str]] = MappingProxyType({
+    "weighted_discrete": frozenset({"type", "values", "weights"}),
+    "normal": frozenset({"type", "mean", "std", "min", "max"}),
+    "uniform": frozenset({"type", "min", "max"}),
+    "fixed": frozenset({"type", "value"}),
+    "shuffled_pool": frozenset({"type", "values", "counts"}),
+    "proportional_to": frozenset({"type", "source", "multiplier", "offset"}),
+})
+
+_SWEEP_SPEC_KEYS: frozenset[str] = frozenset({"type", "min", "max", "steps", "mode"})
+
+
 def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
     """Parse a distribution specification from config data.
 
     Args:
         data: Raw data (scalar, None, or distribution dict)
-        param_name: Parameter name for error messages
+        param_name: The parameter's path in its file, named in error messages
 
     Returns:
         DistributionSpec (distribution object, scalar, or None)
@@ -1089,6 +1101,13 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
         raise ConfigurationError(
             f"Distribution for '{param_name}' requires 'type' field"
         )
+    recognised = _DISTRIBUTION_SPEC_KEYS.get(dist_type) if isinstance(dist_type, str) else None
+    if recognised is None:
+        raise ConfigurationError(
+            f"Unknown distribution type '{dist_type}' for '{param_name}'. "
+            f"Supported: {', '.join(_DISTRIBUTION_SPEC_KEYS)}"
+        )
+    _refuse_unrecognised_keys(param_name, data, recognised)
 
     if dist_type == "weighted_discrete":
         if "values" not in data or "weights" not in data:
@@ -1137,7 +1156,7 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
         counts = tuple(int(c) for c in data["counts"])
         return ShuffledPoolDistribution(values=values, counts=counts)
 
-    elif dist_type == "proportional_to":
+    else:
         if "source" not in data:
             raise ConfigurationError(
                 f"proportional_to distribution for '{param_name}' requires 'source'"
@@ -1150,6 +1169,9 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
                 raise ConfigurationError(
                     f"proportional_to multiplier dict for '{param_name}' must have type='sweep'"
                 )
+            _refuse_unrecognised_keys(
+                _child_path(param_name, "multiplier"), multiplier_data, _SWEEP_SPEC_KEYS
+            )
             multiplier = SweepSpec(
                 min=float(multiplier_data["min"]),
                 max=float(multiplier_data["max"]),
@@ -1162,12 +1184,6 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
             source=data["source"],
             multiplier=multiplier,
             offset=float(data.get("offset", 0.0)),
-        )
-
-    else:
-        raise ConfigurationError(
-            f"Unknown distribution type '{dist_type}' for '{param_name}'. "
-            "Supported: weighted_discrete, normal, uniform, fixed, shuffled_pool, proportional_to"
         )
 
 
@@ -1204,57 +1220,86 @@ def _sample_from_distribution(spec: DistributionSpec, rng: random.Random) -> Opt
     raise ConfigurationError(f"Unknown distribution type: {type(spec)}")
 
 
-def _parse_pv_distribution_config(data: dict[str, Any]) -> PVDistributionConfig:
+_PV_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "capacity_kw", "azimuth", "tilt", "module_efficiency", "inverter_efficiency",
+    "system_age_years", "degradation_rate_per_year",
+})
+
+
+def _parse_pv_distribution_config(
+    data: dict[str, Any], *, block_path: str
+) -> PVDistributionConfig:
     """Parse PV distribution configuration from config data."""
+    _refuse_unrecognised_keys(block_path, data, _PV_DISTRIBUTION_BLOCK_KEYS)
     if "capacity_kw" not in data:
         raise ConfigurationError("PV distribution config requires 'capacity_kw'")
 
     return PVDistributionConfig(
-        capacity_kw=_parse_distribution_spec(data["capacity_kw"], "pv.capacity_kw"),
-        azimuth=_parse_distribution_spec(data.get("azimuth", 180.0), "pv.azimuth"),
-        tilt=_parse_distribution_spec(data.get("tilt", 35.0), "pv.tilt"),
+        capacity_kw=_parse_distribution_spec(
+            data["capacity_kw"], _child_path(block_path, "capacity_kw")
+        ),
+        azimuth=_parse_distribution_spec(
+            data.get("azimuth", 180.0), _child_path(block_path, "azimuth")
+        ),
+        tilt=_parse_distribution_spec(data.get("tilt", 35.0), _child_path(block_path, "tilt")),
         module_efficiency=_parse_distribution_spec(
-            data.get("module_efficiency", 0.20), "pv.module_efficiency"
+            data.get("module_efficiency", 0.20), _child_path(block_path, "module_efficiency")
         ),
         inverter_efficiency=_parse_distribution_spec(
-            data.get("inverter_efficiency", 0.96), "pv.inverter_efficiency"
+            data.get("inverter_efficiency", 0.96), _child_path(block_path, "inverter_efficiency")
         ),
         system_age_years=_parse_distribution_spec(
-            data.get("system_age_years", 0.0), "pv.system_age_years"
+            data.get("system_age_years", 0.0), _child_path(block_path, "system_age_years")
         ),
         degradation_rate_per_year=_parse_distribution_spec(
-            data.get("degradation_rate_per_year", 0.005), "pv.degradation_rate_per_year"
+            data.get("degradation_rate_per_year", 0.005),
+            _child_path(block_path, "degradation_rate_per_year"),
         ),
     )
 
 
+# grid_charging is read from the raw block by load_fleet_config.
+_BATTERY_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "capacity_kwh", "max_charge_kw", "max_discharge_kw", "grid_charging",
+})
+
+
 def _parse_battery_distribution_config(
-    data: Optional[dict[str, Any]],
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[BatteryDistributionConfig]:
     """Parse battery distribution configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _BATTERY_DISTRIBUTION_BLOCK_KEYS)
 
     if "capacity_kwh" not in data:
         raise ConfigurationError("Battery distribution config requires 'capacity_kwh'")
 
     return BatteryDistributionConfig(
-        capacity_kwh=_parse_distribution_spec(data["capacity_kwh"], "battery.capacity_kwh"),
+        capacity_kwh=_parse_distribution_spec(
+            data["capacity_kwh"], _child_path(block_path, "capacity_kwh")
+        ),
         max_charge_kw=_parse_distribution_spec(
-            data.get("max_charge_kw", 2.5), "battery.max_charge_kw"
+            data.get("max_charge_kw", 2.5), _child_path(block_path, "max_charge_kw")
         ),
         max_discharge_kw=_parse_distribution_spec(
-            data.get("max_discharge_kw", 2.5), "battery.max_discharge_kw"
+            data.get("max_discharge_kw", 2.5), _child_path(block_path, "max_discharge_kw")
         ),
     )
 
 
+_HEAT_PUMP_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "heat_pump_type", "thermal_capacity_kw", "annual_heat_demand_kwh",
+})
+
+
 def _parse_heat_pump_distribution_config(
-    data: Optional[dict[str, Any]],
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[HeatPumpDistributionConfig]:
     """Parse heat pump distribution configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _HEAT_PUMP_DISTRIBUTION_BLOCK_KEYS)
 
     # Parse heat_pump_type - can be string, distribution, or None
     heat_pump_type_raw = data.get("heat_pump_type")
@@ -1267,7 +1312,7 @@ def _parse_heat_pump_distribution_config(
     elif isinstance(heat_pump_type_raw, dict):
         # Distribution spec
         heat_pump_type = _parse_distribution_spec(
-            heat_pump_type_raw, "heat_pump.heat_pump_type"
+            heat_pump_type_raw, _child_path(block_path, "heat_pump_type")
         )
     else:
         raise ConfigurationError(
@@ -1277,54 +1322,82 @@ def _parse_heat_pump_distribution_config(
     return HeatPumpDistributionConfig(
         heat_pump_type=heat_pump_type,
         thermal_capacity_kw=_parse_distribution_spec(
-            data.get("thermal_capacity_kw", 8.0), "heat_pump.thermal_capacity_kw"
+            data.get("thermal_capacity_kw", 8.0), _child_path(block_path, "thermal_capacity_kw")
         ),
         annual_heat_demand_kwh=_parse_distribution_spec(
-            data.get("annual_heat_demand_kwh", 8000.0), "heat_pump.annual_heat_demand_kwh"
+            data.get("annual_heat_demand_kwh", 8000.0),
+            _child_path(block_path, "annual_heat_demand_kwh"),
         ),
     )
 
 
-def _parse_load_distribution_config(data: dict[str, Any]) -> LoadDistributionConfig:
+_LOAD_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "annual_consumption_kwh", "household_occupants", "use_stochastic",
+})
+
+
+def _parse_load_distribution_config(
+    data: dict[str, Any], *, block_path: str
+) -> LoadDistributionConfig:
     """Parse load distribution configuration from config data."""
+    _refuse_unrecognised_keys(block_path, data, _LOAD_DISTRIBUTION_BLOCK_KEYS)
     return LoadDistributionConfig(
         annual_consumption_kwh=_parse_distribution_spec(
-            data.get("annual_consumption_kwh"), "load.annual_consumption_kwh"
+            data.get("annual_consumption_kwh"), _child_path(block_path, "annual_consumption_kwh")
         ),
         household_occupants=_parse_distribution_spec(
-            data.get("household_occupants", 3), "load.household_occupants"
+            data.get("household_occupants", 3), _child_path(block_path, "household_occupants")
         ),
         use_stochastic=data.get("use_stochastic", True),
     )
 
 
+_EV_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "charger_type", "arrival_hour", "departure_hour", "required_charge_kwh",
+    "smart_charging_mode",
+})
+
+
 def _parse_ev_distribution_config(
-    data: Optional[dict[str, Any]],
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[EVDistributionConfig]:
     """Parse EV distribution configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _EV_DISTRIBUTION_BLOCK_KEYS)
 
     if "charger_type" not in data:
         raise ConfigurationError("EV distribution config requires 'charger_type'")
 
     return EVDistributionConfig(
-        charger_type=_parse_distribution_spec(data["charger_type"], "ev.charger_type"),
+        charger_type=_parse_distribution_spec(
+            data["charger_type"], _child_path(block_path, "charger_type")
+        ),
         arrival_hour=_parse_distribution_spec(
-            data.get("arrival_hour", 18.0), "ev.arrival_hour"
+            data.get("arrival_hour", 18.0), _child_path(block_path, "arrival_hour")
         ),
         departure_hour=_parse_distribution_spec(
-            data.get("departure_hour", 7.0), "ev.departure_hour"
+            data.get("departure_hour", 7.0), _child_path(block_path, "departure_hour")
         ),
         required_charge_kwh=_parse_distribution_spec(
-            data.get("required_charge_kwh", 35.0), "ev.required_charge_kwh"
+            data.get("required_charge_kwh", 35.0), _child_path(block_path, "required_charge_kwh")
         ),
         smart_charging_mode=data.get("smart_charging_mode", "none"),
     )
 
 
-def parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionConfig:
+# dispatch_strategy is read from the raw block by load_fleet_config.
+_FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "n_homes", "pv", "load", "battery", "heat_pump", "ev", "seed", "random_order",
+    "dispatch_strategy",
+})
+
+
+def parse_fleet_distribution_config(
+    data: dict[str, Any], *, block_path: str = "fleet_distribution"
+) -> FleetDistributionConfig:
     """Parse fleet distribution configuration from config data."""
+    _refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
     if "n_homes" not in data:
         raise ConfigurationError("Fleet distribution config requires 'n_homes'")
     if "pv" not in data:
@@ -1332,11 +1405,17 @@ def parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionCo
 
     return FleetDistributionConfig(
         n_homes=int(data["n_homes"]),
-        pv=_parse_pv_distribution_config(data["pv"]),
-        load=_parse_load_distribution_config(data.get("load", {})),
-        battery=_parse_battery_distribution_config(data.get("battery")),
-        heat_pump=_parse_heat_pump_distribution_config(data.get("heat_pump")),
-        ev=_parse_ev_distribution_config(data.get("ev")),
+        pv=_parse_pv_distribution_config(data["pv"], block_path=_child_path(block_path, "pv")),
+        load=_parse_load_distribution_config(
+            data.get("load", {}), block_path=_child_path(block_path, "load")
+        ),
+        battery=_parse_battery_distribution_config(
+            data.get("battery"), block_path=_child_path(block_path, "battery")
+        ),
+        heat_pump=_parse_heat_pump_distribution_config(
+            data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
+        ),
+        ev=_parse_ev_distribution_config(data.get("ev"), block_path=_child_path(block_path, "ev")),
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
     )
