@@ -21,15 +21,22 @@ if TYPE_CHECKING:
     from flask import Flask
 
 
-def build_test_app(data_dir: Path) -> Flask:
-    """Return the dashboard app in testing mode, keeping its database and run files under *data_dir*."""
+def build_test_app(
+    data_dir: Path, *, secret_key: str | None = "test-secret-key"
+) -> Flask:
+    """Return the dashboard app in testing mode, keeping its database and run files under *data_dir*.
+
+    The test_config supplies *secret_key* as the app's SECRET_KEY. With
+    secret_key=None it holds no SECRET_KEY, and create_app looks a key up itself.
+    """
     from solar_challenge.web.app import create_app
 
+    secret_key_config = {} if secret_key is None else {"SECRET_KEY": secret_key}
     return create_app(
         test_config={
             "TESTING": True,
-            "SECRET_KEY": "test-secret-key",
             "DATABASE": str(data_dir / "test.db"),
             "DATA_DIR": str(data_dir),
+            **secret_key_config,
         }
     )
