@@ -444,18 +444,22 @@ def _make_sim_results(
     export_kwh: float = 48.0,
     import_kwh: float = 12.0,
     discharge_kwh: float = 0.0,
-    n_minutes: int = 1440,  # 1 day
+    n_steps: int = 8760,
 ) -> "SimulationResults":  # type: ignore[name-defined]
-    """Build a minimal SimulationResults with constant power series."""
+    """Constant-power SimulationResults whose totals are the kWh arguments; a full year by default.
+
+    Hourly index with kW = kWh / (n_steps / 60), so calculate_summary's 1/60
+    integration returns the kWh totals, and the default 8760 steps give
+    simulation_days 365.
+    """
     import pandas as pd
     from solar_challenge.home import SimulationResults
 
-    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    # Convert kWh to kW for constant-power series (energy = power * n_minutes/60)
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    dis_kw = discharge_kwh / (n_minutes / 60.0)
+    idx = pd.date_range("2020-01-01", periods=n_steps, freq="1h", tz="Europe/London")
+    sc_kw = self_kwh / (n_steps / 60.0)
+    exp_kw = export_kwh / (n_steps / 60.0)
+    imp_kw = import_kwh / (n_steps / 60.0)
+    dis_kw = discharge_kwh / (n_steps / 60.0)
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw - dis_kw
 
