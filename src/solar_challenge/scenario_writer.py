@@ -7,7 +7,7 @@ custom type, and parse_seg_rate.  A block carries every key its parser reads, an
 absent value written as null, which those parsers read as their default or None.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
 import yaml
@@ -50,6 +50,46 @@ def home_scenario(home: HomeConfig, *, name: str) -> dict[str, Any]:
         "home": _home_block(home),
         "seg": _seg_block(home.seg_tariff),
     }
+
+
+def fleet_scenario(homes: Sequence[HomeConfig], *, name: str) -> dict[str, Any]:
+    """The scenario *name* that load_fleet_config reads back as *homes*, their SEG tariff unnamed.
+
+    Raises:
+        ValueError: for no homes, which load_fleet_config refuses too, or for homes that
+            do not write the same location: and seg: blocks, which a scenario holds once
+            for the whole fleet.
+    """
+    if not homes:
+        raise ValueError("A fleet needs at least one home, as load_fleet_config requires")
+    return {
+        "name": name,
+        "location": _fleet_wide_block(
+            "location", [location_block(home.location) for home in homes]
+        ),
+        "seg": _fleet_wide_block("seg", [_seg_block(home.seg_tariff) for home in homes]),
+        "homes": [_home_block(home) for home in homes],
+    }
+
+
+def _fleet_wide_block(
+    key: str, home_blocks: Sequence[Optional[dict[str, Any]]]
+) -> Optional[dict[str, Any]]:
+    """The *key* block that every one of a fleet's *home_blocks* is.
+
+    Raises:
+        ValueError: naming *key* and the distinct blocks, when the homes write more than one.
+    """
+    distinct: list[Optional[dict[str, Any]]] = []
+    for block in home_blocks:
+        if block not in distinct:
+            distinct.append(block)
+    if len(distinct) > 1:
+        raise ValueError(
+            f"A scenario holds one {key}: block for the whole fleet, "
+            f"but its homes write {len(distinct)}: {distinct}"
+        )
+    return distinct[0]
 
 
 def _home_block(home: HomeConfig) -> dict[str, Any]:
