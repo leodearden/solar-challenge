@@ -1202,10 +1202,12 @@ class TestPhysicsReconciliationColumn:
 
     Runs a 2-home, 3-day fleet simulation via real simulate_fleet to show that the
     real-physics path returns a structurally valid CostRecoverySolution.  Its numbers
-    are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation): the
-    solve sets the window's 3 days of own-use kWh against a year of opex and floor
-    (project_multi_year asks for a period of about one full year), and the [FIN] grant
-    covers the 2-home fleet's capex, so the fleet carries no debt (guarded by
+    are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation) for
+    two reasons.  The solve annualises the 3-day January window (×365/3), as
+    project_multi_year does every energy and SEG total, so its rate extrapolates one
+    winter window to a year: a seasonal sample, which is why project_multi_year asks
+    for about one full year and warns on a short window.  And the [FIN] grant covers
+    the 2-home fleet's capex, so the fleet carries no debt (guarded by
     TestPhysicsColumnPremises).
     Mirrors θ's TestCalibrationPhysicsColumn.
     Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
@@ -1247,7 +1249,7 @@ class TestPhysicsReconciliationColumn:
             f"\n  Binding: {sol.binding}, Feasible: {sol.feasible}"
             "\n  [Reported not pinned: assertion policy in §3.3 of"
             " docs/finance-spreadsheet-reconciliation.md]"
-            "\n  [Cause: the solve sets the window's 3 days of own-use kWh against a year of"
-            " opex and floor (project_multi_year asks for about one full year), so this rate"
-            " reflects the window length, not a self-consumption gap]"
+            "\n  [Cause: one 3-day January window annualised to a year (×365/3, a seasonal"
+            " sample; project_multi_year asks for about one full year), and a debt-free"
+            " fleet (the [FIN] grant covers its capex)]"
         )
