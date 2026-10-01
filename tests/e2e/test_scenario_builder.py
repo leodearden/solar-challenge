@@ -5,8 +5,12 @@ button, General section inputs, and detects Bug B1 (Alpine race condition
 with external JS).
 """
 
+from pathlib import Path
+
 import pytest
 from playwright.sync_api import ConsoleMessage, Page, expect
+
+from solar_challenge.config import load_fleet_config
 
 pytestmark = pytest.mark.e2e
 
@@ -159,3 +163,29 @@ def test_general_section_inputs(page: Page, live_server: str) -> None:
     assert x_model_desc == "description", (
         f"Expected x-model='description' on textarea, got '{x_model_desc}'"
     )
+
+
+# ── Builder YAML: what the scenario loaders read ─────────────────────
+
+
+def test_default_form_previews_yaml_the_fleet_loader_loads(
+    page: Page, live_server: str, tmp_path: Path
+) -> None:
+    """The YAML previewed for the builder's default form loads through load_fleet_config.
+
+    The page previews its default form as soon as it opens, so this pins the real
+    payload of getFormData(), which tests/unit/test_web_scenarios.py's
+    TestBuilderScenarioYaml._DEFAULT_FORM mirrors.
+    """
+    with page.expect_response("**/api/scenarios/preview-yaml") as preview:
+        page.goto(live_server + "/scenarios/builder")
+
+    response = preview.value
+    assert response.status == 200
+    path = tmp_path / "builder.yaml"
+    path.write_text(response.json()["yaml"], encoding="utf-8")
+
+    fleet = load_fleet_config(path)
+
+    assert len(fleet.homes) == 100
+    assert {home.pv_config.capacity_kw for home in fleet.homes} == {4.0}

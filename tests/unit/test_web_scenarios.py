@@ -4,12 +4,25 @@ import json
 from collections.abc import Callable
 from inspect import signature
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.config import (
+    NormalDistribution,
+    ShuffledPoolDistribution,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
+    load_fleet_config,
+    parse_fleet_distribution_config,
+    parse_seg_rate,
+)
+from solar_challenge.tariff import TariffConfig
+from solar_challenge.web.shared import LOCATION_PRESETS
 from tests._web_app import build_test_app
 
 
@@ -261,6 +274,135 @@ class TestScenarioAPI:
         data = response.get_json()
         assert data["name"] == "fetch-me"
         assert data["source"] == "saved"
+
+
+def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:
+    """The YAML text /api/scenarios/preview-yaml answers for the builder *form*, and the document it holds."""
+    response = client.post("/api/scenarios/preview-yaml", json=form)
+    assert response.status_code == 200, response.get_json()
+    yaml_text: str = response.get_json()["yaml"]
+    return yaml_text, yaml.safe_load(yaml_text)
+
+
+class TestBuilderScenarioYaml:
+    """The YAML /api/scenarios/preview-yaml writes for a builder form is a fleet scenario its loaders read."""
+
+    _DEFAULT_FORM: dict[str, Any] = {
+        "name": "Builder defaults",
+        "description": "",
+        "start_date": "2024-01-01",
+        "end_date": "2024-12-31",
+        "location_preset": "bristol",
+        "n_homes": 100,
+        "import_rate": 0.245,
+        "seg_rate_pence_per_kwh": 15.0,
+        "pv_capacity_kw": 4,
+        "battery_capacity_kwh": 5,
+        "annual_consumption_kwh": 3500,
+    }
+    """The form scenario-builder.js's getFormData() sends on page load, given a name.
+
+    tests/e2e/test_scenario_builder.py::test_default_form_previews_yaml_the_fleet_loader_loads
+    pins the real payload this mirrors.
+    """
+
+    def test_default_form_yaml_loads_through_load_fleet_config(
+        self, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """load_fleet_config builds every home of the form; the period and SEG rate are there for their own readers."""
+        yaml_text, document = _preview_document(client, self._DEFAULT_FORM)
+        path = tmp_path / "builder.yaml"
+        path.write_text(yaml_text, encoding="utf-8")
+
+        fleet = load_fleet_config(path)
+
+        assert len(fleet.homes) == 100
+        assert {
+            (
+                home.pv_config.capacity_kw,
+                home.battery_config.capacity_kwh if home.battery_config is not None else None,
+                home.load_config.annual_consumption_kwh,
+                home.tariff_config,
+                home.location,
+            )
+            for home in fleet.homes
+        } == {(4.0, 5.0, 3500.0, TariffConfig.flat_rate(0.245), LOCATION_PRESETS["bristol"])}
+        assert document["period"] == {"start_date": "2024-01-01", "end_date": "2024-12-31"}
+        assert parse_seg_rate(document["seg"]) == 15.0
+
+    @pytest.mark.parametrize(
+        ("distribution_fields", "expected"),
+        [
+            pytest.param(
+                {"distribution_type": "normal", "mean": 5, "std": 2, "min": 0, "max": 13.5},
+                NormalDistribution(5.0, 2.0, min=0.0, max=13.5),
+                id="normal",
+            ),
+            pytest.param(
+                {"distribution_type": "uniform", "mean": 5, "std": 2, "min": 2, "max": 8},
+                UniformDistribution(2.0, 8.0),
+                id="uniform",
+            ),
+            pytest.param(
+                {
+                    "distribution_type": "weighted_discrete",
+                    "wd_values": [{"value": 3, "weight": 20}, {"value": 4, "weight": 40}],
+                },
+                WeightedDiscreteDistribution((3.0, 4.0), (20.0, 40.0)),
+                id="weighted_discrete",
+            ),
+            pytest.param(
+                {
+                    "distribution_type": "shuffled_pool",
+                    "sp_entries": [{"value": 3, "count": 50}, {"value": 4, "count": 50}],
+                },
+                ShuffledPoolDistribution((3.0, 4.0), (50, 50)),
+                id="shuffled_pool",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("component", "fixed_field", "grammar_key"),
+        [
+            pytest.param("pv", "pv_capacity_kw", "capacity_kw", id="pv"),
+            pytest.param("battery", "battery_capacity_kwh", "capacity_kwh", id="battery"),
+            pytest.param(
+                "load", "annual_consumption_kwh", "annual_consumption_kwh", id="load"
+            ),
+        ],
+    )
+    def test_each_distribution_the_form_offers_reaches_the_loader(
+        self,
+        client: FlaskClient,
+        component: str,
+        fixed_field: str,
+        grammar_key: str,
+        distribution_fields: dict[str, Any],
+        expected: object,
+    ) -> None:
+        """A component sent as a distribution, in the keys getFormData() sends, is read back as that distribution.
+
+        The form keys are the component's prefix on each of *distribution_fields*,
+        and the component's fixed field is not sent.
+        """
+        form = {key: value for key, value in self._DEFAULT_FORM.items() if key != fixed_field}
+        form.update(
+            {f"{component}_{suffix}": value for suffix, value in distribution_fields.items()}
+        )
+
+        _, document = _preview_document(client, form)
+
+        fleet_distribution = parse_fleet_distribution_config(document["fleet_distribution"])
+        assert getattr(getattr(fleet_distribution, component), grammar_key) == expected
+
+    def test_a_form_key_the_builder_does_not_read_is_refused(self, client: FlaskClient) -> None:
+        """A key the builder does not read gets 400 naming it, instead of being dropped from the YAML."""
+        response = client.post(
+            "/api/scenarios/preview-yaml", json={**self._DEFAULT_FORM, "export_rate": 0.15}
+        )
+
+        assert response.status_code == 400
+        assert "export_rate" in response.get_json()["error"]
 
 
 class TestSweepAPI:
