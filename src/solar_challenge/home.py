@@ -246,7 +246,7 @@ def simulate_home(
             config.heat_pump_config,
             aligned_temperature,
             annual_temperature_c=minute_temperature,
-        )
+        ).rename("heat_pump_load_kw")
         minute_demand = minute_demand + heat_pump_load_series
 
     aligned_generation = _align_tmy_to_demand(minute_generation, minute_demand)
