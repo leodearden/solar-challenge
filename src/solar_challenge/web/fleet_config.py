@@ -161,10 +161,9 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
         Fleet distribution config dict.
 
     Raises:
-        ValueError: If required fields are missing or invalid, or if a ``pv``,
-            ``battery`` or ``load`` block is truthy but not a mapping; the
-            error names the block and the type sent. A falsy block reads as
-            absent.
+        ValueError: If required fields are missing or invalid, or a
+            pv/battery/load block is not a mapping (see
+            :func:`_component_block`).
     """
     n_homes = int(form_data.get("n_homes", 100))
     if n_homes < 1:
