@@ -600,9 +600,11 @@ def _seg_export_income_gbp(
 
     * **Physics path** (``finance.self_consumption_override`` is None):
       annualised ``summary.total_export_revenue_gbp``.
-    * **Override path**: re-compute override export kWh from the override
-      self-consumption fraction; price at the effective export rate derived
-      from the physics figures (falls back to 0.0 if physics export kWh == 0).
+    * **Override path**: export = generation − min(override × generation,
+      demand) (:func:`_override_energy_split`), priced at the effective
+      export rate derived from the physics figures (falls back to 0.0 if
+      physics export kWh == 0).  Silent when the cap binds, since this runs
+      per home at every sampled age; :func:`householder_bill` warns instead.
 
     Args:
         summary: Per-home simulation output (read-only).
@@ -622,8 +624,9 @@ def _seg_export_income_gbp(
         return float(phys.export_rev_physics)
     else:
         # Spreadsheet path: recompute from override fraction
-        sc_kwh = override * phys.gen_kwh
-        override_export_kwh = max(phys.gen_kwh - sc_kwh, 0.0)
+        override_export_kwh = _override_energy_split(
+            override, generation_kwh=phys.gen_kwh, demand_kwh=phys.demand_kwh
+        ).export_kwh
         if phys.export_kwh > 0.0:
             effective_export_rate_pence = (
                 phys.export_rev_physics / phys.export_kwh
