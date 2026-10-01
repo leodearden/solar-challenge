@@ -467,8 +467,22 @@ _SHORT_PERIOD_THRESHOLD = 360
 
 
 # ---------------------------------------------------------------------------
-# _AnnualisedPhysics / _annualise_physics — shared annualisation helper
+# _annualisation_scale / _annualise_physics — shared annualisation helpers
 # ---------------------------------------------------------------------------
+
+
+def _annualisation_scale(simulation_days: int) -> float:
+    """Multiplier that scales a *simulation_days* window total to a 365-day year.
+
+    ``365 / max(simulation_days, 1)`` below :data:`_SHORT_PERIOD_THRESHOLD`
+    (360) days, else 1.0.  This is the single annualisation rule:
+    :func:`householder_bill` and :func:`_seg_export_income_gbp` reach it via
+    :func:`_annualise_physics`, and :func:`project_multi_year` calls it
+    directly, so the threshold, guard and formula cannot diverge.
+    """
+    if simulation_days < _SHORT_PERIOD_THRESHOLD:
+        return _ANNUALISATION_DAYS / max(simulation_days, 1)
+    return 1.0
 
 
 class _AnnualisedPhysics(NamedTuple):
@@ -500,13 +514,8 @@ def _annualise_physics(
 ) -> _AnnualisedPhysics:
     """Scale simulation energy/cost figures to a 365-day annual basis.
 
-    When *simulation_days* is below :data:`_SHORT_PERIOD_THRESHOLD` (360),
-    all quantities are multiplied by ``365 / max(simulation_days, 1)``.
-    Otherwise ``scale = 1.0`` and the raw figures are returned unchanged.
-
-    This is the single authoritative annualisation implementation; both
-    :func:`householder_bill` and :func:`_seg_export_income_gbp` delegate to it
-    so the threshold, guard, and formula cannot diverge.
+    Every quantity is multiplied by :func:`_annualisation_scale`, so a window
+    of 360 days or more is returned unchanged.
 
     Args:
         summary: Per-home simulation output (read-only).
@@ -516,10 +525,7 @@ def _annualise_physics(
         An :class:`_AnnualisedPhysics` namedtuple with ``scale`` and the
         annualised energy/cost quantities.
     """
-    if simulation_days < _SHORT_PERIOD_THRESHOLD:
-        scale = _ANNUALISATION_DAYS / max(simulation_days, 1)
-    else:
-        scale = 1.0
+    scale = _annualisation_scale(simulation_days)
     return _AnnualisedPhysics(
         scale=scale,
         gen_kwh=summary.total_generation_kwh * scale,
@@ -897,15 +903,11 @@ class YearPoint:
     ``pv_soh`` from :func:`pv.calculate_degradation_factor`; ``battery_soh``
     from :func:`battery.compute_soh` (1.0 when the fleet has no batteries).
 
-    Energy fields are kWh totals for the *simulation period* as returned by
-    :func:`home.calculate_summary` — **not** necessarily a full calendar year.
-    When ``scenario.period`` covers ≥ 360 days these values approximate annual
-    totals; for shorter periods they are sub-annual.  By contrast,
-    ``fleet_revenue_gbp`` is annualised by :func:`householder_bill` (which
-    scales short periods to 365 days), so direct £/kWh derivations from a
-    sub-year :class:`YearPoint` will yield inconsistent results.  Callers
-    should ensure the scenario period covers approximately one year for
-    consistent energy and revenue units.
+    Energy fields and ``fleet_revenue_gbp`` share one 365-day basis.  On a
+    simulation window under 360 days, :func:`project_multi_year` scales each
+    home's window totals and its SEG income by ``365 / days``, so £/kWh
+    derivations from a :class:`YearPoint` are consistent.  A short window is
+    still one season's sample, and its annual figures carry that season's bias.
 
     ``fleet_revenue_gbp`` is the CBS revenue:
     own-use savings (own_use_rate × fleet_self_consumption_kwh / 100)
@@ -1326,16 +1328,16 @@ class _NodeData(NamedTuple):
     """
 
     fleet_sc: float
-    """Fleet total self-consumed solar for the simulation period (kWh)."""
+    """Fleet basis-C own-use (Σ demand − import), annualised to a 365-day year (kWh/yr)."""
 
     fleet_exp: float
-    """Fleet total grid export for the simulation period (kWh)."""
+    """Fleet grid export, annualised to a 365-day year (kWh/yr)."""
 
     fleet_imp: float
-    """Fleet total grid import for the simulation period (kWh)."""
+    """Fleet grid import, annualised to a 365-day year (kWh/yr)."""
 
     per_home_discharge: List[float]
-    """Per-home battery discharge for the simulation period (kWh)."""
+    """Per-home battery discharge, annualised to a 365-day year (kWh/yr)."""
 
     mean_pv_soh: float
     """Mean PV state-of-health across the fleet (fraction, 0–1)."""
@@ -1345,6 +1347,9 @@ class _NodeData(NamedTuple):
 
     fleet_revenue: float
     """CBS fleet revenue: own-use + SEG + grid-services (£)."""
+
+    annualised_from_days: int
+    """Shortest per-home simulated window (days) the energy totals were annualised from."""
 
 
 def _aged_homes(
@@ -1419,12 +1424,13 @@ def project_multi_year(
             ``fleet.simulate_fleet``.
 
     Note:
-        For consistent units between energy fields and ``fleet_revenue_gbp``
-        in the returned :class:`YearPoint` objects, ``scenario.period`` should
-        cover approximately one full year (≥ 360 days).  For shorter periods
-        the energy fields are sub-annual totals while ``fleet_revenue_gbp`` is
-        annualised by :func:`householder_bill` — direct £/kWh derivations from
-        such a curve will yield inconsistent results.
+        Every returned :class:`YearPoint` is a 365-day year.  When a home's
+        simulated window is shorter than 360 days, its own-use, export,
+        import and battery-discharge kWh and its SEG income are scaled by
+        ``365 / days`` (:func:`_annualisation_scale`), so energy fields and
+        ``fleet_revenue_gbp`` stay on one basis, and one ``UserWarning`` per
+        call says so.  A short window is still one season's sample, so board
+        figures want ``scenario.period`` to cover about one full year.
 
     Returns:
         :class:`MultiYearCurve` with one :class:`YearPoint` per year and
@@ -1501,15 +1507,18 @@ def project_multi_year(
         # Basis C (task-84 §6): own-use = demand − import (CBS-supplied energy consumed).
         # Arbitrage-immune: grid-charged battery discharge inflates
         # total_self_consumption_kwh but NOT demand − import.
-        fleet_sc = sum(_cbs_own_use_kwh(s) for s in per_home_summaries)
-        fleet_exp = sum(s.total_grid_export_kwh for s in per_home_summaries)
-        fleet_imp = sum(s.total_grid_import_kwh for s in per_home_summaries)
-        per_home_discharge = [s.total_battery_discharge_kwh for s in per_home_summaries]
+        # Each home's window totals are annualised by its own simulated days, the
+        # days _seg_export_income_gbp annualises that home's SEG income by.
+        scaled_summaries = [(_annualisation_scale(s.simulation_days), s) for s in per_home_summaries]
+        fleet_sc = sum(k * _cbs_own_use_kwh(s) for k, s in scaled_summaries)
+        fleet_exp = sum(k * s.total_grid_export_kwh for k, s in scaled_summaries)
+        fleet_imp = sum(k * s.total_grid_import_kwh for k, s in scaled_summaries)
+        per_home_discharge = [k * s.total_battery_discharge_kwh for k, s in scaled_summaries]
 
-        # CBS fleet revenue (PRD §3.2):
-        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100   (fleet_sc = basis C)
-        #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)
-        #   grid_services   = model-dependent (flat or capacity_at_events)
+        # CBS fleet revenue (PRD §3.2), every term per 365-day year:
+        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100   (fleet_sc = Σ annualised basis C)
+        #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)   (same rule)
+        #   grid_services   = model-dependent (flat or capacity_at_events), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
         # Grid-charge energy is paid by the householder inside grid import, not a CBS
         # outgoing (docs/cost-recovery-finance-model.md §4).
@@ -1569,6 +1578,7 @@ def project_multi_year(
             mean_pv_soh=mean_pv_soh,
             mean_battery_soh=mean_battery_soh,
             fleet_revenue=fleet_revenue,
+            annualised_from_days=min(s.simulation_days for s in per_home_summaries),
         )
 
     # ---- Seed forward-march (snapshot cum_tp BEFORE each simulation) ---------
@@ -1586,6 +1596,19 @@ def project_multi_year(
             for i in range(n_homes):
                 cum_throughput[i] += 0.5 * (prev_discharge[i] + node.per_home_discharge[i]) * dt
         prev_age = age
+
+    # ---- Short-window annualisation warning (once per projection) -----------
+    window_days = sampled_data[0].annualised_from_days
+    if window_days < _SHORT_PERIOD_THRESHOLD:
+        warnings.warn(
+            f"project_multi_year: simulation period is only {window_days} days "
+            f"(<{_SHORT_PERIOD_THRESHOLD}); scaling own-use, export, import and "
+            f"battery-discharge kWh and SEG income to a {_ANNUALISATION_DAYS}-day year "
+            f"(scale={_annualisation_scale(window_days):.3f}). A short window samples "
+            f"one season, so the annual figures carry that season's bias.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # ---- Adaptive bisection (H4, §3.3) --------------------------------------
     # Deviation is the max across all driven energy + revenue metrics, normalised
@@ -2159,6 +2182,11 @@ def solve_cost_recovery_rate(
     4. Solve ``r* = (floor - s0) / slope``; clamp to [0, retail]; set *binding*.
     5. Compute outlay from a dedicated age-0 fleet sim (per-home granularity
        not available from the multi-year curve).
+
+    The rate base (``YearPoint.fleet_self_consumption_kwh``) and the revenue
+    are the projection's annualised figures, so a short window is solved
+    like-for-like against the annual opex, debt and floor, but carries that
+    window's seasonal bias.
 
     **Affine-line precondition** (Suggestion 3 / robustness note):
 
