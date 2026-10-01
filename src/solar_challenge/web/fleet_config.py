@@ -77,7 +77,7 @@ def sample_distribution(
             ``'normal'``, ``'uniform'``, ``'shuffled_pool'``.
         params: Distribution parameters (varies by type), read the way
             :func:`_build_distribution_dict` reads a fleet form's spec; must be
-            a mapping.
+            a dict.
         n_samples: Number of samples to generate.
 
     Returns:
@@ -85,13 +85,13 @@ def sample_distribution(
 
     Raises:
         ValueError: If dist_type is unknown or params are invalid, params are
-            not a mapping (see :func:`_require_mapping`), or a
+            not a dict (see :func:`_require_dict`), or a
             weighted_discrete/shuffled_pool row list is malformed (see
-            :func:`_mapping_list`).
+            :func:`_dict_list`).
     """
     if n_samples < 1:
         raise ValueError("n_samples must be at least 1")
-    params = _require_mapping(params, "params")
+    params = _require_dict(params, "params")
     spec = _build_distribution_dict({**params, "type": dist_type})
 
     rng = random.Random(42)
@@ -149,9 +149,9 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
 
     Raises:
         ValueError: If required fields are missing or invalid, a
-            pv/battery/load block is not a mapping (see
+            pv/battery/load block is not a dict (see
             :func:`_component_block`), or a weighted_discrete/shuffled_pool
-            row list is malformed (see :func:`_mapping_list`).
+            row list is malformed (see :func:`_dict_list`).
     """
     n_homes = int(form_data.get("n_homes", 100))
     if n_homes < 1:
@@ -186,33 +186,33 @@ def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any]:
     """Return the *key* component block of *form_data*, reading an absent or falsy block as empty.
 
     Raises:
-        ValueError: If the block is truthy but not a mapping (see :func:`_require_mapping`).
+        ValueError: If the block is truthy but not a dict (see :func:`_require_dict`).
     """
-    return _require_mapping(form_data.get(key) or {}, key)
+    return _require_dict(form_data.get(key) or {}, key)
 
 
-def _require_mapping(value: object, field: str) -> dict[str, Any]:
-    """Return *value*, refusing one that is not a mapping.
+def _require_dict(value: object, field: str) -> dict[str, Any]:
+    """Return *value*, refusing one that is not a dict.
 
     Raises:
-        ValueError: If *value* is not a mapping; the error names *field* and the type sent.
+        ValueError: If *value* is not a dict; the error names *field* and the type sent.
     """
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be a mapping, got {type(value).__name__}")
     return value
 
 
-def _mapping_list(spec: dict[str, Any], key: str) -> list[dict[str, Any]]:
+def _dict_list(spec: dict[str, Any], key: str) -> list[dict[str, Any]]:
     """Return the *key* row list of *spec*, reading an absent list as empty.
 
     Raises:
         ValueError: If the value is not a list (the error names *key* and the type sent),
-            or a row is not a mapping (see :func:`_require_mapping`; the row is named ``key[index]``).
+            or a row is not a dict (see :func:`_require_dict`; the row is named ``key[index]``).
     """
     rows = spec.get(key, [])
     if not isinstance(rows, list):
         raise ValueError(f"{key} must be a list, got {type(rows).__name__}")
-    return [_require_mapping(row, f"{key}[{index}]") for index, row in enumerate(rows)]
+    return [_require_dict(row, f"{key}[{index}]") for index, row in enumerate(rows)]
 
 
 def _parse_component_distribution(
@@ -264,7 +264,7 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
 
     Raises:
         ValueError: If a weighted_discrete/shuffled_pool row list is malformed
-            (see :func:`_mapping_list`).
+            (see :func:`_dict_list`).
     """
     dist_type = data["type"]
     result: dict[str, Any] = {"type": dist_type}
@@ -282,12 +282,12 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
         result["max"] = float(data.get("max", 1))
 
     elif dist_type == "weighted_discrete":
-        values_raw = _mapping_list(data, "values")
+        values_raw = _dict_list(data, "values")
         result["values"] = [float(v.get("value", 0)) for v in values_raw]
         result["weights"] = [float(v.get("weight", 1)) for v in values_raw]
 
     elif dist_type == "shuffled_pool":
-        entries = _mapping_list(data, "entries")
+        entries = _dict_list(data, "entries")
         result["values"] = [float(e.get("value", 0)) for e in entries]
         result["counts"] = [int(e.get("count", 1)) for e in entries]
 
