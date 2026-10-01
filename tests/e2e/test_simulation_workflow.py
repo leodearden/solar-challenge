@@ -22,9 +22,8 @@ def test_submit_home_simulation_via_api(
     page: Page,
     live_server: str,
 ) -> None:
-    """POST to /api/simulate/home via fetch returns 201 with job_id/run_id."""
+    """POST to /api/simulate/home via fetch returns 201 with a job_id and a run_id."""
     page.goto(live_server + "/simulate/home")
-    page.wait_for_load_state("networkidle")
 
     result = page.evaluate("""async () => {
         const resp = await fetch('/api/simulate/home', {
@@ -44,11 +43,9 @@ def test_submit_home_simulation_via_api(
     status = result["status"]
     body = result["body"]
 
-    # Should return 201 (created) or 200
-    assert status in (200, 201), f"Expected 200/201, got {status}: {body}"
-    assert "run_id" in body or "job_id" in body, (
-        f"Expected run_id or job_id in response, got keys: {list(body.keys())}"
-    )
+    assert status == 201, f"Expected 201, got {status}: {body}"
+    assert body.get("job_id"), f"Expected a job_id in the response, got {body}"
+    assert body.get("run_id"), f"Expected a run_id in the response, got {body}"
 
 
 # -- Progress tracker appears after submit ---------------------------------

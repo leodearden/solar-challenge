@@ -19,20 +19,13 @@ def test_results_page_loads(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """GET /results/home/<id> returns 200, shows run name in heading."""
+    """GET /results/home/<id> returns 200, and the page's h1 is the run's name."""
     run_id, run_name = seeded_home_run
     response = page.goto(live_server + f"/results/home/{run_id}")
     assert response is not None
     assert response.status == 200
 
-    page.wait_for_load_state("domcontentloaded")
-
-    # The page should show the run name (from config.name)
-    heading = page.locator("h1, h2")
-    heading_text = heading.first.text_content() or ""
-    assert run_name in heading_text or "Simulation" in heading_text, (
-        f"Expected run name '{run_name}' or 'Simulation' in heading, got '{heading_text}'"
-    )
+    expect(page.get_by_role("heading", level=1)).to_have_text(run_name)
 
 
 # -- Chart containers exist ------------------------------------------------
@@ -72,7 +65,7 @@ def test_results_tab_switching(
         expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(name)
 
 
-# -- Stat card labels not truncated (potential bug) -------------------------
+# -- Stat card labels not truncated ----------------------------------------
 
 
 def test_results_stat_card_labels_not_truncated(
@@ -80,34 +73,27 @@ def test_results_stat_card_labels_not_truncated(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """p.truncate label scrollWidth <= clientWidth (text fits)."""
+    """The seeded run's stat card labels are all visible, and none is cut short.
+
+    The stat_card macro titles each label with its text; no other <p> here has a title.
+    The seed's battery_config adds the battery cards; the expected count includes them.
+    A label is cut short when its text needs more room than its box, across or down.
+    """
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
-    truncated = page.evaluate("""() => {
-        const labels = document.querySelectorAll('p.truncate');
-        const problems = [];
-        labels.forEach(el => {
-            if (el.scrollWidth > el.clientWidth) {
-                problems.push({
-                    text: el.textContent.trim(),
-                    scrollWidth: el.scrollWidth,
-                    clientWidth: el.clientWidth,
-                });
-            }
-        });
-        return problems;
-    }""")
+    stat_card_labels = page.locator("p[title]").filter(visible=True)
+    expect(stat_card_labels).to_have_count(12)
 
-    if not truncated:
-        return  # All labels fit
-
-    descriptions = [f"'{t['text']}' (scroll={t['scrollWidth']}, client={t['clientWidth']})" for t in truncated]
-    assert not truncated, (
-        f"Stat card labels are truncated: {', '.join(descriptions)}"
-    )
+    cut_short = stat_card_labels.evaluate_all("""labels => labels
+        .filter(label => label.scrollWidth > label.clientWidth
+            || label.scrollHeight > label.clientHeight)
+        .map(label => ({
+            label: label.textContent.trim(),
+            text_size: [label.scrollWidth, label.scrollHeight],
+            box_size: [label.clientWidth, label.clientHeight],
+        }))""")
+    assert cut_short == [], f"Stat card labels are cut short: {cut_short}"
 
 
 # -- Download CSV returns 200 ----------------------------------------------
