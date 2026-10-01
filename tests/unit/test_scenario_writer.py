@@ -5,17 +5,23 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
-from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.config import (
+    DispatchStrategyConfig,
+    GridChargeConfig,
+    load_fleet_config,
+    parse_seg_rate,
+)
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.scenario_writer import home_scenario, scenario_yaml
+from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 
@@ -138,3 +144,86 @@ def test_a_pv_field_the_grammar_has_no_key_for_is_refused(field: str) -> None:
 
     with pytest.raises(ValueError, match=field):
         home_scenario(home, name="Custom pvlib")
+
+
+_EDINBURGH = Location(55.95, -3.19, altitude=47.0, name="Edinburgh, UK")
+
+
+def _home(pv_kw: float, *, load_config: LoadConfig = LoadConfig(), **parts: Any) -> HomeConfig:
+    """A home with *pv_kw* of PV, *load_config*, and whichever other HomeConfig *parts* are given."""
+    return HomeConfig(pv_config=PVConfig(capacity_kw=pv_kw), load_config=load_config, **parts)
+
+
+def test_a_fleet_written_as_a_scenario_loads_back_through_load_fleet_config(
+    tmp_path: Path,
+) -> None:
+    homes = [
+        _home(3.0, location=_EDINBURGH, name="Home 1"),
+        _home(
+            5.0,
+            location=_EDINBURGH,
+            name="Home 2",
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+            tariff_config=TariffConfig.economy_7(),
+            dispatch_strategy="tou_optimized",
+        ),
+        _home(
+            4.0,
+            location=_EDINBURGH,
+            name="Home 3",
+            load_config=LoadConfig(annual_consumption_kwh=2900.0, seed=44),
+        ),
+    ]
+    path = tmp_path / "fleet.yaml"
+    path.write_text(scenario_yaml(fleet_scenario(homes, name="Fleet run")), encoding="utf-8")
+
+    fleet = load_fleet_config(path)
+
+    assert fleet.homes == homes
+    assert fleet.name == "Fleet run"
+
+
+def test_a_fleet_seg_block_carries_the_rate_its_homes_share() -> None:
+    """The homes' SEG tariffs share a rate but not a name, which no seg: block carries.
+
+    load_fleet_config does not read seg: yet (pending task 185), so the block is
+    checked through the SEG reader that finance and optimize use.
+    """
+    homes = [
+        _home(3.0, seg_tariff=SEGTariff(name="Octopus Energy", rate_pence_per_kwh=4.1)),
+        _home(4.0, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=4.1)),
+    ]
+
+    text = scenario_yaml(fleet_scenario(homes, name="SEG fleet"))
+
+    assert parse_seg_rate(yaml.safe_load(text)["seg"]) == 4.1
+
+
+@pytest.mark.parametrize(
+    ("homes", "refusal"),
+    [
+        pytest.param(
+            [_home(3.0), _home(4.0, location=_EDINBURGH)], "location", id="two locations"
+        ),
+        pytest.param(
+            [
+                _home(3.0, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=4.1)),
+                _home(4.0, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=5.5)),
+            ],
+            "seg",
+            id="two SEG rates",
+        ),
+        pytest.param(
+            [_home(3.0, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=4.1)), _home(4.0)],
+            "seg",
+            id="SEG on one home only",
+        ),
+        pytest.param([], "at least one home", id="no homes"),
+    ],
+)
+def test_a_fleet_the_grammar_cannot_carry_is_refused(
+    homes: list[HomeConfig], refusal: str
+) -> None:
+    """The grammar has one location: block and one seg: block for the whole fleet."""
+    with pytest.raises(ValueError, match=refusal):
+        fleet_scenario(homes, name="Unwritable fleet")
