@@ -10,6 +10,7 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
+from tests._html_page import element_ids, texts_after
 from tests._web_app import build_test_app
 
 
@@ -321,7 +322,11 @@ class TestHomeResultsRoute:
         assert response.status_code in (302, 404)
 
     def test_home_results_after_simulation(self, app: Flask, client: FlaskClient) -> None:
-        """Test accessing results after saving a run directly returns 200."""
+        """A saved run's results page renders its Overview charts and energy totals.
+
+        Both Overview chart containers are elements of the page, and the Total
+        Generation and Total Demand cards read the saved summary's totals in kWh.
+        """
         import uuid
         from solar_challenge.home import HomeConfig, calculate_summary
         from solar_challenge.pv import PVConfig
@@ -351,12 +356,15 @@ class TestHomeResultsRoute:
                 name="Test Run",
             )
 
-        # Access the results page
         response = client.get(f"/results/home/{run_id}")
         assert response.status_code == 200
-        html_data = response.data.decode("utf-8")
-        assert "Total Generation" in html_data or "Generation" in html_data
-        assert "chart-sankey" in html_data or "chart-daily-balance" in html_data
+        page = response.get_data(as_text=True)
+        assert {"chart-sankey", "chart-daily-balance"} <= element_ids(page)
+        for label, total_kwh in (
+            ("Total Generation", summary.total_generation_kwh),
+            ("Total Demand", summary.total_demand_kwh),
+        ):
+            assert texts_after(page, label, 2) == [f"{total_kwh:.1f}", "kWh"], label
 
 
 class TestFleetConfigRoute:
