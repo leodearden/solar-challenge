@@ -22,7 +22,7 @@ from solar_challenge.pv import PVConfig
 
 
 class TestFinanceConfig:
-    """Tests for FinanceConfig dataclass construction, defaults, and immutability."""
+    """Tests for FinanceConfig dataclass construction, defaults, immutability, and pickling."""
 
     _DECLARED_DEFAULTS: dict[str, object] = {
         "vat_rate": 0.05,
@@ -78,6 +78,11 @@ class TestFinanceConfig:
         fc = FinanceConfig(standing_charge_pence_per_day=60.0)
         with pytest.raises(dataclasses.FrozenInstanceError):
             fc.vat_rate = 0.20  # type: ignore[misc]
+
+    def test_default_config_round_trips_through_pickle(self) -> None:
+        """A FinanceConfig given only the standing charge survives a pickle round-trip equal to the original."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert pickle.loads(pickle.dumps(fc)) == fc
 
     def test_standing_charge_is_required(self) -> None:
         """standing_charge_pence_per_day has no default; omitting it raises TypeError."""
@@ -570,17 +575,6 @@ class TestFinanceConfigGridServicesModel:
     """FinanceConfig.grid_services_model + grid_services_events fields."""
 
     _BASE: dict = {"standing_charge_pence_per_day": 60.0}
-
-    def test_frozen_with_new_fields(self) -> None:
-        """FinanceConfig is still frozen after adding new fields."""
-        fc = FinanceConfig(**self._BASE)
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            fc.grid_services_model = "capacity_at_events"  # type: ignore[misc]
-
-    def test_picklable_with_new_fields(self) -> None:
-        """FinanceConfig is picklable when grid_services_events is None."""
-        fc = FinanceConfig(**self._BASE)
-        assert pickle.loads(pickle.dumps(fc)) == fc
 
     def test_capacity_at_events_model_with_config(self) -> None:
         """Constructing with grid_services_model='capacity_at_events' + GridServicesEventsConfig round-trips."""
