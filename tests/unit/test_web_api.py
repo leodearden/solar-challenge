@@ -1034,6 +1034,48 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize("key", ["pv", "battery", "load"])
+    def test_non_mapping_component_block_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock, key: str
+    ) -> None:
+        """A pv/battery/load block sent as a non-object is a 400 naming the block and the type sent; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                "n_homes": 2,
+                "seed": 1,
+                "location": "bristol",
+                "days": 1,
+                "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
+                "load": {"annual_consumption_kwh": 3500.0},
+                key: "x",
+            },
+        )
+        assert resp.status_code == 400
+        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize("key", ["pv", "load"])
+    def test_null_pv_or_load_component_block_returns_400(
+        self, client: FlaskClient, mock_job_manager: MagicMock, key: str
+    ) -> None:
+        """A null pv/load block reads as absent, and the endpoint refuses the missing distribution with a 400 naming it; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                "n_homes": 2,
+                "seed": 1,
+                "location": "bristol",
+                "days": 1,
+                "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
+                "load": {"annual_consumption_kwh": 3500.0},
+                key: None,
+            },
+        )
+        assert resp.status_code == 400
+        assert key in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
 
 # ===================================================================
 # POST /api/fleet/export-yaml
