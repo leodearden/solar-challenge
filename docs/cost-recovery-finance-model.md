@@ -249,6 +249,12 @@ net_surplus(r) = [Σ_years (r × sc_y/100 + C_y − opex − debt_y)] / (N_years
 where `sc_y` is the **basis-C** fleet own-use at year `y`
 (`YearPoint.fleet_self_consumption_kwh = Σ_homes (demand − import)` after degradation
 interpolation), and `C_y` is rate-independent (SEG + grid-services, fixed by physics).
+`opex` is the fleet opex (`opex_per_home_per_year_gbp × N_homes`).  `debt_y` is
+`annual_debt_svc` (§6) in the loan years `y < loan_term_years` and **0 afterwards**,
+while the sum runs over all `N_years = asset_life_years`.  With the defaults
+(`loan_term_years` = 15, `asset_life_years` = 25) debt service is therefore paid in
+15 of the 25 years and enters the mean at 15/25 of its annual value (worked in §7.4).
+Source: `project_economics` (algorithm steps 5, 6 and 10 in its docstring).
 PCHIP interpolation and `project_economics` are both linear in per-year revenue,
 so the affine form is preserved end-to-end.
 
@@ -290,6 +296,8 @@ financed        = max(total_capex_gbp − grant_gbp, 0)
 equity_gbp      = financed × equity_fraction
 debt_gbp        = financed × (1 − equity_fraction)
 annual_debt_svc = annuity(debt_gbp, loan_rate, loan_term_years)
+
+annuity(P, r, n) = P × r / (1 − (1 + r)^−n)    (= P / n when r = 0; _annuity_payment)
 ```
 
 Raising capex (larger battery or PV) directly raises `annual_debt_svc`, which
@@ -306,12 +314,14 @@ total_capex  = 100 × (5.5×1000 + 1000 + 5.0×250) = 100 × £7,750 = £775,000
 financed     = 775,000 − 250,000 = £525,000
 equity       = 525,000 × 0.75   = £393,750
 debt         = 525,000 × 0.25   = £131,250
-debt_svc/yr  = annuity(131,250, 7%, 15yr) ≈ £14,410/yr
+debt_svc/yr  = annuity(131,250, 7%, 15yr) ≈ £14,410.54/yr  (years 0–14 only; §5)
 opex/yr      = 100 × £131       = £13,100/yr
 floor_total  = 100 × £27        = £2,700/yr
-required rev = 14,410 + 13,100 + 2,700 = £30,210/yr (no-flex, interior target)
-r*           ≈ 30,210 / (fleet_sc / 100)             (closed-form, synthetic fleet)
 ```
+
+§7.4 turns `debt_svc`, `opex` and `floor_total` into the solved rate for the synthetic
+[FIN] fleet (12.22 p/kWh) and shows why summing them as one year's cost
+(£30,210/yr → 15.1 p/kWh) overstates it.
 
 ---
 
@@ -390,6 +400,19 @@ Synthetic energy inputs (per home, annual):
   Feasible:            True
 ```
 
+The reported **saving** follows from §3's H3 identity at the solved rate (H3 is exact
+here: the untariffed fixture prices import at the 23 p retail fallback):
+
+```
+saving_vs_baseline = 2,000 × (23 − 12.2232) × 1.05 / 100 = £226.31/home/yr
+```
+
+The [FEAS] saving of ≈£324 assumes the spreadsheet self-consumption fraction of 0.70
+(Sensitivity!B7: 5 kWh battery; see §4.1 of `docs/finance-spreadsheet-reconciliation.md`).
+The injected aggregates (self = 2,000 kWh, gen = 5,775 kWh) give scf ≈ 0.346 instead
+(§7.2), and H3 scales the saving with own-use kWh per home, so the solved saving
+(≈£226 live vs. ≈£324 target) differs.
+
 ### 7.4 Why the Live Rate Differs from the Single-Year Approximation
 
 A single-year back-of-envelope gives:
@@ -400,37 +423,54 @@ r*_approx        = 30,210 / (200,000 / 100) = 15.1 p/kWh
 ```
 
 The live calibration value is **12.22 p/kWh** — lower than this approximation.
-The difference has two sources:
+The whole difference is the debt schedule.
 
-1. **Multi-year mean, not a single-year snapshot.**  `project_multi_year` builds a
-   25-year PCHIP revenue curve and `project_economics` takes the *mean net surplus*
-   over all 25 years.  Generation (and therefore self-consumption) peaks in years 1–5
-   and degrades gently (linear PV degradation at 0.5 %/yr, `degradation_rate_per_year=0.005`
-   default in `calculate_degradation_factor`; applied per-home in `_simulate_age` via
-   `h.pv_config.degradation_rate_per_year`, producing the per-year `pv_soh` that shapes
-   the PCHIP curve); the PCHIP mean surplus at a given rate is slightly higher than
-   the year-1 point, so the solver can reach the £27/home floor at a *lower* rate than
-   the year-1 approximation implies.
+**Cause.**  `project_economics` charges `annual_debt_svc` only in the loan years
+`y < loan_term_years` (15), but `net_surplus_per_home_per_year_gbp` — the figure the
+solve drives to the floor — is the mean over all `asset_life_years` (25, the
+`FinanceConfig` default; §5).  Debt service therefore costs
+`debt_svc × loan_term_years / asset_life_years` a year on average, not `debt_svc`; the
+single-year sum above charges it in all 25 years, including the ten debt-free years
+15–24.
 
-2. **Synthetic scf ≈ 0.346 ≠ spreadsheet 0.70.**  The [FEAS] target of ≈15p and
-   saving ≈£324 assume the spreadsheet self-consumption fraction of 0.70
-   (Sensitivity!B7: 5 kWh battery; see §4.1 of `docs/finance-spreadsheet-reconciliation.md`).
-   The synthetic fleet uses injected aggregates (self=2,000 kWh, gen=5,775 kWh) that
-   produce scf ≈ 0.346.  The single-year approximation above already uses the correct
-   fleet_sc = 200,000 kWh, so the scf difference does not change the 15.1 p estimate —
-   but it does mean the solved *saving* (≈£226 live vs. ≈£324 target) differs, because
-   saving depends on sc_kwh per home.
+For this fixture (flat curve, SEG = 0, grid services = 0), setting §5's
+`net_surplus(r*) = floor` gives:
 
-**The key structural result is exact and hard-asserted**: `sol.net_surplus_per_home_per_year_gbp == 27.00`
-to float ε (binding = 'floor' — the closed-form affine solve guarantees this regardless
-of the rate value).  The printed rate (12.22 p) and saving (£226) are live, code-authoritative
+```
+r* = (opex + debt_svc × loan_term/asset_life + floor × n_homes) / (fleet_sc / 100)
+```
+
+**Reproduction.**  Carry `debt_svc` to 4 dp: the 2-dp value 14,410.54 × 15/25 gives
+8,646.32, but the live figure is 8,646.33.
+
+```
+debt_svc × 15/25 = 14,410.5445 × 15/25          = £8,646.33/yr
+required revenue = 13,100 + 8,646.33 + 2,700    = £24,446.33/yr
+r*               = 24,446.33 / (200,000 / 100)  = 12.2232 p/kWh    (live solve: 12.2232)
+```
+
+At the solved rate every one of the 25 `YearPoint.fleet_revenue_gbp` values is £24,446.33,
+the required revenue above, to the penny.  Equivalently,
+`(13,100 + 14,410.5445 + 2,700 − 14,410.5445 × 10/25) / 2,000 = 12.2232 p/kWh`: the
+single-year sum also charges debt service in the ten debt-free years 15–24, worth
+`14,410.5445 × 10/25 / 2,000 = 2.88 p/kWh` — the whole gap between 15.1 and 12.22 p/kWh.
+
+**The revenue curve contributes nothing.**  The injected `simulate` returns the same
+`FleetResults` at every sampled age (0, 12, 24), so the 25 revenue points are identical
+and PCHIP returns that constant.  PV degradation (0.5 %/yr, §7.2) shows only in
+`YearPoint.pv_soh` (1.00 at year 0 → 0.88 at year 24), because the injected results
+ignore the aged home configs.  On a real-physics run, degradation lowers later-year
+generation (`_aged_homes` → `simulate_pv_output` → `apply_degradation`), which would
+raise `r*`, not lower it.
+
+**The key structural result is exact.**  At binding = 'floor' the closed-form affine solve
+returns `net_surplus_per_home_per_year_gbp == floor` to float ε, regardless of the rate
+value (£27.00 at the [FIN] anchor).  It is hard-asserted (to within 1e-6) as H1 in
+`TestStructuralInvariants::test_h1_surplus_equals_floor` (£50 floor) and in
+`TestArbitrageBasisCReconciliation::test_b_solve_binds_floor_grid_charge` (£27 floor);
+the [FIN] anchor test, `test_no_flex_solve_report`, prints its surplus and does not
+assert it.  The printed rate (12.22 p) and saving (£226) are live, code-authoritative
 figures reported for transparency; no test pins them to specific digits.
-
-> **Note on code line numbers** — The line numbers cited in this document (e.g. line 499,
-> line 1814) are approximate anchors for the current version and will drift as the code
-> evolves.  Use the function names as durable references.
-
-**The key structural result is hard-asserted and exact**: `sol.net_surplus_per_home_per_year_gbp == 27.00` to float ε (binding = 'floor' — the closed-form affine solve guarantees this regardless of the rate value).
 
 ### 7.5 Assertion Strategy (Mirrors θ §3.3)
 
@@ -443,8 +483,8 @@ figures reported for transparency; no test pins them to specific digits.
 | H2: capex → rate + outlay monotone | **HARD asserted** | Exact by affine algebra |
 | flex → strictly lower rate | **HARD asserted** | Monotone by affine algebra |
 | θ: capex == £775,000, min_dscr ≥ 1.20 | **HARD asserted** | 4-term build-up exact; covenant floor achievable |
-| Solved rate ≈ 15 p/kWh (no-flex anchor) | *REPORTED only* | Assumption-dependent (scf); live value: 12.22 p |
-| Saving ≈ £324 vs baseline (no-flex) | *REPORTED only* | Assumption-dependent; live value: £226 |
+| Solved rate ≈ 15 p/kWh (no-flex anchor) | *REPORTED only* | ≈15 p matches only the single-year approximation; the solve spreads 15 years of debt service over the 25-year asset life (§7.4); live value: 12.22 p |
+| Saving ≈ £324 vs baseline (no-flex) | *REPORTED only* | Assumption-dependent (scf ≈ 0.346 vs 0.70; §7.3); live value: £226 |
 
 ---
 

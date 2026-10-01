@@ -102,11 +102,19 @@ def _make_fleet_results_fin_cr6(
 ) -> "FleetResults":  # type: ignore[name-defined]
     """Build a [FIN]-aligned synthetic FleetResults.
 
-    Default values tuned to produce solved rate ≈15p under [FIN] capex/grant:
+    With _make_finance_fin_cr6 defaults the solve lands in the interior 'floor'
+    regime (feasible=True):
       - 100 homes × 5.5 kWp + 5 kWh (HomeConfig)
       - fleet_sc = n_homes × self_kwh = 200,000 kWh
-      - Required revenue = opex(13100) + debt_svc(14410) + floor×n(2700) = £30,210
-      - r* = 30210 / (200000/100) = 15.1 p/kWh → interior 'floor' regime, feasible=True
+      - project_economics (solar_challenge.finance) charges debt service only in
+        the 15 loan years but averages surplus over the 25-year asset life, so the
+        effective annual cost is opex + debt_svc × 15/25
+      - Required revenue = opex(13,100) + debt_svc(≈14,410) × 15/25 (≈8,646)
+        + floor×n(2,700) ≈ £24,446/yr
+      - r* ≈ 24,446 / (200,000/100) ≈ 12.2 p/kWh < retail 23p
+      The single-year sum 13,100 + 14,410 + 2,700 = £30,210 → 15.1 p/kWh overstates
+      r* because it charges debt service in all 25 years
+      (docs/cost-recovery-finance-model.md §7.4).
 
     No-flex by construction: no grid charging, export_revenue=0, grid_services=0.
     """
@@ -235,8 +243,10 @@ class TestNoFlexAnchorReconciliation:
       (grid_services=0, SEG=0)
     - 0 ≤ sol.own_use_rate ≤ retail (valid clamped range)
 
-    REPORTS (printed, NOT asserted): solved rate ≈15p, saving ≈£324,
-    surplus = £27 floor (assumption-dependent; physics scf ≠ 0.70/sheet).
+    REPORTS (printed, NOT asserted): the solved rate, saving and surplus beside the
+    [FEAS] targets (≈15p, ≈£324, £27 floor).  The synthetic fixture is not expected
+    to hit the rate or saving targets; docs/cost-recovery-finance-model.md §7.3–§7.4
+    derive the reported values.
     """
 
     def _build_fin_anchor(self) -> tuple:  # type: ignore[type-arg]
@@ -306,9 +316,11 @@ class TestNoFlexAnchorReconciliation:
     def test_no_flex_solve_report(self) -> None:
         """REPORT the no-flex anchor numbers (printed; tolerance documented; NOT pinned).
 
-        The reported values depend on synthetic self-consumption assumptions.
-        Physics self-consumption (≈20–35%) ≠ spreadsheet 0.70, so the exact
-        rate/saving differ from [FEAS] figures. This test prints and PASSES always.
+        The reported values come from the synthetic fixture, not from [FEAS]: the
+        rate reflects debt service paid in 15 of the 25 asset-life years, and the
+        saving the fixture's 2,000 kWh/home own-use (scf ≈ 0.346, below the
+        spreadsheet's 0.70); see docs/cost-recovery-finance-model.md §7.3–§7.4.
+        This test prints and PASSES always.
         """
         from solar_challenge.finance import solve_cost_recovery_rate
 
@@ -400,16 +412,16 @@ def _make_interior_fleet_cr6(
     Interior guarantee (with _make_finance_interior_cr6 defaults):
       fleet_sc = n_homes × self_kwh = 5 × 2000 = 10,000 kWh
       capex = 5 × (5.5×£2000 + £1000 + 5×£250) = 5 × £13,250 = £66,250
-      debt = 66250 × 0.25 = £16,562.50; single-year debt_svc ≈ £1,820/yr
+      debt = 66250 × 0.25 = £16,562.50; single-year debt_svc ≈ £1,818/yr
       (the loan runs 15 years)
       opex = 5 × £131 = £655/yr
       project_economics (solar_challenge.finance) charges debt service only in
       the 15 loan years but averages surplus over the 25-year asset life
       (ProjectEconomics.per_year_surplus_gbp, mean_fleet_surplus_per_year_gbp),
       so the effective annual cost is opex + debt_svc × 15/25
-      ≈ 655 + 1,820 × 15/25 ≈ £1,747/yr
-      required_revenue = 1747 + 50×5 ≈ £1,997/yr
-      r* = (1997 − 0) / (10000/100) ≈ 20p
+      ≈ 655 + 1,818 × 15/25 ≈ £1,746/yr
+      required_revenue = 1746 + 50×5 ≈ £1,996/yr
+      r* = (1996 − 0) / (10000/100) ≈ 20p
       retail=30p → interior: 0 < r* ≈ 20p < 30p ✓
 
     No-flex: no grid charging, export_revenue=0.
@@ -438,9 +450,9 @@ def _make_finance_interior_cr6(
     With n=5 homes, self=2000kWh:
       fleet_sc = 10,000 kWh
       Effective annual cost (surplus averaged over the 25-year asset life, loan
-      over 15 years) ≈ 655 + 1820 × 15/25 ≈ £1,747/yr
-      At r=0: surplus ≈ −1747/5 ≈ −349/home << floor=50
-      At r=retail=30p: surplus ≈ (30×10000/100−1747)/5 ≈ 251/home >> floor=50
+      over 15 years) ≈ 655 + 1818 × 15/25 ≈ £1,746/yr
+      At r=0: surplus ≈ −1746/5 ≈ −349/home << floor=50
+      At r=retail=30p: surplus ≈ (30×10000/100−1746)/5 ≈ 251/home >> floor=50
     ∴ interior ✓ (r* derived in _make_interior_fleet_cr6)
     """
     return _make_finance_cr6(
@@ -914,7 +926,10 @@ class TestArbitrageBasisCReconciliation:
 
         Interior-tuned: self_kwh=2800, grid_charge_kwh=200 → basis C = 2600/home
         fleet_sc (basis C) = 5 × 2600 = 13,000 kWh
-        r* = (floor×n + opex + debt_svc) / (fleet_sc/100) ≈ 14.5p < retail = 30p
+        Debt service is charged in the 15 loan years but averaged over the 25-year
+        asset life (see _make_interior_fleet_cr6), so
+        r* = (floor×n + opex + debt_svc × 15/25) / (fleet_sc/100)
+           ≈ (135 + 655 + 1,818 × 15/25) / 130 ≈ 14.5p < retail = 30p
         → binding='floor', feasible=True.
         """
         from solar_challenge.config import ScenarioConfig, SimulationPeriod
