@@ -26,6 +26,7 @@ from solar_challenge.config import (
     parse_home_block,
     parse_location_block,
     parse_seg_rate,
+    parse_tariff_config,
 )
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
@@ -33,9 +34,15 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 _PERIOD = {"start_date": "2024-01-01", "end_date": "2024-01-07"}
+
+_SCENARIO = {
+    "name": "Scenario",
+    "period": _PERIOD,
+    "home": {"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3400}},
+}
 
 _CLI_TEMPLATES = {"home": HOME_TEMPLATE, "fleet": FLEET_TEMPLATE, "scenario": SCENARIO_TEMPLATE}
 
@@ -338,6 +345,167 @@ class TestHomeBlockKeys:
             ev_config=EVConfig(**ev),
         )
         assert parse_home_block(block, Location.bristol()) == expected
+
+
+class TestTariffBlockKeys:
+    """A tariff: block recognises the keys of its own type."""
+
+    _NIGHT: dict[str, Any] = {"start_time": "00:00", "end_time": "07:00", "rate_per_kwh": 0.10}
+    _DAY: dict[str, Any] = {"start_time": "07:00", "end_time": "00:00", "rate_per_kwh": 0.30}
+    _ECONOMY_7_OVERRIDES: dict[str, Any] = {
+        "off_peak_rate": 0.10,
+        "peak_rate": 0.30,
+        "off_peak_start": "01:00",
+        "off_peak_end": "08:00",
+    }
+    _ECONOMY_10_OVERRIDES: dict[str, Any] = {
+        "off_peak_rate": 0.09,
+        "peak_rate": 0.29,
+        "night_start": "00:30",
+        "night_end": "05:30",
+        "afternoon_start": "13:30",
+        "afternoon_end": "16:30",
+        "evening_start": "20:30",
+        "evening_end": "22:30",
+    }
+    _MISKEYED_ECONOMY_7: dict[str, Any] = {"type": "economy_7", "rate_per_kwh": 0.30}
+
+    @pytest.mark.parametrize(
+        ("block", "key"),
+        [
+            pytest.param(
+                {"type": "flat_rate", "rate_per_kwh": 0.30, "rate": 0.25}, "rate", id="flat_rate"
+            ),
+            pytest.param(_MISKEYED_ECONOMY_7, "rate_per_kwh", id="economy_7-flat_rate-key"),
+            pytest.param({"type": "economy_7", "name": "E7"}, "name", id="economy_7-name"),
+            pytest.param(
+                {"type": "economy_10", "off_peak_start": "00:30"},
+                "off_peak_start",
+                id="economy_10-economy_7-key",
+            ),
+            pytest.param(
+                {"type": "custom", "periods": [_NIGHT], "currency": "GBP"}, "currency", id="custom"
+            ),
+        ],
+    )
+    def test_key_another_tariff_type_reads_is_refused(
+        self, block: dict[str, Any], key: str
+    ) -> None:
+        """A key outside the grammar of the block's own type is refused, even one another type reads."""
+        with pytest.raises(ConfigurationError, match=_refusal("tariff", key)):
+            parse_tariff_config(block)
+
+    def test_custom_period_refuses_an_unrecognised_key(self) -> None:
+        """Each custom period refuses a key a tariff period does not read, naming the period."""
+        periods = [self._NIGHT, {**self._DAY, "rate": 0.30}]
+        with pytest.raises(ConfigurationError, match=_refusal("tariff.periods[1]", "rate")):
+            parse_tariff_config({"type": "custom", "periods": periods})
+
+    @pytest.mark.parametrize(
+        ("block", "block_path", "type_name"),
+        [
+            pytest.param("flat_rate", "tariff", "str", id="string"),
+            pytest.param("", "tariff", "str", id="empty-string"),
+            pytest.param(
+                {"type": "custom", "periods": ["00:00-07:00"]},
+                "tariff.periods[0]",
+                "str",
+                id="period",
+            ),
+        ],
+    )
+    def test_non_mapping_tariff_or_period_is_refused_naming_it(
+        self, block: Any, block_path: str, type_name: str
+    ) -> None:
+        """A tariff or custom period that is not a mapping is refused, naming it; only None means no tariff."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+        ):
+            parse_tariff_config(block)
+
+    @pytest.mark.parametrize(
+        ("load", "document", "block_path"),
+        [
+            pytest.param(
+                load_home_config, {"home": {"tariff": _MISKEYED_ECONOMY_7}}, "home.tariff", id="home"
+            ),
+            pytest.param(
+                load_fleet_config,
+                {"homes": [{"pv": {"capacity_kw": 4.0}, "tariff": _MISKEYED_ECONOMY_7}]},
+                "homes[0].tariff",
+                id="fleet-homes",
+            ),
+            pytest.param(
+                load_scenarios,
+                {**_SCENARIO, "tariff_config": _MISKEYED_ECONOMY_7},
+                "tariff_config",
+                id="scenario",
+            ),
+            pytest.param(
+                load_fleet_config,
+                {
+                    "fleet_distribution": {"n_homes": 1, "pv": {"capacity_kw": 4.0}},
+                    "tariff": _MISKEYED_ECONOMY_7,
+                },
+                "tariff",
+                id="fleet_distribution",
+            ),
+            pytest.param(
+                load_community_config,
+                {"community": {"sharing_mode": "p2p", "billing": {"tariff": _MISKEYED_ECONOMY_7}}},
+                "community.billing.tariff",
+                id="community-billing",
+            ),
+        ],
+    )
+    def test_tariff_path_names_where_the_block_sits(
+        self,
+        tmp_path: Path,
+        load: Callable[[Path], object],
+        document: dict[str, Any],
+        block_path: str,
+    ) -> None:
+        """A tariff refusal names the block's path wherever the block sits in its file."""
+        with pytest.raises(ConfigurationError, match=_refusal(block_path, "rate_per_kwh")):
+            load(_write(tmp_path, document))
+
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            pytest.param(
+                {"type": "flat_rate", "rate_per_kwh": 0.28, "name": "Flat"},
+                TariffConfig.flat_rate(rate_per_kwh=0.28, name="Flat"),
+                id="flat_rate",
+            ),
+            pytest.param(
+                {"type": "economy_7", **_ECONOMY_7_OVERRIDES},
+                TariffConfig.economy_7(**_ECONOMY_7_OVERRIDES),
+                id="economy_7",
+            ),
+            pytest.param(
+                {"type": "economy_10", **_ECONOMY_10_OVERRIDES},
+                TariffConfig.economy_10(**_ECONOMY_10_OVERRIDES),
+                id="economy_10",
+            ),
+            pytest.param(
+                {
+                    "type": "custom",
+                    "name": "Two-rate",
+                    "periods": [{**_NIGHT, "name": "Night"}, {**_DAY, "name": "Day"}],
+                },
+                TariffConfig(
+                    periods=(TariffPeriod(**_NIGHT, name="Night"), TariffPeriod(**_DAY, name="Day")),
+                    name="Two-rate",
+                ),
+                id="custom",
+            ),
+        ],
+    )
+    def test_every_key_of_each_type_is_accepted(
+        self, block: dict[str, Any], expected: TariffConfig
+    ) -> None:
+        """A block setting every key its type reads parses to the TariffConfig built from those values."""
+        assert parse_tariff_config(block) == expected
 
 
 class TestShippedScenarios:
