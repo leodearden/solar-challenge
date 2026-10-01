@@ -16,7 +16,7 @@ import pytest
 
 from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
 from tests._interpreters import off_pin_minor_versions, python_version_pin
-from tests._orchestrator_config import load_orchestrator_config, sole_offline_lane_job
+from tests._orchestrator_config import lane_job_directory, load_orchestrator_config, sole_offline_lane_job
 
 _MATRIX_JOB = "interpreter-matrix"
 
@@ -60,9 +60,10 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(pro
     Each case's node-id must name its interpreter: that node-id is the only
     attribution a fix task filed by the lane carries.
     """
-    command = sole_offline_lane_job(project_root, _MATRIX_JOB)["command"]
+    job = sole_offline_lane_job(project_root, _MATRIX_JOB)
+    command = job["command"]
 
-    result = run_collect_only(command, project_root)
+    result = run_collect_only(command, lane_job_directory(project_root, job))
 
     assert result.returncode == pytest.ExitCode.OK, (
         f"the {_MATRIX_JOB!r} lane job {command!r} failed to collect\n{describe_outcome(result)}"

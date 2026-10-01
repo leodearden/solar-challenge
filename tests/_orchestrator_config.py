@@ -3,12 +3,14 @@
 
 Usage::
 
-    from tests._orchestrator_config import load_orchestrator_config, sole_offline_lane_job
+    from tests._orchestrator_config import lane_job_directory, load_orchestrator_config, sole_offline_lane_job
 
     test_command = load_orchestrator_config(project_root)["test_command"]
     matrix_job = sole_offline_lane_job(project_root, "interpreter-matrix")
+    matrix_directory = lane_job_directory(project_root, matrix_job)
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -33,3 +35,23 @@ def sole_offline_lane_job(project_root: Path, name: str) -> dict[str, Any]:
         "never runs that job, with several every merge runs it more than once"
     )
     return jobs[0]
+
+
+def lane_job_directory(project_root: Path, job: Mapping[str, Any]) -> Path:
+    """Return the directory the offline lane runs *job*'s command in, *project_root* standing in for the lane worktree's root.
+
+    That is the job's cwd under the root, or the root itself when the job sets none.
+    The rule is dark-factory's LaneCommand.cwd (orchestrator/src/orchestrator/config.py), which defaults to '.'.
+    It asserts the cwd is a path string that resolves to a directory, so a cwd the lane cannot use fails here, naming the job.
+    """
+    cwd = job.get("cwd", ".")
+    assert isinstance(cwd, str), (
+        f"the {job.get('name')!r} lane job's cwd is {cwd!r}, not a path string; dark-factory's "
+        "LaneCommand.cwd must be a string, so the orchestrator rejects the config"
+    )
+    directory = project_root / cwd
+    assert directory.is_dir(), (
+        f"the {job.get('name')!r} lane job's cwd {cwd!r} resolves to {directory}, which is not a "
+        "directory, so the lane cannot start the job's command"
+    )
+    return directory
