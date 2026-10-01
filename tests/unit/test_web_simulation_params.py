@@ -3,7 +3,8 @@
 import pytest
 pytest.importorskip("flask")
 
-from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.config import ConfigurationError
+from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.simulation_params import (
     parse_date_range,
     parse_home_config,
@@ -60,24 +61,6 @@ FORM_PAYLOAD_BATTERY_OFF: dict = {
     "start": "2024-03-01",
     "end": "2024-03-05",
 }
-
-MALFORMED_SEG_BLOCKS = [
-    pytest.param({}, id="empty"),
-    pytest.param({"rate": 4.0}, id="unrecognised-key"),
-    pytest.param({"preset": "Octopus", "rate_pence_per_kwh": 9}, id="preset-and-rate"),
-    pytest.param({"preset": "custom", "rate_pence_per_kwh": 5.5}, id="custom-preset-and-rate"),
-    pytest.param([1, 2], id="array"),
-    pytest.param("Octopus", id="bare-string"),
-]
-
-MALFORMED_SEG_RATE_BLOCKS = [
-    pytest.param({"rate_pence_per_kwh": None}, id="null-rate"),
-    pytest.param({"rate_pence_per_kwh": "abc"}, id="non-numeric-rate"),
-    pytest.param({"rate_pence_per_kwh": -2.0}, id="negative-rate"),
-    pytest.param({"rate_pence_per_kwh": float("nan")}, id="nan-rate"),
-    pytest.param({"rate_pence_per_kwh": float("inf")}, id="infinite-rate"),
-    pytest.param({"rate_pence_per_kwh": True}, id="boolean-rate"),
-]
 
 
 class TestParseDateRange:
@@ -167,42 +150,38 @@ class TestParseHomeConfigKeys:
 
 
 class TestParseSegTariff:
-    """Unit tests for parse_seg_tariff(seg_data)."""
-
-    @pytest.mark.parametrize("preset", sorted(SEG_PRESETS))
-    def test_every_preset_reads_as_its_supplier_rate(self, preset: str) -> None:
-        """Every SEG_PRESETS key reads as that supplier's export rate."""
-        tariff = parse_seg_tariff({"preset": preset})
-        assert tariff is not None
-        assert tariff.rate_pence_per_kwh == SEG_PRESETS[preset].rate_pence_per_kwh
-
-    def test_explicit_rate_reads_as_a_float(self) -> None:
-        """An integer rate_pence_per_kwh reads back as a float."""
-        tariff = parse_seg_tariff({"rate_pence_per_kwh": 5})
-        assert tariff is not None
-        assert tariff.rate_pence_per_kwh == 5.0
-        assert isinstance(tariff.rate_pence_per_kwh, float)
+    """parse_seg_tariff adapts config.parse_seg_rate; test_config.py::TestScenarioSegBlock covers that grammar case by case."""
 
     def test_absent_seg_is_no_tariff(self) -> None:
         """A null seg value, like an absent one, means no SEG."""
         assert parse_seg_tariff(None) is None
 
-    def test_unknown_preset_raises_value_error(self) -> None:
-        """A preset name outside the SEG catalogue raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown SEG preset"):
-            parse_seg_tariff({"preset": "NotASupplier"})
+    def test_preset_reads_as_a_tariff_at_the_supplier_rate(self) -> None:
+        """A preset reads as a tariff at that supplier's export rate."""
+        assert parse_seg_tariff({"preset": "Octopus"}) == SEGTariff(
+            name="", rate_pence_per_kwh=SEG_PRESETS["Octopus"].rate_pence_per_kwh
+        )
 
-    @pytest.mark.parametrize("seg", MALFORMED_SEG_BLOCKS)
-    def test_malformed_block_is_refused_naming_seg(self, seg: object) -> None:
-        """A value that is not a block naming exactly one of preset or rate_pence_per_kwh is refused, never read as no SEG."""
-        with pytest.raises(ValueError, match="'seg'"):
-            parse_seg_tariff(seg)
+    def test_explicit_rate_reads_as_a_tariff_at_that_rate(self) -> None:
+        """An explicit rate_pence_per_kwh reads as a tariff at that rate."""
+        assert parse_seg_tariff({"rate_pence_per_kwh": 5.5}) == SEGTariff(
+            name="", rate_pence_per_kwh=5.5
+        )
 
-    @pytest.mark.parametrize("seg", MALFORMED_SEG_RATE_BLOCKS)
-    def test_malformed_rate_is_refused_naming_the_rate_key(self, seg: object) -> None:
-        """A rate_pence_per_kwh that is not a finite, non-negative number is refused by name."""
-        with pytest.raises(ValueError, match="rate_pence_per_kwh"):
+    @pytest.mark.parametrize(
+        "seg",
+        [
+            pytest.param({"preset": "NotASupplier"}, id="unknown-preset"),
+            pytest.param({"rate_pence_per_kwh": float("nan")}, id="nan-rate"),
+        ],
+    )
+    def test_refused_seg_raises_value_error_from_the_grammar_error(self, seg: object) -> None:
+        """A value the grammar refuses raises ValueError chained from its ConfigurationError, carrying that message."""
+        with pytest.raises(ValueError) as exc_info:
             parse_seg_tariff(seg)
+        grammar_error = exc_info.value.__cause__
+        assert isinstance(grammar_error, ConfigurationError)
+        assert str(exc_info.value) == str(grammar_error)
 
 
 class TestParseHomeConfigCapabilities:
@@ -352,8 +331,7 @@ class TestParseHomeConfigSEG:
         home_config, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
         assert home_config.seg_tariff is None
 
-    @pytest.mark.parametrize("seg", MALFORMED_SEG_BLOCKS + MALFORMED_SEG_RATE_BLOCKS)
-    def test_malformed_seg_is_refused_with_value_error(self, seg: object) -> None:
+    def test_malformed_seg_is_refused_with_value_error(self) -> None:
         """A malformed seg is refused with the ValueError every web caller answers with HTTP 400."""
         with pytest.raises(ValueError, match="seg"):
-            parse_home_config({**VALID_HOME_PAYLOAD, "seg": seg})
+            parse_home_config({**VALID_HOME_PAYLOAD, "seg": [1, 2]})
