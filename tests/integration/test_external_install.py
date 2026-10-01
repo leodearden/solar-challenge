@@ -19,7 +19,7 @@ Marked ``build`` (NOT ``slow``) to stay independently selectable
 (``pytest -m build``).  Note: the project's default ``addopts`` does not
 deselect ``build``, so a plain ``pytest`` run will execute these heavy tests
 (timeouts: 300 s build + 600 s isolated install).  Tests skip automatically
-when ``uv`` is absent from PATH.
+when ``git`` or ``uv`` is absent from PATH, or when the tree is not a git checkout.
 """
 
 from __future__ import annotations
@@ -40,6 +40,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # ---------------------------------------------------------------------------
 
 
+def _skip_unless_a_clean_wheel_can_be_built() -> None:
+    """Skip unless git is on PATH with a checkout to list, and uv is on PATH to build the copy."""
+    for tool in ("git", "uv"):
+        if shutil.which(tool) is None:
+            pytest.skip(f"{tool} not available on PATH — skipping build-marker tests")
+    work_tree_check = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if work_tree_check.returncode != 0:
+        pytest.skip(
+            f"git does not recognise {PROJECT_ROOT} as a checkout, so it cannot list the files to "
+            f"build the wheel from: {work_tree_check.stderr.strip()}"
+        )
+
+
 @pytest.fixture(scope="module")
 def wheel_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Return a copy of what a fresh clone plus uncommitted new files would hold.
@@ -48,6 +66,7 @@ def wheel_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
     src/solar_challenge.egg-info, whose stale entries setuptools keeps shipping after pyproject
     stops declaring them.
     """
+    _skip_unless_a_clean_wheel_can_be_built()
     listing = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=PROJECT_ROOT,
@@ -72,9 +91,6 @@ def built_wheel(wheel_source: Path, tmp_path_factory: pytest.TempPathFactory) ->
     The build and its output both stay under tmp, so the checkout gains no build/,
     egg-info or dist/.
     """
-    if shutil.which("uv") is None:
-        pytest.skip("uv not available on PATH — skipping build-marker tests")
-
     out_dir = tmp_path_factory.mktemp("wheel_out")
 
     result = subprocess.run(
