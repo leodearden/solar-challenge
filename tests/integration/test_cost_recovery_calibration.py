@@ -1157,8 +1157,12 @@ class TestCbsOwnUseKwhHelper:
 class TestPhysicsReconciliationColumn:
     """Real-PVGIS physics column — REPORTED, not asserted == spreadsheet (step-9 RED / step-10 GREEN).
 
-    Runs a 2-home, 3-day fleet simulation via real simulate_fleet to document
-    the physics-vs-assumption self-consumption gap that motivates 'reported not pinned'.
+    Runs a 2-home, 3-day fleet simulation via real simulate_fleet to show that the
+    real-physics path returns a structurally valid CostRecoverySolution.  Its numbers
+    are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation): the
+    solve sets the window's 3 days of own-use kWh against a year of opex and floor
+    (project_multi_year asks for a period of about one full year), and the [FIN] grant
+    covers the 2-home fleet's capex, so the fleet carries no debt.
     Mirrors θ's TestCalibrationPhysicsColumn.
     Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
     """
@@ -1172,7 +1176,6 @@ class TestPhysicsReconciliationColumn:
         - sol.binding in {'floor', 'rate_clamped_zero', 'infeasible_above_retail'}
 
         REPORTS (printed, NOT pinned): physics-path solved rate, saving, surplus.
-        Motivates 'reported not pinned' — physics scf (≈20–35%) ≠ sheet 0.70.
         """
         from solar_challenge.config import ScenarioConfig, SimulationPeriod
         from solar_challenge.finance import CostRecoverySolution, solve_cost_recovery_rate
@@ -1201,10 +1204,12 @@ class TestPhysicsReconciliationColumn:
         print(
             f"\n[PHYSICS RECONCILIATION REPORT] (2 homes, 3-day window)"
             f"\n  Physics-path solved rate: {sol.own_use_rate_pence_per_kwh:.2f} p/kWh"
-            f"  (synthetic ≈15p; gap = physics scf << 0.70)"
+            "  (not comparable with the no-flex anchor reported in"
+            " docs/cost-recovery-finance-model.md §7.3)"
             f"\n  Physics saving vs baseline: £{sol.saving_vs_baseline_gbp:.0f}"
             f"\n  Net surplus/home/yr: £{sol.net_surplus_per_home_per_year_gbp:.2f}"
             f"\n  Binding: {sol.binding}, Feasible: {sol.feasible}"
-            f"\n  [Reported not pinned: physics scf ≠ 0.70/sheet — see §3.3 of"
-            f" docs/finance-spreadsheet-reconciliation.md for rationale]"
+            "\n  [Reported not pinned (§3.3 of docs/finance-spreadsheet-reconciliation.md):"
+            " the solve sets the window's 3 days of own-use kWh against a year of opex"
+            " and floor, so this rate reflects the window length, not a self-consumption gap]"
         )
