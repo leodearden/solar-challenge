@@ -19,20 +19,13 @@ def test_results_page_loads(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """GET /results/home/<id> returns 200, shows run name in heading."""
+    """GET /results/home/<id> returns 200, and the page's h1 is the run's name."""
     run_id, run_name = seeded_home_run
     response = page.goto(live_server + f"/results/home/{run_id}")
     assert response is not None
     assert response.status == 200
 
-    page.wait_for_load_state("domcontentloaded")
-
-    # The page should show the run name (from config.name)
-    heading = page.locator("h1, h2")
-    heading_text = heading.first.text_content() or ""
-    assert run_name in heading_text or "Simulation" in heading_text, (
-        f"Expected run name '{run_name}' or 'Simulation' in heading, got '{heading_text}'"
-    )
+    expect(page.get_by_role("heading", level=1)).to_have_text(run_name)
 
 
 # -- Chart containers exist ------------------------------------------------
