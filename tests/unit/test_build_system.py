@@ -4,6 +4,7 @@
 from pathlib import Path
 
 from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from tests._pyproject import load_pyproject
@@ -17,10 +18,16 @@ def test_build_system_requires_a_setuptools_whose_package_data_globs_recurse(
     """[tool.setuptools.package-data] ships the dashboard's folders through `**` globs, so the
     build-system floor must admit only a setuptools that expands `**` through nested directories.
     """
+    requires = load_pyproject(project_root)["build-system"]["requires"]
     build_requirements = {
-        requirement.name: requirement
-        for requirement in map(Requirement, load_pyproject(project_root)["build-system"]["requires"])
+        canonicalize_name(requirement.name): requirement
+        for requirement in map(Requirement, requires)
     }
+    assert "setuptools" in build_requirements, (
+        f"[build-system] requires {requires!r}, which has no setuptools entry to carry the "
+        f"setuptools>={_FIRST_SETUPTOOLS_WITH_RECURSIVE_PACKAGE_DATA_GLOBS} floor that the `**` "
+        "globs in [tool.setuptools.package-data] need."
+    )
     setuptools = build_requirements["setuptools"]
     floors = [Version(clause.version) for clause in setuptools.specifier if clause.operator == ">="]
 
