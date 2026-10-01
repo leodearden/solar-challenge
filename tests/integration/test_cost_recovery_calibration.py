@@ -12,7 +12,7 @@ Layout:
       TestStructuralInvariants — H1 (surplus==floor) + H2 (capex monotone)
       TestFlexLowersSolvedRate — directional assert: flex ⟹ strictly lower rate
       TestThetaStaysGreen — in-file θ-isolation smoke (spreadsheet → economics)
-      TestPhysicsColumnPremises — fast guard for the premise the physics column states
+      TestPhysicsColumnPremises — fast guard for the physics column's no-debt premise
   - @pytest.mark.slow class:
       TestPhysicsReconciliationColumn — real-PVGIS physics column (reported, not asserted ==)
 
@@ -1241,11 +1241,11 @@ def _make_physics_column_scenario_cr6() -> "ScenarioConfig":  # type: ignore[nam
 
 
 class TestPhysicsColumnPremises:
-    """Fast guard for the premise TestPhysicsReconciliationColumn states about its fleet.
+    """Fast guard for the no-debt premise docs/cost-recovery-finance-model.md §7.6 states.
 
-    That class is slow and excluded from -m 'not slow' runs, so the claim its docstring
-    makes (the [FIN] grant covers the fleet's capex) is enforced here, on the scenario
-    and finance it builds.
+    TestPhysicsReconciliationColumn is slow and excluded from -m 'not slow' runs, so the
+    premise (the [FIN] grant covers its fleet's capex, so the fleet carries no debt) is
+    enforced here, on the scenario and finance that class builds.
     """
 
     def test_grant_covers_fleet_capex_so_the_fleet_has_no_debt(self) -> None:
@@ -1267,13 +1267,8 @@ class TestPhysicsReconciliationColumn:
 
     Runs a 2-home, 3-day fleet simulation via real simulate_fleet to show that the
     real-physics path returns a structurally valid CostRecoverySolution.  Its numbers
-    are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation) for
-    two reasons.  The solve annualises the 3-day January window (×365/3), as
-    project_multi_year does every energy and SEG total, so its rate extrapolates one
-    winter window to a year: a seasonal sample, which is why project_multi_year asks
-    for about one full year and warns on a short window.  And the [FIN] grant covers
-    the 2-home fleet's capex, so the fleet carries no debt (guarded by
-    TestPhysicsColumnPremises).
+    are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation); see
+    docs/cost-recovery-finance-model.md §7.6.
     Mirrors θ's TestCalibrationPhysicsColumn.
     Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
     """
@@ -1314,7 +1309,5 @@ class TestPhysicsReconciliationColumn:
             f"\n  Binding: {sol.binding}, Feasible: {sol.feasible}"
             "\n  [Reported not pinned: assertion policy in §3.3 of"
             " docs/finance-spreadsheet-reconciliation.md]"
-            "\n  [Cause: one 3-day January window annualised to a year (×365/3, a seasonal"
-            " sample; project_multi_year asks for about one full year), and a debt-free"
-            " fleet (the [FIN] grant covers its capex)]"
+            "\n  [Why not comparable: docs/cost-recovery-finance-model.md §7.6]"
         )
