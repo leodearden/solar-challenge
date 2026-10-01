@@ -1348,6 +1348,12 @@ class _NodeData(NamedTuple):
     fleet_revenue: float
     """CBS fleet revenue: own-use + SEG + grid-services (£)."""
 
+    simulation_days: int
+    """Shortest per-home simulated window behind these totals (days).
+
+    A value below :data:`_SHORT_PERIOD_THRESHOLD` means the totals were annualised.
+    """
+
 
 def _aged_homes(
     homes: "list[Any]",  # list[HomeConfig]
@@ -1425,9 +1431,9 @@ def project_multi_year(
         simulated window is shorter than 360 days, its own-use, export,
         import and battery-discharge kWh and its SEG income are scaled by
         ``365 / days`` (:func:`_annualisation_scale`), so energy fields and
-        ``fleet_revenue_gbp`` stay on one basis.  A short window is still one
-        season's sample, so board figures want ``scenario.period`` to cover
-        about one full year.
+        ``fleet_revenue_gbp`` stay on one basis, and one ``UserWarning`` per
+        call says so.  A short window is still one season's sample, so board
+        figures want ``scenario.period`` to cover about one full year.
 
     Returns:
         :class:`MultiYearCurve` with one :class:`YearPoint` per year and
@@ -1575,6 +1581,7 @@ def project_multi_year(
             mean_pv_soh=mean_pv_soh,
             mean_battery_soh=mean_battery_soh,
             fleet_revenue=fleet_revenue,
+            simulation_days=min(s.simulation_days for s in per_home_summaries),
         )
 
     # ---- Seed forward-march (snapshot cum_tp BEFORE each simulation) ---------
@@ -1592,6 +1599,20 @@ def project_multi_year(
             for i in range(n_homes):
                 cum_throughput[i] += 0.5 * (prev_discharge[i] + node.per_home_discharge[i]) * dt
         prev_age = age
+
+    # ---- Short-window annualisation warning (once per projection) -----------
+    # Every node simulates the same scenario.period; age 0 is always a seed.
+    window_days = sampled_data[0].simulation_days
+    if window_days < _SHORT_PERIOD_THRESHOLD:
+        warnings.warn(
+            f"project_multi_year: simulation period is only {window_days} days "
+            f"(<{_SHORT_PERIOD_THRESHOLD}); scaling own-use, export, import and "
+            f"battery-discharge kWh and SEG income to a {_ANNUALISATION_DAYS}-day year "
+            f"(scale={_annualisation_scale(window_days):.3f}). A short window samples "
+            f"one season, so the annual figures carry that season's bias.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # ---- Adaptive bisection (H4, §3.3) --------------------------------------
     # Deviation is the max across all driven energy + revenue metrics, normalised
