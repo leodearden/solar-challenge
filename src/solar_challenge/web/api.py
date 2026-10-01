@@ -23,9 +23,11 @@ from solar_challenge.config import (
     parse_tariff_config,
 )
 from solar_challenge.home import HomeConfig
+from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import get_job_manager, get_storage, resolve_location
 from solar_challenge.web.simulation_params import parse_date_range, parse_home_config, parse_seg_tariff
+from solar_challenge.web.storage import stored_fleet_home_configs, stored_home_config
 
 logger = logging.getLogger(__name__)
 
@@ -894,19 +896,20 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
 
 @api_bp.route("/history/runs/<run_id>/export/yaml")
 def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
-    """Export run config as YAML download.
+    """Export a run's config as the scenario YAML that `home run` or load_fleet_config reads back.
 
     Args:
         run_id: Unique run identifier.
 
     Returns:
-        YAML file response, or 404 if not found.
+        YAML file response; 404 if the run or its config is missing, 500 if the
+        stored config does not decode, 422 if the scenario grammar cannot express it.
     """
     db_path = current_app.config["DATABASE"]
 
     with get_db(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, config_json FROM runs WHERE id = ?", (run_id,))
+        cursor.execute("SELECT id, name, type, config_json FROM runs WHERE id = ?", (run_id,))
         row = cursor.fetchone()
 
     if row is None:
@@ -917,19 +920,31 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
         return jsonify({"error": "No config data available"}), 404
 
     try:
-        config_dict = json.loads(config_json)
+        config = json.loads(config_json)
     except (json.JSONDecodeError, TypeError):
         return jsonify({"error": "Invalid config data"}), 500
 
-    # Convert to YAML format
-    yaml_data = _yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+    is_fleet = row["type"] == "fleet"
+    try:
+        homes = stored_fleet_home_configs(config) if is_fleet else [stored_home_config(config)]
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        return jsonify({"error": f"Invalid config data: {exc}"}), 500
 
     run_name = row["name"] or "run"
+    try:
+        document = (
+            fleet_scenario(homes, name=run_name)
+            if is_fleet
+            else home_scenario(homes[0], name=run_name)
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 422
+
     safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in run_name)
     filename = f"{safe_name}_{run_id[:8]}.yaml"
 
     return Response(
-        yaml_data,
+        scenario_yaml(document),
         mimetype="text/yaml",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
