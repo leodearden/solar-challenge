@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for a home with a heat pump."""
 
+import re
+
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
@@ -171,12 +173,12 @@ class TestSimulateHomeSharesTheAnnualHeatDemandOverTheTMYYear:
 
 
 class TestSimulateHomeRejectsWeatherThatIsNotOneYear:
-    """With a heat pump configured, simulate_home needs weather_data to span one TMY year.
+    """With a heat pump configured, simulate_home needs weather_data to be one TMY year of hourly rows.
 
     That is the year the heat pump's annual heat demand is shared out over. Synthetic weather, no network.
     """
 
-    def test_one_day_of_weather_raises_naming_its_minutes(self):
+    def test_one_day_of_weather_raises_naming_its_hourly_rows(self):
         home = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
@@ -185,7 +187,9 @@ class TestSimulateHomeRejectsWeatherThatIsNotOneYear:
         )
         day = pd.Timestamp("2025-01-15")
 
-        with pytest.raises(ValueError, match="annual_temperature_c has 1,440 rows"):
+        with pytest.raises(
+            ValueError, match=re.escape("weather_data has 24 rows, not one year of hourly rows (8,760 to 8,784)")
+        ):
             simulate_home(home, day, day, weather_data=_dark_tmy_year(10.0).loc["1990-01-15"])
 
 
