@@ -19,6 +19,13 @@ def test_element_ids_come_from_tags_and_not_from_script_text() -> None:
     assert element_ids(page) == {"chart-sankey", "pv_kw"}
 
 
+def test_a_repeated_id_raises_rather_than_counting_once() -> None:
+    page = '<div id="chart-sankey"></div><p id="main-content"></p><div id="chart-sankey"></div>'
+
+    with pytest.raises(ValueError, match="'chart-sankey' is on 2 elements"):
+        element_ids(page)
+
+
 def test_texts_after_returns_the_following_texts_in_document_order() -> None:
     page = (
         "<p>Total Generation</p>\n"
