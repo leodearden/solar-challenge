@@ -43,21 +43,12 @@ def test_results_chart_containers_exist(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """#chart-sankey or #chart-daily-balance div present."""
+    """Overview tab shows both chart containers: #chart-sankey, #chart-daily-balance."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
 
-    # Look for chart container divs
-    sankey = page.locator("#chart-sankey")
-    daily_balance = page.locator("#chart-daily-balance")
-
-    has_sankey = sankey.count() > 0
-    has_daily = daily_balance.count() > 0
-
-    assert has_sankey or has_daily, (
-        "Expected at least one chart container (#chart-sankey or #chart-daily-balance)"
-    )
+    for chart_id in ("#chart-sankey", "#chart-daily-balance"):
+        expect(page.locator(chart_id)).to_be_visible()
 
 
 # -- Tab switching ----------------------------------------------------------
@@ -68,28 +59,17 @@ def test_results_tab_switching(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Click Overview/Power Flow/Battery & Finance/Analysis -> aria-selected='true'."""
+    """Clicking each chart tab makes it the only selected tab.
+
+    Overview is selected on load, so it is clicked last: only then does
+    its click have to move the selection.
+    """
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
-    # The results page uses a tab nav (may be aria-label="Chart tabs" or similar)
-    tab_labels = ["Overview", "Power Flow", "Battery", "Analysis"]
-
-    for label in tab_labels:
-        tab_btn = page.locator("button", has_text=label)
-        if tab_btn.count() == 0:
-            continue
-
-        tab_btn.first.click()
-        page.wait_for_timeout(300)
-
-        # Check aria-selected on the clicked tab
-        selected = tab_btn.first.get_attribute("aria-selected")
-        assert selected == "true", (
-            f"Tab '{label}' should have aria-selected='true', got '{selected}'"
-        )
+    for name in ("Power Flow", "Battery & Finance", "Analysis", "Overview"):
+        page.get_by_role("tab", name=name, exact=True).click()
+        expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(name)
 
 
 # -- Stat card labels not truncated (potential bug) -------------------------
@@ -141,16 +121,11 @@ def test_results_download_csv_returns_200(
     """Follow CSV link -> status 200, content-type text/csv."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
 
-    # Find the CSV download link
-    csv_link = page.locator("a", has_text="Download CSV")
-    if csv_link.count() == 0:
-        csv_link = page.locator("a", has_text="CSV")
+    csv_link = page.get_by_role("link", name="Download CSV", exact=True)
+    expect(csv_link).to_be_visible()
 
-    expect(csv_link.first).to_be_visible()
-
-    href = csv_link.first.get_attribute("href") or ""
+    href = csv_link.get_attribute("href") or ""
     assert href, "CSV download link has no href"
 
     # Fetch the URL directly
@@ -172,18 +147,11 @@ def test_results_download_yaml_returns_200(
     """Follow YAML link -> status 200."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
 
-    # Find the YAML download link
-    yaml_link = page.locator("a", has_text="Download Config")
-    if yaml_link.count() == 0:
-        yaml_link = page.locator("a", has_text="YAML")
-    if yaml_link.count() == 0:
-        yaml_link = page.locator("a", has_text="Config")
+    yaml_link = page.get_by_role("link", name="Download Config (YAML)", exact=True)
+    expect(yaml_link).to_be_visible()
 
-    expect(yaml_link.first).to_be_visible()
-
-    href = yaml_link.first.get_attribute("href") or ""
+    href = yaml_link.get_attribute("href") or ""
     assert href, "YAML download link has no href"
 
     yaml_url = href if href.startswith("http") else live_server + href
