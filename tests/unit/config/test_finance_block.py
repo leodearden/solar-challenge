@@ -370,24 +370,7 @@ class TestFinanceConfigParsing:
     def test_minimal_dict_uses_defaults(self) -> None:
         """Dict with only standing_charge_pence_per_day uses all other defaults."""
         result = parse_finance_config({"standing_charge_pence_per_day": 60.0})
-        assert result is not None
-        assert result.standing_charge_pence_per_day == 60.0
-        assert result.vat_rate == 0.05
-        assert result.retail_baseline_rate_pence_per_kwh == 23.0
-        assert result.self_consumption_override is None
-        assert result.pv_cost_per_kwp_gbp == 1000.0
-        assert result.roof_fit_cost_gbp == 1000.0
-        assert result.battery_cost_per_kwh_gbp == 250.0
-        assert result.inverter_cost_per_kw_gbp == 0.0
-        assert result.grant_gbp == 250000.0
-        assert result.equity_fraction == 0.75
-        assert result.loan_term_years == 15
-        assert result.loan_rate == 0.07
-        assert result.opex_per_home_per_year_gbp == 131.0
-        assert result.asset_life_years == 25
-        assert result.own_use_rate_pence_per_kwh == 15.0
-        assert result.retained_cash_floor_per_home_per_year_gbp == 27.0
-        assert result.grid_services_income_per_kw_per_year_gbp == 0.0
+        assert result == FinanceConfig(standing_charge_pence_per_day=60.0)
 
     def test_full_dict_round_trips(self) -> None:
         """All fields supplied in the dict are reflected on the returned FinanceConfig."""
@@ -568,14 +551,11 @@ class TestScenarioFinance:
 
         scenarios = load_scenarios(path)
         assert len(scenarios) == 1
-        fc = scenarios[0].finance
-        assert fc is not None
-        assert isinstance(fc, FinanceConfig)
-        assert fc.standing_charge_pence_per_day == 65.0
-        assert fc.vat_rate == 0.08
-        assert fc.self_consumption_override == 0.75
-        # Un-overridden fields use defaults
-        assert fc.loan_term_years == 15
+        assert scenarios[0].finance == FinanceConfig(
+            standing_charge_pence_per_day=65.0,
+            vat_rate=0.08,
+            self_consumption_override=0.75,
+        )
 
     def test_load_scenarios_without_finance_block_is_none(self, tmp_path: Path) -> None:
         """YAML without a finance: block → scenarios[0].finance is None."""
@@ -620,14 +600,12 @@ class TestScenarioFinance:
 
         scenarios = load_scenarios(path)
         assert len(scenarios) == 1
-        fc = scenarios[0].finance
-        assert fc is not None
-        assert isinstance(fc, FinanceConfig)
-        assert fc.own_use_rate_pence_per_kwh == 12.5
-        assert fc.retained_cash_floor_per_home_per_year_gbp == 30.0
-        assert fc.grid_services_income_per_kw_per_year_gbp == 8.0
-        # Un-overridden fields use documented defaults
-        assert fc.loan_term_years == 15
+        assert scenarios[0].finance == FinanceConfig(
+            standing_charge_pence_per_day=65.0,
+            own_use_rate_pence_per_kwh=12.5,
+            retained_cash_floor_per_home_per_year_gbp=30.0,
+            grid_services_income_per_kw_per_year_gbp=8.0,
+        )
 
 
 class TestFinanceConfigGridServicesModel:
