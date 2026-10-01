@@ -11,11 +11,14 @@ import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_TEMPLATE
+from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
     ConfigurationError,
     DispatchStrategyConfig,
     FleetDistributionConfig,
     GridChargeConfig,
+    OutputConfig,
+    SimulationPeriod,
     detect_sweep_spec,
     load_community_config,
     load_config,
@@ -30,6 +33,8 @@ from solar_challenge.config import (
     parse_tariff_config,
 )
 from solar_challenge.ev import EVConfig
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
@@ -711,6 +716,290 @@ class TestFleetDistributionBlockKeys:
             ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
         ):
             _parsed_fleet_distribution(**sections)
+
+
+class TestScenarioFileBlockKeys:
+    """The location, period, output, seg, finance and community blocks refuse a key their parser does not read."""
+
+    _MISKEYED_SEG: dict[str, Any] = {"rate_pence_per_kwh": 5.5, "currency": "GBP"}
+    _MISKEYED_FINANCE: dict[str, Any] = {"standing_charge_pence_per_day": 60.0, "vat": 0.05}
+    _EVENT_WINDOW: dict[str, Any] = {
+        "months": [12, 1, 2],
+        "weekdays": [0, 1, 2, 3, 4],
+        "hours": [17, 18],
+        "events_per_year": 10,
+        "event_hours": 2.0,
+    }
+
+    @pytest.fixture
+    def read(self, request: pytest.FixtureRequest, tmp_path: Path) -> Callable[[Any], object]:
+        """Read *data* through the public reader the case names: a loader reads it as a file, a parser as a block."""
+
+        def from_file(load: Callable[[Path], object]) -> Callable[[Any], object]:
+            return lambda document: load(_write(tmp_path, document))
+
+        readers: dict[str, Callable[[Any], object]] = {
+            "load_scenarios": from_file(load_scenarios),
+            "load_community_config": from_file(load_community_config),
+            "parse_location_block": parse_location_block,
+            "parse_seg_rate": parse_seg_rate,
+            "parse_finance_config": parse_finance_config,
+        }
+        return readers[request.param]
+
+    @pytest.mark.parametrize(
+        ("read", "data", "block_path", "key"),
+        [
+            pytest.param(
+                "load_scenarios",
+                {**_SCENARIO, "location": {"lat": 51.45}},
+                "location",
+                "lat",
+                id="location",
+            ),
+            pytest.param(
+                "parse_location_block",
+                {"latitude": 51.45, "lon": -2.58},
+                "location",
+                "lon",
+                id="parse_location_block",
+            ),
+            pytest.param(
+                "load_scenarios",
+                {**_SCENARIO, "period": {**_PERIOD, "days": 7}},
+                "period",
+                "days",
+                id="period",
+            ),
+            pytest.param(
+                "load_scenarios",
+                {**_SCENARIO, "output": {"csv_path": "out.csv", "format": "csv"}},
+                "output",
+                "format",
+                id="output",
+            ),
+            pytest.param(
+                "load_scenarios",
+                {**_SCENARIO, "seg": {"preset": "Octopus", "name": "x"}},
+                "seg",
+                "name",
+                id="seg",
+            ),
+            pytest.param("parse_seg_rate", _MISKEYED_SEG, "seg", "currency", id="parse_seg_rate"),
+            pytest.param(
+                "load_community_config",
+                {"community": {"sharing_mode": "p2p", "billing": {"seg": _MISKEYED_SEG}}},
+                "community.billing.seg",
+                "currency",
+                id="community-billing-seg",
+            ),
+            pytest.param(
+                "parse_finance_config", _MISKEYED_FINANCE, "finance", "vat", id="parse_finance_config"
+            ),
+            pytest.param(
+                "parse_finance_config",
+                {
+                    "standing_charge_pence_per_day": 60.0,
+                    "grid_services_events": {"band": "central", "events": []},
+                },
+                "finance.grid_services_events",
+                "events",
+                id="grid_services_events",
+            ),
+            pytest.param(
+                "parse_finance_config",
+                {
+                    "standing_charge_pence_per_day": 60.0,
+                    "grid_services_events": {
+                        "band": "central",
+                        "event_windows": [_EVENT_WINDOW, {**_EVENT_WINDOW, "duration": 2}],
+                    },
+                },
+                "finance.grid_services_events.event_windows[1]",
+                "duration",
+                id="event_window",
+            ),
+            pytest.param(
+                "load_community_config",
+                {"community": {"sharing_mode": "p2p", "mode": "p2p"}},
+                "community",
+                "mode",
+                id="community",
+            ),
+            pytest.param(
+                "load_community_config",
+                {
+                    "community": {
+                        "sharing_mode": "p2p",
+                        "billing": {"seg_rate_pence_per_kwh": 4.1, "rate": 4.1},
+                    }
+                },
+                "community.billing",
+                "rate",
+                id="community-billing",
+            ),
+            pytest.param(
+                "load_community_config",
+                {
+                    "community": {
+                        "sharing_mode": "community_battery",
+                        "community_battery": {"capacity_kwh": 50.0, "size_kwh": 50.0},
+                    }
+                },
+                "community.community_battery",
+                "size_kwh",
+                id="community-battery",
+            ),
+            pytest.param(
+                "load_scenarios",
+                {**_SCENARIO, "finance": _MISKEYED_FINANCE},
+                "finance",
+                "vat",
+                id="scenario-finance",
+            ),
+        ],
+        indirect=["read"],
+    )
+    def test_unrecognised_key_is_refused_naming_its_block(
+        self, read: Callable[[Any], object], data: Any, block_path: str, key: str
+    ) -> None:
+        """A key outside a block's grammar is refused, naming the block's path and the key."""
+        with pytest.raises(ConfigurationError, match=_refusal(block_path, key)):
+            read(data)
+
+    def test_block_paths_carry_the_scenario_prefix(self, tmp_path: Path) -> None:
+        """A block of a scenarios: entry is named from the file's top level, through the entry's index."""
+        second = {**_SCENARIO, "name": "Second", "period": {**_PERIOD, "days": 7}}
+        path = _write(tmp_path, {"scenarios": [_SCENARIO, second]})
+        with pytest.raises(ConfigurationError, match=_refusal("scenarios[1].period", "days")):
+            load_scenarios(path)
+
+    @pytest.mark.parametrize(
+        ("read", "data", "block_path", "type_name"),
+        [
+            pytest.param(
+                "load_scenarios", {**_SCENARIO, "period": "2024"}, "period", "str", id="period"
+            ),
+            pytest.param("parse_location_block", "bristol", "location", "str", id="location"),
+            pytest.param(
+                "load_community_config", {"community": "p2p"}, "community", "str", id="community"
+            ),
+            pytest.param(
+                "load_scenarios", {**_SCENARIO, "output": ["csv"]}, "output", "list", id="output"
+            ),
+        ],
+        indirect=["read"],
+    )
+    def test_non_mapping_block_is_refused_naming_it(
+        self, read: Callable[[Any], object], data: Any, block_path: str, type_name: str
+    ) -> None:
+        """A block that is not a mapping is refused, naming the block's path and the type it got."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+        ):
+            read(data)
+
+    def test_every_recognised_key_is_accepted(self, tmp_path: Path) -> None:
+        """A scenario setting every key of its location, period, output and finance blocks, and a seg block, parses to the values set."""
+        location: dict[str, Any] = {
+            "latitude": 52.2,
+            "longitude": -1.5,
+            "timezone": "Europe/London",
+            "altitude": 80.0,
+            "name": "Midlands",
+        }
+        output: dict[str, Any] = {
+            "csv_path": "out.csv",
+            "include_minute_data": False,
+            "include_summary": False,
+            "aggregation": "daily",
+        }
+        grid_services_events: dict[str, Any] = {
+            "band": "high",
+            "event_windows": [self._EVENT_WINDOW],
+            "aggregator_share": 0.1,
+            "utilisation_factor": 0.8,
+            "availability_gbp_per_kw_per_event": 2.5,
+            "utilisation_gbp_per_mwh": 80.0,
+        }
+        finance: dict[str, Any] = {
+            "standing_charge_pence_per_day": 70.0,
+            "vat_rate": 0.08,
+            "retail_baseline_rate_pence_per_kwh": 28.5,
+            "self_consumption_override": 0.70,
+            "pv_cost_per_kwp_gbp": 950.0,
+            "roof_fit_cost_gbp": 1100.0,
+            "battery_cost_per_kwh_gbp": 280.0,
+            "inverter_cost_per_kw_gbp": 200.0,
+            "grant_gbp": 200000.0,
+            "equity_fraction": 0.60,
+            "loan_term_years": 20,
+            "loan_rate": 0.065,
+            "opex_per_home_per_year_gbp": 140.0,
+            "asset_life_years": 25,
+            "own_use_rate_pence_per_kwh": 12.0,
+            "retained_cash_floor_per_home_per_year_gbp": 30.0,
+            "grid_services_income_per_kw_per_year_gbp": 5.0,
+            "grid_services_model": "capacity_at_events",
+            "grid_services_events": grid_services_events,
+        }
+        document = {
+            **_SCENARIO,
+            "location": location,
+            "output": output,
+            "seg": {"rate_pence_per_kwh": 5.5},
+            "finance": finance,
+        }
+
+        (scenario,) = load_scenarios(_write(tmp_path, document))
+
+        expected_events = GridServicesEventsConfig(
+            **{
+                **grid_services_events,
+                "event_windows": (
+                    EventWindow(
+                        months=(12, 1, 2),
+                        weekdays=(0, 1, 2, 3, 4),
+                        hours=(17, 18),
+                        events_per_year=10,
+                        event_hours=2.0,
+                    ),
+                ),
+            }
+        )
+        assert scenario.location == Location(**location)
+        assert scenario.period == SimulationPeriod(**_PERIOD)
+        assert scenario.output == OutputConfig(**output)
+        assert scenario.seg_tariff_pence_per_kwh == 5.5
+        assert scenario.finance == FinanceConfig(
+            **{**finance, "grid_services_events": expected_events}
+        )
+
+    def test_every_recognised_community_key_is_accepted(self, tmp_path: Path) -> None:
+        """A community block setting its mode, battery and billing, billed by a tariff and a scalar SEG rate, parses to the CommunityConfig built from those values."""
+        community_battery: dict[str, Any] = {
+            "capacity_kwh": 50.0,
+            "max_charge_kw": 20.0,
+            "max_discharge_kw": 20.0,
+        }
+        community = {
+            "sharing_mode": "community_battery",
+            "community_battery": community_battery,
+            "billing": {
+                "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30, "name": "Community"},
+                "seg_rate_pence_per_kwh": 4.1,
+            },
+        }
+
+        expected = CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=BatteryConfig(**community_battery),
+            billing=CommunityBillingConfig(
+                tariff=TariffConfig.flat_rate(rate_per_kwh=0.30, name="Community"),
+                seg_rate_pence_per_kwh=4.1,
+            ),
+        )
+        assert load_community_config(_write(tmp_path, {"community": community})) == expected
 
 
 class TestShippedScenarios:
