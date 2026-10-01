@@ -206,14 +206,10 @@ class TestAlignTMYToDemand:
 
 
 def _utc_tmy_with_one_marked_hour(marked_hour_utc: str, **marked: float) -> pd.DataFrame:
-    """Two days of hourly UTC 1990 weather, the shape of a PVGIS TMY.
-
-    It is dark and 25 °C except for the marked hour's columns. It spans 20-21 June UTC, so every
-    minute of the BST day 21 June has weather.
-    """
+    """A year of hourly UTC 1990 weather, the shape of a PVGIS TMY: dark and 25 °C except for the marked hour's columns."""
     weather = pd.DataFrame(
         {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 25.0, "wind_speed": 2.0},
-        index=pd.date_range("1990-06-20 00:00", "1990-06-21 23:00", freq="1h", tz="UTC"),
+        index=pd.date_range("1990-01-01 00:00", periods=8760, freq="1h", tz="UTC"),
     )
     for column, value in marked.items():
         weather.loc[pd.Timestamp(marked_hour_utc, tz="UTC"), column] = value
