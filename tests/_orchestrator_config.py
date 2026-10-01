@@ -3,12 +3,14 @@
 
 Usage::
 
-    from tests._orchestrator_config import load_orchestrator_config, sole_offline_lane_job
+    from tests._orchestrator_config import lane_job_directory, load_orchestrator_config, sole_offline_lane_job
 
     test_command = load_orchestrator_config(project_root)["test_command"]
     matrix_job = sole_offline_lane_job(project_root, "interpreter-matrix")
+    matrix_directory = lane_job_directory(project_root, matrix_job)
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -33,3 +35,13 @@ def sole_offline_lane_job(project_root: Path, name: str) -> dict[str, Any]:
         "never runs that job, with several every merge runs it more than once"
     )
     return jobs[0]
+
+
+def lane_job_directory(project_root: Path, job: Mapping[str, Any]) -> Path:
+    """Return the directory the offline lane runs *job*'s command in, *project_root* standing in for the lane worktree's root.
+
+    That is the job's cwd under the root, or the root itself when the job sets none.
+    The rule is dark-factory's LaneCommand.cwd (orchestrator/src/orchestrator/config.py), which defaults to '.'.
+    """
+    cwd: str = job.get("cwd", ".")
+    return project_root / cwd
