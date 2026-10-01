@@ -11,7 +11,8 @@ import random
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Collection, Iterator, Literal, Optional, Union, cast
+from types import MappingProxyType
+from typing import Any, Collection, Iterator, Literal, Mapping, Optional, Union, cast
 
 import pandas as pd
 import yaml
@@ -790,7 +791,24 @@ def parse_dispatch_strategy_config(
     )
 
 
-def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig]:
+_TARIFF_BLOCK_KEYS: Mapping[str, frozenset[str]] = MappingProxyType({
+    "flat_rate": frozenset({"type", "rate_per_kwh", "name"}),
+    "economy_7": frozenset({
+        "type", "off_peak_rate", "peak_rate", "off_peak_start", "off_peak_end",
+    }),
+    "economy_10": frozenset({
+        "type", "off_peak_rate", "peak_rate", "night_start", "night_end", "afternoon_start",
+        "afternoon_end", "evening_start", "evening_end",
+    }),
+    "custom": frozenset({"type", "periods", "name"}),
+})
+
+_TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
+
+
+def parse_tariff_config(
+    data: Optional[dict[str, Any]], *, block_path: str = "tariff"
+) -> Optional[TariffConfig]:
     """Parse tariff configuration from config data.
 
     Supports preset tariffs (flat_rate, economy_7, economy_10) and custom
@@ -798,19 +816,30 @@ def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig
 
     Args:
         data: Tariff configuration dictionary or None
+        block_path: The block's path in its file, named in error messages
 
     Returns:
         TariffConfig object or None if data is None
 
     Raises:
-        ConfigurationError: If tariff specification is invalid
+        ConfigurationError: If tariff specification is invalid, including a
+            block or custom period that is not a mapping or carries a key its
+            type does not read
     """
     if data is None:
         return None
+    _require_mapping(block_path, data)
 
     tariff_type = data.get("type")
     if tariff_type is None:
         raise ConfigurationError("Tariff configuration requires 'type' field")
+    recognised = _TARIFF_BLOCK_KEYS.get(tariff_type) if isinstance(tariff_type, str) else None
+    if recognised is None:
+        raise ConfigurationError(
+            f"Unknown tariff type '{tariff_type}'. "
+            f"Supported types: {', '.join(_TARIFF_BLOCK_KEYS)}"
+        )
+    _refuse_unrecognised_keys(block_path, data, recognised)
 
     if tariff_type == "flat_rate":
         rate = data.get("rate_per_kwh")
@@ -853,7 +882,7 @@ def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig
             kwargs["evening_end"] = data["evening_end"]
         return TariffConfig.economy_10(**kwargs)
 
-    elif tariff_type == "custom":
+    else:
         if "periods" not in data:
             raise ConfigurationError("custom tariff requires 'periods' field")
 
@@ -862,7 +891,10 @@ def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig
             raise ConfigurationError("custom tariff must have at least one period")
 
         periods = []
-        for period_data in periods_data:
+        for index, period_data in enumerate(periods_data):
+            _refuse_unrecognised_keys(
+                _child_path(block_path, f"periods[{index}]"), period_data, _TARIFF_PERIOD_KEYS
+            )
             if "start_time" not in period_data:
                 raise ConfigurationError("Tariff period requires 'start_time' field")
             if "end_time" not in period_data:
@@ -882,12 +914,6 @@ def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig
         return TariffConfig(
             periods=tuple(periods),
             name=data.get("name", "")
-        )
-
-    else:
-        raise ConfigurationError(
-            f"Unknown tariff type '{tariff_type}'. "
-            "Supported types: flat_rate, economy_7, economy_10, custom"
         )
 
 
@@ -997,7 +1023,9 @@ def parse_home_block(
         load_config=_parse_load_config(load_data, block_path=_child_path(block_path, "load")),
         location=location,
         name=data.get("name", ""),
-        tariff_config=parse_tariff_config(tariff_data),
+        tariff_config=parse_tariff_config(
+            tariff_data, block_path=_child_path(block_path, "tariff")
+        ),
         dispatch_strategy=dispatch_strategy,
         heat_pump_config=_parse_heat_pump_config(
             data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
@@ -1837,7 +1865,9 @@ def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
         home=home,
         output=_parse_output_config(data.get("output")),
         seg_tariff_pence_per_kwh=parse_seg_rate(data.get("seg")),
-        tariff_config=parse_tariff_config(data.get("tariff_config")),
+        tariff_config=parse_tariff_config(
+            data.get("tariff_config"), block_path=_child_path(block_path, "tariff_config")
+        ),
         finance=parse_finance_config(data.get("finance")),
     )
 
@@ -2426,7 +2456,7 @@ def _parse_community_billing_config(
     if data is None:
         return None
 
-    tariff = parse_tariff_config(data.get("tariff"))
+    tariff = parse_tariff_config(data.get("tariff"), block_path="community.billing.tariff")
 
     # Resolve SEG rate (three mutually-exclusive forms)
     direct_rate: Optional[float] = None
