@@ -4,6 +4,7 @@
 Usage::
 
     from tests._orchestrator_config import (
+        git_config,
         lane_job_directory,
         lane_job_enabled,
         load_orchestrator_config,
@@ -11,6 +12,7 @@ Usage::
     )
 
     test_command = load_orchestrator_config(project_root)["test_command"]
+    offline_lane_enabled = git_config(project_root).get("offline_lane_enabled")
     matrix_job = sole_offline_lane_job(project_root, "interpreter-matrix")
     matrix_directory = lane_job_directory(project_root, matrix_job)
     matrix_enabled = lane_job_enabled(matrix_job)
@@ -30,9 +32,15 @@ def load_orchestrator_config(project_root: Path) -> dict[str, Any]:
     return config
 
 
+def git_config(project_root: Path) -> dict[str, Any]:
+    """Return the `git` mapping (dark-factory's GitConfig) of *project_root*'s dark-factory-orchestrator.yaml, where the offline-lane settings live."""
+    git: dict[str, Any] = load_orchestrator_config(project_root)["git"]
+    return git
+
+
 def sole_offline_lane_job(project_root: Path, name: str) -> dict[str, Any]:
     """Return the offline-lane job (git.offline_lane_commands entry) named *name*, asserting it is the only one."""
-    git: dict[str, Any] = load_orchestrator_config(project_root)["git"]
+    git = git_config(project_root)
     jobs: list[dict[str, Any]] = [
         job for job in git.get("offline_lane_commands") or [] if job.get("name") == name
     ]

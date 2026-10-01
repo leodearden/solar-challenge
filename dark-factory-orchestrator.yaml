@@ -61,13 +61,15 @@ git:
   # - e2e: the non-slow Playwright suite. LaneCommand has no timeout field and
   #   the lane is single-flight, so without `timeout` a hung browser run would
   #   stall every later lane run; 1800 s is ~8x the measured 214 s run.
-  # The legacy numeric seam is off: this repo has no scripts/run-offline-deep.sh.
+  # The legacy numeric and infra seams are off: this repo has neither
+  # scripts/run-offline-deep.sh nor reify's tests/infra/run_all.sh.
   # offline_lane_enabled and persistent_offline_deep_worktree take effect at
   # orchestrator restart (the fleet redeploy applies them); offline_lane_commands
   # is hot-reloadable.
   persistent_offline_deep_worktree: true
   offline_lane_enabled: true
   offline_lane_legacy_numeric_enabled: false
+  offline_lane_infra_enabled: false
   offline_lane_commands:
     - name: interpreter-matrix
       command: "uv run --extra dev pytest tests/interpreter_matrix"
