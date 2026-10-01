@@ -10,31 +10,24 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
 from tests._interpreters import off_pin_minor_versions, python_version_pin
 from tests._orchestrator_config import (
+    git_config,
     lane_job_directory,
     lane_job_enabled,
-    load_orchestrator_config,
     sole_offline_lane_job,
 )
 
 _MATRIX_JOB = "interpreter-matrix"
 
 
-def _git_config(project_root: Path) -> dict[str, Any]:
-    """Return the `git` mapping of dark-factory-orchestrator.yaml, where the offline-lane keys live."""
-    git: dict[str, Any] = load_orchestrator_config(project_root)["git"]
-    return git
-
-
 def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Path) -> None:
     """The offline lane must start, skip the seams this repo lacks, and run one interpreter-matrix job."""
-    git = _git_config(project_root)
+    git = git_config(project_root)
 
     assert git.get("offline_lane_enabled") is True, (
         "git.offline_lane_enabled is not true, so the offline lane never starts and no "

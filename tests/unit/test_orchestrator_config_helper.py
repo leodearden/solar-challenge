@@ -9,7 +9,7 @@ import pytest
 from tests._orchestrator_config import git_config, lane_job_directory, lane_job_enabled
 
 
-def test_git_config_is_the_git_mapping_of_the_project_roots_orchestrator_config(tmp_path: Path) -> None:
+def test_the_git_mapping_is_read_whole_from_the_project_roots_orchestrator_config(tmp_path: Path) -> None:
     (tmp_path / "dark-factory-orchestrator.yaml").write_text(
         textwrap.dedent(
             """\
