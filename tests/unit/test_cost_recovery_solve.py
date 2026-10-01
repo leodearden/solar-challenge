@@ -771,3 +771,67 @@ class TestSolveCostRecoveryRateDegenerate:
             sol.net_surplus_per_home_per_year_gbp
             < finance.retained_cash_floor_per_home_per_year_gbp
         )
+
+
+# ---------------------------------------------------------------------------
+# Short window — a sub-360-day window solves as its 365-day year
+# ---------------------------------------------------------------------------
+
+
+class TestSolveCostRecoveryRateShortWindow:
+    """A window under 360 days solves like the full year with the same daily rates.
+
+    The projection annualises the window, so its own-use rate base and revenue
+    sit on the same 365-day basis as the annual opex, debt and floor.
+    """
+
+    def test_short_window_solves_like_the_equivalent_full_year(self) -> None:
+        """Rate, surplus, outlay, binding and feasibility all match the full-year solve."""
+        from solar_challenge.finance import solve_cost_recovery_rate
+        from solar_challenge.fleet import FleetResults
+
+        n_homes = 5
+        window_days = 3
+        scenario = _make_scenario(n_homes=n_homes)
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=2000.0,
+            grant_gbp=0.0,
+            own_use_rate_pence_per_kwh=15.0,
+            retained_cash_floor=100.0,
+            retail_baseline_rate=30.0,
+            n_homes=n_homes,
+        )
+        fleet_full_year = _make_fleet_results(
+            n_homes=n_homes, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0
+        )
+        share_of_year = window_days / 365
+        fleet_short = FleetResults(
+            per_home_results=[
+                _make_sim_results(
+                    2000.0 * share_of_year,
+                    800.0 * share_of_year,
+                    1200.0 * share_of_year,
+                    n_minutes=window_days * 1440,
+                )
+                for _ in scenario.homes
+            ],
+            home_configs=list(scenario.homes),
+        )
+
+        sol_full = solve_cost_recovery_rate(
+            scenario, finance, simulate=lambda fc, s, e: fleet_full_year
+        )
+        sol_short = solve_cost_recovery_rate(scenario, finance, simulate=lambda fc, s, e: fleet_short)
+
+        assert sol_full.binding == "floor", "premise: the full year solves in the interior"
+        assert sol_short.own_use_rate_pence_per_kwh == pytest.approx(
+            sol_full.own_use_rate_pence_per_kwh, rel=1e-9
+        )
+        assert sol_short.net_surplus_per_home_per_year_gbp == pytest.approx(
+            sol_full.net_surplus_per_home_per_year_gbp, rel=1e-9
+        )
+        assert sol_short.representative_outlay_gbp == pytest.approx(
+            sol_full.representative_outlay_gbp, rel=1e-9
+        )
+        assert sol_short.binding == sol_full.binding
+        assert sol_short.feasible == sol_full.feasible

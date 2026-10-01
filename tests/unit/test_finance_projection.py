@@ -1975,3 +1975,100 @@ class TestProjectHonoursScenarioLevelSeg:
 
         with pytest.raises(ValueError, match=re.compile(r"inconsistent.*SEG", re.IGNORECASE)):
             project_multi_year(scenario_inconsistent, finance, simulate=sim)
+
+
+# ---------------------------------------------------------------------------
+# Short-window annualisation — a sub-360-day window projects as its 365-day year
+# ---------------------------------------------------------------------------
+
+_SHORT_WINDOW_DAYS = 3
+
+
+def _make_full_year_and_short_window_fleets() -> tuple:
+    """Return (scenario, finance, battery_config, fleet_full_year, fleet_short).
+
+    Two battery homes at the same daily rates over a full year and over a
+    _SHORT_WINDOW_DAYS window, so the short fleet's kWh totals are the annual
+    ones × _SHORT_WINDOW_DAYS / 365.  Inject either fleet with
+    ``simulate=lambda fc, s, e: fleet``.
+    """
+    from solar_challenge.battery import BatteryConfig
+    from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+    from solar_challenge.fleet import FleetResults
+    from solar_challenge.home import HomeConfig
+    from solar_challenge.location import Location
+
+    battery_config = BatteryConfig(
+        capacity_kwh=10.0,
+        max_charge_kw=3.5,
+        max_discharge_kw=3.5,
+        calendar_fade_rate_per_year=0.005,
+        cycle_fade_per_equivalent_full_cycle=0.0002,
+        soh_floor=0.60,
+    )
+    homes = [
+        HomeConfig(
+            pv_config=_make_pv_config(),
+            load_config=_make_load_config(),
+            location=Location.bristol(),
+            battery_config=battery_config,
+        )
+        for _ in range(2)
+    ]
+    scenario = ScenarioConfig(
+        name="short-window-test",
+        period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+        description="Short-window annualisation test",
+        homes=homes,
+    )
+    finance = FinanceConfig(
+        standing_charge_pence_per_day=28.0,
+        asset_life_years=25,
+        grid_services_income_per_kw_per_year_gbp=10.0,
+    )
+
+    def fleet_over(window_days: int) -> "FleetResults":  # type: ignore[name-defined]
+        share_of_year = window_days / 365
+        return FleetResults(
+            per_home_results=[
+                _make_sim_results(
+                    self_kwh=3000.0 * share_of_year,
+                    export_kwh=1000.0 * share_of_year,
+                    import_kwh=500.0 * share_of_year,
+                    discharge_kwh=800.0 * share_of_year,
+                    n_steps=24 * window_days,
+                )
+                for _ in homes
+            ],
+            home_configs=homes,
+        )
+
+    return scenario, finance, battery_config, fleet_over(365), fleet_over(_SHORT_WINDOW_DAYS)
+
+
+class TestProjectMultiYearAnnualisesShortWindow:
+    """A window under 360 days projects as the 365-day year it samples.
+
+    project_multi_year scales each home's window totals to a 365-day year, so a
+    short window at the same daily rates as a full year gives the same curve.
+    """
+
+    def test_short_window_projects_the_equivalent_full_year_curve(self) -> None:
+        """Every YearPoint field, energy, revenue and SOH alike, matches the full-year curve."""
+        from solar_challenge.finance import project_multi_year
+        from solar_challenge.home import calculate_summary
+
+        scenario, finance, battery_config, fleet_full_year, fleet_short = (
+            _make_full_year_and_short_window_fleets()
+        )
+        short_summary = calculate_summary(fleet_short.per_home_results[0])
+        assert short_summary.simulation_days == _SHORT_WINDOW_DAYS
+
+        curve_full = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_full_year)
+        curve_short = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_short)
+
+        # Premise: SOH stays above the floor, so window-length discharge would show as higher SOH.
+        assert curve_full.points[-1].battery_soh > battery_config.soh_floor
+        assert curve_short.sampled_ages == curve_full.sampled_ages
+        for short, full in zip(curve_short.points, curve_full.points, strict=True):
+            assert dataclasses.asdict(short) == pytest.approx(dataclasses.asdict(full), rel=1e-9)
