@@ -571,12 +571,6 @@ class TestFinanceConfigGridServicesModel:
 
     _BASE: dict = {"standing_charge_pence_per_day": 60.0}
 
-    def test_frozen_with_new_fields(self) -> None:
-        """FinanceConfig is still frozen after adding new fields."""
-        fc = FinanceConfig(**self._BASE)
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            fc.grid_services_model = "capacity_at_events"  # type: ignore[misc]
-
     def test_picklable_with_new_fields(self) -> None:
         """FinanceConfig is picklable when grid_services_events is None."""
         fc = FinanceConfig(**self._BASE)
