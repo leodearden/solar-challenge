@@ -3,6 +3,7 @@
 **Task:** #203 (follow-up from #189)
 **Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_voltage_matched_cec_inverter`, `_ranking_key`, `_wiring_within_window`, `_CecInverter.admits`)
 **PRD:** [docs/prds/discrete-install-config-sweep.md](prds/discrete-install-config-sweep.md) §2.1
+**Measurement:** [`scripts/measure_mppt_window.py`](../scripts/measure_mppt_window.py) (§3)
 
 ---
 
@@ -30,32 +31,39 @@ than ten times the error it removes, with no gain in accuracy (§4).
 
 ## 3. Method
 
-§4–§6 were measured this way, and task 240 measures the window's floor the same way.
+[`scripts/measure_mppt_window.py`](../scripts/measure_mppt_window.py) is the method. It
+prints the figures in §4–§6, and can write a CSV with one row per sizing and
+configuration; the figures for particular capacities, and §6's count against the band,
+are read from that. Its docstring gives the command. A run takes about twelve minutes,
+and the script is not part of the test suite. Task 240 measures the window's floor with
+it too. In outline:
 
-- **Provenance.** Measured on main 9e9ab8f (2026-09-30) and re-measured in full on
-  abd0bcc (2026-10-01); pv.py's selection code and uv.lock are the same in both. CPython
-  3.12.3, pvlib 0.15.1, pandas 3.0.3, numpy 2.4.6.
+- **Provenance.** Measured on main 9e9ab8f (2026-09-30), re-measured in full on
+  abd0bcc (2026-10-01), and reproduced by the script on task 203's branch from main
+  a0f1102 (2026-10-01). pv.py's selection code and uv.lock are the same in all three.
+  CPython 3.12.3, pvlib 0.15.1, pandas 3.0.3, numpy 2.4.6.
 - **Weather.** The PVGIS TMY for `Location.bristol()`: year 1990, UTC-indexed, 8760
-  hours, minimum air temperature −6.2 °C, cached as `tmy_5dc8c8bca218`. Read it with
-  `weather.set_weather_cache(WeatherCache(<cache dir>))` and `get_tmy_data`.
+  hours, minimum air temperature −6.2 °C, cached as `tmy_5dc8c8bca218`. The script
+  reads it through the weather cache and prints those facts, so a different TMY shows.
 - **Model.** `create_model_chain(config, location).run_model(tmy)`. The hourly AC,
   clipped at 0 and summed, equals the year-long home's generation: 4 kW gives
-  4328.13 kWh, as `simulate_home` does over a whole year. Per array, `results.dc`'s
-  `v_mp` and `p_mp` are the string voltage and the array power; `results.diode_params`
-  are per module.
+  4328.13 kWh, as `simulate_home` does over a whole year. A producing hour has sunlight
+  on the cells. Counting `p_mp > 0` instead would add 518 night hours, where the diode
+  solver leaves about 1e-43 W.
 - **Module.** The representative CEC module: 400.428 W at STC, `V_mp_ref` 44.1 V,
   `V_oc_ref` 53.4 V, `beta_oc` −0.147064 V/K. The CEC library has no V_mp temperature
   coefficient.
-- **(a) Extrapolation alone.** Run `pvlib.inverter.sandia_multi` with each array's
-  `v_mp` clipped to the window's edge and `p_mp` unchanged, and compare its annual AC
-  with the model's.
+- **Sizing.** Each configuration gets its inverter and wiring from pv.py's own
+  selection. An alternative sizing in §4 divides every catalogue `Mppt_high` by its
+  factor before that selection runs, which is the same check as multiplying the string
+  voltage by it.
+- **(a) Extrapolation alone.** `pvlib.inverter.sandia_multi` gets each array's `v_mp`
+  moved to the window's edge in its out-of-window hours, at unchanged `p_mp`. Its annual
+  AC is compared with the model's.
 - **(b) What a real inverter delivers.** An inverter holds a string outside its window
-  at the window's edge, off the maximum power point. Re-evaluate each out-of-window hour
-  there, on its IV curve:
-  - V_module = edge / modules_per_string.
-  - I = `pvlib.pvsystem.i_from_v(V_module, I_L, I_o, R_s, R_sh, nNsVth)`.
-  - Array P = V_module × I × modules_per_string × strings.
-  - Run `sandia_multi` at the clipped voltages with those powers.
+  at the window's edge, off the maximum power point. Each out-of-window hour is
+  re-evaluated there, on the module's IV curve (`pvlib.pvsystem.i_from_v` with the
+  chain's diode parameters), and `sandia_multi` gets that power at the edge's voltage.
 - **Counting.** Configured capacities that wire the same modules to the same inverter
   give identical results, so §4 takes the current sizing's error over distinct
   inverter/wiring pairs; the census and headroom tables count configs. Medians are
@@ -68,7 +76,7 @@ than ten times the error it removes, with no gain in accuracy (§4).
   POA 258 W/m², cell 4.3 °C, air −3.8 °C.
 - The six hours above 1.06 × `V_mp_ref` fall in February, March and December, between
   08:00 and 11:00 UTC, at 184–301 W/m² with cells at 4.0–6.9 °C.
-- For the default 4 kW string, 1679 of its 4744 producing hours, carrying 38.3% of its
+- For the default 4 kW string, 1679 of its 4226 producing hours, carrying 38.3% of its
   DC energy, run above `V_mp_ref`.
 
 **Proxy coefficient.**
@@ -87,7 +95,7 @@ than ten times the error it removes, with no gain in accuracy (§4).
 |---|---|---|---|---|
 | Longest string within 10% of `Mppt_high` at STC | 68 | 168 | 108 | 92 |
 | Configs with any hour above `Mppt_high` | 33 | 88 | 0 | 92 |
-| Most hours above, of 4744 producing | 1215 | 1215 | 0 | 1660 |
+| Most hours above, of 4226 producing | 1215 | 1215 | 0 | 1660 |
 | Largest overshoot | 52.4 V | 24.1 V | – | 51.0 V |
 
 **Error of the current sizing**, over the 64 distinct inverter/wiring pairs with any
@@ -154,9 +162,10 @@ left" is the most hours any config in the column still spends above the ceiling.
   (0.3–0.6 kW on the 3.68 kW inverter). At default rating, 7.2 kW picks an OutBack
   GS8048A wired as 18 single-module strings; 58% of its DC energy falls below the floor,
   and annual AC is 1.11% lower. Task 240 owns that.
-- The measurement covers Bristol only. Re-measure with §3 before relying on it for a
-  colder site or a module with a larger voltage temperature coefficient. Re-measure too
-  once the model gains out-of-window inverter behaviour or a new selection policy.
+- The measurement covers Bristol only. Re-run §3's script, with the site or module
+  changed, before relying on it for a colder site or a module with a larger voltage
+  temperature coefficient. Re-run it too once the model gains out-of-window inverter
+  behaviour or a new selection policy.
 
 ## 6. Annual-Yield Band Re-Check (Task Item 5)
 
