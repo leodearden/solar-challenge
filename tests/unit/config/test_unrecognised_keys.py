@@ -14,6 +14,7 @@ from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_T
 from solar_challenge.config import (
     ConfigurationError,
     DispatchStrategyConfig,
+    FleetDistributionConfig,
     GridChargeConfig,
     detect_sweep_spec,
     load_community_config,
@@ -50,6 +51,11 @@ _CLI_TEMPLATES = {"home": HOME_TEMPLATE, "fleet": FLEET_TEMPLATE, "scenario": SC
 def _parsed_home(**blocks: Any) -> HomeConfig:
     """Parse a ``home:`` block holding only *blocks*, at the Bristol default location."""
     return parse_home_block(blocks, Location.bristol())
+
+
+def _parsed_fleet_distribution(**sections: Any) -> FleetDistributionConfig:
+    """Parse a one-home ``fleet_distribution:`` block with a 4 kW pv section, overridden by *sections*."""
+    return parse_fleet_distribution_config({"n_homes": 1, "pv": {"capacity_kw": 4.0}, **sections})
 
 
 def _refusal(block_path: str, *keys: str) -> str:
@@ -506,6 +512,205 @@ class TestTariffBlockKeys:
     ) -> None:
         """A block setting every key its type reads parses to the TariffConfig built from those values."""
         assert parse_tariff_config(block) == expected
+
+
+class TestFleetDistributionBlockKeys:
+    """A fleet_distribution: block, its component blocks and their distribution specs refuse a key their parser does not read."""
+
+    _ONLY_7KW_CHARGERS: dict[str, Any] = {"type": "weighted_discrete", "values": ["7kW"], "weights": [1]}
+
+    @pytest.mark.parametrize(
+        ("sections", "block_path", "key"),
+        [
+            pytest.param({"homes_count": 5}, "fleet_distribution", "homes_count", id="fleet_distribution"),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "orientation": 180}},
+                "fleet_distribution.pv",
+                "orientation",
+                id="pv",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": 5.0, "power_kw": 2.5}},
+                "fleet_distribution.battery",
+                "power_kw",
+                id="battery",
+            ),
+            pytest.param(
+                {"load": {"annual_consumption_kwh": 3400, "occupants": 3}},
+                "fleet_distribution.load",
+                "occupants",
+                id="load",
+            ),
+            pytest.param(
+                {"heat_pump": {"heat_pump_type": "ASHP", "capacity_kw": 8.0}},
+                "fleet_distribution.heat_pump",
+                "capacity_kw",
+                id="heat_pump",
+            ),
+            pytest.param(
+                {"ev": {"charger_type": _ONLY_7KW_CHARGERS, "arrival": 18}},
+                "fleet_distribution.ev",
+                "arrival",
+                id="ev",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0, "minimum": 2.0}}},
+                "fleet_distribution.pv.capacity_kw",
+                "minimum",
+                id="normal",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 5.0, "mean": 4.0}}},
+                "fleet_distribution.pv.capacity_kw",
+                "mean",
+                id="uniform",
+            ),
+            pytest.param(
+                {
+                    "pv": {
+                        "capacity_kw": {
+                            "type": "weighted_discrete",
+                            "values": [3.0, 4.0],
+                            "weights": [1, 1],
+                            "counts": [1, 1],
+                        }
+                    }
+                },
+                "fleet_distribution.pv.capacity_kw",
+                "counts",
+                id="weighted_discrete",
+            ),
+            pytest.param(
+                {
+                    "pv": {
+                        "capacity_kw": {
+                            "type": "shuffled_pool",
+                            "values": [4.0],
+                            "counts": [1],
+                            "weights": [1],
+                        }
+                    }
+                },
+                "fleet_distribution.pv.capacity_kw",
+                "weights",
+                id="shuffled_pool",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "fixed", "value": 4.0, "values": [4.0]}}},
+                "fleet_distribution.pv.capacity_kw",
+                "values",
+                id="fixed",
+            ),
+            pytest.param(
+                {
+                    "battery": {
+                        "capacity_kwh": {
+                            "type": "proportional_to",
+                            "source": "pv.capacity_kw",
+                            "factor": 2.0,
+                        }
+                    }
+                },
+                "fleet_distribution.battery.capacity_kwh",
+                "factor",
+                id="proportional_to",
+            ),
+            pytest.param(
+                {
+                    "battery": {
+                        "capacity_kwh": {
+                            "type": "proportional_to",
+                            "source": "pv.capacity_kw",
+                            "multiplier": {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3, "step": 1},
+                        }
+                    }
+                },
+                "fleet_distribution.battery.capacity_kwh.multiplier",
+                "step",
+                id="sweep-multiplier",
+            ),
+        ],
+    )
+    def test_unrecognised_key_is_refused_naming_its_block(
+        self, sections: dict[str, Any], block_path: str, key: str
+    ) -> None:
+        """A key outside a block's or distribution spec's grammar is refused, naming its path and the key."""
+        with pytest.raises(ConfigurationError, match=_refusal(block_path, key)):
+            _parsed_fleet_distribution(**sections)
+
+    def test_raw_keys_load_fleet_config_reads_are_recognised(self, tmp_path: Path) -> None:
+        """dispatch_strategy and battery.grid_charging, which load_fleet_config reads raw, are accepted beside every parsed key."""
+        fleet_distribution = {
+            "n_homes": 2,
+            "seed": 42,
+            "random_order": "default",
+            "dispatch_strategy": "tou_optimized",
+            "pv": {
+                "capacity_kw": 4.0,
+                "azimuth": 180.0,
+                "tilt": 35.0,
+                "module_efficiency": 0.2,
+                "inverter_efficiency": 0.96,
+                "system_age_years": 1.0,
+                "degradation_rate_per_year": 0.005,
+            },
+            "battery": {
+                "capacity_kwh": 5.0,
+                "max_charge_kw": 2.5,
+                "max_discharge_kw": 2.5,
+                "grid_charging": {"target_soc_fraction": 0.8},
+            },
+            "load": {"annual_consumption_kwh": 3400, "household_occupants": 3, "use_stochastic": False},
+            "heat_pump": {
+                "heat_pump_type": "ASHP",
+                "thermal_capacity_kw": 8.0,
+                "annual_heat_demand_kwh": 8000.0,
+            },
+            "ev": {
+                "charger_type": self._ONLY_7KW_CHARGERS,
+                "arrival_hour": 18,
+                "departure_hour": 7,
+                "required_charge_kwh": 30.0,
+                "smart_charging_mode": "solar",
+            },
+        }
+        path = _write(
+            tmp_path, {"fleet_distribution": fleet_distribution, "tariff": {"type": "economy_7"}}
+        )
+
+        home = load_fleet_config(path).homes[0]
+
+        assert home.battery_config is not None
+        assert home.battery_config.grid_charging == GridChargeConfig(target_soc_fraction=0.8)
+        assert home.dispatch_strategy == "tou_optimized"
+
+    def test_load_fleet_config_names_the_grid_charging_block(self, tmp_path: Path) -> None:
+        """The fleet battery's grid_charging block refuses an unrecognised key at its full path."""
+        battery = {"capacity_kwh": 5.0, "grid_charging": {"target": 0.8}}
+        path = _write(
+            tmp_path,
+            {"fleet_distribution": {"n_homes": 1, "pv": {"capacity_kw": 4.0}, "battery": battery}},
+        )
+        with pytest.raises(
+            ConfigurationError, match=_refusal("fleet_distribution.battery.grid_charging", "target")
+        ):
+            load_fleet_config(path)
+
+    @pytest.mark.parametrize(
+        ("sections", "block_path", "type_name"),
+        [
+            pytest.param({"load": None}, "fleet_distribution.load", "NoneType", id="load"),
+            pytest.param({"pv": 4.0}, "fleet_distribution.pv", "float", id="pv"),
+        ],
+    )
+    def test_non_mapping_component_block_is_refused_naming_it(
+        self, sections: dict[str, Any], block_path: str, type_name: str
+    ) -> None:
+        """A component block that is not a mapping is refused, naming its path and the type it got."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+        ):
+            _parsed_fleet_distribution(**sections)
 
 
 class TestShippedScenarios:
