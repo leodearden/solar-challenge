@@ -7,13 +7,11 @@ merge instead, so an e2e regression files a fix task rather than rotting
 unseen.
 """
 
-import os
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
+from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
 from tests._orchestrator_config import sole_offline_lane_job
 
 _E2E_JOB = "e2e"
@@ -28,35 +26,25 @@ def test_offline_lane_runs_one_enabled_e2e_job(project_root: Path) -> None:
     )
 
 
+@requires_uv
 def test_e2e_job_collects_the_e2e_suite_and_nothing_else(project_root: Path) -> None:
     """Run as the lane runs it, the e2e job collects at least one test, every one under tests/e2e/.
 
     The repo's pytest addopts stay in force, as they do in the lane, so this also
     pins that the job's explicit tests/e2e path overrides their --ignore=tests/e2e.
     """
-    if shutil.which("uv") is None:
-        pytest.skip("uv is not installed; the e2e job runs through it")
     job = sole_offline_lane_job(project_root, _E2E_JOB)
     command = job["command"]
 
-    result = subprocess.run(
-        command,
-        shell=True,
-        cwd=project_root / job.get("cwd", "."),
-        env={**os.environ, "PYTEST_ADDOPTS": "--collect-only --verbosity=-1"},
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    result = run_collect_only(command, project_root / job.get("cwd", "."))
 
-    assert result.returncode == 0, (
-        f"the {_E2E_JOB!r} lane job {command!r} failed to collect (exit {result.returncode})\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert result.returncode == pytest.ExitCode.OK, (
+        f"the {_E2E_JOB!r} lane job {command!r} failed to collect\n{describe_outcome(result)}"
     )
-    node_ids = [line for line in result.stdout.splitlines() if "::" in line]
+    node_ids = collected_node_ids(result.stdout)
     assert node_ids, (
         f"the {_E2E_JOB!r} lane job {command!r} collected no tests, so the lane stays green "
-        f"while the e2e suite goes unrun\nstdout:\n{result.stdout}"
+        f"while the e2e suite goes unrun\n{describe_outcome(result)}"
     )
     outside_e2e = [node_id for node_id in node_ids if not node_id.startswith("tests/e2e/")]
     assert not outside_e2e, (
