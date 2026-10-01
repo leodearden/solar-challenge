@@ -186,14 +186,91 @@ class TestScenarioAPI:
         assert "location" in data["yaml"]
 
     def test_validate_valid_returns_ok(self, client: FlaskClient) -> None:
-        """Test POST /api/scenarios/validate with valid data returns ok."""
+        """A named, complete builder form validates with no errors."""
         response = client.post(
             "/api/scenarios/validate",
-            json={"name": "Test Scenario"},
+            json=TestBuilderScenarioYaml._DEFAULT_FORM,
         )
         assert response.status_code == 200
         data = response.get_json()
         assert data["valid"] is True
+        assert data["errors"] == []
+
+    @pytest.mark.parametrize(
+        ("without", "changes", "error_text"),
+        [
+            pytest.param(
+                ("pv_capacity_kw",),
+                {"pv_distribution_type": "uniform", "pv_min": 8, "pv_max": 2},
+                "min cannot be greater than max",
+                id="PV uniform min above max",
+            ),
+            pytest.param(
+                ("battery_capacity_kwh",),
+                {
+                    "battery_distribution_type": "weighted_discrete",
+                    "battery_wd_values": [{"value": 0, "weight": 0}, {"value": 5, "weight": 0}],
+                },
+                "weights cannot all be zero",
+                id="battery weights all zero",
+            ),
+            pytest.param((), {"seg_rate_pence_per_kwh": -1}, "seg", id="negative SEG rate"),
+            pytest.param((), {"import_rate": -0.1}, "negative", id="negative import rate"),
+            pytest.param((), {"end_date": ""}, "end_date", id="cleared end date"),
+            pytest.param((), {"export_rate": 0.15}, "export_rate", id="unread export_rate"),
+        ],
+    )
+    def test_validate_reports_what_the_scenario_readers_reject(
+        self,
+        client: FlaskClient,
+        without: tuple[str, ...],
+        changes: dict[str, Any],
+        error_text: str,
+    ) -> None:
+        """The default builder form, *without* those fields and with *changes*, is invalid for the reason a scenario reader gives."""
+        form = {
+            key: value
+            for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
+            if key not in without
+        }
+        form.update(changes)
+
+        response = client.post("/api/scenarios/validate", json=form)
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["valid"] is False
+        assert any(error_text in error for error in data["errors"]), data["errors"]
+
+    def test_validate_reports_a_shuffled_pool_too_small_for_the_fleet(
+        self, client: FlaskClient
+    ) -> None:
+        """A PV pool of 90 values for 100 homes is invalid; the builder's default PV pool used to be exactly this.
+
+        Only the rejection is asserted: load_fleet_config raises a bare IndexError for it today.
+        """
+        form = {
+            key: value
+            for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
+            if key != "pv_capacity_kw"
+        }
+        form.update(
+            {
+                "pv_distribution_type": "shuffled_pool",
+                "pv_sp_entries": [
+                    {"value": 3.0, "count": 20},
+                    {"value": 4.0, "count": 40},
+                    {"value": 5.0, "count": 30},
+                ],
+            }
+        )
+
+        response = client.post("/api/scenarios/validate", json=form)
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["valid"] is False
+        assert data["errors"]
 
     def test_validate_missing_name_returns_errors(self, client: FlaskClient) -> None:
         """Test POST /api/scenarios/validate with missing name returns errors."""
