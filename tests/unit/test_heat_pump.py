@@ -558,6 +558,8 @@ class TestGenerateHeatPumpLoadNamesItsLoad:
     """generate_heat_pump_load names its load heat_pump_load_kw, not after its temperature input.
 
     That holds whether or not the reference year has any heating degree-minutes.
+    The inputs are named temp_air, as simulate_home's are,
+    so that naming the load only when it would otherwise be unnamed fails this test.
     """
 
     @pytest.mark.parametrize(
