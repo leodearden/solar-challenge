@@ -3,11 +3,17 @@
 
 Usage::
 
-    from tests._orchestrator_config import lane_job_directory, load_orchestrator_config, sole_offline_lane_job
+    from tests._orchestrator_config import (
+        lane_job_directory,
+        lane_job_enabled,
+        load_orchestrator_config,
+        sole_offline_lane_job,
+    )
 
     test_command = load_orchestrator_config(project_root)["test_command"]
     matrix_job = sole_offline_lane_job(project_root, "interpreter-matrix")
     matrix_directory = lane_job_directory(project_root, matrix_job)
+    matrix_enabled = lane_job_enabled(matrix_job)
 """
 
 from collections.abc import Mapping
@@ -55,3 +61,18 @@ def lane_job_directory(project_root: Path, job: Mapping[str, Any]) -> Path:
         "directory, so the lane cannot start the job's command"
     )
     return directory
+
+
+def lane_job_enabled(job: Mapping[str, Any]) -> bool:
+    """Return whether the offline lane runs *job*: its enabled flag, or True when the job sets none.
+
+    The rule is dark-factory's LaneCommand.enabled (orchestrator/src/orchestrator/config.py), which defaults to True;
+    the lane skips a job whose flag is false.
+    It asserts the flag is a YAML boolean, so a flag this rule cannot read as the lane does fails here, naming the job.
+    """
+    enabled = job.get("enabled", True)
+    assert isinstance(enabled, bool), (
+        f"the {job.get('name')!r} lane job's enabled is {enabled!r}, not a YAML boolean; dark-factory's "
+        "LaneCommand.enabled rejects some such values and coerces others, so write true or false"
+    )
+    return enabled
