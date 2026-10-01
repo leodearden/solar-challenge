@@ -6,8 +6,10 @@ with external JS).
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 from playwright.sync_api import ConsoleMessage, Page, expect
 
 from solar_challenge.config import load_fleet_config
@@ -189,3 +191,73 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
 
     assert len(fleet.homes) == 100
     assert {home.pv_config.capacity_kw for home in fleet.homes} == {4.0}
+
+
+_UPLOADED_FORM_GENERAL_FIELDS: dict[str, Any] = {
+    "name": "Upload round trip",
+    "description": "every builder block",
+    "start_date": "2024-06-01",
+    "end_date": "2024-06-30",
+    "location_preset": "custom",
+    "latitude": 53.4,
+    "longitude": -2.2,
+    "altitude": 38.0,
+    "n_homes": 12,
+    "import_rate": 0.3,
+    "seg_rate_pence_per_kwh": 5.5,
+}
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        pytest.param(
+            {
+                **_UPLOADED_FORM_GENERAL_FIELDS,
+                "pv_distribution_type": "weighted_discrete",
+                "pv_wd_values": [{"value": 3.0, "weight": 1}, {"value": 5.0, "weight": 3}],
+                "battery_distribution_type": "normal",
+                "battery_mean": 5.0,
+                "battery_std": 2.0,
+                "battery_min": 0,
+                "battery_max": 10.0,
+                "load_distribution_type": "shuffled_pool",
+                "load_sp_entries": [{"value": 2900, "count": 6}, {"value": 4100, "count": 6}],
+            },
+            id="distribution rows and min 0",
+        ),
+        pytest.param(
+            {
+                **_UPLOADED_FORM_GENERAL_FIELDS,
+                "pv_distribution_type": "uniform",
+                "pv_mean": 4.0,
+                "pv_std": 1.0,
+                "pv_min": 2,
+                "pv_max": 8,
+                "battery_capacity_kwh": 0,
+                "annual_consumption_kwh": 3100,
+            },
+            id="fixed values and uniform",
+        ),
+    ],
+)
+def test_uploading_a_builder_yaml_restores_the_form_that_emits_it(
+    page: Page, live_server: str, tmp_path: Path, form: dict[str, Any]
+) -> None:
+    """Uploading the YAML the builder previews for *form* sets the form to one that previews the same scenario.
+
+    The location is custom: a preset location reloads as 'custom', the same place under no preset name.
+    """
+    yaml_text = page.request.post(
+        live_server + "/api/scenarios/preview-yaml", data=form, fail_on_status_code=True
+    ).json()["yaml"]
+    with page.expect_response("**/api/scenarios/preview-yaml"):
+        page.goto(live_server + "/scenarios/builder")
+    path = tmp_path / "scenario.yaml"
+    path.write_text(yaml_text, encoding="utf-8")
+
+    with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
+        page.set_input_files('input[type="file"]', path)
+
+    assert after_upload.value.status == 200
+    assert yaml.safe_load(after_upload.value.json()["yaml"]) == yaml.safe_load(yaml_text)
