@@ -331,7 +331,7 @@ Eight tasks across four phases. **File-lock discipline:** `battery.py` + `_parse
 - **Web exposure** of the finance report / new battery fields → candidate P2 follow-up (engine + CLI + YAML only here).
 - **Flexibility / grid-services revenue** (DFS / DNO flex / arbitrage uplift) in the economics — the W1/survey value model; the projection models self-consumption + SEG only. A future revenue-stack extension.
 - **Cycle counting inside the dispatch loop** — the cycle term reads the existing `total_battery_discharge_kwh` aggregate; per-timestep cycle accounting is not added.
-- **Real-historical weather** in the projection — runs on TMY like the rest of the sim (`weather.py`'s historical path stays unwired — a separate gap).
+- **Real-historical weather** in the projection — runs on TMY like the rest of the sim (`weather.py`'s historical path stays unwired — a separate gap). **[Amended 2026-10-01, task 290: that historical path, `weather.get_hourly_data`, never parsed a live PVGIS response and was deleted; real-historical weather remains a separate gap with no fetcher.]**
 - **Re-fixing pricing / SEG** (#2), **PV degradation** (P3), **`fleet.py` simulation logic** (P5) — consumed, not modified.
 - **The CBS-supply VAT regulatory question** (is self-consumed CBS-owned generation VATable?) — a regulatory determination (survey §7), not sim logic; `vat_rate` is configurable so either treatment is expressible.
 

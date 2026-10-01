@@ -48,7 +48,7 @@ The source lives in `src/solar_challenge/` with a setuptools build (`pyproject.t
 The simulation flows through these core modules:
 
 1. **`location.py`** — Frozen dataclass for geographic coordinates (Bristol default: 51.45°N, 2.58°W)
-2. **`weather.py`** — Fetches TMY/hourly irradiance from PVGIS via pvlib; caches results to disk (MD5-keyed by location)
+2. **`weather.py`** — Fetches TMY irradiance from PVGIS via pvlib; caches results to disk (MD5-keyed by location)
 3. **`pv.py`** — Models PV generation using pvlib; interpolates hourly output to 1-minute resolution
 4. **`load.py`** — Generates household consumption profiles scaled to an annual total (Ofgem TDCV by household size, unless set explicitly); stochastic mode via richardsonpy (UK CREST model, a core dependency), with a defensive fallback to the deterministic Elexon Profile Class 1 shape
 5. **`battery.py`** — Tracks state of charge with configurable power limits, efficiency, and SOC constraints
