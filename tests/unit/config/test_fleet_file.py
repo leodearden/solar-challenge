@@ -2,7 +2,6 @@
 """Tests for load_fleet_config, on inline fleet files and on the fleet scenarios shipped in scenarios/."""
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -21,7 +20,7 @@ def scenarios_dir(project_root: Path) -> Path:
 class TestLoadFleetConfig:
     """Tests for loading fleet configuration."""
 
-    def test_load_fleet_config(self) -> None:
+    def test_load_fleet_config(self, tmp_path: Path) -> None:
         """Test loading fleet configuration from file."""
         json_content = {
             "name": "Test Fleet",
@@ -31,37 +30,23 @@ class TestLoadFleetConfig:
                 {"pv": {"capacity_kw": 5.0}, "load": {}},
             ],
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            fleet = load_fleet_config(path)
-            assert fleet.name == "Test Fleet"
-            assert len(fleet.homes) == 3
-        finally:
-            path.unlink()
+        fleet = load_fleet_config(path)
+        assert fleet.name == "Test Fleet"
+        assert len(fleet.homes) == 3
 
-    def test_load_fleet_requires_homes(self) -> None:
+    def test_load_fleet_requires_homes(self, tmp_path: Path) -> None:
         """Test that fleet config requires homes list or fleet_distribution."""
         json_content = {"name": "Empty Fleet"}
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            with pytest.raises(
-                ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
-            ):
-                load_fleet_config(path)
-        finally:
-            path.unlink()
+        with pytest.raises(
+            ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
+        ):
+            load_fleet_config(path)
 
 
 class TestBristolPhase1Scenario:
@@ -141,7 +126,7 @@ class TestBristolPhase1Scenario:
 class TestLoadFleetConfigWithDistribution:
     """Tests for load_fleet_config with fleet_distribution."""
 
-    def test_load_fleet_distribution_yaml(self) -> None:
+    def test_load_fleet_distribution_yaml(self, tmp_path: Path) -> None:
         """Test loading fleet config with distribution from YAML."""
         yaml_content = """
 name: Test Distribution Fleet
@@ -166,30 +151,23 @@ fleet_distribution:
       min: 2000
       max: 6000
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            fleet = load_fleet_config(path)
-            assert fleet.name == "Test Distribution Fleet"
-            assert len(fleet.homes) == 10
+        fleet = load_fleet_config(path)
+        assert fleet.name == "Test Distribution Fleet"
+        assert len(fleet.homes) == 10
 
-            # Check PV sizes are from the distribution
-            pv_sizes = {h.pv_config.capacity_kw for h in fleet.homes}
-            assert pv_sizes.issubset({3.0, 4.0, 5.0})
+        # Check PV sizes are from the distribution
+        pv_sizes = {h.pv_config.capacity_kw for h in fleet.homes}
+        assert pv_sizes.issubset({3.0, 4.0, 5.0})
 
-            # Check some homes have batteries and some don't
-            with_battery = [h for h in fleet.homes if h.battery_config is not None]
-            without_battery = [h for h in fleet.homes if h.battery_config is None]
-            assert len(with_battery) + len(without_battery) == 10
-        finally:
-            path.unlink()
+        # Check some homes have batteries and some don't
+        with_battery = [h for h in fleet.homes if h.battery_config is not None]
+        without_battery = [h for h in fleet.homes if h.battery_config is None]
+        assert len(with_battery) + len(without_battery) == 10
 
-    def test_load_fleet_distribution_json(self) -> None:
+    def test_load_fleet_distribution_json(self, tmp_path: Path) -> None:
         """Test loading fleet config with distribution from JSON."""
         json_content = {
             "name": "JSON Distribution Fleet",
@@ -208,26 +186,19 @@ fleet_distribution:
                 },
             },
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            fleet = load_fleet_config(path)
-            assert fleet.name == "JSON Distribution Fleet"
-            assert len(fleet.homes) == 5
+        fleet = load_fleet_config(path)
+        assert fleet.name == "JSON Distribution Fleet"
+        assert len(fleet.homes) == 5
 
-            # Check PV sizes are in uniform range
-            for home in fleet.homes:
-                assert 3.0 <= home.pv_config.capacity_kw <= 6.0
-                assert home.load_config.annual_consumption_kwh == 3400
-        finally:
-            path.unlink()
+        # Check PV sizes are in uniform range
+        for home in fleet.homes:
+            assert 3.0 <= home.pv_config.capacity_kw <= 6.0
+            assert home.load_config.annual_consumption_kwh == 3400
 
-    def test_load_fleet_backward_compatibility(self) -> None:
+    def test_load_fleet_backward_compatibility(self, tmp_path: Path) -> None:
         """Test that explicit homes list still works."""
         json_content = {
             "name": "Explicit Fleet",
@@ -236,61 +207,40 @@ fleet_distribution:
                 {"pv": {"capacity_kw": 4.0}, "load": {}},
             ],
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            fleet = load_fleet_config(path)
-            assert fleet.name == "Explicit Fleet"
-            assert len(fleet.homes) == 2
-            assert fleet.homes[0].pv_config.capacity_kw == 3.0
-            assert fleet.homes[1].pv_config.capacity_kw == 4.0
-        finally:
-            path.unlink()
+        fleet = load_fleet_config(path)
+        assert fleet.name == "Explicit Fleet"
+        assert len(fleet.homes) == 2
+        assert fleet.homes[0].pv_config.capacity_kw == 3.0
+        assert fleet.homes[1].pv_config.capacity_kw == 4.0
 
-    def test_load_fleet_missing_homes_and_distribution_raises(self) -> None:
+    def test_load_fleet_missing_homes_and_distribution_raises(self, tmp_path: Path) -> None:
         """Test that missing both homes and fleet_distribution raises error."""
         json_content = {"name": "Empty Fleet"}
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            with pytest.raises(
-                ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
-            ):
-                load_fleet_config(path)
-        finally:
-            path.unlink()
+        with pytest.raises(
+            ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
+        ):
+            load_fleet_config(path)
 
-    def test_load_fleet_empty_homes_list_raises(self) -> None:
+    def test_load_fleet_empty_homes_list_raises(self, tmp_path: Path) -> None:
         """Test that empty homes list raises error."""
         json_content = {"name": "Empty Fleet", "homes": []}
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            with pytest.raises(ConfigurationError, match="cannot be empty"):
-                load_fleet_config(path)
-        finally:
-            path.unlink()
+        with pytest.raises(ConfigurationError, match="cannot be empty"):
+            load_fleet_config(path)
 
 
 class TestBristolPhase1DistributionEquivalence:
     """Tests that distribution config can reproduce Bristol Phase 1 scenario."""
 
-    def test_distribution_config_matches_programmatic(self) -> None:
+    def test_distribution_config_matches_programmatic(self, tmp_path: Path) -> None:
         """Test that YAML distribution config produces similar results to programmatic."""
         # Create distribution config that mirrors Bristol Phase 1
         yaml_content = """
@@ -316,45 +266,38 @@ fleet_distribution:
       min: 2000
       max: 6000
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            fleet = load_fleet_config(path)
-            assert len(fleet.homes) == 100
+        fleet = load_fleet_config(path)
+        assert len(fleet.homes) == 100
 
-            # Check PV distribution
-            pv_sizes = [h.pv_config.capacity_kw for h in fleet.homes]
-            assert all(3.0 <= s <= 6.0 for s in pv_sizes)
+        # Check PV distribution
+        pv_sizes = [h.pv_config.capacity_kw for h in fleet.homes]
+        assert all(3.0 <= s <= 6.0 for s in pv_sizes)
 
-            # Check battery distribution
-            no_battery = sum(1 for h in fleet.homes if h.battery_config is None)
-            battery_5 = sum(
-                1
-                for h in fleet.homes
-                if h.battery_config is not None and h.battery_config.capacity_kwh == 5.0
-            )
-            battery_10 = sum(
-                1
-                for h in fleet.homes
-                if h.battery_config is not None and h.battery_config.capacity_kwh == 10.0
-            )
-            # Should be roughly 40/40/20 distribution
-            assert no_battery + battery_5 + battery_10 == 100
+        # Check battery distribution
+        no_battery = sum(1 for h in fleet.homes if h.battery_config is None)
+        battery_5 = sum(
+            1
+            for h in fleet.homes
+            if h.battery_config is not None and h.battery_config.capacity_kwh == 5.0
+        )
+        battery_10 = sum(
+            1
+            for h in fleet.homes
+            if h.battery_config is not None and h.battery_config.capacity_kwh == 10.0
+        )
+        # Should be roughly 40/40/20 distribution
+        assert no_battery + battery_5 + battery_10 == 100
 
-            # Check consumption bounds
-            consumptions = [
-                h.load_config.annual_consumption_kwh
-                for h in fleet.homes
-                if h.load_config.annual_consumption_kwh is not None
-            ]
-            assert all(2000 <= c <= 6000 for c in consumptions)
-        finally:
-            path.unlink()
+        # Check consumption bounds
+        consumptions = [
+            h.load_config.annual_consumption_kwh
+            for h in fleet.homes
+            if h.load_config.annual_consumption_kwh is not None
+        ]
+        assert all(2000 <= c <= 6000 for c in consumptions)
 
 
 class TestAgedScenario:
@@ -400,7 +343,7 @@ class TestAgedScenario:
 class TestLoadFleetConfigFlexThreading:
     """Tests for YAML tariff + grid_charging threading through load_fleet_config."""
 
-    def test_fleet_yaml_tariff_and_grid_charging_threaded(self) -> None:
+    def test_fleet_yaml_tariff_and_grid_charging_threaded(self, tmp_path: Path) -> None:
         """A fleet YAML with top-level tariff: and battery.grid_charging: threads both to all homes."""
         yaml_content = """
 name: Flex Threading Test
@@ -420,25 +363,18 @@ tariff:
   off_peak_rate: 0.09
   peak_rate: 0.25
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            fleet = load_fleet_config(path)
-            assert len(fleet.homes) == 4
-            for home in fleet.homes:
-                assert home.tariff_config is not None, "tariff_config should be threaded"
-                assert home.battery_config is not None, "all homes should have batteries"
-                assert home.battery_config.grid_charging is not None, "grid_charging should be threaded"
-                assert home.battery_config.grid_charging.target_soc_fraction == 0.9
-        finally:
-            path.unlink()
+        fleet = load_fleet_config(path)
+        assert len(fleet.homes) == 4
+        for home in fleet.homes:
+            assert home.tariff_config is not None, "tariff_config should be threaded"
+            assert home.battery_config is not None, "all homes should have batteries"
+            assert home.battery_config.grid_charging is not None, "grid_charging should be threaded"
+            assert home.battery_config.grid_charging.target_soc_fraction == 0.9
 
-    def test_fleet_yaml_dispatch_strategy_threaded(self) -> None:
+    def test_fleet_yaml_dispatch_strategy_threaded(self, tmp_path: Path) -> None:
         """fleet_distribution.dispatch_strategy: tou_optimized threads to all homes via load_fleet_config."""
         yaml_content = """
 name: Dispatch Strategy Threading Test
@@ -453,24 +389,17 @@ fleet_distribution:
     annual_consumption_kwh: 3400
   dispatch_strategy: tou_optimized
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            fleet = load_fleet_config(path)
-            assert len(fleet.homes) == 4
-            for home in fleet.homes:
-                assert home.dispatch_strategy == "tou_optimized", (
-                    "dispatch_strategy should be threaded from YAML to every home"
-                )
-        finally:
-            path.unlink()
+        fleet = load_fleet_config(path)
+        assert len(fleet.homes) == 4
+        for home in fleet.homes:
+            assert home.dispatch_strategy == "tou_optimized", (
+                "dispatch_strategy should be threaded from YAML to every home"
+            )
 
-    def test_fleet_yaml_no_dispatch_strategy_defaults_greedy(self) -> None:
+    def test_fleet_yaml_no_dispatch_strategy_defaults_greedy(self, tmp_path: Path) -> None:
         """fleet YAML without dispatch_strategy key: all homes default to dispatch_strategy='greedy'."""
         yaml_content = """
 name: Dispatch Strategy Default Guard
@@ -484,24 +413,17 @@ fleet_distribution:
   load:
     annual_consumption_kwh: 3400
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            fleet = load_fleet_config(path)
-            assert len(fleet.homes) == 4
-            for home in fleet.homes:
-                assert home.dispatch_strategy == "greedy", (
-                    "dispatch_strategy must default to 'greedy' when key is absent"
-                )
-        finally:
-            path.unlink()
+        fleet = load_fleet_config(path)
+        assert len(fleet.homes) == 4
+        for home in fleet.homes:
+            assert home.dispatch_strategy == "greedy", (
+                "dispatch_strategy must default to 'greedy' when key is absent"
+            )
 
-    def test_theta_calibration_regression_no_tariff_no_grid_charging(self) -> None:
+    def test_theta_calibration_regression_no_tariff_no_grid_charging(self, tmp_path: Path) -> None:
         """θ regression pin: fleet YAML without tariff: or grid_charging is bit-identical (both None).
 
         Mirrors the shape of scenarios/bristol-fin-calibration.yaml (fleet_distribution +
@@ -529,28 +451,21 @@ finance:
   capex_per_home_gbp: 3000
   standing_charge_pence_per_day: 60.0
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            fleet = load_fleet_config(path)
-            assert len(fleet.homes) == 4
-            for home in fleet.homes:
-                assert home.tariff_config is None, (
-                    "tariff_config must be None when no top-level tariff: key is present"
-                )
-                assert home.battery_config is not None
-                assert home.battery_config.grid_charging is None, (
-                    "grid_charging must be None when no battery.grid_charging key is present"
-                )
-        finally:
-            path.unlink()
+        fleet = load_fleet_config(path)
+        assert len(fleet.homes) == 4
+        for home in fleet.homes:
+            assert home.tariff_config is None, (
+                "tariff_config must be None when no top-level tariff: key is present"
+            )
+            assert home.battery_config is not None
+            assert home.battery_config.grid_charging is None, (
+                "grid_charging must be None when no battery.grid_charging key is present"
+            )
 
-    def test_fleet_yaml_invalid_dispatch_strategy_raises(self) -> None:
+    def test_fleet_yaml_invalid_dispatch_strategy_raises(self, tmp_path: Path) -> None:
         """A typo in fleet_distribution.dispatch_strategy raises ConfigurationError.
 
         Catches config errors early rather than silently falling back to
@@ -570,18 +485,13 @@ fleet_distribution:
     annual_consumption_kwh: 3400
   dispatch_strategy: tou-optimised
 """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            with pytest.raises(ConfigurationError, match="tou-optimised"):
-                load_fleet_config(path)
-        finally:
-            path.unlink()
+        with pytest.raises(ConfigurationError, match="tou-optimised"):
+            load_fleet_config(path)
 
-    def test_dispatch_strategy_tou_without_tariff_warns(self) -> None:
+    def test_dispatch_strategy_tou_without_tariff_warns(self, tmp_path: Path) -> None:
         """tou_optimized without a tariff block emits a UserWarning.
 
         Strategy is still threaded to all homes so the config-layer assertion
@@ -601,16 +511,11 @@ fleet_distribution:
     annual_consumption_kwh: 3400
   dispatch_strategy: tou_optimized
 """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            with pytest.warns(UserWarning, match="tou_optimized"):
-                fleet = load_fleet_config(path)
-            # Strategy is still threaded despite the warning.
-            for home in fleet.homes:
-                assert home.dispatch_strategy == "tou_optimized"
-        finally:
-            path.unlink()
+        with pytest.warns(UserWarning, match="tou_optimized"):
+            fleet = load_fleet_config(path)
+        # Strategy is still threaded despite the warning.
+        for home in fleet.homes:
+            assert home.dispatch_strategy == "tou_optimized"

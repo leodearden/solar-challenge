@@ -3,7 +3,6 @@
 
 import json
 import math
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -207,7 +206,7 @@ class TestBatteryGridChargeParsing:
                 battery={"capacity_kwh": 5.0, "grid_charging": grid_charging}
             )
 
-    def test_yaml_round_trip_grid_charging(self) -> None:
+    def test_yaml_round_trip_grid_charging(self, tmp_path: Path) -> None:
         """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""
         yaml_content = """
 home:
@@ -220,20 +219,13 @@ home:
     grid_charging:
       target_soc_fraction: 0.8
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "home.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            home = load_home_config(path)
-            assert home.battery_config is not None
-            assert home.battery_config.grid_charging is not None
-            assert home.battery_config.grid_charging.target_soc_fraction == 0.8
-        finally:
-            path.unlink()
+        home = load_home_config(path)
+        assert home.battery_config is not None
+        assert home.battery_config.grid_charging is not None
+        assert home.battery_config.grid_charging.target_soc_fraction == 0.8
 
 
 class TestBatterySOCEfficiencyParsing:
@@ -282,7 +274,7 @@ class TestBatterySOCEfficiencyParsing:
         with pytest.raises(ValueError, match="[Cc]harge"):
             _parsed_home(battery={"capacity_kwh": 5.0, "charge_efficiency": 0.0})
 
-    def test_yaml_round_trip_efficiency(self) -> None:
+    def test_yaml_round_trip_efficiency(self, tmp_path: Path) -> None:
         """YAML with battery.efficiency round-trips into home.battery_config.charge_efficiency."""
         yaml_content = """
 home:
@@ -294,21 +286,16 @@ home:
     capacity_kwh: 5.0
     efficiency: 0.95
 """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "home.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            home = load_home_config(path)
-            assert home.battery_config is not None
-            assert home.battery_config.efficiency == 0.95
-            assert home.battery_config.charge_efficiency == pytest.approx(math.sqrt(0.95))
-            assert home.battery_config.discharge_efficiency == pytest.approx(math.sqrt(0.95))
-        finally:
-            path.unlink()
+        home = load_home_config(path)
+        assert home.battery_config is not None
+        assert home.battery_config.efficiency == 0.95
+        assert home.battery_config.charge_efficiency == pytest.approx(math.sqrt(0.95))
+        assert home.battery_config.discharge_efficiency == pytest.approx(math.sqrt(0.95))
 
-    def test_yaml_round_trip_min_max_soc(self) -> None:
+    def test_yaml_round_trip_min_max_soc(self, tmp_path: Path) -> None:
         """YAML with battery.min_soc_fraction/max_soc_fraction round-trips correctly."""
         yaml_content = """
 home:
@@ -321,18 +308,13 @@ home:
     min_soc_fraction: 0.15
     max_soc_fraction: 0.85
 """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "home.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            home = load_home_config(path)
-            assert home.battery_config is not None
-            assert home.battery_config.min_soc_fraction == 0.15
-            assert home.battery_config.max_soc_fraction == 0.85
-        finally:
-            path.unlink()
+        home = load_home_config(path)
+        assert home.battery_config is not None
+        assert home.battery_config.min_soc_fraction == 0.15
+        assert home.battery_config.max_soc_fraction == 0.85
 
 
 class TestBatterySOHParsing:
@@ -367,7 +349,7 @@ class TestBatterySOHParsing:
         assert result.soh_floor == 0.5
         assert result.soh is None
 
-    def test_yaml_round_trip_system_age_years(self) -> None:
+    def test_yaml_round_trip_system_age_years(self, tmp_path: Path) -> None:
         """YAML with battery.system_age_years round-trips into battery_config.system_age_years."""
         yaml_content = """
 home:
@@ -379,17 +361,12 @@ home:
     capacity_kwh: 5.0
     system_age_years: 10
 """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "home.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            home = load_home_config(path)
-            assert home.battery_config is not None
-            assert home.battery_config.system_age_years == 10
-        finally:
-            path.unlink()
+        home = load_home_config(path)
+        assert home.battery_config is not None
+        assert home.battery_config.system_age_years == 10
 
     def test_out_of_range_system_age_raises(self) -> None:
         """Negative system_age_years surfaces as ValueError."""
@@ -459,7 +436,7 @@ class TestDispatchStrategyParsing:
 class TestLoadHomeConfig:
     """Tests for loading home configuration."""
 
-    def test_load_home_config(self) -> None:
+    def test_load_home_config(self, tmp_path: Path) -> None:
         """Test loading home configuration from file."""
         json_content = {
             "home": {
@@ -468,42 +445,28 @@ class TestLoadHomeConfig:
                 "load": {"annual_consumption_kwh": 4000},
             }
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "home.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            home = load_home_config(path)
-            assert home.pv_config.capacity_kw == 5.0
-            assert home.pv_config.tilt == 30
-            assert home.battery_config is not None
-            assert home.battery_config.capacity_kwh == 10.0
-            assert home.load_config.annual_consumption_kwh == 4000
-        finally:
-            path.unlink()
+        home = load_home_config(path)
+        assert home.pv_config.capacity_kw == 5.0
+        assert home.pv_config.tilt == 30
+        assert home.battery_config is not None
+        assert home.battery_config.capacity_kwh == 10.0
+        assert home.load_config.annual_consumption_kwh == 4000
 
-    def test_load_home_without_battery(self) -> None:
+    def test_load_home_without_battery(self, tmp_path: Path) -> None:
         """Test loading home without battery."""
         json_content = {
             "pv": {"capacity_kw": 4.0},
             "load": {"annual_consumption_kwh": 3400},
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "home.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            home = load_home_config(path)
-            assert home.pv_config.capacity_kw == 4.0
-            assert home.battery_config is None
-        finally:
-            path.unlink()
+        home = load_home_config(path)
+        assert home.pv_config.capacity_kw == 4.0
+        assert home.battery_config is None
 
 
 class TestParseHomeBlockHeatPumpEV:

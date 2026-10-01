@@ -2,7 +2,6 @@
 """Tests for generate_homes_from_distribution, which samples a FleetDistributionConfig into the fleet's HomeConfigs."""
 
 import json
-import tempfile
 from pathlib import Path
 
 from solar_challenge.config import (
@@ -324,7 +323,7 @@ class TestHeatPumpDistribution:
         mean_demand = sum(demands) / len(demands)
         assert 7000.0 <= mean_demand <= 9000.0
 
-    def test_load_fleet_config_with_heat_pump_distribution_yaml(self) -> None:
+    def test_load_fleet_config_with_heat_pump_distribution_yaml(self, tmp_path: Path) -> None:
         """Test loading fleet config with heat pump distribution from YAML."""
         yaml_content = """
 name: Test Heat Pump Fleet
@@ -343,41 +342,34 @@ fleet_distribution:
     thermal_capacity_kw: 8.0
     annual_heat_demand_kwh: 8000.0
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            fleet = load_fleet_config(path)
-            assert fleet.name == "Test Heat Pump Fleet"
-            assert len(fleet.homes) == 20
+        fleet = load_fleet_config(path)
+        assert fleet.name == "Test Heat Pump Fleet"
+        assert len(fleet.homes) == 20
 
-            # Check some homes have heat pumps and some don't
-            with_heat_pump = [h for h in fleet.homes if h.heat_pump_config is not None]
-            without_heat_pump = [h for h in fleet.homes if h.heat_pump_config is None]
-            assert len(with_heat_pump) > 0
-            assert len(without_heat_pump) > 0
+        # Check some homes have heat pumps and some don't
+        with_heat_pump = [h for h in fleet.homes if h.heat_pump_config is not None]
+        without_heat_pump = [h for h in fleet.homes if h.heat_pump_config is None]
+        assert len(with_heat_pump) > 0
+        assert len(without_heat_pump) > 0
 
-            # Check heat pump types
-            ashp_count = sum(
-                1 for h in fleet.homes
-                if h.heat_pump_config is not None
-                and h.heat_pump_config.heat_pump_type == "ASHP"
-            )
-            gshp_count = sum(
-                1 for h in fleet.homes
-                if h.heat_pump_config is not None
-                and h.heat_pump_config.heat_pump_type == "GSHP"
-            )
-            assert ashp_count > 0
-            assert gshp_count >= 0  # May be 0 due to small sample size
-        finally:
-            path.unlink()
+        # Check heat pump types
+        ashp_count = sum(
+            1 for h in fleet.homes
+            if h.heat_pump_config is not None
+            and h.heat_pump_config.heat_pump_type == "ASHP"
+        )
+        gshp_count = sum(
+            1 for h in fleet.homes
+            if h.heat_pump_config is not None
+            and h.heat_pump_config.heat_pump_type == "GSHP"
+        )
+        assert ashp_count > 0
+        assert gshp_count >= 0  # May be 0 due to small sample size
 
-    def test_load_fleet_config_with_heat_pump_distribution_json(self) -> None:
+    def test_load_fleet_config_with_heat_pump_distribution_json(self, tmp_path: Path) -> None:
         """Test loading fleet config with heat pump distribution from JSON."""
         json_content = {
             "name": "JSON Heat Pump Fleet",
@@ -405,33 +397,26 @@ fleet_distribution:
                 },
             },
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "fleet.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            fleet = load_fleet_config(path)
-            assert fleet.name == "JSON Heat Pump Fleet"
-            assert len(fleet.homes) == 15
+        fleet = load_fleet_config(path)
+        assert fleet.name == "JSON Heat Pump Fleet"
+        assert len(fleet.homes) == 15
 
-            # All should have ASHP
-            assert all(h.heat_pump_config is not None for h in fleet.homes)
-            assert all(
-                h.heat_pump_config.heat_pump_type == "ASHP"
-                for h in fleet.homes
-                if h.heat_pump_config is not None
-            )
+        # All should have ASHP
+        assert all(h.heat_pump_config is not None for h in fleet.homes)
+        assert all(
+            h.heat_pump_config.heat_pump_type == "ASHP"
+            for h in fleet.homes
+            if h.heat_pump_config is not None
+        )
 
-            # Check capacity is in range
-            for home in fleet.homes:
-                if home.heat_pump_config:
-                    assert 6.0 <= home.heat_pump_config.thermal_capacity_kw <= 10.0
-                    assert 5000.0 <= home.heat_pump_config.annual_heat_demand_kwh <= 12000.0
-        finally:
-            path.unlink()
+        # Check capacity is in range
+        for home in fleet.homes:
+            if home.heat_pump_config:
+                assert 6.0 <= home.heat_pump_config.thermal_capacity_kw <= 10.0
+                assert 5000.0 <= home.heat_pump_config.annual_heat_demand_kwh <= 12000.0
 
     def test_heat_pump_distribution_reproducibility(self) -> None:
         """Test that heat pump distribution is reproducible with same seed."""

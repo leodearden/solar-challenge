@@ -3,7 +3,6 @@
 
 import dataclasses
 import pickle
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -547,7 +546,7 @@ class TestScenarioFinance:
         )
         assert sc.finance is None
 
-    def test_load_scenarios_with_finance_block_populates_field(self) -> None:
+    def test_load_scenarios_with_finance_block_populates_field(self, tmp_path: Path) -> None:
         """YAML with a top-level finance: block → scenarios[0].finance is FinanceConfig."""
         yaml_content = (
             "name: Finance Test\n"
@@ -564,28 +563,21 @@ class TestScenarioFinance:
             "  vat_rate: 0.08\n"
             "  self_consumption_override: 0.75\n"
         )
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            scenarios = load_scenarios(path)
-            assert len(scenarios) == 1
-            fc = scenarios[0].finance
-            assert fc is not None
-            assert isinstance(fc, FinanceConfig)
-            assert fc.standing_charge_pence_per_day == 65.0
-            assert fc.vat_rate == 0.08
-            assert fc.self_consumption_override == 0.75
-            # Un-overridden fields use defaults
-            assert fc.loan_term_years == 15
-        finally:
-            path.unlink()
+        scenarios = load_scenarios(path)
+        assert len(scenarios) == 1
+        fc = scenarios[0].finance
+        assert fc is not None
+        assert isinstance(fc, FinanceConfig)
+        assert fc.standing_charge_pence_per_day == 65.0
+        assert fc.vat_rate == 0.08
+        assert fc.self_consumption_override == 0.75
+        # Un-overridden fields use defaults
+        assert fc.loan_term_years == 15
 
-    def test_load_scenarios_without_finance_block_is_none(self) -> None:
+    def test_load_scenarios_without_finance_block_is_none(self, tmp_path: Path) -> None:
         """YAML without a finance: block → scenarios[0].finance is None."""
         yaml_content = (
             "name: No Finance Test\n"
@@ -598,21 +590,14 @@ class TestScenarioFinance:
             "  load:\n"
             "    annual_consumption_kwh: 3400\n"
         )
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            scenarios = load_scenarios(path)
-            assert len(scenarios) == 1
-            assert scenarios[0].finance is None
-        finally:
-            path.unlink()
+        scenarios = load_scenarios(path)
+        assert len(scenarios) == 1
+        assert scenarios[0].finance is None
 
-    def test_load_scenarios_with_cost_recovery_fields_round_trip(self) -> None:
+    def test_load_scenarios_with_cost_recovery_fields_round_trip(self, tmp_path: Path) -> None:
         """YAML finance: block with the three cost-recovery keys round-trips into FinanceConfig."""
         yaml_content = (
             "name: Cost Recovery Test\n"
@@ -630,26 +615,19 @@ class TestScenarioFinance:
             "  retained_cash_floor_per_home_per_year_gbp: 30.0\n"
             "  grid_services_income_per_kw_per_year_gbp: 8.0\n"
         )
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            scenarios = load_scenarios(path)
-            assert len(scenarios) == 1
-            fc = scenarios[0].finance
-            assert fc is not None
-            assert isinstance(fc, FinanceConfig)
-            assert fc.own_use_rate_pence_per_kwh == 12.5
-            assert fc.retained_cash_floor_per_home_per_year_gbp == 30.0
-            assert fc.grid_services_income_per_kw_per_year_gbp == 8.0
-            # Un-overridden fields use documented defaults
-            assert fc.loan_term_years == 15
-        finally:
-            path.unlink()
+        scenarios = load_scenarios(path)
+        assert len(scenarios) == 1
+        fc = scenarios[0].finance
+        assert fc is not None
+        assert isinstance(fc, FinanceConfig)
+        assert fc.own_use_rate_pence_per_kwh == 12.5
+        assert fc.retained_cash_floor_per_home_per_year_gbp == 30.0
+        assert fc.grid_services_income_per_kw_per_year_gbp == 8.0
+        # Un-overridden fields use documented defaults
+        assert fc.loan_term_years == 15
 
 
 class TestFinanceConfigGridServicesModel:

@@ -3,7 +3,6 @@
 
 import dataclasses
 import pickle
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -124,7 +123,7 @@ class TestCommunityBlockParsing:
 class TestLoadCommunityConfig:
     """Tests for load_community_config."""
 
-    def test_load_yaml_with_community_block(self) -> None:
+    def test_load_yaml_with_community_block(self, tmp_path: Path) -> None:
         """YAML file with community: block returns a populated CommunityConfig."""
         yaml_content = """\
 community:
@@ -139,26 +138,19 @@ community:
       rate_per_kwh: 0.30
     seg_rate_pence_per_kwh: 4.1
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "community.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            cfg = load_community_config(path)
-            assert isinstance(cfg, CommunityConfig)
-            assert cfg.sharing_mode == "community_battery"
-            assert cfg.community_battery is not None
-            assert cfg.community_battery.capacity_kwh == pytest.approx(50.0)
-            assert cfg.billing is not None
-            assert cfg.billing.tariff is not None
-            assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(4.1)
-        finally:
-            path.unlink()
+        cfg = load_community_config(path)
+        assert isinstance(cfg, CommunityConfig)
+        assert cfg.sharing_mode == "community_battery"
+        assert cfg.community_battery is not None
+        assert cfg.community_battery.capacity_kwh == pytest.approx(50.0)
+        assert cfg.billing is not None
+        assert cfg.billing.tariff is not None
+        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(4.1)
 
-    def test_load_yaml_without_community_block_returns_none(self) -> None:
+    def test_load_yaml_without_community_block_returns_none(self, tmp_path: Path) -> None:
         """YAML file with no community: key returns None."""
         yaml_content = """\
 name: Bristol Phase 1
@@ -166,35 +158,21 @@ period:
   start_date: "2024-01-01"
   end_date: "2024-12-31"
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "community.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            result = load_community_config(path)
-            assert result is None
-        finally:
-            path.unlink()
+        result = load_community_config(path)
+        assert result is None
 
-    def test_load_non_dict_yaml_returns_none(self) -> None:
+    def test_load_non_dict_yaml_returns_none(self, tmp_path: Path) -> None:
         """A YAML file whose top-level value is a list (not a dict) returns None
         instead of raising AttributeError on .get('community').
         """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write("- item1\n- item2\n")  # top-level list, no community key
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "community.yaml"
+        path.write_text("- item1\n- item2\n")  # top-level list, no community key
 
-        try:
-            result = load_community_config(path)
-            assert result is None
-        finally:
-            path.unlink()
+        result = load_community_config(path)
+        assert result is None
 
 
 class TestCommunityConfigFrozenPicklable:

@@ -2,7 +2,6 @@
 """Tests for a scenario file's top level, from the raw YAML or JSON read to the ScenarioConfig that load_scenarios builds."""
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -148,7 +147,7 @@ class TestScenarioConfig:
 class TestLoadConfigYaml:
     """Tests for YAML configuration loading."""
 
-    def test_load_yaml_file(self) -> None:
+    def test_load_yaml_file(self, tmp_path: Path) -> None:
         """Test loading a YAML configuration file."""
         yaml_content = """
 name: Test Scenario
@@ -163,19 +162,12 @@ home:
   load:
     annual_consumption_kwh: 3400
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            config = load_config_yaml(path)
-            assert config["name"] == "Test Scenario"
-            assert config["home"]["pv"]["capacity_kw"] == 4.0
-        finally:
-            path.unlink()
+        config = load_config_yaml(path)
+        assert config["name"] == "Test Scenario"
+        assert config["home"]["pv"]["capacity_kw"] == 4.0
 
     def test_load_nonexistent_yaml_raises(self) -> None:
         """Test loading nonexistent YAML file raises error."""
@@ -186,7 +178,7 @@ home:
 class TestLoadConfigJson:
     """Tests for JSON configuration loading."""
 
-    def test_load_json_file(self) -> None:
+    def test_load_json_file(self, tmp_path: Path) -> None:
         """Test loading a JSON configuration file."""
         json_content = {
             "name": "Test Scenario",
@@ -199,107 +191,65 @@ class TestLoadConfigJson:
                 "load": {"annual_consumption_kwh": 3400},
             },
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            config = load_config_json(path)
-            assert config["name"] == "Test Scenario"
-            assert config["home"]["pv"]["capacity_kw"] == 4.0
-        finally:
-            path.unlink()
+        config = load_config_json(path)
+        assert config["name"] == "Test Scenario"
+        assert config["home"]["pv"]["capacity_kw"] == 4.0
 
-    def test_load_invalid_json_raises(self) -> None:
+    def test_load_invalid_json_raises(self, tmp_path: Path) -> None:
         """Test loading invalid JSON raises error."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            f.write("{ invalid json }")
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.json"
+        path.write_text("{ invalid json }")
 
-        try:
-            with pytest.raises(ConfigurationError, match="Invalid JSON"):
-                load_config_json(path)
-        finally:
-            path.unlink()
+        with pytest.raises(ConfigurationError, match="Invalid JSON"):
+            load_config_json(path)
 
 
 class TestLoadConfig:
     """Tests for auto-detecting configuration format."""
 
-    def test_auto_detect_yaml(self) -> None:
+    def test_auto_detect_yaml(self, tmp_path: Path) -> None:
         """Test auto-detecting YAML format."""
         yaml_content = "name: Test\nvalue: 123"
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.yaml"
+        path.write_text(yaml_content)
 
-        try:
-            config = load_config(path)
-            assert config["name"] == "Test"
-        finally:
-            path.unlink()
+        config = load_config(path)
+        assert config["name"] == "Test"
 
-    def test_auto_detect_yml(self) -> None:
+    def test_auto_detect_yml(self, tmp_path: Path) -> None:
         """Test auto-detecting .yml format."""
         yaml_content = "name: Test\nvalue: 123"
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.yml"
+        path.write_text(yaml_content)
 
-        try:
-            config = load_config(path)
-            assert config["name"] == "Test"
-        finally:
-            path.unlink()
+        config = load_config(path)
+        assert config["name"] == "Test"
 
-    def test_auto_detect_json(self) -> None:
+    def test_auto_detect_json(self, tmp_path: Path) -> None:
         """Test auto-detecting JSON format."""
         json_content = {"name": "Test", "value": 123}
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            config = load_config(path)
-            assert config["name"] == "Test"
-        finally:
-            path.unlink()
+        config = load_config(path)
+        assert config["name"] == "Test"
 
-    def test_unknown_format_raises(self) -> None:
+    def test_unknown_format_raises(self, tmp_path: Path) -> None:
         """Test unknown format raises error."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False
-        ) as f:
-            f.write("some content")
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.txt"
+        path.write_text("some content")
 
-        try:
-            with pytest.raises(ConfigurationError, match="Unknown.*format"):
-                load_config(path)
-        finally:
-            path.unlink()
+        with pytest.raises(ConfigurationError, match="Unknown.*format"):
+            load_config(path)
 
 
 class TestLoadScenarios:
     """Tests for loading scenarios from configuration files."""
 
-    def test_load_single_scenario(self) -> None:
+    def test_load_single_scenario(self, tmp_path: Path) -> None:
         """Test loading a single scenario."""
         json_content = {
             "name": "Single Home Test",
@@ -312,22 +262,15 @@ class TestLoadScenarios:
                 "load": {"annual_consumption_kwh": 3400},
             },
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            scenarios = load_scenarios(path)
-            assert len(scenarios) == 1
-            assert scenarios[0].name == "Single Home Test"
-            assert scenarios[0].home is not None
-        finally:
-            path.unlink()
+        scenarios = load_scenarios(path)
+        assert len(scenarios) == 1
+        assert scenarios[0].name == "Single Home Test"
+        assert scenarios[0].home is not None
 
-    def test_load_multiple_scenarios(self) -> None:
+    def test_load_multiple_scenarios(self, tmp_path: Path) -> None:
         """Test loading multiple scenarios."""
         json_content = {
             "scenarios": [
@@ -343,20 +286,13 @@ class TestLoadScenarios:
                 },
             ]
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(json_content, f)
-            f.flush()
-            path = Path(f.name)
+        path = tmp_path / "scenario.json"
+        path.write_text(json.dumps(json_content))
 
-        try:
-            scenarios = load_scenarios(path)
-            assert len(scenarios) == 2
-            assert scenarios[0].name == "Scenario 1"
-            assert scenarios[1].name == "Scenario 2"
-        finally:
-            path.unlink()
+        scenarios = load_scenarios(path)
+        assert len(scenarios) == 2
+        assert scenarios[0].name == "Scenario 1"
+        assert scenarios[1].name == "Scenario 2"
 
 
 class TestLocationBlockParsing:
