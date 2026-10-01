@@ -9,7 +9,7 @@ from jinja2 import Environment, PackageLoader, nodes
 _LOADER = PackageLoader("solar_challenge.web", "templates")
 _ENV = Environment(loader=_LOADER)
 
-MACRO_LIBRARIES = ["components/macros.html"]
+MACRO_LIBRARIES = ["components/macros.html", "components/icons.html"]
 
 
 @pytest.fixture(scope="module")
