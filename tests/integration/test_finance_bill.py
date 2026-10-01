@@ -357,12 +357,13 @@ class TestHouseholderBillOverrideAndAnnualisation:
             finance=_make_finance(self_consumption_override=None),
             simulation_days=summary.simulation_days,
         )
-        bill_override = householder_bill(
-            summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-            finance=_make_finance(self_consumption_override=override_val),
-            simulation_days=summary.simulation_days,
-        )
+        with pytest.warns(UserWarning, match="capped at demand"):
+            bill_override = householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=_make_finance(self_consumption_override=override_val),
+                simulation_days=summary.simulation_days,
+            )
 
         # Higher self-consumption → different self-consumption saving
         assert bill_override.self_consumption_saving_gbp != pytest.approx(
@@ -486,71 +487,86 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
 
 class TestOverrideExactValues:
-    """Verify exact import/own_use recomputation in the spreadsheet override path (CR3).
+    """Exact override-path values for the [FIN] home, whose implied own-use exceeds its demand.
 
-    Uses _make_summary() which has consistent physics figures:
-      - import_rate  = 276.0 / 1200.0 × 100 = 23.0 p/kWh
-      - retail_rate  = 23.0 p/kWh  (default)
-      - own_use_rate = 15.0 p/kWh  (default)
+    _make_summary(total_generation_kwh=5775.0, total_grid_export_kwh=3575.0):
+      - generation 5.5 kWp × 1,050 kWh/kWp = 5,775 kWh; demand 3,400 kWh
+      - physics import 1,200 kWh costing £276 → effective import rate 23.0 p/kWh
+      - retail 23 p, own-use 15 p, VAT 5%, standing 60 p/day
 
-    With override = 0.90 and gen = 4000 kWh, demand = 3400 kWh, vat = 5%:
-      - sc_kwh               = 0.90 × 4000 = 3600.0 kWh
-      - override_export_kwh  = max(4000 - 3600, 0) = 400.0 kWh
-      - override_import_kwh  = max(3400 - 3600, 0) = 0.0 kWh  (clamped)
-      - import_cost_gbp      = 0.0 £
-      - own_use_payment_gbp  = 3600 × 15 / 100 = 540.0 £
-      - standing             = 60.0 × 365 / 100  = 219.0 £
-      - vat_gbp              = 0.05 × (0.0 + 219.0 + 540.0) = 37.95 £
-      - total_outlay_gbp     = (0.0 + 219.0 + 540.0) × 1.05 = 796.95 £
+    With override = 0.70:
+      - implied own-use    = 0.70 × 5,775 = 4,042.5 kWh > 3,400 → capped at 3,400 kWh
+      - import             = 3,400 − 3,400 = 0 kWh
+      - own_use_payment    = 3,400 × 15 / 100 = £510.00
+      - standing           = 60 × 365 / 100 = £219.00
+      - vat                = 0.05 × (0 + 219 + 510) = £36.45
+      - total_outlay       = (0 + 219 + 510) × 1.05 = £765.45
+      - baseline           = (3,400 × 23 / 100 + 219) × 1.05 = £1,051.05
+      - saving_vs_baseline = 1,051.05 − 765.45 = £285.60 = 3,400 × (23 − 15) × 1.05 / 100
     """
 
+    @staticmethod
+    def _fin_override_bill() -> "BillBreakdown":  # type: ignore[name-defined]
+        """householder_bill for the [FIN] home at override 0.70; the cap must warn."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary(total_generation_kwh=5775.0, total_grid_export_kwh=3575.0)
+        with pytest.warns(UserWarning, match="capped at demand"):
+            return householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=_make_finance(self_consumption_override=0.70),
+                simulation_days=365,
+            )
+
+    def test_override_own_use_capped_at_demand(self) -> None:
+        """Own-use is billed on the 3,400 kWh demand, not the implied 4,042.5 kWh (£606.375)."""
+        bill = self._fin_override_bill()
+
+        assert bill.own_use_payment_gbp == pytest.approx(510.0)
+        assert bill.cbs_amount_due_gbp == pytest.approx(535.5)
+
     def test_override_exact_import_cost(self) -> None:
-        """import_cost_gbp must match hand-computed expectation for override=0.90."""
-        from solar_challenge.finance import householder_bill
+        """The capped own-use meets the whole demand, so nothing is imported."""
+        bill = self._fin_override_bill()
 
-        summary = _make_summary()  # import_rate = 23.0 p/kWh, gen=4000, demand=3400
-        bill = householder_bill(
-            summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-            finance=_make_finance(self_consumption_override=0.90),
-            simulation_days=365,
-        )
-        # demand(3400) < sc(3600) → override_import_kwh = 0 → import_cost = 0
-        assert bill.import_cost_gbp == pytest.approx(0.0, abs=1e-6)
-
-    def test_override_exact_own_use_payment(self) -> None:
-        """own_use_payment_gbp must match hand-computed expectation for override=0.90.
-
-        CR3 replaces seg_export_income with own_use_payment (CBS-owned solar transfer price).
-        """
-        from solar_challenge.finance import householder_bill
-
-        summary = _make_summary()  # gen=4000
-        bill = householder_bill(
-            summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-            finance=_make_finance(self_consumption_override=0.90),
-            simulation_days=365,
-        )
-        # sc_kwh = 0.90 × 4000 = 3600; own_use_payment = 3600 × 15 / 100 = 540
-        assert bill.own_use_payment_gbp == pytest.approx(540.0, rel=1e-6)
+        assert bill.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
 
     def test_override_exact_total_outlay(self) -> None:
-        """total_outlay_gbp must match hand-computed expectation for override=0.90.
+        bill = self._fin_override_bill()
 
-        CR3 headline replaces net_annual_bill_gbp with total_outlay_gbp (no SEG credit).
-        """
+        assert bill.vat_gbp == pytest.approx(36.45)
+        assert bill.total_outlay_gbp == pytest.approx(765.45)
+
+    def test_override_cap_reports_effective_fraction(self) -> None:
+        """The fraction reports billed own-use over generation, below the 0.70 override."""
+        bill = self._fin_override_bill()
+
+        assert bill.self_consumption_fraction == pytest.approx(3400.0 / 5775.0)
+
+    def test_override_cap_keeps_h3_identity(self) -> None:
+        """saving_vs_baseline == own-use × (retail − own-use rate) × (1 + VAT) / 100, exactly."""
+        bill = self._fin_override_bill()
+
+        assert bill.baseline_bill_gbp == pytest.approx(1051.05)
+        assert bill.saving_vs_baseline_gbp == pytest.approx(3400.0 * (23.0 - 15.0) * 1.05 / 100.0)
+
+    def test_override_within_demand_does_not_warn(self) -> None:
+        """0.70 × 4,000 = 2,800 kWh fits the 3,400 kWh demand, so it is billed as implied, silently."""
         from solar_challenge.finance import householder_bill
 
         summary = _make_summary()
-        bill = householder_bill(
-            summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-            finance=_make_finance(self_consumption_override=0.90),
-            simulation_days=365,
-        )
-        # total_outlay = (0.0 + 219.0 + 540.0) × 1.05 = 759 × 1.05 = 796.95
-        assert bill.total_outlay_gbp == pytest.approx(796.95, rel=1e-5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            bill = householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=_make_finance(self_consumption_override=0.70),
+                simulation_days=365,
+            )
+
+        assert bill.own_use_payment_gbp == pytest.approx(420.0)
+        assert bill.import_cost_gbp == pytest.approx(138.0)  # 600 kWh × 23 p
 
     def test_override_zero_import_kwh_fallback(self) -> None:
         """When total_grid_import_kwh==0, effective import rate falls back to retail_baseline_rate."""
@@ -1021,7 +1037,7 @@ class TestHouseholderBillWrapperEquivalence:
         assert actual == expected
 
     def test_wrapper_equals_bill_annual_override(self) -> None:
-        """householder_bill(365-day, override=0.90) == bill(period_days=365, ...) with override inputs.
+        """householder_bill(365-day, override=0.90) == bill(period_days=365, ...) with the capped override inputs.
 
         Uses pytest.approx(rel=1e-12, abs=1e-12) to be robust to incidental
         operand-order drift in the override path's intermediate computations.
@@ -1031,12 +1047,13 @@ class TestHouseholderBillWrapperEquivalence:
         summary = _make_summary()   # import_rate = 23.0 p/kWh, gen=4000, demand=3400
         finance = _make_finance(self_consumption_override=0.90)
 
-        actual = householder_bill(
-            summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-            finance=finance,
-            simulation_days=365,
-        )
+        with pytest.warns(UserWarning, match="capped at demand"):
+            actual = householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=finance,
+                simulation_days=365,
+            )
 
         # Reproduce wrapper's override path inputs with IDENTICAL expressions
         gen_kwh = summary.total_generation_kwh
@@ -1045,12 +1062,12 @@ class TestHouseholderBillWrapperEquivalence:
         import_cost_physics = summary.total_import_cost_gbp
         retail_rate = finance.retail_baseline_rate_pence_per_kwh
 
-        sc_kwh = finance.self_consumption_override * gen_kwh   # type: ignore[operator]  # 3600.0
+        sc_kwh = min(finance.self_consumption_override * gen_kwh, demand_kwh)  # type: ignore[operator]  # 3400.0
         if import_kwh > 0.0:
             eff_import_rate = (import_cost_physics / import_kwh) * 100.0
         else:
             eff_import_rate = retail_rate
-        override_import_kwh = max(demand_kwh - sc_kwh, 0.0)
+        override_import_kwh = demand_kwh - sc_kwh   # 0.0
         override_import_cost = override_import_kwh * eff_import_rate / 100.0
         baseline_import_cost_gbp = demand_kwh * retail_rate / 100.0
 
