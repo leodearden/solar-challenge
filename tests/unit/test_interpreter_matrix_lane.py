@@ -16,7 +16,12 @@ import pytest
 
 from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
 from tests._interpreters import off_pin_minor_versions, python_version_pin
-from tests._orchestrator_config import lane_job_directory, load_orchestrator_config, sole_offline_lane_job
+from tests._orchestrator_config import (
+    lane_job_directory,
+    lane_job_enabled,
+    load_orchestrator_config,
+    sole_offline_lane_job,
+)
 
 _MATRIX_JOB = "interpreter-matrix"
 
@@ -48,7 +53,7 @@ def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Pa
         "which this repo does not have, so every lane run goes red"
     )
     matrix_job = sole_offline_lane_job(project_root, _MATRIX_JOB)
-    assert matrix_job.get("enabled", True) is True, (
+    assert lane_job_enabled(matrix_job), (
         f"the {_MATRIX_JOB!r} lane job is disabled, so the off-pin interpreters are never re-verified"
     )
 

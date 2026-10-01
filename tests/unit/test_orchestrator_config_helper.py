@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tests._orchestrator_config import lane_job_directory
+from tests._orchestrator_config import lane_job_directory, lane_job_enabled
 
 
 def test_a_lane_job_without_a_cwd_runs_in_the_project_root(tmp_path: Path) -> None:
@@ -42,3 +42,29 @@ def test_a_lane_job_whose_cwd_names_no_directory_fails_naming_the_job_and_its_cw
 
     assert "'probe'" in str(failure.value)
     assert "'tests/e2e'" in str(failure.value)
+
+
+def test_a_lane_job_without_an_enabled_flag_is_enabled() -> None:
+    job = {"name": "probe", "command": "pytest"}
+
+    assert lane_job_enabled(job) is True
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_a_lane_job_with_an_enabled_flag_is_enabled_as_the_flag_says(enabled: bool) -> None:
+    job = {"name": "probe", "command": "pytest", "enabled": enabled}
+
+    assert lane_job_enabled(job) is enabled
+
+
+@pytest.mark.parametrize("enabled", [None, "false"], ids=["bare-enabled-key", "quoted-false"])
+def test_a_lane_job_whose_enabled_flag_is_not_a_boolean_fails_naming_the_job_and_its_flag(
+    enabled: object
+) -> None:
+    job = {"name": "probe", "command": "pytest", "enabled": enabled}
+
+    with pytest.raises(AssertionError) as failure:
+        lane_job_enabled(job)
+
+    assert "'probe'" in str(failure.value)
+    assert repr(enabled) in str(failure.value)

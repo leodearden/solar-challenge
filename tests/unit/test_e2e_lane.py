@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
-from tests._orchestrator_config import lane_job_directory, sole_offline_lane_job
+from tests._orchestrator_config import lane_job_directory, lane_job_enabled, sole_offline_lane_job
 
 _E2E_JOB = "e2e"
 
@@ -21,7 +21,7 @@ def test_offline_lane_runs_one_enabled_e2e_job(project_root: Path) -> None:
     """The offline lane runs exactly one e2e job, and it is enabled."""
     job = sole_offline_lane_job(project_root, _E2E_JOB)
 
-    assert job.get("enabled", True) is True, (
+    assert lane_job_enabled(job), (
         f"the {_E2E_JOB!r} lane job is disabled, so e2e regressions go unseen again"
     )
 
