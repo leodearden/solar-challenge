@@ -245,32 +245,31 @@ class TestScenarioAPI:
     def test_validate_reports_a_shuffled_pool_too_small_for_the_fleet(
         self, client: FlaskClient
     ) -> None:
-        """A PV pool of 90 values for 100 homes is invalid; the builder's default PV pool used to be exactly this.
+        """A PV pool of 90 values for 100 homes is the one fault in a form that validates with a pool of 100.
 
-        Only the rejection is asserted: load_fleet_config raises a bare IndexError for it today.
+        The builder's default PV pool used to hold those 90 values.  The fault's message is
+        not asserted: load_fleet_config raises a bare IndexError for it today.
         """
-        form = {
-            key: value
-            for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
-            if key != "pv_capacity_kw"
-        }
-        form.update(
-            {
-                "pv_distribution_type": "shuffled_pool",
-                "pv_sp_entries": [
-                    {"value": 3.0, "count": 20},
-                    {"value": 4.0, "count": 40},
-                    {"value": 5.0, "count": 30},
-                ],
+
+        def validation_with_pv_pool(counts: tuple[int, int, int]) -> Any:
+            form = {
+                key: value
+                for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
+                if key != "pv_capacity_kw"
             }
-        )
+            form["pv_distribution_type"] = "shuffled_pool"
+            form["pv_sp_entries"] = [
+                {"value": value, "count": count}
+                for value, count in zip((3.0, 4.0, 5.0), counts)
+            ]
+            response = client.post("/api/scenarios/validate", json=form)
+            assert response.status_code == 200
+            return response.get_json()
 
-        response = client.post("/api/scenarios/validate", json=form)
-
-        assert response.status_code == 200
-        data = response.get_json()
-        assert data["valid"] is False
-        assert data["errors"]
+        assert validation_with_pv_pool((20, 40, 40)) == {"valid": True, "errors": []}
+        short_pool = validation_with_pv_pool((20, 40, 30))
+        assert short_pool["valid"] is False
+        assert len(short_pool["errors"]) == 1, short_pool["errors"]
 
     def test_validate_missing_name_returns_errors(self, client: FlaskClient) -> None:
         """Test POST /api/scenarios/validate with missing name returns errors."""
