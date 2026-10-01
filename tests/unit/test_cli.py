@@ -18,43 +18,9 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import create_summary_table, parse_location
 from solar_challenge.home import HomeConfig, SummaryStatistics
 from solar_challenge.seg import SEG_PRESETS
+from tests._synthetic_weather import synthetic_june_weather
 
 runner = CliRunner()
-
-
-def _make_june21_weather() -> pd.DataFrame:
-    """Synthetic June-21 24h weather DataFrame (mirrors test_home.py fixture).
-
-    Avoids any PVGIS network call / disk cache.
-    """
-    index = pd.date_range(
-        "2024-06-21 00:00", periods=24, freq="1h", tz="Europe/London"
-    )
-    return pd.DataFrame(
-        {
-            "ghi": [
-                0, 0, 0, 0, 0, 50, 150, 300, 500, 650, 780, 850,
-                870, 850, 780, 650, 500, 300, 150, 50, 0, 0, 0, 0,
-            ],
-            "dni": [
-                0, 0, 0, 0, 0, 100, 250, 450, 650, 800, 900, 950,
-                970, 950, 900, 800, 650, 450, 250, 100, 0, 0, 0, 0,
-            ],
-            "dhi": [
-                0, 0, 0, 0, 0, 30, 70, 130, 180, 200, 200, 200,
-                200, 200, 200, 200, 180, 130, 70, 30, 0, 0, 0, 0,
-            ],
-            "temp_air": [
-                12, 11, 11, 11, 12, 13, 15, 17, 19, 21, 22, 23,
-                23, 23, 22, 21, 19, 17, 16, 14, 13, 12, 12, 12,
-            ],
-            "wind_speed": [
-                2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3,
-                3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2,
-            ],
-        },
-        index=index,
-    )
 
 
 class TestMainCLI:
@@ -603,7 +569,7 @@ home:
             return real_simulate_home(home_config, start_date, end_date, progress_callback)
 
         # Patch get_tmy_data to avoid PVGIS network call
-        monkeypatch.setattr(_home_module, "get_tmy_data", lambda loc: _make_june21_weather())
+        monkeypatch.setattr(_home_module, "get_tmy_data", lambda loc: synthetic_june_weather("2024-06-21"))
         # Patch simulate_home in the CLI module (local binding)
         monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)
 
