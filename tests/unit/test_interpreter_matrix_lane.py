@@ -41,9 +41,10 @@ def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Pa
         "git.offline_lane_legacy_numeric_enabled is not false; that default-on seam runs "
         "scripts/run-offline-deep.sh, which this repo does not have, so every lane run goes red"
     )
-    assert git.get("offline_lane_infra_enabled", False) is False, (
-        "git.offline_lane_infra_enabled is on; that seam runs reify's tests/infra/run_all.sh, "
-        "which this repo does not have, so every lane run goes red"
+    assert git.get("offline_lane_infra_enabled") is False, (
+        "git.offline_lane_infra_enabled is not false; when on, that seam runs reify's "
+        "tests/infra/run_all.sh, which this repo does not have, so every lane run goes red, and "
+        "when unset it is on if dark-factory's default ever is"
     )
     matrix_job = sole_offline_lane_job(project_root, _MATRIX_JOB)
     assert lane_job_enabled(matrix_job), (
