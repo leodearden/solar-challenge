@@ -116,19 +116,24 @@ The calibration test suite maintains two parallel columns:
 | Column | Method | DSCR | IRR | Self-cons fraction |
 |--------|--------|------|-----|-------------------|
 | **Spreadsheet-input** | `spreadsheet_revenue_curve` (analytic) | ~4.02 | ~10.7% | 0.70 (named inp) |
-| **Physics** | `project_multi_year` (real PVGIS sim) | varies | varies | ~30–52% (simulated) |
+| **Physics** | `project_multi_year` (real PVGIS sim) | reported | reported | reported (window-dependent) |
 
 Only the **spreadsheet-input column** is hard-asserted (capex + covenant floor).
-The **physics column** is run in the `@pytest.mark.slow` suite and *reported*
-alongside the spreadsheet column to document the difference.
+The **physics column** is run in the `@pytest.mark.slow` suite over a 2-home,
+3-day January window and *reported* alongside the spreadsheet column as a smoke
+check of the physics path. It does **not** document the §2.3 annual
+self-consumption tension: a short winter window cannot show an annual
+self-consumption fraction, and its DSCR/IRR are degenerate (the [FIN] grant
+exceeds the 2-home capex, so financed capex, debt and equity are all zero).
+Documenting the annual tension would need a full-year run.
 
 ### 4.1 §2.3 Self-Consumption Tension
 
 The spreadsheet assumes `self_consumption_fraction = 0.70` for with-battery homes
-(Sensitivity!B7 = 5 kWh). The physics simulation typically yields ~30–52%
-depending on load profile and battery dispatch. This is **expected** and **not an
-error**: the spreadsheet uses a simplified aggregate assumption, while the physics
-model accounts for load shape, PV intermittency, and battery SOC dynamics.
+(Sensitivity!B7 = 5 kWh). A physics simulation over a full year accounts for load
+shape, PV intermittency, and battery SOC dynamics, so its annual fraction is
+expected to differ from this simplified aggregate assumption. That difference is
+**expected** and **not an error**.
 
 **The physics self-consumption fraction is deliberately NOT asserted equal to 0.70.**
 This prevents false-precision: the physics column is the better-grounded default
@@ -142,5 +147,6 @@ for real fleet projections.
 - DSCR and IRR from the pure layer legitimately differ from the spreadsheet due
   to abstracted fees/deferral — covenant floor (≥1.20) and IRR > 0 are asserted
 - The £125,000 capex delta is a battery-size reconciliation, not an error
-- Physics column self-consumption (~30–52%) differs from the spreadsheet's 0.70
-  by design — physics is the correct path for real projections
+- Annual physics self-consumption is expected to differ from the spreadsheet's
+  0.70 by design — physics is the correct path for real projections. The slow
+  3-day physics column is a smoke report, not evidence of that difference

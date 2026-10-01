@@ -698,10 +698,13 @@ class TestCalibrationG6Guards:
 class TestCalibrationPhysicsColumn:
     """Real-PVGIS physics column for calibration (REPORTED, not asserted == spreadsheet).
 
-    Runs a small 2-home fleet over a short window to show the physics column
-    alongside the spreadsheet column. Self-consumption from the physics sim
-    may differ significantly from the spreadsheet's 0.70 ([FIN] assumption).
-    This is the §2.3 self-consumption tension (physics ~30–52% vs sheet 70%).
+    Runs a small 2-home fleet over a 3-day January window to smoke-test the
+    physics path alongside the spreadsheet column. This does NOT document the
+    §2.3 annual self-consumption tension: a short winter window cannot show an
+    annual self-consumption fraction, and its DSCR/IRR are degenerate for a
+    2-home fleet because the [FIN] grant exceeds the 2-home capex (financed
+    capex, debt and equity are all zero). The printed physics values are
+    reported for inspection only and are not pinned.
 
     Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
     """
@@ -756,7 +759,8 @@ class TestCalibrationPhysicsColumn:
             f"  Physics self_cons_kwh:   {physics_curve.points[0].fleet_self_consumption_kwh:.1f}\n"
             f"  Physics export_kwh:      {physics_curve.points[0].fleet_export_kwh:.1f}\n"
             f"  Spreadsheet scf=0.70 (named inp: {_FIN_SCF})\n"
-            f"  §2.3: physics scf may differ — this is expected, NOT an error."
+            f"  Note: 3-day window and grant > 2-home capex — values are a smoke\n"
+            f"  report of the physics path, not the annual §2.3 tension."
         )
 
         # STRUCTURAL assertions only (no physics==spreadsheet assertions)
