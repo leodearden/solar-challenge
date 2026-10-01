@@ -1186,6 +1186,36 @@ class TestProjectMultiYearRevenue:
             curve_over.points[0].fleet_revenue_gbp, rel=1e-4
         )
 
+    def test_override_seg_counts_generation_above_demand_as_export(self) -> None:
+        """Override 0.90 implies 3,600 kWh of own-use per home against a 2,800 kWh demand.
+
+        Capped at demand, each home exports 4,000 − 2,800 = 1,200 kWh, paid at its
+        physics export rate (£72 / 2,400 kWh = 3 p).  Own-use revenue stays basis C:
+        1,600 kWh at 15 p (test_self_consumption_override_does_not_change_own_use_revenue).
+        """
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.fleet import FleetResults
+
+        n_homes = 2
+        fleet = FleetResults(
+            per_home_results=[
+                _make_sim_results(
+                    self_kwh=1600.0, export_kwh=2400.0, import_kwh=1200.0, export_revenue_gbp=72.0
+                )
+                for _ in range(n_homes)
+            ],
+            home_configs=[_make_home_config() for _ in range(n_homes)],
+        )
+        scenario, finance = self._make_revenue_scenario(
+            n_homes=n_homes, self_consumption_override=0.90
+        )
+
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet)
+
+        assert curve.points[0].fleet_revenue_gbp == pytest.approx(
+            n_homes * (15.0 * 1600.0 / 100.0 + 1200.0 * 3.0 / 100.0)
+        )
+
     def test_fleet_revenue_non_negative(self) -> None:
         """fleet_revenue_gbp is non-negative for all years (updated for CR2 formula)."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
@@ -1414,14 +1444,14 @@ class TestSegExportIncomeGbp:
         """Override path with nonzero physics export: returns override_export_kwh × effective_rate.
 
         Contract (§3.2):
-          sc_kwh          = override × gen_kwh
-          override_export = max(gen_kwh - sc_kwh, 0)
+          own_use         = min(override × gen_kwh, demand_kwh)
+          override_export = gen_kwh − own_use
           effective_rate  = (export_rev / export_kwh) × 100  p/kWh
           result          = override_export × effective_rate / 100
 
-        Using override=0.60 (60% sc → export=40%=1600 kWh) against physics
-        that had 20% export (800 kWh, 24 £ → 3 p/kWh):
-          override_export = 4000 - 0.60×4000 = 1600 kWh
+        Using override=0.60 (own-use 0.60×4000 = 2400 kWh, within the 4400 kWh
+        demand) against physics that had 20% export (800 kWh, 24 £ → 3 p/kWh):
+          override_export = 4000 - 2400 = 1600 kWh
           effective_rate  = (24/800)×100 = 3 p/kWh
           result          = 1600×3/100 = 48 £
         """
