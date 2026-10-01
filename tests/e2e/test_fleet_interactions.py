@@ -1,8 +1,9 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
-Verifies slider-input sync, distribution type selects, export YAML button,
-that the simulation name reaches the submitted run, and that the period
-selector offers presets and a custom date range.
+Verifies slider-input sync, that each distribution editor's controls are named
+for their card, export YAML button, that the simulation name reaches the
+submitted run, and that the period selector offers presets and a custom date
+range.
 """
 
 import pytest
@@ -23,17 +24,28 @@ def test_fleet_slider_input_sync(page: Page, live_server: str) -> None:
     expect(page.get_by_label("Number of Homes", exact=True)).to_have_value("50")
 
 
-# -- Distribution type select ----------------------------------------------
+# -- Distribution editor control names -------------------------------------
 
 
-def test_fleet_distribution_type_select(page: Page, live_server: str) -> None:
-    """The PV, battery and consumption cards each show a distribution-type select offering 'Normal (Gaussian)'."""
+DISTRIBUTION_CARDS = [
+    pytest.param("PV Capacity", id="pv_capacity"),
+    pytest.param("Battery Capacity", id="battery_capacity"),
+    pytest.param("Annual Consumption", id="annual_consumption"),
+]
+
+
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_type_select_is_named_for_its_card(
+    page: Page, live_server: str, card: str
+) -> None:
+    """Each card's distribution-type select is named for its card, e.g. 'PV Capacity Distribution Type', and offers 'Normal (Gaussian)'."""
     page.goto(live_server + "/simulate/fleet")
 
-    distribution_type_selects = page.get_by_role("combobox").filter(
-        has=page.get_by_role("option", name="Normal (Gaussian)", exact=True)
-    )
-    expect(distribution_type_selects).to_have_count(3)
+    type_select = page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True)
+    expect(type_select).to_be_visible()
+    expect(
+        type_select.get_by_role("option", name="Normal (Gaussian)", exact=True)
+    ).to_have_count(1)
 
 
 # -- Export YAML button -----------------------------------------------------
