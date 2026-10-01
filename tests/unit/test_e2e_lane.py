@@ -9,6 +9,8 @@ unseen.
 
 from pathlib import Path
 
+import pytest
+
 from tests._collect_only import collected_node_ids, requires_uv, run_collect_only
 from tests._orchestrator_config import sole_offline_lane_job
 
@@ -36,7 +38,7 @@ def test_e2e_job_collects_the_e2e_suite_and_nothing_else(project_root: Path) -> 
 
     result = run_collect_only(command, project_root / job.get("cwd", "."))
 
-    assert result.returncode == 0, (
+    assert result.returncode == pytest.ExitCode.OK, (
         f"the {_E2E_JOB!r} lane job {command!r} failed to collect (exit {result.returncode})\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )

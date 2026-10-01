@@ -64,7 +64,7 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(pro
 
     result = run_collect_only(command, project_root)
 
-    assert result.returncode == 0, (
+    assert result.returncode == pytest.ExitCode.OK, (
         f"the {_MATRIX_JOB!r} lane job {command!r} failed to collect (exit {result.returncode})\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
