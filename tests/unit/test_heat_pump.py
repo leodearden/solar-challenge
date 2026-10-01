@@ -408,7 +408,8 @@ class TestGenerateHeatPumpLoad:
 
         load = generate_heat_pump_load(config, day_at_minus_5c, annual_temperature_c=year_at_10c)
 
-        pd.testing.assert_series_equal(load, pd.Series(5.0 / calculate_cop("ASHP", -5.0), index=day_at_minus_5c.index))
+        expected = pd.Series(5.0 / calculate_cop("ASHP", -5.0), index=day_at_minus_5c.index, name="heat_pump_load_kw")
+        pd.testing.assert_series_equal(load, expected)
 
     def test_gshp_vs_ashp_efficiency(self, year_at_10c):
         """GSHP uses less electricity than ASHP for same thermal output."""
@@ -514,7 +515,7 @@ class TestGenerateHeatPumpLoadSharesTheAnnualHeatDemand:
 
         load = generate_heat_pump_load(HeatPumpConfig.default_ashp(), day_at_0c, annual_temperature_c=year_at_20c)
 
-        pd.testing.assert_series_equal(load, pd.Series(0.0, index=day_at_0c.index))
+        pd.testing.assert_series_equal(load, pd.Series(0.0, index=day_at_0c.index, name="heat_pump_load_kw"))
 
 
 class TestGenerateHeatPumpLoadRejectsAReferenceThatIsNotAYear:
@@ -551,6 +552,28 @@ class TestGenerateHeatPumpLoadRejectsAReferenceThatIsNotAYear:
 
         heat_delivered_kwh = (load * calculate_cop("ASHP", 10.0)).sum() / 60
         assert heat_delivered_kwh == pytest.approx(8000.0 / days)
+
+
+class TestGenerateHeatPumpLoadNamesItsLoad:
+    """generate_heat_pump_load names its load heat_pump_load_kw, not after its temperature input.
+
+    That holds whether or not the reference year has any heating degree-minutes.
+    """
+
+    @pytest.mark.parametrize(
+        "reference_temperature_c",
+        [
+            pytest.param(10.0, id="heating-year"),
+            pytest.param(20.0, id="no-heating-year"),
+        ],
+    )
+    def test_load_is_named_heat_pump_load_kw(self, reference_temperature_c):
+        reference_year = pd.Series(reference_temperature_c, index=_utc_1990_minute_index(), name="temp_air")
+        cold_day = _days_at(5.0, "2025-01-15").rename("temp_air")
+
+        load = generate_heat_pump_load(HeatPumpConfig.default_ashp(), cold_day, annual_temperature_c=reference_year)
+
+        assert load.name == "heat_pump_load_kw"
 
 
 class TestHeatPumpDocstringExamples:
