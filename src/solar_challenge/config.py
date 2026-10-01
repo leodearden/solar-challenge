@@ -631,11 +631,19 @@ def _refuse_unrecognised_keys(block_path: str, data: object, recognised: Collect
         )
 
 
-def parse_location_block(data: Optional[dict[str, Any]]) -> Location:
+_LOCATION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "latitude", "longitude", "timezone", "altitude", "name",
+})
+
+
+def parse_location_block(
+    data: Optional[dict[str, Any]], *, block_path: str = "location"
+) -> Location:
     """Parse a ``location:`` block into a Location; an absent or empty block is Bristol."""
     bristol = Location.bristol()
     if not data:
         return bristol
+    _refuse_unrecognised_keys(block_path, data, _LOCATION_BLOCK_KEYS)
     return Location(
         latitude=data.get("latitude", bristol.latitude),
         longitude=data.get("longitude", bristol.longitude),
@@ -1034,8 +1042,12 @@ def parse_home_block(
     )
 
 
-def _parse_period(data: dict[str, Any]) -> SimulationPeriod:
+_PERIOD_BLOCK_KEYS: frozenset[str] = frozenset({"start_date", "end_date"})
+
+
+def _parse_period(data: dict[str, Any], *, block_path: str) -> SimulationPeriod:
     """Parse simulation period from config data."""
+    _refuse_unrecognised_keys(block_path, data, _PERIOD_BLOCK_KEYS)
     if "start_date" not in data or "end_date" not in data:
         raise ConfigurationError("Simulation period requires 'start_date' and 'end_date'")
     return SimulationPeriod(
@@ -1044,10 +1056,18 @@ def _parse_period(data: dict[str, Any]) -> SimulationPeriod:
     )
 
 
-def _parse_output_config(data: Optional[dict[str, Any]]) -> Optional[OutputConfig]:
+_OUTPUT_BLOCK_KEYS: frozenset[str] = frozenset({
+    "csv_path", "include_minute_data", "include_summary", "aggregation",
+})
+
+
+def _parse_output_config(
+    data: Optional[dict[str, Any]], *, block_path: str
+) -> Optional[OutputConfig]:
     """Parse output configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _OUTPUT_BLOCK_KEYS)
     return OutputConfig(
         csv_path=data.get("csv_path"),
         include_minute_data=data.get("include_minute_data", True),
@@ -1727,6 +1747,9 @@ def generate_homes_from_distribution(
     return homes
 
 
+_SEG_BLOCK_KEYS: frozenset[str] = frozenset({"preset", "rate_pence_per_kwh"})
+
+
 def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
     """Read the SEG export rate in pence/kWh from a ``seg:`` block.
 
@@ -1742,6 +1765,7 @@ def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
             f"'{block_path}' must be a mapping with 'preset' or "
             f"'rate_pence_per_kwh', got {data!r}"
         )
+    _refuse_unrecognised_keys(block_path, data, _SEG_BLOCK_KEYS)
     if ("preset" in data) == ("rate_pence_per_kwh" in data):
         raise ConfigurationError(
             f"'{block_path}' must specify exactly one of 'preset' or "
@@ -1771,21 +1795,46 @@ def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
         raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
 
 
-def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConfig]:
+_FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
+    "standing_charge_pence_per_day", "vat_rate", "retail_baseline_rate_pence_per_kwh",
+    "self_consumption_override", "pv_cost_per_kwp_gbp", "roof_fit_cost_gbp",
+    "battery_cost_per_kwh_gbp", "inverter_cost_per_kw_gbp", "grant_gbp", "equity_fraction",
+    "loan_term_years", "loan_rate", "opex_per_home_per_year_gbp", "asset_life_years",
+    "own_use_rate_pence_per_kwh", "retained_cash_floor_per_home_per_year_gbp",
+    "grid_services_income_per_kw_per_year_gbp", "grid_services_model", "grid_services_events",
+})
+
+_GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
+    "band", "event_windows", "aggregator_share", "utilisation_factor",
+    "availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh",
+})
+
+_EVENT_WINDOW_KEYS: tuple[str, ...] = (
+    "months", "weekdays", "hours", "events_per_year", "event_hours",
+)
+
+
+def parse_finance_config(
+    data: Optional[dict[str, Any]], *, block_path: str = "finance"
+) -> Optional[FinanceConfig]:
     """Parse finance configuration from config data.
 
     Args:
         data: Finance configuration dictionary or None
+        block_path: The block's path in its file, named in error messages
 
     Returns:
         FinanceConfig object or None if data is None
 
     Raises:
         ConfigurationError: If any field value is out of its allowed range
-            (propagated from FinanceConfig.__post_init__)
+            (propagated from FinanceConfig.__post_init__), or if the block, its
+            grid_services_events block or an event window is not a mapping or
+            carries a key it does not read
     """
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _FINANCE_BLOCK_KEYS)
     if "standing_charge_pence_per_day" not in data:
         raise ConfigurationError(
             "finance.standing_charge_pence_per_day is required"
@@ -1804,6 +1853,8 @@ def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConf
                 "grid_services_events must be a mapping (dict), "
                 f"got {type(gs_events_raw).__name__!r}"
             )
+        events_path = _child_path(block_path, "grid_services_events")
+        _refuse_unrecognised_keys(events_path, gs_events_raw, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
         gs_data = gs_events_raw
         # Parse event_windows list-of-dicts -> tuple[EventWindow, ...]
         # mirroring parse_tariff_config 'custom' branch.
@@ -1820,7 +1871,10 @@ def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConf
                     f"grid_services_events.event_windows[{i}] must be a mapping "
                     f"(dict), got {type(ew_dict).__name__!r}"
                 )
-            for req_key in ("months", "weekdays", "hours", "events_per_year", "event_hours"):
+            _refuse_unrecognised_keys(
+                _child_path(events_path, f"event_windows[{i}]"), ew_dict, _EVENT_WINDOW_KEYS
+            )
+            for req_key in _EVENT_WINDOW_KEYS:
                 if req_key not in ew_dict:
                     raise ConfigurationError(
                         f"grid_services_events.event_windows[{i}] requires '{req_key}' field"
@@ -1916,7 +1970,9 @@ def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
     if "period" not in data:
         raise ConfigurationError(f"Scenario '{data['name']}' must have a 'period' field")
 
-    location = parse_location_block(data.get("location"))
+    location = parse_location_block(
+        data.get("location"), block_path=_child_path(block_path, "location")
+    )
 
     homes: list[HomeConfig] = []
     home: Optional[HomeConfig] = None
@@ -1939,15 +1995,21 @@ def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
         name=data["name"],
         description=data.get("description", ""),
         location=location,
-        period=_parse_period(data["period"]),
+        period=_parse_period(data["period"], block_path=_child_path(block_path, "period")),
         homes=homes,
         home=home,
-        output=_parse_output_config(data.get("output")),
-        seg_tariff_pence_per_kwh=parse_seg_rate(data.get("seg")),
+        output=_parse_output_config(
+            data.get("output"), block_path=_child_path(block_path, "output")
+        ),
+        seg_tariff_pence_per_kwh=parse_seg_rate(
+            data.get("seg"), block_path=_child_path(block_path, "seg")
+        ),
         tariff_config=parse_tariff_config(
             data.get("tariff_config"), block_path=_child_path(block_path, "tariff_config")
         ),
-        finance=parse_finance_config(data.get("finance")),
+        finance=parse_finance_config(
+            data.get("finance"), block_path=_child_path(block_path, "finance")
+        ),
     )
 
 
@@ -2508,8 +2570,13 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
 # ---------------------------------------------------------------------------
 
 
+_COMMUNITY_BILLING_BLOCK_KEYS: frozenset[str] = frozenset({
+    "tariff", "seg_rate_pence_per_kwh", "seg",
+})
+
+
 def _parse_community_billing_config(
-    data: Optional[dict[str, Any]]
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[CommunityBillingConfig]:
     """Parse a ``billing:`` sub-block into a :class:`CommunityBillingConfig`.
 
@@ -2524,25 +2591,28 @@ def _parse_community_billing_config(
 
     Args:
         data: Billing configuration dictionary, or None.
+        block_path: The block's path in its file, named in error messages.
 
     Returns:
         ``CommunityBillingConfig`` when *data* is a dict; ``None`` otherwise.
 
     Raises:
-        ConfigurationError: For an ambiguous SEG specification, a malformed ``seg``
+        ConfigurationError: For a block that is not a mapping or carries a key it
+            does not read, an ambiguous SEG specification, a malformed ``seg``
             block or an invalid ``seg_rate_pence_per_kwh``.
     """
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _COMMUNITY_BILLING_BLOCK_KEYS)
 
-    tariff = parse_tariff_config(data.get("tariff"), block_path="community.billing.tariff")
+    tariff = parse_tariff_config(data.get("tariff"), block_path=_child_path(block_path, "tariff"))
 
     # Resolve SEG rate (three mutually-exclusive forms)
     direct_rate: Optional[float] = None
     if "seg_rate_pence_per_kwh" in data:
         direct_rate = _parse_seg_rate_scalar(
             data["seg_rate_pence_per_kwh"],
-            key_path="community.billing.seg_rate_pence_per_kwh",
+            key_path=_child_path(block_path, "seg_rate_pence_per_kwh"),
         )
 
     seg_block = data.get("seg")
@@ -2556,7 +2626,7 @@ def _parse_community_billing_config(
     seg_rate = (
         direct_rate
         if direct_rate is not None
-        else parse_seg_rate(seg_block, block_path="community.billing.seg")
+        else parse_seg_rate(seg_block, block_path=_child_path(block_path, "seg"))
     )
 
     # Normalise an all-None result to None so callers can reliably test ``is None``
@@ -2567,23 +2637,31 @@ def _parse_community_billing_config(
     return CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
 
 
+_COMMUNITY_BLOCK_KEYS: frozenset[str] = frozenset({
+    "sharing_mode", "community_battery", "billing",
+})
+
+
 def _parse_community_config(
-    data: Optional[dict[str, Any]]
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[CommunityConfig]:
     """Parse a ``community:`` YAML block into a :class:`CommunityConfig`.
 
     Args:
         data: Community configuration dictionary, or None.
+        block_path: The block's path in its file, named in error messages.
 
     Returns:
         ``CommunityConfig`` when *data* is a dict; ``None`` when *data* is ``None``.
 
     Raises:
-        ConfigurationError: For missing/invalid ``sharing_mode``, p2p+battery,
+        ConfigurationError: For a block that is not a mapping or carries a key it
+            does not read, missing/invalid ``sharing_mode``, p2p+battery,
             community_battery-without-battery, or any nested config error.
     """
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _COMMUNITY_BLOCK_KEYS)
 
     sharing_mode = data.get("sharing_mode")
     if not sharing_mode:
@@ -2593,9 +2671,11 @@ def _parse_community_config(
         )
 
     community_battery = _parse_battery_config(
-        data.get("community_battery"), block_path="community.community_battery"
+        data.get("community_battery"), block_path=_child_path(block_path, "community_battery")
     )
-    billing = _parse_community_billing_config(data.get("billing"))
+    billing = _parse_community_billing_config(
+        data.get("billing"), block_path=_child_path(block_path, "billing")
+    )
 
     try:
         return CommunityConfig(
@@ -2630,4 +2710,4 @@ def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
     # .get("community") works cleanly and returns None rather than raising
     # AttributeError.
     data: dict[str, Any] = raw if isinstance(raw, dict) else {}
-    return _parse_community_config(data.get("community"))
+    return _parse_community_config(data.get("community"), block_path="community")
