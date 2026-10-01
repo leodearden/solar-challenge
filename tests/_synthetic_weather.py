@@ -75,7 +75,11 @@ def _consecutive_days(
     first_day: str | pd.Timestamp, days: Sequence[pd.DataFrame]
 ) -> pd.DataFrame:
     index = pd.date_range(
-        first_day, periods=_HOURS_PER_DAY * len(days), freq="h", tz=_TIMEZONE
+        first_day,
+        periods=_HOURS_PER_DAY * len(days),
+        freq="h",
+        tz=_TIMEZONE,
+        normalize=True,
     )
     return pd.concat(days, ignore_index=True).set_axis(index)
 
