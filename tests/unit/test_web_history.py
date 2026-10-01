@@ -1,5 +1,6 @@
 """Tests for the run history browser and comparison features."""
 
+import dataclasses
 import io
 import json
 import tempfile
@@ -13,7 +14,17 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.cli.home import home_config_for_run
+from solar_challenge.config import load_fleet_config
+from solar_challenge.fleet import FleetResults, calculate_fleet_summary
+from solar_challenge.home import HomeConfig, calculate_summary
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
 from tests._web_app import build_test_app
@@ -309,18 +320,99 @@ class TestExportAPI:
         response = client.get("/api/history/runs/nonexistent/export/yaml")
         assert response.status_code == 404
 
-    def test_api_export_yaml_with_config(self, app: Flask, client: FlaskClient) -> None:
+    def test_api_export_yaml_with_config(self, storage: RunStorage, client: FlaskClient) -> None:
         """Test YAML export returns config data."""
-        _insert_test_run(
-            app,
-            run_id="yaml-export",
+        _store_home_run(
+            storage,
+            "yaml-export",
+            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
             name="YAML Run",
-            config={"pv_config": {"capacity_kw": 4.0}},
         )
 
         response = client.get("/api/history/runs/yaml-export/export/yaml")
         assert response.status_code == 200
         assert "attachment" in response.headers.get("Content-Disposition", "")
+
+    def test_export_of_a_home_run_loads_back_through_home_run(
+        self, storage: RunStorage, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """The task's repro: this run's export loaded back with PV 4.0, no battery and no SEG.
+
+        The SEG tariff comes back unnamed, as a seg: block names no tariff.
+        """
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=9.0),
+            load_config=LoadConfig(annual_consumption_kwh=3500.0),
+            battery_config=BatteryConfig(capacity_kwh=10.0),
+            location=LOCATION_PRESETS["edinburgh"],
+            name="Nine",
+            tariff_config=TariffConfig.economy_7(),
+            seg_tariff=SEGTariff(name="Custom", rate_pence_per_kwh=5.5),
+        )
+        _store_home_run(storage, "nine-kw-home", config)
+
+        response = client.get("/api/history/runs/nine-kw-home/export/yaml")
+
+        assert response.status_code == 200
+        assert "attachment" in response.headers.get("Content-Disposition", "")
+        path = tmp_path / "export.yaml"
+        path.write_bytes(response.data)
+        assert home_config_for_run(path) == dataclasses.replace(
+            config, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=5.5)
+        )
+
+    def test_export_of_a_fleet_run_loads_back_through_load_fleet_config(
+        self, storage: RunStorage, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        edinburgh = LOCATION_PRESETS["edinburgh"]
+        home_configs = [
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=3.0),
+                load_config=LoadConfig(annual_consumption_kwh=2900.0),
+                location=edinburgh,
+                name="Home 1",
+            ),
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=6.0),
+                load_config=LoadConfig(annual_consumption_kwh=4100.0),
+                battery_config=BatteryConfig(capacity_kwh=5.0),
+                location=edinburgh,
+                name="Home 2",
+            ),
+        ]
+        _store_fleet_run(storage, "two-home-fleet", home_configs)
+
+        response = client.get("/api/history/runs/two-home-fleet/export/yaml")
+
+        assert response.status_code == 200
+        path = tmp_path / "export.yaml"
+        path.write_bytes(response.data)
+        assert load_fleet_config(path).homes == home_configs
+
+    def test_export_refuses_a_run_config_the_scenario_grammar_cannot_express(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0, custom_module_params={"pdc0": 250.0}),
+            load_config=LoadConfig(),
+        )
+        _store_home_run(storage, "custom-pvlib", config)
+
+        response = client.get("/api/history/runs/custom-pvlib/export/yaml")
+
+        assert response.status_code == 422
+        assert "custom_module_params" in response.get_json()["error"]
+
+    def test_export_of_an_undecodable_stored_config_is_a_server_error(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A stored config without a load_config cannot be a HomeConfig."""
+        _insert_test_run(app, run_id="undecodable", config={"pv_config": {"capacity_kw": 4.0}})
+
+        response = client.get("/api/history/runs/undecodable/export/yaml")
+
+        assert response.status_code == 500
+        assert response.get_json()["error"].startswith("Invalid config data")
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +618,34 @@ def _make_sim_results(days: int = 1, gen_scale: float = 3.0, demand_val: float =
     )
 
 
+def _store_home_run(
+    storage: RunStorage, run_id: str, config: HomeConfig, name: str | None = None
+) -> None:
+    """Save a one-day home run of *config* through RunStorage, as a finished job does."""
+    results = _make_sim_results(days=1)
+    storage.save_home_run(
+        run_id=run_id,
+        config=config,
+        results=results,
+        summary=calculate_summary(results),
+        name=name,
+    )
+
+
+def _store_fleet_run(storage: RunStorage, run_id: str, home_configs: list[HomeConfig]) -> None:
+    """Save a one-day fleet run of *home_configs* through RunStorage, as a finished job does."""
+    fleet_results = FleetResults(
+        per_home_results=[_make_sim_results(days=1) for _ in home_configs],
+        home_configs=home_configs,
+    )
+    storage.save_fleet_run(
+        run_id=run_id,
+        fleet_results=fleet_results,
+        fleet_summary=calculate_fleet_summary(fleet_results),
+        per_home_summaries=[calculate_summary(r) for r in fleet_results.per_home_results],
+    )
+
+
 class TestFleetCSVExport:
     """Tests for fleet CSV export containing aggregate data."""
 
@@ -669,11 +789,16 @@ class TestContentDispositionHeader:
         )
 
     def test_yaml_content_disposition_has_quoted_filename(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """Test YAML export Content-Disposition header has quotes around the filename."""
         run_id = str(uuid.uuid4())
-        _insert_test_run(app, run_id=run_id, name="YAML Quote Test")
+        _store_home_run(
+            storage,
+            run_id,
+            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+            name="YAML Quote Test",
+        )
 
         response = client.get(f"/api/history/runs/{run_id}/export/yaml")
         assert response.status_code == 200
