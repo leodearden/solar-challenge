@@ -7,7 +7,6 @@ orchestrator offline lane's interpreter-matrix job (tests/interpreter_matrix).
 """
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from tests._collect_only import collected_node_ids, requires_uv, run_collect_only
 from tests._interpreters import off_pin_minor_versions, python_version_pin
 from tests._orchestrator_config import load_orchestrator_config, sole_offline_lane_job
 
@@ -53,32 +53,23 @@ def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Pa
     )
 
 
+@requires_uv
 def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(project_root: Path) -> None:
     """Run as the lane runs it, the interpreter-matrix job collects one case per off-pin admitted minor.
 
     Each case's node-id must name its interpreter: that node-id is the only
     attribution a fix task filed by the lane carries.
     """
-    if shutil.which("uv") is None:
-        pytest.skip("uv is not installed; the interpreter-matrix job runs through it")
     command = sole_offline_lane_job(project_root, _MATRIX_JOB)["command"]
 
-    result = subprocess.run(
-        command,
-        shell=True,
-        cwd=project_root,
-        env={**os.environ, "PYTEST_ADDOPTS": "--collect-only --verbosity=-1"},
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    result = run_collect_only(command, project_root)
 
     assert result.returncode == 0, (
         f"the {_MATRIX_JOB!r} lane job {command!r} failed to collect (exit {result.returncode})\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     expected = sorted(f"{major}.{minor}" for major, minor in off_pin_minor_versions(project_root))
-    node_ids = [line for line in result.stdout.splitlines() if "::" in line]
+    node_ids = collected_node_ids(result.stdout)
     collected = sorted(node_id.rpartition("[")[2].removesuffix("]") for node_id in node_ids)
     assert collected == expected, (
         f"the {_MATRIX_JOB!r} lane job collected {node_ids}; expected exactly one case per minor "
