@@ -4,6 +4,81 @@ document.addEventListener('alpine:init', () => {
         return value === undefined || value === null ? '' : value;
     }
 
+    // Whether `value` is a YAML mapping, as a scenario document and each of its blocks is
+    function isMapping(value) {
+        return value !== null && typeof value === 'object' && !Array.isArray(value);
+    }
+
+    // The form fields whose preview is `scenario`, a document in the preview's grammar.
+    // Throws, saying why, for a document the form cannot hold.
+    function scenarioFormFields(scenario) {
+        if (!isMapping(scenario)) {
+            throw new Error('it does not hold a YAML mapping');
+        }
+        const fleet = scenario.fleet_distribution;
+        if (!isMapping(fleet)) {
+            throw new Error('it has no fleet_distribution: block for the builder to edit (a run export lists its homes instead)');
+        }
+        const period = scenario.period || {};
+        const tariff = scenario.tariff || {};
+        const fields = {
+            name: inputValue(scenario.name),
+            description: inputValue(scenario.description),
+            start_date: inputValue(period.start_date),
+            end_date: inputValue(period.end_date),
+            n_homes: inputValue(fleet.n_homes),
+            import_rate: tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '',
+            seg_rate_pence_per_kwh: inputValue((scenario.seg || {}).rate_pence_per_kwh),
+            ...componentFields(fleet, 'pv', 'pv_capacity_kw', 'capacity_kw'),
+            ...componentFields(fleet, 'battery', 'battery_capacity_kwh', 'capacity_kwh'),
+            ...componentFields(fleet, 'load', 'annual_consumption_kwh', 'annual_consumption_kwh'),
+        };
+        if (scenario.location) {
+            fields.location_preset = 'custom';
+            fields.latitude = inputValue(scenario.location.latitude);
+            fields.longitude = inputValue(scenario.location.longitude);
+            fields.altitude = inputValue(scenario.location.altitude);
+        }
+        return fields;
+    }
+
+    // One component's form fields, read from its spec at fleet[prefix][key]: a fixed number, or a distribution.
+    // Throws, naming the spec, for one the form cannot hold.
+    function componentFields(fleet, prefix, fixedField, key) {
+        const spec = (fleet[prefix] || {})[key];
+        const path = 'fleet_distribution.' + prefix + '.' + key;
+        if (spec === undefined || spec === null || typeof spec === 'number') {
+            return { [prefix + '_distribution_type']: '', [fixedField]: inputValue(spec) };
+        }
+        if (!isMapping(spec)) {
+            throw new Error(path + ' must be a number or a distribution, got ' + JSON.stringify(spec));
+        }
+        const fields = { [prefix + '_distribution_type']: spec.type };
+        if (spec.type === 'weighted_discrete') {
+            fields[prefix + '_wd_values'] = distributionRows(spec, 'weights', 'weight', path);
+        } else if (spec.type === 'shuffled_pool') {
+            fields[prefix + '_sp_entries'] = distributionRows(spec, 'counts', 'count', path);
+        } else if (spec.type === 'normal' || spec.type === 'uniform') {
+            for (const parameter of ['mean', 'std', 'min', 'max']) {
+                fields[prefix + '_' + parameter] = inputValue(spec[parameter]);
+            }
+        } else {
+            throw new Error(path + ' has distribution type ' + JSON.stringify(spec.type) + ', which the builder does not offer');
+        }
+        return fields;
+    }
+
+    // The form's rows of a distribution: each of its values, with the same entry of its `listKey` list as `rowKey`.
+    // Throws, naming `path`, unless both are lists of the same length.
+    function distributionRows(spec, listKey, rowKey, path) {
+        const values = spec.values;
+        const column = spec[listKey];
+        if (!Array.isArray(values) || !Array.isArray(column) || values.length !== column.length) {
+            throw new Error(path + ' needs values and ' + listKey + ' lists of the same length');
+        }
+        return values.map((value, i) => ({ value, [rowKey]: column[i] }));
+    }
+
     Alpine.data('scenarioBuilder', () => ({
         // Form state
         name: '',
@@ -151,62 +226,23 @@ document.addEventListener('alpine:init', () => {
             URL.revokeObjectURL(url);
         },
 
-        // Upload YAML file: set the form to the scenario it holds
+        // Upload YAML file: set the form to the scenario it holds, or, for one the form cannot hold,
+        // leave every field as it is and say why in the preview
         async uploadYaml(event) {
             const file = event.target.files[0];
             if (!file) return;
             const text = await file.text();
-            this.yamlPreview = text;
-            try {
-                const scenario = (typeof jsyaml !== 'undefined') ? jsyaml.load(text) : null;
-                if (scenario) {
-                    this.applyScenario(scenario);
-                    this.updatePreview();
-                }
-            } catch (e) { /* ignore parse errors */ }
             event.target.value = '';
-        },
-
-        // Set the form to the one whose preview is `scenario`, a document in the preview's grammar
-        applyScenario(scenario) {
-            const period = scenario.period || {};
-            const fleet = scenario.fleet_distribution || {};
-            const tariff = scenario.tariff || {};
-            this.name = inputValue(scenario.name);
-            this.description = inputValue(scenario.description);
-            this.start_date = inputValue(period.start_date);
-            this.end_date = inputValue(period.end_date);
-            if (scenario.location) {
-                this.location_preset = 'custom';
-                this.latitude = inputValue(scenario.location.latitude);
-                this.longitude = inputValue(scenario.location.longitude);
-                this.altitude = inputValue(scenario.location.altitude);
-            }
-            this.n_homes = inputValue(fleet.n_homes);
-            this.import_rate = tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '';
-            this.seg_rate_pence_per_kwh = inputValue((scenario.seg || {}).rate_pence_per_kwh);
-            this.applyDistribution('pv', 'pv_capacity_kw', (fleet.pv || {}).capacity_kw);
-            this.applyDistribution('battery', 'battery_capacity_kwh', (fleet.battery || {}).capacity_kwh);
-            this.applyDistribution('load', 'annual_consumption_kwh', (fleet.load || {}).annual_consumption_kwh);
-        },
-
-        // Set one component's fields to `spec`: a fixed number, or a distribution
-        applyDistribution(prefix, fixedField, spec) {
-            if (spec === null || typeof spec !== 'object') {
-                this[prefix + '_distribution_type'] = '';
-                this[fixedField] = inputValue(spec);
+            let fields;
+            try {
+                fields = scenarioFormFields(jsyaml.load(text));
+            } catch (e) {
+                this.yamlPreview = '# ' + file.name + ' was not loaded: ' + e.message;
                 return;
             }
-            this[prefix + '_distribution_type'] = spec.type;
-            if (spec.type === 'weighted_discrete') {
-                this[prefix + '_wd_values'] = spec.values.map((value, i) => ({ value, weight: spec.weights[i] }));
-            } else if (spec.type === 'shuffled_pool') {
-                this[prefix + '_sp_entries'] = spec.values.map((value, i) => ({ value, count: spec.counts[i] }));
-            } else {
-                for (const key of ['mean', 'std', 'min', 'max']) {
-                    this[prefix + '_' + key] = inputValue(spec[key]);
-                }
-            }
+            Object.assign(this, fields);
+            this.yamlPreview = text;
+            this.updatePreview();
         },
 
         // Load presets list

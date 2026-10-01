@@ -5,6 +5,7 @@ button, General section inputs, and detects Bug B1 (Alpine race condition
 with external JS).
 """
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,10 @@ import yaml
 from playwright.sync_api import ConsoleMessage, Page, expect
 
 from solar_challenge.config import load_fleet_config
+from solar_challenge.home import HomeConfig
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 
 pytestmark = pytest.mark.e2e
 
@@ -261,3 +266,55 @@ def test_uploading_a_builder_yaml_restores_the_form_that_emits_it(
 
     assert after_upload.value.status == 200
     assert yaml.safe_load(after_upload.value.json()["yaml"]) == yaml.safe_load(yaml_text)
+
+
+_RUN_EXPORT_YAML = scenario_yaml(
+    fleet_scenario(
+        [HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())],
+        name="Exported run",
+    )
+)
+"""A run-history YAML export, which lists the fleet's homes one by one."""
+
+
+@pytest.mark.parametrize(
+    ("yaml_text", "refusal"),
+    [
+        pytest.param(_RUN_EXPORT_YAML, "fleet_distribution", id="run-history export"),
+        pytest.param(
+            yaml.safe_dump(
+                {
+                    "name": "Pool without values",
+                    "fleet_distribution": {
+                        "n_homes": 5,
+                        "pv": {"capacity_kw": {"type": "weighted_discrete", "weights": [1, 3]}},
+                    },
+                }
+            ),
+            "fleet_distribution.pv.capacity_kw",
+            id="weighted_discrete without values",
+        ),
+    ],
+)
+def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
+    page: Page, live_server: str, tmp_path: Path, yaml_text: str, refusal: str
+) -> None:
+    """Uploading a scenario the builder's form cannot hold leaves every field as it was, and the preview says why.
+
+    A run-history export has no fleet_distribution: block for the form to edit, and a
+    weighted_discrete distribution without values has no rows to show.
+    """
+    with page.expect_response("**/api/scenarios/preview-yaml") as opened:
+        page.goto(live_server + "/scenarios/builder")
+    form_before_upload = opened.value.request.post_data_json
+    path = tmp_path / "scenario.yaml"
+    path.write_text(yaml_text, encoding="utf-8")
+
+    page.set_input_files('input[type="file"]', path)
+
+    expect(page.locator("pre")).to_have_text(
+        re.compile(rf"^# scenario\.yaml was not loaded: .*{re.escape(refusal)}")
+    )
+    with page.expect_response("**/api/scenarios/validate") as validated:
+        page.get_by_role("button", name="Validate", exact=True).click()
+    assert validated.value.request.post_data_json == form_before_upload
