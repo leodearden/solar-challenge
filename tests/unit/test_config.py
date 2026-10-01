@@ -1,16 +1,18 @@
 """Tests for configuration file support."""
 
 import json
-import random
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
+from typing import Any, TypeAlias
 
+import pandas as pd
 import pytest
 import yaml
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.community import CommunityBillingConfig, CommunityConfig
+from solar_challenge.community import CommunityConfig
 from solar_challenge.config import (
     BatteryDistributionConfig,
     ConfigurationError,
@@ -28,17 +30,7 @@ from solar_challenge.config import (
     SimulationPeriod,
     UniformDistribution,
     WeightedDiscreteDistribution,
-    _parse_battery_config,
-    _parse_grid_charge_config,
-    _parse_community_config,
-    _parse_ev_config,
-    _parse_heat_pump_config,
-    _parse_pv_config,
-    _parse_pv_distribution_config,
-    _modify_pv_config,
     load_community_config,
-    _parse_distribution_spec,
-    _sample_from_distribution,
     generate_homes_from_distribution,
     load_config,
     load_config_json,
@@ -53,15 +45,28 @@ from solar_challenge.config import (
     parse_location_block,
     parse_seg_rate,
     parse_tariff_config,
+    run_parameter_sweep,
 )
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
-from solar_challenge.home import HomeConfig
+from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, calculate_degradation_factor
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.weather import WeatherCache, set_weather_cache
+from tests._synthetic_weather import synthetic_june_weather
+
+
+def _parsed_home(**blocks: Any) -> HomeConfig:
+    """Parse a ``home:`` block holding only *blocks*, at the Bristol default location."""
+    return parse_home_block(blocks, Location.bristol())
+
+
+def _parsed_fleet_distribution(**sections: Any) -> FleetDistributionConfig:
+    """Parse a one-home ``fleet_distribution:`` block holding *sections*."""
+    return parse_fleet_distribution_config({"n_homes": 1, **sections})
 
 
 class TestSimulationPeriod:
@@ -380,26 +385,19 @@ class TestGridChargeConfig:
 
 
 class TestBatteryGridChargeParsing:
-    """Tests for _parse_battery_config grid_charging support."""
-
-    def test_parse_grid_charging_sets_target_soc(self) -> None:
-        """_parse_battery_config parses nested grid_charging dict."""
-        result = _parse_battery_config(
-            {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 0.8}}
-        )
-        assert result is not None
-        assert result.grid_charging is not None
-        assert result.grid_charging.target_soc_fraction == 0.8
+    """The home battery block's grid_charging support, read through parse_home_block."""
 
     def test_parse_absent_grid_charging_is_none(self) -> None:
         """Absent grid_charging block -> grid_charging is None."""
-        result = _parse_battery_config({"capacity_kwh": 5.0})
+        result = _parsed_home(battery={"capacity_kwh": 5.0}).battery_config
         assert result is not None
         assert result.grid_charging is None
 
     def test_parse_empty_grid_charging_uses_default(self) -> None:
         """Empty grid_charging dict -> default target_soc_fraction == 0.9."""
-        result = _parse_battery_config({"capacity_kwh": 5.0, "grid_charging": {}})
+        result = _parsed_home(
+            battery={"capacity_kwh": 5.0, "grid_charging": {}}
+        ).battery_config
         assert result is not None
         assert result.grid_charging is not None
         assert result.grid_charging.target_soc_fraction == 0.9
@@ -407,24 +405,32 @@ class TestBatteryGridChargeParsing:
     def test_parse_out_of_range_raises(self) -> None:
         """Out-of-range target_soc_fraction propagates ConfigurationError."""
         with pytest.raises(ConfigurationError, match="target_soc_fraction"):
-            _parse_battery_config(
-                {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 1.5}}
+            _parsed_home(
+                battery={
+                    "capacity_kwh": 5.0,
+                    "grid_charging": {"target_soc_fraction": 1.5},
+                }
             )
 
-    def test_parse_grid_charging_non_mapping_raises(self) -> None:
-        """grid_charging supplied as a scalar raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping"):
-            _parse_battery_config({"capacity_kwh": 5.0, "grid_charging": 0.8})
-
-    def test_parse_grid_charge_config_non_mapping_raises_directly(self) -> None:
-        """_parse_grid_charge_config raises ConfigurationError for non-dict input directly."""
-        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping, got str"):
-            _parse_grid_charge_config("not-a-dict")  # type: ignore[arg-type]
-
-    def test_parse_grid_charge_config_list_raises_directly(self) -> None:
-        """_parse_grid_charge_config raises ConfigurationError for list input."""
-        with pytest.raises(ConfigurationError, match="grid_charging must be a mapping, got list"):
-            _parse_grid_charge_config([1, 2])  # type: ignore[arg-type]
+    @pytest.mark.parametrize(
+        ("grid_charging", "type_name"),
+        [
+            pytest.param(0.8, "float", id="number"),
+            pytest.param("not-a-dict", "str", id="string"),
+            pytest.param([1, 2], "list", id="list"),
+        ],
+    )
+    def test_parse_grid_charging_non_mapping_raises(
+        self, grid_charging: object, type_name: str
+    ) -> None:
+        """grid_charging supplied as a number, string or list raises ConfigurationError."""
+        with pytest.raises(
+            ConfigurationError,
+            match=f"grid_charging must be a mapping, got {type_name}",
+        ):
+            _parsed_home(
+                battery={"capacity_kwh": 5.0, "grid_charging": grid_charging}
+            )
 
     def test_yaml_round_trip_grid_charging(self) -> None:
         """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""
@@ -456,38 +462,28 @@ home:
 
 
 class TestBatterySOCEfficiencyParsing:
-    """Tests for _parse_battery_config SOC + efficiency key forwarding."""
+    """Tests for parse_home_block battery SOC + efficiency key forwarding."""
 
     def test_parse_explicit_soc_and_eff_keys(self) -> None:
         """All five SOC/eff keys are forwarded to BatteryConfig."""
-        result = _parse_battery_config(
-            {
+        result = _parsed_home(
+            battery={
                 "capacity_kwh": 5.0,
                 "min_soc_fraction": 0.2,
                 "max_soc_fraction": 0.85,
                 "charge_efficiency": 0.96,
                 "discharge_efficiency": 0.97,
             }
-        )
+        ).battery_config
         assert result is not None
         assert result.min_soc_fraction == 0.2
         assert result.max_soc_fraction == 0.85
         assert result.charge_efficiency == 0.96
         assert result.discharge_efficiency == 0.97
 
-    def test_parse_efficiency_splits_via_sqrt(self) -> None:
-        """efficiency key is forwarded and split as sqrt by BatteryConfig.__post_init__."""
-        import math
-
-        result = _parse_battery_config({"capacity_kwh": 5.0, "efficiency": 0.95})
-        assert result is not None
-        assert result.efficiency == 0.95
-        assert result.charge_efficiency == pytest.approx(math.sqrt(0.95))
-        assert result.discharge_efficiency == pytest.approx(math.sqrt(0.95))
-
     def test_absent_keys_use_defaults(self) -> None:
         """Absent SOC/eff keys yield the correct defaults."""
-        result = _parse_battery_config({"capacity_kwh": 5.0})
+        result = _parsed_home(battery={"capacity_kwh": 5.0}).battery_config
         assert result is not None
         assert result.min_soc_fraction == 0.1
         assert result.max_soc_fraction == 0.9
@@ -498,14 +494,18 @@ class TestBatterySOCEfficiencyParsing:
     def test_out_of_range_soc_raises_value_error(self) -> None:
         """Out-of-range SOC fractions propagate as ValueError."""
         with pytest.raises(ValueError, match="SOC"):
-            _parse_battery_config(
-                {"capacity_kwh": 5.0, "min_soc_fraction": 0.9, "max_soc_fraction": 0.5}
+            _parsed_home(
+                battery={
+                    "capacity_kwh": 5.0,
+                    "min_soc_fraction": 0.9,
+                    "max_soc_fraction": 0.5,
+                }
             )
 
     def test_out_of_range_efficiency_raises_value_error(self) -> None:
         """Out-of-range efficiency propagates as ValueError."""
         with pytest.raises(ValueError, match="[Cc]harge"):
-            _parse_battery_config({"capacity_kwh": 5.0, "charge_efficiency": 0.0})
+            _parsed_home(battery={"capacity_kwh": 5.0, "charge_efficiency": 0.0})
 
     def test_yaml_round_trip_efficiency(self) -> None:
         """YAML with battery.efficiency round-trips into home.battery_config.charge_efficiency."""
@@ -563,12 +563,12 @@ home:
 
 
 class TestBatterySOHParsing:
-    """Tests for _parse_battery_config SOH/aging key forwarding."""
+    """Tests for parse_home_block battery SOH/aging key forwarding."""
 
     def test_parse_explicit_soh_keys(self) -> None:
         """All five SOH keys are forwarded to BatteryConfig."""
-        result = _parse_battery_config(
-            {
+        result = _parsed_home(
+            battery={
                 "capacity_kwh": 5.0,
                 "system_age_years": 8.0,
                 "calendar_fade_rate_per_year": 0.025,
@@ -576,7 +576,7 @@ class TestBatterySOHParsing:
                 "soh_floor": 0.6,
                 "soh": 0.85,
             }
-        )
+        ).battery_config
         assert result is not None
         assert result.system_age_years == 8.0
         assert result.calendar_fade_rate_per_year == 0.025
@@ -586,7 +586,7 @@ class TestBatterySOHParsing:
 
     def test_absent_soh_keys_use_defaults(self) -> None:
         """Absent SOH keys yield the correct BatteryConfig defaults."""
-        result = _parse_battery_config({"capacity_kwh": 5.0})
+        result = _parsed_home(battery={"capacity_kwh": 5.0}).battery_config
         assert result is not None
         assert result.system_age_years == 0.0
         assert result.calendar_fade_rate_per_year == 0.02
@@ -621,7 +621,7 @@ home:
     def test_out_of_range_system_age_raises(self) -> None:
         """Negative system_age_years surfaces as ValueError."""
         with pytest.raises(ValueError, match="system_age_years"):
-            _parse_battery_config({"capacity_kwh": 5.0, "system_age_years": -1.0})
+            _parsed_home(battery={"capacity_kwh": 5.0, "system_age_years": -1.0})
 
 
 class TestDispatchStrategyParsing:
@@ -1306,21 +1306,16 @@ class TestDistributionDataclasses:
 
 
 class TestDistributionParsing:
-    """Tests for _parse_distribution_spec function."""
+    """The distribution-spec grammar, read as a fleet distribution's pv.capacity_kw."""
 
     def test_parse_none(self) -> None:
         """Test parsing None value."""
-        result = _parse_distribution_spec(None, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": None}).pv.capacity_kw
         assert result is None
-
-    def test_parse_scalar_float(self) -> None:
-        """Test parsing scalar float."""
-        result = _parse_distribution_spec(4.0, "test")
-        assert result == 4.0
 
     def test_parse_scalar_int(self) -> None:
         """Test parsing scalar int converts to float."""
-        result = _parse_distribution_spec(5, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": 5}).pv.capacity_kw
         assert result == 5.0
         assert isinstance(result, float)
 
@@ -1331,7 +1326,7 @@ class TestDistributionParsing:
             "values": [3.0, 4.0, 5.0],
             "weights": [20, 50, 30],
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, WeightedDiscreteDistribution)
         assert result.values == (3.0, 4.0, 5.0)
         assert result.weights == (20.0, 50.0, 30.0)
@@ -1343,7 +1338,7 @@ class TestDistributionParsing:
             "values": [None, 5.0, 10.0],
             "weights": [40, 40, 20],
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, WeightedDiscreteDistribution)
         assert result.values == (None, 5.0, 10.0)
 
@@ -1355,7 +1350,7 @@ class TestDistributionParsing:
             "values": [3.0, 4.0, 5.0, 6.0],
             "counts": [20, 40, 30, 10],
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, ShuffledPoolDistribution)
         assert result.values == (3.0, 4.0, 5.0, 6.0)
         assert result.counts == (20, 40, 30, 10)
@@ -1368,15 +1363,15 @@ class TestDistributionParsing:
             "values": [None, 5.0, 10.0],
             "counts": [40, 40, 20],
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, ShuffledPoolDistribution)
         assert result.values == (None, 5.0, 10.0)
 
     def test_parse_shuffled_pool_missing_counts_raises(self) -> None:
         """Test parsing shuffled_pool without counts raises."""
         with pytest.raises(ConfigurationError, match="requires 'values' and 'counts'"):
-            _parse_distribution_spec(
-                {"type": "shuffled_pool", "values": [1, 2, 3]}, "test"
+            _parsed_fleet_distribution(
+                pv={"capacity_kw": {"type": "shuffled_pool", "values": [1, 2, 3]}}
             )
 
     def test_parse_normal(self) -> None:
@@ -1386,7 +1381,7 @@ class TestDistributionParsing:
             "mean": 3400,
             "std": 800,
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, NormalDistribution)
         assert result.mean == 3400.0
         assert result.std == 800.0
@@ -1400,7 +1395,7 @@ class TestDistributionParsing:
             "min": 2000,
             "max": 6000,
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, NormalDistribution)
         assert result.min == 2000.0
         assert result.max == 6000.0
@@ -1412,7 +1407,7 @@ class TestDistributionParsing:
             "min": 3.0,
             "max": 6.0,
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert isinstance(result, UniformDistribution)
         assert result.min == 3.0
         assert result.max == 6.0
@@ -1423,93 +1418,97 @@ class TestDistributionParsing:
             "type": "fixed",
             "value": 4.5,
         }
-        result = _parse_distribution_spec(data, "test")
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert result == 4.5
 
     def test_parse_missing_type_raises(self) -> None:
         """Test parsing dict without type raises error."""
         with pytest.raises(ConfigurationError, match="requires 'type'"):
-            _parse_distribution_spec({"values": [1, 2, 3]}, "test")
+            _parsed_fleet_distribution(pv={"capacity_kw": {"values": [1, 2, 3]}})
 
     def test_parse_unknown_type_raises(self) -> None:
         """Test parsing unknown type raises error."""
         with pytest.raises(ConfigurationError, match="Unknown distribution type"):
-            _parse_distribution_spec({"type": "unknown"}, "test")
+            _parsed_fleet_distribution(pv={"capacity_kw": {"type": "unknown"}})
 
     def test_parse_weighted_discrete_missing_values_raises(self) -> None:
         """Test parsing weighted_discrete without values raises."""
         with pytest.raises(ConfigurationError, match="requires 'values' and 'weights'"):
-            _parse_distribution_spec(
-                {"type": "weighted_discrete", "weights": [1, 2]}, "test"
+            _parsed_fleet_distribution(
+                pv={"capacity_kw": {"type": "weighted_discrete", "weights": [1, 2]}}
             )
 
     def test_parse_normal_missing_std_raises(self) -> None:
         """Test parsing normal without std raises."""
         with pytest.raises(ConfigurationError, match="requires 'mean' and 'std'"):
-            _parse_distribution_spec({"type": "normal", "mean": 100}, "test")
+            _parsed_fleet_distribution(
+                pv={"capacity_kw": {"type": "normal", "mean": 100}}
+            )
 
     def test_parse_uniform_missing_max_raises(self) -> None:
         """Test parsing uniform without max raises."""
         with pytest.raises(ConfigurationError, match="requires 'min' and 'max'"):
-            _parse_distribution_spec({"type": "uniform", "min": 0}, "test")
+            _parsed_fleet_distribution(
+                pv={"capacity_kw": {"type": "uniform", "min": 0}}
+            )
 
 
 class TestDistributionSampling:
-    """Tests for _sample_from_distribution function."""
+    """How generate_homes_from_distribution samples each home's value from a spec."""
 
     def test_sample_none_returns_none(self) -> None:
-        """Test sampling None returns None."""
-        rng = random.Random(42)
-        assert _sample_from_distribution(None, rng) is None
-
-    def test_sample_scalar_returns_float(self) -> None:
-        """Test sampling scalar returns float."""
-        rng = random.Random(42)
-        assert _sample_from_distribution(4.0, rng) == 4.0
-        assert _sample_from_distribution(5, rng) == 5.0
-
-    def test_sample_weighted_discrete(self) -> None:
-        """Test sampling from weighted discrete distribution."""
-        rng = random.Random(42)
-        dist = WeightedDiscreteDistribution(
-            values=(3.0, 4.0, 5.0),
-            weights=(1.0, 1.0, 1.0),
+        """A None spec samples no value, so every home's annual consumption stays unset."""
+        config = FleetDistributionConfig(
+            n_homes=5,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(annual_consumption_kwh=None),
+            seed=42,
         )
-        samples = [_sample_from_distribution(dist, rng) for _ in range(100)]
-        assert all(s in (3.0, 4.0, 5.0) for s in samples)
-
-    def test_sample_weighted_discrete_can_return_none(self) -> None:
-        """Test weighted discrete can return None."""
-        rng = random.Random(42)
-        dist = WeightedDiscreteDistribution(
-            values=(None, 5.0),
-            weights=(50.0, 50.0),
-        )
-        samples = [_sample_from_distribution(dist, rng) for _ in range(100)]
-        assert None in samples
-        assert 5.0 in samples
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        assert len(homes) == 5
+        for home in homes:
+            assert home.load_config.annual_consumption_kwh is None
 
     def test_sample_normal(self) -> None:
         """Test sampling from normal distribution."""
-        rng = random.Random(42)
-        dist = NormalDistribution(mean=100.0, std=10.0)
-        samples = [_sample_from_distribution(dist, rng) for _ in range(1000)]
-        mean = sum(s for s in samples if s is not None) / len(samples)
+        config = FleetDistributionConfig(
+            n_homes=1000,
+            pv=PVDistributionConfig(
+                capacity_kw=4.0, azimuth=NormalDistribution(mean=100.0, std=10.0)
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        mean = sum(home.pv_config.azimuth for home in homes) / len(homes)
         assert 95.0 <= mean <= 105.0  # Should be close to 100
 
     def test_sample_normal_respects_bounds(self) -> None:
         """Test normal distribution respects min/max bounds."""
-        rng = random.Random(42)
-        dist = NormalDistribution(mean=100.0, std=50.0, min=80.0, max=120.0)
-        samples = [_sample_from_distribution(dist, rng) for _ in range(100)]
-        assert all(s is not None and 80.0 <= s <= 120.0 for s in samples)
+        config = FleetDistributionConfig(
+            n_homes=100,
+            pv=PVDistributionConfig(
+                capacity_kw=4.0,
+                azimuth=NormalDistribution(mean=100.0, std=50.0, min=80.0, max=120.0),
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        assert all(80.0 <= home.pv_config.azimuth <= 120.0 for home in homes)
 
     def test_sample_uniform(self) -> None:
-        """Test sampling from uniform distribution."""
-        rng = random.Random(42)
-        dist = UniformDistribution(min=0.0, max=10.0)
-        samples = [_sample_from_distribution(dist, rng) for _ in range(100)]
-        assert all(s is not None and 0.0 <= s <= 10.0 for s in samples)
+        """A uniform spec samples every home's value inside [min, max]."""
+        config = FleetDistributionConfig(
+            n_homes=100,
+            pv=PVDistributionConfig(
+                capacity_kw=4.0, azimuth=UniformDistribution(min=80.0, max=120.0)
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+        homes = generate_homes_from_distribution(config, Location.bristol())
+        assert all(80.0 <= home.pv_config.azimuth <= 120.0 for home in homes)
 
 
 class TestFleetDistributionConfig:
@@ -2199,16 +2198,27 @@ fleet_distribution:
 # ---------------------------------------------------------------------------
 
 
-class TestParseCommunityConfig:
-    """Tests for _parse_community_config."""
+LoadCommunityBlock: TypeAlias = Callable[[dict[str, Any]], CommunityConfig | None]
 
-    def test_none_returns_none(self) -> None:
-        """_parse_community_config(None) returns None (mirrors _parse_battery_config)."""
-        assert _parse_community_config(None) is None
 
-    def test_minimal_p2p(self) -> None:
+@pytest.fixture
+def load_community_block(tmp_path: Path) -> LoadCommunityBlock:
+    """Read a ``community:`` block the way the CLI does: from a YAML file, through load_community_config."""
+    path = tmp_path / "community.yaml"
+
+    def load(block: dict[str, Any]) -> CommunityConfig | None:
+        path.write_text(yaml.safe_dump({"community": block}))
+        return load_community_config(path)
+
+    return load
+
+
+class TestCommunityBlockParsing:
+    """The community: block, as load_community_config reads it from a file."""
+
+    def test_minimal_p2p(self, load_community_block: LoadCommunityBlock) -> None:
         """A minimal dict with sharing_mode='p2p' returns a valid CommunityConfig."""
-        cfg = _parse_community_config({"sharing_mode": "p2p"})
+        cfg = load_community_block({"sharing_mode": "p2p"})
         assert isinstance(cfg, CommunityConfig)
         assert cfg.sharing_mode == "p2p"
         assert cfg.community_battery is None
@@ -2218,112 +2228,40 @@ class TestParseCommunityConfig:
     # community_battery mode + invalid combinations (step-3)
     # ------------------------------------------------------------------
 
-    def test_community_battery_mode_parses_battery(self) -> None:
-        """community_battery mode with battery block returns BatteryConfig."""
-        cfg = _parse_community_config(
-            {
-                "sharing_mode": "community_battery",
-                "community_battery": {
-                    "capacity_kwh": 50.0,
-                    "max_charge_kw": 20.0,
-                    "max_discharge_kw": 20.0,
-                },
-            }
-        )
-        assert isinstance(cfg, CommunityConfig)
-        assert cfg.sharing_mode == "community_battery"
-        assert cfg.community_battery is not None
-        assert cfg.community_battery.capacity_kwh == 50.0
-
-    def test_community_battery_mode_without_battery_raises(self) -> None:
+    def test_community_battery_mode_without_battery_raises(
+        self, load_community_block: LoadCommunityBlock
+    ) -> None:
         """community_battery mode without a community_battery block raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_community_config({"sharing_mode": "community_battery"})
+            load_community_block({"sharing_mode": "community_battery"})
 
-    def test_p2p_with_battery_raises(self) -> None:
+    def test_p2p_with_battery_raises(
+        self, load_community_block: LoadCommunityBlock
+    ) -> None:
         """p2p + community_battery block raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_community_config(
+            load_community_block(
                 {
                     "sharing_mode": "p2p",
                     "community_battery": {"capacity_kwh": 50.0},
                 }
             )
 
-    def test_bogus_mode_raises(self) -> None:
+    def test_bogus_mode_raises(self, load_community_block: LoadCommunityBlock) -> None:
         """An unrecognised sharing_mode raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_community_config({"sharing_mode": "bogus"})
-
-    # ------------------------------------------------------------------
-    # billing block: tariff + direct SEG scalar (step-5)
-    # ------------------------------------------------------------------
-
-    def test_billing_with_tariff_and_direct_seg(self) -> None:
-        """billing block with tariff + direct seg_rate_pence_per_kwh is parsed."""
-        cfg = _parse_community_config(
-            {
-                "sharing_mode": "p2p",
-                "billing": {
-                    "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
-                    "seg_rate_pence_per_kwh": 4.1,
-                },
-            }
-        )
-        assert isinstance(cfg, CommunityConfig)
-        assert cfg.billing is not None
-        assert isinstance(cfg.billing, CommunityBillingConfig)
-        assert cfg.billing.tariff is not None
-        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(4.1)
-
-    def test_no_billing_key_gives_none(self) -> None:
-        """Absence of the billing key leaves billing=None."""
-        cfg = _parse_community_config({"sharing_mode": "p2p"})
-        assert cfg is not None
-        assert cfg.billing is None
+            load_community_block({"sharing_mode": "bogus"})
 
     # ------------------------------------------------------------------
     # billing: nested SEG forms (step-7)
     # ------------------------------------------------------------------
 
-    def test_billing_seg_preset(self) -> None:
-        """billing.seg.preset resolves to the SEG_PRESETS rate."""
-        cfg = _parse_community_config(
-            {
-                "sharing_mode": "p2p",
-                "billing": {"seg": {"preset": "Octopus"}},
-            }
-        )
-        assert cfg is not None
-        assert cfg.billing is not None
-        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(4.1)
-
-    def test_billing_seg_rate(self) -> None:
-        """billing.seg.rate_pence_per_kwh stores the explicit float."""
-        cfg = _parse_community_config(
-            {
-                "sharing_mode": "p2p",
-                "billing": {"seg": {"rate_pence_per_kwh": 5.5}},
-            }
-        )
-        assert cfg is not None
-        assert cfg.billing is not None
-        assert cfg.billing.seg_rate_pence_per_kwh == pytest.approx(5.5)
-
-    def test_billing_seg_unknown_preset_raises(self) -> None:
-        """billing.seg with unknown preset name raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="Unknown SEG preset"):
-            _parse_community_config(
-                {
-                    "sharing_mode": "p2p",
-                    "billing": {"seg": {"preset": "Nonexistent"}},
-                }
-            )
-
-    def test_billing_both_scalar_and_seg_block_raises(self) -> None:
+    def test_billing_both_scalar_and_seg_block_raises(
+        self, load_community_block: LoadCommunityBlock
+    ) -> None:
         """Supplying both seg_rate_pence_per_kwh and seg block raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
-            _parse_community_config(
+            load_community_block(
                 {
                     "sharing_mode": "p2p",
                     "billing": {
@@ -2337,41 +2275,35 @@ class TestParseCommunityConfig:
     # Amendment: additional robustness tests (reviewer pass)
     # ------------------------------------------------------------------
 
-    def test_billing_seg_non_dict_raises(self) -> None:
+    def test_billing_seg_non_dict_raises(
+        self, load_community_block: LoadCommunityBlock
+    ) -> None:
         """A bare scalar for the seg key raises ConfigurationError, not TypeError."""
         with pytest.raises(ConfigurationError, match="mapping"):
-            _parse_community_config(
+            load_community_block(
                 {
                     "sharing_mode": "p2p",
                     "billing": {"seg": 4.1},
                 }
             )
 
-    def test_billing_seg_string_raises(self) -> None:
+    def test_billing_seg_string_raises(
+        self, load_community_block: LoadCommunityBlock
+    ) -> None:
         """A bare string for the seg key raises ConfigurationError, not TypeError."""
         with pytest.raises(ConfigurationError, match="mapping"):
-            _parse_community_config(
+            load_community_block(
                 {
                     "sharing_mode": "p2p",
                     "billing": {"seg": "Octopus"},
                 }
             )
 
-    def test_billing_seg_block_both_preset_and_rate_raises(self) -> None:
-        """A seg block with both preset and rate_pence_per_kwh raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            _parse_community_config(
-                {
-                    "sharing_mode": "p2p",
-                    "billing": {
-                        "seg": {"preset": "Octopus", "rate_pence_per_kwh": 5.5},
-                    },
-                }
-            )
-
-    def test_empty_billing_block_returns_none_billing(self) -> None:
+    def test_empty_billing_block_returns_none_billing(
+        self, load_community_block: LoadCommunityBlock
+    ) -> None:
         """An empty billing: {} block normalises to billing=None (same as absent key)."""
-        cfg = _parse_community_config({"sharing_mode": "p2p", "billing": {}})
+        cfg = load_community_block({"sharing_mode": "p2p", "billing": {}})
         assert cfg is not None
         assert cfg.billing is None
 
@@ -2455,9 +2387,12 @@ period:
 class TestCommunityConfigFrozenPicklable:
     """Contract guard: full CommunityConfig object graph is frozen and picklable (step-11)."""
 
-    def _full_community_config(self) -> "CommunityConfig":
+    @pytest.fixture
+    def full_community_config(
+        self, load_community_block: LoadCommunityBlock
+    ) -> CommunityConfig:
         """Return a CommunityConfig that exercises every nested dataclass."""
-        cfg = _parse_community_config(
+        cfg = load_community_block(
             {
                 "sharing_mode": "community_battery",
                 "community_battery": {
@@ -2474,37 +2409,37 @@ class TestCommunityConfigFrozenPicklable:
         assert cfg is not None
         return cfg
 
-    def test_picklable_round_trip(self) -> None:
+    def test_picklable_round_trip(self, full_community_config: CommunityConfig) -> None:
         """CommunityConfig (with nested BatteryConfig + CommunityBillingConfig + TariffConfig)
         round-trips through pickle with structural equality."""
         import pickle
 
-        cfg = self._full_community_config()
+        cfg = full_community_config
         restored = pickle.loads(pickle.dumps(cfg))
         assert restored == cfg
 
-    def test_frozen_top_level(self) -> None:
+    def test_frozen_top_level(self, full_community_config: CommunityConfig) -> None:
         """Assigning a new attribute on CommunityConfig raises FrozenInstanceError."""
         import dataclasses
 
-        cfg = self._full_community_config()
+        cfg = full_community_config
         with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.sharing_mode = "p2p"  # type: ignore[misc]
 
-    def test_frozen_nested_battery(self) -> None:
+    def test_frozen_nested_battery(self, full_community_config: CommunityConfig) -> None:
         """BatteryConfig inside CommunityConfig is also frozen."""
         import dataclasses
 
-        cfg = self._full_community_config()
+        cfg = full_community_config
         assert cfg.community_battery is not None
         with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.community_battery.capacity_kwh = 99.0  # type: ignore[misc]
 
-    def test_frozen_nested_billing(self) -> None:
+    def test_frozen_nested_billing(self, full_community_config: CommunityConfig) -> None:
         """CommunityBillingConfig inside CommunityConfig is also frozen."""
         import dataclasses
 
-        cfg = self._full_community_config()
+        cfg = full_community_config
         assert cfg.billing is not None
         with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.billing.seg_rate_pence_per_kwh = 0.0  # type: ignore[misc]
@@ -2554,43 +2489,32 @@ class TestParseHomeBlockHeatPumpEV:
         assert result.ev_config is None, "ev_config should be None when key absent"
 
 
-class TestParseHeatPumpEvConfigErrors:
-    """Tests that _parse_heat_pump_config / _parse_ev_config raise ConfigurationError
-    for malformed blocks (amendment: suggestion 1 + 2)."""
+class TestHeatPumpEvBlockErrors:
+    """parse_home_block refuses a heat_pump or ev block that lacks a required field, naming the field."""
 
     def test_heat_pump_missing_heat_pump_type_raises(self) -> None:
         """heat_pump block without heat_pump_type raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="heat_pump_type"):
-            _parse_heat_pump_config({"thermal_capacity_kw": 8.0})
+            _parsed_home(heat_pump={"thermal_capacity_kw": 8.0})
 
     def test_heat_pump_missing_thermal_capacity_raises(self) -> None:
         """heat_pump block without thermal_capacity_kw raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="thermal_capacity_kw"):
-            _parse_heat_pump_config({"heat_pump_type": "ASHP"})
+            _parsed_home(heat_pump={"heat_pump_type": "ASHP"})
 
     def test_ev_missing_charger_type_raises(self) -> None:
         """ev block without charger_type raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="charger_type"):
-            _parse_ev_config({"arrival_hour": 18})
+            _parsed_home(ev={"arrival_hour": 18})
 
     def test_ev_missing_arrival_hour_raises(self) -> None:
         """ev block without arrival_hour raises ConfigurationError."""
         with pytest.raises(ConfigurationError, match="arrival_hour"):
-            _parse_ev_config({"charger_type": "7kW"})
-
-    def test_heat_pump_missing_type_via_parse_home_block(self) -> None:
-        """parse_home_block raises ConfigurationError for partial heat_pump block."""
-        data: dict = {
-            "pv": {"capacity_kw": 4.0},
-            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-            "heat_pump": {"thermal_capacity_kw": 8.0},  # missing heat_pump_type
-        }
-        with pytest.raises(ConfigurationError, match="heat_pump_type"):
-            parse_home_block(data, Location.bristol())
+            _parsed_home(ev={"charger_type": "7kW"})
 
 
-class TestParsePVConfig:
-    """Tests that _parse_pv_config threads degradation keys through to PVConfig."""
+class TestPVBlockParsing:
+    """parse_home_block threads the pv: block's degradation keys through to PVConfig."""
 
     def test_explicit_degradation_keys_are_passed_through(self) -> None:
         """system_age_years and degradation_rate_per_year from data reach PVConfig."""
@@ -2599,51 +2523,73 @@ class TestParsePVConfig:
             "system_age_years": 15.0,
             "degradation_rate_per_year": 0.008,
         }
-        pv = _parse_pv_config(data)
+        pv = _parsed_home(pv=data).pv_config
         assert pv.system_age_years == 15.0
         assert pv.degradation_rate_per_year == 0.008
 
     def test_missing_keys_yield_dataclass_defaults(self) -> None:
         """Omitting both keys gives PVConfig defaults (age 0.0, rate 0.005)."""
         data = {"capacity_kw": 4.0}
-        pv = _parse_pv_config(data)
+        pv = _parsed_home(pv=data).pv_config
         assert pv.system_age_years == 0.0
         assert pv.degradation_rate_per_year == 0.005
 
 
-class TestModifyPVConfigPreservesDegradation:
-    """Tests that _modify_pv_config sweeps do not drop system_age_years/degradation_rate_per_year."""
+class TestPVParameterSweepPreservesDegradation:
+    """A PV parameter sweep simulates the base home's aged array with only the swept parameter changed."""
 
-    def _base_config(self) -> "PVConfig":
-        return PVConfig(
-            capacity_kw=4.0,
-            system_age_years=20.0,
-            degradation_rate_per_year=0.008,
+    _DAY = "2024-06-21"
+    _AGED_ARRAY = PVConfig(
+        capacity_kw=4.0,
+        system_age_years=20.0,
+        degradation_rate_per_year=0.008,
+    )
+    _LOAD = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
+
+    @pytest.fixture
+    def synthetic_tmy(self, tmp_path: Path) -> Iterator[None]:
+        """Serve a clear June day as Bristol's TMY, so the sweep and the reference simulation need no PVGIS call."""
+        cache = WeatherCache(cache_dir=tmp_path / "weather")
+        cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+        set_weather_cache(cache)
+        yield
+        set_weather_cache(None)
+
+    @pytest.mark.usefixtures("synthetic_tmy")
+    @pytest.mark.parametrize(
+        ("parameter_name", "pv_field", "value"),
+        [
+            ("pv_capacity_kw", "capacity_kw", 6.0),
+            ("pv_tilt", "tilt", 45.0),
+            ("pv_azimuth", "azimuth", 90.0),
+        ],
+    )
+    def test_swept_array_keeps_its_age_and_degradation_rate(
+        self, parameter_name: str, pv_field: str, value: float
+    ) -> None:
+        """Generation matches the aged array with *pv_field* set to *value*, so age and rate carried over."""
+        period = SimulationPeriod(start_date=self._DAY, end_date=self._DAY)
+        scenario = ScenarioConfig(
+            name="aged array",
+            period=period,
+            home=HomeConfig(pv_config=self._AGED_ARRAY, load_config=self._LOAD),
         )
 
-    def test_modify_pv_capacity_kw_preserves_age(self) -> None:
-        """Sweeping pv_capacity_kw keeps age and degradation rate intact."""
-        base = self._base_config()
-        result = _modify_pv_config(base, "pv_capacity_kw", 6.0)
-        assert result.capacity_kw == 6.0
-        assert result.system_age_years == 20.0
-        assert result.degradation_rate_per_year == 0.008
+        [point] = run_parameter_sweep(
+            scenario, ParameterSweepConfig(parameter_name=parameter_name, values=[value])
+        )
 
-    def test_modify_pv_tilt_preserves_age(self) -> None:
-        """Sweeping pv_tilt keeps age and degradation rate intact."""
-        base = self._base_config()
-        result = _modify_pv_config(base, "pv_tilt", 45.0)
-        assert result.tilt == 45.0
-        assert result.system_age_years == 20.0
-        assert result.degradation_rate_per_year == 0.008
-
-    def test_modify_pv_azimuth_preserves_age(self) -> None:
-        """Sweeping pv_azimuth keeps age and degradation rate intact."""
-        base = self._base_config()
-        result = _modify_pv_config(base, "pv_azimuth", 90.0)
-        assert result.azimuth == 90.0
-        assert result.system_age_years == 20.0
-        assert result.degradation_rate_per_year == 0.008
+        expected = simulate_home(
+            HomeConfig(
+                pv_config=replace(self._AGED_ARRAY, **{pv_field: value}),
+                load_config=self._LOAD,
+            ),
+            period.get_start_timestamp(),
+            period.get_end_timestamp(),
+        )
+        assert point.parameter_value == value
+        assert isinstance(point.results, SimulationResults)
+        pd.testing.assert_series_equal(point.results.generation, expected.generation)
 
 
 class TestGenerateHomesFromDistributionDegradation:
@@ -2712,8 +2658,8 @@ class TestGenerateHomesFromDistributionDegradation:
         )
 
 
-class TestParsePVDistributionConfigDegradation:
-    """Tests that _parse_pv_distribution_config threads degradation keys into PVDistributionConfig."""
+class TestPVDistributionDegradationParsing:
+    """parse_fleet_distribution_config threads the pv section's degradation keys into PVDistributionConfig."""
 
     def test_explicit_keys_are_parsed(self) -> None:
         """system_age_years and degradation_rate_per_year from data reach PVDistributionConfig."""
@@ -2722,14 +2668,14 @@ class TestParsePVDistributionConfigDegradation:
             "system_age_years": 20.0,
             "degradation_rate_per_year": 0.008,
         }
-        pv_dist = _parse_pv_distribution_config(data)
+        pv_dist = _parsed_fleet_distribution(pv=data).pv
         assert pv_dist.system_age_years == 20.0
         assert pv_dist.degradation_rate_per_year == 0.008
 
     def test_defaults_apply_when_keys_omitted(self) -> None:
         """Omitting both keys yields defaults: system_age_years=0.0, degradation_rate_per_year=0.005."""
         data = {"capacity_kw": 4.0}
-        pv_dist = _parse_pv_distribution_config(data)
+        pv_dist = _parsed_fleet_distribution(pv=data).pv
         assert pv_dist.system_age_years == 0.0
         assert pv_dist.degradation_rate_per_year == 0.005
 
