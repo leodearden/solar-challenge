@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The scenario builder's form contract, turned into the fleet scenario document config.py's loaders read.
+"""The scenario builder's form contract: the fleet scenario document a form describes, and why it is refused.
 
 The builder posts one flat form, the one scenario-builder.js's getFormData() builds.
 A field the form leaves out, or sends as null or '' (a cleared input), is left out
@@ -7,12 +7,22 @@ of the block that carries it, so the loaders report or default it as they would
 for a hand-written scenario file.
 """
 
+import tempfile
 from collections.abc import Callable, Mapping
-from typing import Any, NamedTuple
+from pathlib import Path
+from typing import Any, NamedTuple, Optional
 
+from solar_challenge.config import (
+    ConfigurationError,
+    SimulationPeriod,
+    load_fleet_config,
+    parse_seg_rate,
+)
 from solar_challenge.location import Location
-from solar_challenge.scenario_writer import location_block
+from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.shared import LOCATION_PRESETS
+
+_MAX_HOMES = 10_000
 
 
 class _Component(NamedTuple):
@@ -79,7 +89,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
     if not isinstance(form, Mapping):
         raise ValueError(f"Builder form must be a JSON object, got {type(form).__name__}")
     _refuse_unrecognised_keys(form)
-    fields = {key: value for key, value in form.items() if value is not None and value != ""}
+    fields = _present_fields(form)
 
     document: dict[str, Any] = {
         key: str(fields[key]) for key in ("name", "description") if key in fields
@@ -98,6 +108,104 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
         fields, {"rate_pence_per_kwh": "seg_rate_pence_per_kwh"}
     )
     return document
+
+
+def builder_form_errors(form: object) -> list[str]:
+    """Every reason the dashboard refuses the builder *form*; none for a scenario it accepts.
+
+    The dashboard's own limits come first.  Then the form becomes its scenario, and,
+    unless its number of homes is out of bounds, the scenario readers judge the YAML
+    text the builder previews: load_fleet_config, the seg: reader and the period's dates.
+    """
+    fields = _present_fields(form) if isinstance(form, Mapping) else {}
+    errors = _dashboard_limit_errors(fields)
+    try:
+        document = scenario_from_builder_form(form)
+    except ValueError as exc:
+        return [*errors, str(exc)]
+    if _home_count_allowed(document["fleet_distribution"].get("n_homes")):
+        errors.extend(_scenario_reader_errors(document))
+    return errors
+
+
+def _present_fields(form: Mapping[str, Any]) -> dict[str, Any]:
+    """The fields *form* gives: each one it neither leaves out nor sends as null or ''."""
+    return {key: value for key, value in form.items() if value is not None and value != ""}
+
+
+def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
+    """The dashboard's own rules: a scenario name, 1 to 10,000 homes, and a fixed PV size of 0.5-20 kW.
+
+    A value that does not read as a number is left to scenario_from_builder_form to report.
+    """
+    errors: list[str] = []
+    if "name" not in fields:
+        errors.append("Scenario name is required.")
+    if not _home_count_allowed(_readable(fields, "n_homes", _as_count)):
+        errors.append("Number of homes must be between 1 and 10,000.")
+    pv_capacity_kw = _readable(fields, "pv_capacity_kw", _as_float)
+    if pv_capacity_kw is not None and not 0.5 <= pv_capacity_kw <= 20.0:
+        errors.append("PV capacity must be between 0.5 and 20 kW.")
+    return errors
+
+
+def _home_count_allowed(n_homes: Optional[float]) -> bool:
+    """Whether the dashboard allows *n_homes*: absent, or within 1 to 10,000."""
+    return n_homes is None or 1 <= n_homes <= _MAX_HOMES
+
+
+def _readable(
+    fields: Mapping[str, Any], key: str, as_number: Callable[[Any, str], float]
+) -> Optional[float]:
+    """The form's *key* as *as_number* reads it; None when the form leaves it out or it does not read."""
+    if key not in fields:
+        return None
+    try:
+        return as_number(fields[key], key)
+    except ValueError:
+        return None
+
+
+def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
+    """What the scenario readers refuse in *document*, written as the YAML text the builder previews.
+
+    Whatever load_fleet_config raises is a refusal: the loader is the judge, and a
+    shuffled pool smaller than the fleet raises IndexError there.
+    """
+    errors: list[str] = []
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "scenario.yaml"
+        path.write_text(scenario_yaml(document), encoding="utf-8")
+        try:
+            load_fleet_config(path)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(str(exc))
+    try:
+        parse_seg_rate(document["seg"])
+    except ConfigurationError as exc:
+        errors.append(str(exc))
+    errors.extend(_period_errors(document["period"]))
+    return errors
+
+
+def _period_errors(period: Mapping[str, str]) -> list[str]:
+    """What keeps the period: block from giving the simulated dates: a date it lacks or one that does not parse."""
+    missing = [key for key in ("start_date", "end_date") if key not in period]
+    if missing:
+        return [f"The period needs {' and '.join(missing)}"]
+    simulation_period = SimulationPeriod(
+        start_date=period["start_date"], end_date=period["end_date"]
+    )
+    errors: list[str] = []
+    for key, timestamp in (
+        ("start_date", simulation_period.get_start_timestamp),
+        ("end_date", simulation_period.get_end_timestamp),
+    ):
+        try:
+            timestamp()
+        except ValueError as exc:
+            errors.append(f"period.{key} is not a date: {exc}")
+    return errors
 
 
 def _refuse_unrecognised_keys(form: Mapping[str, Any]) -> None:

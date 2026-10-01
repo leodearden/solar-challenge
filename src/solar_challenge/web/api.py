@@ -24,7 +24,7 @@ from solar_challenge.config import (
 )
 from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
-from solar_challenge.web.builder_form import scenario_from_builder_form
+from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import get_job_manager, get_storage, resolve_location
 from solar_challenge.web.simulation_params import parse_date_range, parse_home_config, parse_seg_tariff
@@ -985,42 +985,16 @@ def scenarios_preview_yaml() -> tuple[Response, int]:
 
 @api_bp.route("/scenarios/validate", methods=["POST"])
 def scenarios_validate_scenario() -> tuple[Response, int]:
-    """Validate scenario data against basic rules.
+    """Validate a builder form against the dashboard's limits and the scenario readers.
 
-    Expects a JSON body with scenario fields. Performs lightweight
-    validation (not a full ScenarioConfig parse since the form data
-    may be incomplete).
+    Expects a JSON body with the scenario builder's form fields.
 
     Returns:
-        JSON with ``valid`` boolean and optional ``errors`` list, HTTP 200.
+        JSON with ``valid`` and the ``errors`` list, empty for a valid form, HTTP 200.
     """
     data = request.get_json(silent=True) or {}
-    errors: list[str] = []
-
-    if not data.get("name"):
-        errors.append("Scenario name is required.")
-
-    n_homes = data.get("n_homes")
-    if n_homes is not None:
-        try:
-            n = int(n_homes)
-            if n < 1 or n > 10000:
-                errors.append("Number of homes must be between 1 and 10,000.")
-        except (ValueError, TypeError):
-            errors.append("Number of homes must be an integer.")
-
-    pv_kw = data.get("pv_capacity_kw")
-    if pv_kw is not None:
-        try:
-            kw = float(pv_kw)
-            if kw < 0.5 or kw > 20.0:
-                errors.append("PV capacity must be between 0.5 and 20 kW.")
-        except (ValueError, TypeError):
-            errors.append("PV capacity must be a number.")
-
-    if errors:
-        return jsonify({"valid": False, "errors": errors}), 200
-    return jsonify({"valid": True, "errors": []}), 200
+    errors = builder_form_errors(data)
+    return jsonify({"valid": not errors, "errors": errors}), 200
 
 
 @api_bp.route("/scenarios/save", methods=["POST"])
