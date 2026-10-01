@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
-from pvlib.iotools import get_pvgis_tmy, get_pvgis_hourly
+from pvlib.iotools import get_pvgis_tmy
 
 from solar_challenge.location import Location
 
@@ -19,7 +19,8 @@ DEFAULT_CACHE_DIR = Path(".cache/weather")
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
-    Stores TMY and hourly data as parquet files keyed by location and date range.
+    Stores each DataFrame as a CSV file, with a JSON sidecar recording its
+    timezone and frequency, keyed by prefix, location and an optional date range.
     """
 
     def __init__(self, cache_dir: Optional[Path] = None) -> None:
@@ -63,10 +64,10 @@ class WeatherCache:
         """Retrieve cached data if available.
 
         Args:
-            prefix: Data type prefix (e.g., 'tmy', 'hourly')
+            prefix: Data type prefix (e.g., 'tmy')
             location: Location for the data
-            start_date: Start date (for hourly data)
-            end_date: End date (for hourly data)
+            start_date: Optional start of a date-ranged entry (part of the key)
+            end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
             Cached DataFrame or None if not found
@@ -99,8 +100,8 @@ class WeatherCache:
             data: DataFrame to cache
             prefix: Data type prefix
             location: Location for the data
-            start_date: Start date (for hourly data)
-            end_date: End date (for hourly data)
+            start_date: Optional start of a date-ranged entry (part of the key)
+            end_date: Optional end of a date-ranged entry (part of the key)
         """
         key = self._make_key(prefix, location, start_date, end_date)
         cache_file = self._cache_path(key)
@@ -145,8 +146,8 @@ class WeatherCache:
         Args:
             prefix: Data type prefix
             location: Location for the data
-            start_date: Start date (for hourly data)
-            end_date: End date (for hourly data)
+            start_date: Optional start of a date-ranged entry (part of the key)
+            end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
             True if cache entry was removed, False if not found
@@ -241,110 +242,6 @@ def get_tmy_data(
 
     except Exception as e:
         raise RuntimeError(f"Failed to retrieve TMY data from PVGIS: {e}") from e
-
-
-def get_hourly_data(
-    location: Location,
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    use_cache: bool = True,
-) -> pd.DataFrame:
-    """Retrieve hourly historical data from PVGIS for a date range.
-
-    Uses pvlib.iotools.get_pvgis_hourly() to fetch hourly irradiance and
-    temperature data for the specified period.
-
-    Args:
-        location: Location object with latitude, longitude, and altitude
-        start_date: Start of date range (year used for query)
-        end_date: End of date range (year used for query)
-        use_cache: Whether to use caching (default True)
-
-    Returns:
-        DataFrame with datetime index and columns:
-        - temp_air: Ambient temperature (°C)
-        - ghi: Global horizontal irradiance (W/m²)
-        - dni: Direct normal irradiance (W/m²)
-        - dhi: Diffuse horizontal irradiance (W/m²)
-        - wind_speed: Wind speed (m/s)
-
-    Raises:
-        RuntimeError: If PVGIS API request fails
-    """
-    # Normalize to start of year for caching purposes
-    start_year = start_date.year
-    end_year = end_date.year
-
-    # Check cache first
-    cache_start = pd.Timestamp(f"{start_year}-01-01")
-    cache_end = pd.Timestamp(f"{end_year}-12-31")
-
-    if use_cache:
-        cache = get_weather_cache()
-        cached_data = cache.get("hourly", location, cache_start, cache_end)
-        if cached_data is not None:
-            # Ensure timezone consistency for comparison
-            data_tz = cached_data.index.tz
-            filter_start = start_date
-            filter_end = end_date + pd.Timedelta(days=1)
-            if data_tz is not None:
-                if filter_start.tz is None:
-                    filter_start = filter_start.tz_localize(data_tz)
-                if filter_end.tz is None:
-                    filter_end = filter_end.tz_localize(data_tz)
-            # Filter to requested date range
-            return cached_data.loc[
-                (cached_data.index >= filter_start) &
-                (cached_data.index <= filter_end)
-            ]
-
-    try:
-        # PVGIS hourly returns (data, inputs, metadata)
-        data: tuple[pd.DataFrame, Any, Any] = get_pvgis_hourly(
-            latitude=location.latitude,
-            longitude=location.longitude,
-            start=start_year,
-            end=end_year,
-            outputformat="json",
-            usehorizon=True,
-            pvcalculation=False,  # We just want irradiance data
-            components=True,  # Get GHI, DNI, DHI separately
-            map_variables=True,  # Map to standard pvlib names
-        )
-        hourly_data = data[0]
-
-        # Ensure we have expected columns
-        required_columns = {"ghi", "dni", "dhi"}
-        if not required_columns.issubset(hourly_data.columns):
-            missing = required_columns - set(hourly_data.columns)
-            raise RuntimeError(f"Hourly data missing required columns: {missing}")
-
-        # Add temp_air if not present (some PVGIS requests don't include it)
-        if "temp_air" not in hourly_data.columns:
-            # Use a reasonable default for UK climate
-            hourly_data["temp_air"] = 10.0
-
-        # Cache the full year data
-        if use_cache:
-            cache = get_weather_cache()
-            cache.put(hourly_data, "hourly", location, cache_start, cache_end)
-
-        # Filter to requested date range with timezone consistency
-        data_tz = hourly_data.index.tz
-        filter_start = start_date
-        filter_end = end_date + pd.Timedelta(days=1)
-        if data_tz is not None:
-            if filter_start.tz is None:
-                filter_start = filter_start.tz_localize(data_tz)
-            if filter_end.tz is None:
-                filter_end = filter_end.tz_localize(data_tz)
-        return hourly_data.loc[
-            (hourly_data.index >= filter_start) &
-            (hourly_data.index <= filter_end)
-        ]
-
-    except Exception as e:
-        raise RuntimeError(f"Failed to retrieve hourly data from PVGIS: {e}") from e
 
 
 def validate_irradiance_data(data: pd.DataFrame) -> None:
