@@ -13,7 +13,6 @@ from solar_challenge.weather import (
     get_weather_cache,
     set_weather_cache,
     get_tmy_data,
-    get_hourly_data,
 )
 from solar_challenge.location import Location
 
@@ -171,12 +170,12 @@ class TestWeatherCache:
         result = cache.get("tmy", bristol)
         assert result is None
 
-    def test_put_and_get_hourly(self, cache, bristol, sample_weather_data):
-        """Hourly data with date range can be cached."""
+    def test_put_and_get_with_date_range(self, cache, bristol, sample_weather_data):
+        """An entry keyed by a date range can be stored and retrieved."""
         start = pd.Timestamp("2023-01-01")
         end = pd.Timestamp("2023-12-31")
-        cache.put(sample_weather_data, "hourly", bristol, start, end)
-        result = cache.get("hourly", bristol, start, end)
+        cache.put(sample_weather_data, "dated", bristol, start, end)
+        result = cache.get("dated", bristol, start, end)
         assert result is not None
         pd.testing.assert_frame_equal(result, sample_weather_data)
 
@@ -251,93 +250,3 @@ class TestGetTmyDataWithCache:
             mock_api.return_value = (mock_tmy_data, None, None, None)
             result = get_tmy_data(location, use_cache=False)
             mock_api.assert_called_once()
-
-
-class TestGetHourlyData:
-    """Test hourly data retrieval (LOC-003)."""
-
-    @pytest.fixture
-    def temp_cache(self, tmp_path):
-        """Set up temporary cache."""
-        cache_dir = tmp_path / "weather_cache"
-        cache = WeatherCache(cache_dir=cache_dir)
-        set_weather_cache(cache)
-        yield cache
-        set_weather_cache(None)
-
-    @pytest.fixture
-    def mock_hourly_data(self):
-        """Mock hourly data from PVGIS."""
-        index = pd.date_range("2023-01-01", periods=8760, freq="h", tz="UTC")
-        return pd.DataFrame({
-            "ghi": np.random.uniform(0, 800, 8760),
-            "dni": np.random.uniform(0, 600, 8760),
-            "dhi": np.random.uniform(0, 300, 8760),
-            "temp_air": np.random.uniform(0, 25, 8760),
-        }, index=index)
-
-    def test_returns_dataframe_with_datetime_index(self, temp_cache, mock_hourly_data):
-        """Returns DataFrame with datetime index."""
-        location = Location.bristol()
-        start = pd.Timestamp("2023-06-01", tz="UTC")
-        end = pd.Timestamp("2023-06-30", tz="UTC")
-
-        with patch("solar_challenge.weather.get_pvgis_hourly") as mock_api:
-            mock_api.return_value = (mock_hourly_data, None, None)
-            result = get_hourly_data(location, start, end)
-
-            assert isinstance(result, pd.DataFrame)
-            assert isinstance(result.index, pd.DatetimeIndex)
-
-    def test_contains_irradiance_columns(self, temp_cache, mock_hourly_data):
-        """Returns data with GHI, DNI, DHI columns."""
-        location = Location.bristol()
-        start = pd.Timestamp("2023-06-01", tz="UTC")
-        end = pd.Timestamp("2023-06-30", tz="UTC")
-
-        with patch("solar_challenge.weather.get_pvgis_hourly") as mock_api:
-            mock_api.return_value = (mock_hourly_data, None, None)
-            result = get_hourly_data(location, start, end)
-
-            assert "ghi" in result.columns
-            assert "dni" in result.columns
-            assert "dhi" in result.columns
-
-    def test_contains_temperature_column(self, temp_cache, mock_hourly_data):
-        """Returns data with temperature column."""
-        location = Location.bristol()
-        start = pd.Timestamp("2023-06-01", tz="UTC")
-        end = pd.Timestamp("2023-06-30", tz="UTC")
-
-        with patch("solar_challenge.weather.get_pvgis_hourly") as mock_api:
-            mock_api.return_value = (mock_hourly_data, None, None)
-            result = get_hourly_data(location, start, end)
-
-            assert "temp_air" in result.columns
-
-    def test_uses_cache_when_available(self, temp_cache, mock_hourly_data):
-        """Uses cached data when available."""
-        location = Location.bristol()
-        start = pd.Timestamp("2023-01-01")
-        end = pd.Timestamp("2023-12-31")
-        temp_cache.put(mock_hourly_data, "hourly", location, start, end)
-
-        with patch("solar_challenge.weather.get_pvgis_hourly") as mock_api:
-            result = get_hourly_data(location, start, end)
-            mock_api.assert_not_called()
-
-    def test_filters_to_date_range(self, temp_cache, mock_hourly_data):
-        """Filters cached data to requested date range."""
-        location = Location.bristol()
-        cache_start = pd.Timestamp("2023-01-01")
-        cache_end = pd.Timestamp("2023-12-31")
-        temp_cache.put(mock_hourly_data, "hourly", location, cache_start, cache_end)
-
-        query_start = pd.Timestamp("2023-06-01", tz="UTC")
-        query_end = pd.Timestamp("2023-06-30", tz="UTC")
-
-        with patch("solar_challenge.weather.get_pvgis_hourly") as mock_api:
-            result = get_hourly_data(location, query_start, query_end)
-            # Result should be filtered to June only
-            assert result.index.min() >= query_start
-            assert result.index.max() <= query_end + pd.Timedelta(days=1)
