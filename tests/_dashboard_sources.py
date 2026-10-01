@@ -8,9 +8,13 @@ The template and script globs mirror the ``content`` globs in tailwind.config.js
 
 Usage::
 
-    from tests._dashboard_sources import dashboard_template_sources, served_stylesheet_sources
+    from tests._dashboard_sources import (
+        BASE_TEMPLATE_KEY,
+        dashboard_template_sources,
+        served_stylesheet_sources,
+    )
 
-    base_layout = dashboard_template_sources()["templates/base.html"]
+    base_layout = dashboard_template_sources()[BASE_TEMPLATE_KEY]
     stylesheets = list(served_stylesheet_sources())
 """
 
@@ -22,7 +26,8 @@ from tests._css_classes import linked_stylesheets
 
 _WEB_DIR = Path(solar_challenge.web.__file__).parent
 _STATIC_DIR = _WEB_DIR / "static"
-_BASE_TEMPLATE = _WEB_DIR / "templates" / "base.html"
+BASE_TEMPLATE_KEY = "templates/base.html"
+_BASE_TEMPLATE = _WEB_DIR / BASE_TEMPLATE_KEY
 
 
 def dashboard_template_sources() -> dict[str, str]:
