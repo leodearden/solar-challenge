@@ -1,9 +1,10 @@
 """End-to-end tests for the dashboard's enable/disable switches.
 
 Each switch shows, then hides, the settings it enables, among them the select
-that picks their variant. The switch and that select are each found by role
-and by the accessible name its label gives it. Clicking a switch's label flips
-it just as clicking the switch does.
+that picks their variant; so does the fleet page's battery control, a checkbox
+that starts checked. The switch and that select are each found by role and by
+the accessible name its label gives it. Clicking a switch's label flips it
+just as clicking the switch does.
 """
 
 import pytest
@@ -68,6 +69,20 @@ def test_fleet_switch_shows_and_hides_its_settings(
     _assert_switch_shows_and_hides(
         page.get_by_role("switch", name=switch_name, exact=True),
         page.get_by_role("combobox", name=variant_select_name, exact=True),
+    )
+
+
+def test_fleet_battery_checkbox_shows_and_hides_its_distribution_editor(
+    page: Page, live_server: str
+) -> None:
+    page.goto(live_server + "/simulate/fleet")
+    battery = page.get_by_role("checkbox", name="Enable Battery", exact=True)
+    expect(battery).to_be_checked()
+    battery.click()
+
+    _assert_switch_shows_and_hides(
+        battery,
+        page.get_by_role("combobox", name="Battery Capacity Distribution Type", exact=True),
     )
 
 
