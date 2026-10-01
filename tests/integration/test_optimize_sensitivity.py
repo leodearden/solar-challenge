@@ -192,6 +192,58 @@ def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
     return _CONST_FLEET_RESULTS
 
 
+def _home_seg_rates(homes) -> "list[Optional[float]]":  # type: ignore[no-untyped-def]
+    """Each home's own SEG export rate in p/kWh; None for a home without a tariff."""
+    return [
+        None if home.seg_tariff is None else home.seg_tariff.rate_pence_per_kwh
+        for home in homes
+    ]
+
+
+def _make_seg_priced_scenario(seg_rate: float, finance) -> "ScenarioConfig":  # type: ignore[no-untyped-def,name-defined]
+    """Build the fleet shape `optimize configs` produces: the seg: rate on the scenario AND on every home."""
+    from solar_challenge.seg import SEGTariff
+
+    scenario = _make_scenario(n_homes=_N_HOMES, seg_tariff_pence=seg_rate, finance=finance)
+    tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
+    return dataclasses.replace(
+        scenario,
+        homes=[dataclasses.replace(home, seg_tariff=tariff) for home in scenario.homes],
+    )
+
+
+class _SegPricingSimulate:
+    """Simulate stand-in that prices each home's export at that home's own SEG tariff.
+
+    A home without a tariff earns nothing, as in simulate_home.  ``rates_per_call``
+    records the SEG rates carried by every fleet it is asked to simulate.
+    """
+
+    _EXPORT_KWH = 800.0
+
+    def __init__(self) -> None:
+        self.rates_per_call: list[frozenset[Optional[float]]] = []
+        self._results_by_rate: dict[Optional[float], "SimulationResults"] = {}  # type: ignore[name-defined]
+
+    def __call__(self, fleet_config, start, end):  # type: ignore[no-untyped-def]
+        from solar_challenge.fleet import FleetResults
+
+        rates = _home_seg_rates(fleet_config.homes)
+        self.rates_per_call.append(frozenset(rates))
+        return FleetResults(
+            per_home_results=[self._results_at(rate) for rate in rates],
+            home_configs=list(fleet_config.homes),
+        )
+
+    def _results_at(self, rate: Optional[float]) -> "SimulationResults":  # type: ignore[name-defined]
+        if rate not in self._results_by_rate:
+            self._results_by_rate[rate] = _make_sim_results(
+                export_kwh=self._EXPORT_KWH,
+                export_revenue_gbp_per_year=self._EXPORT_KWH * (rate or 0.0) / 100.0,
+            )
+        return self._results_by_rate[rate]
+
+
 # ---------------------------------------------------------------------------
 # TestSensitivityDataclasses
 # ---------------------------------------------------------------------------
@@ -390,7 +442,7 @@ class TestBuildAxisConfigs:
             assert new_sc.finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(42.0)
 
     def test_seg_alias_replaced(self) -> None:
-        """'seg' alias replaces ScenarioConfig.seg_tariff_pence_per_kwh."""
+        """'seg' alias re-prices the scenario's SEG rate and every home's SEG tariff."""
         from solar_challenge.optimize import _build_axis_configs
 
         base = self._base_configs()
@@ -398,11 +450,12 @@ class TestBuildAxisConfigs:
 
         for (_, orig_sc), (_, new_sc) in zip(base, result):
             assert new_sc.seg_tariff_pence_per_kwh == pytest.approx(7.5)
+            assert _home_seg_rates(new_sc.homes) == [7.5] * len(new_sc.homes)
             # Finance block is unchanged
             assert new_sc.finance is orig_sc.finance
 
     def test_seg_tariff_full_name_replaced(self) -> None:
-        """'seg_tariff_pence_per_kwh' replaces ScenarioConfig.seg_tariff_pence_per_kwh."""
+        """'seg_tariff_pence_per_kwh' re-prices the scenario's SEG rate and every home's SEG tariff."""
         from solar_challenge.optimize import _build_axis_configs
 
         base = self._base_configs()
@@ -410,6 +463,36 @@ class TestBuildAxisConfigs:
 
         for _, new_sc in result:
             assert new_sc.seg_tariff_pence_per_kwh == pytest.approx(9.0)
+            assert _home_seg_rates(new_sc.homes) == [9.0] * len(new_sc.homes)
+
+    def test_seg_replaces_whatever_tariff_each_home_carried(self) -> None:
+        """A preset, no tariff and another rate all end on the swept rate, as an unnamed tariff."""
+        from solar_challenge.optimize import _build_axis_configs, enumerate_configs
+        from solar_challenge.seg import SEGTariff, resolve_seg_tariff
+
+        carried = [
+            resolve_seg_tariff("Octopus"),
+            None,
+            SEGTariff(name="", rate_pence_per_kwh=9.9),
+        ]
+        scenario = _make_scenario(n_homes=len(carried), finance=_interior_finance())
+        scenario = dataclasses.replace(
+            scenario,
+            homes=[
+                dataclasses.replace(home, seg_tariff=tariff)
+                for home, tariff in zip(scenario.homes, carried, strict=True)
+            ],
+        )
+        base = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6])
+        [(_, orig_sc)] = base
+        assert [home.seg_tariff for home in orig_sc.homes] == carried
+
+        [(_, new_sc)] = _build_axis_configs(base, "seg", 6.0)
+
+        assert new_sc.seg_tariff_pence_per_kwh == pytest.approx(6.0)
+        assert [home.seg_tariff for home in new_sc.homes] == [
+            SEGTariff(name="", rate_pence_per_kwh=6.0)
+        ] * len(carried)
 
     def test_degradation_alias_replaced(self) -> None:
         """'degradation' alias replaces degradation_rate_per_year on every home."""
@@ -785,6 +868,52 @@ class TestRetainedFloorAxis:
         assert original_floors == after_floors, (
             "base_configs finance.retained_cash_floor was mutated (should be immutable)"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestSegAxisOnSegPricedHomes — the 'seg' knob on homes that carry the rate
+# ---------------------------------------------------------------------------
+
+
+class TestSegAxisOnSegPricedHomes:
+    """The 'seg' knob on the fleet `optimize configs` builds, whose homes already carry the seg: rate."""
+
+    _BASE_RATE = 4.1
+    _SWEPT_RATE = 6.0
+
+    @pytest.mark.parametrize("knob", ["seg", "seg_tariff_pence_per_kwh"])
+    def test_sweep_completes_and_simulates_every_home_at_the_swept_rate(
+        self, knob: str
+    ) -> None:
+        """Sweeping the rate must re-price the homes' own tariffs, so the swept rate reaches
+        the simulated export revenue instead of tripping the per-home vs scenario SEG
+        consistency check.
+        """
+        from solar_challenge.optimize import enumerate_configs, sensitivity_panel
+        from solar_challenge.seg import SEGTariff
+
+        scenario = _make_seg_priced_scenario(self._BASE_RATE, finance=_interior_finance())
+        assert scenario.seg_tariff_pence_per_kwh == self._BASE_RATE
+        assert all(
+            home.seg_tariff == SEGTariff(name="", rate_pence_per_kwh=self._BASE_RATE)
+            for home in scenario.homes
+        )
+        base_configs = enumerate_configs(
+            scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6]
+        )
+        simulate = _SegPricingSimulate()
+
+        panel = sensitivity_panel(
+            base_configs,
+            axes={knob: [self._BASE_RATE, self._SWEPT_RATE]},
+            simulate=simulate,
+        )
+
+        assert panel.axes[0].values == (self._BASE_RATE, self._SWEPT_RATE)
+        assert set(simulate.rates_per_call) == {
+            frozenset({self._BASE_RATE}),
+            frozenset({self._SWEPT_RATE}),
+        }, f"fleets were simulated at SEG rates {set(simulate.rates_per_call)}"
 
 
 # ---------------------------------------------------------------------------

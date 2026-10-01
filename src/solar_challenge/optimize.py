@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, S
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import FinanceConfig, ScenarioConfig
 from solar_challenge.home import HomeConfig
+from solar_challenge.seg import SEGTariff
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -408,6 +409,21 @@ class SensitivityPanel:
 # OAT private helper (W3 task D)
 # ---------------------------------------------------------------------------
 
+def _repriced_at_seg_rate(
+    scenario: ScenarioConfig, rate_pence_per_kwh: float
+) -> ScenarioConfig:
+    """Return *scenario* with its SEG rate and every home's SEG tariff set to *rate_pence_per_kwh*.
+
+    Each home's own tariff, named or not, is replaced, so the whole fleet exports at one rate.
+    """
+    tariff = SEGTariff(name="", rate_pence_per_kwh=rate_pence_per_kwh)
+    return replace(
+        scenario,
+        homes=[replace(home, seg_tariff=tariff) for home in scenario.homes],
+        seg_tariff_pence_per_kwh=rate_pence_per_kwh,
+    )
+
+
 def _build_axis_configs(
     base_configs: "List[tuple[ConfigPoint, ScenarioConfig]]",
     name: str,
@@ -421,7 +437,8 @@ def _build_axis_configs(
        ``dataclasses.replace(scenario.finance, **{name: value})``.
        Raises :exc:`ValueError` if ``scenario.finance is None``.
     2. *name* in ``{'seg', 'seg_tariff_pence_per_kwh'}`` →
-       ``dataclasses.replace(scenario, seg_tariff_pence_per_kwh=value)``.
+       :func:`_repriced_at_seg_rate`, which sets the scenario-level
+       ``seg_tariff_pence_per_kwh`` AND every home's ``seg_tariff``.
     3. *name* in ``{'degradation', 'degradation_rate_per_year'}`` →
        per-home ``dataclasses.replace(home.pv_config, degradation_rate_per_year=value)``.
     4. Otherwise → :exc:`ValueError` listing the supported knob names.
@@ -452,7 +469,7 @@ def _build_axis_configs(
             new_finance = replace(scenario.finance, **{name: value})  # type: ignore[arg-type]
             new_scenario = replace(scenario, finance=new_finance)
         elif name in ("seg", "seg_tariff_pence_per_kwh"):
-            new_scenario = replace(scenario, seg_tariff_pence_per_kwh=value)
+            new_scenario = _repriced_at_seg_rate(scenario, value)
         elif name in ("degradation", "degradation_rate_per_year"):
             new_homes = [
                 replace(h, pv_config=replace(h.pv_config, degradation_rate_per_year=value))
@@ -493,8 +510,8 @@ def sensitivity_panel(
     Args:
         base_configs: (ConfigPoint, ScenarioConfig) pairs produced by
             :func:`enumerate_configs`.  The scenarios carry the baseline
-            finance / tariff values; :func:`_build_axis_configs` replaces
-            exactly one field per axis per value.
+            finance / tariff values; :func:`_build_axis_configs` applies
+            exactly one knob per axis per value.
         axes: Mapping of knob name → non-empty sequence of float values.
             Supported names: any :class:`~solar_challenge.config.FinanceConfig`
             field, ``'seg'`` / ``'seg_tariff_pence_per_kwh'``,
