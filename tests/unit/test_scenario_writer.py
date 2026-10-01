@@ -23,7 +23,8 @@ from solar_challenge.tariff import TariffConfig
 def _every_grammar_field_home() -> HomeConfig:
     """An Edinburgh home with every field the scenario grammar carries set away from its default.
 
-    The timezone is the one exception: Edinburgh keeps London's.
+    Two stay at their defaults: the timezone, as Edinburgh keeps London's, and the
+    TOU dispatch strategy's import_limit_kw, which only peak shaving uses.
     """
     return HomeConfig(
         pv_config=PVConfig(
