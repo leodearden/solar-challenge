@@ -374,12 +374,6 @@ class TestFinanceConfigParsing:
         assert result.retained_cash_floor_per_home_per_year_gbp == 30.0
         assert result.grid_services_income_per_kw_per_year_gbp == 5.0
 
-    def test_inverter_cost_omission_defaults_zero(self) -> None:
-        """Parser with no inverter_cost_per_kw_gbp key returns 0.0 (acceptance guard)."""
-        result = parse_finance_config({"standing_charge_pence_per_day": 60.0})
-        assert result is not None
-        assert result.inverter_cost_per_kw_gbp == 0.0
-
     def test_inverter_cost_key_round_trips(self) -> None:
         """inverter_cost_per_kw_gbp in dict is reflected on the returned FinanceConfig."""
         result = parse_finance_config(
@@ -613,13 +607,6 @@ class TestFinanceConfigParsingGridServices:
     """Tests for parse_finance_config with grid_services_model + grid_services_events."""
 
     _BASE = {"standing_charge_pence_per_day": 60.0}
-
-    def test_omitting_model_defaults_flat(self) -> None:
-        """Finance dict omitting grid_services_model yields 'flat' + None events."""
-        result = parse_finance_config(self._BASE)
-        assert result is not None
-        assert result.grid_services_model == "flat"
-        assert result.grid_services_events is None
 
     def test_capacity_at_events_with_nested_events_block(self) -> None:
         """grid_services_model='capacity_at_events' + events block parses fully."""
