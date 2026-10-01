@@ -380,6 +380,7 @@ Synthetic energy inputs (per home, annual):
 | `equity_fraction` | 0.75 |
 | `loan_rate` | 7 % |
 | `loan_term_years` | 15 |
+| `asset_life_years` | 25 (`FinanceConfig` default; the [FIN] fixture sets it to 25) |
 | `opex_per_home_per_year_gbp` | £131 |
 | `own_use_rate_pence_per_kwh` | 15 p/kWh (configured; solved rate below) |
 | `retained_cash_floor_per_home_per_year_gbp` | £27 |
