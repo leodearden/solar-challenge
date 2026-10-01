@@ -5,9 +5,11 @@ These tests make real API calls and may be slow or flaky.
 
 import pytest
 import pandas as pd
+import numpy as np
+from pvlib.solarposition import get_solarposition
 
 from solar_challenge.location import Location
-from solar_challenge.weather import get_tmy_data, validate_irradiance_data
+from solar_challenge.weather import get_tmy_data
 
 
 @pytest.mark.slow
@@ -35,13 +37,25 @@ class TestPVGISTMY:
         # Should have roughly a year of hourly data
         assert len(data) >= 8760  # At least 1 year of hours
 
-    def test_tmy_data_is_valid(self):
-        """TMY data passes irradiance validation."""
+    def test_tmy_irradiance_is_physically_consistent(self):
+        """Irradiance is never negative, GHI never exceeds DNI + DHI, and the year's GHI closes with DNI·cos(zenith) + DHI.
+
+        The closure rejects a dni column that is not beam-normal irradiance: a
+        beam-horizontal one, which is what PVGIS seriescalc's components are, closes at about 0.83.
+        """
         location = Location.bristol()
         data = get_tmy_data(location)
 
-        # Should pass validation
-        validate_irradiance_data(data)
+        irradiance = data[["ghi", "dni", "dhi"]]
+        assert (irradiance >= 0).all().all(), irradiance.min().to_dict()
+
+        excess = data["ghi"] - (data["dni"] + data["dhi"])
+        assert excess.max() <= 1.0, f"GHI exceeds DNI + DHI by {excess.max():.1f} W/m² at {excess.idxmax()}"
+
+        zenith = get_solarposition(data.index, location.latitude, location.longitude)["zenith"]
+        cos_zenith = np.cos(np.radians(zenith)).clip(lower=0.0)
+        closure = (data["dni"] * cos_zenith + data["dhi"]).sum() / data["ghi"].sum()
+        assert closure == pytest.approx(1.0, abs=0.02)
 
     def test_tmy_data_has_realistic_values(self):
         """TMY data has physically realistic values."""
