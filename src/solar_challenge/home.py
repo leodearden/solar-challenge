@@ -16,13 +16,16 @@ from solar_challenge.dispatch import (
 )
 from solar_challenge.ev import EVConfig
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
-from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load
+from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.weather import get_tmy_data
+
+
+_YEAR_LENGTHS_IN_HOURS = reference_year_lengths(rows_per_day=24)
 
 
 @dataclass(frozen=True)
@@ -207,15 +210,26 @@ def simulate_home(
             fetched for config.location when None. A heat pump's
             annual_heat_demand_kwh is shared out over the heating
             degree-minutes of the air temperature across this whole year,
-            so weather that is not one year is treated as the whole year,
-            with a UserWarning.
+            so with a heat pump configured the weather must be one year of
+            hourly rows, 8760 to 8784 (365 to 366 days).
 
     Returns:
         SimulationResults with all time series at 1-minute resolution
+
+    Raises:
+        ValueError: If a heat pump is configured and weather_data is not one
+            year of hourly rows.
     """
     # Get weather data (TMY for now)
     if weather_data is None:
         weather_data = get_tmy_data(config.location)
+    if config.heat_pump_config is not None and len(weather_data) not in _YEAR_LENGTHS_IN_HOURS:
+        raise ValueError(
+            f"weather_data has {len(weather_data):,} rows, not one year of hourly rows "
+            f"({_YEAR_LENGTHS_IN_HOURS.start:,} to {_YEAR_LENGTHS_IN_HOURS[-1]:,}): a heat pump's "
+            "annual_heat_demand_kwh is shared out over the heating degree-minutes of this whole year, "
+            "so pass one TMY year of hourly weather, as get_tmy_data returns."
+        )
 
     # Generate PV output at hourly resolution
     hourly_generation = simulate_pv_output(
