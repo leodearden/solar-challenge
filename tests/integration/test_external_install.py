@@ -9,6 +9,8 @@ These tests prove that an EXTERNAL consumer can:
   - Confirm the wheel ships solar_challenge/py.typed (PEP 561).
   - Confirm the wheel ships every file under solar_challenge/web/templates and
     solar_challenge/web/static, which the dashboard renders and serves.
+  - Confirm the wheel's METADATA names the license by the PEP 639
+    License-Expression AGPL-3.0-or-later.
 
 The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here.
@@ -24,6 +26,7 @@ when ``git`` or ``uv`` is absent from PATH, or when the tree is not a git checko
 
 from __future__ import annotations
 
+import email
 import shutil
 import subprocess
 import zipfile
@@ -177,6 +180,31 @@ def test_built_wheel_ships_every_file_of_the_dashboard_folder(
         'Ship them with a pattern under [tool.setuptools.package-data] "solar_challenge.web" '
         "in pyproject.toml. setuptools' globs skip names starting with \".\", so a dot-file "
         "needs its own pattern."
+    )
+
+
+# ---------------------------------------------------------------------------
+# License: the wheel names its license by a PEP 639 SPDX expression
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.build
+def test_built_wheel_declares_the_agpl_license_expression(built_wheel: Path) -> None:
+    """Installers, PyPI and license scanners read a wheel's license from its METADATA, where
+    PEP 639 makes License-Expression the field that names it.
+    """
+    with zipfile.ZipFile(built_wheel) as zf:
+        [metadata_member] = [
+            name for name in zf.namelist() if name.endswith(".dist-info/METADATA")
+        ]
+        metadata = email.message_from_bytes(zf.read(metadata_member))
+
+    expressions = metadata.get_all("License-Expression")
+    assert expressions == ["AGPL-3.0-or-later"], (
+        f"The built wheel's METADATA carries License-Expression {expressions} and the legacy "
+        f"License {metadata.get_all('License')}, so it does not name its license by the PEP 639 "
+        'SPDX expression AGPL-3.0-or-later. Declare [project] license = "AGPL-3.0-or-later" in '
+        "pyproject.toml: an SPDX expression string, not a TOML table."
     )
 
 
