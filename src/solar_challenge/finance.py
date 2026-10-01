@@ -1348,11 +1348,8 @@ class _NodeData(NamedTuple):
     fleet_revenue: float
     """CBS fleet revenue: own-use + SEG + grid-services (£)."""
 
-    simulation_days: int
-    """Shortest per-home simulated window behind these totals (days).
-
-    A value below :data:`_SHORT_PERIOD_THRESHOLD` means the totals were annualised.
-    """
+    annualised_from_days: int
+    """Shortest per-home simulated window (days) the energy totals were annualised from."""
 
 
 def _aged_homes(
@@ -1581,7 +1578,7 @@ def project_multi_year(
             mean_pv_soh=mean_pv_soh,
             mean_battery_soh=mean_battery_soh,
             fleet_revenue=fleet_revenue,
-            simulation_days=min(s.simulation_days for s in per_home_summaries),
+            annualised_from_days=min(s.simulation_days for s in per_home_summaries),
         )
 
     # ---- Seed forward-march (snapshot cum_tp BEFORE each simulation) ---------
@@ -1601,8 +1598,7 @@ def project_multi_year(
         prev_age = age
 
     # ---- Short-window annualisation warning (once per projection) -----------
-    # Every node simulates the same scenario.period; age 0 is always a seed.
-    window_days = sampled_data[0].simulation_days
+    window_days = sampled_data[0].annualised_from_days
     if window_days < _SHORT_PERIOD_THRESHOLD:
         warnings.warn(
             f"project_multi_year: simulation period is only {window_days} days "
