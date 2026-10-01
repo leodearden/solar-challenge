@@ -248,6 +248,24 @@ class TestSimulateHomeAPI:
         assert "period_days" in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("body", "type_name"),
+        [
+            pytest.param([1], "list", id="array"),
+            pytest.param("x", "str", id="string"),
+            pytest.param(1, "int", id="number"),
+            pytest.param(True, "bool", id="boolean"),
+        ],
+    )
+    def test_body_that_is_not_a_json_object_returns_400_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, body: object, type_name: str
+    ) -> None:
+        """A JSON body that is not an object is refused naming its type, not answered with a 500."""
+        resp = client.post("/api/simulate/home", json=body)
+        assert resp.status_code == 400
+        assert type_name in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
+
 
 # ===================================================================
 # POST /api/simulate/fleet
@@ -307,6 +325,22 @@ class TestSimulateFleetAPI:
             },
         )
         assert resp.status_code == 400
+
+    @pytest.mark.parametrize(
+        ("homes", "type_name"),
+        [
+            pytest.param([1], "int", id="first-home"),
+            pytest.param([VALID_HOME_PAYLOAD, "x"], "str", id="later-home"),
+        ],
+    )
+    def test_home_that_is_not_a_json_object_returns_400_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, homes: list[object], type_name: str
+    ) -> None:
+        """A homes entry that is not an object is refused naming its type, whether it is the first home or a later one."""
+        resp = client.post("/api/simulate/fleet", json={"name": "Bad Fleet", "homes": homes})
+        assert resp.status_code == 400
+        assert type_name in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_fleet_uses_first_home_dates(
         self, client: FlaskClient, mock_job_manager: MagicMock
