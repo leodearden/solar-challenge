@@ -674,7 +674,7 @@ def overcast_january_day() -> pd.DataFrame:
 
 
 class TestInverterMatchesStringVoltage:
-    """The CEC inverter's MPPT window takes the array's string voltage, whatever the capacity.
+    """The CEC inverter's MPPT window takes the array's STC string voltage, whatever the capacity.
 
     pvlib's Sandia model is a linear fit across the MPPT window and is not adjusted
     for it, so a string outside the window extrapolates the loss terms by hundreds of
@@ -682,7 +682,7 @@ class TestInverterMatchesStringVoltage:
     """
 
     @pytest.mark.parametrize("config", SYSTEM_SIZE_CONFIGS, ids=_config_id)
-    def test_every_string_operates_inside_the_inverters_mppt_window(
+    def test_every_strings_stc_voltage_sits_inside_the_inverters_mppt_window(
         self, config: PVConfig
     ) -> None:
         system = create_pv_system(config)
@@ -693,7 +693,7 @@ class TestInverterMatchesStringVoltage:
             string_vmp = array.modules_per_string * array.module_parameters["V_mp_ref"]
             assert window_low <= string_vmp <= window_high, (
                 f"{config.capacity_kw} kW wired as {_wiring(system)} "
-                f"(modules per string, strings) runs a {string_vmp:.0f} V string "
+                f"(modules per string, strings) sizes a {string_vmp:.0f} V (STC V_mp) string "
                 f"outside the inverter's {window_low:.0f}-{window_high:.0f} V MPPT window"
             )
 

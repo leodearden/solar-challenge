@@ -322,10 +322,14 @@ def _cec_inverters() -> tuple[_CecInverter, ...]:
 def _wiring_within_window(
     module_count: int, module_vmp_v: float, inverter: _CecInverter
 ) -> Optional[_Wiring]:
-    """The fewest near-equal series strings that keep every string inside the inverter's MPPT window.
+    """The fewest near-equal series strings whose STC voltage (modules × V_mp_ref) lies inside the inverter's MPPT window.
 
     Fewer strings are longer strings, so if the shortest of these misses the
     window's floor, every other near-equal split does too.
+
+    Colder cells lift the operating V_mp above the window's ceiling on some
+    hours; docs/pv-inverter-string-matching.md measures that and records why
+    strings are not sized on a cold-corrected V_mp.
     """
     longest = math.floor(inverter.mppt_high_v / module_vmp_v)
     if longest < 1:
