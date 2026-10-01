@@ -11,6 +11,7 @@ Layout:
       TestStructuralInvariants — H1 (surplus==floor) + H2 (capex monotone)
       TestFlexLowersSolvedRate — directional assert: flex ⟹ strictly lower rate
       TestThetaStaysGreen — in-file θ-isolation smoke (spreadsheet → economics)
+      TestPhysicsColumnPremises — fast guard for the premise the physics column states
   - @pytest.mark.slow class:
       TestPhysicsReconciliationColumn — real-PVGIS physics column (reported, not asserted ==)
 
@@ -692,6 +693,30 @@ class TestFlexLowersSolvedRate:
 # ---------------------------------------------------------------------------
 
 
+def _spreadsheet_economics_cr6(
+    scenario: "ScenarioConfig",  # type: ignore[name-defined]
+    finance: "FinanceConfig",  # type: ignore[name-defined]
+) -> "ProjectEconomics":  # type: ignore[name-defined]
+    """[FIN]-assumption ProjectEconomics for ``scenario``: spreadsheet_revenue_curve → project_economics.
+
+    Physics-free and network-free.  Capex, debt and debt service depend on the
+    scenario's homes and ``finance`` alone, so callers that read only those do not
+    depend on the curve's revenue.
+    """
+    from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
+
+    curve = spreadsheet_revenue_curve(
+        n_homes=len(scenario.homes),
+        pv_kwp=_FIN_GOLDEN["inp_kWp"],
+        kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
+        self_consumption_fraction=_FIN_SCF,
+        own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
+        export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
+        asset_life_years=finance.asset_life_years,
+    )
+    return project_economics(curve, scenario, finance)
+
+
 class TestThetaStaysGreen:
     """In-file θ-isolation smoke: spreadsheet→economics path unchanged by CR6.
 
@@ -705,20 +730,8 @@ class TestThetaStaysGreen:
 
     def _build_theta_econ(self) -> "ProjectEconomics":  # type: ignore[name-defined]
         """Build [FIN]-assumption ProjectEconomics via spreadsheet_revenue_curve."""
-        from solar_challenge.finance import project_economics, spreadsheet_revenue_curve
-
-        curve = spreadsheet_revenue_curve(
-            n_homes=100,
-            pv_kwp=_FIN_GOLDEN["inp_kWp"],
-            kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
-            export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
-            asset_life_years=25,
-        )
         scenario = _make_scenario_fin_cr6(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
-        finance = _make_finance_fin_cr6()
-        return project_economics(curve, scenario, finance)
+        return _spreadsheet_economics_cr6(scenario, _make_finance_fin_cr6())
 
     def test_spreadsheet_path_capex_and_dscr_unchanged(self) -> None:
         """θ-isolation: capex==£775k (Capital_Stack!B6) and min_dscr≥1.20 still hold.
@@ -1153,12 +1166,47 @@ class TestCbsOwnUseKwhHelper:
         assert result == pytest.approx(0.0, abs=1e-9)
 
 
+def _make_physics_column_scenario_cr6() -> "ScenarioConfig":  # type: ignore[name-defined]
+    """The scenario TestPhysicsReconciliationColumn simulates: 2 homes × 5.5 kWp + 5 kWh, 3 days."""
+    from solar_challenge.config import ScenarioConfig, SimulationPeriod
+
+    homes = [_make_home_config_fin_cr6(pv_kwp=5.5, battery_kwh=5.0)] * 2
+    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
+    return ScenarioConfig(name="CR6-Physics-Test", period=period, homes=homes)
+
+
+class TestPhysicsColumnPremises:
+    """Fast guard for the premise TestPhysicsReconciliationColumn states about its fleet.
+
+    That class is slow and excluded from -m 'not slow' runs, so the claim its docstring
+    makes (the [FIN] grant covers the fleet's capex) is enforced here, on the scenario
+    and finance it builds.
+    """
+
+    def test_grant_covers_fleet_capex_so_the_fleet_has_no_debt(self) -> None:
+        scenario = _make_physics_column_scenario_cr6()
+        finance = _make_finance_fin_cr6()
+
+        econ = _spreadsheet_economics_cr6(scenario, finance)
+
+        assert econ.total_capex_gbp <= finance.grant_gbp, (
+            f"grant £{finance.grant_gbp:,.0f} no longer covers the physics fleet's "
+            f"capex £{econ.total_capex_gbp:,.0f}"
+        )
+        assert econ.debt_gbp == 0.0, f"physics fleet carries £{econ.debt_gbp:,.2f} debt"
+
+
 @pytest.mark.slow
 class TestPhysicsReconciliationColumn:
     """Real-PVGIS physics column — REPORTED, not asserted == spreadsheet (step-9 RED / step-10 GREEN).
 
-    Runs a 2-home, 3-day fleet simulation via real simulate_fleet to document
-    the physics-vs-assumption self-consumption gap that motivates 'reported not pinned'.
+    Runs a 2-home, 3-day fleet simulation via real simulate_fleet to show that the
+    real-physics path returns a structurally valid CostRecoverySolution.  Its numbers
+    are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation): the
+    solve sets the window's 3 days of own-use kWh against a year of opex and floor
+    (project_multi_year asks for a period of about one full year), and the [FIN] grant
+    covers the 2-home fleet's capex, so the fleet carries no debt (guarded by
+    TestPhysicsColumnPremises).
     Mirrors θ's TestCalibrationPhysicsColumn.
     Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
     """
@@ -1172,19 +1220,10 @@ class TestPhysicsReconciliationColumn:
         - sol.binding in {'floor', 'rate_clamped_zero', 'infeasible_above_retail'}
 
         REPORTS (printed, NOT pinned): physics-path solved rate, saving, surplus.
-        Motivates 'reported not pinned' — physics scf (≈20–35%) ≠ sheet 0.70.
         """
-        from solar_challenge.config import ScenarioConfig, SimulationPeriod
         from solar_challenge.finance import CostRecoverySolution, solve_cost_recovery_rate
 
-        # 2-home fleet, 3-day window, 5.5kWp+5kWh (real simulate_fleet via default simulate=None)
-        homes = [_make_home_config_fin_cr6(pv_kwp=5.5, battery_kwh=5.0)] * 2
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
-        scenario = ScenarioConfig(
-            name="CR6-Physics-Test",
-            period=period,
-            homes=homes,
-        )
+        scenario = _make_physics_column_scenario_cr6()
         finance = _make_finance_fin_cr6()
 
         # Real physics simulation (simulate=None → real simulate_fleet)
@@ -1201,10 +1240,14 @@ class TestPhysicsReconciliationColumn:
         print(
             f"\n[PHYSICS RECONCILIATION REPORT] (2 homes, 3-day window)"
             f"\n  Physics-path solved rate: {sol.own_use_rate_pence_per_kwh:.2f} p/kWh"
-            f"  (synthetic ≈15p; gap = physics scf << 0.70)"
+            "  (not comparable with the no-flex anchor reported in"
+            " docs/cost-recovery-finance-model.md §7.3)"
             f"\n  Physics saving vs baseline: £{sol.saving_vs_baseline_gbp:.0f}"
             f"\n  Net surplus/home/yr: £{sol.net_surplus_per_home_per_year_gbp:.2f}"
             f"\n  Binding: {sol.binding}, Feasible: {sol.feasible}"
-            f"\n  [Reported not pinned: physics scf ≠ 0.70/sheet — see §3.3 of"
-            f" docs/finance-spreadsheet-reconciliation.md for rationale]"
+            "\n  [Reported not pinned: assertion policy in §3.3 of"
+            " docs/finance-spreadsheet-reconciliation.md]"
+            "\n  [Cause: the solve sets the window's 3 days of own-use kWh against a year of"
+            " opex and floor (project_multi_year asks for about one full year), so this rate"
+            " reflects the window length, not a self-consumption gap]"
         )
