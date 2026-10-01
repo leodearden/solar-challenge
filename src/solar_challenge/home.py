@@ -414,7 +414,7 @@ def _utc_time_of_year_keys(index: pd.DatetimeIndex) -> pd.Index:
 
 
 def _align_tmy_to_demand(
-    tmy_generation: pd.Series,
+    tmy: pd.Series,
     demand: pd.Series,
 ) -> pd.Series:
     """Map a TMY series onto the demand's timestamps by UTC time of year.
@@ -425,13 +425,13 @@ def _align_tmy_to_demand(
     instants. A naive index on either side is read as UTC, following pvlib's
     convention. A demand timestamp with no match (e.g. 29 February against a
     non-leap TMY year) maps to 0.0. Where the TMY repeats a UTC time of year,
-    the later value wins. The result carries the demand's index and is named
-    generation_kw.
+    the later value wins. The result carries the demand's index and the TMY
+    series' name.
     """
-    lookup = tmy_generation.set_axis(_utc_time_of_year_keys(tmy_generation.index))
+    lookup = tmy.set_axis(_utc_time_of_year_keys(tmy.index))
     lookup = lookup[~lookup.index.duplicated(keep="last")]
     aligned = lookup.reindex(_utc_time_of_year_keys(demand.index), fill_value=0.0)
-    return pd.Series(aligned.to_numpy(), index=demand.index, name="generation_kw")
+    return pd.Series(aligned.to_numpy(), index=demand.index, name=tmy.name)
 
 
 def calculate_summary(
