@@ -1,60 +1,24 @@
-"""Tests for configuration file support."""
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Tests for parameter sweeps: the values a ParameterSweepConfig yields and the scenarios run_parameter_sweep simulates."""
 
-import json
-import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, TypeAlias
 
 import pandas as pd
 import pytest
-import yaml
 
-from solar_challenge.battery import BatteryConfig
-from solar_challenge.community import CommunityConfig
 from solar_challenge.config import (
-    BatteryDistributionConfig,
     ConfigurationError,
-    DispatchStrategyConfig,
-    FinanceConfig,
-    FleetDistributionConfig,
-    GridChargeConfig,
-    HeatPumpDistributionConfig,
-    LoadDistributionConfig,
-    NormalDistribution,
-    OutputConfig,
     ParameterSweepConfig,
-    PVDistributionConfig,
     ScenarioConfig,
     SimulationPeriod,
-    UniformDistribution,
-    WeightedDiscreteDistribution,
-    load_community_config,
-    generate_homes_from_distribution,
-    load_config,
-    load_config_json,
-    load_config_yaml,
-    load_fleet_config,
-    load_home_config,
-    load_scenarios,
-    parse_dispatch_strategy_config,
-    parse_finance_config,
-    parse_fleet_distribution_config,
-    parse_home_block,
-    parse_location_block,
-    parse_seg_rate,
-    parse_tariff_config,
     run_parameter_sweep,
 )
-from solar_challenge.ev import EVConfig
-from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
-from solar_challenge.pv import PVConfig, calculate_degradation_factor
-from solar_challenge.seg import SEG_PRESETS
-from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache, set_weather_cache
 from tests._synthetic_weather import synthetic_june_weather
 
