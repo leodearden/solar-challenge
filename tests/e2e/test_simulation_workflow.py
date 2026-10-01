@@ -119,15 +119,9 @@ def test_results_page_has_stat_cards(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Stat cards visible on seeded results page."""
+    """The results page shows the Total Generation and Total Demand stat cards."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
-    # Stat cards should show key metrics
-    generation_card = page.locator("text=Total Generation")
-    demand_card = page.locator("text=Total Demand")
-
-    expect(generation_card.first).to_be_visible()
-    expect(demand_card.first).to_be_visible()
+    for label in ("Total Generation", "Total Demand"):
+        expect(page.get_by_text(label, exact=True)).to_be_visible()
