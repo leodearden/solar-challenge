@@ -70,86 +70,6 @@ class TestFinanceConfig:
             "and every row must name a FinanceConfig field"
         )
 
-    def test_defaults_vat_rate(self) -> None:
-        """Default vat_rate is 0.05."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.vat_rate == 0.05
-
-    def test_defaults_retail_baseline_rate(self) -> None:
-        """Default retail_baseline_rate_pence_per_kwh is 23.0."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.retail_baseline_rate_pence_per_kwh == 23.0
-
-    def test_defaults_self_consumption_override_is_none(self) -> None:
-        """Default self_consumption_override is None."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.self_consumption_override is None
-
-    def test_defaults_pv_cost_per_kwp(self) -> None:
-        """Default pv_cost_per_kwp_gbp is 1000.0."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.pv_cost_per_kwp_gbp == 1000.0
-
-    def test_defaults_roof_fit_cost(self) -> None:
-        """Default roof_fit_cost_gbp is 1000.0."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.roof_fit_cost_gbp == 1000.0
-
-    def test_defaults_battery_cost_per_kwh(self) -> None:
-        """Default battery_cost_per_kwh_gbp is 250.0."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.battery_cost_per_kwh_gbp == 250.0
-
-    def test_defaults_grant_gbp(self) -> None:
-        """Default grant_gbp is 250000.0."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.grant_gbp == 250000.0
-
-    def test_defaults_equity_fraction(self) -> None:
-        """Default equity_fraction is 0.75."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.equity_fraction == 0.75
-
-    def test_defaults_loan_term_years(self) -> None:
-        """Default loan_term_years is 15."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.loan_term_years == 15
-
-    def test_defaults_loan_rate(self) -> None:
-        """Default loan_rate is 0.07."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.loan_rate == 0.07
-
-    def test_defaults_opex_per_home_per_year(self) -> None:
-        """Default opex_per_home_per_year_gbp is 131.0."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.opex_per_home_per_year_gbp == 131.0
-
-    def test_defaults_asset_life_years(self) -> None:
-        """Default asset_life_years is 25."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.asset_life_years == 25
-
-    def test_defaults_inverter_cost_per_kw_is_zero(self) -> None:
-        """Default inverter_cost_per_kw_gbp is 0.0 (opt-in, zero-allowed)."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.inverter_cost_per_kw_gbp == 0.0
-
-    def test_defaults_own_use_rate_pence_per_kwh(self) -> None:
-        """Default own_use_rate_pence_per_kwh is 15.0 (CBS transfer price)."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.own_use_rate_pence_per_kwh == 15.0
-
-    def test_defaults_retained_cash_floor_per_home_per_year_gbp(self) -> None:
-        """Default retained_cash_floor_per_home_per_year_gbp is 27.0."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.retained_cash_floor_per_home_per_year_gbp == 27.0
-
-    def test_defaults_grid_services_income_per_kw_per_year_gbp(self) -> None:
-        """Default grid_services_income_per_kw_per_year_gbp is 0.0 (theta-safe seam)."""
-        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
-        assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
-
     def test_frozen_raises_on_assignment(self) -> None:
         """FinanceConfig is frozen: attribute assignment raises FrozenInstanceError."""
         fc = FinanceConfig(standing_charge_pence_per_day=60.0)
@@ -653,25 +573,6 @@ class TestFinanceConfigGridServicesModel:
     """FinanceConfig.grid_services_model + grid_services_events fields."""
 
     _BASE: dict = {"standing_charge_pence_per_day": 60.0}
-
-    def test_default_grid_services_model_is_flat(self) -> None:
-        """Default grid_services_model is 'flat'."""
-        fc = FinanceConfig(**self._BASE)
-        assert fc.grid_services_model == "flat"
-
-    def test_default_grid_services_events_is_none(self) -> None:
-        """Default grid_services_events is None."""
-        fc = FinanceConfig(**self._BASE)
-        assert fc.grid_services_events is None
-
-    def test_all_pre_existing_defaults_unchanged(self) -> None:
-        """Adding new fields does not disturb any pre-existing FinanceConfig defaults."""
-        fc = FinanceConfig(**self._BASE)
-        assert fc.vat_rate == 0.05
-        assert fc.retail_baseline_rate_pence_per_kwh == 23.0
-        assert fc.self_consumption_override is None
-        assert fc.pv_cost_per_kwp_gbp == 1000.0
-        assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
 
     def test_frozen_with_new_fields(self) -> None:
         """FinanceConfig is still frozen after adding new fields."""
