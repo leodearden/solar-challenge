@@ -95,7 +95,9 @@ class SimulationResults:
     tariff_rate: pd.Series
     strategy_name: str = "self_consumption"
     heat_pump_load: Optional[pd.Series] = None
-    grid_charge_cost: Optional[pd.Series] = None  # per-timestep cost of grid-to-battery charging in £ (None when tariff_config is None)
+    # Per-timestep slice of import_cost spent charging the battery from the grid, in £
+    # (None when tariff_config is None).
+    grid_charge_cost: Optional[pd.Series] = None
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to DataFrame.
@@ -152,7 +154,9 @@ class SummaryStatistics:
     total_heat_pump_load_kwh: Optional[float] = None  # total heat pump consumption
     peak_heat_pump_load_kw: Optional[float] = None  # peak heat pump load
     heat_pump_load_ratio: Optional[float] = None  # heat_pump_load / total_demand
-    total_grid_charge_cost_gbp: float = 0.0  # total CBS grid-to-battery charging cost in £
+    # Slice of total_import_cost_gbp spent charging the battery from the grid: householder
+    # import, informational, in no CBS equation (docs/cost-recovery-finance-model.md §4).
+    total_grid_charge_cost_gbp: float = 0.0
 
 
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
@@ -508,7 +512,7 @@ def calculate_summary(
             SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh),
         )
 
-    # Calculate CBS grid-charge cost
+    # Grid-charge cost: the slice of total_import_cost spent charging the battery from the grid
     total_grid_charge_cost = (
         float(results.grid_charge_cost.sum())
         if results.grid_charge_cost is not None
