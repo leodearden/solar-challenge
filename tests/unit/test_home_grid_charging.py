@@ -11,30 +11,13 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+from tests._synthetic_weather import sunless_weather
 
 
 @pytest.fixture
 def night_weather_data() -> pd.DataFrame:
-    """Zero-irradiance synthetic 24-hour weather data for Bristol (June 21).
-
-    All irradiance (GHI/DNI/DHI) is zero so PV generation is ~0.
-    Any battery_charge > 0 is unambiguously from grid charging, not excess PV.
-    Covers all 24 hours so align_tmy_to_index maps every simulation minute to a valid row.
-    Avoids a PVGIS network call.
-    """
-    index = pd.date_range(
-        "2024-06-21 00:00", periods=24, freq="1h", tz="Europe/London"
-    )
-    return pd.DataFrame(
-        {
-            "ghi": [0] * 24,
-            "dni": [0] * 24,
-            "dhi": [0] * 24,
-            "temp_air": [12] * 24,
-            "wind_speed": [2] * 24,
-        },
-        index=index,
-    )
+    """No sun on 21 June, so any battery charge comes from the grid, not excess PV."""
+    return sunless_weather("2024-06-21", temp_air=12.0)
 
 
 class TestSimulateHomeStrategyPathGridCharging:
