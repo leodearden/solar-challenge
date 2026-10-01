@@ -11,6 +11,7 @@ from typing import Optional
 import pandas as pd
 
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.pv import PVConfig, wired_dc_capacity_kw
 
 
 class ValidationError(Exception):
@@ -71,6 +72,38 @@ class ValidationReport:
         return "\n".join(lines)
 
 
+_UK_YIELD_BENCHMARK_KWH_PER_KWP = (700.0, 1100.0)
+
+
+def _check_annual_yield(
+    generation: pd.Series, capacity_kw: float
+) -> Optional[ValidationResult]:
+    """The year's AC energy per kWp of the DC wired for capacity_kw, against the UK benchmark band.
+
+    generation is 1-minute kW; None when it spans under 365 days.
+    """
+    duration_days = (generation.index[-1] - generation.index[0]).days + 1
+    if duration_days < 365:
+        return None
+    total_kwh = float(generation.sum() / 60)
+    wired_kw = wired_dc_capacity_kw(PVConfig(capacity_kw=capacity_kw))
+    yield_per_kwp = total_kwh / wired_kw
+    low, high = _UK_YIELD_BENCHMARK_KWH_PER_KWP
+    passed = low <= yield_per_kwp <= high
+    placement = "within" if passed else "outside"
+    return ValidationResult(
+        passed=passed,
+        check_name="annual_yield_range",
+        message=(
+            f"Annual yield ({yield_per_kwp:.0f} kWh/kWp over the {wired_kw:.2f} kWp "
+            f"wired for {capacity_kw} kW) {placement} the expected UK range "
+            f"({low:.0f}-{high:.0f} kWh/kWp)"
+        ),
+        value=yield_per_kwp,
+        expected_range=(low, high),
+    )
+
+
 def validate_pv_generation(
     generation: pd.Series,
     capacity_kw: float,
@@ -82,11 +115,14 @@ def validate_pv_generation(
     - Generation is never negative
     - Generation is zero at night (approximately)
     - Peak generation does not exceed system capacity
-    - Annual generation within expected UK range (if full year data)
+    - Annual yield per kWp wired within the UK benchmark band (if full year data)
 
     Args:
         generation: PV generation time series in kW
-        capacity_kw: System DC capacity in kW
+        capacity_kw: The configured DC capacity (PVConfig.capacity_kw) of a
+            system of the default module. The peak check compares against it;
+            the annual yield is per kWp of the DC the PV model wires for it
+            (pv.wired_dc_capacity_kw).
         check_annual: Whether to check annual yield (requires ~1 year data)
 
     Returns:
@@ -96,7 +132,7 @@ def validate_pv_generation(
         - Generation never negative
         - Generation zero at night
         - Peak generation does not exceed system capacity
-        - Annual generation within expected range for UK (800-1000 kWh/kWp)
+        - Annual generation per kWp wired within the UK benchmark band
     """
     results: list[ValidationResult] = []
 
@@ -163,43 +199,11 @@ def validate_pv_generation(
                     value=night_max,
                 ))
 
-    # Check 4: Annual yield within UK expected range
+    # Check 4: Annual yield per kWp wired within the UK benchmark band
     if check_annual:
-        # Calculate total energy (kWh) for the period
-        # Assuming 1-minute data: kW * (1/60) = kWh per minute
-        total_kwh = float(generation.sum() / 60)
-        duration_days = (generation.index[-1] - generation.index[0]).days + 1
-
-        if duration_days >= 365:
-            # Normalize to per-kWp yield
-            yield_per_kwp = total_kwh / capacity_kw
-
-            # UK expected range: 800-1000 kWh/kWp (can be slightly wider for edge cases)
-            expected_min = 700.0  # Allow slightly below
-            expected_max = 1100.0  # Allow slightly above
-
-            if expected_min <= yield_per_kwp <= expected_max:
-                results.append(ValidationResult(
-                    passed=True,
-                    check_name="annual_yield_range",
-                    message=(
-                        f"Annual yield ({yield_per_kwp:.0f} kWh/kWp) "
-                        "within expected UK range"
-                    ),
-                    value=yield_per_kwp,
-                    expected_range=(expected_min, expected_max),
-                ))
-            else:
-                results.append(ValidationResult(
-                    passed=False,
-                    check_name="annual_yield_range",
-                    message=(
-                        f"Annual yield ({yield_per_kwp:.0f} kWh/kWp) "
-                        f"outside expected UK range ({expected_min}-{expected_max})"
-                    ),
-                    value=yield_per_kwp,
-                    expected_range=(expected_min, expected_max),
-                ))
+        annual_yield = _check_annual_yield(generation, capacity_kw)
+        if annual_yield is not None:
+            results.append(annual_yield)
 
     return results
 
@@ -492,7 +496,7 @@ def validate_simulation(
 
     Args:
         results: Simulation results to validate
-        pv_capacity_kw: PV system capacity
+        pv_capacity_kw: Configured PV capacity in kW (PVConfig.capacity_kw)
         battery_capacity_kwh: Battery capacity (None if no battery)
         target_annual_consumption_kwh: Expected annual consumption
 
