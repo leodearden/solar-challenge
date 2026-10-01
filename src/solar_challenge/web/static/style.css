@@ -1,66 +1,19 @@
 /* ===== Solar Challenge Dashboard — Tailwind Companion CSS ===== */
 /* Served as-is: base.html links this file directly after dist/style.css, and
    Tailwind does not compile it.
-   Only CSS variables, Tailwind overrides, energy colour palette,
-   chart container sizing, and spinner animation.
-   All component-level styling is handled by Tailwind utility classes. */
+   All component-level styling is handled by Tailwind utility classes.
+   tests/unit/test_web_hand_written_css.py fails on any class or custom property
+   defined here that the dashboard does not use, and on @keyframes dist/style.css
+   already defines. */
 
 /* --- CSS Custom Properties (Light Mode) --- */
 :root {
     --color-primary: #f59e0b;       /* amber - solar */
-    --color-primary-dark: #d97706;
-    --color-secondary: #0ea5e9;     /* sky blue */
-    --color-bg: #f8fafc;
-    --color-surface: #ffffff;
-    --color-border: #e2e8f0;
-    --color-text: #1e293b;
-    --color-text-muted: #64748b;
-    --color-success: #16a34a;
-    --color-error: #dc2626;
-    --color-info: #0284c7;
-
-    /* Energy flow colour palette */
-    --color-generation: #f5a623;
-    --color-demand: #d0021b;
-    --color-self-consumption: #7ed321;
-    --color-grid-import: #9b9b9b;
-    --color-grid-export: #4a90e2;
-    --color-battery: #50e3c2;
 }
 
 /* --- CSS Custom Properties (Dark Mode) --- */
 html.dark {
     --color-primary: #fbbf24;
-    --color-primary-dark: #f59e0b;
-    --color-secondary: #38bdf8;
-    --color-bg: #0f172a;
-    --color-surface: #1e293b;
-    --color-border: #334155;
-    --color-text: #f1f5f9;
-    --color-text-muted: #94a3b8;
-    --color-success: #4ade80;
-    --color-error: #f87171;
-    --color-info: #38bdf8;
-}
-
-/* --- Spinner Animation --- */
-.spinner {
-    width: 1em;
-    height: 1em;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.6s linear infinite;
-}
-
-.spinner--lg {
-    width: 2.5rem;
-    height: 2.5rem;
-    border-width: 3px;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
 }
 
 /* --- Chart Container Sizing --- */
@@ -104,7 +57,7 @@ input[type="range"]::-moz-range-thumb {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
-/* Smooth transitions for sidebar layout shifts */
+/* Hide Alpine-managed elements until Alpine initialises */
 [x-cloak] {
     display: none !important;
 }
