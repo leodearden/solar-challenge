@@ -44,3 +44,49 @@ def test_declared_floor_is_none_when_nothing_bounds_the_named_distribution_from_
     requirements: list[str],
 ) -> None:
     assert declared_floor(requirements, "setuptools") is None
+
+
+@pytest.mark.parametrize(
+    ("requirements", "floor"),
+    [
+        pytest.param(
+            ["setuptools>=62.3.0", "setuptools>=77.0.0; python_version >= '3.12'"],
+            Version("62.3.0"),
+            id="higher-marked-bound-beside-unmarked-ignored",
+        ),
+        pytest.param(
+            ["setuptools>=77.0.0", "setuptools>=62.3.0; python_version < '3.12'"],
+            Version("77.0.0"),
+            id="lower-marked-bound-beside-unmarked-ignored",
+        ),
+        pytest.param(
+            ["setuptools", "setuptools>=77.0.0; python_version >= '3.12'"],
+            None,
+            id="marked-bound-beside-unbounded-unmarked-ignored",
+        ),
+        pytest.param(
+            ["setuptools>=77.0.0; platform_machine != 'armv7l'"],
+            Version("77.0.0"),
+            id="single-marked-entry-bounds",
+        ),
+        pytest.param(
+            ["setuptools>=77.0.0; python_version >= '3.12'", "setuptools>=62.3.0; python_version < '3.12'"],
+            Version("62.3.0"),
+            id="complementary-markers-give-lower-bound",
+        ),
+        pytest.param(
+            ["setuptools>=77.0.0; python_version >= '3.12'", "setuptools; python_version < '3.12'"],
+            None,
+            id="unbounded-marked-entry-voids-floor",
+        ),
+        pytest.param(
+            ["setuptools>=62.3.0", "setuptools>=77.0.0"],
+            Version("77.0.0"),
+            id="unmarked-duplicates-give-higher-bound",
+        ),
+    ],
+)
+def test_declared_floor_is_the_bound_guaranteed_whichever_markers_apply(
+    requirements: list[str], floor: Version | None
+) -> None:
+    assert declared_floor(requirements, "setuptools") == floor
