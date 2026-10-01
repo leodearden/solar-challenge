@@ -7,49 +7,42 @@ nothing rebuilds it automatically. A class added without ``npm run build:css``
 therefore silently has no effect in the browser (task 170 found nine).
 """
 
-from pathlib import Path
-
 import pytest
-
-import solar_challenge.web
 
 pytest.importorskip("jinja2")
 from tests._css_classes import (
     applied_classes_in_script,
     applied_classes_in_template,
-    linked_stylesheets,
     selector_classes,
 )
-
-WEB_DIR = Path(solar_challenge.web.__file__).parent
-BASE_TEMPLATE = WEB_DIR / "templates" / "base.html"
-
-
-def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
-
-
-def _relative(path: Path) -> str:
-    return path.relative_to(WEB_DIR).as_posix()
+from tests._dashboard_sources import (
+    BASE_TEMPLATE_KEY,
+    dashboard_script_sources,
+    dashboard_template_sources,
+    served_stylesheet_sources,
+)
 
 
 def _served_classes() -> set[str]:
     """Classes named by the stylesheets base.html links; every page template extends base.html."""
-    stylesheets = linked_stylesheets(_read(BASE_TEMPLATE))
     return {
         name
-        for stylesheet in stylesheets
-        for name in selector_classes(_read(WEB_DIR / "static" / stylesheet))
+        for source in served_stylesheet_sources().values()
+        for name in selector_classes(source)
     }
 
 
 def _applied_classes_by_source() -> dict[str, set[str]]:
-    """Classes each dashboard template and script applies, keyed by its path relative to WEB_DIR."""
-    templates = sorted((WEB_DIR / "templates").rglob("*.html"))
-    scripts = sorted((WEB_DIR / "static" / "js").rglob("*.js"))
+    """Classes each dashboard template and script applies, keyed by its path relative to the web package."""
     return {
-        **{_relative(path): applied_classes_in_template(_read(path)) for path in templates},
-        **{_relative(path): applied_classes_in_script(_read(path)) for path in scripts},
+        **{
+            path: applied_classes_in_template(source)
+            for path, source in dashboard_template_sources().items()
+        },
+        **{
+            path: applied_classes_in_script(source)
+            for path, source in dashboard_script_sources().items()
+        },
     }
 
 
@@ -57,9 +50,9 @@ def test_every_class_the_dashboard_applies_is_named_by_a_served_stylesheet() -> 
     applied = _applied_classes_by_source()
     served = _served_classes()
 
-    assert applied.get(_relative(BASE_TEMPLATE)), (
-        f"read no classes from {_relative(BASE_TEMPLATE)}, the layout every page extends, among "
-        f"{len(applied)} templates and scripts under {WEB_DIR}, so this guard would pass vacuously"
+    assert applied.get(BASE_TEMPLATE_KEY), (
+        f"read no classes from {BASE_TEMPLATE_KEY}, the layout every page extends, among "
+        f"{len(applied)} templates and scripts, so this guard would pass vacuously"
     )
     unstyled = {
         source: sorted(classes - served) for source, classes in applied.items() if classes - served
