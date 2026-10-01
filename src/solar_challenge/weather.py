@@ -272,35 +272,3 @@ def validate_irradiance_data(data: pd.DataFrame) -> None:
         raise ValueError(
             f"GHI exceeds DNI + DHI in {violations} rows (physical impossibility)"
         )
-
-
-def extract_temperature_data(
-    weather_data: pd.DataFrame,
-    default_wind_speed: float = 1.0
-) -> pd.DataFrame:
-    """Extract temperature and wind data for cell temperature modelling.
-
-    Args:
-        weather_data: DataFrame containing weather data
-        default_wind_speed: Default wind speed if not available (m/s)
-
-    Returns:
-        DataFrame with columns:
-        - temp_air: Ambient temperature (°C)
-        - wind_speed: Wind speed (m/s)
-        Aligned with input DataFrame index.
-    """
-    result = pd.DataFrame(index=weather_data.index)
-
-    if "temp_air" in weather_data.columns:
-        result["temp_air"] = weather_data["temp_air"]
-    else:
-        raise ValueError("Weather data must contain 'temp_air' column")
-
-    if "wind_speed" in weather_data.columns:
-        result["wind_speed"] = weather_data["wind_speed"]
-    else:
-        # Use default wind speed if not available
-        result["wind_speed"] = default_wind_speed
-
-    return result

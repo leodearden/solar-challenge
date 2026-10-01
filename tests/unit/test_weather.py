@@ -8,7 +8,6 @@ from unittest.mock import patch, MagicMock
 
 from solar_challenge.weather import (
     validate_irradiance_data,
-    extract_temperature_data,
     WeatherCache,
     get_weather_cache,
     set_weather_cache,
@@ -88,38 +87,6 @@ class TestValidateIrradianceData:
         }, index=sample_index[:2])
         with pytest.raises(ValueError, match="exceeds"):
             validate_irradiance_data(data)
-
-
-class TestExtractTemperatureData:
-    """Test temperature data extraction."""
-
-    def test_extracts_temp_and_wind(self, valid_weather_data):
-        """Extracts temp_air and wind_speed columns."""
-        result = extract_temperature_data(valid_weather_data)
-        assert "temp_air" in result.columns
-        assert "wind_speed" in result.columns
-        assert len(result) == len(valid_weather_data)
-
-    def test_uses_default_wind_speed(self, sample_index):
-        """Uses default wind speed when not present."""
-        data = pd.DataFrame({
-            "temp_air": np.linspace(5, 15, 24),
-        }, index=sample_index)
-        result = extract_temperature_data(data, default_wind_speed=2.5)
-        assert (result["wind_speed"] == 2.5).all()
-
-    def test_missing_temp_raises(self, sample_index):
-        """Missing temp_air raises error."""
-        data = pd.DataFrame({
-            "wind_speed": [3.0, 3.0],
-        }, index=sample_index[:2])
-        with pytest.raises(ValueError, match="temp_air"):
-            extract_temperature_data(data)
-
-    def test_preserves_index(self, valid_weather_data):
-        """Output index matches input index."""
-        result = extract_temperature_data(valid_weather_data)
-        pd.testing.assert_index_equal(result.index, valid_weather_data.index)
 
 
 class TestWeatherCache:
