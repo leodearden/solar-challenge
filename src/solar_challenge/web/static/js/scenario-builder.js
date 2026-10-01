@@ -29,11 +29,11 @@ document.addEventListener('alpine:init', () => {
         load_min: 2000,
         load_max: 5000,
         import_rate: 0.245,
-        export_rate: 0.15,
+        seg_rate_pence_per_kwh: 15.0,
 
         // Weighted discrete / shuffled pool arrays
         pv_wd_values: [{ value: 3.0, weight: 20 }, { value: 4.0, weight: 40 }, { value: 5.0, weight: 30 }],
-        pv_sp_entries: [{ value: 3.0, count: 20 }, { value: 4.0, count: 40 }, { value: 5.0, count: 30 }],
+        pv_sp_entries: [{ value: 3.0, count: 20 }, { value: 4.0, count: 40 }, { value: 5.0, count: 30 }, { value: 6.0, count: 10 }],
         battery_wd_values: [{ value: 0, weight: 40 }, { value: 5.0, weight: 40 }, { value: 10.0, weight: 20 }],
         battery_sp_entries: [{ value: 0, count: 40 }, { value: 5.0, count: 40 }, { value: 10.0, count: 20 }],
         load_wd_values: [{ value: 2900, weight: 30 }, { value: 3500, weight: 40 }, { value: 4500, weight: 30 }],
@@ -86,7 +86,7 @@ document.addEventListener('alpine:init', () => {
                     body: JSON.stringify(formData)
                 });
                 const result = await resp.json();
-                this.yamlPreview = result.yaml || '# Error generating preview';
+                this.yamlPreview = result.yaml !== undefined ? result.yaml : '# ' + result.error;
             } catch (e) {
                 this.yamlPreview = '# Error: could not generate preview';
             }
@@ -261,7 +261,7 @@ document.addEventListener('alpine:init', () => {
                 location_preset: this.location_preset,
                 n_homes: this.n_homes,
                 import_rate: this.import_rate,
-                export_rate: this.export_rate,
+                seg_rate_pence_per_kwh: this.seg_rate_pence_per_kwh,
             };
             if (this.location_preset === 'custom') {
                 data.latitude = this.latitude;
