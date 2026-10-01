@@ -29,6 +29,47 @@ class TestFinanceConfig:
         fc = FinanceConfig(standing_charge_pence_per_day=60.0)
         assert fc.standing_charge_pence_per_day == 60.0
 
+    _DECLARED_DEFAULTS: dict[str, object] = {
+        "vat_rate": 0.05,
+        "retail_baseline_rate_pence_per_kwh": 23.0,
+        "self_consumption_override": None,
+        "pv_cost_per_kwp_gbp": 1000.0,
+        "roof_fit_cost_gbp": 1000.0,
+        "battery_cost_per_kwh_gbp": 250.0,
+        "inverter_cost_per_kw_gbp": 0.0,
+        "grant_gbp": 250000.0,
+        "equity_fraction": 0.75,
+        "loan_term_years": 15,
+        "loan_rate": 0.07,
+        "opex_per_home_per_year_gbp": 131.0,
+        "asset_life_years": 25,
+        "own_use_rate_pence_per_kwh": 15.0,
+        "retained_cash_floor_per_home_per_year_gbp": 27.0,
+        "grid_services_income_per_kw_per_year_gbp": 0.0,
+        "grid_services_model": "flat",
+        "grid_services_events": None,
+    }
+
+    @pytest.mark.parametrize(
+        ("field_name", "declared_default"),
+        list(_DECLARED_DEFAULTS.items()),
+        ids=list(_DECLARED_DEFAULTS),
+    )
+    def test_declared_default(self, field_name: str, declared_default: object) -> None:
+        """A FinanceConfig given only the standing charge holds each field's declared default."""
+        fc = FinanceConfig(standing_charge_pence_per_day=60.0)
+        assert getattr(fc, field_name) == declared_default
+
+    def test_declared_defaults_cover_every_optional_field(self) -> None:
+        """Every FinanceConfig field but the required standing charge has a row in _DECLARED_DEFAULTS."""
+        optional_fields = {f.name for f in dataclasses.fields(FinanceConfig)} - {
+            "standing_charge_pence_per_day"
+        }
+        assert set(self._DECLARED_DEFAULTS) == optional_fields, (
+            "every optional FinanceConfig field needs a row in _DECLARED_DEFAULTS, "
+            "and every row must name a FinanceConfig field"
+        )
+
     def test_defaults_vat_rate(self) -> None:
         """Default vat_rate is 0.05."""
         fc = FinanceConfig(standing_charge_pence_per_day=60.0)
