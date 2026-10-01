@@ -207,11 +207,15 @@ def simulate_home(
             fetched for config.location when None. A heat pump's
             annual_heat_demand_kwh is shared out over the heating
             degree-minutes of the air temperature across this whole year,
-            so weather that is not one year is treated as the whole year,
-            with a UserWarning.
+            so with a heat pump configured the weather must span one year,
+            365 or 366 days of hourly rows.
 
     Returns:
         SimulationResults with all time series at 1-minute resolution
+
+    Raises:
+        ValueError: If a heat pump is configured and weather_data is not one
+            year of hourly rows.
     """
     # Get weather data (TMY for now)
     if weather_data is None:

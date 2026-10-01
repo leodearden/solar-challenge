@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Heat pump configuration and modelling."""
 
-import warnings
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -209,11 +208,8 @@ def generate_heat_pump_load(
     Raises:
         ValueError: If temperature_c doesn't have a DatetimeIndex
         ValueError: If temperature_c index is not timezone-aware
-
-    Warns:
-        UserWarning: If annual_temperature_c is not one year of minutes. The
-            annual demand is still shared out over its rows as if they were
-            the whole year.
+        ValueError: If annual_temperature_c is not one year of minutes, 365 or
+            366 days of rows
 
     Example:
         >>> config = HeatPumpConfig(heat_pump_type="ASHP", thermal_capacity_kw=8.0)
@@ -234,13 +230,12 @@ def generate_heat_pump_load(
     if temperature_c.index.tz is None:
         raise ValueError("Temperature series index must be timezone-aware")
     if len(annual_temperature_c) not in _YEAR_LENGTHS_IN_MINUTES:
-        warnings.warn(
+        raise ValueError(
             f"annual_temperature_c has {len(annual_temperature_c):,} rows, not one year of minutes "
             f"({_YEAR_LENGTHS_IN_MINUTES.start:,} to {_YEAR_LENGTHS_IN_MINUTES[-1]:,}): "
-            f"annual_heat_demand_kwh={config.annual_heat_demand_kwh:g} is shared out over those rows "
-            "as if they were the whole year.",
-            UserWarning,
-            stacklevel=2,
+            f"annual_heat_demand_kwh={config.annual_heat_demand_kwh:g} is shared out over one year's "
+            "heating degree-minutes, so pass a whole year of 1-minute temperature, such as the "
+            "minute-interpolated TMY."
         )
 
     annual_degree_minutes = calculate_heating_degree_minutes(annual_temperature_c).sum()
