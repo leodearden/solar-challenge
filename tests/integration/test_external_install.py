@@ -7,8 +7,11 @@ These tests prove that an EXTERNAL consumer can:
     and have each one resolve (H1); non-class/non-routine symbols are confirmed
     non-None (constants present).
   - Confirm the wheel ships solar_challenge/py.typed (PEP 561).
+  - Confirm the wheel ships every file under solar_challenge/web/templates and
+    solar_challenge/web/static, which the dashboard renders and serves.
 
-The wheel is built once via a module-scoped fixture to avoid building twice.
+The wheel is built once, from a copy of the working tree (wheel_source), via a
+module-scoped fixture shared by every test here.
 The consumer-side proof runs inside an isolated uv env via _external_probe.py,
 which is NOT collected by pytest (underscore-prefixed, matches _helpers.py).
 
@@ -16,7 +19,7 @@ Marked ``build`` (NOT ``slow``) to stay independently selectable
 (``pytest -m build``).  Note: the project's default ``addopts`` does not
 deselect ``build``, so a plain ``pytest`` run will execute these heavy tests
 (timeouts: 300 s build + 600 s isolated install).  Tests skip automatically
-when ``uv`` is absent from PATH.
+when ``git`` or ``uv`` is absent from PATH, or when the tree is not a git checkout.
 """
 
 from __future__ import annotations
@@ -28,32 +31,71 @@ from pathlib import Path
 
 import pytest
 
+# Module-scoped fixtures cannot request the function-scoped project_root fixture.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 # ---------------------------------------------------------------------------
-# Module-scoped shared fixture: build the wheel once for both tests.
-# Cannot consume the function-scoped conftest project_root fixture — scope
-# mismatch would error — so the project root is computed inline.
-# Mirrors tests/unit/test_py_typed_packaging.py:42-58.
+# Module-scoped shared fixtures: one copy of the working tree, one wheel build.
 # ---------------------------------------------------------------------------
+
+
+def _skip_unless_a_clean_wheel_can_be_built() -> None:
+    """Skip unless git is on PATH with a checkout to list, and uv is on PATH to build the copy."""
+    for tool in ("git", "uv"):
+        if shutil.which(tool) is None:
+            pytest.skip(f"{tool} not available on PATH — skipping build-marker tests")
+    work_tree_check = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if work_tree_check.returncode != 0:
+        pytest.skip(
+            f"git does not recognise {PROJECT_ROOT} as a checkout, so it cannot list the files to "
+            f"build the wheel from: {work_tree_check.stderr.strip()}"
+        )
 
 
 @pytest.fixture(scope="module")
-def built_wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Build the solar_challenge wheel once and return its path.
+def wheel_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Return a copy of what a fresh clone plus uncommitted new files would hold.
 
-    Builds into a temp directory so the repo's dist/ is never polluted.
-    Uses tmp_path_factory (module-scoped) rather than tmp_path (function-scoped).
-    The project root is computed as the grandparent of the tests/ directory.
+    The wheel is built from it because a build in the checkout reuses the ignored build/ and
+    src/solar_challenge.egg-info, whose stale entries setuptools keeps shipping after pyproject
+    stops declaring them.
     """
-    if shutil.which("uv") is None:
-        pytest.skip("uv not available on PATH — skipping build-marker tests")
+    _skip_unless_a_clean_wheel_can_be_built()
+    listing = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    copy_root = tmp_path_factory.mktemp("wheel_source")
+    for relative_path in filter(None, listing.stdout.split("\0")):
+        source = PROJECT_ROOT / relative_path
+        if source.is_file():
+            destination = copy_root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+    return copy_root
 
-    project_root = Path(__file__).resolve().parents[2]
+
+@pytest.fixture(scope="module")
+def built_wheel(wheel_source: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build the solar_challenge wheel once, from the wheel_source copy, and return its path.
+
+    The build and its output both stay under tmp, so the checkout gains no build/,
+    egg-info or dist/.
+    """
     out_dir = tmp_path_factory.mktemp("wheel_out")
 
     result = subprocess.run(
         ["uv", "build", "--wheel", "--out-dir", str(out_dir)],
-        cwd=str(project_root),
+        cwd=str(wheel_source),
         capture_output=True,
         text=True,
         timeout=300,
@@ -101,6 +143,44 @@ def test_built_wheel_is_typed(built_wheel: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dashboard assets: the wheel ships every file create_app renders or serves
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.build
+@pytest.mark.parametrize("folder", ["templates", "static"])
+def test_built_wheel_ships_every_file_of_the_dashboard_folder(
+    folder: str, wheel_source: Path, built_wheel: Path
+) -> None:
+    """create_app renders pages from web/templates and serves web/static, both resolved beside
+    web/app.py, so a wheel without them fails every page with TemplateNotFound.
+    """
+    package_root = wheel_source / "src"
+    in_source = sorted(
+        path.relative_to(package_root).as_posix()
+        for path in (package_root / "solar_challenge" / "web" / folder).rglob("*")
+        if path.is_file()
+    )
+    assert in_source, (
+        f"found no files under src/solar_challenge/web/{folder} in the copy of the working tree, "
+        "so this test would pass vacuously"
+    )
+
+    with zipfile.ZipFile(built_wheel) as zf:
+        members = set(zf.namelist())
+    missing = [name for name in in_source if name not in members]
+
+    listing = "".join(f"\n  {name}" for name in missing)
+    assert missing == [], (
+        f"The built wheel lacks these dashboard files, so a wheel install cannot render or "
+        f"serve them:{listing}\n"
+        'Ship them with a pattern under [tool.setuptools.package-data] "solar_challenge.web" '
+        "in pyproject.toml. setuptools' globs skip names starting with \".\", so a dot-file "
+        "needs its own pattern."
+    )
+
+
+# ---------------------------------------------------------------------------
 # H1: every public symbol resolves and is callable/present in an isolated install
 # ---------------------------------------------------------------------------
 
@@ -126,8 +206,7 @@ def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> 
     the built wheel and resolves its declared deps from the uv cache.
     No ``--offline`` flag — cache-first-with-network-fallback is more robust.
     """
-    project_root = Path(__file__).resolve().parents[2]
-    probe_path = project_root / "tests" / "integration" / "_external_probe.py"
+    probe_path = PROJECT_ROOT / "tests" / "integration" / "_external_probe.py"
 
     result = subprocess.run(
         [
@@ -140,7 +219,7 @@ def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> 
             "python",
             str(probe_path),
         ],
-        cwd=str(project_root),
+        cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
         timeout=600,
