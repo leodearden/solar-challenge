@@ -26,6 +26,7 @@ from typing import Any, Type, TypeVar, Union, get_args, get_origin, get_type_hin
 
 import pandas as pd
 
+import solar_challenge.config
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.web.database import get_db
@@ -87,15 +88,7 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
     if not is_dataclass(cls):
         raise TypeError(f"Expected dataclass type, got {cls}")
 
-    # Use get_type_hints() to resolve string annotations to real types.
-    # Pass the defining module's globals so forward references resolve correctly.
-    cls_module = sys.modules.get(cls.__module__, None)
-    cls_globals = getattr(cls_module, "__dict__", None)
-    try:
-        resolved_hints = get_type_hints(cls, globalns=cls_globals)
-    except NameError:
-        # Fall back to field annotations if forward references can't resolve
-        resolved_hints = {f.name: f.type for f in fields(cls)}
+    field_types = _field_types(cls)
 
     kwargs: dict[str, Any] = {}
     for field_name, value in data.items():
@@ -103,7 +96,7 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
             kwargs[field_name] = None
             continue
 
-        field_type = resolved_hints.get(field_name)
+        field_type = field_types.get(field_name)
         if field_type is None:
             # Field not in dataclass definition, skip
             continue
@@ -111,6 +104,20 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
         kwargs[field_name] = _deserialize_value(value, field_type)
 
     return cls(**kwargs)
+
+
+def _field_types(cls: type) -> dict[str, Any]:
+    """Return the type each field of dataclass *cls* is annotated with.
+
+    Names resolve in cls's module first, then in solar_challenge.config. config.py
+    defines DispatchStrategyConfig and GridChargeConfig, which battery.py can name
+    only under TYPE_CHECKING because config.py imports battery.py.
+
+    Raises:
+        NameError: An annotation names a type neither module binds.
+    """
+    namespace = {**vars(solar_challenge.config), **vars(sys.modules[cls.__module__])}
+    return get_type_hints(cls, globalns=namespace)
 
 
 def _deserialize_value(value: Any, annotation: Any) -> Any:
