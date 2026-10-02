@@ -154,20 +154,18 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
         Fleet distribution config dict.
 
     Raises:
-        ValueError: If required fields are missing or invalid, a
-            pv/battery/load block is not a dict (see
+        ValueError: If required fields are missing or invalid, n_homes is one
+            int() cannot read or outside 1 to MAX_FLEET_HOMES (see
+            :func:`_as_int_within`), seed is one int() cannot read (see
+            :func:`_as_int`), a pv/battery/load block is not a dict (see
             :func:`_component_block`), a weighted_discrete/shuffled_pool
             row list is malformed (see :func:`_dict_list`), or a shuffled_pool
             count is one int() cannot read or outside 0 to MAX_FLEET_HOMES
             (see :func:`_as_int_within`).
     """
-    n_homes = int(form_data.get("n_homes", 100))
-    if n_homes < 1:
-        raise ValueError("n_homes must be at least 1")
-
     config: dict[str, Any] = {
-        "n_homes": n_homes,
-        "seed": int(form_data.get("seed", 42)),
+        "n_homes": _as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
+        "seed": _as_int(form_data.get("seed", 42), "seed"),
     }
 
     # Process PV distribution
