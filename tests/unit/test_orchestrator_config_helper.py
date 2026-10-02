@@ -52,6 +52,38 @@ def test_a_lane_job_named_once_is_returned_whole(tmp_path: Path) -> None:
     assert sole_offline_lane_job(tmp_path, "probe") == probe_job
 
 
+@pytest.mark.parametrize(
+    ("git", "count"),
+    [
+        pytest.param(
+            {"offline_lane_commands": [{"name": "e2e", "command": "pytest tests/e2e"}]}, 0, id="no-job-named-probe"
+        ),
+        pytest.param({"offline_lane_commands": None}, 0, id="bare-offline-lane-commands-key"),
+        pytest.param({"main_branch": "main"}, 0, id="no-offline-lane-commands-key"),
+        pytest.param(
+            {
+                "offline_lane_commands": [
+                    {"name": "probe", "command": "pytest"},
+                    {"name": "probe", "command": "pytest tests/unit"},
+                ]
+            },
+            2,
+            id="two-jobs-named-probe",
+        ),
+    ],
+)
+def test_a_lane_job_named_other_than_once_fails_naming_the_job_and_its_count(
+    tmp_path: Path, git: Mapping[str, object], count: int
+) -> None:
+    _write_orchestrator_config(tmp_path, git)
+
+    with pytest.raises(AssertionError) as failure:
+        sole_offline_lane_job(tmp_path, "probe")
+
+    assert "'probe'" in str(failure.value)
+    assert f"{count} entries" in str(failure.value)
+
+
 def test_a_lane_job_without_a_cwd_runs_in_the_project_root(tmp_path: Path) -> None:
     job = {"name": "probe", "command": "pytest"}
 
