@@ -9,9 +9,10 @@ import json
 import math
 import random
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterator, Literal, Optional, Union, cast
+from types import MappingProxyType
+from typing import Any, Collection, Iterator, Literal, Mapping, Optional, Union, cast
 
 import pandas as pd
 import yaml
@@ -249,6 +250,25 @@ class PVDistributionConfig:
     degradation_rate_per_year: DistributionSpec = 0.005
 
 
+@dataclass(frozen=True)
+class GridChargeConfig:
+    """Configuration for grid-charging (battery arbitrage) mode.
+
+    Attributes:
+        target_soc_fraction: Target state-of-charge to reach via grid charging,
+            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
+    """
+
+    target_soc_fraction: float = 0.9
+
+    def __post_init__(self) -> None:
+        """Validate grid-charge configuration."""
+        if not (0 < self.target_soc_fraction <= 1):
+            raise ConfigurationError(
+                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
+            )
+
+
 @dataclass
 class BatteryDistributionConfig:
     """Distribution configuration for battery parameters.
@@ -259,11 +279,13 @@ class BatteryDistributionConfig:
         capacity_kwh: Distribution for battery capacity (can include None)
         max_charge_kw: Distribution for max charge rate (default: 2.5)
         max_discharge_kw: Distribution for max discharge rate (default: 2.5)
+        grid_charging: Grid-charging configuration of every home with a battery (optional)
     """
 
     capacity_kwh: DistributionSpec
     max_charge_kw: DistributionSpec = 2.5
     max_discharge_kw: DistributionSpec = 2.5
+    grid_charging: Optional[GridChargeConfig] = None
 
 
 @dataclass
@@ -372,25 +394,6 @@ class DispatchStrategyConfig:
                 )
 
 
-@dataclass(frozen=True)
-class GridChargeConfig:
-    """Configuration for grid-charging (battery arbitrage) mode.
-
-    Attributes:
-        target_soc_fraction: Target state-of-charge to reach via grid charging,
-            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
-    """
-
-    target_soc_fraction: float = 0.9
-
-    def __post_init__(self) -> None:
-        """Validate grid-charge configuration."""
-        if not (0 < self.target_soc_fraction <= 1):
-            raise ConfigurationError(
-                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
-            )
-
-
 @dataclass
 class FleetDistributionConfig:
     """Configuration for generating a fleet from distributions.
@@ -407,6 +410,8 @@ class FleetDistributionConfig:
             - "default": Shuffle pools first, then sample normal distributions per home
             - "bristol_legacy": Sample all normal distributions first, then shuffle pools
               (matches exact behavior of create_bristol_phase1_scenario)
+        dispatch_strategy: Dispatch strategy of every home ("greedy" or "tou_optimized");
+            None means greedy
     """
 
     n_homes: int
@@ -417,6 +422,7 @@ class FleetDistributionConfig:
     ev: Optional[EVDistributionConfig] = None
     seed: Optional[int] = None
     random_order: str = "default"
+    dispatch_strategy: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.n_homes < 1:
@@ -600,11 +606,52 @@ class SweepResult:
     results: Union[SimulationResults, FleetResults]
 
 
-def parse_location_block(data: Optional[dict[str, Any]]) -> Location:
+def _child_path(block_path: str, key: str) -> str:
+    """Return the path of the *key* block inside the block at *block_path*; "" is the top level."""
+    return f"{block_path}.{key}" if block_path else key
+
+
+def _block_label(block_path: str) -> str:
+    """Name the block at *block_path* in an error message."""
+    return block_path or "the top level"
+
+
+def _require_mapping(block_path: str, data: object) -> dict[Any, Any]:
+    """Return the block at *block_path*, refusing it unless it is a mapping."""
+    if not isinstance(data, dict):
+        raise ConfigurationError(
+            f"{_block_label(block_path)} must be a mapping, got {type(data).__name__}"
+        )
+    return data
+
+
+def _refuse_unrecognised_keys(
+    block_path: str, data: object, recognised: Collection[str]
+) -> dict[Any, Any]:
+    """Return the block at *block_path*, refusing it unless it is a mapping holding only *recognised* keys."""
+    mapping = _require_mapping(block_path, data)
+    unrecognised = sorted(repr(key) for key in mapping.keys() - recognised)
+    if unrecognised:
+        raise ConfigurationError(
+            f"Unrecognised keys in {_block_label(block_path)}: {', '.join(unrecognised)}; "
+            f"recognised keys: {', '.join(sorted(recognised))}"
+        )
+    return mapping
+
+
+_LOCATION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "latitude", "longitude", "timezone", "altitude", "name",
+})
+
+
+def parse_location_block(
+    data: Optional[dict[str, Any]], *, block_path: str = "location"
+) -> Location:
     """Parse a ``location:`` block into a Location; an absent or empty block is Bristol."""
     bristol = Location.bristol()
-    if not data:
+    if data is None or data == {}:
         return bristol
+    _refuse_unrecognised_keys(block_path, data, _LOCATION_BLOCK_KEYS)
     return Location(
         latitude=data.get("latitude", bristol.latitude),
         longitude=data.get("longitude", bristol.longitude),
@@ -614,8 +661,15 @@ def parse_location_block(data: Optional[dict[str, Any]]) -> Location:
     )
 
 
-def _parse_pv_config(data: dict[str, Any]) -> PVConfig:
+_PV_BLOCK_KEYS: frozenset[str] = frozenset({
+    "capacity_kw", "azimuth", "tilt", "name", "module_efficiency", "temperature_coefficient",
+    "inverter_efficiency", "inverter_capacity_kw", "system_age_years", "degradation_rate_per_year",
+})
+
+
+def _parse_pv_config(data: dict[str, Any], *, block_path: str) -> PVConfig:
     """Parse PV configuration from config data."""
+    _refuse_unrecognised_keys(block_path, data, _PV_BLOCK_KEYS)
     return PVConfig(
         capacity_kw=data.get("capacity_kw", 4.0),
         azimuth=data.get("azimuth", 180.0),
@@ -630,39 +684,58 @@ def _parse_pv_config(data: dict[str, Any]) -> PVConfig:
     )
 
 
-def _parse_grid_charge_config(data: Optional[dict[str, Any]]) -> Optional[GridChargeConfig]:
+_GRID_CHARGING_BLOCK_KEYS: frozenset[str] = frozenset({"target_soc_fraction"})
+
+
+def _parse_grid_charge_config(
+    data: Optional[dict[str, Any]], *, block_path: str
+) -> Optional[GridChargeConfig]:
     """Parse grid-charging configuration from a dict or None.
 
     Args:
         data: grid_charging mapping (e.g. ``{'target_soc_fraction': 0.9}``) or None.
+        block_path: The block's path in its file, named in error messages.
 
     Returns:
         GridChargeConfig if data is a non-None mapping, else None.
 
     Raises:
-        ConfigurationError: If data is present but not a mapping.
+        ConfigurationError: If data is present but not a mapping, or carries a key
+            other than ``target_soc_fraction``.
     """
     if data is None:
         return None
-    if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"grid_charging must be a mapping, got {type(data).__name__}"
-        )
+    _refuse_unrecognised_keys(block_path, data, _GRID_CHARGING_BLOCK_KEYS)
     return GridChargeConfig(target_soc_fraction=data.get("target_soc_fraction", 0.9))
 
 
-def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryConfig]:
+_BATTERY_BLOCK_KEYS: frozenset[str] = frozenset({
+    "capacity_kwh", "max_charge_kw", "max_discharge_kw", "name", "dispatch_strategy",
+    "grid_charging", "min_soc_fraction", "max_soc_fraction", "charge_efficiency",
+    "discharge_efficiency", "efficiency", "system_age_years", "calendar_fade_rate_per_year",
+    "cycle_fade_per_equivalent_full_cycle", "soh_floor", "soh",
+})
+
+
+def _parse_battery_config(
+    data: Optional[dict[str, Any]], *, block_path: str
+) -> Optional[BatteryConfig]:
     """Parse battery configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _BATTERY_BLOCK_KEYS)
 
     # Parse dispatch strategy if present
     dispatch_strategy = None
     if "dispatch_strategy" in data:
-        dispatch_strategy = parse_dispatch_strategy_config(data["dispatch_strategy"])
+        dispatch_strategy = parse_dispatch_strategy_config(
+            data["dispatch_strategy"], block_path=_child_path(block_path, "dispatch_strategy")
+        )
 
     # Parse grid-charging config if present
-    grid_charging = _parse_grid_charge_config(data.get("grid_charging"))
+    grid_charging = _parse_grid_charge_config(
+        data.get("grid_charging"), block_path=_child_path(block_path, "grid_charging")
+    )
 
     return BatteryConfig(
         capacity_kwh=data.get("capacity_kwh", 5.0),
@@ -686,8 +759,14 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
     )
 
 
-def _parse_load_config(data: dict[str, Any]) -> LoadConfig:
+_LOAD_BLOCK_KEYS: frozenset[str] = frozenset({
+    "annual_consumption_kwh", "household_occupants", "name", "use_stochastic", "seed",
+})
+
+
+def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:
     """Parse load configuration from config data."""
+    _refuse_unrecognised_keys(block_path, data, _LOAD_BLOCK_KEYS)
     return LoadConfig(
         annual_consumption_kwh=data.get("annual_consumption_kwh"),
         household_occupants=data.get("household_occupants", 3),
@@ -697,12 +776,18 @@ def _parse_load_config(data: dict[str, Any]) -> LoadConfig:
     )
 
 
+_DISPATCH_STRATEGY_BLOCK_KEYS: frozenset[str] = frozenset({
+    "strategy_type", "peak_hours", "import_limit_kw",
+})
+
+
 def parse_dispatch_strategy_config(
-    data: Optional[dict[str, Any]]
+    data: Optional[dict[str, Any]], *, block_path: str = "dispatch_strategy"
 ) -> Optional[DispatchStrategyConfig]:
     """Parse dispatch strategy configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _DISPATCH_STRATEGY_BLOCK_KEYS)
 
     strategy_type = data.get("strategy_type")
     if not strategy_type:
@@ -722,7 +807,24 @@ def parse_dispatch_strategy_config(
     )
 
 
-def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig]:
+_TARIFF_BLOCK_KEYS: Mapping[str, frozenset[str]] = MappingProxyType({
+    "flat_rate": frozenset({"type", "rate_per_kwh", "name"}),
+    "economy_7": frozenset({
+        "type", "off_peak_rate", "peak_rate", "off_peak_start", "off_peak_end",
+    }),
+    "economy_10": frozenset({
+        "type", "off_peak_rate", "peak_rate", "night_start", "night_end", "afternoon_start",
+        "afternoon_end", "evening_start", "evening_end",
+    }),
+    "custom": frozenset({"type", "periods", "name"}),
+})
+
+_TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
+
+
+def parse_tariff_config(
+    data: Optional[dict[str, Any]], *, block_path: str = "tariff"
+) -> Optional[TariffConfig]:
     """Parse tariff configuration from config data.
 
     Supports preset tariffs (flat_rate, economy_7, economy_10) and custom
@@ -730,19 +832,30 @@ def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig
 
     Args:
         data: Tariff configuration dictionary or None
+        block_path: The block's path in its file, named in error messages
 
     Returns:
         TariffConfig object or None if data is None
 
     Raises:
-        ConfigurationError: If tariff specification is invalid
+        ConfigurationError: If tariff specification is invalid, including a
+            block or custom period that is not a mapping or carries a key its
+            type does not read
     """
     if data is None:
         return None
+    _require_mapping(block_path, data)
 
     tariff_type = data.get("type")
     if tariff_type is None:
         raise ConfigurationError("Tariff configuration requires 'type' field")
+    recognised = _TARIFF_BLOCK_KEYS.get(tariff_type) if isinstance(tariff_type, str) else None
+    if recognised is None:
+        raise ConfigurationError(
+            f"Unknown tariff type '{tariff_type}'. "
+            f"Supported types: {', '.join(_TARIFF_BLOCK_KEYS)}"
+        )
+    _refuse_unrecognised_keys(block_path, data, recognised)
 
     if tariff_type == "flat_rate":
         rate = data.get("rate_per_kwh")
@@ -794,7 +907,10 @@ def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig
             raise ConfigurationError("custom tariff must have at least one period")
 
         periods = []
-        for period_data in periods_data:
+        for index, period_data in enumerate(periods_data):
+            _refuse_unrecognised_keys(
+                _child_path(block_path, f"periods[{index}]"), period_data, _TARIFF_PERIOD_KEYS
+            )
             if "start_time" not in period_data:
                 raise ConfigurationError("Tariff period requires 'start_time' field")
             if "end_time" not in period_data:
@@ -816,28 +932,34 @@ def parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig
             name=data.get("name", "")
         )
 
-    else:
-        raise ConfigurationError(
-            f"Unknown tariff type '{tariff_type}'. "
-            "Supported types: flat_rate, economy_7, economy_10, custom"
-        )
+    raise AssertionError(f"tariff type {tariff_type!r} has recognised keys but no parser branch")
 
 
-def _parse_heat_pump_config(data: Optional[dict[str, Any]]) -> Optional[HeatPumpConfig]:
+_HEAT_PUMP_BLOCK_KEYS: frozenset[str] = frozenset({
+    "heat_pump_type", "thermal_capacity_kw", "annual_heat_demand_kwh", "name",
+})
+
+
+def _parse_heat_pump_config(
+    data: Optional[dict[str, Any]], *, block_path: str
+) -> Optional[HeatPumpConfig]:
     """Parse heat pump configuration from config data.
 
     Args:
         data: Dict with heat_pump_type, thermal_capacity_kw, and optional fields,
               or None.
+        block_path: The block's path in its file, named in error messages.
 
     Returns:
         HeatPumpConfig or None if data is None.
 
     Raises:
-        ConfigurationError: If a required field is missing.
+        ConfigurationError: If the block is not a mapping, carries a key it does
+            not read, or lacks a required field.
     """
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _HEAT_PUMP_BLOCK_KEYS)
     if "heat_pump_type" not in data:
         raise ConfigurationError(
             "heat_pump configuration requires 'heat_pump_type' field"
@@ -854,20 +976,29 @@ def _parse_heat_pump_config(data: Optional[dict[str, Any]]) -> Optional[HeatPump
     )
 
 
-def _parse_ev_config(data: Optional[dict[str, Any]]) -> Optional[EVConfig]:
+_EV_BLOCK_KEYS: frozenset[str] = frozenset({
+    "charger_type", "arrival_hour", "departure_hour", "required_charge_kwh",
+    "smart_charging_mode", "name",
+})
+
+
+def _parse_ev_config(data: Optional[dict[str, Any]], *, block_path: str) -> Optional[EVConfig]:
     """Parse EV configuration from config data.
 
     Args:
         data: Dict with charger_type, arrival_hour, and optional fields, or None.
+        block_path: The block's path in its file, named in error messages.
 
     Returns:
         EVConfig or None if data is None.
 
     Raises:
-        ConfigurationError: If a required field is missing.
+        ConfigurationError: If the block is not a mapping, carries a key it does
+            not read, or lacks a required field.
     """
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _EV_BLOCK_KEYS)
     if "charger_type" not in data:
         raise ConfigurationError(
             "ev configuration requires 'charger_type' field"
@@ -886,8 +1017,16 @@ def _parse_ev_config(data: Optional[dict[str, Any]]) -> Optional[EVConfig]:
     )
 
 
-def parse_home_block(data: dict[str, Any], location: Location) -> HomeConfig:
+_HOME_BLOCK_KEYS: frozenset[str] = frozenset({
+    "name", "pv", "battery", "load", "tariff", "dispatch_strategy", "heat_pump", "ev",
+})
+
+
+def parse_home_block(
+    data: dict[str, Any], location: Location, *, block_path: str = "home"
+) -> HomeConfig:
     """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*."""
+    _refuse_unrecognised_keys(block_path, data, _HOME_BLOCK_KEYS)
     pv_data = data.get("pv", {})
     battery_data = data.get("battery")
     load_data = data.get("load", {})
@@ -895,20 +1034,30 @@ def parse_home_block(data: dict[str, Any], location: Location) -> HomeConfig:
     dispatch_strategy = data.get("dispatch_strategy", "greedy")
 
     return HomeConfig(
-        pv_config=_parse_pv_config(pv_data),
-        battery_config=_parse_battery_config(battery_data),
-        load_config=_parse_load_config(load_data),
+        pv_config=_parse_pv_config(pv_data, block_path=_child_path(block_path, "pv")),
+        battery_config=_parse_battery_config(
+            battery_data, block_path=_child_path(block_path, "battery")
+        ),
+        load_config=_parse_load_config(load_data, block_path=_child_path(block_path, "load")),
         location=location,
         name=data.get("name", ""),
-        tariff_config=parse_tariff_config(tariff_data),
+        tariff_config=parse_tariff_config(
+            tariff_data, block_path=_child_path(block_path, "tariff")
+        ),
         dispatch_strategy=dispatch_strategy,
-        heat_pump_config=_parse_heat_pump_config(data.get("heat_pump")),
-        ev_config=_parse_ev_config(data.get("ev")),
+        heat_pump_config=_parse_heat_pump_config(
+            data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
+        ),
+        ev_config=_parse_ev_config(data.get("ev"), block_path=_child_path(block_path, "ev")),
     )
 
 
-def _parse_period(data: dict[str, Any]) -> SimulationPeriod:
+_PERIOD_BLOCK_KEYS: frozenset[str] = frozenset({"start_date", "end_date"})
+
+
+def _parse_period(data: dict[str, Any], *, block_path: str) -> SimulationPeriod:
     """Parse simulation period from config data."""
+    _refuse_unrecognised_keys(block_path, data, _PERIOD_BLOCK_KEYS)
     if "start_date" not in data or "end_date" not in data:
         raise ConfigurationError("Simulation period requires 'start_date' and 'end_date'")
     return SimulationPeriod(
@@ -917,10 +1066,18 @@ def _parse_period(data: dict[str, Any]) -> SimulationPeriod:
     )
 
 
-def _parse_output_config(data: Optional[dict[str, Any]]) -> Optional[OutputConfig]:
+_OUTPUT_BLOCK_KEYS: frozenset[str] = frozenset({
+    "csv_path", "include_minute_data", "include_summary", "aggregation",
+})
+
+
+def _parse_output_config(
+    data: Optional[dict[str, Any]], *, block_path: str
+) -> Optional[OutputConfig]:
     """Parse output configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _OUTPUT_BLOCK_KEYS)
     return OutputConfig(
         csv_path=data.get("csv_path"),
         include_minute_data=data.get("include_minute_data", True),
@@ -932,12 +1089,24 @@ def _parse_output_config(data: Optional[dict[str, Any]]) -> Optional[OutputConfi
 # --- Distribution Parsing and Sampling ---
 
 
+_DISTRIBUTION_SPEC_KEYS: Mapping[str, frozenset[str]] = MappingProxyType({
+    "weighted_discrete": frozenset({"type", "values", "weights"}),
+    "normal": frozenset({"type", "mean", "std", "min", "max"}),
+    "uniform": frozenset({"type", "min", "max"}),
+    "fixed": frozenset({"type", "value"}),
+    "shuffled_pool": frozenset({"type", "values", "counts"}),
+    "proportional_to": frozenset({"type", "source", "multiplier", "offset"}),
+})
+
+_SWEEP_SPEC_KEYS: frozenset[str] = frozenset({"type", "min", "max", "steps", "mode"})
+
+
 def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
     """Parse a distribution specification from config data.
 
     Args:
         data: Raw data (scalar, None, or distribution dict)
-        param_name: Parameter name for error messages
+        param_name: The parameter's path in its file, named in error messages
 
     Returns:
         DistributionSpec (distribution object, scalar, or None)
@@ -962,6 +1131,13 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
         raise ConfigurationError(
             f"Distribution for '{param_name}' requires 'type' field"
         )
+    recognised = _DISTRIBUTION_SPEC_KEYS.get(dist_type) if isinstance(dist_type, str) else None
+    if recognised is None:
+        raise ConfigurationError(
+            f"Unknown distribution type '{dist_type}' for '{param_name}'. "
+            f"Supported: {', '.join(_DISTRIBUTION_SPEC_KEYS)}"
+        )
+    _refuse_unrecognised_keys(param_name, data, recognised)
 
     if dist_type == "weighted_discrete":
         if "values" not in data or "weights" not in data:
@@ -1023,6 +1199,9 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
                 raise ConfigurationError(
                     f"proportional_to multiplier dict for '{param_name}' must have type='sweep'"
                 )
+            _refuse_unrecognised_keys(
+                _child_path(param_name, "multiplier"), multiplier_data, _SWEEP_SPEC_KEYS
+            )
             multiplier = SweepSpec(
                 min=float(multiplier_data["min"]),
                 max=float(multiplier_data["max"]),
@@ -1037,11 +1216,7 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
             offset=float(data.get("offset", 0.0)),
         )
 
-    else:
-        raise ConfigurationError(
-            f"Unknown distribution type '{dist_type}' for '{param_name}'. "
-            "Supported: weighted_discrete, normal, uniform, fixed, shuffled_pool, proportional_to"
-        )
+    raise AssertionError(f"distribution type {dist_type!r} has recognised keys but no parser branch")
 
 
 def _sample_from_distribution(spec: DistributionSpec, rng: random.Random) -> Optional[float]:
@@ -1077,57 +1252,88 @@ def _sample_from_distribution(spec: DistributionSpec, rng: random.Random) -> Opt
     raise ConfigurationError(f"Unknown distribution type: {type(spec)}")
 
 
-def _parse_pv_distribution_config(data: dict[str, Any]) -> PVDistributionConfig:
+_PV_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "capacity_kw", "azimuth", "tilt", "module_efficiency", "inverter_efficiency",
+    "system_age_years", "degradation_rate_per_year",
+})
+
+
+def _parse_pv_distribution_config(
+    data: dict[str, Any], *, block_path: str
+) -> PVDistributionConfig:
     """Parse PV distribution configuration from config data."""
+    _refuse_unrecognised_keys(block_path, data, _PV_DISTRIBUTION_BLOCK_KEYS)
     if "capacity_kw" not in data:
         raise ConfigurationError("PV distribution config requires 'capacity_kw'")
 
     return PVDistributionConfig(
-        capacity_kw=_parse_distribution_spec(data["capacity_kw"], "pv.capacity_kw"),
-        azimuth=_parse_distribution_spec(data.get("azimuth", 180.0), "pv.azimuth"),
-        tilt=_parse_distribution_spec(data.get("tilt", 35.0), "pv.tilt"),
+        capacity_kw=_parse_distribution_spec(
+            data["capacity_kw"], _child_path(block_path, "capacity_kw")
+        ),
+        azimuth=_parse_distribution_spec(
+            data.get("azimuth", 180.0), _child_path(block_path, "azimuth")
+        ),
+        tilt=_parse_distribution_spec(data.get("tilt", 35.0), _child_path(block_path, "tilt")),
         module_efficiency=_parse_distribution_spec(
-            data.get("module_efficiency", 0.20), "pv.module_efficiency"
+            data.get("module_efficiency", 0.20), _child_path(block_path, "module_efficiency")
         ),
         inverter_efficiency=_parse_distribution_spec(
-            data.get("inverter_efficiency", 0.96), "pv.inverter_efficiency"
+            data.get("inverter_efficiency", 0.96), _child_path(block_path, "inverter_efficiency")
         ),
         system_age_years=_parse_distribution_spec(
-            data.get("system_age_years", 0.0), "pv.system_age_years"
+            data.get("system_age_years", 0.0), _child_path(block_path, "system_age_years")
         ),
         degradation_rate_per_year=_parse_distribution_spec(
-            data.get("degradation_rate_per_year", 0.005), "pv.degradation_rate_per_year"
+            data.get("degradation_rate_per_year", 0.005),
+            _child_path(block_path, "degradation_rate_per_year"),
         ),
     )
 
 
+_BATTERY_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "capacity_kwh", "max_charge_kw", "max_discharge_kw", "grid_charging",
+})
+
+
 def _parse_battery_distribution_config(
-    data: Optional[dict[str, Any]],
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[BatteryDistributionConfig]:
     """Parse battery distribution configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _BATTERY_DISTRIBUTION_BLOCK_KEYS)
 
     if "capacity_kwh" not in data:
         raise ConfigurationError("Battery distribution config requires 'capacity_kwh'")
 
     return BatteryDistributionConfig(
-        capacity_kwh=_parse_distribution_spec(data["capacity_kwh"], "battery.capacity_kwh"),
+        capacity_kwh=_parse_distribution_spec(
+            data["capacity_kwh"], _child_path(block_path, "capacity_kwh")
+        ),
         max_charge_kw=_parse_distribution_spec(
-            data.get("max_charge_kw", 2.5), "battery.max_charge_kw"
+            data.get("max_charge_kw", 2.5), _child_path(block_path, "max_charge_kw")
         ),
         max_discharge_kw=_parse_distribution_spec(
-            data.get("max_discharge_kw", 2.5), "battery.max_discharge_kw"
+            data.get("max_discharge_kw", 2.5), _child_path(block_path, "max_discharge_kw")
+        ),
+        grid_charging=_parse_grid_charge_config(
+            data.get("grid_charging"), block_path=_child_path(block_path, "grid_charging")
         ),
     )
 
 
+_HEAT_PUMP_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "heat_pump_type", "thermal_capacity_kw", "annual_heat_demand_kwh",
+})
+
+
 def _parse_heat_pump_distribution_config(
-    data: Optional[dict[str, Any]],
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[HeatPumpDistributionConfig]:
     """Parse heat pump distribution configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _HEAT_PUMP_DISTRIBUTION_BLOCK_KEYS)
 
     # Parse heat_pump_type - can be string, distribution, or None
     heat_pump_type_raw = data.get("heat_pump_type")
@@ -1140,7 +1346,7 @@ def _parse_heat_pump_distribution_config(
     elif isinstance(heat_pump_type_raw, dict):
         # Distribution spec
         heat_pump_type = _parse_distribution_spec(
-            heat_pump_type_raw, "heat_pump.heat_pump_type"
+            heat_pump_type_raw, _child_path(block_path, "heat_pump_type")
         )
     else:
         raise ConfigurationError(
@@ -1150,54 +1356,92 @@ def _parse_heat_pump_distribution_config(
     return HeatPumpDistributionConfig(
         heat_pump_type=heat_pump_type,
         thermal_capacity_kw=_parse_distribution_spec(
-            data.get("thermal_capacity_kw", 8.0), "heat_pump.thermal_capacity_kw"
+            data.get("thermal_capacity_kw", 8.0), _child_path(block_path, "thermal_capacity_kw")
         ),
         annual_heat_demand_kwh=_parse_distribution_spec(
-            data.get("annual_heat_demand_kwh", 8000.0), "heat_pump.annual_heat_demand_kwh"
+            data.get("annual_heat_demand_kwh", 8000.0),
+            _child_path(block_path, "annual_heat_demand_kwh"),
         ),
     )
 
 
-def _parse_load_distribution_config(data: dict[str, Any]) -> LoadDistributionConfig:
+_LOAD_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "annual_consumption_kwh", "household_occupants", "use_stochastic",
+})
+
+
+def _parse_load_distribution_config(
+    data: dict[str, Any], *, block_path: str
+) -> LoadDistributionConfig:
     """Parse load distribution configuration from config data."""
+    _refuse_unrecognised_keys(block_path, data, _LOAD_DISTRIBUTION_BLOCK_KEYS)
     return LoadDistributionConfig(
         annual_consumption_kwh=_parse_distribution_spec(
-            data.get("annual_consumption_kwh"), "load.annual_consumption_kwh"
+            data.get("annual_consumption_kwh"), _child_path(block_path, "annual_consumption_kwh")
         ),
         household_occupants=_parse_distribution_spec(
-            data.get("household_occupants", 3), "load.household_occupants"
+            data.get("household_occupants", 3), _child_path(block_path, "household_occupants")
         ),
         use_stochastic=data.get("use_stochastic", True),
     )
 
 
+_EV_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "charger_type", "arrival_hour", "departure_hour", "required_charge_kwh",
+    "smart_charging_mode",
+})
+
+
 def _parse_ev_distribution_config(
-    data: Optional[dict[str, Any]],
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[EVDistributionConfig]:
     """Parse EV distribution configuration from config data."""
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _EV_DISTRIBUTION_BLOCK_KEYS)
 
     if "charger_type" not in data:
         raise ConfigurationError("EV distribution config requires 'charger_type'")
 
     return EVDistributionConfig(
-        charger_type=_parse_distribution_spec(data["charger_type"], "ev.charger_type"),
+        charger_type=_parse_distribution_spec(
+            data["charger_type"], _child_path(block_path, "charger_type")
+        ),
         arrival_hour=_parse_distribution_spec(
-            data.get("arrival_hour", 18.0), "ev.arrival_hour"
+            data.get("arrival_hour", 18.0), _child_path(block_path, "arrival_hour")
         ),
         departure_hour=_parse_distribution_spec(
-            data.get("departure_hour", 7.0), "ev.departure_hour"
+            data.get("departure_hour", 7.0), _child_path(block_path, "departure_hour")
         ),
         required_charge_kwh=_parse_distribution_spec(
-            data.get("required_charge_kwh", 35.0), "ev.required_charge_kwh"
+            data.get("required_charge_kwh", 35.0), _child_path(block_path, "required_charge_kwh")
         ),
         smart_charging_mode=data.get("smart_charging_mode", "none"),
     )
 
 
-def parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionConfig:
+_FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
+    "n_homes", "pv", "load", "battery", "heat_pump", "ev", "seed", "random_order",
+    "dispatch_strategy",
+})
+
+
+def _parse_fleet_dispatch_strategy(data: object, *, key_path: str) -> Optional[str]:
+    """Read a fleet's dispatch strategy: absent, or one of _VALID_DISPATCH_STRATEGIES."""
+    if data is None:
+        return None
+    if not isinstance(data, str) or data not in _VALID_DISPATCH_STRATEGIES:
+        raise ConfigurationError(
+            f"Invalid {key_path} {data!r}; valid values: {sorted(_VALID_DISPATCH_STRATEGIES)}"
+        )
+    return data
+
+
+def parse_fleet_distribution_config(
+    data: dict[str, Any], *, block_path: str = "fleet_distribution"
+) -> FleetDistributionConfig:
     """Parse fleet distribution configuration from config data."""
+    _refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
     if "n_homes" not in data:
         raise ConfigurationError("Fleet distribution config requires 'n_homes'")
     if "pv" not in data:
@@ -1205,13 +1449,22 @@ def parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionCo
 
     return FleetDistributionConfig(
         n_homes=int(data["n_homes"]),
-        pv=_parse_pv_distribution_config(data["pv"]),
-        load=_parse_load_distribution_config(data.get("load", {})),
-        battery=_parse_battery_distribution_config(data.get("battery")),
-        heat_pump=_parse_heat_pump_distribution_config(data.get("heat_pump")),
-        ev=_parse_ev_distribution_config(data.get("ev")),
+        pv=_parse_pv_distribution_config(data["pv"], block_path=_child_path(block_path, "pv")),
+        load=_parse_load_distribution_config(
+            data.get("load", {}), block_path=_child_path(block_path, "load")
+        ),
+        battery=_parse_battery_distribution_config(
+            data.get("battery"), block_path=_child_path(block_path, "battery")
+        ),
+        heat_pump=_parse_heat_pump_distribution_config(
+            data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
+        ),
+        ev=_parse_ev_distribution_config(data.get("ev"), block_path=_child_path(block_path, "ev")),
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
+        dispatch_strategy=_parse_fleet_dispatch_strategy(
+            data.get("dispatch_strategy"), key_path=_child_path(block_path, "dispatch_strategy")
+        ),
     )
 
 
@@ -1320,15 +1573,15 @@ def generate_homes_from_distribution(
             (default) homes are generated with tariff_config=None, preserving
             bit-identical behaviour for callers that do not pass this kwarg.
         fleet_grid_charging: Optional GridChargeConfig to apply to every home
-            that has a battery. When None (default) the battery's grid_charging
-            remains None, preserving bit-identical behaviour. Note: if a home's
+            that has a battery, in place of config.battery.grid_charging. When
+            None (default) the config's applies. Note: if a home's
             sampled battery capacity is non-positive (or battery is absent), no
-            BatteryConfig is created and fleet_grid_charging is silently dropped
+            BatteryConfig is created and its grid charging is silently dropped
             for that home — this is expected behaviour (no battery → no grid
             charging), not an error.
         fleet_dispatch_strategy: Optional dispatch strategy string to apply to
-            every home. When None (default) or empty, homes use "greedy",
-            preserving bit-identical behaviour for existing callers.
+            every home, in place of config.dispatch_strategy. When None (default)
+            or empty the config's applies, and "greedy" when that is None too.
 
     Returns:
         List of HomeConfig objects
@@ -1431,7 +1684,7 @@ def generate_homes_from_distribution(
                     capacity_kwh=battery_capacity,
                     max_charge_kw=charge_kw if charge_kw is not None else 2.5,
                     max_discharge_kw=discharge_kw if discharge_kw is not None else 2.5,
-                    grid_charging=fleet_grid_charging,
+                    grid_charging=fleet_grid_charging or config.battery.grid_charging,
                 )
 
         # Sample load parameters
@@ -1514,11 +1767,14 @@ def generate_homes_from_distribution(
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=fleet_tariff,
-                dispatch_strategy=fleet_dispatch_strategy or "greedy",
+                dispatch_strategy=fleet_dispatch_strategy or config.dispatch_strategy or "greedy",
             )
         )
 
     return homes
+
+
+_SEG_BLOCK_KEYS: frozenset[str] = frozenset({"preset", "rate_pence_per_kwh"})
 
 
 def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
@@ -1531,11 +1787,7 @@ def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
     """
     if data is None:
         return None
-    if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"'{block_path}' must be a mapping with 'preset' or "
-            f"'rate_pence_per_kwh', got {data!r}"
-        )
+    data = _refuse_unrecognised_keys(block_path, data, _SEG_BLOCK_KEYS)
     if ("preset" in data) == ("rate_pence_per_kwh" in data):
         raise ConfigurationError(
             f"'{block_path}' must specify exactly one of 'preset' or "
@@ -1565,21 +1817,46 @@ def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
         raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
 
 
-def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConfig]:
+_FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
+    "standing_charge_pence_per_day", "vat_rate", "retail_baseline_rate_pence_per_kwh",
+    "self_consumption_override", "pv_cost_per_kwp_gbp", "roof_fit_cost_gbp",
+    "battery_cost_per_kwh_gbp", "inverter_cost_per_kw_gbp", "grant_gbp", "equity_fraction",
+    "loan_term_years", "loan_rate", "opex_per_home_per_year_gbp", "asset_life_years",
+    "own_use_rate_pence_per_kwh", "retained_cash_floor_per_home_per_year_gbp",
+    "grid_services_income_per_kw_per_year_gbp", "grid_services_model", "grid_services_events",
+})
+
+_GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
+    "band", "event_windows", "aggregator_share", "utilisation_factor",
+    "availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh",
+})
+
+_EVENT_WINDOW_KEYS: tuple[str, ...] = (
+    "months", "weekdays", "hours", "events_per_year", "event_hours",
+)
+
+
+def parse_finance_config(
+    data: Optional[dict[str, Any]], *, block_path: str = "finance"
+) -> Optional[FinanceConfig]:
     """Parse finance configuration from config data.
 
     Args:
         data: Finance configuration dictionary or None
+        block_path: The block's path in its file, named in error messages
 
     Returns:
         FinanceConfig object or None if data is None
 
     Raises:
         ConfigurationError: If any field value is out of its allowed range
-            (propagated from FinanceConfig.__post_init__)
+            (propagated from FinanceConfig.__post_init__), or if the block, its
+            grid_services_events block or an event window is not a mapping or
+            carries a key it does not read
     """
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _FINANCE_BLOCK_KEYS)
     if "standing_charge_pence_per_day" not in data:
         raise ConfigurationError(
             "finance.standing_charge_pence_per_day is required"
@@ -1592,12 +1869,8 @@ def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConf
     grid_services_events_obj: Optional[GridServicesEventsConfig] = None
     gs_events_raw = data.get("grid_services_events")
     if gs_events_raw is not None:
-        # Guard: grid_services_events must be a dict (e.g. not a bare string).
-        if not isinstance(gs_events_raw, dict):
-            raise ConfigurationError(
-                "grid_services_events must be a mapping (dict), "
-                f"got {type(gs_events_raw).__name__!r}"
-            )
+        events_path = _child_path(block_path, "grid_services_events")
+        _refuse_unrecognised_keys(events_path, gs_events_raw, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
         gs_data = gs_events_raw
         # Parse event_windows list-of-dicts -> tuple[EventWindow, ...]
         # mirroring parse_tariff_config 'custom' branch.
@@ -1608,13 +1881,10 @@ def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConf
             )
         parsed_windows: list[EventWindow] = []
         for i, ew_dict in enumerate(ew_raw_list):
-            # Guard: each event_window entry must itself be a dict.
-            if not isinstance(ew_dict, dict):
-                raise ConfigurationError(
-                    f"grid_services_events.event_windows[{i}] must be a mapping "
-                    f"(dict), got {type(ew_dict).__name__!r}"
-                )
-            for req_key in ("months", "weekdays", "hours", "events_per_year", "event_hours"):
+            _refuse_unrecognised_keys(
+                _child_path(events_path, f"event_windows[{i}]"), ew_dict, _EVENT_WINDOW_KEYS
+            )
+            for req_key in _EVENT_WINDOW_KEYS:
                 if req_key not in ew_dict:
                     raise ConfigurationError(
                         f"grid_services_events.event_windows[{i}] requires '{req_key}' field"
@@ -1703,23 +1973,29 @@ def parse_finance_config(data: Optional[dict[str, Any]]) -> Optional[FinanceConf
         ) from exc
 
 
-def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
+def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
     """Parse a scenario from config data."""
     if "name" not in data:
         raise ConfigurationError("Scenario must have a 'name' field")
     if "period" not in data:
         raise ConfigurationError(f"Scenario '{data['name']}' must have a 'period' field")
 
-    location = parse_location_block(data.get("location"))
+    location = parse_location_block(
+        data.get("location"), block_path=_child_path(block_path, "location")
+    )
 
     homes: list[HomeConfig] = []
     home: Optional[HomeConfig] = None
 
     if "homes" in data:
-        for home_data in data["homes"]:
-            homes.append(parse_home_block(home_data, location))
+        for index, home_data in enumerate(data["homes"]):
+            homes.append(
+                parse_home_block(
+                    home_data, location, block_path=_child_path(block_path, f"homes[{index}]")
+                )
+            )
     elif "home" in data:
-        home = parse_home_block(data["home"], location)
+        home = parse_home_block(data["home"], location, block_path=_child_path(block_path, "home"))
     else:
         raise ConfigurationError(
             f"Scenario '{data['name']}' must define either 'home' or 'homes'"
@@ -1729,13 +2005,21 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         name=data["name"],
         description=data.get("description", ""),
         location=location,
-        period=_parse_period(data["period"]),
+        period=_parse_period(data["period"], block_path=_child_path(block_path, "period")),
         homes=homes,
         home=home,
-        output=_parse_output_config(data.get("output")),
-        seg_tariff_pence_per_kwh=parse_seg_rate(data.get("seg")),
-        tariff_config=parse_tariff_config(data.get("tariff_config")),
-        finance=parse_finance_config(data.get("finance")),
+        output=_parse_output_config(
+            data.get("output"), block_path=_child_path(block_path, "output")
+        ),
+        seg_tariff_pence_per_kwh=parse_seg_rate(
+            data.get("seg"), block_path=_child_path(block_path, "seg")
+        ),
+        tariff_config=parse_tariff_config(
+            data.get("tariff_config"), block_path=_child_path(block_path, "tariff_config")
+        ),
+        finance=parse_finance_config(
+            data.get("finance"), block_path=_child_path(block_path, "finance")
+        ),
     )
 
 
@@ -1833,26 +2117,8 @@ def _replace_sweep_with_value(
     if not isinstance(cap_spec, ProportionalDistribution):
         return config
 
-    new_cap_spec = ProportionalDistribution(
-        source=cap_spec.source,
-        multiplier=value,
-        offset=cap_spec.offset,
-    )
-    new_battery = BatteryDistributionConfig(
-        capacity_kwh=new_cap_spec,
-        max_charge_kw=config.battery.max_charge_kw,
-        max_discharge_kw=config.battery.max_discharge_kw,
-    )
-    return FleetDistributionConfig(
-        n_homes=config.n_homes,
-        pv=config.pv,
-        load=config.load,
-        battery=new_battery,
-        heat_pump=config.heat_pump,
-        ev=config.ev,
-        seed=config.seed,
-        random_order=config.random_order,
-    )
+    swept_battery = replace(config.battery, capacity_kwh=replace(cap_spec, multiplier=value))
+    return replace(config, battery=swept_battery)
 
 
 def expand_sweep_configs(
@@ -1973,16 +2239,25 @@ def load_scenarios(path: Union[str, Path]) -> list[ScenarioConfig]:
     config = load_config(path)
 
     if "scenarios" in config:
-        return [_parse_scenario(s) for s in config["scenarios"]]
+        return [
+            _parse_scenario(scenario, block_path=f"scenarios[{index}]")
+            for index, scenario in enumerate(config["scenarios"])
+        ]
     elif "scenario" in config:
-        return [_parse_scenario(config["scenario"])]
+        return [_parse_scenario(config["scenario"], block_path="scenario")]
     else:
         # Try to parse the entire config as a single scenario
-        return [_parse_scenario(config)]
+        return [_parse_scenario(config, block_path="")]
+
+
+_FLAT_HOME_FILE_KEYS: frozenset[str] = _HOME_BLOCK_KEYS | {"location"}
 
 
 def load_home_config(path: Union[str, Path]) -> HomeConfig:
     """Load a single home configuration from file.
+
+    The file holds a ``home:`` block, or is itself a home block beside an
+    optional ``location:`` block.
 
     Args:
         path: Path to configuration file
@@ -1994,12 +2269,13 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
         ConfigurationError: If configuration is invalid
     """
     config = load_config(path)
-
-    # Check for home section or parse entire config as home
-    home_data = config.get("home", config)
     location = parse_location_block(config.get("location"))
 
-    return parse_home_block(home_data, location)
+    if "home" in config:
+        return parse_home_block(config["home"], location)
+    _refuse_unrecognised_keys("", config, _FLAT_HOME_FILE_KEYS)
+    flat_home = {key: value for key, value in config.items() if key != "location"}
+    return parse_home_block(flat_home, location, block_path="")
 
 
 def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
@@ -2025,26 +2301,10 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     # Check for fleet_distribution (new format)
     if "fleet_distribution" in config:
         dist_config = parse_fleet_distribution_config(config["fleet_distribution"])
-        # Thread scenario-level tariff and fleet battery grid_charging (Seam 1, §9.1).
+        # Thread the scenario-level tariff (Seam 1, §9.1).
         # parse_tariff_config returns None when the key is absent → calibration-safe.
         fleet_tariff = parse_tariff_config(config.get("tariff"))
-        # grid_charging lives under fleet_distribution.battery.grid_charging
-        battery_data = config["fleet_distribution"].get("battery")
-        fleet_grid_charging = (
-            _parse_grid_charge_config(battery_data.get("grid_charging"))
-            if isinstance(battery_data, dict)
-            else None
-        )
-        # dispatch_strategy lives directly under fleet_distribution (raw-dict read,
-        # mirroring the fleet_grid_charging seam above — not added to FleetDistributionConfig).
-        fleet_dispatch_strategy = config["fleet_distribution"].get("dispatch_strategy")
-        if fleet_dispatch_strategy and fleet_dispatch_strategy not in _VALID_DISPATCH_STRATEGIES:
-            raise ConfigurationError(
-                f"Invalid fleet_distribution.dispatch_strategy "
-                f"{fleet_dispatch_strategy!r}; valid values: "
-                f"{sorted(_VALID_DISPATCH_STRATEGIES)}"
-            )
-        if fleet_dispatch_strategy == "tou_optimized" and fleet_tariff is None:
+        if dist_config.dispatch_strategy == "tou_optimized" and fleet_tariff is None:
             warnings.warn(
                 "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff "
                 "is configured; homes will fall back to self-consumption dispatch at "
@@ -2053,19 +2313,16 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
                 UserWarning,
                 stacklevel=2,
             )
-        homes = generate_homes_from_distribution(
-            dist_config,
-            location,
-            fleet_tariff=fleet_tariff,
-            fleet_grid_charging=fleet_grid_charging,
-            fleet_dispatch_strategy=fleet_dispatch_strategy,
-        )
+        homes = generate_homes_from_distribution(dist_config, location, fleet_tariff=fleet_tariff)
     elif "homes" in config:
         # Explicit homes list (original format)
         homes_data = config["homes"]
         if not homes_data:
             raise ConfigurationError("Fleet 'homes' list cannot be empty")
-        homes = [parse_home_block(h, location) for h in homes_data]
+        homes = [
+            parse_home_block(home_data, location, block_path=f"homes[{index}]")
+            for index, home_data in enumerate(homes_data)
+        ]
     else:
         raise ConfigurationError(
             "Fleet configuration requires either 'homes' list or 'fleet_distribution'"
@@ -2284,8 +2541,13 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
 # ---------------------------------------------------------------------------
 
 
+_COMMUNITY_BILLING_BLOCK_KEYS: frozenset[str] = frozenset({
+    "tariff", "seg_rate_pence_per_kwh", "seg",
+})
+
+
 def _parse_community_billing_config(
-    data: Optional[dict[str, Any]]
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[CommunityBillingConfig]:
     """Parse a ``billing:`` sub-block into a :class:`CommunityBillingConfig`.
 
@@ -2300,25 +2562,28 @@ def _parse_community_billing_config(
 
     Args:
         data: Billing configuration dictionary, or None.
+        block_path: The block's path in its file, named in error messages.
 
     Returns:
         ``CommunityBillingConfig`` when *data* is a dict; ``None`` otherwise.
 
     Raises:
-        ConfigurationError: For an ambiguous SEG specification, a malformed ``seg``
+        ConfigurationError: For a block that is not a mapping or carries a key it
+            does not read, an ambiguous SEG specification, a malformed ``seg``
             block or an invalid ``seg_rate_pence_per_kwh``.
     """
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _COMMUNITY_BILLING_BLOCK_KEYS)
 
-    tariff = parse_tariff_config(data.get("tariff"))
+    tariff = parse_tariff_config(data.get("tariff"), block_path=_child_path(block_path, "tariff"))
 
     # Resolve SEG rate (three mutually-exclusive forms)
     direct_rate: Optional[float] = None
     if "seg_rate_pence_per_kwh" in data:
         direct_rate = _parse_seg_rate_scalar(
             data["seg_rate_pence_per_kwh"],
-            key_path="community.billing.seg_rate_pence_per_kwh",
+            key_path=_child_path(block_path, "seg_rate_pence_per_kwh"),
         )
 
     seg_block = data.get("seg")
@@ -2332,7 +2597,7 @@ def _parse_community_billing_config(
     seg_rate = (
         direct_rate
         if direct_rate is not None
-        else parse_seg_rate(seg_block, block_path="community.billing.seg")
+        else parse_seg_rate(seg_block, block_path=_child_path(block_path, "seg"))
     )
 
     # Normalise an all-None result to None so callers can reliably test ``is None``
@@ -2343,23 +2608,31 @@ def _parse_community_billing_config(
     return CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
 
 
+_COMMUNITY_BLOCK_KEYS: frozenset[str] = frozenset({
+    "sharing_mode", "community_battery", "billing",
+})
+
+
 def _parse_community_config(
-    data: Optional[dict[str, Any]]
+    data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[CommunityConfig]:
     """Parse a ``community:`` YAML block into a :class:`CommunityConfig`.
 
     Args:
         data: Community configuration dictionary, or None.
+        block_path: The block's path in its file, named in error messages.
 
     Returns:
         ``CommunityConfig`` when *data* is a dict; ``None`` when *data* is ``None``.
 
     Raises:
-        ConfigurationError: For missing/invalid ``sharing_mode``, p2p+battery,
+        ConfigurationError: For a block that is not a mapping or carries a key it
+            does not read, missing/invalid ``sharing_mode``, p2p+battery,
             community_battery-without-battery, or any nested config error.
     """
     if data is None:
         return None
+    _refuse_unrecognised_keys(block_path, data, _COMMUNITY_BLOCK_KEYS)
 
     sharing_mode = data.get("sharing_mode")
     if not sharing_mode:
@@ -2368,8 +2641,12 @@ def _parse_community_config(
             "('p2p' or 'community_battery')"
         )
 
-    community_battery = _parse_battery_config(data.get("community_battery"))
-    billing = _parse_community_billing_config(data.get("billing"))
+    community_battery = _parse_battery_config(
+        data.get("community_battery"), block_path=_child_path(block_path, "community_battery")
+    )
+    billing = _parse_community_billing_config(
+        data.get("billing"), block_path=_child_path(block_path, "billing")
+    )
 
     try:
         return CommunityConfig(
@@ -2404,4 +2681,4 @@ def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
     # .get("community") works cleanly and returns None rather than raising
     # AttributeError.
     data: dict[str, Any] = raw if isinstance(raw, dict) else {}
-    return _parse_community_config(data.get("community"))
+    return _parse_community_config(data.get("community"), block_path="community")
