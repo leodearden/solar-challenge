@@ -32,21 +32,33 @@ A custom property counts as read only through a ``var()`` in some source: a
 script's ``getPropertyValue()`` read is not counted, and a ``var()`` inside a
 comment is.
 
-A class declares a property only in a lone-class rule, one with that class alone as
-an entry of its selector list, at any @media depth, and only without ``!important``.
-An element sets a property inline only through its static ``style`` attribute. On both
-sides a property name is read lower-cased, as CSS matches it case-insensitively, but a
-custom property's name is read as written, as CSS matches it case-sensitively. Five
-gaps are known, and each makes a check miss an override, never report a false one:
-pseudo-class, compound and descendant selectors (so ``hover:``, ``dark:`` and the
-other variant utilities); classes a Jinja expression writes into the element's
-attributes, such as a macro's ``classes`` argument; Alpine ``:style`` bindings;
-style writes from scripts; and a shorthand set against its longhands, such as an
-inline ``margin`` against a class's ``margin-top``.
+A class declares a property only in a lone-class rule: one with that class alone as an
+entry of its selector list and no rule nested in it, inside nothing but @media,
+@supports and @layer blocks, at any depth, and only without ``!important``. Those three
+at-rules limit when a rule applies, never which elements it reaches: the code calls them
+document-wide. An element sets a property inline only through its static ``style``
+attribute. On both sides a property name is read lower-cased, as CSS matches it
+case-insensitively, but a custom property's name is read as written, as CSS matches it
+case-sensitively.
+
+Six gaps are known, and each makes a check miss an override, never report a false one:
+
+- pseudo-class, compound and descendant selectors (so ``hover:``, ``dark:`` and the
+  other variant utilities);
+- nested and scoped rules: a rule nested in a style rule, which native CSS nesting makes
+  relative to its parent, or inside an at-rule other than those three, such as @container
+  or @scope, which limit it to some elements of its class; and the style rule that nests
+  another, skipped whole with its own declarations;
+- classes a Jinja expression writes into the element's attributes, such as a macro's
+  ``classes`` argument;
+- Alpine ``:style`` bindings;
+- style writes from scripts;
+- a shorthand set against its longhands, such as an inline ``margin`` against a class's
+  ``margin-top``.
 """
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
@@ -85,7 +97,9 @@ _CLASS_SELECTOR = re.compile(
 _CUSTOM_PROPERTY_DECLARATION = re.compile(r"(?<![\w-])(--[\w-]+)\s*:")
 _CUSTOM_PROPERTY_REFERENCE = re.compile(r"\bvar\(\s*(--[\w-]+)")
 _KEYFRAMES_RULE = re.compile(r"@(?:-[a-zA-Z]+-)?keyframes\s+([\w-]+)")
-_CSS_RULE = re.compile(r"(?P<selectors>[^{};]*)\{(?P<declarations>[^{}]*)\}")
+_BLOCK_BOUNDARY = re.compile(r"[{};]")
+_AT_KEYWORD = re.compile(r"\s*@([\w-]+)")
+_DOCUMENT_WIDE_AT_RULES = frozenset({"media", "supports", "layer"})
 _IMPORTANT = re.compile(r"!\s*important", re.IGNORECASE)
 
 
@@ -120,6 +134,10 @@ def selector_classes(stylesheet: str) -> set[str]:
     in them (a URL, a file name, an attribute value) is never read as a class; neither
     is a number such as ``.5rem`` in an at-rule prelude, because an identifier cannot
     start with a digit.
+
+    Every selector counts wherever it sits, inside nested rules and any at-rule included,
+    so unlike declared_properties_by_class this needs no rule structure: blanking the
+    innermost blocks leaves them all.
     """
     selectors_and_preludes = _INNERMOST_BLOCK.sub(" ", _literal_free(stylesheet))
     return {
@@ -149,11 +167,11 @@ def declared_properties_by_class(stylesheet: str) -> dict[str, set[str]]:
     r"""The properties the lone-class rules of *stylesheet* declare without ``!important``, keyed
     by decoded class name, so the rules of ``.md\:flex`` key ``md:flex``."""
     declared: dict[str, set[str]] = {}
-    for rule in _CSS_RULE.finditer(_literal_free(stylesheet)):
+    for selectors, declarations in _document_wide_rules(_literal_free(stylesheet)):
         properties = {
-            name for name, value in _declarations(rule["declarations"]) if not _IMPORTANT.search(value)
+            name for name, value in _declarations(declarations) if not _IMPORTANT.search(value)
         }
-        for class_name in _lone_classes(rule["selectors"]):
+        for class_name in _lone_classes(selectors):
             declared.setdefault(class_name, set()).update(properties)
     return declared
 
@@ -324,6 +342,44 @@ def _is_static_url_for(call: nodes.Call) -> bool:
         and len(call.args) > 0
         and _string_value(call.args[0]) == "static"
     )
+
+
+def _document_wide_rules(css: str) -> Iterator[tuple[str, str]]:
+    """(selectors, declarations) for each rule of *css* that nests no rule and sits inside
+    nothing but document-wide at-rules."""
+    for prelude, contents in _top_level_blocks(css):
+        if _is_document_wide(prelude):
+            yield from _document_wide_rules(contents)
+        elif "{" not in contents:
+            yield prelude, contents
+
+
+def _is_document_wide(prelude: str) -> bool:
+    """True when *prelude* opens a document-wide at-rule block; at-keywords are ASCII
+    case-insensitive."""
+    at_keyword = _AT_KEYWORD.match(prelude)
+    return at_keyword is not None and at_keyword[1].lower() in _DOCUMENT_WIDE_AT_RULES
+
+
+def _top_level_blocks(css: str) -> list[tuple[str, str]]:
+    """(prelude, contents) for each block at the top level of *css*. A prelude runs from the
+    previous top-level ``;`` or ``}`` to the block's ``{``; a stray top-level ``}`` ends a
+    statement as ``;`` does, and an unclosed trailing block is dropped."""
+    blocks: list[tuple[str, str]] = []
+    depth = statement_start = opening_brace = 0
+    for boundary in _BLOCK_BOUNDARY.finditer(css):
+        if boundary[0] == "{":
+            depth += 1
+            if depth == 1:
+                opening_brace = boundary.start()
+        elif boundary[0] == "}" and depth > 0:
+            depth -= 1
+            if depth == 0:
+                blocks.append((css[statement_start:opening_brace], css[opening_brace + 1 : boundary.start()]))
+                statement_start = boundary.end()
+        elif depth == 0:
+            statement_start = boundary.end()
+    return blocks
 
 
 def _lone_classes(selector_list: str) -> list[str]:

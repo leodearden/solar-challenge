@@ -234,22 +234,49 @@ def test_declared_properties_by_class_read_lone_class_rules_at_any_media_depth_b
     }
 
 
-def test_declared_properties_by_class_tolerate_spacing_an_import_statement_and_a_spaced_upper_case_important() -> None:
+def test_declared_properties_by_class_read_rules_inside_media_supports_and_layer_blocks_only() -> None:
+    """md:grid sits two at-rules deep and btn sits in a @layer block, so both count. Under native
+    CSS nesting, card-title reads ``.card .card-title``, a descendant selector, and @scope and
+    @container limit scoped-only and contained-only to some elements of their class. So none of
+    those three declares anything, and neither does card, because it nests a rule."""
+    stylesheet = (
+        r".card{color:red;.card-title{min-height:0}}"
+        r"@scope (.panel){.scoped-only{padding:0}}"
+        r"@container (min-width:20rem){.contained-only{display:flex}}"
+        r"@supports (display:grid){@media (min-width:40rem){.md\:grid{display:grid}}}"
+        r"@layer components{.btn{cursor:pointer}}"
+    )
+
+    assert declared_properties_by_class(stylesheet) == {
+        "md:grid": {"display"},
+        "btn": {"cursor"},
+    }
+
+
+def test_declared_properties_by_class_tolerate_spacing_an_import_statement_a_stray_brace_an_upper_case_at_rule_and_a_spaced_upper_case_important() -> None:
     """Each tolerance has a class of its own: an @import statement just before a rule (sr-only),
-    whitespace before a brace (scrollbar-hide) and around a comma (inset-x-0, inset-y-0). The
-    spaced, upper-case ``! IMPORTANT`` still marks left as important."""
+    an upper-case at-keyword with no whitespace before it (grid-flow-dense), whitespace before a
+    brace (scrollbar-hide) and around a comma (inset-x-0, inset-y-0), whitespace before a
+    lower-case at-keyword (print:hidden), and a stray closing brace just before a rule
+    (after-stray-brace). The spaced, upper-case ``! IMPORTANT`` still marks left as important."""
     stylesheet = (
         r'@import url("vendor/reset.css");'
         r".sr-only{position:absolute}"
+        r"@SUPPORTS (display:grid){.grid-flow-dense{grid-auto-flow:dense}}"
         ".scrollbar-hide {\n    scrollbar-width: none;\n}\n"
         ".inset-x-0 , .inset-y-0 {\n    left: 0 ! IMPORTANT;\n    top: 0;\n}\n"
+        "@media print {\n    .print\\:hidden { display: none; }\n}\n"
+        r"}.after-stray-brace{bottom:0}"
     )
 
     assert declared_properties_by_class(stylesheet) == {
         "sr-only": {"position"},
+        "grid-flow-dense": {"grid-auto-flow"},
         "scrollbar-hide": {"scrollbar-width"},
         "inset-x-0": {"top"},
         "inset-y-0": {"top"},
+        "print:hidden": {"display"},
+        "after-stray-brace": {"bottom"},
     }
 
 
