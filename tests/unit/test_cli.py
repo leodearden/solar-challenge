@@ -153,30 +153,32 @@ class TestValidateCLI:
         assert result.exit_code == 0
 
 
-def _write_results_csv(path: Path, generation_column: str = "generation_kw") -> Path:
-    """Write a synthetic 7-day, 1-minute results CSV: a 4 kW daytime sinusoid and flat demand."""
+def _valid_results_frame() -> pd.DataFrame:
+    """A valid 7-day, 1-minute results frame: a 3.5 kW daytime sinusoid and flat demand."""
     index = pd.date_range(
         "2024-06-01", periods=7 * 24 * 60, freq="1min", tz="Europe/London"
     )
     hours = index.hour + index.minute / 60.0
     daylight = (hours >= 6) & (hours < 21)
     sine = np.sin(np.pi * (hours - 6) / 15)
-    generation = np.where(daylight, 4.0 * sine, 0.0).clip(min=0.0)
-    df = pd.DataFrame(
-        {generation_column: generation, "demand_kw": 0.4}, index=index
-    )
-    df.to_csv(path)
-    return path
+    generation = np.where(daylight, 3.5 * sine, 0.0)
+    return pd.DataFrame({"generation_kw": generation, "demand_kw": 0.4}, index=index)
 
 
 class TestValidateResultsCommand:
     """Functional tests for `validate results` running a CSV through the command."""
 
-    def test_valid_csv_passes_all_checks(self, tmp_path: Path) -> None:
-        csv_file = _write_results_csv(tmp_path / "results.csv")
+    def _validate_results(
+        self, tmp_path: Path, frame: pd.DataFrame, *options: str
+    ) -> Result:
+        """Write *frame* as the results CSV and run `validate results` on it with *options*."""
+        csv_file = tmp_path / "results.csv"
+        frame.to_csv(csv_file)
+        return runner.invoke(app, ["validate", "results", str(csv_file), *options])
 
-        result = runner.invoke(
-            app, ["validate", "results", str(csv_file), "--pv-kw", "4.0"]
+    def test_valid_csv_passes_all_checks(self, tmp_path: Path) -> None:
+        result = self._validate_results(
+            tmp_path, _valid_results_frame(), "--pv-kw", "4.0"
         )
 
         assert result.exit_code == 0, result.output
@@ -184,19 +186,17 @@ class TestValidateResultsCommand:
         assert "All 6 checks passed" in " ".join(result.output.split())
 
     def test_zero_pv_capacity_is_refused(self, tmp_path: Path) -> None:
-        csv_file = _write_results_csv(tmp_path / "results.csv")
-
-        result = runner.invoke(
-            app, ["validate", "results", str(csv_file), "--pv-kw", "0"]
+        result = self._validate_results(
+            tmp_path, _valid_results_frame(), "--pv-kw", "0"
         )
 
         assert result.exit_code == 1
         assert "Capacity must be positive" in " ".join(result.output.split())
 
     def test_csv_without_generation_column_is_refused(self, tmp_path: Path) -> None:
-        csv_file = _write_results_csv(tmp_path / "results.csv", generation_column="output_kw")
+        frame = _valid_results_frame().rename(columns={"generation_kw": "output_kw"})
 
-        result = runner.invoke(app, ["validate", "results", str(csv_file)])
+        result = self._validate_results(tmp_path, frame)
 
         assert result.exit_code == 1
         assert "CSV must contain a 'generation' column" in " ".join(
