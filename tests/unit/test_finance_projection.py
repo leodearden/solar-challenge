@@ -939,51 +939,38 @@ class TestProjectMultiYearRevenue:
             f"grid_services ({expected_gs:.4f} = {grid_services_rate} × {total_discharge_kw} kW)"
         )
 
-    def test_self_consumption_override_does_not_change_own_use_revenue(self) -> None:
-        """CBS own_use_revenue is override-invariant: own_use_rate × fleet_sc / 100 uses
-        physics fleet_sc regardless of self_consumption_override.
+    def test_self_consumption_override_drives_own_use_revenue(self) -> None:
+        """With the override set, own-use revenue bills the own-use householder_bill charges.
 
-        Updated for CR2: the OLD formula (retail_rate × sc_saving_kwh) DID change with the
-        override (different sc_kwh). The NEW formula (own_use_rate × PHYSICS fleet_sc) does
-        NOT change because fleet_sc comes from the simulation results, not the override.
-        This RED-fails against the old implementation which used self_consumption_saving_gbp.
+        One home: 5,000 kWh generation, 4,500 kWh demand and 4,000 kWh basis-C own-use.
+        The physics curve bills basis C at 15 p; the 0.50 override bills
+        min(0.50 × 5,000, 4,500) = 2,500 kWh, where the cap does not bind.  SEG adds £0
+        on both paths: the builder's exports earn £0, so the effective export rate is 0 p.
         """
-        from solar_challenge.finance import householder_bill, project_multi_year  # type: ignore[attr-defined]
-        from solar_challenge.home import calculate_summary
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        n_homes = 1
-        sc, exp, imp = 4000.0, 1000.0, 500.0
-        fr = _make_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
+        fr = _make_fleet_results(n_homes=1, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
 
-        # Physics path (no override)
-        scenario_phys, finance_phys = self._make_revenue_scenario(
-            n_homes=n_homes,
-            self_consumption_override=None,
-        )
-        curve_phys = project_multi_year(scenario_phys, finance_phys, simulate=lambda fc, s, e: fr)
+        def year_0(self_consumption_override: Optional[float]) -> "YearPoint":  # type: ignore[name-defined]
+            scenario, finance = self._make_revenue_scenario(
+                n_homes=1, self_consumption_override=self_consumption_override
+            )
+            return project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr).points[0]
 
-        # Spreadsheet path (with override — different SC fraction)
-        scenario_over, finance_over = self._make_revenue_scenario(
-            n_homes=n_homes,
-            self_consumption_override=0.50,  # 50% of gen, changes SC calc in householder_bill
-        )
-        curve_over = project_multi_year(scenario_over, finance_over, simulate=lambda fc, s, e: fr)
+        physics = year_0(self_consumption_override=None)
+        override = year_0(self_consumption_override=0.50)
 
-        # Under the NEW CBS formula: own_use_revenue = own_use_rate × PHYSICS fleet_sc / 100.
-        # Physics fleet_sc is the same in both paths (from the injected SimulationResults),
-        # so own_use_revenue is identical. With zero export_revenue in the mock SimulationResults,
-        # seg_revenue is also zero. Hence both paths produce the SAME fleet_revenue_gbp.
-        # (This would FAIL under the OLD formula where self_consumption_saving changed with override.)
-        assert curve_phys.points[0].fleet_revenue_gbp == pytest.approx(
-            curve_over.points[0].fleet_revenue_gbp, rel=1e-4
-        )
+        assert physics.fleet_self_consumption_kwh == pytest.approx(4000.0)
+        assert physics.fleet_revenue_gbp == pytest.approx(600.0)
+        assert override.fleet_self_consumption_kwh == pytest.approx(2500.0)
+        assert override.fleet_revenue_gbp == pytest.approx(375.0)
 
-    def test_override_seg_counts_generation_above_demand_as_export(self) -> None:
+    def test_override_bills_own_use_up_to_demand_and_exports_the_rest(self) -> None:
         """Override 0.90 implies 3,600 kWh of own-use per home against a 2,800 kWh demand.
 
-        Capped at demand, each home exports 4,000 − 2,800 = 1,200 kWh, paid at its
-        physics export rate (£72 / 2,400 kWh = 3 p).  Own-use revenue stays basis C:
-        1,600 kWh at 15 p (test_self_consumption_override_does_not_change_own_use_revenue).
+        Own-use is capped at demand, so each home is billed 2,800 kWh of own-use at 15 p,
+        and the rest of its 4,000 kWh generation, 1,200 kWh, is exported at its physics
+        export rate (£72 / 2,400 kWh = 3 p).  Both are priced.
         """
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
         from solar_challenge.fleet import FleetResults
@@ -1002,10 +989,11 @@ class TestProjectMultiYearRevenue:
             n_homes=n_homes, self_consumption_override=0.90
         )
 
-        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet)
+        year_0 = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet).points[0]
 
-        assert curve.points[0].fleet_revenue_gbp == pytest.approx(
-            n_homes * (15.0 * 1600.0 / 100.0 + 1200.0 * 3.0 / 100.0)
+        assert year_0.fleet_self_consumption_kwh == pytest.approx(n_homes * 2800.0)
+        assert year_0.fleet_revenue_gbp == pytest.approx(
+            n_homes * (15.0 * 2800.0 / 100.0 + 1200.0 * 3.0 / 100.0)
         )
 
     def test_fleet_revenue_non_negative(self) -> None:
