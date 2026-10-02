@@ -1,9 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for parameter sweeps: the values a ParameterSweepConfig yields and the scenarios run_parameter_sweep simulates."""
 
-from collections.abc import Iterator
 from dataclasses import replace
-from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -19,7 +17,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.weather import WeatherCache, set_weather_cache
+from solar_challenge.weather import WeatherCache
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -98,13 +96,9 @@ class TestPVParameterSweepPreservesDegradation:
     _LOAD = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
 
     @pytest.fixture
-    def synthetic_tmy(self, tmp_path: Path) -> Iterator[None]:
+    def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
         """Serve a clear June day as Bristol's TMY, so the sweep and the reference simulation need no PVGIS call."""
-        cache = WeatherCache(cache_dir=tmp_path / "weather")
-        cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
-        set_weather_cache(cache)
-        yield
-        set_weather_cache(None)
+        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
 
     @pytest.mark.usefixtures("synthetic_tmy")
     @pytest.mark.parametrize(

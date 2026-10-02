@@ -17,6 +17,7 @@ ROOT_CONFTEST = Path(__file__).parents[1] / "conftest.py"
 SCENARIOS = """
     import pytest
 
+    from solar_challenge.web.jobs import JobManager
     from solar_challenge.web.shared import get_job_manager
 
     from tests._web_app import build_test_app
@@ -26,9 +27,14 @@ SCENARIOS = """
     apps_built_inside_earlier_tests = []
 
 
+    def no_simulation(config, start_date, end_date):
+        raise RuntimeError("the drain-scope scenarios run no simulation")
+
+
     @pytest.fixture(scope="module")
     def module_app(tmp_path_factory):
         app = build_test_app(tmp_path_factory.mktemp("module_app"))
+        app.extensions["job_manager"] = JobManager(simulate_home=no_simulation)
         yield app
         with app.app_context():
             get_job_manager().shutdown(wait=True)
@@ -57,13 +63,10 @@ SCENARIOS = """
 def test_the_per_test_drain_stops_only_the_managers_a_test_created(
     pytester: pytest.Pytester,
     monkeypatch: pytest.MonkeyPatch,
-    request: pytest.FixtureRequest,
     project_root: Path,
 ) -> None:
     pytester.makeconftest(ROOT_CONFTEST.read_text(encoding="utf-8"))
     scenarios = pytester.makepyfile(SCENARIOS)
-    # The scenarios' job reads the weather cache relative to cwd, so run where the suite runs.
-    monkeypatch.chdir(request.config.invocation_params.dir)
     # The scenarios build their apps with tests/_web_app.py, whatever directory the suite runs from.
     monkeypatch.setenv("PYTHONPATH", str(project_root), prepend=os.pathsep)
 

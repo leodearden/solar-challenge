@@ -1,13 +1,16 @@
 """Pytest configuration and shared fixtures."""
 
 import sys
+import tempfile
 import weakref
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
 from typing import Any
 
 import pytest
 from pathlib import Path
 
+from solar_challenge.weather import WeatherCache, set_weather_cache
+from tests._network_guard import refusing_network
 from tests._uv_env import isolated_uv_env
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs it by explicit path.
@@ -50,6 +53,46 @@ def uv_probe_environment(tmp_path: Path) -> dict[str, str]:
     return isolated_uv_env(tmp_path / "venv")
 
 
+@pytest.fixture(scope="session")
+def _weather_cache_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("weather-caches")
+
+
+@pytest.fixture
+def weather_cache(_weather_cache_root: Path) -> Iterator[WeatherCache]:
+    """An empty weather cache of the test's own, installed as the one get_tmy_data reads; seed a TMY with its put()."""
+    cache = WeatherCache(cache_dir=Path(tempfile.mkdtemp(dir=_weather_cache_root)))
+    set_weather_cache(cache)
+    yield cache
+    set_weather_cache(None)
+
+
+_MARKS_OF_TESTS_ALLOWED_ONLINE = ("slow", "e2e")
+
+
+@pytest.fixture(autouse=True)
+def _run_offline_unless_slow_or_e2e(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Run each test not marked slow or e2e offline, and fail it at teardown if it reached the network.
+
+    Such a test neither reads nor writes the working directory's .cache/weather,
+    since get_tmy_data reads the test's own empty weather_cache, and every name
+    lookup or connection it makes off this machine, from any thread, is refused.
+    """
+    if any(request.node.get_closest_marker(mark) for mark in _MARKS_OF_TESTS_ALLOWED_ONLINE):
+        yield
+        return
+    request.getfixturevalue("weather_cache")
+    with refusing_network() as refused:
+        yield
+    if refused:
+        pytest.fail(
+            f"{request.node.nodeid} reached the network ({', '.join(dict.fromkeys(refused))}); "
+            "a test not marked slow or e2e runs offline: pass weather_data, seed the weather_cache fixture, "
+            "or mark it slow if it needs a live service",
+            pytrace=False,
+        )
+
+
 def _live_job_managers() -> frozenset[Any]:
     jobs_mod: Any = sys.modules.get("solar_challenge.web.jobs")
     if jobs_mod is None:
@@ -58,10 +101,12 @@ def _live_job_managers() -> frozenset[Any]:
 
 
 @pytest.fixture(autouse=True)
-def _shutdown_job_managers() -> Generator[None, None, None]:
+def _shutdown_job_managers(_run_offline_unless_slow_or_e2e: None) -> Generator[None, None, None]:
     """At teardown, shut down the JobManagers created during the test, waiting for their in-flight simulations.
 
-    Abandoned workers would otherwise hold up interpreter exit.
+    Abandoned workers would otherwise hold up interpreter exit. It requests the
+    offline guard, so the jobs it waits for still run offline and finish before
+    the guard checks what the test reached.
 
     Autouse fixtures are set up after every broader-scoped fixture and before
     the other fixtures of their own scope. So a manager owned by a
