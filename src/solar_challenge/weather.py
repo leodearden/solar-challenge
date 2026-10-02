@@ -15,6 +15,12 @@ from solar_challenge.location import Location
 # Default cache directory
 DEFAULT_CACHE_DIR = Path(".cache/weather")
 
+IRRADIANCE_COLUMNS = ("ghi", "dni", "dhi")
+"""The TMY's irradiance columns, in W/m²: global horizontal, direct normal and diffuse horizontal."""
+
+TMY_HOURS = 8760
+"""The rows of PVGIS's TMY as pvlib returns it: one hourly year, coerced to the non-leap 1990."""
+
 
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
@@ -180,6 +186,22 @@ def set_weather_cache(cache: Optional[WeatherCache]) -> None:
     """Set the global weather cache (for testing)."""
     global _weather_cache
     _weather_cache = cache
+
+
+def scale_tmy_to_annual_ghi(tmy: pd.DataFrame, annual_ghi_kwh_per_m2: float) -> pd.DataFrame:
+    """A copy of tmy whose ghi, dni and dhi are multiplied by one factor, so its GHI sums to annual_ghi_kwh_per_m2.
+
+    tmy must be one TMY year of TMY_HOURS hourly rows with some GHI, and the target positive; else ValueError.
+    """
+    if len(tmy) != TMY_HOURS:
+        raise ValueError(f"the TMY must be one year of {TMY_HOURS} hourly rows, got {len(tmy)}")
+    if annual_ghi_kwh_per_m2 <= 0:
+        raise ValueError(f"annual_ghi_kwh_per_m2 must be positive, got {annual_ghi_kwh_per_m2}")
+    tmy_annual_ghi_kwh_per_m2 = tmy["ghi"].sum() / 1000.0
+    if tmy_annual_ghi_kwh_per_m2 <= 0:
+        raise ValueError(f"the TMY's annual ghi total must be positive, got {tmy_annual_ghi_kwh_per_m2} kWh/m²")
+    factor = annual_ghi_kwh_per_m2 / tmy_annual_ghi_kwh_per_m2
+    return tmy.assign(**{column: tmy[column] * factor for column in IRRADIANCE_COLUMNS})
 
 
 def get_tmy_data(
