@@ -209,8 +209,9 @@ def generate_heat_pump_load(
             Only its values are read.
 
     Returns:
-        Series of electrical power demand in kW, with same index as temperature_c.
-        Values are non-negative and capped at thermal_capacity_kw / COP.
+        Series of electrical power demand in kW, named heat_pump_load_kw, with
+        same index as temperature_c. Values are non-negative and capped at
+        thermal_capacity_kw / COP.
 
     Raises:
         ValueError: If temperature_c doesn't have a DatetimeIndex
@@ -247,20 +248,20 @@ def generate_heat_pump_load(
 
     annual_degree_minutes = calculate_heating_degree_minutes(annual_temperature_c).sum()
     if annual_degree_minutes == 0:
-        return pd.Series(0.0, index=temperature_c.index)
+        electrical_load_kw = pd.Series(0.0, index=temperature_c.index)
+    else:
+        heat_kw_per_degree_minute = config.annual_heat_demand_kwh * 60.0 / annual_degree_minutes
+        thermal_demand_kw = (
+            calculate_heating_degree_minutes(temperature_c) * heat_kw_per_degree_minute
+        ).clip(upper=config.thermal_capacity_kw)
 
-    heat_kw_per_degree_minute = config.annual_heat_demand_kwh * 60.0 / annual_degree_minutes
-    thermal_demand_kw = (
-        calculate_heating_degree_minutes(temperature_c) * heat_kw_per_degree_minute
-    ).clip(upper=config.thermal_capacity_kw)
+        # Calculate COP for each timestep
+        cop_series = temperature_c.apply(
+            lambda temp: calculate_cop(config.heat_pump_type, temp)
+        )
 
-    # Calculate COP for each timestep
-    cop_series = temperature_c.apply(
-        lambda temp: calculate_cop(config.heat_pump_type, temp)
-    )
+        # Calculate electrical load (thermal output / COP)
+        # Avoid division by zero (though COP should never be zero with our bounds)
+        electrical_load_kw = thermal_demand_kw / cop_series
 
-    # Calculate electrical load (thermal output / COP)
-    # Avoid division by zero (though COP should never be zero with our bounds)
-    electrical_load_kw = thermal_demand_kw / cop_series
-
-    return electrical_load_kw
+    return electrical_load_kw.rename("heat_pump_load_kw")
