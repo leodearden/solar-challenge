@@ -1018,6 +1018,116 @@ class TestCycleFadeEngagement:
 
 
 # ---------------------------------------------------------------------------
+# Battery SOH counts the throughput up to each sampled age
+# ---------------------------------------------------------------------------
+
+_ANNUAL_DISCHARGE_KWH = 800.0
+
+
+def _make_battery_ageing_simulate(
+    discharge_kwh: "Callable[[HomeConfig], float]",  # type: ignore[name-defined]
+) -> "Callable":  # type: ignore[name-defined]
+    """A simulate whose own-use decays with PV age and whose battery discharges discharge_kwh(home) a year.
+
+    ``home`` is the aged HomeConfig the projection simulates, so a profile can
+    read its PV age or its injected battery SOH.  Basis-C own-use
+    (demand − import) is 3000 kWh × exp(−0.1 × PV age) whatever the discharge,
+    so the ages bisection samples depend on PV age alone.
+    """
+    import math
+
+    def _simulate(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        from solar_challenge.fleet import FleetResults
+
+        per_home = []
+        for home in fc.homes:
+            pv_decay = math.exp(-0.1 * home.pv_config.system_age_years)
+            discharge = discharge_kwh(home)
+            per_home.append(
+                _make_sim_results(
+                    self_kwh=3000.0 * pv_decay + discharge,
+                    export_kwh=1000.0 * pv_decay,
+                    import_kwh=500.0,
+                    discharge_kwh=discharge,
+                )
+            )
+        return FleetResults(per_home_results=per_home, home_configs=list(fc.homes))
+
+    return _simulate
+
+
+class TestBatterySohCountsThroughputToEachAge:
+    """Each sampled age's battery SOH counts the battery throughput from installation to that age.
+
+    Seed and bisection-trial ages alike, so battery_soh never rises year on
+    year.  The battery fades 0.005/yr by calendar and 0.0002 per equivalent
+    full cycle.
+    """
+
+    _ERROR_TARGET_PCT = 0.1  # tight enough that bisection samples ages between the seeds
+
+    def test_constant_discharge_soh_counts_discharge_times_years(self) -> None:
+        """With a constant annual discharge D, year y's battery SOH is compute_soh(y, D × y)."""
+        from solar_challenge.battery import compute_soh
+        from solar_challenge.finance import project_multi_year
+
+        scenario, finance, battery, _ = _make_battery_scenario(cycle_fade=0.0002, calendar_fade=0.005)
+        usable_kwh = battery.capacity_kwh * (battery.max_soc_fraction - battery.min_soc_fraction)
+
+        curve = project_multi_year(
+            scenario,
+            finance,
+            error_target_pct=self._ERROR_TARGET_PCT,
+            simulate=_make_battery_ageing_simulate(lambda home: _ANNUAL_DISCHARGE_KWH),
+        )
+
+        assert len(curve.sampled_ages) > 3, "premise: bisection sampled ages between the three seeds"
+        assert curve.points[-1].battery_soh > battery.soh_floor, "premise: the SOH floor clamps no year"
+        for point in curve.points:
+            expected_soh = compute_soh(
+                float(point.year), _ANNUAL_DISCHARGE_KWH * point.year, usable_kwh, battery
+            )
+            assert point.battery_soh == pytest.approx(expected_soh, abs=1e-12), f"year {point.year}"
+
+    @pytest.mark.parametrize(
+        "discharge_kwh",
+        [
+            pytest.param(
+                lambda home: _ANNUAL_DISCHARGE_KWH * home.battery_config.soh,
+                id="discharge-falls-with-soh",
+            ),
+            pytest.param(
+                lambda home: _ANNUAL_DISCHARGE_KWH * (1.0 + 0.5 * home.pv_config.system_age_years),
+                id="discharge-rises-with-age",
+            ),
+        ],
+    )
+    def test_battery_soh_never_rises(
+        self,
+        discharge_kwh: "Callable[[HomeConfig], float]",  # type: ignore[name-defined]
+    ) -> None:
+        """battery_soh is non-increasing year on year, whether discharge falls or rises with age."""
+        from solar_challenge.finance import project_multi_year
+
+        scenario, finance, _, _ = _make_battery_scenario(cycle_fade=0.0002, calendar_fade=0.005)
+
+        curve = project_multi_year(
+            scenario,
+            finance,
+            error_target_pct=self._ERROR_TARGET_PCT,
+            simulate=_make_battery_ageing_simulate(discharge_kwh),
+        )
+
+        assert len(curve.sampled_ages) > 3, "premise: bisection sampled ages between the three seeds"
+        rises = [
+            (later.year, earlier.battery_soh, later.battery_soh)
+            for earlier, later in zip(curve.points, curve.points[1:])
+            if later.battery_soh > earlier.battery_soh + 1e-12
+        ]
+        assert rises == [], f"battery_soh rose at (year, previous SOH, SOH): {rises}"
+
+
+# ---------------------------------------------------------------------------
 # fleet_revenue_gbp + self-consumption override (step-13 / step-14)
 # ---------------------------------------------------------------------------
 
