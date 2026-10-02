@@ -438,10 +438,10 @@ def _tmy_keys_to_read(demand_index: pd.DatetimeIndex, tmy_keys: pd.Index) -> pd.
     That is its own key, unless the timestamp is on a UTC 29 February and the TMY lacks that key;
     then it is the key of the same UTC time on 28 February.
     """
-    own_keys = _utc_time_of_year_keys(demand_index)
     utc = _in_utc(demand_index)
+    own_keys = _utc_time_of_year_keys(utc)
     reads_28_february = (utc.month == 2) & (utc.day == 29) & ~own_keys.isin(tmy_keys)
-    return own_keys.where(~reads_28_february, _utc_time_of_year_keys(demand_index - pd.Timedelta(days=1)))
+    return own_keys.where(~reads_28_february, _utc_time_of_year_keys(utc - pd.Timedelta(days=1)))
 
 
 def _align_tmy_to_demand(
