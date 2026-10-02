@@ -60,6 +60,11 @@ def test_each_e2e_tests_live_server_jobs_finish_before_the_next_test_starts(
     monkeypatch.chdir(request.config.invocation_params.dir)
     # The e2e conftest builds its app with tests/_web_app.py, whatever directory the suite runs from.
     monkeypatch.setenv("PYTHONPATH", str(project_root), prepend=os.pathsep)
+    # A job that fetched its TMY goes through this dead proxy and fails, so the pin cannot pass by reaching PVGIS.
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
 
     result = pytester.runpytest_subprocess(scenarios)
 
