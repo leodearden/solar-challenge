@@ -267,9 +267,8 @@ class Battery:
         if config.soh is not None:
             self._soh: float = config.soh
         else:
-            nominal_usable = config.capacity_kwh * (resolved_max_soc - resolved_min_soc)
             self._soh = compute_soh(
-                config.system_age_years, 0.0, nominal_usable, config
+                config.system_age_years, 0.0, config.nominal_usable_capacity_kwh, config
             )
 
         # Set initial SOC
