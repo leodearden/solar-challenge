@@ -13,7 +13,7 @@ from typing import Optional
 import pytest
 
 from tests._factories import make_bill_distribution
-from tests._finance_builders import make_fleet_results, make_scenario, make_sim_results
+from tests._finance_builders import make_fleet_results, make_scenario
 
 
 # ---------------------------------------------------------------------------
@@ -677,7 +677,6 @@ class TestSolveCostRecoveryRateShortWindow:
     def test_short_window_solves_like_the_equivalent_full_year(self) -> None:
         """Rate, surplus, outlay, binding and feasibility all match the full-year solve."""
         from solar_challenge.finance import solve_cost_recovery_rate
-        from solar_challenge.fleet import FleetResults
 
         n_homes = 5
         window_days = 3
@@ -698,18 +697,13 @@ class TestSolveCostRecoveryRateShortWindow:
             export_revenue_gbp=40.0,
         )
         share_of_year = window_days / 365
-        fleet_short = FleetResults(
-            per_home_results=[
-                make_sim_results(
-                    self_kwh=2000.0 * share_of_year,
-                    export_kwh=800.0 * share_of_year,
-                    import_kwh=1200.0 * share_of_year,
-                    export_revenue_gbp=40.0 * share_of_year,
-                    days=window_days,
-                )
-                for _ in scenario.homes
-            ],
-            home_configs=list(scenario.homes),
+        fleet_short = make_fleet_results(
+            n_homes=n_homes,
+            self_kwh=2000.0 * share_of_year,
+            export_kwh=800.0 * share_of_year,
+            import_kwh=1200.0 * share_of_year,
+            export_revenue_gbp=40.0 * share_of_year,
+            days=window_days,
         )
 
         sol_full = solve_cost_recovery_rate(

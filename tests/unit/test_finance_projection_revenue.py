@@ -13,14 +13,7 @@ import dataclasses
 
 import pytest
 
-from tests._finance_builders import (
-    make_fleet_results,
-    make_home_config,
-    make_load_config,
-    make_pv_config,
-    make_scenario_and_finance,
-    make_sim_results,
-)
+from tests._finance_builders import make_fleet_results, make_home_config, make_scenario_and_finance
 
 
 class TestProjectMultiYearRevenue:
@@ -89,44 +82,20 @@ class TestProjectMultiYearRevenue:
     def test_grid_services_included_in_fleet_revenue(self) -> None:
         """fleet_revenue_gbp includes grid_services = rate × Σ max_discharge_kw when rate > 0."""
         from solar_challenge.battery import BatteryConfig
-        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
-        from solar_challenge.fleet import FleetResults
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-        from solar_challenge.home import HomeConfig
-        from solar_challenge.location import Location
 
-        # Battery-equipped home so max_discharge_kw is available
+        # Battery-equipped homes so max_discharge_kw is available
         bat_config = BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5)
-        home_with_bat = HomeConfig(
-            pv_config=make_pv_config(),
-            load_config=make_load_config(),
-            location=Location.bristol(),
-            battery_config=bat_config,
-        )
         n_homes = 2
-        homes = [home_with_bat] * n_homes
         grid_services_rate = 50.0  # £/kW/year
 
-        finance = FinanceConfig(
-            standing_charge_pence_per_day=28.0,
-            asset_life_years=5,
-            loan_term_years=5,  # must be <= asset_life_years
-            own_use_rate_pence_per_kwh=15.0,
-            grid_services_income_per_kw_per_year_gbp=grid_services_rate,
+        scenario, finance = make_scenario_and_finance(
+            n_homes=n_homes, asset_life_years=5, battery_config=bat_config
         )
-        scenario = ScenarioConfig(
-            name="gs-test",
-            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
-            description="Grid services test",
-            homes=homes,
-        )
+        finance = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=grid_services_rate)
 
         # Synthetic fleet results with no grid_charge_cost
-        fr_bat = FleetResults(
-            per_home_results=[make_sim_results(self_kwh=3000.0, export_kwh=500.0, import_kwh=300.0)
-                               for _ in range(n_homes)],
-            home_configs=homes,
-        )
+        fr_bat = make_fleet_results(homes=scenario.homes, self_kwh=3000.0, export_kwh=500.0, import_kwh=300.0)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr_bat)
 
         # Expected grid_services contribution at age 0
@@ -171,17 +140,10 @@ class TestProjectMultiYearRevenue:
         export rate (£72 / 2,400 kWh = 3 p).  Both are priced.
         """
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
-        from solar_challenge.fleet import FleetResults
 
         n_homes = 2
-        fleet = FleetResults(
-            per_home_results=[
-                make_sim_results(
-                    self_kwh=1600.0, export_kwh=2400.0, import_kwh=1200.0, export_revenue_gbp=72.0
-                )
-                for _ in range(n_homes)
-            ],
-            home_configs=[make_home_config() for _ in range(n_homes)],
+        fleet = make_fleet_results(
+            n_homes=n_homes, self_kwh=1600.0, export_kwh=2400.0, import_kwh=1200.0, export_revenue_gbp=72.0
         )
         scenario, finance = self._make_revenue_scenario(
             n_homes=n_homes, self_consumption_override=0.90

@@ -8,7 +8,7 @@ injected synthetic simulate.
 """
 from __future__ import annotations
 
-from tests._finance_builders import make_home_config, make_sim_results
+from tests._finance_builders import make_fleet_results, make_home_config
 
 
 def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignore[name-defined]
@@ -25,20 +25,15 @@ def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignor
     BASE_EXP = 3_000.0
 
     def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
-        from solar_challenge.fleet import FleetResults
-
         homes = fleet_config.homes
         mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
         factor = math.exp(-curvature * mean_age)
-        per_home = [
-            make_sim_results(
-                self_kwh=max(0.1, BASE_SC * factor),
-                export_kwh=max(0.1, BASE_EXP * factor),
-                import_kwh=500.0,
-            )
-            for _ in homes
-        ]
-        return FleetResults(per_home_results=per_home, home_configs=list(homes))
+        return make_fleet_results(
+            homes=homes,
+            self_kwh=max(0.1, BASE_SC * factor),
+            export_kwh=max(0.1, BASE_EXP * factor),
+            import_kwh=500.0,
+        )
 
     return _simulate
 

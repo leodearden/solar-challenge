@@ -11,7 +11,7 @@ import dataclasses
 
 import pytest
 
-from tests._finance_builders import make_load_config, make_pv_config, make_sim_results
+from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
 
 _SHORT_WINDOW_DAYS = 3
@@ -26,10 +26,7 @@ def _make_full_year_and_short_window_fleets() -> tuple:
     ``simulate=lambda fc, s, e: fleet``.
     """
     from solar_challenge.battery import BatteryConfig
-    from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
     from solar_challenge.fleet import FleetResults
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
 
     battery_config = BatteryConfig(
         capacity_kwh=10.0,
@@ -39,42 +36,21 @@ def _make_full_year_and_short_window_fleets() -> tuple:
         cycle_fade_per_equivalent_full_cycle=0.0002,
         soh_floor=0.60,
     )
-    homes = [
-        HomeConfig(
-            pv_config=make_pv_config(),
-            load_config=make_load_config(),
-            location=Location.bristol(),
-            battery_config=battery_config,
-        )
-        for _ in range(2)
-    ]
-    scenario = ScenarioConfig(
-        name="short-window-test",
-        period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
-        description="Short-window annualisation test",
-        homes=homes,
+    scenario, finance = make_scenario_and_finance(
+        n_homes=2, asset_life_years=25, battery_config=battery_config
     )
-    finance = FinanceConfig(
-        standing_charge_pence_per_day=28.0,
-        asset_life_years=25,
-        grid_services_income_per_kw_per_year_gbp=10.0,
-    )
+    finance = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=10.0)
 
     def fleet_over(window_days: int) -> "FleetResults":  # type: ignore[name-defined]
         share_of_year = window_days / 365
-        return FleetResults(
-            per_home_results=[
-                make_sim_results(
-                    self_kwh=3000.0 * share_of_year,
-                    export_kwh=1000.0 * share_of_year,
-                    import_kwh=500.0 * share_of_year,
-                    discharge_kwh=800.0 * share_of_year,
-                    export_revenue_gbp=150.0 * share_of_year,
-                    days=window_days,
-                )
-                for _ in homes
-            ],
-            home_configs=homes,
+        return make_fleet_results(
+            homes=scenario.homes,
+            self_kwh=3000.0 * share_of_year,
+            export_kwh=1000.0 * share_of_year,
+            import_kwh=500.0 * share_of_year,
+            discharge_kwh=800.0 * share_of_year,
+            export_revenue_gbp=150.0 * share_of_year,
+            days=window_days,
         )
 
     return scenario, finance, battery_config, fleet_over(365), fleet_over(_SHORT_WINDOW_DAYS)
