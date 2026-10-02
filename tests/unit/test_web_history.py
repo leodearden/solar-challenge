@@ -463,11 +463,28 @@ class TestExportAPI:
         assert response.status_code == 422
         assert "custom_module_params" in response.get_json()["error"]
 
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param({"pv_config": {"capacity_kw": 4.0}}, id="no load_config"),
+            pytest.param(
+                {
+                    "pv_config": {"capacity_kw": 4.0},
+                    "load_config": {},
+                    "battery_config": {
+                        "capacity_kwh": 5.0,
+                        "dispatch_strategy": {"strategy_type": "tou_optimized"},
+                    },
+                },
+                id="TOU dispatch strategy without peak hours",
+            ),
+        ],
+    )
     def test_export_of_an_undecodable_stored_config_is_a_server_error(
-        self, app: Flask, client: FlaskClient
+        self, app: Flask, client: FlaskClient, config: dict
     ) -> None:
-        """A stored config without a load_config cannot be a HomeConfig."""
-        _insert_test_run(app, run_id="undecodable", config={"pv_config": {"capacity_kw": 4.0}})
+        """A stored config that a HomeConfig-tree constructor refuses is a JSON server error."""
+        _insert_test_run(app, run_id="undecodable", config=config)
 
         response = client.get("/api/history/runs/undecodable/export/yaml")
 
