@@ -17,11 +17,14 @@ from flask.testing import FlaskClient
 
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.weather import WeatherCache
 from solar_challenge.web.database import init_db
 from solar_challenge.web.jobs import HomeSimulator, JobManager, live_managers, shutdown_all_managers
 from solar_challenge.web.storage import RunStorage
 
+from tests._synthetic_weather import synthetic_june_weather
 from tests._web_app import build_test_app
 
 
@@ -104,8 +107,12 @@ def client(app: Flask) -> FlaskClient:
 
 
 @pytest.fixture
-def real_simulation_client(app: Flask) -> FlaskClient:
-    """A client of the JobManager create_app built, whose jobs run the real simulate_home."""
+def real_simulation_client(app: Flask, weather_cache: WeatherCache) -> FlaskClient:
+    """A client of the JobManager create_app built, whose jobs run the real simulate_home.
+
+    Bristol's TMY is a clear day on 1 June 2024, the first day of every days window the API simulates.
+    """
+    weather_cache.put(synthetic_june_weather("2024-06-01"), "tmy", Location.bristol())
     return app.test_client()
 
 

@@ -91,6 +91,7 @@ Typer-based; subcommand groups are registered in `cli/main.py` (run `solar-chall
 - **mypy strict mode** enabled; pvlib/pandas/numpy/yaml have `ignore_missing_imports`
 - **Reproducible simulations** via per-home seeding (seed parameter in configs)
 - **Scenario files** in `scenarios/` (YAML) — e.g., `bristol-phase1.yaml` defines a 100-home fleet
+- **Offline fast tests** — `tests/conftest.py` runs every test not marked `slow` or `e2e` offline, with its function-scoped fixtures: a lookup or connection off the machine fails the test, naming the destination. `get_tmy_data` reads the test's own empty `weather_cache` fixture; seed it with `weather_cache.put(synthetic_june_weather(day), "tmy", location)`, or pass `weather_data`. Class-, module- and session-scoped fixtures run unguarded, and `weather_cache` supersedes any cache they install, so they must pass `weather_data` and reach no service. Mark a test `slow` only if it needs PVGIS itself.
 
 ## Optional Dependencies
 
