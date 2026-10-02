@@ -597,11 +597,10 @@ def _physics_import_cost_gbp(phys: _AnnualisedPhysics, retail_rate_pence: float)
     """
     if phys.import_cost_physics == 0.0 and phys.import_kwh > 0.0:
         warnings.warn(
-            f"Physics import cost is £0 but {phys.import_kwh:.1f} kWh was "
-            f"imported (no tariff configured on this home); pricing grid "
-            f"imports at the retail baseline rate "
-            f"({retail_rate_pence:.1f} p/kWh) so the bill reflects actual "
-            f"imported energy.",
+            f"This home's simulated grid import ({phys.import_kwh:.1f} kWh/yr) "
+            f"has a £0 cost (no tariff configured on this home), so its import "
+            f"rate falls back to the retail baseline rate "
+            f"({retail_rate_pence:.1f} p/kWh).",
             UserWarning,
             stacklevel=3,
         )
