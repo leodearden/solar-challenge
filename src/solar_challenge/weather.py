@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Weather data retrieval and handling."""
 
+import calendar
 import hashlib
 import json
 from pathlib import Path
@@ -237,7 +238,7 @@ def get_tmy_data(
         Index is DatetimeIndex in UTC.
 
     Raises:
-        RuntimeError: If a PVGIS request fails
+        RuntimeError: If a PVGIS request fails, or its hourly series lacks or repeats hours of a climate year
         ValueError: If PVGIS's TMY is not one TMY_HOURS-hour year with some GHI (from scale_tmy_to_annual_ghi)
     """
     if use_cache:
@@ -279,7 +280,8 @@ def _fetch_pvgis_tmy(location: Location) -> pd.DataFrame:
 def _fetch_mean_annual_ghi_kwh_per_m2(location: Location) -> float:
     """The mean of the calendar-year GHI totals, in kWh/m², of PVGIS's CLIMATE_YEARS hourly series at location.
 
-    The series is requested for a horizontal plane, so its poa_global is GHI.
+    The series is requested for a horizontal plane, so its poa_global is GHI. A series that lacks or repeats
+    hours of any of CLIMATE_YEARS raises RuntimeError naming those years, since its mean would be skewed.
     """
     try:
         series: pd.DataFrame = get_pvgis_hourly(
@@ -294,11 +296,20 @@ def _fetch_mean_annual_ghi_kwh_per_m2(location: Location) -> float:
             timeout=PVGIS_TIMEOUT_S,
             map_variables=True,
         )[0]
-        ghi = series["poa_global"]
-        return float((ghi.groupby(ghi.index.year).sum() / 1000.0).mean())
+        ghi_by_year = series["poa_global"].groupby(series.index.year)
+        hours_by_year = ghi_by_year.size()
+        incomplete_years = [year for year in CLIMATE_YEARS if hours_by_year.get(year) != _hours_in(year)]
+        if incomplete_years:
+            raise ValueError(f"the hourly series lacks or repeats hours of {incomplete_years}")
+        return float((ghi_by_year.sum() / 1000.0).mean())
 
     except Exception as e:
         raise RuntimeError(f"Failed to retrieve long-term irradiation from PVGIS: {e}") from e
+
+
+def _hours_in(year: int) -> int:
+    """The number of hours in calendar year year."""
+    return 24 * (366 if calendar.isleap(year) else 365)
 
 
 def align_tmy_to_index(tmy: pd.Series, index: pd.DatetimeIndex) -> pd.Series:
