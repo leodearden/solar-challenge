@@ -5,7 +5,8 @@ tailwind.config.js, which defines its theme.
 
 Each template, script and stylesheet is keyed by its POSIX path relative to the
 package directory, such as ``templates/base.html``, ``static/js/chart-renderer.js``
-or ``static/style.css``. The template and script globs mirror the ``content`` globs
+or ``static/style.css``. tailwind.config.js is keyed the same way, as
+``tailwind.config.js``. The template and script globs mirror the ``content`` globs
 in tailwind.config.js.
 
 Usage::
@@ -31,6 +32,7 @@ _STATIC_DIR = _WEB_DIR / "static"
 BASE_TEMPLATE_KEY = "templates/base.html"
 _BASE_TEMPLATE = _WEB_DIR / BASE_TEMPLATE_KEY
 HAND_WRITTEN_STYLESHEET_KEY = "static/style.css"
+TAILWIND_CONFIG_KEY = "tailwind.config.js"
 
 
 def dashboard_template_sources() -> dict[str, str]:
@@ -63,7 +65,7 @@ def hand_written_stylesheet_source() -> str:
 
 def tailwind_config_source() -> str:
     """Source of tailwind.config.js, the home of the dashboard's theme."""
-    return (_WEB_DIR / "tailwind.config.js").read_text(encoding="utf-8")
+    return (_WEB_DIR / TAILWIND_CONFIG_KEY).read_text(encoding="utf-8")
 
 
 def _sources(paths: Iterable[Path]) -> dict[str, str]:
