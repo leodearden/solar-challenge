@@ -101,6 +101,20 @@ class TestAlignTMYToDemand:
 
         pd.testing.assert_series_equal(aligned, _expected_alignment(demand, leap_year_tmy), check_exact=True)
 
+    def test_tmy_with_part_of_29_february_keeps_that_part_and_the_rest_reads_28_february(self, tmy_minute_year):
+        own_29_february_noon = pd.Series([0.5], index=pd.DatetimeIndex(["1992-02-29 12:00"], tz="UTC"))
+        demand = _london_minute_demand("2024-02-29 00:00", "2024-02-29 23:59")
+
+        aligned = _align_tmy_to_demand(pd.concat([tmy_minute_year, own_29_february_noon]), demand)
+
+        expected = _expected_alignment(
+            demand,
+            tmy_minute_year.loc["1990-02-28 00:00":"1990-02-28 11:59"],
+            own_29_february_noon,
+            tmy_minute_year.loc["1990-02-28 12:01":"1990-02-28 23:59"],
+        )
+        pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
     def test_29_february_whose_28_february_is_missing_too_maps_to_zero(self, tmy_minute_year):
         march_only = tmy_minute_year.loc["1990-03-01"]
         demand = _london_minute_demand("2024-02-29 00:00", "2024-03-01 23:59")
