@@ -5,7 +5,6 @@ The orchestrator runs dark-factory-orchestrator.yaml's test_command in each
 task's fresh worktree before merging it, so these tests run it the same way.
 """
 
-import os
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -14,6 +13,7 @@ import pytest
 
 from tests._collect_only import describe_outcome, requires_uv, run_collect_only
 from tests._orchestrator_config import load_orchestrator_config
+from tests._uv_env import isolated_uv_env
 
 pytestmark = requires_uv
 
@@ -31,8 +31,7 @@ def _collect_with_test_command(
     nested run installs the web extra into it.
     """
     command = load_orchestrator_config(project_root)["test_command"]
-    env = {name: value for name, value in os.environ.items() if name != "VIRTUAL_ENV"}
-    env["UV_PROJECT_ENVIRONMENT"] = str(workdir / "venv")
+    env = isolated_uv_env(workdir / "venv")
     return run_collect_only(command, project_root, *pytest_args, env=env)
 
 
