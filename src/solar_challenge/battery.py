@@ -61,7 +61,8 @@ def compute_soh(
         system_age_years: Age of the battery in years (≥ 0).
         cumulative_throughput_kwh: Total energy discharged over the battery's
             lifetime in kWh (≥ 0).
-        usable_capacity_kwh: Nominal usable capacity in kWh; used to convert
+        usable_capacity_kwh: Nominal usable capacity in kWh
+            (``BatteryConfig.nominal_usable_capacity_kwh``); used to convert
             throughput to EFC.  Pass 0.0 to disable cycle fade (safe).
         params: BatteryConfig carrying the fade-rate and floor parameters.
 
@@ -184,6 +185,11 @@ class BatteryConfig:
             raise ValueError(
                 f"soh override must be in (0, 1], got {self.soh}"
             )
+
+    @property
+    def nominal_usable_capacity_kwh(self) -> float:
+        """Usable capacity between the SOC limits, before SOH de-rating (kWh)."""
+        return self.capacity_kwh * (self.max_soc_fraction - self.min_soc_fraction)
 
     @classmethod
     def default_5kwh(cls) -> "BatteryConfig":
