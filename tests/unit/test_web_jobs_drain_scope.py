@@ -4,15 +4,8 @@ What one test's teardown did is only visible from a later test, so the scenarios
 run in order inside a separate pytest session under a copy of the root conftest.
 """
 
-import os
-from pathlib import Path
-
 import pytest
 pytest.importorskip("flask")
-
-pytest_plugins = ["pytester"]
-
-ROOT_CONFTEST = Path(__file__).parents[1] / "conftest.py"
 
 SCENARIOS = """
     import pytest
@@ -62,15 +55,10 @@ SCENARIOS = """
 
 
 def test_the_per_test_drain_stops_only_the_managers_a_test_created(
-    pytester: pytest.Pytester,
-    monkeypatch: pytest.MonkeyPatch,
-    project_root: Path,
+    pytester_under_root_conftest: pytest.Pytester,
 ) -> None:
-    pytester.makeconftest(ROOT_CONFTEST.read_text(encoding="utf-8"))
-    scenarios = pytester.makepyfile(SCENARIOS)
-    # The scenarios build their apps with tests/_web_app.py, whatever directory the suite runs from.
-    monkeypatch.setenv("PYTHONPATH", str(project_root), prepend=os.pathsep)
+    scenarios = pytester_under_root_conftest.makepyfile(SCENARIOS)
 
-    result = pytester.runpytest_subprocess(scenarios)
+    result = pytester_under_root_conftest.runpytest_subprocess(scenarios)
 
     result.assert_outcomes(passed=3)

@@ -6,9 +6,6 @@ separate pytest session under a copy of tests/conftest.py, in a directory of its
 own and with no HTTP proxy configured, as in tests/unit/test_web_jobs_drain_scope.py.
 """
 
-import os
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -16,26 +13,19 @@ from solar_challenge.location import Location
 from solar_challenge.weather import DEFAULT_CACHE_DIR, WeatherCache, get_tmy_data
 from tests._synthetic_weather import synthetic_june_weather
 
-pytest_plugins = ["pytester"]
-
-ROOT_CONFTEST = Path(__file__).parents[1] / "conftest.py"
-
 _PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 
 
 @pytest.fixture
-def suite(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, project_root: Path) -> pytest.Pytester:
+def suite(pytester_under_root_conftest: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
     """A pytest session of its own, under a copy of tests/conftest.py and with no HTTP proxy configured.
 
     Through a proxy, requests would look up only the proxy's loopback host, so the
     guard would never see the PVGIS destination.
     """
-    pytester.makeconftest(ROOT_CONFTEST.read_text(encoding="utf-8"))
-    # The copied conftest imports the tests/ helpers, whatever directory the suite runs from.
-    monkeypatch.setenv("PYTHONPATH", str(project_root), prepend=os.pathsep)
     for name in _PROXY_VARIABLES:
         monkeypatch.delenv(name, raising=False)
-    return pytester
+    return pytester_under_root_conftest
 
 
 def test_get_tmy_data_reads_the_tmy_a_test_seeds_into_weather_cache(weather_cache: WeatherCache) -> None:

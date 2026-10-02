@@ -1,5 +1,6 @@
 """Pytest configuration and shared fixtures."""
 
+import os
 import sys
 import tempfile
 import weakref
@@ -12,6 +13,8 @@ from pathlib import Path
 from solar_challenge.weather import WeatherCache, set_weather_cache
 from tests._network_guard import refusing_network
 from tests._uv_env import isolated_uv_env
+
+pytest_plugins = ["pytester"]
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs it by explicit path.
 collect_ignore = ["interpreter_matrix"]
@@ -51,6 +54,22 @@ def uv_probe_environment(tmp_path: Path) -> dict[str, str]:
     not from the shell running these tests.
     """
     return isolated_uv_env(tmp_path / "venv")
+
+
+@pytest.fixture
+def pytester_importing_test_helpers(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> pytest.Pytester:
+    """pytester, whose sessions can import the tests/ helpers, such as tests._web_app, from whatever directory they run in."""
+    monkeypatch.setenv("PYTHONPATH", str(project_root), prepend=os.pathsep)
+    return pytester
+
+
+@pytest.fixture
+def pytester_under_root_conftest(pytester_importing_test_helpers: pytest.Pytester) -> pytest.Pytester:
+    """pytester_importing_test_helpers, whose sessions run under a copy of this conftest."""
+    pytester_importing_test_helpers.makeconftest(Path(__file__).read_text(encoding="utf-8"))
+    return pytester_importing_test_helpers
 
 
 @pytest.fixture(scope="session")

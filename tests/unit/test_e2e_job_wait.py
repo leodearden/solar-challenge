@@ -6,13 +6,10 @@ The job must complete: a failing job can end before the next test starts even
 with no wait, so a 'failed' status would not show that the wait happened.
 """
 
-import os
 from pathlib import Path
 
 import pytest
 pytest.importorskip("flask")
-
-pytest_plugins = ["pytester"]
 
 E2E_CONFTEST = Path(__file__).parents[1] / "e2e" / "conftest.py"
 
@@ -66,20 +63,17 @@ SCENARIOS = """
 
 
 def test_each_e2e_tests_live_server_jobs_finish_before_the_next_test_starts(
-    pytester: pytest.Pytester,
+    pytester_importing_test_helpers: pytest.Pytester,
     monkeypatch: pytest.MonkeyPatch,
-    project_root: Path,
 ) -> None:
-    pytester.makeconftest(E2E_CONFTEST.read_text(encoding="utf-8"))
-    scenarios = pytester.makepyfile(SCENARIOS)
-    # The e2e conftest builds its app with tests/_web_app.py, whatever directory the suite runs from.
-    monkeypatch.setenv("PYTHONPATH", str(project_root), prepend=os.pathsep)
+    pytester_importing_test_helpers.makeconftest(E2E_CONFTEST.read_text(encoding="utf-8"))
+    scenarios = pytester_importing_test_helpers.makepyfile(SCENARIOS)
     # A job that fetched its TMY goes through this dead proxy and fails, so the pin cannot pass by reaching PVGIS.
     for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
         monkeypatch.setenv(name, "http://127.0.0.1:9")
     for name in ("NO_PROXY", "no_proxy"):
         monkeypatch.delenv(name, raising=False)
 
-    result = pytester.runpytest_subprocess(scenarios)
+    result = pytester_importing_test_helpers.runpytest_subprocess(scenarios)
 
     result.assert_outcomes(passed=2)
