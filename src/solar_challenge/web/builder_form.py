@@ -56,7 +56,9 @@ _DISTRIBUTION_FIELDS = (
     "sp_entries",
 )
 
-_CUSTOM_COORDINATES = ("latitude", "longitude", "altitude")
+_CUSTOM_LOCATION_FORM_KEYS: Mapping[str, str] = {
+    coordinate: coordinate for coordinate in ("latitude", "longitude", "altitude")
+}
 
 _RECOGNISED_KEYS = frozenset(
     {
@@ -65,7 +67,7 @@ _RECOGNISED_KEYS = frozenset(
         "start_date",
         "end_date",
         "location_preset",
-        *_CUSTOM_COORDINATES,
+        *_CUSTOM_LOCATION_FORM_KEYS.values(),
         "n_homes",
         "import_rate",
         "seg_rate_pence_per_kwh",
@@ -230,9 +232,7 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
     """
     preset = fields["location_preset"]
     if preset == "custom":
-        return _present_numbers(
-            fields, {coordinate: coordinate for coordinate in _CUSTOM_COORDINATES}
-        )
+        return _present_numbers(fields, _CUSTOM_LOCATION_FORM_KEYS)
     if isinstance(preset, str) and preset in LOCATION_PRESETS:
         return location_block(LOCATION_PRESETS[preset])
     raise ValueError(
