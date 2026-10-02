@@ -324,6 +324,23 @@ class TestSimulateFleetAPI:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize(
+        ("homes", "type_name"),
+        [
+            pytest.param({"a": 1}, "dict", id="object"),
+            pytest.param(5, "int", id="number"),
+            pytest.param("abc", "str", id="string"),
+        ],
+    )
+    def test_homes_that_is_not_a_json_array_returns_400_naming_its_type_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, homes: object, type_name: str
+    ) -> None:
+        """A 'homes' that is not an array is refused naming its own type, not read as a list of home configs."""
+        resp = client.post("/api/simulate/fleet", json={"name": "Bad Fleet", "homes": homes})
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == f"homes must be a JSON array, got {type_name}"
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     def test_invalid_home_in_fleet_returns_400(self, client: FlaskClient) -> None:
         """Fleet with an invalid home config returns 400."""
         resp = client.post(
