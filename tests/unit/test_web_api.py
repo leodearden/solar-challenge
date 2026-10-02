@@ -880,6 +880,34 @@ class TestPreviewDistribution:
         assert resp.status_code == 200
         assert len(resp.get_json()["samples"]) == 100
 
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        [
+            pytest.param(
+                {"type": "normal", "params": "x"},
+                "params must be a mapping, got str",
+                id="normal-str-params",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "params": {"values": ["x"]}},
+                "values[0] must be a mapping, got str",
+                id="weighted-discrete-str-row",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "params": {"entries": [1]}},
+                "entries[0] must be a mapping, got int",
+                id="shuffled-pool-int-row",
+            ),
+        ],
+    )
+    def test_malformed_params_return_400_naming_the_field(
+        self, client: FlaskClient, body: dict, message: str
+    ) -> None:
+        """Params that are not an object, or a distribution row that is not an object, is a 400 naming it and the type sent."""
+        resp = client.post("/api/fleet/preview-distribution", json=body)
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+
 
 # ===================================================================
 # POST /api/simulate/fleet-from-distribution
@@ -1073,6 +1101,50 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
         assert distribution in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("block", "message"),
+        [
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "weighted_discrete", "values": ["x"]}}},
+                "values[0] must be a mapping, got str",
+                id="pv-weighted-discrete-str-row",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "weighted_discrete", "values": "ab"}}},
+                "values must be a list, got str",
+                id="pv-weighted-discrete-str-values",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "shuffled_pool", "entries": [1]}}},
+                "entries[0] must be a mapping, got int",
+                id="pv-shuffled-pool-int-row",
+            ),
+            pytest.param(
+                {
+                    "load": {
+                        "annual_consumption_kwh": {
+                            "type": "weighted_discrete",
+                            "values": [3500],
+                        }
+                    }
+                },
+                "values[0] must be a mapping, got int",
+                id="load-weighted-discrete-int-row",
+            ),
+        ],
+    )
+    def test_malformed_distribution_rows_return_400_naming_the_field(
+        self, client: FlaskClient, mock_job_manager: MagicMock, block: dict, message: str
+    ) -> None:
+        """A weighted_discrete/shuffled_pool row that is not an object, or a row list that is not an array, is a 400 naming it and the type sent; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, **block},
+        )
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)

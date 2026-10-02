@@ -68,75 +68,62 @@ def apply_fleet_overlay(
 
 
 def sample_distribution(
-    dist_type: str, params: dict[str, Any], n_samples: int = 100
+    dist_type: str, params: object, n_samples: int = 100
 ) -> list[float]:
     """Generate sample values from a distribution for preview histogram.
 
     Args:
         dist_type: Distribution type. One of ``'weighted_discrete'``,
             ``'normal'``, ``'uniform'``, ``'shuffled_pool'``.
-        params: Distribution parameters (varies by type).
+        params: Distribution parameters (varies by type), read the way
+            :func:`_build_distribution_dict` reads a fleet form's spec; must be
+            a dict.
         n_samples: Number of samples to generate.
 
     Returns:
         List of sampled float values.
 
     Raises:
-        ValueError: If dist_type is unknown or params are invalid.
+        ValueError: If dist_type is unknown or params are invalid, params are
+            not a dict (see :func:`_require_dict`), or a
+            weighted_discrete/shuffled_pool row list is malformed (see
+            :func:`_dict_list`).
     """
     if n_samples < 1:
         raise ValueError("n_samples must be at least 1")
+    params = _require_dict(params, "params")
+    spec = _build_distribution_dict({**params, "type": dist_type})
 
     rng = random.Random(42)
 
     if dist_type == "normal":
-        mean = float(params.get("mean", 0.0))
-        std = float(params.get("std", 1.0))
-        min_val = params.get("min")
-        max_val = params.get("max")
-        if std < 0:
+        if spec["std"] < 0:
             raise ValueError("Standard deviation cannot be negative")
-        samples = [rng.gauss(mean, std) for _ in range(n_samples)]
-        if min_val is not None:
-            min_val = float(min_val)
-            samples = [max(min_val, s) for s in samples]
-        if max_val is not None:
-            max_val = float(max_val)
-            samples = [min(max_val, s) for s in samples]
+        samples = [rng.gauss(spec["mean"], spec["std"]) for _ in range(n_samples)]
+        if "min" in spec:
+            samples = [max(spec["min"], s) for s in samples]
+        if "max" in spec:
+            samples = [min(spec["max"], s) for s in samples]
         return samples
 
     if dist_type == "uniform":
-        min_val = float(params.get("min", 0.0))
-        max_val = float(params.get("max", 1.0))
-        if min_val > max_val:
+        if spec["min"] > spec["max"]:
             raise ValueError("min cannot be greater than max")
-        return [rng.uniform(min_val, max_val) for _ in range(n_samples)]
+        return [rng.uniform(spec["min"], spec["max"]) for _ in range(n_samples)]
 
     if dist_type == "weighted_discrete":
-        values_raw = params.get("values", [])
-        if not values_raw:
+        if not spec["values"]:
             raise ValueError("weighted_discrete requires non-empty 'values' list")
-        values = []
-        weights = []
-        for entry in values_raw:
-            values.append(float(entry.get("value", 0)))
-            weights.append(float(entry.get("weight", 1)))
-        if sum(weights) == 0:
+        if sum(spec["weights"]) == 0:
             raise ValueError("Weights cannot all be zero")
-        population = values
-        cum_weights = weights
-        samples = rng.choices(population, weights=cum_weights, k=n_samples)
-        return [float(s) for s in samples]
+        return rng.choices(spec["values"], weights=spec["weights"], k=n_samples)
 
     if dist_type == "shuffled_pool":
-        entries = params.get("entries", [])
-        if not entries:
+        if not spec["values"]:
             raise ValueError("shuffled_pool requires non-empty 'entries' list")
         pool: list[float] = []
-        for entry in entries:
-            val = float(entry.get("value", 0))
-            count = int(entry.get("count", 1))
-            pool.extend([val] * count)
+        for value, count in zip(spec["values"], spec["counts"]):
+            pool.extend([value] * count)
         if not pool:
             raise ValueError("shuffled_pool produced an empty pool")
         rng.shuffle(pool)
@@ -161,9 +148,10 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
         Fleet distribution config dict.
 
     Raises:
-        ValueError: If required fields are missing or invalid, or a
-            pv/battery/load block is not a mapping (see
-            :func:`_component_block`).
+        ValueError: If required fields are missing or invalid, a
+            pv/battery/load block is not a dict (see
+            :func:`_component_block`), or a weighted_discrete/shuffled_pool
+            row list is malformed (see :func:`_dict_list`).
     """
     n_homes = int(form_data.get("n_homes", 100))
     if n_homes < 1:
@@ -198,12 +186,33 @@ def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any]:
     """Return the *key* component block of *form_data*, reading an absent or falsy block as empty.
 
     Raises:
-        ValueError: If the block is truthy but not a mapping; the error names *key* and the type sent.
+        ValueError: If the block is truthy but not a dict (see :func:`_require_dict`).
     """
-    block = form_data.get(key) or {}
-    if not isinstance(block, dict):
-        raise ValueError(f"{key} must be a mapping, got {type(block).__name__}")
-    return block
+    return _require_dict(form_data.get(key) or {}, key)
+
+
+def _require_dict(value: object, field: str) -> dict[str, Any]:
+    """Return *value*, refusing one that is not a dict.
+
+    Raises:
+        ValueError: If *value* is not a dict; the error names *field* and the type sent.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be a mapping, got {type(value).__name__}")
+    return value
+
+
+def _dict_list(spec: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """Return the *key* row list of *spec*, reading an absent list as empty.
+
+    Raises:
+        ValueError: If the value is not a list (the error names *key* and the type sent),
+            or a row is not a dict (see :func:`_require_dict`; the row is named ``key[index]``).
+    """
+    rows = spec.get(key, [])
+    if not isinstance(rows, list):
+        raise ValueError(f"{key} must be a list, got {type(rows).__name__}")
+    return [_require_dict(row, f"{key}[{index}]") for index, row in enumerate(rows)]
 
 
 def _parse_component_distribution(
@@ -252,6 +261,10 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         Distribution specification dict.
+
+    Raises:
+        ValueError: If a weighted_discrete/shuffled_pool row list is malformed
+            (see :func:`_dict_list`).
     """
     dist_type = data["type"]
     result: dict[str, Any] = {"type": dist_type}
@@ -269,12 +282,12 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
         result["max"] = float(data.get("max", 1))
 
     elif dist_type == "weighted_discrete":
-        values_raw = data.get("values", [])
+        values_raw = _dict_list(data, "values")
         result["values"] = [float(v.get("value", 0)) for v in values_raw]
         result["weights"] = [float(v.get("weight", 1)) for v in values_raw]
 
     elif dist_type == "shuffled_pool":
-        entries = data.get("entries", [])
+        entries = _dict_list(data, "entries")
         result["values"] = [float(e.get("value", 0)) for e in entries]
         result["counts"] = [int(e.get("count", 1)) for e in entries]
 
