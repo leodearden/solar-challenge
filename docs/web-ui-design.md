@@ -235,18 +235,7 @@ Conversational AI interface for configuring, running, and interpreting simulatio
 
 ### Colour Palette
 
-| Series | Colour | Hex |
-|--------|--------|-----|
-| PV Generation | Amber | `#f5a623` |
-| Demand | Red | `#d0021b` |
-| Self-Consumption | Green | `#7ed321` |
-| Grid Import | Grey | `#9b9b9b` |
-| Grid Export | Blue | `#4a90e2` |
-| Battery Charge | Teal | `#50e3c2` |
-| Battery Discharge | Orange | `#f8a427` |
-| Heat Pump | Purple | `#9013fe` |
-| Financial Cost | Red | `#d0021b` |
-| Financial Revenue | Green | `#7ed321` |
+The as-built chart colours are `COLOUR_PALETTE` in `src/solar_challenge/web/charts.py`, which the Plotly figures read. They are not Tailwind theme colours: Plotly takes colour strings, not classes.
 
 ### Single Home Charts
 
