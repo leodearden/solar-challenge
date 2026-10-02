@@ -97,9 +97,10 @@ the floor-binding rate is correspondingly higher).
 **Implementation**: `finance._cbs_own_use_kwh(summary)` returns
 `max(summary.total_demand_kwh − summary.total_grid_import_kwh, 0.0)`.
 `bill_distribution` passes it to `householder_bill` as
-annual_self_consumption_kwh, and `_simulate_age` reads it for fleet_sc through
-`_billed_own_use_kwh(summary, finance)`, which switches to the override's
-own-use when one is set.  The physics `self_consumption` series and
+annual_self_consumption_kwh, and `_simulate_age` passes it for fleet_sc.  Both
+annualise it and pass it to `_billed_energy(annual, finance, physics_own_use_kwh=…)`,
+the one physics/override switch, which replaces it with the override's own-use when
+one is set.  The physics `self_consumption` series and
 `self_consumption_ratio` in `flow.py` / `home.py` are **not changed** — only the
 money path moves to basis C.
 
@@ -176,7 +177,7 @@ saving_vs_baseline  ≈ £226/yr             (REPORTED; not pinned — see §7)
 
 ### Override (spreadsheet-assumption) path
 
-Source: `finance.py:householder_bill()` via `_override_energy_split()`.
+Source: `finance.py:householder_bill()` via `_billed_energy()` and `_override_energy_split()`.
 
 With `FinanceConfig.self_consumption_override` set (a scenario's `finance:` block, or
 `finance run --assumptions spreadsheet|both`), the bill's own-use comes from the
@@ -265,23 +266,25 @@ Where each term is:
 
 ```
 own_use_revenue   = own_use_rate_pence_per_kwh × fleet_sc_kwh / 100
-                    (fleet_sc_kwh = Σ_homes k_h × _billed_own_use_kwh(s_h, finance)
+                    (fleet_sc_kwh = Σ_homes _billed_energy(a_h, finance,
+                                      physics_own_use_kwh=k_h × _cbs_own_use_kwh(s_h)).own_use_kwh
                                   = Σ_homes k_h × (demand − import)
                                     with no override (basis C)
-                                  = Σ_homes k_h × min(override × generation, demand)
+                                  = Σ_homes min(override × k_h × generation, k_h × demand)
                                     with self_consumption_override set)
-                    (k_h = _annualisation_scale(sim_days_h)
+                    (a_h = _annualise_physics(s_h, sim_days_h), home h's window totals × k_h;
+                     k_h = _annualisation_scale(sim_days_h)
                          = 365 / sim_days_h if sim_days_h < 360, else 1)
 
-seg_revenue       = Σ_homes _seg_export_income_gbp(home, finance, sim_days_h)
+seg_revenue       = Σ_homes _seg_export_income_gbp(a_h, finance)
                     (= Σ k_h × home.total_export_revenue_gbp on the physics path;
-                    either path is annualised by the same k_h inside
-                    _seg_export_income_gbp)
+                    both paths read the same a_h as own-use)
 
                     Override path (self_consumption_override set):
                     export_kwh = generation − min(override × generation, demand)
-                    (§3, override path), priced at the home's effective export
-                    rate = physics export revenue / physics export kWh × 100
+                    (a_h's annual generation and demand; §3, override path),
+                    priced at the home's effective export rate = physics
+                    export revenue / physics export kWh × 100
                     (0 when physics export is 0)
 
                     SEG input reconciliation: project_multi_year calls
@@ -310,7 +313,10 @@ the battery throughput behind ageing stay the simulated flows
 **Annual basis.** Every projection year is a 365-day year.  When a home's
 simulated window is under 360 days, `project_multi_year` scales that home's
 own-use, export, import and battery-discharge kWh, and its SEG income, by
-`k_h = 365 / sim_days_h`, and emits one `UserWarning` per projection.  The
+`k_h = 365 / sim_days_h`, and emits one `UserWarning` per projection.  Each home
+is annualised once (`a_h`) before the override splits it, as `householder_bill`
+annualises before it bills (§3;
+`tests/unit/test_finance_projection.py::TestProjectMultiYearAnnualisesShortWindow`).  The
 annualised discharge is the yearly throughput that battery cycle ageing
 integrates.  Grid-services income is already annual.  Full-year windows are
 unchanged (`k_h = 1`).  A short window is still one season's sample, so board
@@ -376,8 +382,8 @@ net_surplus(r) = [Σ_years (r × sc_y/100 + C_y − opex − debt_y)] / (N_years
 ```
 
 where `sc_y` is the fleet own-use the bills charge at year `y`
-(`YearPoint.fleet_self_consumption_kwh = Σ_homes k_h × _billed_own_use_kwh(s_h, finance)`:
-basis C, or the capped override own-use; annualised as in §4, after degradation
+(`YearPoint.fleet_self_consumption_kwh`, §4's `fleet_sc_kwh` = Σ_homes `_billed_energy`
+own-use: basis C, or the capped override own-use; annualised as in §4, after degradation
 interpolation), and `C_y` is rate-independent (SEG + grid-services, fixed by physics).
 `opex` is the fleet opex (`opex_per_home_per_year_gbp × N_homes`).  `debt_y` is
 `annual_debt_svc` (§6) in the loan years `y < loan_term_years` and **0 afterwards**,
@@ -779,14 +785,14 @@ fleet median — the board's single-home summary figure.
 |---------|----------|---------------|
 | Basis-C own-use energy | `own_use_kwh = demand − import` (≥ 0; see §2) | `_cbs_own_use_kwh()` |
 | Own-use payment | `own_use_rate × own_use_kwh / 100` (basis C) | `householder_bill()` |
-| Override own-use | `min(override × generation, demand)`; surplus generation → export (§3, §4, §5) | `householder_bill()`, `_seg_export_income_gbp()`, `_billed_own_use_kwh()` |
+| Override own-use | `min(override × generation, demand)`; surplus generation → export (§3, §4, §5) | `householder_bill()`, `_seg_export_income_gbp()`, `_billed_energy()` |
 | VAT | `vat_rate × (import + standing + own_use_payment)` | `householder_bill()` |
 | Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `householder_bill()` |
 | Saving | `baseline_bill − total_outlay` | `householder_bill()` |
-| CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ_homes k_h × `_billed_own_use_kwh`: basis C, or the capped override own-use; annualised; §4) | `project_multi_year()` |
+| CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ_homes `_billed_energy` own-use: basis C, or the capped override own-use; annualised; §4) | `project_multi_year()` |
 | CBS revenue (full) | `own_use_rev + seg_rev + gs_income` | `project_multi_year()` |
 | Grid-charge energy | in householder `import_cost_gbp`; no CBS term (§4) | `householder_bill()` |
-| Solve rate-base | `fleet_sc = Σ_homes k_h × _billed_own_use_kwh` (basis C, or the capped override own-use; annualised; §2, §4, §5) | `_simulate_age()` |
+| Solve rate-base | `fleet_sc` = Σ_homes `_billed_energy` own-use (basis C, or the capped override own-use; annualised; §2, §4, §5) | `_simulate_age()` |
 | Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` |
 | Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost)` | `project_economics()` |
 | Net surplus | `mean(surplus_y) / n_homes` over 25 yr | `project_economics()` |

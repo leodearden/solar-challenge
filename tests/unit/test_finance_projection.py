@@ -861,7 +861,11 @@ class TestProjectMultiYearRevenue:
         (default 15p/kWh) × fleet_sc + Σ _seg_export_income_gbp.
         CR3: SEG is now computed via _seg_export_income_gbp (extracted from householder_bill).
         """
-        from solar_challenge.finance import _seg_export_income_gbp, project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.finance import (  # type: ignore[attr-defined]
+            _annualise_physics,
+            _seg_export_income_gbp,
+            project_multi_year,
+        )
         from solar_challenge.home import calculate_summary
 
         n_homes = 2
@@ -876,7 +880,8 @@ class TestProjectMultiYearRevenue:
         # New formula (no grid_services since homes have no battery):
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc_kwh / 100.0
         seg_revenue = sum(
-            _seg_export_income_gbp(s, finance, s.simulation_days) for s in summaries
+            _seg_export_income_gbp(_annualise_physics(s, s.simulation_days), finance)
+            for s in summaries
         )
         expected_revenue = own_use_revenue + seg_revenue
 
@@ -1185,7 +1190,7 @@ class TestSegExportIncomeGbp:
 
     def test_physics_path_returns_annualised_export_revenue(self) -> None:
         """Physics path (no override): returns total_export_revenue_gbp directly."""
-        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
 
         summary = _make_seg_summary(
             total_generation_kwh=4000.0,
@@ -1194,7 +1199,7 @@ class TestSegExportIncomeGbp:
         )
         finance = self._make_finance_seg(self_consumption_override=None)
 
-        result = _seg_export_income_gbp(summary, finance, simulation_days=365)
+        result = _seg_export_income_gbp(_annualise_physics(summary, 365), finance)
 
         assert result == pytest.approx(24.0, rel=1e-9)
 
@@ -1205,7 +1210,7 @@ class TestSegExportIncomeGbp:
         derived from physics figures and falls back to 0.0 p/kWh.  The result
         must be exactly 0.0 regardless of the override fraction.
         """
-        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
 
         # Summary with no export at all (e.g. all generation self-consumed)
         summary_no_export = _make_seg_summary(
@@ -1215,7 +1220,7 @@ class TestSegExportIncomeGbp:
         )
         finance = self._make_finance_seg(self_consumption_override=0.60)
 
-        result = _seg_export_income_gbp(summary_no_export, finance, simulation_days=365)
+        result = _seg_export_income_gbp(_annualise_physics(summary_no_export, 365), finance)
 
         # effective_export_rate_pence = 0.0 (fallback), so result = override_export * 0 = 0
         assert result == pytest.approx(0.0, abs=1e-9)
@@ -1235,7 +1240,7 @@ class TestSegExportIncomeGbp:
           effective_rate  = (24/800)×100 = 3 p/kWh
           result          = 1600×3/100 = 48 £
         """
-        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
 
         summary = _make_seg_summary(
             total_generation_kwh=4000.0,
@@ -1245,14 +1250,14 @@ class TestSegExportIncomeGbp:
         # Override: 60% self-consumption → 40% export → 1600 kWh
         finance = self._make_finance_seg(self_consumption_override=0.60)
 
-        result = _seg_export_income_gbp(summary, finance, simulation_days=365)
+        result = _seg_export_income_gbp(_annualise_physics(summary, 365), finance)
 
         # hand-checked: 1600 * 3 / 100 = 48.0
         assert result == pytest.approx(48.0, rel=1e-9)
 
     def test_short_period_annualises_physics_export_revenue(self) -> None:
         """Physics path: short simulation period is annualised to 365 days."""
-        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
 
         # Build a summary with a 182-day simulation (half year)
         from solar_challenge.home import SummaryStatistics
@@ -1277,7 +1282,7 @@ class TestSegExportIncomeGbp:
         )
         finance = self._make_finance_seg(self_consumption_override=None)
 
-        result = _seg_export_income_gbp(summary_182, finance, simulation_days=182)
+        result = _seg_export_income_gbp(_annualise_physics(summary_182, 182), finance)
 
         expected = 12.0 * (365 / 182)
         assert result == pytest.approx(expected, rel=1e-6)
