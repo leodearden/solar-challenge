@@ -8,7 +8,7 @@ collection, so it runs only when its path is passed explicitly.
 
 Manual run::
 
-    uv run --extra dev pytest tests/interpreter_matrix [-k 3.13]
+    uv run --locked --extra dev pytest tests/interpreter_matrix [-k 3.13]
 
 Inside a sandbox that cannot write uv's python directory, set
 UV_PYTHON_INSTALL_DIR to a writable path.

@@ -29,11 +29,11 @@ pytest --cov=src/solar_challenge
 
 # Interpreter matrix: the orchestrator verify on every admitted Python minor
 # except the .python-version pin (one case per minor, ~6-10 min each)
-uv run --extra dev pytest tests/interpreter_matrix
+uv run --locked --extra dev pytest tests/interpreter_matrix
 
 # Browser e2e suite: what the offline lane's e2e job runs after every merge
 # (~3.5 min); the per-task verify never runs it
-uv run --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider
+uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider
 
 # CLI entry point
 solar-challenge --help
@@ -111,8 +111,13 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   descriptive `agent_id`.
 - Config lives at the repo root: `dark-factory-orchestrator.yaml` (+ `.mcp.json`, `.envrc`).
   Escalation MCP runs on port **8106**; fused-memory is shared on 8002.
-- Orchestrator verify uses `uv run --extra dev …` (worktree-safe; the local
-  `venv/` is not present inside task worktrees).
+- Orchestrator verify uses `uv run --locked --extra dev …` (worktree-safe; the
+  local `venv/` is not present inside task worktrees). Every uv command the
+  orchestrator runs, verify and offline lane alike, passes `--locked`, so it
+  refuses a `uv.lock` that `pyproject.toml` has outgrown instead of silently
+  re-locking it. A dependency edit to `pyproject.toml` must commit its `uv lock`
+  re-lock in the same change, or verify fails with uv's "The lockfile at
+  `uv.lock` needs to be updated" error.
 - After every merge, the offline lane re-runs the verify suite on each admitted
   Python minor other than the pin (`tests/interpreter_matrix`). A fix task it
   files names the interpreter in its failing node-id, e.g.
@@ -121,8 +126,8 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   fix task it files names the failing e2e node-ids, e.g.
   `tests/e2e/test_history.py::<test>[chromium]`, or `e2e::nonzero-exit` when
   the red run printed no failing node-id (it hit the job's `timeout`, or pytest
-  could not start). Reproduce with
-  `uv run --extra dev --extra web --extra e2e pytest <node-id> -p no:cacheprovider`.
+  could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
+  `uv run --locked --extra dev --extra web --extra e2e pytest <node-id> -p no:cacheprovider`.
   The browser comes from `~/.cache/ms-playwright`, which the sandbox cannot
   write, so the playwright locked in `uv.lock` must match an installed
   chromium-headless-shell. This shows the revision it needs:
