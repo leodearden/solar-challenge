@@ -10,7 +10,7 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
-from tests._html_page import doctype, element_count, element_ids, texts_after
+from tests._html_page import doctype, element_count, element_ids, headings, texts_after
 from tests._web_app import build_test_app
 
 
@@ -384,12 +384,13 @@ class TestFleetConfigRoute:
         assert "n_homes" in element_ids(page)
 
     def test_fleet_page_contains_pv_battery_load_sections(self, client: FlaskClient) -> None:
-        """Test GET /simulate/fleet contains PV, Battery, and Load sections."""
+        """GET /simulate/fleet renders one heading per distribution card: PV Capacity, Battery Capacity and Annual Consumption."""
         response = client.get("/simulate/fleet")
-        html_data = response.data.decode("utf-8")
-        assert "PV Capacity" in html_data
-        assert "Battery Capacity" in html_data
-        assert "Annual Consumption" in html_data
+        page = response.get_data(as_text=True)
+        subjects = ("PV Capacity", "Battery Capacity", "Annual Consumption")
+        page_headings = headings(page)
+        headings_per_subject = {subject: page_headings.count(subject) for subject in subjects}
+        assert headings_per_subject == dict.fromkeys(subjects, 1)
 
     def test_fleet_page_contains_action_buttons(self, client: FlaskClient) -> None:
         """Test GET /simulate/fleet contains import/export/run buttons."""
