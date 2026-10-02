@@ -26,9 +26,8 @@ def _collect_with_test_command(
     """Run test_command verbatim, collect-only, with *pytest_args*, in a fresh uv environment under *workdir*.
 
     The environment holds exactly the extras the command names. The shared
-    environment would prove nothing: `uv run` never uninstalls, so it keeps any
-    extra an earlier `uv run` installed, and tests/unit/test_e2e_lane.py's
-    nested run installs the web extra into it.
+    environment would prove nothing: `uv run` syncs inexactly, so it keeps any
+    extra an earlier `uv run` installed.
     """
     command = load_orchestrator_config(project_root)["test_command"]
     env = isolated_uv_env(workdir / "venv")
