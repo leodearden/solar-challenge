@@ -355,26 +355,19 @@ class TOUOptimizedStrategy(DispatchStrategy):
         """Return strategy name."""
         return "tou_optimized"
 
-    def __init__(
-        self,
-        peak_hours: List[Tuple[int, int]],
-        off_peak_hours: Optional[List[Tuple[int, int]]] = None,
-    ) -> None:
+    def __init__(self, peak_hours: List[Tuple[int, int]]) -> None:
         """Initialize TOU-optimized strategy with tariff period definitions.
 
         Args:
             peak_hours: List of (start_hour, end_hour) tuples defining peak periods.
                 Hours are in 24-hour format (0-23). For example, [(17, 20)]
-                represents peak period from 5 PM to 8 PM.
-            off_peak_hours: Optional list of (start_hour, end_hour) tuples for
-                off-peak periods. If not specified, all non-peak hours are
-                considered off-peak.
+                represents peak period from 5 PM to 8 PM. Every hour outside
+                these ranges is off-peak.
 
         Raises:
             ValueError: If hour ranges are invalid (not 0-23, start >= end)
         """
         self._peak_hours = peak_hours
-        self._off_peak_hours = off_peak_hours
 
         # Validate peak hours
         for start, end in peak_hours:
@@ -387,18 +380,6 @@ class TOUOptimizedStrategy(DispatchStrategy):
                     f"Peak period start must be before end, got ({start}, {end})"
                 )
 
-        # Validate off-peak hours if provided
-        if off_peak_hours is not None:
-            for start, end in off_peak_hours:
-                if not (0 <= start < 24 and 0 <= end <= 24):
-                    raise ValueError(
-                        f"Off-peak hours must be in range 0-23, got ({start}, {end})"
-                    )
-                if start >= end:
-                    raise ValueError(
-                        f"Off-peak period start must be before end, got ({start}, {end})"
-                    )
-
     def _get_tariff_period(self, timestamp: datetime) -> TariffPeriod:
         """Determine tariff period for given timestamp.
 
@@ -410,21 +391,8 @@ class TOUOptimizedStrategy(DispatchStrategy):
             TariffPeriod.OFF_PEAK otherwise
         """
         hour = timestamp.hour
-
-        # Check if current hour falls within any peak period
-        for start, end in self._peak_hours:
-            if start <= hour < end:
-                return TariffPeriod.PEAK
-
-        # If off_peak_hours specified, verify it's in an off-peak period
-        if self._off_peak_hours is not None:
-            for start, end in self._off_peak_hours:
-                if start <= hour < end:
-                    return TariffPeriod.OFF_PEAK
-            # Not in peak or explicit off-peak, treat as off-peak by default
-            return TariffPeriod.OFF_PEAK
-
-        # Not in peak period, so it's off-peak
+        if any(start <= hour < end for start, end in self._peak_hours):
+            return TariffPeriod.PEAK
         return TariffPeriod.OFF_PEAK
 
     def decide_action(
