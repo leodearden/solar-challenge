@@ -28,8 +28,8 @@
             <div class="p-5 space-y-5">
                 <!-- Parameter Selection -->
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Parameter to Sweep</label>
-                    <select x-model="parameter" @change="onParameterChange()"
+                    <label for="sweep_parameter" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Parameter to Sweep</label>
+                    <select id="sweep_parameter" x-model="parameter" @change="onParameterChange()"
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                         <template x-for="opt in parameterOptions" :key="opt.value">
                             <option :value="opt.value" x-text="opt.label"></option>
@@ -40,18 +40,18 @@
                 <!-- Range Inputs -->
                 <div class="grid grid-cols-3 gap-4">
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Min Value</label>
-                        <input type="number" step="any" x-model="minVal"
+                        <label for="sweep_min" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Min Value</label>
+                        <input id="sweep_min" type="number" step="any" x-model="minVal"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Max Value</label>
-                        <input type="number" step="any" x-model="maxVal"
+                        <label for="sweep_max" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Max Value</label>
+                        <input id="sweep_max" type="number" step="any" x-model="maxVal"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Steps</label>
-                        <input type="number" min="2" max="50" x-model="steps"
+                        <label for="sweep_steps" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Steps</label>
+                        <input id="sweep_steps" type="number" min="2" max="50" x-model="steps"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                 </div>
@@ -78,13 +78,13 @@
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Base Configuration</label>
                     <div class="grid grid-cols-2 gap-3">
                         <div>
-                            <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Battery (kWh)</label>
-                            <input type="number" step="0.1" x-model="baseConfig.battery_kwh"
+                            <label for="sweep_base_battery_kwh" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Battery (kWh)</label>
+                            <input id="sweep_base_battery_kwh" type="number" step="0.1" x-model="baseConfig.battery_kwh"
                                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                         </div>
                         <div>
-                            <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Location</label>
-                            <select x-model="baseConfig.location"
+                            <label for="sweep_base_location" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Location</label>
+                            <select id="sweep_base_location" x-model="baseConfig.location"
                                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                                 <option value="bristol">Bristol</option>
                                 <option value="london">London</option>
@@ -93,8 +93,8 @@
                             </select>
                         </div>
                         <div>
-                            <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Days</label>
-                            <input type="number" min="1" max="365" x-model="baseConfig.days"
+                            <label for="sweep_base_days" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Days</label>
+                            <input id="sweep_base_days" type="number" min="1" max="365" x-model="baseConfig.days"
                                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                         </div>
                     </div>
@@ -139,12 +139,12 @@
 
                     <!-- Values list -->
                     <div class="mt-8 pt-4 border-t border-slate-200 dark:border-slate-700">
-                        <div class="flex flex-wrap gap-2">
+                        <ul role="list" aria-label="Sweep values" class="flex flex-wrap gap-2">
                             <template x-for="(val, idx) in previewValues" :key="idx">
-                                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300"
-                                    x-text="val"></span>
+                                <li class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300"
+                                    x-text="val"></li>
                             </template>
-                        </div>
+                        </ul>
                     </div>
 
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-2">
