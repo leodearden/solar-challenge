@@ -1,7 +1,8 @@
 """End-to-end tests for the Parameter Sweep page (/scenarios/sweep).
 
-Verifies page loading, form elements, preview calculations, that submitting
-a sweep returns one background job per sweep point, and detects Bug B1
+Verifies page loading, that each form control is found by role and by the name
+its label gives it, preview calculations, that submitting a sweep filled into
+the form returns one background job per sweep point, and detects Bug B1
 (Alpine race condition with external JS).
 """
 
@@ -54,39 +55,30 @@ def test_sweep_no_js_errors(page: Page, live_server: str) -> None:
     assert errors == [], f"Console errors on /scenarios/sweep: {errors}"
 
 
-# -- Sweep configuration form elements ------------------------------------
+# -- Sweep configuration form controls -------------------------------------
 
 
-def test_sweep_configuration_form(page: Page, live_server: str) -> None:
-    """The sweep form has parameter dropdown, min/max/steps inputs, and
-    linear/geometric radio buttons.
-    """
+_SWEEP_FORM_CONTROLS = (
+    pytest.param("combobox", "Parameter to Sweep", id="parameter"),
+    pytest.param("spinbutton", "Min Value", id="min"),
+    pytest.param("spinbutton", "Max Value", id="max"),
+    pytest.param("spinbutton", "Steps", id="steps"),
+    pytest.param("radio", "Linear", id="linear"),
+    pytest.param("radio", "Geometric", id="geometric"),
+    pytest.param("spinbutton", "Battery (kWh)", id="battery_kwh"),
+    pytest.param("combobox", "Location", id="location"),
+    pytest.param("spinbutton", "Days", id="days"),
+)
+
+
+@pytest.mark.parametrize(("role", "label"), _SWEEP_FORM_CONTROLS)
+def test_sweep_form_control_is_named_by_its_label(
+    page: Page, live_server: str, role: str, label: str
+) -> None:
+    """Each sweep form control is found by role and by the accessible name its label gives it."""
     page.goto(live_server + "/scenarios/sweep")
-    page.wait_for_load_state("networkidle")
 
-    # Parameter dropdown (select with x-model="parameter")
-    param_select = page.locator('select[x-model="parameter"]')
-    expect(param_select).to_be_attached()
-
-    # Min Value input
-    min_input = page.locator('input[x-model="minVal"]')
-    expect(min_input).to_be_attached()
-
-    # Max Value input
-    max_input = page.locator('input[x-model="maxVal"]')
-    expect(max_input).to_be_attached()
-
-    # Steps input
-    steps_input = page.locator('input[x-model="steps"]')
-    expect(steps_input).to_be_attached()
-
-    # Linear radio button
-    linear_radio = page.locator('input[type="radio"][value="linear"]')
-    expect(linear_radio).to_be_attached()
-
-    # Geometric radio button
-    geometric_radio = page.locator('input[type="radio"][value="geometric"]')
-    expect(geometric_radio).to_be_attached()
+    expect(page.get_by_role(role, name=label, exact=True)).to_be_visible()
 
 
 # -- Preview updates when inputs change ------------------------------------
@@ -96,9 +88,9 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
     """Filling in min=1, max=10, steps=5 previews the five linear sweep values from 1 to 10."""
     page.goto(live_server + "/scenarios/sweep")
 
-    page.locator('input[x-model="minVal"]').fill("1")
-    page.locator('input[x-model="maxVal"]').fill("10")
-    page.locator('input[x-model="steps"]').fill("5")
+    page.get_by_label("Min Value", exact=True).fill("1")
+    page.get_by_label("Max Value", exact=True).fill("10")
+    page.get_by_label("Steps", exact=True).fill("5")
 
     expect(page.get_by_text("5 values will be tested", exact=True)).to_be_visible()
     expect(page.locator(".flex.flex-wrap.gap-2 span.rounded-full")).to_have_text(
@@ -110,26 +102,16 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
 
 
 def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> None:
-    """Submitting a 3-point sweep via the form button returns 201 with a
-    sweep id, the sweep values and one distinct background home-job id per
-    sweep point.
+    """Filling the form with a 3-point linear sweep from 3 to 9 and clicking its
+    button returns 201 with a sweep id, the sweep values and one distinct
+    background home-job id per sweep point.
     """
     page.goto(live_server + "/scenarios/sweep")
-    page.wait_for_load_state("networkidle")
 
-    # Wait for Alpine.js to initialise
-    page.wait_for_timeout(1000)
-
-    # Set valid sweep parameters so the submit button is enabled.
-    page.evaluate("""() => {
-        const el = document.querySelector('[x-data="parameterSweep()"]');
-        const data = Alpine.$data(el);
-        data.minVal = 2;
-        data.maxVal = 8;
-        data.steps = 3;
-        data.mode = 'linear';
-    }""")
-    page.wait_for_timeout(500)
+    page.get_by_label("Min Value", exact=True).fill("3")
+    page.get_by_label("Max Value", exact=True).fill("9")
+    page.get_by_label("Steps", exact=True).fill("3")
+    page.get_by_role("radio", name="Linear", exact=True).check()
 
     # Intercept the API call and click the submit button
     with page.expect_response("**/api/simulate/sweep") as response_info:
@@ -140,7 +122,7 @@ def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> 
 
     data = response.json()
     assert data["sweep_id"]
-    assert data["values"] == [2.0, 5.0, 8.0]
+    assert data["values"] == [3.0, 6.0, 9.0]
 
     job_ids = data["job_ids"]
     assert len(job_ids) == 3
