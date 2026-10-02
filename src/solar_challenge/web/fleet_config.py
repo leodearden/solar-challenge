@@ -92,8 +92,9 @@ def sample_distribution(
         ValueError: If dist_type is unknown or params are invalid, params are
             not a dict (see :func:`_require_dict`), a
             weighted_discrete/shuffled_pool row list is malformed (see
-            :func:`_dict_list`), or n_samples is not an integer from 1 to
-            MAX_FLEET_HOMES (see :func:`_as_int_within`).
+            :func:`_dict_list`), n_samples is one int() cannot read or outside
+            1 to MAX_FLEET_HOMES, or a shuffled_pool count is one int() cannot
+            read or outside 0 to MAX_FLEET_HOMES (see :func:`_as_int_within`).
     """
     n_samples = _as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
@@ -155,8 +156,10 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     Raises:
         ValueError: If required fields are missing or invalid, a
             pv/battery/load block is not a dict (see
-            :func:`_component_block`), or a weighted_discrete/shuffled_pool
-            row list is malformed (see :func:`_dict_list`).
+            :func:`_component_block`), a weighted_discrete/shuffled_pool
+            row list is malformed (see :func:`_dict_list`), or a shuffled_pool
+            count is one int() cannot read or outside 0 to MAX_FLEET_HOMES
+            (see :func:`_as_int_within`).
     """
     n_homes = int(form_data.get("n_homes", 100))
     if n_homes < 1:
@@ -295,7 +298,8 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
 
     Raises:
         ValueError: If a weighted_discrete/shuffled_pool row list is malformed
-            (see :func:`_dict_list`).
+            (see :func:`_dict_list`), or a shuffled_pool count is one int() cannot
+            read or outside 0 to MAX_FLEET_HOMES (see :func:`_as_int_within`).
     """
     dist_type = data["type"]
     result: dict[str, Any] = {"type": dist_type}
@@ -320,7 +324,10 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
     elif dist_type == "shuffled_pool":
         entries = _dict_list(data, "entries")
         result["values"] = [float(e.get("value", 0)) for e in entries]
-        result["counts"] = [int(e.get("count", 1)) for e in entries]
+        result["counts"] = [
+            _as_int_within(entry.get("count", 1), f"entries[{index}].count", 0, MAX_FLEET_HOMES)
+            for index, entry in enumerate(entries)
+        ]
 
     return result
 
