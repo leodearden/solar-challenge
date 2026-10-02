@@ -682,7 +682,7 @@ class TestPeakShavingStrategyGridCharging:
         assert decision.grid_charge_kw == 0.0
 
     # -------------------------------------------------------------------------
-    # Regression: ctx omitted → behaviour unchanged from pre-α3 baseline
+    # Regression: ctx omitted → no grid charge; charge/discharge unaffected
     # -------------------------------------------------------------------------
 
     def test_regression_no_ctx_excess_pv(self, standard_peak_shaving_strategy):
