@@ -10,7 +10,7 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
-from tests._html_page import element_ids, texts_after
+from tests._html_page import doctype, element_count, element_ids, texts_after
 from tests._web_app import build_test_app
 
 
@@ -51,9 +51,9 @@ class TestIndexRoute:
         assert response.status_code == 200
 
     def test_get_index_returns_html(self, client: FlaskClient) -> None:
-        """Test GET / returns HTML content."""
+        """GET / returns an HTML document: the page declares the html doctype."""
         response = client.get("/")
-        assert b"html" in response.data.lower() or b"<" in response.data
+        assert doctype(response.get_data(as_text=True)) == "html"
 
     def test_get_index_content_type_html(self, client: FlaskClient) -> None:
         """Test GET / returns text/html content type."""
@@ -378,9 +378,9 @@ class TestFleetConfigRoute:
     def test_fleet_page_contains_distribution_editors(self, client: FlaskClient) -> None:
         """Test GET /simulate/fleet response contains distribution editors."""
         response = client.get("/simulate/fleet")
-        html_data = response.data.decode("utf-8").lower()
-        assert "distribution" in html_data
-        assert "n_homes" in html_data or "homes" in html_data
+        page = response.get_data(as_text=True)
+        assert "distribution" in page.lower()
+        assert "n_homes" in element_ids(page)
 
     def test_fleet_page_contains_pv_battery_load_sections(self, client: FlaskClient) -> None:
         """Test GET /simulate/fleet contains PV, Battery, and Load sections."""
@@ -876,7 +876,7 @@ class TestErrorPages:
         # Should contain the custom 404 template content
         assert "Page Not Found" in html
         # Should NOT be a raw error string like "Not Found"
-        assert "<!DOCTYPE html>" in html or "<html" in html
+        assert doctype(html) == "html"
 
     def test_404_page_renders_within_app_layout(self, client: FlaskClient) -> None:
         """Test custom 404 page is rendered within the base app layout."""
@@ -886,8 +886,8 @@ class TestErrorPages:
         # The base template includes sidebar navigation and footer
         assert "Solar Challenge" in html
         # Check it extends the base layout (has nav and footer elements)
-        assert "<nav" in html or "nav-sidebar" in html.lower() or "sidebar" in html.lower()
-        assert "<footer" in html
+        assert element_count(html, "nav") >= 1
+        assert element_count(html, "footer") >= 1
         # Contains the 404-specific content
         assert "404" in html
         assert "Back to Dashboard" in html
@@ -909,10 +909,9 @@ class TestErrorPages:
                 html = response.data.decode("utf-8")
                 # Should render within the base layout
                 assert "Solar Challenge" in html
-                assert "<footer" in html
+                assert element_count(html, "footer") >= 1
                 # Contains the 500-specific content
-                assert "500" in html
-                assert "Internal Server Error" in html or "Server Error" in html
+                assert texts_after(html, "500", 1) == ["Internal Server Error"]
                 assert "Back to Dashboard" in html
         finally:
             app.config["TESTING"] = True
@@ -963,8 +962,6 @@ class TestSimulateHomePageRendering:
         html = response.data.decode("utf-8")
 
         # Should have a proper HTML document
-        assert "<!DOCTYPE html>" in html or "<html" in html
-        assert "<head>" in html or "<head " in html
-        assert "</head>" in html
-        assert "<body" in html
-        assert "</body>" in html
+        assert doctype(html) == "html"
+        assert element_count(html, "head") == 1
+        assert element_count(html, "body") == 1

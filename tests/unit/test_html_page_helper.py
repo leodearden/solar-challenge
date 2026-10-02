@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_html_page.py, the reader of a rendered page's element ids and texts.
+"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, ids and texts.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a page test that uses it pass vacuously.
@@ -7,7 +7,7 @@ letting a page test that uses it pass vacuously.
 
 import pytest
 
-from tests._html_page import element_ids, texts_after
+from tests._html_page import doctype, element_count, element_ids, texts, texts_after
 
 
 def test_element_ids_come_from_tags_and_not_from_script_text() -> None:
@@ -77,3 +77,108 @@ def test_a_repeated_label_raises_rather_than_picking_one() -> None:
 
     with pytest.raises(ValueError, match="'Total Demand'.*found 2"):
         texts_after(page, "Total Demand", 1)
+
+
+def test_texts_lists_every_text_in_document_order_each_time_it_occurs() -> None:
+    page = "<title>Compare Runs</title><h1>Compare Runs</h1><h2>No Runs Selected</h2>"
+
+    assert texts(page) == ["Compare Runs", "Compare Runs", "No Runs Selected"]
+
+
+def test_element_count_counts_the_elements_with_the_tag() -> None:
+    page = "<aside><nav></nav></aside><nav><a>Runs</a></nav><footer></footer>"
+
+    assert element_count(page, "nav") == 2
+
+
+def test_element_count_counts_only_elements_carrying_every_given_attribute() -> None:
+    page = (
+        '<input type="text" x-model="name">'
+        '<input type="hidden" x-model="name">'
+        '<input type="text" x-model="saveName">'
+        '<select x-model="name"></select>'
+    )
+
+    assert element_count(page, "input", {"type": "text", "x-model": "name"}) == 1
+
+
+def test_an_attribute_value_matches_only_in_its_exact_case() -> None:
+    page = '<input x-model="Name">'
+
+    assert element_count(page, "input", {"x-model": "name"}) == 0
+
+
+def test_tag_and_attribute_names_are_read_in_lower_case() -> None:
+    page = '<NAV></NAV><Input X-Model="name">'
+
+    assert element_count(page, "nav") == 1
+    assert element_count(page, "input", {"x-model": "name"}) == 1
+
+
+@pytest.mark.parametrize(
+    ("tag", "attributes", "refused"),
+    [
+        pytest.param("Input", {"x-model": "name"}, "Input", id="tag"),
+        pytest.param("input", {"X-Model": "name"}, "X-Model", id="attribute-name"),
+    ],
+)
+def test_a_name_not_in_lower_case_raises_rather_than_counting_none(
+    tag: str, attributes: dict[str, str], refused: str
+) -> None:
+    page = '<input x-model="name">'
+
+    with pytest.raises(ValueError, match=f"in lower case.*; got '{refused}'$"):
+        element_count(page, tag, attributes)
+
+
+def test_a_repeated_attribute_keeps_its_first_value() -> None:
+    page = '<input x-model="name" x-model="saveName">'
+
+    assert element_count(page, "input", {"x-model": "name"}) == 1
+    assert element_count(page, "input", {"x-model": "saveName"}) == 0
+
+
+def test_an_element_inside_script_text_does_not_count() -> None:
+    page = "<nav></nav><script>menu.innerHTML = '<nav></nav>';</script>"
+
+    assert element_count(page, "nav") == 1
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        pytest.param("<!DOCTYPE html>", id="upper-case"),
+        pytest.param("<!doctype HTML>", id="lower-case-keyword"),
+    ],
+)
+def test_doctype_reads_the_declared_type_in_lower_case(declaration: str) -> None:
+    page = f"{declaration}<html><p>Dashboard</p></html>"
+
+    assert doctype(page) == "html"
+
+
+def test_a_legacy_doctype_keeps_its_identifiers_so_it_is_not_html() -> None:
+    page = '<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN"><p>Dashboard</p>'
+
+    assert doctype(page) == 'html public "-//w3c//dtd html 4.01//en"'
+
+
+def test_a_page_without_a_doctype_declares_none() -> None:
+    page = "<html><p>Dashboard</p></html>"
+
+    assert doctype(page) is None
+
+
+def test_a_doctype_inside_a_comment_or_script_text_does_not_count() -> None:
+    page = "<!-- <!DOCTYPE html> --><script>const d = '<!DOCTYPE html>';</script><p>Dashboard</p>"
+
+    assert doctype(page) is None
+
+
+def test_a_repeated_doctype_raises_rather_than_picking_one() -> None:
+    page = "<!DOCTYPE html><!DOCTYPE html><p>Dashboard</p>"
+
+    with pytest.raises(
+        ValueError, match="at most one doctype declaration on the page; found 2"
+    ):
+        doctype(page)

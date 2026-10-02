@@ -27,6 +27,7 @@ from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
+from tests._html_page import texts_after
 from tests._web_app import build_test_app
 
 
@@ -833,9 +834,10 @@ class TestCompareWithoutIDs:
     def test_compare_without_ids_shows_helpful_message(
         self, client: FlaskClient
     ) -> None:
-        """Test that empty state page shows a helpful message about selecting runs."""
+        """The empty state's No Runs Selected heading is followed by the message saying how to select runs."""
         response = client.get("/history/compare")
         assert response.status_code == 200
-        html = response.data.decode("utf-8")
-        # The empty state should inform user about selecting runs
-        assert "Select" in html or "simulation runs" in html.lower()
+        page = response.get_data(as_text=True)
+        assert texts_after(page, "No Runs Selected", 1) == [
+            "Select 2-4 simulation runs from the history page to compare their results side by side."
+        ]

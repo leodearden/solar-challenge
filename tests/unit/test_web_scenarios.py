@@ -23,6 +23,7 @@ from solar_challenge.config import (
 )
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.shared import LOCATION_PRESETS
+from tests._html_page import element_count, texts, texts_after
 from tests._web_app import build_test_app
 
 
@@ -92,16 +93,17 @@ class TestScenarioBuilderRoute:
         assert response.status_code == 200
 
     def test_builder_contains_form_and_preview(self, client: FlaskClient) -> None:
-        """Test GET /scenarios/builder contains form and YAML preview elements."""
+        """GET /scenarios/builder has its YAML Preview pane: the heading, once, and one element bound to yamlPreview."""
         response = client.get("/scenarios/builder")
-        data = response.data.decode()
-        assert "yaml" in data.lower() or "preview" in data.lower()
+        page = response.get_data(as_text=True)
+        assert texts(page).count("YAML Preview") == 1
+        assert element_count(page, "pre", {"x-text": "yamlPreview"}) == 1
 
     def test_builder_contains_scenario_name_input(self, client: FlaskClient) -> None:
-        """Test GET /scenarios/builder contains the scenario name input."""
+        """GET /scenarios/builder has exactly one input bound to the scenario's name."""
         response = client.get("/scenarios/builder")
-        data = response.data.decode()
-        assert "Scenario Name" in data or "name" in data
+        page = response.get_data(as_text=True)
+        assert element_count(page, "input", {"x-model": "name"}) == 1
 
     def test_builder_contains_accordion_sections(self, client: FlaskClient) -> None:
         """Test GET /scenarios/builder contains accordion sections."""
@@ -131,23 +133,22 @@ class TestSweepRoute:
         assert response.status_code == 200
 
     def test_sweep_page_contains_parameter_selector(self, client: FlaskClient) -> None:
-        """Test GET /scenarios/sweep contains parameter selection elements."""
+        """GET /scenarios/sweep has exactly one select bound to the swept parameter."""
         response = client.get("/scenarios/sweep")
-        data = response.data.decode()
-        assert "parameter" in data.lower() or "sweep" in data.lower()
+        page = response.get_data(as_text=True)
+        assert element_count(page, "select", {"x-model": "parameter"}) == 1
 
     def test_sweep_page_contains_mode_options(self, client: FlaskClient) -> None:
-        """Test GET /scenarios/sweep contains linear/geometric mode options."""
+        """GET /scenarios/sweep offers the Linear and Geometric modes, in that order, after the Sweep Mode label."""
         response = client.get("/scenarios/sweep")
-        data = response.data.decode()
-        assert "linear" in data.lower() or "Linear" in data
-        assert "geometric" in data.lower() or "Geometric" in data
+        page = response.get_data(as_text=True)
+        assert texts_after(page, "Sweep Mode", 2) == ["Linear", "Geometric"]
 
     def test_sweep_page_contains_preview_section(self, client: FlaskClient) -> None:
-        """Test GET /scenarios/sweep contains the sweep point preview."""
+        """GET /scenarios/sweep has the Sweep Point Preview heading, once."""
         response = client.get("/scenarios/sweep")
-        data = response.data.decode()
-        assert "Sweep Point Preview" in data or "preview" in data.lower()
+        page = response.get_data(as_text=True)
+        assert texts(page).count("Sweep Point Preview") == 1
 
 
 class TestScenarioAPI:
