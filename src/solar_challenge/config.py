@@ -12,7 +12,7 @@ import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Collection, Iterator, Literal, Mapping, Optional, Union, cast
+from typing import Any, Callable, Collection, Iterator, Literal, Mapping, Optional, Union, cast
 
 import pandas as pd
 import yaml
@@ -1817,13 +1817,35 @@ def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
         raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
 
 
+def _float_or_none(value: Any) -> Optional[float]:
+    """Coerce *value* to a float, keeping a null as None."""
+    return None if value is None else float(value)
+
+
+# Rows follow FinanceConfig's field order, which decides the first bad value reported.
+_FINANCE_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
+    "standing_charge_pence_per_day": float,
+    "vat_rate": float,
+    "retail_baseline_rate_pence_per_kwh": float,
+    "self_consumption_override": _float_or_none,
+    "pv_cost_per_kwp_gbp": float,
+    "roof_fit_cost_gbp": float,
+    "battery_cost_per_kwh_gbp": float,
+    "inverter_cost_per_kw_gbp": float,
+    "grant_gbp": float,
+    "equity_fraction": float,
+    "loan_term_years": int,
+    "loan_rate": float,
+    "opex_per_home_per_year_gbp": float,
+    "asset_life_years": int,
+    "own_use_rate_pence_per_kwh": float,
+    "retained_cash_floor_per_home_per_year_gbp": float,
+    "grid_services_income_per_kw_per_year_gbp": float,
+    "grid_services_model": str,
+})
+
 _FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
-    "standing_charge_pence_per_day", "vat_rate", "retail_baseline_rate_pence_per_kwh",
-    "self_consumption_override", "pv_cost_per_kwp_gbp", "roof_fit_cost_gbp",
-    "battery_cost_per_kwh_gbp", "inverter_cost_per_kw_gbp", "grant_gbp", "equity_fraction",
-    "loan_term_years", "loan_rate", "opex_per_home_per_year_gbp", "asset_life_years",
-    "own_use_rate_pence_per_kwh", "retained_cash_floor_per_home_per_year_gbp",
-    "grid_services_income_per_kw_per_year_gbp", "grid_services_model", "grid_services_events",
+    *_FINANCE_SCALAR_COERCIONS, "grid_services_events",
 })
 
 _GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -1840,6 +1862,8 @@ def parse_finance_config(
     data: Optional[dict[str, Any]], *, block_path: str = "finance"
 ) -> Optional[FinanceConfig]:
     """Parse finance configuration from config data.
+
+    A key the block omits takes FinanceConfig's declared default.
 
     Args:
         data: Finance configuration dictionary or None
@@ -1865,7 +1889,6 @@ def parse_finance_config(
     # Parse optional nested grid_services_events block BEFORE the try/except so
     # ConfigurationError raised by GridServicesEventsConfig.__post_init__ propagates
     # without being swallowed by the (ValueError, TypeError) 'non-numeric' wrapper.
-    grid_services_model: str = str(data.get("grid_services_model", "flat"))
     grid_services_events_obj: Optional[GridServicesEventsConfig] = None
     gs_events_raw = data.get("grid_services_events")
     if gs_events_raw is not None:
@@ -1935,42 +1958,14 @@ def parse_finance_config(
             ) from exc
 
     try:
-        sc_raw = data.get("self_consumption_override")
-        return FinanceConfig(
-            standing_charge_pence_per_day=float(data["standing_charge_pence_per_day"]),
-            vat_rate=float(data.get("vat_rate", 0.05)),
-            retail_baseline_rate_pence_per_kwh=float(
-                data.get("retail_baseline_rate_pence_per_kwh", 23.0)
-            ),
-            self_consumption_override=float(sc_raw) if sc_raw is not None else None,
-            pv_cost_per_kwp_gbp=float(data.get("pv_cost_per_kwp_gbp", 1000.0)),
-            roof_fit_cost_gbp=float(data.get("roof_fit_cost_gbp", 1000.0)),
-            battery_cost_per_kwh_gbp=float(data.get("battery_cost_per_kwh_gbp", 250.0)),
-            inverter_cost_per_kw_gbp=float(data.get("inverter_cost_per_kw_gbp", 0.0)),
-            grant_gbp=float(data.get("grant_gbp", 250000.0)),
-            equity_fraction=float(data.get("equity_fraction", 0.75)),
-            loan_term_years=int(data.get("loan_term_years", 15)),
-            loan_rate=float(data.get("loan_rate", 0.07)),
-            opex_per_home_per_year_gbp=float(
-                data.get("opex_per_home_per_year_gbp", 131.0)
-            ),
-            asset_life_years=int(data.get("asset_life_years", 25)),
-            own_use_rate_pence_per_kwh=float(
-                data.get("own_use_rate_pence_per_kwh", 15.0)
-            ),
-            retained_cash_floor_per_home_per_year_gbp=float(
-                data.get("retained_cash_floor_per_home_per_year_gbp", 27.0)
-            ),
-            grid_services_income_per_kw_per_year_gbp=float(
-                data.get("grid_services_income_per_kw_per_year_gbp", 0.0)
-            ),
-            grid_services_model=grid_services_model,
-            grid_services_events=grid_services_events_obj,
-        )
+        scalars = {
+            key: coerce(data[key])
+            for key, coerce in _FINANCE_SCALAR_COERCIONS.items()
+            if key in data
+        }
     except (ValueError, TypeError) as exc:
-        raise ConfigurationError(
-            f"finance block contains a non-numeric value: {exc}"
-        ) from exc
+        raise ConfigurationError(f"finance block contains a non-numeric value: {exc}") from exc
+    return FinanceConfig(**scalars, grid_services_events=grid_services_events_obj)
 
 
 def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:

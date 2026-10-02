@@ -253,19 +253,20 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
 
 def test_unset_grid_services_is_theta_safe_noop() -> None:
-    """Omitting grid_services_income_per_kw_per_year_gbp (via both the production
-    parser default and the FinanceConfig dataclass default) must be bit-identical
-    to explicit 0.0 on project surplus.
+    """Omitting grid_services_income_per_kw_per_year_gbp, whether from the finance
+    block the production parser reads or from a direct FinanceConfig construction,
+    must be bit-identical to explicit 0.0 on project surplus.
 
     Encodes the seam's θ-safe contract: the additive default is a true no-op,
     so existing non-flex economics and the θ calibration are unperturbed.
 
     Non-tautological: finance_base (from the board YAML) carries 12.0, so the
     two omitted-path configs (finance_omitted, finance_dataclass_default) must
-    resolve to 0.0 via their respective defaults — not 12.0 — to pass.  A future
-    change that shifts parse_finance_config's data.get fallback OR
-    FinanceConfig's grid_services_income_per_kw_per_year_gbp field default
-    away from 0.0 would be caught here.
+    resolve to 0.0 — not 12.0 — to pass.  parse_finance_config leaves an omitted
+    key to FinanceConfig's declared default, so a future change that shifts
+    FinanceConfig's grid_services_income_per_kw_per_year_gbp field default away
+    from 0.0, or that has the parser supply its own value for an omitted key,
+    would be caught here.
     """
     from solar_challenge.config import (
         FinanceConfig,
@@ -288,23 +289,24 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     )
     surplus_explicit = _surplus_at(scenario, finance_explicit_zero, simulate)
 
-    # Path 1 — production-parser omitted path: pop the key from the finance dict
-    # and drive parse_finance_config's data.get(..., 0.0) fallback.
+    # Path 1 — production-parser omitted path: pop the key from the finance dict,
+    # so parse_finance_config leaves it to FinanceConfig's declared default.
     cfg = load_config(SCENARIO)
     finance_dict = dict(cfg["finance"])
     finance_dict.pop("grid_services_income_per_kw_per_year_gbp")
-    # Also remove event-model keys so the parser defaults to flat model.
+    # Also remove event-model keys so FinanceConfig's declared default, the flat
+    # model, applies.
     # No-op before task-76 ε flip (board YAML is flat); preserves the
     # "all grid-services keys unset" intent after the flip.
     finance_dict.pop("grid_services_model", None)
     finance_dict.pop("grid_services_events", None)
     assert "grid_services_income_per_kw_per_year_gbp" not in finance_dict, (
-        "Key must be absent so the parser fallback fires"
+        "Key must be absent so FinanceConfig's declared default applies"
     )
     finance_omitted = parse_finance_config(finance_dict)
     assert finance_omitted is not None
     assert finance_omitted.grid_services_income_per_kw_per_year_gbp == 0.0, (
-        "parse_finance_config's data.get fallback must resolve to 0.0 when key is absent"
+        "parse_finance_config must leave an absent key to FinanceConfig's default of 0.0"
     )
 
     # Path 2 — FinanceConfig dataclass default path: reconstruct from finance_base's
