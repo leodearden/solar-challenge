@@ -132,7 +132,7 @@ def validate_pv_generation(
 ) -> list[ValidationResult]:
     """Validate PV generation values for sanity.
 
-    Checks:
+    Checks (VAL-001):
     - Generation is never negative
     - Generation is zero at night (approximately)
     - Peak generation within 10% over the DC the PV model wires (pv.wired_dc_capacity_kw)
@@ -149,12 +149,6 @@ def validate_pv_generation(
 
     Returns:
         List of ValidationResult objects
-
-    VAL-001 acceptance criteria:
-        - Generation never negative
-        - Generation zero at night
-        - Peak generation does not exceed system capacity
-        - Annual generation per kWp wired within the UK benchmark band
     """
     results: list[ValidationResult] = []
 
