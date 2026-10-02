@@ -7,8 +7,11 @@ verify built on one passes and the stale lock merges. Every uv command the
 orchestrator runs from dark-factory-orchestrator.yaml must instead refuse a
 stale lock, failing with uv's error, which names the fix: run `uv lock`.
 
-Each command runs verbatim through run_collect_only, so one that got past the
-lock check would only collect its tests.
+Each command runs verbatim, through run_collect_only, on a probe holding only
+the project's uv metadata and no source. A command that gets past the lock
+check, by re-locking or, like `uv run --frozen`, by running on the stale pins,
+fails later, building the package, without naming `uv lock`. So the tests look
+for that phrase, not merely a non-zero exit.
 """
 
 import hashlib
