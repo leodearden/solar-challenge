@@ -13,10 +13,11 @@
 
     {% block head %}{% endblock %}
 
+    {# Vendored verbatim; why, and how to upgrade: tests/unit/test_web_layout_scripts.py #}
     <!-- Alpine.js plugins (must load before Alpine core) -->
-    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.14.8/dist/cdn.min.js" integrity="sha384-NArNwzWsUSF+kY2lgW4YriEkjLqi+J+za6HrENUn/3nZqkBnWbxV22kCJEK5Uu6n" crossorigin="anonymous"></script>
+    <script defer src="{{ url_for('static', filename='vendor/alpinejs/collapse-3.14.8.min.js') }}" integrity="sha384-NArNwzWsUSF+kY2lgW4YriEkjLqi+J+za6HrENUn/3nZqkBnWbxV22kCJEK5Uu6n"></script>
     <!-- Alpine.js -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js" integrity="sha384-X9kJyAubVxnP0hcA+AMMs21U445qsnqhnUF8EBlEpP3a42Kh/JwWjlv2ZcvGfphb" crossorigin="anonymous"></script>
+    <script defer src="{{ url_for('static', filename='vendor/alpinejs/alpinejs-3.14.8.min.js') }}" integrity="sha384-X9kJyAubVxnP0hcA+AMMs21U445qsnqhnUF8EBlEpP3a42Kh/JwWjlv2ZcvGfphb"></script>
 
     <!-- Project stylesheet -->
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
