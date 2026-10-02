@@ -521,8 +521,8 @@ class TestOverrideExactValues:
             )
 
     @staticmethod
-    def _untariffed_override_bill() -> "BillBreakdown":  # type: ignore[name-defined]
-        """householder_bill at override 0.70 for a home with no tariff; the retail fallback must warn."""
+    def _untariffed_override_bill(override: float = 0.70) -> "BillBreakdown":  # type: ignore[name-defined]
+        """householder_bill at *override* for a home with no tariff; the retail fallback must warn."""
         from solar_challenge.finance import householder_bill
 
         summary = _make_summary(
@@ -535,7 +535,7 @@ class TestOverrideExactValues:
             return householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-                finance=_make_finance(self_consumption_override=0.70),
+                finance=_make_finance(self_consumption_override=override),
                 simulation_days=365,
             )
 
@@ -617,6 +617,13 @@ class TestOverrideExactValues:
         untariffed = self._untariffed_override_bill()
 
         assert dataclasses.astuple(untariffed) == pytest.approx(dataclasses.astuple(tariffed))
+
+    def test_override_untariffed_capped_home_bills_no_import_yet_warns_twice(self) -> None:
+        """At 0.90 own-use is capped at the 3,400 kWh demand, so no import is billed, yet both warnings fire."""
+        with pytest.warns(UserWarning, match="capped at demand"):
+            bill = self._untariffed_override_bill(override=0.90)
+
+        assert bill.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
 
     def test_override_zero_import_kwh_fallback(self) -> None:
         """When total_grid_import_kwh==0, effective import rate falls back to retail_baseline_rate."""
