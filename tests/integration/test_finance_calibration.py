@@ -713,9 +713,12 @@ class TestCalibrationPhysicsColumn:
         """Physics column: capex still input-driven (2 homes × £7,750).
 
         The physics column uses the real project_multi_year simulation (2 homes,
-        3-day window). Only STRUCTURAL checks: capex == £15,500, physics scf MAY
+        3-day window) with no self_consumption_override, so it prices the
+        simulated own-use. Only STRUCTURAL checks: capex == £15,500, physics scf MAY
         differ from 0.70, no physics==spreadsheet assertion.
         """
+        import dataclasses
+
         from solar_challenge.config import ScenarioConfig, SimulationPeriod
         from solar_challenge.finance import (
             project_economics,
@@ -732,10 +735,11 @@ class TestCalibrationPhysicsColumn:
             homes=homes,
         )
         finance = _make_finance_fin()
+        physics_finance = dataclasses.replace(finance, self_consumption_override=None)
 
         # Physics column (real PVGIS)
-        physics_curve = project_multi_year(scenario, finance)
-        physics_econ = project_economics(physics_curve, scenario, finance)
+        physics_curve = project_multi_year(scenario, physics_finance)
+        physics_econ = project_economics(physics_curve, scenario, physics_finance)
 
         # Spreadsheet column (analytic)
         ss_curve = spreadsheet_revenue_curve(

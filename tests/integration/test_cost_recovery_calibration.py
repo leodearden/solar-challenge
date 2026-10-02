@@ -8,7 +8,7 @@ and flex-lowers-rate directionality for solve_cost_recovery_rate.
 Layout:
   - Fast (no-network) classes:
       TestNoFlexAnchorReconciliation — [FIN] no-flex structural anchor
-      TestOverrideOwnUseCappedAtDemand — the anchor under the 0.70 override bills own-use up to demand
+      TestOverrideOwnUseCappedAtDemand — under the 0.70 override the solve's rate base is the capped own-use the bills charge
       TestStructuralInvariants — H1 (surplus==floor) + H2 (capex monotone)
       TestFlexLowersSolvedRate — directional assert: flex ⟹ strictly lower rate
       TestThetaStaysGreen — in-file θ-isolation smoke (spreadsheet → economics)
@@ -231,6 +231,62 @@ def _make_finance_fin_cr6(
     )
 
 
+def _surplus_the_bills_fund_cr6(
+    sol: "CostRecoverySolution",  # type: ignore[name-defined]
+    scenario: "ScenarioConfig",  # type: ignore[name-defined]
+    finance: "FinanceConfig",  # type: ignore[name-defined]
+    fleet: "FleetResults",  # type: ignore[name-defined]
+) -> float:
+    """Net surplus per home per year that the solve's own bills fund.
+
+    The fleet's revenue is n × the representative home's ex-VAT own-use payment at
+    the solved rate.  That is the CBS's whole revenue only when every home's bill is
+    the same and the fleet earns no grid services and no export revenue, so those
+    premises are asserted first.  The revenue is flat across the asset life, so the
+    figure is valid only for an age-independent injected simulate, which every CR6
+    fixture uses.
+    """
+    from solar_challenge.finance import MultiYearCurve, YearPoint, project_economics
+    from solar_challenge.home import calculate_summary
+
+    outlays = sol.outlay.per_home_net_bill_gbp
+    assert min(outlays) == max(outlays), (
+        f"per-home outlays range £{min(outlays):.6f} to £{max(outlays):.6f}, "
+        "so the representative bill does not stand for every home"
+    )
+    assert finance.grid_services_model == "flat", (
+        f"grid services are priced by the {finance.grid_services_model!r} model, not the flat rate"
+    )
+    assert finance.grid_services_income_per_kw_per_year_gbp == 0.0, (
+        f"grid services earn £{finance.grid_services_income_per_kw_per_year_gbp}/kW/yr"
+    )
+    export_revenues_gbp = [
+        calculate_summary(r).total_export_revenue_gbp for r in fleet.per_home_results
+    ]
+    assert all(revenue == 0.0 for revenue in export_revenues_gbp), (
+        f"homes earn export revenue (max £{max(export_revenues_gbp):.6f}), so SEG is not £0"
+    )
+
+    fleet_revenue_gbp = len(scenario.homes) * sol.outlay.representative.own_use_payment_gbp
+    curve = MultiYearCurve(
+        points=tuple(
+            YearPoint(
+                year=year,
+                pv_soh=1.0,
+                battery_soh=1.0,
+                fleet_self_consumption_kwh=0.0,
+                fleet_export_kwh=0.0,
+                fleet_import_kwh=0.0,
+                fleet_revenue_gbp=fleet_revenue_gbp,
+            )
+            for year in range(finance.asset_life_years)
+        ),
+        sampled_ages=(0,),
+        interp_error_estimate=0.0,
+    )
+    return project_economics(curve, scenario, finance).net_surplus_per_home_per_year_gbp
+
+
 # ---------------------------------------------------------------------------
 # Step-1 RED / step-2 GREEN: TestNoFlexAnchorReconciliation
 # ---------------------------------------------------------------------------
@@ -244,6 +300,7 @@ class TestNoFlexAnchorReconciliation:
     - No-flex CBS-revenue identity: fleet_revenue = own_use_rate × fleet_sc / 100
       (grid_services=0, SEG=0)
     - 0 ≤ sol.own_use_rate ≤ retail (valid clamped range)
+    - The bills at the solved rate fund the surplus the solve reports
 
     REPORTS (printed, NOT asserted): the solved rate, saving and surplus beside the
     [FEAS] targets (≈15p, ≈£324, £27 floor).  The synthetic fixture is not expected
@@ -315,6 +372,17 @@ class TestNoFlexAnchorReconciliation:
 
         assert 0.0 <= sol.own_use_rate_pence_per_kwh <= finance.retail_baseline_rate_pence_per_kwh
 
+    def test_surplus_is_what_the_bills_fund(self) -> None:
+        """Physics control: the bills at the solved rate fund exactly the surplus the solve reports."""
+        from solar_challenge.finance import solve_cost_recovery_rate
+
+        scenario, finance, fr, simulate = self._build_fin_anchor()
+        sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+        assert _surplus_the_bills_fund_cr6(sol, scenario, finance, fr) == pytest.approx(
+            sol.net_surplus_per_home_per_year_gbp, abs=1e-6
+        )
+
     def test_no_flex_solve_report(self) -> None:
         """REPORT the no-flex anchor numbers (printed; tolerance documented; NOT pinned).
 
@@ -362,29 +430,62 @@ class TestOverrideOwnUseCappedAtDemand:
 
     Two anchor fleets: 3,400 kWh demand, 2,000 kWh basis-C own-use and no SEG per home,
     with 5,775 or 5,000 kWh of generation, so the override implies 4,042.5 or 3,500 kWh
-    of own-use.  The solve's rate base is basis C, so the solved rate cannot depend on
-    generation; capped at demand, the representative home is billed for 3,400 kWh at that
-    rate on both fleets.
+    of own-use.  Capped at demand, that is 3,400 kWh/home on both fleets, and the solve's
+    rate base is this capped own-use, the own-use the bills charge.  So both fleets solve
+    to one rate, and the bills fund exactly the surplus the solve reports.
     """
 
-    @pytest.fixture(scope="class")
-    def solutions(self) -> "tuple[CostRecoverySolution, CostRecoverySolution]":  # type: ignore[name-defined]
-        """(5,775 kWh, 5,000 kWh generation) solves; each must warn that the cap binds."""
+    @staticmethod
+    def _scenario_and_finance() -> "tuple[ScenarioConfig, FinanceConfig]":  # type: ignore[name-defined]
+        """The 100-home [FIN] anchor and its finance under the spreadsheet's 0.70 override."""
         import dataclasses
 
+        finance = dataclasses.replace(_make_finance_fin_cr6(), self_consumption_override=_FIN_SCF)
+        return _make_scenario_fin_cr6(), finance
+
+    @pytest.fixture(scope="class")
+    def fleets(self) -> "tuple[FleetResults, FleetResults]":  # type: ignore[name-defined]
+        """The anchor fleets with 5,775 and 5,000 kWh of generation per home."""
+        high_gen, low_gen = (
+            _make_fleet_results_fin_cr6(self_kwh=2000.0, export_kwh=export_kwh, import_kwh=1400.0)
+            for export_kwh in (3775.0, 3000.0)
+        )
+        return high_gen, low_gen
+
+    @pytest.fixture(scope="class")
+    def solutions(
+        self, fleets: "tuple[FleetResults, FleetResults]"  # type: ignore[name-defined]
+    ) -> "tuple[CostRecoverySolution, CostRecoverySolution]":  # type: ignore[name-defined]
+        """(5,775 kWh, 5,000 kWh generation) solves; each must warn that the cap binds."""
         from solar_challenge.finance import solve_cost_recovery_rate
 
-        scenario = _make_scenario_fin_cr6()
-        finance = dataclasses.replace(_make_finance_fin_cr6(), self_consumption_override=_FIN_SCF)
+        scenario, finance = self._scenario_and_finance()
 
-        def solve(export_kwh: float) -> "CostRecoverySolution":  # type: ignore[name-defined]
-            fleet = _make_fleet_results_fin_cr6(
-                self_kwh=2000.0, export_kwh=export_kwh, import_kwh=1400.0
-            )
+        def solve(fleet: "FleetResults") -> "CostRecoverySolution":  # type: ignore[name-defined]
             with pytest.warns(UserWarning, match="capped at demand"):
                 return solve_cost_recovery_rate(scenario, finance, simulate=lambda fc, s, e: fleet)
 
-        return solve(export_kwh=3775.0), solve(export_kwh=3000.0)
+        high_gen, low_gen = fleets
+        return solve(high_gen), solve(low_gen)
+
+    def test_surplus_is_what_the_bills_fund(
+        self,
+        fleets: "tuple[FleetResults, FleetResults]",  # type: ignore[name-defined]
+        solutions: "tuple[CostRecoverySolution, CostRecoverySolution]",  # type: ignore[name-defined]
+    ) -> None:
+        """On both fleets the bills at the solved rate fund the surplus the solve reports, the floor."""
+        scenario, finance = self._scenario_and_finance()
+
+        for fleet, sol in zip(fleets, solutions, strict=True):
+            funded = _surplus_the_bills_fund_cr6(sol, scenario, finance, fleet)
+
+            assert funded == pytest.approx(sol.net_surplus_per_home_per_year_gbp, abs=1e-6), (
+                f"the bills fund £{funded:.6f}/home/yr, but the solve reports "
+                f"£{sol.net_surplus_per_home_per_year_gbp:.6f}"
+            )
+            assert funded == pytest.approx(
+                finance.retained_cash_floor_per_home_per_year_gbp, abs=1e-6
+            )
 
     def test_solved_rate_does_not_depend_on_generation(
         self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"  # type: ignore[name-defined]

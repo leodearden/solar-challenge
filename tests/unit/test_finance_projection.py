@@ -861,7 +861,11 @@ class TestProjectMultiYearRevenue:
         (default 15p/kWh) × fleet_sc + Σ _seg_export_income_gbp.
         CR3: SEG is now computed via _seg_export_income_gbp (extracted from householder_bill).
         """
-        from solar_challenge.finance import _seg_export_income_gbp, project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.finance import (  # type: ignore[attr-defined]
+            _annualise_physics,
+            _seg_export_income_gbp,
+            project_multi_year,
+        )
         from solar_challenge.home import calculate_summary
 
         n_homes = 2
@@ -876,7 +880,8 @@ class TestProjectMultiYearRevenue:
         # New formula (no grid_services since homes have no battery):
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc_kwh / 100.0
         seg_revenue = sum(
-            _seg_export_income_gbp(s, finance, s.simulation_days) for s in summaries
+            _seg_export_income_gbp(_annualise_physics(s, s.simulation_days), finance)
+            for s in summaries
         )
         expected_revenue = own_use_revenue + seg_revenue
 
@@ -939,51 +944,38 @@ class TestProjectMultiYearRevenue:
             f"grid_services ({expected_gs:.4f} = {grid_services_rate} × {total_discharge_kw} kW)"
         )
 
-    def test_self_consumption_override_does_not_change_own_use_revenue(self) -> None:
-        """CBS own_use_revenue is override-invariant: own_use_rate × fleet_sc / 100 uses
-        physics fleet_sc regardless of self_consumption_override.
+    def test_self_consumption_override_drives_own_use_revenue(self) -> None:
+        """With the override set, own-use revenue bills the own-use householder_bill charges.
 
-        Updated for CR2: the OLD formula (retail_rate × sc_saving_kwh) DID change with the
-        override (different sc_kwh). The NEW formula (own_use_rate × PHYSICS fleet_sc) does
-        NOT change because fleet_sc comes from the simulation results, not the override.
-        This RED-fails against the old implementation which used self_consumption_saving_gbp.
+        One home: 5,000 kWh generation, 4,500 kWh demand and 4,000 kWh basis-C own-use.
+        The physics curve bills basis C at 15 p; the 0.50 override bills
+        min(0.50 × 5,000, 4,500) = 2,500 kWh, where the cap does not bind.  SEG adds £0
+        on both paths: the builder's exports earn £0, so the effective export rate is 0 p.
         """
-        from solar_challenge.finance import householder_bill, project_multi_year  # type: ignore[attr-defined]
-        from solar_challenge.home import calculate_summary
+        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        n_homes = 1
-        sc, exp, imp = 4000.0, 1000.0, 500.0
-        fr = _make_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
+        fr = _make_fleet_results(n_homes=1, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
 
-        # Physics path (no override)
-        scenario_phys, finance_phys = self._make_revenue_scenario(
-            n_homes=n_homes,
-            self_consumption_override=None,
-        )
-        curve_phys = project_multi_year(scenario_phys, finance_phys, simulate=lambda fc, s, e: fr)
+        def year_0(self_consumption_override: Optional[float]) -> "YearPoint":  # type: ignore[name-defined]
+            scenario, finance = self._make_revenue_scenario(
+                n_homes=1, self_consumption_override=self_consumption_override
+            )
+            return project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr).points[0]
 
-        # Spreadsheet path (with override — different SC fraction)
-        scenario_over, finance_over = self._make_revenue_scenario(
-            n_homes=n_homes,
-            self_consumption_override=0.50,  # 50% of gen, changes SC calc in householder_bill
-        )
-        curve_over = project_multi_year(scenario_over, finance_over, simulate=lambda fc, s, e: fr)
+        physics = year_0(self_consumption_override=None)
+        override = year_0(self_consumption_override=0.50)
 
-        # Under the NEW CBS formula: own_use_revenue = own_use_rate × PHYSICS fleet_sc / 100.
-        # Physics fleet_sc is the same in both paths (from the injected SimulationResults),
-        # so own_use_revenue is identical. With zero export_revenue in the mock SimulationResults,
-        # seg_revenue is also zero. Hence both paths produce the SAME fleet_revenue_gbp.
-        # (This would FAIL under the OLD formula where self_consumption_saving changed with override.)
-        assert curve_phys.points[0].fleet_revenue_gbp == pytest.approx(
-            curve_over.points[0].fleet_revenue_gbp, rel=1e-4
-        )
+        assert physics.fleet_self_consumption_kwh == pytest.approx(4000.0)
+        assert physics.fleet_revenue_gbp == pytest.approx(600.0)
+        assert override.fleet_self_consumption_kwh == pytest.approx(2500.0)
+        assert override.fleet_revenue_gbp == pytest.approx(375.0)
 
-    def test_override_seg_counts_generation_above_demand_as_export(self) -> None:
+    def test_override_bills_own_use_up_to_demand_and_exports_the_rest(self) -> None:
         """Override 0.90 implies 3,600 kWh of own-use per home against a 2,800 kWh demand.
 
-        Capped at demand, each home exports 4,000 − 2,800 = 1,200 kWh, paid at its
-        physics export rate (£72 / 2,400 kWh = 3 p).  Own-use revenue stays basis C:
-        1,600 kWh at 15 p (test_self_consumption_override_does_not_change_own_use_revenue).
+        Own-use is capped at demand, so each home is billed 2,800 kWh of own-use at 15 p,
+        and the rest of its 4,000 kWh generation, 1,200 kWh, is exported at its physics
+        export rate (£72 / 2,400 kWh = 3 p).  Both are priced.
         """
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
         from solar_challenge.fleet import FleetResults
@@ -1002,10 +994,11 @@ class TestProjectMultiYearRevenue:
             n_homes=n_homes, self_consumption_override=0.90
         )
 
-        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet)
+        year_0 = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet).points[0]
 
-        assert curve.points[0].fleet_revenue_gbp == pytest.approx(
-            n_homes * (15.0 * 1600.0 / 100.0 + 1200.0 * 3.0 / 100.0)
+        assert year_0.fleet_self_consumption_kwh == pytest.approx(n_homes * 2800.0)
+        assert year_0.fleet_revenue_gbp == pytest.approx(
+            n_homes * (15.0 * 2800.0 / 100.0 + 1200.0 * 3.0 / 100.0)
         )
 
     def test_fleet_revenue_non_negative(self) -> None:
@@ -1197,7 +1190,7 @@ class TestSegExportIncomeGbp:
 
     def test_physics_path_returns_annualised_export_revenue(self) -> None:
         """Physics path (no override): returns total_export_revenue_gbp directly."""
-        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
 
         summary = _make_seg_summary(
             total_generation_kwh=4000.0,
@@ -1206,7 +1199,7 @@ class TestSegExportIncomeGbp:
         )
         finance = self._make_finance_seg(self_consumption_override=None)
 
-        result = _seg_export_income_gbp(summary, finance, simulation_days=365)
+        result = _seg_export_income_gbp(_annualise_physics(summary, 365), finance)
 
         assert result == pytest.approx(24.0, rel=1e-9)
 
@@ -1217,7 +1210,7 @@ class TestSegExportIncomeGbp:
         derived from physics figures and falls back to 0.0 p/kWh.  The result
         must be exactly 0.0 regardless of the override fraction.
         """
-        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
 
         # Summary with no export at all (e.g. all generation self-consumed)
         summary_no_export = _make_seg_summary(
@@ -1227,7 +1220,7 @@ class TestSegExportIncomeGbp:
         )
         finance = self._make_finance_seg(self_consumption_override=0.60)
 
-        result = _seg_export_income_gbp(summary_no_export, finance, simulation_days=365)
+        result = _seg_export_income_gbp(_annualise_physics(summary_no_export, 365), finance)
 
         # effective_export_rate_pence = 0.0 (fallback), so result = override_export * 0 = 0
         assert result == pytest.approx(0.0, abs=1e-9)
@@ -1247,7 +1240,7 @@ class TestSegExportIncomeGbp:
           effective_rate  = (24/800)×100 = 3 p/kWh
           result          = 1600×3/100 = 48 £
         """
-        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
 
         summary = _make_seg_summary(
             total_generation_kwh=4000.0,
@@ -1257,14 +1250,14 @@ class TestSegExportIncomeGbp:
         # Override: 60% self-consumption → 40% export → 1600 kWh
         finance = self._make_finance_seg(self_consumption_override=0.60)
 
-        result = _seg_export_income_gbp(summary, finance, simulation_days=365)
+        result = _seg_export_income_gbp(_annualise_physics(summary, 365), finance)
 
         # hand-checked: 1600 * 3 / 100 = 48.0
         assert result == pytest.approx(48.0, rel=1e-9)
 
     def test_short_period_annualises_physics_export_revenue(self) -> None:
         """Physics path: short simulation period is annualised to 365 days."""
-        from solar_challenge.finance import _seg_export_income_gbp  # type: ignore[attr-defined]
+        from solar_challenge.finance import _annualise_physics, _seg_export_income_gbp  # type: ignore[attr-defined]
 
         # Build a summary with a 182-day simulation (half year)
         from solar_challenge.home import SummaryStatistics
@@ -1289,7 +1282,7 @@ class TestSegExportIncomeGbp:
         )
         finance = self._make_finance_seg(self_consumption_override=None)
 
-        result = _seg_export_income_gbp(summary_182, finance, simulation_days=182)
+        result = _seg_export_income_gbp(_annualise_physics(summary_182, 182), finance)
 
         expected = 12.0 * (365 / 182)
         assert result == pytest.approx(expected, rel=1e-6)
@@ -1875,11 +1868,23 @@ class TestProjectMultiYearAnnualisesShortWindow:
     """A window under 360 days projects as the 365-day year it samples.
 
     project_multi_year scales each home's window totals to a 365-day year, so a
-    short window at the same daily rates as a full year gives the same curve,
-    and it warns once per projection that it did so.
+    short window at the same daily rates as a full year gives the same curve, with
+    or without the override, and under the override its own-use is the one
+    householder_bill charges for that year.  It warns once per projection that it
+    annualised.
     """
 
-    def test_short_window_projects_the_equivalent_full_year_curve(self) -> None:
+    @pytest.mark.parametrize(
+        "self_consumption_override",
+        [
+            pytest.param(None, id="physics"),
+            pytest.param(0.5, id="override-cap-not-binding"),
+            pytest.param(0.9, id="override-cap-binding"),
+        ],
+    )
+    def test_short_window_projects_the_equivalent_full_year_curve(
+        self, self_consumption_override: "float | None"
+    ) -> None:
         """Every YearPoint field, energy, revenue and SOH alike, matches the full-year curve."""
         from solar_challenge.finance import project_multi_year
         from solar_challenge.home import calculate_summary
@@ -1887,6 +1892,7 @@ class TestProjectMultiYearAnnualisesShortWindow:
         scenario, finance, battery_config, fleet_full_year, fleet_short = (
             _make_full_year_and_short_window_fleets()
         )
+        finance = dataclasses.replace(finance, self_consumption_override=self_consumption_override)
         short_summary = calculate_summary(fleet_short.per_home_results[0])
         assert short_summary.simulation_days == _SHORT_WINDOW_DAYS
         assert short_summary.total_export_revenue_gbp > 0.0, "premise: the window earns SEG income"
@@ -1899,6 +1905,54 @@ class TestProjectMultiYearAnnualisesShortWindow:
         assert curve_short.sampled_ages == curve_full.sampled_ages
         for short, full in zip(curve_short.points, curve_full.points, strict=True):
             assert dataclasses.asdict(short) == pytest.approx(dataclasses.asdict(full), rel=1e-9)
+
+    @pytest.mark.parametrize(
+        ("self_consumption_override", "annual_own_use_kwh"),
+        [
+            pytest.param(0.5, 2000.0, id="cap-not-binding"),
+            pytest.param(0.9, 2700.0, id="cap-binding"),
+        ],
+    )
+    def test_short_window_override_own_use_is_what_the_annual_bills_charge(
+        self, self_consumption_override: float, annual_own_use_kwh: float
+    ) -> None:
+        """Under the override, year 0's own-use is the annual own-use householder_bill charges.
+
+        Each home generates 4,000 kWh and demands 2,700 kWh a year, so the override bills
+        min(override × 4,000, 2,700) kWh a year.  The projection and householder_bill both
+        start from the 3-day window's summary, so both must annualise it.
+        """
+        import warnings
+
+        from solar_challenge.finance import householder_bill, project_multi_year
+        from solar_challenge.home import calculate_summary
+
+        scenario, finance, _, fleet_full_year, fleet_short = _make_full_year_and_short_window_fleets()
+        finance = dataclasses.replace(finance, self_consumption_override=self_consumption_override)
+        annual = calculate_summary(fleet_full_year.per_home_results[0])
+        assert (annual.total_generation_kwh, annual.total_demand_kwh) == pytest.approx((4000.0, 2700.0))
+        summaries = [calculate_summary(r) for r in fleet_short.per_home_results]
+        assert {s.simulation_days for s in summaries} == {_SHORT_WINDOW_DAYS}
+
+        with warnings.catch_warnings():
+            # The short window, the missing tariff and the cap all warn; none is under test here.
+            warnings.simplefilter("ignore", UserWarning)
+            year_0 = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_short).points[0]
+            bills = [
+                householder_bill(
+                    s,
+                    annual_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
+                    finance=finance,
+                    simulation_days=s.simulation_days,
+                )
+                for s in summaries
+            ]
+
+        billed_own_use_kwh = (
+            sum(b.own_use_payment_gbp for b in bills) * 100.0 / finance.own_use_rate_pence_per_kwh
+        )
+        assert billed_own_use_kwh == pytest.approx(len(summaries) * annual_own_use_kwh)
+        assert year_0.fleet_self_consumption_kwh == pytest.approx(billed_own_use_kwh)
 
     def test_short_window_warns_once_naming_the_window(self) -> None:
         """Annualising a short window raises one UserWarning per projection, naming its days."""

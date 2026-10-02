@@ -54,8 +54,9 @@ class FinanceConfig:
             (default 23.0 p/kWh).
         self_consumption_override: Optional fixed self-consumption fraction
             (0, 1]; if None the simulator uses the modelled value.  When set,
-            each home's own-use is min(override × generation, demand) and the
-            surplus generation is counted as export.
+            each home's own-use is min(override × generation, demand), on the
+            householder bill and the CBS own-use revenue alike, and the surplus
+            generation is counted as export.
         pv_cost_per_kwp_gbp: PV hardware + install cost per kWp (default 1000.0).
         roof_fit_cost_gbp: Fixed per-home roof-fitting cost (default 1000.0).
         battery_cost_per_kwh_gbp: Battery hardware cost per kWh (default 250.0).
@@ -478,9 +479,9 @@ def _annualisation_scale(simulation_days: int) -> float:
 
     ``365 / max(simulation_days, 1)`` below :data:`_SHORT_PERIOD_THRESHOLD`
     (360) days, else 1.0.  This is the single annualisation rule:
-    :func:`householder_bill` and :func:`_seg_export_income_gbp` reach it via
-    :func:`_annualise_physics`, and :func:`project_multi_year` calls it
-    directly, so the threshold, guard and formula cannot diverge.
+    :func:`householder_bill` and :func:`project_multi_year` both annualise
+    through :func:`_annualise_physics`, so the threshold, guard and formula
+    cannot diverge.
     """
     if simulation_days < _SHORT_PERIOD_THRESHOLD:
         return _ANNUALISATION_DAYS / max(simulation_days, 1)
@@ -508,6 +509,7 @@ class _AnnualisedPhysics(NamedTuple):
     import_cost_physics: float
     export_kwh: float
     export_rev_physics: float
+    battery_discharge_kwh: float
 
 
 def _annualise_physics(
@@ -537,16 +539,17 @@ def _annualise_physics(
         import_cost_physics=summary.total_import_cost_gbp * scale,
         export_kwh=summary.total_grid_export_kwh * scale,
         export_rev_physics=summary.total_export_revenue_gbp * scale,
+        battery_discharge_kwh=summary.total_battery_discharge_kwh * scale,
     )
 
 
 # ---------------------------------------------------------------------------
-# _override_energy_split — one home's energy under self_consumption_override
+# _billed_energy — one home's own-use, import and export as the CBS bills them
 # ---------------------------------------------------------------------------
 
 
-class _OverrideEnergySplit(NamedTuple):
-    """One home's own-use, import and export on the override path (kWh)."""
+class _BilledEnergy(NamedTuple):
+    """One home's own-use, import and export as the CBS bills them (kWh)."""
 
     own_use_kwh: float
     import_kwh: float
@@ -560,7 +563,7 @@ def _override_energy_split(
     *,
     generation_kwh: float,
     demand_kwh: float,
-) -> _OverrideEnergySplit:
+) -> _BilledEnergy:
     """Split a home's generation and demand by the override fraction.
 
     Own-use is ``min(override × generation, demand)``: a home cannot consume
@@ -569,11 +572,42 @@ def _override_energy_split(
     """
     implied_own_use_kwh = override * generation_kwh
     own_use_kwh = min(implied_own_use_kwh, demand_kwh)
-    return _OverrideEnergySplit(
+    return _BilledEnergy(
         own_use_kwh=own_use_kwh,
         import_kwh=demand_kwh - own_use_kwh,
         export_kwh=generation_kwh - own_use_kwh,
         capped_at_demand=implied_own_use_kwh > demand_kwh,
+    )
+
+
+def _billed_energy(
+    phys: _AnnualisedPhysics,
+    finance: "FinanceConfig",
+    *,
+    physics_own_use_kwh: float,
+) -> _BilledEnergy:
+    """One home's annual own-use, import and export as the CBS bills them (kWh/yr).
+
+    The one physics/override switch for billed energy: :func:`householder_bill`
+    bills its own-use and import, and :func:`project_multi_year` sums its own-use
+    into the CBS own-use revenue.  With no ``self_consumption_override``, own-use
+    is *physics_own_use_kwh*, annual (basis C, :func:`_cbs_own_use_kwh`, from both
+    :func:`bill_distribution` and :func:`project_multi_year`), and import and
+    export are the simulated flows.  With the override set, all three split the
+    annual generation and demand (:func:`_override_energy_split`).  Silent when
+    the cap binds, since the projection calls this per home at every sampled age;
+    :func:`householder_bill` warns instead.
+    """
+    override = finance.self_consumption_override
+    if override is None:
+        return _BilledEnergy(
+            own_use_kwh=physics_own_use_kwh,
+            import_kwh=phys.import_kwh,
+            export_kwh=phys.export_kwh,
+            capped_at_demand=False,
+        )
+    return _override_energy_split(
+        override, generation_kwh=phys.gen_kwh, demand_kwh=phys.demand_kwh
     )
 
 
@@ -614,23 +648,20 @@ def _physics_import_cost_gbp(phys: _AnnualisedPhysics, retail_rate_pence: float)
 
 
 def _seg_export_income_gbp(
-    summary: "SummaryStatistics",
+    phys: _AnnualisedPhysics,
     finance: "FinanceConfig",
-    simulation_days: int,
 ) -> float:
     """Compute the SEG export income for a single home (CBS-revenue side).
 
     This is the export-income logic that was removed from the householder bill
     in CR3 (the CBS owns the export MPAN, so export revenue flows to the CBS,
     not the householder).  It is used by :func:`project_multi_year._simulate_age`
-    to compute ``seg_revenue = Σ _seg_export_income_gbp(s, ...)`` as part of
-    the CBS fleet revenue formula (PRD §3.2).
-
-    Delegates annualisation to :func:`_annualise_physics` so the threshold,
-    guard, and formula cannot diverge from :func:`householder_bill`.
+    to compute ``seg_revenue = Σ _seg_export_income_gbp(phys, ...)`` as part of
+    the CBS fleet revenue formula (PRD §3.2), from the same annualised physics
+    the home's own-use reads.
 
     * **Physics path** (``finance.self_consumption_override`` is None):
-      annualised ``summary.total_export_revenue_gbp``.
+      the annualised ``summary.total_export_revenue_gbp``.
     * **Override path**: export = generation − min(override × generation,
       demand) (:func:`_override_energy_split`), priced at the effective
       export rate derived from the physics figures (falls back to 0.0 if
@@ -638,17 +669,14 @@ def _seg_export_income_gbp(
       per home at every sampled age; :func:`householder_bill` warns instead.
 
     Args:
-        summary: Per-home simulation output (read-only).
+        phys: The home's simulation totals, annualised to a 365-day year
+            (:func:`_annualise_physics`).
         finance: FinanceConfig with tariff + assumption parameters.
-        simulation_days: Actual simulation length in days; triggers
-            annualisation to 365 days when < 360.
 
     Returns:
         SEG export income in GBP (£), annualised to a 365-day year.
     """
     override = finance.self_consumption_override
-
-    phys = _annualise_physics(summary, simulation_days)
 
     if override is None:
         # Physics path: annualised SEG revenue from simulation
@@ -857,9 +885,10 @@ def householder_bill(
     Responsibilities of this wrapper (not in bill()):
       * Annualise sub-year simulation totals via :func:`_annualise_physics`.
       * Emit a :class:`UserWarning` for short periods (< 360 days).
-      * Resolve the physics/override self-consumption path.  The override's
-        own-use is capped at demand (:func:`_override_energy_split`), with a
-        :class:`UserWarning` when the cap binds.
+      * Resolve own-use and import through :func:`_billed_energy`, the
+        physics/override switch :func:`project_multi_year` also reads.  The
+        override's own-use is capped at demand, with a :class:`UserWarning`
+        when the cap binds.
       * Apply the missing-tariff retail fallback (:func:`_physics_import_cost_gbp`,
         with a :class:`UserWarning`) before the physics/override switch, so
         both paths price an untariffed home's import at retail.
@@ -907,17 +936,13 @@ def householder_bill(
     # _seg_export_income_gbp in CR3; householder_bill no longer computes export income.
 
     # ---- Self-consumption switch (§2.3 / §3.2) ------------------------------
+    energy = _billed_energy(phys, finance, physics_own_use_kwh=sc_kwh_physics)
     if override is None:
-        # Physics path: use simulation figures directly
+        # Physics path: the simulated import, at its simulated cost
         import_cost_gbp = import_cost_physics
-        sc_kwh = sc_kwh_physics
-        # import_kwh_for_bill matches phys.import_kwh (set above) — the energy
-        # quantity priced by import_cost_gbp on the physics path.
-        import_kwh_for_bill = import_kwh
     else:
-        # Spreadsheet path: override the self-consumption fraction
-        split = _override_energy_split(override, generation_kwh=gen_kwh, demand_kwh=demand_kwh)
-        if split.capped_at_demand:
+        # Spreadsheet path: the override's import, at the home's physics import rate
+        if energy.capped_at_demand:
             warnings.warn(
                 f"self_consumption_override={override:g} implies more own-use than "
                 f"this home's demand; own-use is capped at demand and the surplus "
@@ -925,7 +950,6 @@ def householder_bill(
                 UserWarning,
                 stacklevel=2,
             )
-        sc_kwh = split.own_use_kwh
 
         # Effective import unit rate from physics (fall back to retail if zero physics import)
         if import_kwh > 0.0:
@@ -933,9 +957,7 @@ def householder_bill(
         else:
             effective_import_rate_pence = retail_rate_pence
 
-        # The override's import, not phys.import_kwh, is what import_cost_gbp prices.
-        import_kwh_for_bill = split.import_kwh
-        import_cost_gbp = import_kwh_for_bill * effective_import_rate_pence / 100.0
+        import_cost_gbp = energy.import_kwh * effective_import_rate_pence / 100.0
 
     # ---- Delegate all bill arithmetic to bill() (single source of truth) ----
     # period_days=365 reproduces the old annual standing-charge hard-code exactly:
@@ -945,8 +967,8 @@ def householder_bill(
         period_days=float(_ANNUALISATION_DAYS),
         generation_kwh=gen_kwh,
         demand_kwh=demand_kwh,
-        self_consumption_kwh=sc_kwh,
-        import_kwh=import_kwh_for_bill,
+        self_consumption_kwh=energy.own_use_kwh,
+        import_kwh=energy.import_kwh,
         import_cost_gbp=import_cost_gbp,
         baseline_import_cost_gbp=baseline_import_cost_gbp,
         finance=finance,
@@ -993,10 +1015,15 @@ class YearPoint:
     """Total self-consumed solar energy for the fleet that year (kWh, ≥ 0).
 
     .. note::
-        **Physics path** (:func:`project_multi_year` / ``_simulate_age``):
-        this field holds **basis-C own-use** (Σ demand − import per home),
-        NOT the physics self-consumption series.  The name is retained for
-        back-compat; read it as "fleet basis-C own-use kWh" on this path.
+        **Projection path** (:func:`project_multi_year` / ``_simulate_age``):
+        this field holds the fleet's **billed own-use**
+        (:func:`_billed_energy`), NOT the physics self-consumption
+        series: basis C (Σ demand − import per home) with no
+        ``self_consumption_override``, and Σ min(override × generation,
+        demand) with the override set.  ``fleet_export_kwh`` and
+        ``fleet_import_kwh`` stay the simulated grid flows on both paths.
+        The name is retained for back-compat; read it as "fleet billed
+        own-use kWh" on this path.
 
         **Flat-assumption curve path** (:func:`spreadsheet_revenue_curve`):
         this field holds a fraction-based figure
@@ -1343,14 +1370,8 @@ def bill_distribution(
     bills = [
         householder_bill(
             summary=s,
-            # Basis C (task-84 §6): own-use = demand − import (CBS-supplied energy consumed).
-            # Arbitrage-immune: excludes grid-charged battery discharge which inflates
-            # total_self_consumption_kwh but does not reduce the home's grid import.
-            # NOTE: basis C applies only on the physics path (finance.self_consumption_override
-            # is None).  When self_consumption_override is set (spreadsheet / override path),
-            # householder_bill ignores annual_self_consumption_kwh and recomputes
-            # sc = min(override × gen, demand); that path remains fraction-based and is
-            # unaffected by this basis-C migration.
+            # Basis C (task-84 §6), the physics own-use project_multi_year bills too;
+            # _billed_energy replaces it with the override's own-use when one is set.
             annual_self_consumption_kwh=_cbs_own_use_kwh(s),
             finance=finance,
             simulation_days=simulation_days,
@@ -1392,7 +1413,7 @@ class _NodeData(NamedTuple):
     """
 
     fleet_sc: float
-    """Fleet basis-C own-use (Σ demand − import), annualised to a 365-day year (kWh/yr)."""
+    """Fleet billed own-use (Σ :func:`_billed_energy` own-use), annualised to a 365-day year (kWh/yr)."""
 
     fleet_exp: float
     """Fleet grid export, annualised to a 365-day year (kWh/yr)."""
@@ -1588,20 +1609,24 @@ def project_multi_year(
             for r in fleet_results.per_home_results
         ]
 
-        # Basis C (task-84 §6): own-use = demand − import (CBS-supplied energy consumed).
-        # Arbitrage-immune: grid-charged battery discharge inflates
-        # total_self_consumption_kwh but NOT demand − import.
-        # Each home's window totals are annualised by its own simulated days, the
-        # days _seg_export_income_gbp annualises that home's SEG income by.
-        scaled_summaries = [(_annualisation_scale(s.simulation_days), s) for s in per_home_summaries]
-        fleet_sc = sum(k * _cbs_own_use_kwh(s) for k, s in scaled_summaries)
-        fleet_exp = sum(k * s.total_grid_export_kwh for k, s in scaled_summaries)
-        fleet_imp = sum(k * s.total_grid_import_kwh for k, s in scaled_summaries)
-        per_home_discharge = [k * s.total_battery_discharge_kwh for k, s in scaled_summaries]
+        # Each home is annualised once, by its own simulated days, and every figure
+        # below reads that annual record.  fleet_sc is the own-use the CBS bills
+        # (_billed_energy, the switch householder_bill reads); export, import and
+        # discharge stay the simulated flows (docs/cost-recovery-finance-model.md §4).
+        annualised_homes = [(s, _annualise_physics(s, s.simulation_days)) for s in per_home_summaries]
+        fleet_sc = sum(
+            _billed_energy(
+                phys, finance, physics_own_use_kwh=_cbs_own_use_kwh(s) * phys.scale
+            ).own_use_kwh
+            for s, phys in annualised_homes
+        )
+        fleet_exp = sum(phys.export_kwh for _, phys in annualised_homes)
+        fleet_imp = sum(phys.import_kwh for _, phys in annualised_homes)
+        per_home_discharge = [phys.battery_discharge_kwh for _, phys in annualised_homes]
 
         # CBS fleet revenue (PRD §3.2), every term per 365-day year:
-        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100   (fleet_sc = Σ annualised basis C)
-        #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)   (same rule)
+        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
+        #   seg_revenue     = Σ _seg_export_income_gbp(phys, finance), on the same annual records
         #   grid_services   = model-dependent (flat or capacity_at_events), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
         # Grid-charge energy is paid by the householder inside grid import, not a CBS
@@ -1610,10 +1635,7 @@ def project_multi_year(
         # self_consumption_override and seg scaling automatically); householder_bill
         # is no longer called here since seg_export_income_gbp was removed from it.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc / 100.0
-        seg_revenue = sum(
-            _seg_export_income_gbp(s, finance, s.simulation_days)
-            for s in per_home_summaries
-        )
+        seg_revenue = sum(_seg_export_income_gbp(phys, finance) for _, phys in annualised_homes)
         if finance.grid_services_model == "capacity_at_events":
             # None is already excluded by the top-of-function guard; this assert
             # only narrows Optional[GridServicesEventsConfig] for mypy strict.
@@ -2248,7 +2270,7 @@ def solve_cost_recovery_rate(
     Step 2 is exact while the ``max(0.0, rev_per_year[y])`` clamp that
     ``project_multi_year`` applies to ``fleet_revenue_gbp`` does not bind.  It
     cannot bind today: every CBS revenue term is non-negative (own-use = rate
-    (≥ 0) × basis-C kWh (clamped at 0); SEG ≥ 0; grid-services ≥ 0 under both
+    (≥ 0) × billed own-use kWh (≥ 0); SEG ≥ 0; grid-services ≥ 0 under both
     models, the event model paying gross × (1 − aggregator_share)), and the
     PCHIP / Fritsch–Carlson interpolation is shape-preserving, so no
     interpolated year falls below its non-negative nodes.  A future negative
