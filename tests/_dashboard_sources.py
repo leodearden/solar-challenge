@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Read access to the source files of the solar_challenge.web dashboard: its Jinja
-templates, its standalone scripts and the stylesheets base.html links.
+templates, its standalone scripts, the stylesheets base.html links and
+tailwind.config.js, which defines its theme.
 
-Each source is keyed by its POSIX path relative to the package directory, such as
-``templates/base.html``, ``static/js/chart-renderer.js`` or ``static/style.css``.
-The template and script globs mirror the ``content`` globs in tailwind.config.js.
+Each template, script and stylesheet is keyed by its POSIX path relative to the
+package directory, such as ``templates/base.html``, ``static/js/chart-renderer.js``
+or ``static/style.css``. The template and script globs mirror the ``content`` globs
+in tailwind.config.js.
 
 Usage::
 
@@ -44,6 +46,11 @@ def served_stylesheet_sources() -> dict[str, str]:
     """Source of every stylesheet base.html links through ``url_for('static', ...)``, in link order."""
     linked = linked_stylesheets(_BASE_TEMPLATE.read_text(encoding="utf-8"))
     return _sources(_STATIC_DIR / name for name in linked)
+
+
+def tailwind_config_source() -> str:
+    """Source of tailwind.config.js, the home of the dashboard's theme."""
+    return (_WEB_DIR / "tailwind.config.js").read_text(encoding="utf-8")
 
 
 def _sources(paths: Iterable[Path]) -> dict[str, str]:
