@@ -10,7 +10,14 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
-from tests._html_page import doctype, element_count, element_ids, headings, texts_after
+from tests._html_page import (
+    doctype,
+    element_count,
+    element_ids,
+    headings,
+    texts,
+    texts_after,
+)
 from tests._web_app import build_test_app
 
 
@@ -42,6 +49,11 @@ def mock_job_manager(app: Flask) -> MagicMock:
     return jm
 
 
+def _counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
+    """How many times each of *keys* occurs in *items*; a key that does not occur counts 0."""
+    return {key: items.count(key) for key in keys}
+
+
 class TestIndexRoute:
     """Tests for the GET / route."""
 
@@ -70,44 +82,38 @@ class TestDashboardRoute:
         assert response.status_code == 200
 
     def test_dashboard_contains_dashboard_text(self, client: FlaskClient) -> None:
-        """Test GET / response contains 'Dashboard' text."""
+        """GET / renders one Dashboard heading, the page's title."""
         response = client.get("/")
-        assert b"Dashboard" in response.data
+        page = response.get_data(as_text=True)
+        assert headings(page).count("Dashboard") == 1
 
     def test_dashboard_contains_sidebar_navigation(self, client: FlaskClient) -> None:
-        """Test GET / response contains sidebar navigation elements."""
+        """GET / renders the Simulate, Scenarios and History group labels once in each of its two sidebars, desktop and mobile."""
         response = client.get("/")
-        html_data = response.data.decode("utf-8")
-        # Sidebar should contain navigation group labels
-        assert "Simulate" in html_data
-        assert "Scenarios" in html_data
-        assert "History" in html_data
+        page = response.get_data(as_text=True)
+        labels = ("Simulate", "Scenarios", "History")
+        assert _counts_of(texts(page), labels) == dict.fromkeys(labels, 2)
 
     def test_dashboard_contains_quick_start_cards(self, client: FlaskClient) -> None:
-        """Test GET / response contains quick-start action cards."""
+        """GET / renders one heading per quick-start card: Run Single Home, Run Fleet Simulation and Build Scenario."""
         response = client.get("/")
-        html_data = response.data.decode("utf-8")
-        assert "Run Single Home" in html_data
-        assert "Run Fleet Simulation" in html_data
-        assert "Build Scenario" in html_data
+        page = response.get_data(as_text=True)
+        titles = ("Run Single Home", "Run Fleet Simulation", "Build Scenario")
+        assert _counts_of(headings(page), titles) == dict.fromkeys(titles, 1)
 
     def test_dashboard_contains_stats_section(self, client: FlaskClient) -> None:
-        """Test GET / response contains aggregate stats section."""
+        """GET / renders one label per aggregate stat: Total Runs, Homes Simulated and Energy Modelled."""
         response = client.get("/")
-        html_data = response.data.decode("utf-8")
-        assert "Total Runs" in html_data
-        assert "Homes Simulated" in html_data
-        assert "Energy Modelled" in html_data
+        page = response.get_data(as_text=True)
+        labels = ("Total Runs", "Homes Simulated", "Energy Modelled")
+        assert _counts_of(texts(page), labels) == dict.fromkeys(labels, 1)
 
     def test_dashboard_contains_recent_runs_section(self, client: FlaskClient) -> None:
-        """Test GET / response contains recent runs section."""
+        """GET / with no saved runs renders the Recent Runs heading and its empty-state message."""
         response = client.get("/")
-        html_data = response.data.decode("utf-8")
-        assert "Recent Runs" in html_data
-        # Should show either existing runs in a table or the empty state message
-        has_runs_table = "recent-runs-table" in html_data
-        has_empty_state = "No simulation runs yet" in html_data
-        assert has_runs_table or has_empty_state
+        page = response.get_data(as_text=True)
+        assert headings(page).count("Recent Runs") == 1
+        assert texts(page).count("No simulation runs yet.") == 1
 
 
 class TestSimulateHomeRoute:
@@ -388,23 +394,27 @@ class TestFleetConfigRoute:
         response = client.get("/simulate/fleet")
         page = response.get_data(as_text=True)
         subjects = ("PV Capacity", "Battery Capacity", "Annual Consumption")
-        page_headings = headings(page)
-        headings_per_subject = {subject: page_headings.count(subject) for subject in subjects}
-        assert headings_per_subject == dict.fromkeys(subjects, 1)
+        assert _counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
 
     def test_fleet_page_contains_action_buttons(self, client: FlaskClient) -> None:
-        """Test GET /simulate/fleet contains import/export/run buttons."""
+        """GET /simulate/fleet renders the Import YAML and Export YAML controls and one button that runs the fleet simulation."""
         response = client.get("/simulate/fleet")
-        html_data = response.data.decode("utf-8")
-        assert "Import YAML" in html_data
-        assert "Export YAML" in html_data
-        assert "Run Fleet Simulation" in html_data
+        page = response.get_data(as_text=True)
+        page_texts = texts(page)
+        assert page_texts.count("Import YAML") == 1
+        assert element_count(page, "input", {"type": "file", "@change": "importYaml($event)"}) == 1
+        assert page_texts.count("Export YAML") == 1
+        assert element_count(page, "button", {"@click": "exportYaml()"}) == 1
+        assert element_count(page, "button", {"@click": "submitFleet()"}) == 1
 
     def test_fleet_page_has_correct_page_identifier(self, client: FlaskClient) -> None:
-        """Test GET /simulate/fleet passes simulate-fleet page identifier."""
+        """GET /simulate/fleet renders the sidebar with the simulate-fleet page identifier, so the Simulate group's links show on this page."""
         response = client.get("/simulate/fleet")
-        html_data = response.data.decode("utf-8")
-        assert "simulate-fleet" in html_data
+        page = response.get_data(as_text=True)
+        simulate_links_condition = (
+            "(openGroup === 'simulate' || 'simulate-fleet'.startsWith('simulate')) && sidebarOpen"
+        )
+        assert element_count(page, "div", {"x-show": simulate_links_condition}) == 1
 
 
 VALID_DISTRIBUTION_FORM: dict = {
@@ -876,7 +886,7 @@ class TestErrorPages:
         assert "text/html" in response.content_type
         html = response.data.decode("utf-8")
         # Should contain the custom 404 template content
-        assert "Page Not Found" in html
+        assert headings(html).count("Page Not Found") == 1
         # Should NOT be a raw error string like "Not Found"
         assert doctype(html) == "html"
 
@@ -885,14 +895,15 @@ class TestErrorPages:
         response = client.get("/nonexistent")
         assert response.status_code == 404
         html = response.data.decode("utf-8")
+        page_texts = texts(html)
         # The base template includes sidebar navigation and footer
-        assert "Solar Challenge" in html
+        assert "Solar Challenge" in page_texts
         # Check it extends the base layout (has nav and footer elements)
         assert element_count(html, "nav") >= 1
         assert element_count(html, "footer") >= 1
         # Contains the 404-specific content
-        assert "404" in html
-        assert "Back to Dashboard" in html
+        assert texts_after(html, "404", 1) == ["Page Not Found"]
+        assert page_texts.count("Back to Dashboard") == 1
 
     def test_500_page_renders_within_app_layout(self, app: Flask) -> None:
         """Test custom 500 page is rendered within the base app layout."""
@@ -909,12 +920,13 @@ class TestErrorPages:
                 response = test_client.get("/trigger-500")
                 assert response.status_code == 500
                 html = response.data.decode("utf-8")
+                page_texts = texts(html)
                 # Should render within the base layout
-                assert "Solar Challenge" in html
+                assert "Solar Challenge" in page_texts
                 assert element_count(html, "footer") >= 1
                 # Contains the 500-specific content
                 assert texts_after(html, "500", 1) == ["Internal Server Error"]
-                assert "Back to Dashboard" in html
+                assert page_texts.count("Back to Dashboard") == 1
         finally:
             app.config["TESTING"] = True
 
