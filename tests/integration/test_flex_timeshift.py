@@ -22,39 +22,11 @@ from typing import Optional
 import pandas as pd
 import pytest
 
+from tests._synthetic_weather import sunless_weather
+
 pytestmark = pytest.mark.integration
 
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _zero_pv_weather(
-    day: str = "2024-01-15",
-    tz: str = "Europe/London",
-) -> pd.DataFrame:
-    """Build a 1-day hourly weather DataFrame with zero irradiance.
-
-    All GHI/DNI/DHI are zero → PV generation is zero, so net_cost == import_cost.
-    Isolates the import-arbitrage signal: grid-charge ON pre-loads the battery
-    overnight at the off-peak rate and discharges into the evening peak.
-
-    Copied from tests/integration/test_grid_charge_arbitrage.py.
-    """
-    index = pd.date_range(day, periods=24, freq="h", tz=tz)
-    return pd.DataFrame(
-        {
-            "ghi": [0.0] * 24,
-            "dni": [0.0] * 24,
-            "dhi": [0.0] * 24,
-            "temp_air": [8.0] * 24,  # mild winter temperature
-            "wind_speed": [2.0] * 24,
-        },
-        index=index,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +122,7 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     home_off = dataclasses.replace(home_on, battery_config=off_batt)
 
     start = end = pd.Timestamp("2024-01-15")
-    weather = _zero_pv_weather("2024-01-15")
+    weather = sunless_weather("2024-01-15", temp_air=8.0)
 
     res_on = simulate_home(home_on, start, end, weather_data=weather, validate_balance=True)  # type: ignore[arg-type]
     res_off = simulate_home(home_off, start, end, weather_data=weather, validate_balance=True)

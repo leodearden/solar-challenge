@@ -15,49 +15,13 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+from tests._synthetic_weather import synthetic_june_weather
 
 
 @pytest.fixture
 def june21_weather_data() -> pd.DataFrame:
-    """Synthetic June 21 hourly weather data for Bristol.
-
-    Covers all 24 hours so align_tmy_to_index maps every simulation
-    minute to a valid weather value.  Using synthetic data avoids a
-    PVGIS network call / disk cache in SEG pricing tests whose assertions
-    concern revenue arithmetic rather than PV output magnitude.
-
-    Irradiance profile is a realistic sunny summer day; GHI peaks ~870 W/m²
-    around solar noon, which is enough to drive meaningful grid export from
-    a 4-5 kW south-facing array with a 5 kWh battery.
-    """
-    index = pd.date_range(
-        "2024-06-21 00:00", periods=24, freq="1h", tz="Europe/London"
-    )
-    return pd.DataFrame(
-        {
-            "ghi": [
-                0, 0, 0, 0, 0, 50, 150, 300, 500, 650, 780, 850,
-                870, 850, 780, 650, 500, 300, 150, 50, 0, 0, 0, 0,
-            ],
-            "dni": [
-                0, 0, 0, 0, 0, 100, 250, 450, 650, 800, 900, 950,
-                970, 950, 900, 800, 650, 450, 250, 100, 0, 0, 0, 0,
-            ],
-            "dhi": [
-                0, 0, 0, 0, 0, 30, 70, 130, 180, 200, 200, 200,
-                200, 200, 200, 200, 180, 130, 70, 30, 0, 0, 0, 0,
-            ],
-            "temp_air": [
-                12, 11, 11, 11, 12, 13, 15, 17, 19, 21, 22, 23,
-                23, 23, 22, 21, 19, 17, 16, 14, 13, 12, 12, 12,
-            ],
-            "wind_speed": [
-                2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3,
-                3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2,
-            ],
-        },
-        index=index,
-    )
+    """A clear 21 June, sunny enough for the SEG tests' 4-5 kW arrays to export, with no PVGIS call."""
+    return synthetic_june_weather("2024-06-21")
 
 
 class TestHomeConfigBasics:

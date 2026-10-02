@@ -23,43 +23,13 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.config import load_scenarios
 from solar_challenge.home import calculate_summary, simulate_home
+from tests._synthetic_weather import sunless_weather
 
 pytestmark = pytest.mark.integration
 
 runner = CliRunner()
 
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-arbitrage.yaml"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _zero_pv_weather(
-    day: str = "2024-01-15",
-    tz: str = "Europe/London",
-) -> pd.DataFrame:
-    """Build a 1-day hourly weather DataFrame with zero irradiance.
-
-    All GHI/DNI/DHI are zero → PV generation is zero, so net_cost == import_cost.
-    This isolates the import-arbitrage signal exactly: the grid-charge ON run
-    pre-loads the battery overnight at the off-peak rate and discharges into
-    the evening peak, shifting expensive peak-rate import to cheap off-peak.
-
-    Modeled on tests/integration/test_community_fleet.py::_synth_weather.
-    """
-    index = pd.date_range(day, periods=24, freq="h", tz=tz)
-    return pd.DataFrame(
-        {
-            "ghi": [0.0] * 24,
-            "dni": [0.0] * 24,
-            "dhi": [0.0] * 24,
-            "temp_air": [8.0] * 24,  # mild winter temperature
-            "wind_speed": [2.0] * 24,
-        },
-        index=index,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +80,7 @@ def test_grid_charge_lowers_net_cost() -> None:
     home_off = dataclasses.replace(home_on, battery_config=off_batt)
 
     start = end = pd.Timestamp("2024-01-15")
-    weather = _zero_pv_weather("2024-01-15")
+    weather = sunless_weather("2024-01-15", temp_air=8.0)
 
     res_on = simulate_home(home_on, start, end, weather_data=weather)
     res_off = simulate_home(home_off, start, end, weather_data=weather)
@@ -141,7 +111,7 @@ def test_energy_balance_holds_with_grid_charging() -> None:
     assert home_on is not None
 
     start = end = pd.Timestamp("2024-01-15")
-    weather = _zero_pv_weather("2024-01-15")
+    weather = sunless_weather("2024-01-15", temp_air=8.0)
 
     # simulate_home with validate_balance=True asserts at every timestep internally;
     # if the balance is violated it raises. Passing here proves #27's split-source
