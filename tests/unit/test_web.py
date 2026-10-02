@@ -653,6 +653,59 @@ class TestFleetConfigHelpers:
         assert "load" in config
 
     @pytest.mark.parametrize(
+        ("key", "value", "message"),
+        [
+            pytest.param(
+                "n_homes", float("inf"), "n_homes must be an integer, got inf", id="n_homes-infinity"
+            ),
+            pytest.param("n_homes", "x", "n_homes must be an integer, got 'x'", id="n_homes-str"),
+            pytest.param("n_homes", None, "n_homes must be an integer, got None", id="n_homes-null"),
+            pytest.param(
+                "n_homes",
+                0,
+                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got 0",
+                id="n_homes-zero",
+            ),
+            pytest.param(
+                "n_homes",
+                MAX_FLEET_HOMES + 1,
+                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="n_homes-one-above-the-fleet-limit",
+            ),
+            pytest.param(
+                "n_homes",
+                1e300,
+                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got 1e+300",
+                id="n_homes-huge-float",
+            ),
+            pytest.param("seed", float("inf"), "seed must be an integer, got inf", id="seed-infinity"),
+            pytest.param(
+                "seed", float("-inf"), "seed must be an integer, got -inf", id="seed-negative-infinity"
+            ),
+            pytest.param("seed", "x", "seed must be an integer, got 'x'", id="seed-str"),
+            pytest.param("seed", None, "seed must be an integer, got None", id="seed-null"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_an_n_homes_or_seed_it_cannot_use(
+        self, key: str, value: object, message: str
+    ) -> None:
+        """An n_homes or seed that int() cannot read, or an n_homes outside 1 to the dashboard's fleet limit, is refused, naming the field and the value sent."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        with pytest.raises(ValueError, match=re.escape(message)):
+            form_to_fleet_distribution_config({**VALID_DISTRIBUTION_FORM, key: value})
+
+    def test_form_to_fleet_distribution_config_accepts_a_fleet_of_max_fleet_homes(self) -> None:
+        """A fleet form may ask for as many homes as a dashboard fleet holds."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        config = form_to_fleet_distribution_config(
+            {**VALID_DISTRIBUTION_FORM, "n_homes": MAX_FLEET_HOMES}
+        )
+
+        assert config["n_homes"] == MAX_FLEET_HOMES
+
+    @pytest.mark.parametrize(
         ("key", "value"),
         [
             pytest.param("pv", "x", id="pv-str"),

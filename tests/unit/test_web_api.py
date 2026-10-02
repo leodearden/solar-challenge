@@ -1094,6 +1094,36 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize(
+        ("patch", "message"),
+        [
+            pytest.param(
+                {"n_homes": float("inf")},
+                "n_homes must be an integer, got inf",
+                id="n_homes-infinity",
+            ),
+            pytest.param(
+                {"seed": float("inf")}, "seed must be an integer, got inf", id="seed-infinity"
+            ),
+            pytest.param(
+                {"n_homes": MAX_FLEET_HOMES + 1},
+                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="n_homes-one-above-the-fleet-limit",
+            ),
+        ],
+    )
+    def test_n_homes_or_seed_it_cannot_use_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, message: str
+    ) -> None:
+        """An n_homes or seed that int() cannot read, or a fleet above the dashboard's fleet limit, is a 400 naming the field and the value sent; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, **patch},
+        )
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
