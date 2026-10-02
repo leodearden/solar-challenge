@@ -48,7 +48,11 @@ class ConfigPoint:
 
     Attributes:
         pv_kwp: PV DC rated capacity in kWp (must be > 0).
-        battery_kwh: Battery usable capacity in kWh (must be >= 0).
+        battery_kwh: Battery nameplate (total) energy capacity in kWh (must be
+            >= 0), set as ``BatteryConfig.capacity_kwh`` on every home.  The
+            energy a home can actually cycle is the usable window inside that
+            capacity, bounded by its battery's ``min_soc_fraction`` and
+            ``max_soc_fraction``.
             The value **exactly** ``0.0`` is the no-battery sentinel; it causes
             :func:`_apply_install` (and therefore :func:`enumerate_configs` /
             :func:`iter_configs`) to set ``battery_config = None`` on every home
@@ -297,7 +301,9 @@ def enumerate_configs(
             ``homes`` populated (``base.homes`` non-empty).  Single-home
             scenarios are rejected because the W3 sweep operates at fleet level.
         pv_kwp: Discrete PV DC capacities in kWp (non-empty).
-        battery_kwh: Discrete battery capacities in kWh (non-empty; 0.0 = no battery).
+        battery_kwh: Discrete values for :attr:`ConfigPoint.battery_kwh`, the
+            battery nameplate (total) capacities in kWh (non-empty; 0.0 = no
+            battery).
         inverter_kw: Discrete AC inverter capacities in kW (non-empty).
 
     Returns:
@@ -780,14 +786,17 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
 
     - PV DC capacity (``pv_config.capacity_kw``)
     - AC inverter capacity (``pv_config.inverter_capacity_kw``)
-    - Battery *energy* capacity (``battery_config.capacity_kwh``)
+    - Battery nameplate (total) energy capacity (``battery_config.capacity_kwh``)
 
     **What is intentionally left diverse** (preserved from the base home):
 
-    - Battery power limit (``max_discharge_kw``), grid-charging schedule
+    - Battery power limit (``max_discharge_kw``), state-of-charge limits
+      (``min_soc_fraction``/``max_soc_fraction``), grid-charging schedule
       (``grid_charging``), and battery dispatch strategy (``dispatch_strategy``).
-      Homes that already have a battery therefore retain their individual power
-      and dispatch characteristics, while only capacity is swept.
+      Homes that already have a battery therefore retain their individual power,
+      state-of-charge and dispatch characteristics, while only capacity is
+      swept; two homes at one :class:`ConfigPoint` can thus have different
+      usable windows.  A fabricated battery gets the ``BatteryConfig`` defaults.
     - Household load profile (``load_config``) and home-level dispatch strategy
       (``HomeConfig.dispatch_strategy``) — occupancy diversity and the board
       dispatch are preserved (PRD §3.2, W-H2).

@@ -102,8 +102,9 @@ def configs(
         str,
         typer.Option(
             "--battery",
-            help="Comma-separated battery usable capacities in kWh to sweep (e.g. '0,5,10'). "
-                 "Use 0 for no-battery.",
+            help="Comma-separated battery nameplate (total) capacities in kWh to sweep "
+                 "(e.g. '0,5,10'); each battery's usable energy is capped by its "
+                 "state-of-charge limits. Use 0 for no-battery.",
         ),
     ] = "0,5,10",
     inverter: Annotated[
