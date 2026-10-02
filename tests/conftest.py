@@ -60,7 +60,13 @@ def _weather_cache_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture
 def weather_cache(_weather_cache_root: Path) -> Iterator[WeatherCache]:
-    """An empty weather cache of the test's own, installed as the one get_tmy_data reads; seed a TMY with its put()."""
+    """An empty weather cache of the test's own, installed as the one get_tmy_data reads; seed a TMY with its put().
+
+    It supersedes any cache installed before it, a broader-scoped fixture's
+    included, and at teardown leaves none installed, so get_tmy_data falls back
+    to the working directory's. A cache installed for a whole module or session
+    therefore stops at the first test that uses this fixture.
+    """
     cache = WeatherCache(cache_dir=Path(tempfile.mkdtemp(dir=_weather_cache_root)))
     set_weather_cache(cache)
     yield cache
@@ -77,6 +83,10 @@ def _run_offline_unless_slow_or_e2e(request: pytest.FixtureRequest) -> Iterator[
     Such a test neither reads nor writes the working directory's .cache/weather,
     since get_tmy_data reads the test's own empty weather_cache, and every name
     lookup or connection it makes off this machine, from any thread, is refused.
+
+    The guard spans the test and its function-scoped fixtures only. A class-,
+    module- or session-scoped fixture is set up before the guard opens and torn
+    down after it closes, so such a fixture runs unguarded and must keep itself offline.
     """
     if any(request.node.get_closest_marker(mark) for mark in _MARKS_OF_TESTS_ALLOWED_ONLINE):
         yield
