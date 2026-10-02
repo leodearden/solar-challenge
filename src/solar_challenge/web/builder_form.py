@@ -20,7 +20,6 @@ from solar_challenge.config import (
     load_fleet_config,
     parse_seg_rate,
 )
-from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.shared import LOCATION_PRESETS
 
@@ -57,7 +56,9 @@ _DISTRIBUTION_FIELDS = (
     "sp_entries",
 )
 
-_CUSTOM_COORDINATES = ("latitude", "longitude", "altitude")
+_CUSTOM_LOCATION_FORM_KEYS: Mapping[str, str] = {
+    coordinate: coordinate for coordinate in ("latitude", "longitude", "altitude")
+}
 
 _RECOGNISED_KEYS = frozenset(
     {
@@ -66,7 +67,7 @@ _RECOGNISED_KEYS = frozenset(
         "start_date",
         "end_date",
         "location_preset",
-        *_CUSTOM_COORDINATES,
+        *_CUSTOM_LOCATION_FORM_KEYS.values(),
         "n_homes",
         "import_rate",
         "seg_rate_pence_per_kwh",
@@ -100,7 +101,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
         key: str(fields[key]) for key in ("start_date", "end_date") if key in fields
     }
     if "location_preset" in fields:
-        document["location"] = location_block(_location(fields))
+        document["location"] = _location_block(fields)
     document["fleet_distribution"] = _fleet_distribution_block(fields)
     import_rate = _optional_number(fields, "import_rate")
     seg_rate = _optional_number(fields, "seg_rate_pence_per_kwh")
@@ -219,24 +220,21 @@ def _refuse_unrecognised_keys(form: Mapping[str, Any]) -> None:
         )
 
 
-def _location(fields: Mapping[str, Any]) -> Location:
-    """The location the form's location_preset names: a dashboard preset, or 'custom' for the form's coordinates.
+def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
+    """The location: block for the form's location_preset: a dashboard preset, or 'custom'.
+
+    A custom block holds the coordinates the form gives, as numbers.  A coordinate the
+    form leaves out is left out of the block, for the loader to default.
 
     Raises:
-        ValueError: for any other preset, naming it, or for custom coordinates that are
-            missing, not numbers, or out of range.
+        ValueError: for any other preset, naming it, or for a custom coordinate that is
+            not a number.
     """
     preset = fields["location_preset"]
     if preset == "custom":
-        missing = [key for key in _CUSTOM_COORDINATES if key not in fields]
-        if missing:
-            raise ValueError(f"A custom location needs {', '.join(missing)}")
-        latitude, longitude, altitude = (
-            _as_float(fields[key], key) for key in _CUSTOM_COORDINATES
-        )
-        return Location(latitude=latitude, longitude=longitude, altitude=altitude)
+        return _present_numbers(fields, _CUSTOM_LOCATION_FORM_KEYS)
     if isinstance(preset, str) and preset in LOCATION_PRESETS:
-        return LOCATION_PRESETS[preset]
+        return location_block(LOCATION_PRESETS[preset])
     raise ValueError(
         f"location_preset must be 'custom' or one of "
         f"{', '.join(map(repr, LOCATION_PRESETS))}, got {preset!r}"

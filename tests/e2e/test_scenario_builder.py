@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 import yaml
-from playwright.sync_api import ConsoleMessage, Page, expect
+from playwright.sync_api import ConsoleMessage, Page, Response, expect
 
 from solar_challenge.config import load_fleet_config
 from solar_challenge.home import HomeConfig
@@ -198,6 +198,20 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
     assert {home.pv_config.capacity_kw for home in fleet.homes} == {4.0}
 
 
+def _preview_after_uploading(
+    page: Page, live_server: str, tmp_path: Path, yaml_text: str
+) -> Response:
+    """The preview the builder, freshly opened, requests once *yaml_text* is uploaded to it."""
+    with page.expect_response("**/api/scenarios/preview-yaml"):
+        page.goto(live_server + "/scenarios/builder")
+    path = tmp_path / "scenario.yaml"
+    path.write_text(yaml_text, encoding="utf-8")
+
+    with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
+        page.set_input_files('input[type="file"]', path)
+    return after_upload.value
+
+
 _UPLOADED_FORM_GENERAL_FIELDS: dict[str, Any] = {
     "name": "Upload round trip",
     "description": "every builder block",
@@ -256,16 +270,42 @@ def test_uploading_a_builder_yaml_restores_the_form_that_emits_it(
     yaml_text = page.request.post(
         live_server + "/api/scenarios/preview-yaml", data=form, fail_on_status_code=True
     ).json()["yaml"]
-    with page.expect_response("**/api/scenarios/preview-yaml"):
-        page.goto(live_server + "/scenarios/builder")
-    path = tmp_path / "scenario.yaml"
-    path.write_text(yaml_text, encoding="utf-8")
 
-    with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
-        page.set_input_files('input[type="file"]', path)
+    preview = _preview_after_uploading(page, live_server, tmp_path, yaml_text)
 
-    assert after_upload.value.status == 200
-    assert yaml.safe_load(after_upload.value.json()["yaml"]) == yaml.safe_load(yaml_text)
+    assert preview.status == 200, preview.text()
+    assert yaml.safe_load(preview.json()["yaml"]) == yaml.safe_load(yaml_text)
+
+
+_LOCATION_WITHOUT_ALTITUDE_YAML = yaml.safe_dump(
+    {
+        "name": "Hand-written location",
+        "period": {"start_date": "2024-06-01", "end_date": "2024-06-30"},
+        "location": {"latitude": 53.4, "longitude": -2.2},
+        "fleet_distribution": {
+            "n_homes": 12,
+            "pv": {"capacity_kw": 4.0},
+            "battery": {"capacity_kwh": 5.0},
+            "load": {"annual_consumption_kwh": 3100},
+        },
+        "tariff": {"type": "flat_rate", "rate_per_kwh": 0.3},
+        "seg": {"rate_pence_per_kwh": 5.5},
+    }
+)
+"""A hand-written fleet scenario with every block the form holds; its location: has no altitude."""
+
+
+def test_uploading_a_scenario_whose_location_omits_altitude_previews_that_scenario(
+    page: Page, live_server: str, tmp_path: Path
+) -> None:
+    """The builder previews an uploaded scenario without altitude: parse_location_block defaults it.
+
+    It does not refuse the form, which the upload has already set.
+    """
+    preview = _preview_after_uploading(page, live_server, tmp_path, _LOCATION_WITHOUT_ALTITUDE_YAML)
+
+    assert preview.status == 200, preview.text()
+    assert yaml.safe_load(preview.json()["yaml"]) == yaml.safe_load(_LOCATION_WITHOUT_ALTITUDE_YAML)
 
 
 _RUN_EXPORT_YAML = scenario_yaml(
