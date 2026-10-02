@@ -253,12 +253,12 @@ def test_declared_properties_by_class_read_rules_inside_media_supports_and_layer
     }
 
 
-def test_declared_properties_by_class_tolerate_spacing_an_import_statement_an_upper_case_at_rule_and_a_spaced_upper_case_important() -> None:
+def test_declared_properties_by_class_tolerate_spacing_an_import_statement_a_stray_brace_an_upper_case_at_rule_and_a_spaced_upper_case_important() -> None:
     """Each tolerance has a class of its own: an @import statement just before a rule (sr-only),
     an upper-case at-keyword with no whitespace before it (grid-flow-dense), whitespace before a
-    brace (scrollbar-hide) and around a comma (inset-x-0, inset-y-0), and whitespace before a
-    lower-case at-keyword (print:hidden). The spaced, upper-case ``! IMPORTANT`` still marks left
-    as important."""
+    brace (scrollbar-hide) and around a comma (inset-x-0, inset-y-0), whitespace before a
+    lower-case at-keyword (print:hidden), and a stray closing brace just before a rule
+    (after-stray-brace). The spaced, upper-case ``! IMPORTANT`` still marks left as important."""
     stylesheet = (
         r'@import url("vendor/reset.css");'
         r".sr-only{position:absolute}"
@@ -266,6 +266,7 @@ def test_declared_properties_by_class_tolerate_spacing_an_import_statement_an_up
         ".scrollbar-hide {\n    scrollbar-width: none;\n}\n"
         ".inset-x-0 , .inset-y-0 {\n    left: 0 ! IMPORTANT;\n    top: 0;\n}\n"
         "@media print {\n    .print\\:hidden { display: none; }\n}\n"
+        r"}.after-stray-brace{bottom:0}"
     )
 
     assert declared_properties_by_class(stylesheet) == {
@@ -275,6 +276,7 @@ def test_declared_properties_by_class_tolerate_spacing_an_import_statement_an_up
         "inset-x-0": {"top"},
         "inset-y-0": {"top"},
         "print:hidden": {"display"},
+        "after-stray-brace": {"bottom"},
     }
 
 
