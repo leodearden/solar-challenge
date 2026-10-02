@@ -9,7 +9,7 @@ import json
 import math
 import random
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Collection, Iterator, Literal, Mapping, Optional, Union, cast
@@ -250,6 +250,25 @@ class PVDistributionConfig:
     degradation_rate_per_year: DistributionSpec = 0.005
 
 
+@dataclass(frozen=True)
+class GridChargeConfig:
+    """Configuration for grid-charging (battery arbitrage) mode.
+
+    Attributes:
+        target_soc_fraction: Target state-of-charge to reach via grid charging,
+            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
+    """
+
+    target_soc_fraction: float = 0.9
+
+    def __post_init__(self) -> None:
+        """Validate grid-charge configuration."""
+        if not (0 < self.target_soc_fraction <= 1):
+            raise ConfigurationError(
+                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
+            )
+
+
 @dataclass
 class BatteryDistributionConfig:
     """Distribution configuration for battery parameters.
@@ -260,11 +279,13 @@ class BatteryDistributionConfig:
         capacity_kwh: Distribution for battery capacity (can include None)
         max_charge_kw: Distribution for max charge rate (default: 2.5)
         max_discharge_kw: Distribution for max discharge rate (default: 2.5)
+        grid_charging: Grid-charging configuration of every home with a battery (optional)
     """
 
     capacity_kwh: DistributionSpec
     max_charge_kw: DistributionSpec = 2.5
     max_discharge_kw: DistributionSpec = 2.5
+    grid_charging: Optional[GridChargeConfig] = None
 
 
 @dataclass
@@ -373,25 +394,6 @@ class DispatchStrategyConfig:
                 )
 
 
-@dataclass(frozen=True)
-class GridChargeConfig:
-    """Configuration for grid-charging (battery arbitrage) mode.
-
-    Attributes:
-        target_soc_fraction: Target state-of-charge to reach via grid charging,
-            expressed as a fraction of usable capacity (0 < x <= 1). Defaults to 0.9.
-    """
-
-    target_soc_fraction: float = 0.9
-
-    def __post_init__(self) -> None:
-        """Validate grid-charge configuration."""
-        if not (0 < self.target_soc_fraction <= 1):
-            raise ConfigurationError(
-                f"target_soc_fraction must be in (0, 1], got {self.target_soc_fraction}"
-            )
-
-
 @dataclass
 class FleetDistributionConfig:
     """Configuration for generating a fleet from distributions.
@@ -408,6 +410,8 @@ class FleetDistributionConfig:
             - "default": Shuffle pools first, then sample normal distributions per home
             - "bristol_legacy": Sample all normal distributions first, then shuffle pools
               (matches exact behavior of create_bristol_phase1_scenario)
+        dispatch_strategy: Dispatch strategy of every home ("greedy" or "tou_optimized");
+            None means greedy
     """
 
     n_homes: int
@@ -418,6 +422,7 @@ class FleetDistributionConfig:
     ev: Optional[EVDistributionConfig] = None
     seed: Optional[int] = None
     random_order: str = "default"
+    dispatch_strategy: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.n_homes < 1:
@@ -1278,7 +1283,6 @@ def _parse_pv_distribution_config(
     )
 
 
-# grid_charging is read from the raw block by load_fleet_config.
 _BATTERY_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
     "capacity_kwh", "max_charge_kw", "max_discharge_kw", "grid_charging",
 })
@@ -1304,6 +1308,9 @@ def _parse_battery_distribution_config(
         ),
         max_discharge_kw=_parse_distribution_spec(
             data.get("max_discharge_kw", 2.5), _child_path(block_path, "max_discharge_kw")
+        ),
+        grid_charging=_parse_grid_charge_config(
+            data.get("grid_charging"), block_path=_child_path(block_path, "grid_charging")
         ),
     )
 
@@ -1406,11 +1413,21 @@ def _parse_ev_distribution_config(
     )
 
 
-# dispatch_strategy is read from the raw block by load_fleet_config.
 _FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
     "n_homes", "pv", "load", "battery", "heat_pump", "ev", "seed", "random_order",
     "dispatch_strategy",
 })
+
+
+def _parse_fleet_dispatch_strategy(data: object, *, key_path: str) -> Optional[str]:
+    """Read a fleet's dispatch strategy: absent, or one of _VALID_DISPATCH_STRATEGIES."""
+    if data is None:
+        return None
+    if not isinstance(data, str) or data not in _VALID_DISPATCH_STRATEGIES:
+        raise ConfigurationError(
+            f"Invalid {key_path} {data!r}; valid values: {sorted(_VALID_DISPATCH_STRATEGIES)}"
+        )
+    return data
 
 
 def parse_fleet_distribution_config(
@@ -1438,6 +1455,9 @@ def parse_fleet_distribution_config(
         ev=_parse_ev_distribution_config(data.get("ev"), block_path=_child_path(block_path, "ev")),
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
+        dispatch_strategy=_parse_fleet_dispatch_strategy(
+            data.get("dispatch_strategy"), key_path=_child_path(block_path, "dispatch_strategy")
+        ),
     )
 
 
@@ -1546,15 +1566,15 @@ def generate_homes_from_distribution(
             (default) homes are generated with tariff_config=None, preserving
             bit-identical behaviour for callers that do not pass this kwarg.
         fleet_grid_charging: Optional GridChargeConfig to apply to every home
-            that has a battery. When None (default) the battery's grid_charging
-            remains None, preserving bit-identical behaviour. Note: if a home's
+            that has a battery, in place of config.battery.grid_charging. When
+            None (default) the config's applies. Note: if a home's
             sampled battery capacity is non-positive (or battery is absent), no
-            BatteryConfig is created and fleet_grid_charging is silently dropped
+            BatteryConfig is created and its grid charging is silently dropped
             for that home — this is expected behaviour (no battery → no grid
             charging), not an error.
         fleet_dispatch_strategy: Optional dispatch strategy string to apply to
-            every home. When None (default) or empty, homes use "greedy",
-            preserving bit-identical behaviour for existing callers.
+            every home, in place of config.dispatch_strategy. When None (default)
+            or empty the config's applies, and "greedy" when that is None too.
 
     Returns:
         List of HomeConfig objects
@@ -1657,7 +1677,7 @@ def generate_homes_from_distribution(
                     capacity_kwh=battery_capacity,
                     max_charge_kw=charge_kw if charge_kw is not None else 2.5,
                     max_discharge_kw=discharge_kw if discharge_kw is not None else 2.5,
-                    grid_charging=fleet_grid_charging,
+                    grid_charging=fleet_grid_charging or config.battery.grid_charging,
                 )
 
         # Sample load parameters
@@ -1740,7 +1760,7 @@ def generate_homes_from_distribution(
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=fleet_tariff,
-                dispatch_strategy=fleet_dispatch_strategy or "greedy",
+                dispatch_strategy=fleet_dispatch_strategy or config.dispatch_strategy or "greedy",
             )
         )
 
@@ -2107,26 +2127,8 @@ def _replace_sweep_with_value(
     if not isinstance(cap_spec, ProportionalDistribution):
         return config
 
-    new_cap_spec = ProportionalDistribution(
-        source=cap_spec.source,
-        multiplier=value,
-        offset=cap_spec.offset,
-    )
-    new_battery = BatteryDistributionConfig(
-        capacity_kwh=new_cap_spec,
-        max_charge_kw=config.battery.max_charge_kw,
-        max_discharge_kw=config.battery.max_discharge_kw,
-    )
-    return FleetDistributionConfig(
-        n_homes=config.n_homes,
-        pv=config.pv,
-        load=config.load,
-        battery=new_battery,
-        heat_pump=config.heat_pump,
-        ev=config.ev,
-        seed=config.seed,
-        random_order=config.random_order,
-    )
+    swept_battery = replace(config.battery, capacity_kwh=replace(cap_spec, multiplier=value))
+    return replace(config, battery=swept_battery)
 
 
 def expand_sweep_configs(
@@ -2305,29 +2307,10 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     # Check for fleet_distribution (new format)
     if "fleet_distribution" in config:
         dist_config = parse_fleet_distribution_config(config["fleet_distribution"])
-        # Thread scenario-level tariff and fleet battery grid_charging (Seam 1, §9.1).
+        # Thread the scenario-level tariff (Seam 1, §9.1).
         # parse_tariff_config returns None when the key is absent → calibration-safe.
         fleet_tariff = parse_tariff_config(config.get("tariff"))
-        # grid_charging lives under fleet_distribution.battery.grid_charging
-        battery_data = config["fleet_distribution"].get("battery")
-        fleet_grid_charging = (
-            _parse_grid_charge_config(
-                battery_data.get("grid_charging"),
-                block_path="fleet_distribution.battery.grid_charging",
-            )
-            if isinstance(battery_data, dict)
-            else None
-        )
-        # dispatch_strategy lives directly under fleet_distribution (raw-dict read,
-        # mirroring the fleet_grid_charging seam above — not added to FleetDistributionConfig).
-        fleet_dispatch_strategy = config["fleet_distribution"].get("dispatch_strategy")
-        if fleet_dispatch_strategy and fleet_dispatch_strategy not in _VALID_DISPATCH_STRATEGIES:
-            raise ConfigurationError(
-                f"Invalid fleet_distribution.dispatch_strategy "
-                f"{fleet_dispatch_strategy!r}; valid values: "
-                f"{sorted(_VALID_DISPATCH_STRATEGIES)}"
-            )
-        if fleet_dispatch_strategy == "tou_optimized" and fleet_tariff is None:
+        if dist_config.dispatch_strategy == "tou_optimized" and fleet_tariff is None:
             warnings.warn(
                 "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff "
                 "is configured; homes will fall back to self-consumption dispatch at "
@@ -2336,13 +2319,7 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
                 UserWarning,
                 stacklevel=2,
             )
-        homes = generate_homes_from_distribution(
-            dist_config,
-            location,
-            fleet_tariff=fleet_tariff,
-            fleet_grid_charging=fleet_grid_charging,
-            fleet_dispatch_strategy=fleet_dispatch_strategy,
-        )
+        homes = generate_homes_from_distribution(dist_config, location, fleet_tariff=fleet_tariff)
     elif "homes" in config:
         # Explicit homes list (original format)
         homes_data = config["homes"]

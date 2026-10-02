@@ -13,13 +13,26 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_TEMPLATE
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
+    BatteryDistributionConfig,
     ConfigurationError,
     DispatchStrategyConfig,
+    EVDistributionConfig,
     FleetDistributionConfig,
     GridChargeConfig,
+    HeatPumpDistributionConfig,
+    LoadDistributionConfig,
+    NormalDistribution,
     OutputConfig,
+    ProportionalDistribution,
+    PVDistributionConfig,
+    ShuffledPoolDistribution,
     SimulationPeriod,
+    SweepSpec,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
     detect_sweep_spec,
+    expand_sweep_configs,
+    generate_homes_from_distribution,
     load_community_config,
     load_config,
     load_fleet_config,
@@ -541,6 +554,12 @@ class TestFleetDistributionBlockKeys:
                 id="battery",
             ),
             pytest.param(
+                {"battery": {"capacity_kwh": 5.0, "grid_charging": {"target": 0.8}}},
+                "fleet_distribution.battery.grid_charging",
+                "target",
+                id="grid_charging",
+            ),
+            pytest.param(
                 {"load": {"annual_consumption_kwh": 3400, "occupants": 3}},
                 "fleet_distribution.load",
                 "occupants",
@@ -643,63 +662,123 @@ class TestFleetDistributionBlockKeys:
         with pytest.raises(ConfigurationError, match=_refusal(block_path, key)):
             _parsed_fleet_distribution(**sections)
 
-    def test_raw_keys_load_fleet_config_reads_are_recognised(self, tmp_path: Path) -> None:
-        """dispatch_strategy and battery.grid_charging, which load_fleet_config reads raw, are accepted beside every parsed key."""
-        fleet_distribution = {
+    def test_block_setting_every_recognised_key_is_accepted(self) -> None:
+        """A block setting every key of every component block, with a spec of each distribution type, parses to the FleetDistributionConfig built from those values."""
+        fleet_distribution: dict[str, Any] = {
             "n_homes": 2,
             "seed": 42,
-            "random_order": "default",
+            "random_order": "bristol_legacy",
             "dispatch_strategy": "tou_optimized",
             "pv": {
-                "capacity_kw": 4.0,
-                "azimuth": 180.0,
-                "tilt": 35.0,
-                "module_efficiency": 0.2,
-                "inverter_efficiency": 0.96,
+                "capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0, "min": 2.0, "max": 6.0},
+                "azimuth": {"type": "uniform", "min": 170.0, "max": 190.0},
+                "tilt": {"type": "fixed", "value": 30.0},
+                "module_efficiency": {"type": "weighted_discrete", "values": [0.2, 0.22], "weights": [3, 1]},
+                "inverter_efficiency": 0.97,
                 "system_age_years": 1.0,
-                "degradation_rate_per_year": 0.005,
+                "degradation_rate_per_year": 0.006,
             },
             "battery": {
-                "capacity_kwh": 5.0,
-                "max_charge_kw": 2.5,
-                "max_discharge_kw": 2.5,
+                "capacity_kwh": {
+                    "type": "proportional_to",
+                    "source": "pv.capacity_kw",
+                    "multiplier": {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3, "mode": "linear"},
+                    "offset": 0.5,
+                },
+                "max_charge_kw": {"type": "shuffled_pool", "values": [2.5, 3.0], "counts": [1, 1]},
+                "max_discharge_kw": 3.0,
                 "grid_charging": {"target_soc_fraction": 0.8},
             },
-            "load": {"annual_consumption_kwh": 3400, "household_occupants": 3, "use_stochastic": False},
-            "heat_pump": {
-                "heat_pump_type": "ASHP",
-                "thermal_capacity_kw": 8.0,
-                "annual_heat_demand_kwh": 8000.0,
-            },
+            "load": {"annual_consumption_kwh": 3400.0, "household_occupants": 2, "use_stochastic": False},
+            "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 6.0, "annual_heat_demand_kwh": 9000.0},
             "ev": {
                 "charger_type": self._ONLY_7KW_CHARGERS,
-                "arrival_hour": 18,
-                "departure_hour": 7,
+                "arrival_hour": 19,
+                "departure_hour": 6,
                 "required_charge_kwh": 30.0,
                 "smart_charging_mode": "solar",
             },
         }
-        path = _write(
-            tmp_path, {"fleet_distribution": fleet_distribution, "tariff": {"type": "economy_7"}}
+
+        expected = FleetDistributionConfig(
+            n_homes=2,
+            pv=PVDistributionConfig(
+                capacity_kw=NormalDistribution(mean=4.0, std=1.0, min=2.0, max=6.0),
+                azimuth=UniformDistribution(min=170.0, max=190.0),
+                tilt=30.0,
+                module_efficiency=WeightedDiscreteDistribution(values=(0.2, 0.22), weights=(3.0, 1.0)),
+                inverter_efficiency=0.97,
+                system_age_years=1.0,
+                degradation_rate_per_year=0.006,
+            ),
+            load=LoadDistributionConfig(
+                annual_consumption_kwh=3400.0, household_occupants=2.0, use_stochastic=False
+            ),
+            battery=BatteryDistributionConfig(
+                capacity_kwh=ProportionalDistribution(
+                    source="pv.capacity_kw",
+                    multiplier=SweepSpec(min=0.5, max=2.0, steps=3, mode="linear"),
+                    offset=0.5,
+                ),
+                max_charge_kw=ShuffledPoolDistribution(values=(2.5, 3.0), counts=(1, 1)),
+                max_discharge_kw=3.0,
+                grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+            ),
+            heat_pump=HeatPumpDistributionConfig(
+                heat_pump_type="GSHP", thermal_capacity_kw=6.0, annual_heat_demand_kwh=9000.0
+            ),
+            ev=EVDistributionConfig(
+                charger_type=WeightedDiscreteDistribution(values=("7kW",), weights=(1.0,)),
+                arrival_hour=19.0,
+                departure_hour=6.0,
+                required_charge_kwh=30.0,
+                smart_charging_mode="solar",
+            ),
+            seed=42,
+            random_order="bristol_legacy",
+            dispatch_strategy="tou_optimized",
         )
+        assert parse_fleet_distribution_config(fleet_distribution) == expected
 
-        home = load_fleet_config(path).homes[0]
-
-        assert home.battery_config is not None
-        assert home.battery_config.grid_charging == GridChargeConfig(target_soc_fraction=0.8)
-        assert home.dispatch_strategy == "tou_optimized"
-
-    def test_load_fleet_config_names_the_grid_charging_block(self, tmp_path: Path) -> None:
-        """The fleet battery's grid_charging block refuses an unrecognised key at its full path."""
-        battery = {"capacity_kwh": 5.0, "grid_charging": {"target": 0.8}}
-        path = _write(
-            tmp_path,
-            {"fleet_distribution": {"n_homes": 1, "pv": {"capacity_kw": 4.0}, "battery": battery}},
-        )
+    @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param("tou-optimised", id="misspelt"),
+            pytest.param("", id="empty"),
+            pytest.param({"strategy_type": "tou_optimized"}, id="mapping"),
+        ],
+    )
+    def test_dispatch_strategy_outside_the_valid_strategies_is_refused_naming_its_path(
+        self, dispatch_strategy: object
+    ) -> None:
+        """The block parser refuses a dispatch_strategy that names no strategy, so every reader of the block does."""
         with pytest.raises(
-            ConfigurationError, match=_refusal("fleet_distribution.battery.grid_charging", "target")
+            ConfigurationError,
+            match=re.escape(f"Invalid fleet_distribution.dispatch_strategy {dispatch_strategy!r};"),
         ):
-            load_fleet_config(path)
+            _parsed_fleet_distribution(dispatch_strategy=dispatch_strategy)
+
+    def test_every_home_of_every_sweep_point_carries_grid_charging_and_dispatch_strategy(self) -> None:
+        """Homes generated from each sweep point of a parsed block, as fleet sweep builds them, carry its dispatch_strategy and battery.grid_charging."""
+        sweep = {"type": "sweep", "min": 1.0, "max": 2.0, "steps": 2}
+        distribution = _parsed_fleet_distribution(
+            dispatch_strategy="tou_optimized",
+            battery={
+                "capacity_kwh": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": sweep},
+                "grid_charging": {"target_soc_fraction": 0.8},
+            },
+        )
+
+        homes = [
+            home
+            for _, point in expand_sweep_configs(distribution)
+            for home in generate_homes_from_distribution(point, Location.bristol())
+        ]
+
+        assert [
+            (home.dispatch_strategy, home.battery_config and home.battery_config.grid_charging)
+            for home in homes
+        ] == [("tou_optimized", GridChargeConfig(target_soc_fraction=0.8))] * 2
 
     @pytest.mark.parametrize(
         ("sections", "block_path", "type_name"),
