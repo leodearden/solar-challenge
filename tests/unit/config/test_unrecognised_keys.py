@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Every block of a scenario file refuses a key its parser does not read, naming the block's path, the key and the keys it recognises."""
 
+import copy
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,8 @@ _SCENARIO = {
 
 _CLI_TEMPLATES = {"home": HOME_TEMPLATE, "fleet": FLEET_TEMPLATE, "scenario": SCENARIO_TEMPLATE}
 
+_PROBE_KEY = "unrecognised_probe"
+
 
 def _parsed_home(**blocks: Any) -> HomeConfig:
     """Parse a ``home:`` block holding only *blocks*, at the Bristol default location."""
@@ -90,11 +93,43 @@ def _write(tmp_path: Path, document: object) -> Path:
     return path
 
 
+def _nested_blocks(value: Any, path: str) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Yield each mapping within *value*, *value* first if it is one, with its path in the file."""
+    if isinstance(value, dict):
+        yield path, value
+        for key, item in value.items():
+            yield from _nested_blocks(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _nested_blocks(item, f"{path}[{index}]")
+
+
+def _assert_blocks_recognise_exactly_their_keys(
+    read: Callable[[Any], object], block: dict[str, Any], block_path: str
+) -> None:
+    """Assert that *block*, and each block nested in it, recognises exactly the keys it sets.
+
+    Each block in turn gains a probe key, which *read* must refuse alone,
+    listing that block's own keys as every key it recognises.
+    """
+    for index, (path, nested) in enumerate(_nested_blocks(block, block_path)):
+        probed = copy.deepcopy(block)
+        _, probed_nested = list(_nested_blocks(probed, block_path))[index]
+        probed_nested[_PROBE_KEY] = None
+        with pytest.raises(ConfigurationError) as refusal:
+            read(probed)
+        assert str(refusal.value) == (
+            f"Unrecognised keys in {path}: {_PROBE_KEY!r}; "
+            f"recognised keys: {', '.join(sorted(nested))}"
+        )
+
+
 def _parse_every_block(path: Path) -> None:
     """Read every block of the file at *path* through the public reader that consumes it.
 
-    A fleet_distribution carrying a sweep is read as ``fleet sweep`` reads it, any
-    other fleet as ``fleet run`` does; only a file naming its scenario is read as one.
+    A fleet_distribution carrying a sweep is read as ``fleet sweep`` reads it, with the
+    top-level tariff ``fleet run`` would apply; any other fleet is read as ``fleet run``
+    reads it; only a file naming its scenario is read as one.
     """
     document = load_config(path)
     if "home" in document:
@@ -103,6 +138,8 @@ def _parse_every_block(path: Path) -> None:
         distribution = parse_fleet_distribution_config(document["fleet_distribution"])
         if detect_sweep_spec(distribution) is None:
             load_fleet_config(path)
+        else:
+            parse_tariff_config(document.get("tariff"))
     elif "homes" in document:
         load_fleet_config(path)
     if {"name", "period"} <= document.keys() and ("home" in document or "homes" in document):
@@ -290,7 +327,7 @@ class TestHomeBlockKeys:
         assert load_home_config(path).location.latitude == 52.0
 
     def test_block_setting_every_recognised_key_is_accepted(self) -> None:
-        """A home block setting every key of every sub-block parses to the HomeConfig built from those values."""
+        """A home block setting every key of every sub-block parses to the HomeConfig built from those values; no block recognises another key."""
         pv: dict[str, Any] = {
             "capacity_kw": 5.0,
             "azimuth": 170.0,
@@ -379,6 +416,9 @@ class TestHomeBlockKeys:
             ev_config=EVConfig(**ev),
         )
         assert parse_home_block(block, Location.bristol()) == expected
+        _assert_blocks_recognise_exactly_their_keys(
+            lambda home: parse_home_block(home, Location.bristol()), block, "home"
+        )
 
 
 class TestTariffBlockKeys:
@@ -538,8 +578,9 @@ class TestTariffBlockKeys:
     def test_every_key_of_each_type_is_accepted(
         self, block: dict[str, Any], expected: TariffConfig
     ) -> None:
-        """A block setting every key its type reads parses to the TariffConfig built from those values."""
+        """A block setting every key its type reads parses to the TariffConfig built from those values; it recognises no other key."""
         assert parse_tariff_config(block) == expected
+        _assert_blocks_recognise_exactly_their_keys(parse_tariff_config, block, "tariff")
 
 
 class TestFleetDistributionBlockKeys:
@@ -673,7 +714,7 @@ class TestFleetDistributionBlockKeys:
             _parsed_fleet_distribution(**sections)
 
     def test_block_setting_every_recognised_key_is_accepted(self) -> None:
-        """A block setting every key of every component block, with a spec of each distribution type, parses to the FleetDistributionConfig built from those values."""
+        """A block setting every key of every component block, with a spec of each distribution type, parses to the FleetDistributionConfig built from those values; no block recognises another key."""
         fleet_distribution: dict[str, Any] = {
             "n_homes": 2,
             "seed": 42,
@@ -749,6 +790,9 @@ class TestFleetDistributionBlockKeys:
             dispatch_strategy="tou_optimized",
         )
         assert parse_fleet_distribution_config(fleet_distribution) == expected
+        _assert_blocks_recognise_exactly_their_keys(
+            parse_fleet_distribution_config, fleet_distribution, "fleet_distribution"
+        )
 
     @pytest.mark.parametrize(
         "dispatch_strategy",
@@ -1024,7 +1068,7 @@ class TestScenarioFileBlockKeys:
             read(data)
 
     def test_every_recognised_key_is_accepted(self, tmp_path: Path) -> None:
-        """A scenario setting every key of its location, period, output and finance blocks, and a seg block, parses to the values set."""
+        """A scenario setting every key of its location, period, output and finance blocks, and a seg block, parses to the values set; those blocks recognise no other key."""
         location: dict[str, Any] = {
             "latitude": 52.2,
             "longitude": -1.5,
@@ -1099,8 +1143,16 @@ class TestScenarioFileBlockKeys:
             **{**finance, "grid_services_events": expected_events}
         )
 
+        def read_scenario_with(key: str) -> Callable[[Any], object]:
+            return lambda block: load_scenarios(_write(tmp_path, {**document, key: block}))
+
+        for key in ("location", "period", "output", "finance"):
+            _assert_blocks_recognise_exactly_their_keys(read_scenario_with(key), document[key], key)
+        either_seg_form = {"preset": "Octopus", "rate_pence_per_kwh": 5.5}
+        _assert_blocks_recognise_exactly_their_keys(parse_seg_rate, either_seg_form, "seg")
+
     def test_every_recognised_community_key_is_accepted(self, tmp_path: Path) -> None:
-        """A community block setting its mode, battery and billing, billed by a tariff and a scalar SEG rate, parses to the CommunityConfig built from those values."""
+        """A community block setting its mode, battery and billing, billed by a tariff and a scalar SEG rate, parses to the CommunityConfig built from those values; the community and billing blocks recognise no other key."""
         community_battery: dict[str, Any] = {
             "capacity_kwh": 50.0,
             "max_charge_kw": 20.0,
@@ -1124,6 +1176,17 @@ class TestScenarioFileBlockKeys:
             ),
         )
         assert load_community_config(_write(tmp_path, {"community": community})) == expected
+
+        every_community_key = {
+            "sharing_mode": "p2p",
+            "community_battery": None,
+            "billing": {"tariff": None, "seg_rate_pence_per_kwh": 4.1, "seg": None},
+        }
+        _assert_blocks_recognise_exactly_their_keys(
+            lambda block: load_community_config(_write(tmp_path, {"community": block})),
+            every_community_key,
+            "community",
+        )
 
 
 class TestShippedScenarios:
