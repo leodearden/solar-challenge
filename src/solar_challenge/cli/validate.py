@@ -16,6 +16,7 @@ from solar_challenge.cli.utils import (
     print_success,
 )
 from solar_challenge.config import ConfigurationError, load_config
+from solar_challenge.pv import PVConfig
 from solar_challenge.validation import (
     ValidationReport,
     validate_consumption,
@@ -126,7 +127,7 @@ def results(
     # Validate PV
     pv_results = validate_pv_generation(
         generation,
-        pv_kw,
+        PVConfig(capacity_kw=pv_kw),
         check_annual=True,
     )
     all_results.extend(pv_results)

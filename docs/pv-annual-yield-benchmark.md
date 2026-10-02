@@ -22,8 +22,8 @@ The yields are §3's Bristol measurements. Divided by the nameplate, these corre
 simulations failed the band; divided by the wired DC, they were inside it.
 `validate_pv_generation` and `validate_simulation` take the `PVConfig` that produced the
 generation, so the wired DC is that of the config's own module, `custom_module_params`
-included. A bare capacity, as the `validate results` CLI's `--pv-kw` gives, stands for a
-system of the default module.
+included. The `validate results` CLI holds only a capacity, `--pv-kw`, so it validates
+against a `PVConfig` of the default module at that capacity.
 
 ## 2. The Band Is a Real-World Benchmark
 

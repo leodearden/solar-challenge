@@ -6,7 +6,7 @@ and benchmark validation against expected UK domestic performance.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional
 
 import pandas as pd
 
@@ -75,13 +75,6 @@ class ValidationReport:
 _UK_YIELD_BENCHMARK_KWH_PER_KWP = (700.0, 1100.0)
 
 
-def _as_pv_config(pv_config: Union[PVConfig, float]) -> PVConfig:
-    """pv_config itself, or a PVConfig of the default module at that capacity_kw."""
-    if isinstance(pv_config, PVConfig):
-        return pv_config
-    return PVConfig(capacity_kw=pv_config)
-
-
 def _check_annual_yield(
     generation: pd.Series, config: PVConfig
 ) -> Optional[ValidationResult]:
@@ -134,7 +127,7 @@ def _check_peak_within_capacity(
 
 def validate_pv_generation(
     generation: pd.Series,
-    pv_config: Union[PVConfig, float],
+    pv_config: PVConfig,
     check_annual: bool = True,
 ) -> list[ValidationResult]:
     """Validate PV generation values for sanity.
@@ -149,17 +142,13 @@ def validate_pv_generation(
 
     Args:
         generation: PV generation time series in kW
-        pv_config: The PVConfig that produced generation, or its capacity_kw
-            for a system of the default module. The peak check and the annual
-            yield both use the DC the PV model wires for it
+        pv_config: The PVConfig that produced generation. The peak check and
+            the annual yield both use the DC the PV model wires for it
             (pv.wired_dc_capacity_kw), custom_module_params included.
         check_annual: Whether to check annual yield (requires ~1 year data)
 
     Returns:
         List of ValidationResult objects
-
-    Raises:
-        ValueError: If pv_config is a capacity that PVConfig refuses (not positive).
 
     VAL-001 acceptance criteria:
         - Generation never negative
@@ -167,7 +156,6 @@ def validate_pv_generation(
         - Peak generation does not exceed system capacity
         - Annual generation per kWp wired within the UK benchmark band
     """
-    config = _as_pv_config(pv_config)
     results: list[ValidationResult] = []
 
     # Check 1: No negative values
@@ -188,7 +176,7 @@ def validate_pv_generation(
         ))
 
     # Check 2: Peak within 10% over the wired DC
-    results.append(_check_peak_within_capacity(generation, config))
+    results.append(_check_peak_within_capacity(generation, pv_config))
 
     # Check 3: Night-time generation is approximately zero
     # Night defined as hours 22:00 - 05:00 (local time)
@@ -215,7 +203,7 @@ def validate_pv_generation(
 
     # Check 4: Annual yield per kWp wired within the UK benchmark band
     if check_annual:
-        annual_yield = _check_annual_yield(generation, config)
+        annual_yield = _check_annual_yield(generation, pv_config)
         if annual_yield is not None:
             results.append(annual_yield)
 
@@ -502,7 +490,7 @@ def validate_self_consumption_with_battery(
 
 def validate_simulation(
     results: SimulationResults,
-    pv_config: Union[PVConfig, float],
+    pv_config: PVConfig,
     battery_capacity_kwh: Optional[float] = None,
     target_annual_consumption_kwh: Optional[float] = None,
 ) -> ValidationReport:
@@ -510,26 +498,21 @@ def validate_simulation(
 
     Args:
         results: Simulation results to validate
-        pv_config: The PVConfig that produced results, or its capacity_kw for
-            a system of the default module. validate_pv_generation judges the
-            generation against it; the self-consumption benchmarks use its
-            configured capacity_kw.
+        pv_config: The PVConfig that produced results. validate_pv_generation
+            judges the generation against it; the self-consumption benchmarks
+            use its configured capacity_kw.
         battery_capacity_kwh: Battery capacity (None if no battery)
         target_annual_consumption_kwh: Expected annual consumption
 
     Returns:
         ValidationReport with all check results
-
-    Raises:
-        ValueError: If pv_config is a capacity that PVConfig refuses (not positive).
     """
-    config = _as_pv_config(pv_config)
     all_results: list[ValidationResult] = []
 
     # Validate PV generation
     pv_checks = validate_pv_generation(
         results.generation,
-        config,
+        pv_config,
         check_annual=True,
     )
     all_results.extend(pv_checks)
@@ -546,14 +529,14 @@ def validate_simulation(
         if battery_capacity_kwh is not None and battery_capacity_kwh > 0:
             sc_check = validate_self_consumption_with_battery(
                 results,
-                config.capacity_kw,
+                pv_config.capacity_kw,
                 battery_capacity_kwh,
                 target_annual_consumption_kwh,
             )
         else:
             sc_check = validate_self_consumption_pv_only(
                 results,
-                config.capacity_kw,
+                pv_config.capacity_kw,
                 target_annual_consumption_kwh,
             )
         all_results.append(sc_check)

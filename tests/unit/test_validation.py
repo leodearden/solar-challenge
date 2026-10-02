@@ -206,7 +206,7 @@ class TestValidatePVGeneration:
         index = _create_minute_index(7)
         generation = _create_valid_generation(index, capacity_kw=4.0)
 
-        results = validate_pv_generation(generation, 4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         assert all(r.passed for r in results)
 
@@ -216,7 +216,7 @@ class TestValidatePVGeneration:
         generation = _create_valid_generation(index, capacity_kw=4.0)
         generation.iloc[100] = -1.0  # Introduce negative value
 
-        results = validate_pv_generation(generation, 4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         non_negative_check = next(r for r in results if "non_negative" in r.check_name)
         assert non_negative_check.passed is False
@@ -227,7 +227,7 @@ class TestValidatePVGeneration:
         generation = _create_valid_generation(index, capacity_kw=4.0)
         generation.iloc[500] = 10.0  # Way above 4 kW capacity
 
-        results = validate_pv_generation(generation, 4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         peak_check = next(r for r in results if "peak" in r.check_name)
         assert peak_check.passed is False
@@ -237,7 +237,7 @@ class TestValidatePVGeneration:
         index = _create_minute_index(7)
         generation = pd.Series(np.full(len(index), 0.5), index=index)  # Constant 0.5 kW
 
-        results = validate_pv_generation(generation, 4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         night_check = next(r for r in results if "night" in r.check_name)
         assert night_check.passed is False
@@ -247,7 +247,7 @@ class TestValidatePVGeneration:
         index = _create_minute_index(7)
         generation = _create_valid_generation(index, capacity_kw=4.0)
 
-        results = validate_pv_generation(generation, 4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         night_check = next(r for r in results if "night" in r.check_name)
         assert night_check.passed is True
@@ -258,18 +258,9 @@ class TestValidatePVGeneration:
     ) -> None:
         generation = _create_valid_generation(_create_minute_index(days), capacity_kw=4.0)
 
-        results = validate_pv_generation(generation, 4.0, check_annual=True)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=True)
 
         assert ("annual_yield_range" in [r.check_name for r in results]) is checked
-
-    @pytest.mark.parametrize("check_annual", [False, True])
-    def test_a_non_positive_capacity_is_refused_whatever_the_series_length(
-        self, check_annual: bool
-    ) -> None:
-        generation = _create_valid_generation(_create_minute_index(7), capacity_kw=4.0)
-
-        with pytest.raises(ValueError, match="Capacity must be positive"):
-            validate_pv_generation(generation, 0.0, check_annual=check_annual)
 
 
 class TestAnnualYieldPerWiredKwp:
@@ -279,11 +270,12 @@ class TestAnnualYieldPerWiredKwp:
     def test_a_typical_uk_yield_passes_whatever_the_module_rounding(
         self, capacity_kw: float
     ) -> None:
-        wired_kw = wired_dc_capacity_kw(PVConfig(capacity_kw=capacity_kw))
+        pv_config = PVConfig(capacity_kw=capacity_kw)
+        wired_kw = wired_dc_capacity_kw(pv_config)
         generation = _year_of_generation(1000.0 * wired_kw)
 
         result = _annual_yield_check(
-            validate_pv_generation(generation, capacity_kw, check_annual=True)
+            validate_pv_generation(generation, pv_config, check_annual=True)
         )
 
         assert result.passed is True
@@ -296,11 +288,12 @@ class TestAnnualYieldPerWiredKwp:
     def test_a_yield_outside_the_uk_benchmark_fails(
         self, capacity_kw: float, kwh_per_wired_kwp: float
     ) -> None:
-        wired_kw = wired_dc_capacity_kw(PVConfig(capacity_kw=capacity_kw))
+        pv_config = PVConfig(capacity_kw=capacity_kw)
+        wired_kw = wired_dc_capacity_kw(pv_config)
         generation = _year_of_generation(kwh_per_wired_kwp * wired_kw)
 
         result = _annual_yield_check(
-            validate_pv_generation(generation, capacity_kw, check_annual=True)
+            validate_pv_generation(generation, pv_config, check_annual=True)
         )
 
         assert result.passed is False
@@ -311,7 +304,7 @@ class TestAnnualYieldPerWiredKwp:
         generation = _year_of_generation(400.428)
 
         result = _annual_yield_check(
-            validate_pv_generation(generation, 0.3, check_annual=True)
+            validate_pv_generation(generation, PVConfig(capacity_kw=0.3), check_annual=True)
         )
 
         assert result.passed is True
@@ -346,11 +339,12 @@ class TestAnnualYieldPerWiredKwp:
     def test_the_uk_benchmark_band_runs_from_700_to_1100(
         self, kwh_per_wired_kwp: float, passed: bool
     ) -> None:
-        wired_kw = wired_dc_capacity_kw(PVConfig(capacity_kw=4.0))
+        pv_config = PVConfig(capacity_kw=4.0)
+        wired_kw = wired_dc_capacity_kw(pv_config)
         generation = _year_of_generation(kwh_per_wired_kwp * wired_kw)
 
         result = _annual_yield_check(
-            validate_pv_generation(generation, 4.0, check_annual=True)
+            validate_pv_generation(generation, pv_config, check_annual=True)
         )
 
         assert result.passed is passed
@@ -359,19 +353,13 @@ class TestAnnualYieldPerWiredKwp:
 class TestPeakWithinWiredCapacity:
     """The peak may exceed the DC of the modules the PV model wires by 10%."""
 
-    @pytest.mark.parametrize(
-        "pv_config",
-        [PVConfig(capacity_kw=0.7, inverter_capacity_kw=1.0), 0.7],
-        ids=["pv_config", "capacity_kw"],
-    )
-    def test_a_peak_above_the_configured_capacity_passes_within_the_wired_dc(
-        self, pv_config: PVConfig | float
-    ) -> None:
+    def test_a_peak_above_the_configured_capacity_passes_within_the_wired_dc(self) -> None:
         """0.7 kW wires two 400.428 W modules, 0.80 kWp.
 
         Behind a 1.0 kW inverter the model's AC peaked at 0.804 kW, as
         docs/pv-annual-yield-benchmark.md §4 records.
         """
+        pv_config = PVConfig(capacity_kw=0.7, inverter_capacity_kw=1.0)
         generation = _create_valid_generation(_create_minute_index(7), capacity_kw=0.7)
         generation.iloc[780] = 0.80
 
@@ -556,7 +544,7 @@ class TestValidateSimulation:
 
         report = validate_simulation(
             results,
-            4.0,
+            PVConfig(capacity_kw=4.0),
             battery_capacity_kwh=None,
             target_annual_consumption_kwh=3400,
         )
@@ -576,7 +564,7 @@ class TestValidateSimulation:
 
         report = validate_simulation(
             results,
-            4.0,
+            PVConfig(capacity_kw=4.0),
             battery_capacity_kwh=5.0,
             target_annual_consumption_kwh=3400,
         )
