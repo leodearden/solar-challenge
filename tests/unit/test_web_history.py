@@ -16,7 +16,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
-from solar_challenge.config import load_fleet_config
+from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig, load_fleet_config
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.load import LoadConfig
@@ -384,6 +384,65 @@ class TestExportAPI:
         _store_fleet_run(storage, "two-home-fleet", home_configs)
 
         response = client.get("/api/history/runs/two-home-fleet/export/yaml")
+
+        assert response.status_code == 200
+        path = tmp_path / "export.yaml"
+        path.write_bytes(response.data)
+        assert load_fleet_config(path).homes == home_configs
+
+    def test_export_of_a_home_run_with_battery_dispatch_and_grid_charging_loads_back(
+        self, storage: RunStorage, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """A battery's TOU dispatch strategy and grid charging survive the export."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3500.0),
+            battery_config=BatteryConfig(
+                capacity_kwh=5.0,
+                dispatch_strategy=DispatchStrategyConfig("tou_optimized", peak_hours=[(16, 19)]),
+                grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+            ),
+            tariff_config=TariffConfig.economy_7(),
+            dispatch_strategy="tou_optimized",
+        )
+        _store_home_run(storage, "tou-battery-home", config)
+
+        response = client.get("/api/history/runs/tou-battery-home/export/yaml")
+
+        assert response.status_code == 200
+        path = tmp_path / "export.yaml"
+        path.write_bytes(response.data)
+        assert home_config_for_run(path) == config
+
+    def test_export_of_a_fleet_run_with_battery_dispatch_loads_back_through_load_fleet_config(
+        self, storage: RunStorage, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """Each home keeps its battery's dispatch strategy, TOU with grid charging or peak shaving."""
+        home_configs = [
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=3.0),
+                load_config=LoadConfig(annual_consumption_kwh=2900.0),
+                battery_config=BatteryConfig(
+                    capacity_kwh=5.0,
+                    dispatch_strategy=DispatchStrategyConfig("tou_optimized", peak_hours=[(16, 19)]),
+                    grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+                ),
+                tariff_config=TariffConfig.economy_7(),
+                name="Home 1",
+            ),
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=6.0),
+                load_config=LoadConfig(annual_consumption_kwh=4100.0),
+                battery_config=BatteryConfig(
+                    capacity_kwh=10.0,
+                    dispatch_strategy=DispatchStrategyConfig("peak_shaving", import_limit_kw=3.0),
+                ),
+                name="Home 2",
+            ),
+        ]
+        _store_fleet_run(storage, "dispatch-fleet", home_configs)
+
+        response = client.get("/api/history/runs/dispatch-fleet/export/yaml")
 
         assert response.status_code == 200
         path = tmp_path / "export.yaml"

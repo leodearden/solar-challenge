@@ -6,6 +6,8 @@ Tests cover:
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
 - Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
+- A config holding every field shape, its battery's dispatch strategy and grid
+  charging included, loads equal to the one saved
 - Every saved config and summary is written as its dataclass field tree in JSON
 - Corrupted parquet graceful error handling
 - Missing run directory graceful error handling
@@ -535,6 +537,47 @@ class TestTupleFieldRoundtrip:
         )
 
         loaded_fleet, _, _ = storage.load_fleet_run("tou-fleet-001")
+
+        assert loaded_fleet.home_configs == home_configs
+
+
+class TestEveryFieldShapeRoundtrip:
+    """A config holding every field shape a save writes loads equal to the one saved.
+
+    Its battery has a dispatch strategy and grid charging, whose types BatteryConfig's
+    module names only for type checking.
+    """
+
+    def test_home_config_loads_equal(self, storage: RunStorage) -> None:
+        config = _make_home_config_with_every_field_shape()
+
+        storage.save_home_run(
+            run_id="every-shape-home",
+            config=config,
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+        )
+
+        loaded_config, _, _ = storage.load_home_run("every-shape-home")
+
+        assert loaded_config == config
+
+    def test_fleet_home_configs_load_equal(self, storage: RunStorage) -> None:
+        home_configs = [
+            _make_home_config_with_every_field_shape(f"Home {i}") for i in range(2)
+        ]
+
+        storage.save_fleet_run(
+            run_id="every-shape-fleet",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results() for _ in range(2)],
+                home_configs=home_configs,
+            ),
+            fleet_summary=_make_fleet_summary(n_homes=2),
+            per_home_summaries=[_make_summary() for _ in range(2)],
+        )
+
+        loaded_fleet, _, _ = storage.load_fleet_run("every-shape-fleet")
 
         assert loaded_fleet.home_configs == home_configs
 
