@@ -14,6 +14,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.web.api import api_bp
 from tests._web_app import build_test_app
 
 
@@ -323,6 +324,23 @@ class TestSimulateFleetAPI:
             json={"name": "No homes key"},
         )
         assert resp.status_code == 400
+
+    @pytest.mark.parametrize(
+        ("homes", "type_name"),
+        [
+            pytest.param({"a": 1}, "dict", id="object"),
+            pytest.param(5, "int", id="number"),
+            pytest.param("abc", "str", id="string"),
+        ],
+    )
+    def test_homes_that_is_not_a_json_array_returns_400_naming_its_type_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, homes: object, type_name: str
+    ) -> None:
+        """A 'homes' that is not an array is refused naming its own type, not read as a list of home configs."""
+        resp = client.post("/api/simulate/fleet", json={"name": "Bad Fleet", "homes": homes})
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == f"homes must be a JSON array, got {type_name}"
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_invalid_home_in_fleet_returns_400(self, client: FlaskClient) -> None:
         """Fleet with an invalid home config returns 400."""
@@ -824,6 +842,17 @@ class TestSimulateSweep:
         assert resp.status_code == 201
         assert resp.get_json()["parameter"] == "pv_capacity_kw"
 
+    def test_empty_object_body_submits_the_default_sweep(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """Every field is optional: {} sweeps PV capacity linearly from 1 to 10 kW in 5 steps, one home job per step."""
+        resp = client.post("/api/simulate/sweep", json={})
+        assert resp.status_code == 201
+        default_pv_kw = [1.0, 3.25, 5.5, 7.75, 10.0]
+        assert (resp.get_json()["parameter"], resp.get_json()["values"]) == ("pv_capacity_kw", default_pv_kw)
+        submitted_homes = [call.kwargs["config"] for call in mock_job_manager.submit_home_job.call_args_list]
+        assert [home.pv_config.capacity_kw for home in submitted_homes] == default_pv_kw
+
 
 # ===================================================================
 # POST /api/fleet/preview-distribution
@@ -1262,6 +1291,27 @@ class TestImportFleetYAML:
 # Error path tests (miscellaneous)
 # ===================================================================
 
+_API_ENDPOINTS_THAT_READ_NO_JSON_BODY = frozenset({"api.import_fleet_yaml"})
+
+
+def _api_body_method_routes() -> list[tuple[str, str, str]]:
+    """Return the endpoint, method and path of every POST, PUT and PATCH route of the api blueprint.
+
+    A path argument is filled with a value that names no record, e.g. no-such-run_id.
+    """
+    api_only = Flask(__name__, static_folder=None)
+    api_only.register_blueprint(api_bp)
+    urls = api_only.url_map.bind("localhost")
+    return [
+        (
+            rule.endpoint,
+            method,
+            urls.build(rule.endpoint, {name: f"no-such-{name}" for name in rule.arguments}, method=method),
+        )
+        for rule in api_only.url_map.iter_rules()
+        for method in sorted({"POST", "PUT", "PATCH"}.intersection(rule.methods or ()))
+    ]
+
 
 class TestErrorPaths:
     """Catch-all tests for error handling across the API."""
@@ -1301,6 +1351,44 @@ class TestErrorPaths:
             content_type="application/json",
         )
         assert resp.status_code == 400
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            pytest.param(method, path, id=endpoint)
+            for endpoint, method, path in _api_body_method_routes()
+            if endpoint not in _API_ENDPOINTS_THAT_READ_NO_JSON_BODY
+        ],
+    )
+    def test_every_json_endpoint_answers_a_non_object_body_with_the_shared_400(
+        self, client: FlaskClient, mock_job_manager: MagicMock, method: str, path: str
+    ) -> None:
+        """The body is refused, naming its type, before any run lookup, save or job submission."""
+        resp = client.open(path, method=method, json=[1])
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "Request body must be a JSON object, got list"}
+        assert mock_job_manager.method_calls == []
+
+    def test_no_stale_endpoint_is_listed_as_reading_no_json_body(self) -> None:
+        """Every endpoint exempted from the shared 400 is still a POST, PUT or PATCH route of the api blueprint."""
+        body_method_endpoints = {endpoint for endpoint, _, _ in _api_body_method_routes()}
+        assert _API_ENDPOINTS_THAT_READ_NO_JSON_BODY - body_method_endpoints == set()
+
+    @pytest.mark.parametrize(
+        ("data", "content_type"),
+        [
+            pytest.param(None, None, id="absent"),
+            pytest.param("null", "application/json", id="json-null"),
+        ],
+    )
+    def test_an_absent_or_null_body_is_refused_as_nonetype(
+        self, client: FlaskClient, mock_job_manager: MagicMock, data: str | None, content_type: str | None
+    ) -> None:
+        """No body at all, and a JSON null, are both refused naming NoneType."""
+        resp = client.post("/api/simulate/home", data=data, content_type=content_type)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "Request body must be a JSON object, got NoneType"}
+        assert mock_job_manager.method_calls == []
 
     def test_get_method_not_allowed_simulate_home(self, client: FlaskClient) -> None:
         """GET on POST-only endpoint returns 405."""

@@ -426,6 +426,20 @@ class TestChatDegradation:
         )
         assert client.get("/assistant/history").get_json() == {"messages": []}
 
+    def test_body_that_is_not_a_json_object_returns_error_frame_naming_its_type_and_saves_no_turn(
+        self, client: FlaskClient, anthropic_api: FakeAnthropic
+    ) -> None:
+        """A body that is not a JSON object gets a lone error frame naming its type, and no chat turn is saved."""
+        resp = client.post("/assistant/chat", json=[1])
+
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.content_type
+        events = parse_sse_events(resp.get_data(as_text=True))
+        assert [e.event for e in events] == ["error"]
+        assert events[0].data == {"message": "Request body must be a JSON object, got list"}
+        assert anthropic_api.calls == []  # the model is never called
+        assert client.get("/assistant/history").get_json() == {"messages": []}
+
 
 class TestChatPageWiring:
     """Tests for chat.html JS include, data-* attributes, and configure-notice."""

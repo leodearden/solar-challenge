@@ -26,13 +26,25 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.database import get_db
-from solar_challenge.web.shared import get_job_manager, get_storage, resolve_location
+from solar_challenge.web.shared import (
+    RequestBodyNotAJsonObject,
+    get_job_manager,
+    get_storage,
+    request_json_object,
+    resolve_location,
+)
 from solar_challenge.web.simulation_params import parse_date_range, parse_home_config, parse_seg_tariff
 from solar_challenge.web.storage import stored_fleet_home_configs, stored_home_config
 
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
+
+
+@api_bp.errorhandler(RequestBodyNotAJsonObject)
+def _refuse_body_that_is_not_a_json_object(refusal: RequestBodyNotAJsonObject) -> tuple[Response, int]:
+    """Any endpoint of this blueprint whose body is not a JSON object gets HTTP 400 naming the type sent."""
+    return jsonify({"error": str(refusal)}), 400
 
 
 @api_bp.route("/simulate/home", methods=["POST"])
@@ -44,9 +56,7 @@ def simulate_home_api() -> tuple[Response, int]:
     Returns:
         JSON with job_id and run_id, HTTP 201 on success.
     """
-    data = request.get_json(silent=True)
-    if data is None:
-        return jsonify({"error": "Request body must be JSON"}), 400
+    data = request_json_object()
     try:
         home_config, start_date, end_date, name = parse_home_config(data)
     except (ValueError, TypeError) as exc:
@@ -70,15 +80,15 @@ def simulate_home_api() -> tuple[Response, int]:
 def simulate_fleet_api() -> tuple[Response, int]:
     """Submit a fleet simulation job for background execution.
 
-    Expects a JSON body with a list of home configs under 'homes' key.
+    Expects a JSON body with a non-empty array of home configs under the 'homes' key.
 
     Returns:
         JSON with job_id and run_id, HTTP 201 on success.
     """
-    data = request.get_json(silent=True)
-    if data is None:
-        return jsonify({"error": "Request body must be JSON"}), 400
+    data = request_json_object()
     homes_data = data.get("homes", [])
+    if not isinstance(homes_data, list):
+        return jsonify({"error": f"homes must be a JSON array, got {type(homes_data).__name__}"}), 400
     if not homes_data:
         return jsonify({"error": "Fleet requires at least one home config in 'homes' array"}), 400
     try:
@@ -286,9 +296,7 @@ def save_preset() -> tuple[Response, int]:
     import uuid as _uuid  # noqa: PLC0415
     from datetime import datetime, timezone  # noqa: PLC0415
 
-    data = request.get_json(silent=True)
-    if data is None:
-        return jsonify({"error": "Request body must be JSON"}), 400
+    data = request_json_object()
     name = data.get("name", "").strip()
     if not name:
         return jsonify({"error": "Preset name is required"}), 400
@@ -385,7 +393,7 @@ def preview_distribution() -> tuple[Response, int]:
     Returns:
         JSON with ``samples`` array, HTTP 200 on success.
     """
-    data = request.get_json(silent=True) or {}
+    data = request_json_object()
     dist_type = data.get("type", "normal")
     params = data.get("params", {})
     n_samples = int(data.get("n_samples", 100))
@@ -408,9 +416,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     Returns:
         JSON with ``job_id`` and ``run_id``, HTTP 201 on success.
     """
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "Request body must be JSON"}), 400
+    data = request_json_object()
 
     job_manager = get_job_manager()
 
@@ -468,7 +474,7 @@ def export_fleet_yaml() -> Response:
     Returns:
         YAML file download response.
     """
-    data = request.get_json(silent=True) or {}
+    data = request_json_object()
 
     from solar_challenge.web.fleet_config import fleet_distribution_to_yaml  # noqa: PLC0415
 
@@ -522,7 +528,7 @@ def simulate_sweep() -> tuple[Response, int]:
     background home-simulation job per point.  Returns the sweep id, the
     rounded sweep values and the ids of the submitted jobs.
 
-    Expects a JSON body with:
+    Expects a JSON object whose fields are all optional, so ``{}`` runs the default sweep:
       - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
       - min: float
       - max: float
@@ -538,9 +544,7 @@ def simulate_sweep() -> tuple[Response, int]:
     """
     import uuid as _uuid  # noqa: PLC0415
 
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "Request body must be JSON"}), 400
+    data = request_json_object()
     parameter = str(data.get("parameter", "pv_capacity_kw"))
     home_config_key = _SWEEP_PARAMETER_HOME_KEYS.get(parameter)
     if home_config_key is None:
@@ -811,7 +815,7 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
         JSON response with updated run data, or 404 if not found.
     """
     db_path = current_app.config["DATABASE"]
-    data = request.get_json(silent=True) or {}
+    data = request_json_object()
 
     with get_db(db_path) as conn:
         cursor = conn.cursor()
@@ -975,7 +979,7 @@ def scenarios_preview_yaml() -> tuple[Response, int]:
         JSON with the ``yaml`` text, HTTP 200; or the ``error``, HTTP 400, for a
         form the builder does not send.
     """
-    data = request.get_json(silent=True) or {}
+    data = request_json_object()
     try:
         document = scenario_from_builder_form(data)
     except ValueError as exc:
@@ -992,7 +996,7 @@ def scenarios_validate_scenario() -> tuple[Response, int]:
     Returns:
         JSON with ``valid`` and the ``errors`` list, empty for a valid form, HTTP 200.
     """
-    data = request.get_json(silent=True) or {}
+    data = request_json_object()
     errors = builder_form_errors(data)
     return jsonify({"valid": not errors, "errors": errors}), 200
 
@@ -1009,9 +1013,7 @@ def scenarios_save_scenario() -> tuple[Response, int]:
     import uuid  # noqa: PLC0415
     from datetime import datetime, timezone  # noqa: PLC0415
 
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "Request body must be JSON"}), 400
+    data = request_json_object()
     name = str(data.get("name", "")).strip()
     if not name:
         return jsonify({"error": "Scenario name is required"}), 400

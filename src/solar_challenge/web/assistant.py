@@ -16,19 +16,19 @@ gives the reason.
 
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Generator
 from uuid import uuid4
 
-from flask import Blueprint, Response, current_app, jsonify, render_template, request, session
+from flask import Blueprint, Response, current_app, jsonify, render_template, session
 from flask.helpers import stream_with_context
 from flask.typing import ResponseReturnValue
 
 from solar_challenge.web import database
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import get_job_manager
+from solar_challenge.web.shared import RequestBodyNotAJsonObject, get_job_manager, request_json_object
 from solar_challenge.web.simulation_params import parse_home_config
 
 bp = Blueprint("assistant", __name__)
@@ -791,11 +791,29 @@ def _add_cache_usage(totals: Mapping[str, int], usage: Any) -> dict[str, int]:
     }
 
 
+def _error_frame(message: str) -> str:
+    """Return the SSE ``error`` frame carrying *message*."""
+    return f"event: error\ndata: {json.dumps({'message': message})}\n\n"
+
+
+def _event_stream(frames: Iterable[str]) -> Response:
+    """Return the 200 ``text/event-stream`` response sending *frames*, uncached and unbuffered by proxies."""
+    return Response(
+        frames,
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @bp.route("/chat", methods=["POST"])
 def chat() -> Response:
     """Stream an AI assistant reply as Server-Sent Events.
 
     Request JSON body: ``{"message": "<user text>", "run_id": "<optional>"}``.
+    A body that is not a JSON object is answered with a lone ``error`` frame.
     A ``run_id`` puts that run's summary in front of the message as context.
 
     SSE frame contract:
@@ -807,7 +825,10 @@ def chat() -> Response:
     Returns:
         ``text/event-stream`` 200 response (even on error).
     """
-    data = request.get_json(silent=True) or {}
+    try:
+        data = request_json_object()
+    except RequestBodyNotAJsonObject as refusal:
+        return _event_stream([_error_frame(str(refusal))])
     user_message: str = str(data.get("message", "")).strip()
     run_id: str = str(data.get("run_id", "")).strip()
     sid = _session_id()
@@ -818,19 +839,13 @@ def chat() -> Response:
     def generate() -> Generator[str, None, None]:
         # Pre-check: API key must be set
         if not os.environ.get("ANTHROPIC_API_KEY"):
-            yield (
-                "event: error\n"
-                'data: {"message": "AI assistant is not configured: set ANTHROPIC_API_KEY."}\n\n'
-            )
+            yield _error_frame("AI assistant is not configured: set ANTHROPIC_API_KEY.")
             return
 
         # Pre-check: reject empty/whitespace messages before hitting the API
         # or writing a dangling user row (JS guards are insufficient).
         if not user_message:
-            yield (
-                "event: error\n"
-                'data: {"message": "Message cannot be empty."}\n\n'
-            )
+            yield _error_frame("Message cannot be empty.")
             return
 
         # Constructing a client fails on a misconfigured environment, such as a
@@ -838,10 +853,7 @@ def chat() -> Response:
         try:
             client = _create_client()
         except Exception as exc:
-            yield (
-                "event: error\n"
-                f"data: {json.dumps({'message': f'Could not initialise Anthropic client: {exc}'})}\n\n"
-            )
+            yield _error_frame(f"Could not initialise Anthropic client: {exc}")
             return
 
         # Persist the user turn
@@ -992,10 +1004,7 @@ def chat() -> Response:
                 db_path, sid, "assistant", accumulated,
                 metadata={"error": str(exc), "truncated": True},
             )
-            yield (
-                "event: error\n"
-                f"data: {json.dumps({'message': f'Streaming error: {exc}'})}\n\n"
-            )
+            yield _error_frame(f"Streaming error: {exc}")
             return
 
         # Persist assistant turn on success; record any invoked tool names.
@@ -1008,11 +1017,4 @@ def chat() -> Response:
 
         yield "event: done\ndata: {}\n\n"
 
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return _event_stream(stream_with_context(generate()))
