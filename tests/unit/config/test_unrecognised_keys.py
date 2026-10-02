@@ -273,6 +273,16 @@ class TestHomeBlockKeys:
         with pytest.raises(ConfigurationError, match=_refusal("pv", "capacity_kwp")):
             load_home_config(path)
 
+    def test_flat_home_file_refusal_lists_location_among_its_keys(self, tmp_path: Path) -> None:
+        """A flat home file recognises the home block's keys and the location: block beside them."""
+        path = _write(tmp_path, {"pv": {"capacity_kw": 4.0}, "batteries": {}})
+        with pytest.raises(ConfigurationError) as refusal:
+            load_home_config(path)
+        assert str(refusal.value) == (
+            "Unrecognised keys in the top level: 'batteries'; recognised keys: "
+            "battery, dispatch_strategy, ev, heat_pump, load, location, name, pv, tariff"
+        )
+
     def test_flat_home_file_location_block_is_read_not_refused(self, tmp_path: Path) -> None:
         """load_home_config reads a flat home file's location: block itself, beside the home keys."""
         location = {"latitude": 52.0, "longitude": -1.5, "name": "Midlands"}
@@ -960,6 +970,41 @@ class TestScenarioFileBlockKeys:
                 "load_scenarios", {**_SCENARIO, "period": "2024"}, "period", "str", id="period"
             ),
             pytest.param("parse_location_block", "bristol", "location", "str", id="location"),
+            pytest.param("parse_location_block", [], "location", "list", id="location-empty-list"),
+            pytest.param("parse_location_block", 0, "location", "int", id="location-zero"),
+            pytest.param("parse_seg_rate", 4.1, "seg", "float", id="seg"),
+            pytest.param(
+                "parse_finance_config",
+                {"standing_charge_pence_per_day": 60.0, "grid_services_events": "central"},
+                "finance.grid_services_events",
+                "str",
+                id="grid_services_events",
+            ),
+            pytest.param(
+                "parse_finance_config",
+                {
+                    "standing_charge_pence_per_day": 60.0,
+                    "grid_services_events": {"band": "central", "event_windows": ["winter"]},
+                },
+                "finance.grid_services_events.event_windows[0]",
+                "str",
+                id="event_window",
+            ),
+            pytest.param(
+                "load_scenarios",
+                {
+                    "scenario": {
+                        **_SCENARIO,
+                        "finance": {
+                            "standing_charge_pence_per_day": 60.0,
+                            "grid_services_events": "central",
+                        },
+                    }
+                },
+                "scenario.finance.grid_services_events",
+                "str",
+                id="scenario-grid_services_events",
+            ),
             pytest.param(
                 "load_community_config", {"community": "p2p"}, "community", "str", id="community"
             ),

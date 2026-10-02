@@ -625,8 +625,10 @@ def _require_mapping(block_path: str, data: object) -> dict[Any, Any]:
     return data
 
 
-def _refuse_unrecognised_keys(block_path: str, data: object, recognised: Collection[str]) -> None:
-    """Refuse the block at *block_path* unless it is a mapping holding only *recognised* keys."""
+def _refuse_unrecognised_keys(
+    block_path: str, data: object, recognised: Collection[str]
+) -> dict[Any, Any]:
+    """Return the block at *block_path*, refusing it unless it is a mapping holding only *recognised* keys."""
     mapping = _require_mapping(block_path, data)
     unrecognised = sorted(repr(key) for key in mapping.keys() - recognised)
     if unrecognised:
@@ -634,6 +636,7 @@ def _refuse_unrecognised_keys(block_path: str, data: object, recognised: Collect
             f"Unrecognised keys in {_block_label(block_path)}: {', '.join(unrecognised)}; "
             f"recognised keys: {', '.join(sorted(recognised))}"
         )
+    return mapping
 
 
 _LOCATION_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -646,7 +649,7 @@ def parse_location_block(
 ) -> Location:
     """Parse a ``location:`` block into a Location; an absent or empty block is Bristol."""
     bristol = Location.bristol()
-    if not data:
+    if data is None or data == {}:
         return bristol
     _refuse_unrecognised_keys(block_path, data, _LOCATION_BLOCK_KEYS)
     return Location(
@@ -1784,12 +1787,7 @@ def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
     """
     if data is None:
         return None
-    if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"'{block_path}' must be a mapping with 'preset' or "
-            f"'rate_pence_per_kwh', got {data!r}"
-        )
-    _refuse_unrecognised_keys(block_path, data, _SEG_BLOCK_KEYS)
+    data = _refuse_unrecognised_keys(block_path, data, _SEG_BLOCK_KEYS)
     if ("preset" in data) == ("rate_pence_per_kwh" in data):
         raise ConfigurationError(
             f"'{block_path}' must specify exactly one of 'preset' or "
@@ -1871,12 +1869,6 @@ def parse_finance_config(
     grid_services_events_obj: Optional[GridServicesEventsConfig] = None
     gs_events_raw = data.get("grid_services_events")
     if gs_events_raw is not None:
-        # Guard: grid_services_events must be a dict (e.g. not a bare string).
-        if not isinstance(gs_events_raw, dict):
-            raise ConfigurationError(
-                "grid_services_events must be a mapping (dict), "
-                f"got {type(gs_events_raw).__name__!r}"
-            )
         events_path = _child_path(block_path, "grid_services_events")
         _refuse_unrecognised_keys(events_path, gs_events_raw, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
         gs_data = gs_events_raw
@@ -1889,12 +1881,6 @@ def parse_finance_config(
             )
         parsed_windows: list[EventWindow] = []
         for i, ew_dict in enumerate(ew_raw_list):
-            # Guard: each event_window entry must itself be a dict.
-            if not isinstance(ew_dict, dict):
-                raise ConfigurationError(
-                    f"grid_services_events.event_windows[{i}] must be a mapping "
-                    f"(dict), got {type(ew_dict).__name__!r}"
-                )
             _refuse_unrecognised_keys(
                 _child_path(events_path, f"event_windows[{i}]"), ew_dict, _EVENT_WINDOW_KEYS
             )
@@ -2264,6 +2250,9 @@ def load_scenarios(path: Union[str, Path]) -> list[ScenarioConfig]:
         return [_parse_scenario(config, block_path="")]
 
 
+_FLAT_HOME_FILE_KEYS: frozenset[str] = _HOME_BLOCK_KEYS | {"location"}
+
+
 def load_home_config(path: Union[str, Path]) -> HomeConfig:
     """Load a single home configuration from file.
 
@@ -2284,6 +2273,7 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
 
     if "home" in config:
         return parse_home_block(config["home"], location)
+    _refuse_unrecognised_keys("", config, _FLAT_HOME_FILE_KEYS)
     flat_home = {key: value for key, value in config.items() if key != "location"}
     return parse_home_block(flat_home, location, block_path="")
 
