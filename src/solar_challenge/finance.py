@@ -1476,11 +1476,10 @@ def _aged_homes(
         # Age the battery config (inject SOH via dataclasses.replace if present)
         new_bc = home.battery_config
         if new_bc is not None:
-            usable = new_bc.capacity_kwh * (new_bc.max_soc_fraction - new_bc.min_soc_fraction)
             soh_i = compute_soh(
                 system_age_years=float(age),
                 cumulative_throughput_kwh=cum_throughput[i],
-                usable_capacity_kwh=usable,
+                usable_capacity_kwh=new_bc.nominal_usable_capacity_kwh,
                 params=new_bc,
             )
             new_bc = dataclasses.replace(new_bc, soh=soh_i)
