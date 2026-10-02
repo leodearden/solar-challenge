@@ -316,7 +316,7 @@ own-use, export, import and battery-discharge kWh, and its SEG income, by
 `k_h = 365 / sim_days_h`, and emits one `UserWarning` per projection.  Each home
 is annualised once (`a_h`) before the override splits it, as `householder_bill`
 annualises before it bills (§3;
-`tests/unit/test_finance_projection.py::TestProjectMultiYearAnnualisesShortWindow`).  The
+`tests/unit/test_finance_projection_short_window.py::TestProjectMultiYearAnnualisesShortWindow`).  The
 annualised discharge is the yearly throughput that battery cycle ageing
 integrates.  Grid-services income is already annual.  Full-year windows are
 unchanged (`k_h = 1`).  A short window is still one season's sample, so board
