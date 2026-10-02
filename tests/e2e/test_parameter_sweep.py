@@ -104,16 +104,19 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
 
 
 def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> None:
-    """Filling the form with a 3-point linear sweep from 3 to 9 and clicking its
-    button returns 201 with a sweep id, the sweep values and one distinct
-    background home-job id per sweep point.
+    """Filling the form with a 3-point geometric sweep from 1 to 9 and clicking its
+    button returns 201 with a sweep id, the geometric sweep values and one
+    distinct background home-job id per sweep point.
+
+    Min, max, steps and mode are all moved off their defaults, so the response's
+    values prove that each filled control reached the request.
     """
     page.goto(live_server + "/scenarios/sweep")
 
-    page.get_by_label("Min Value", exact=True).fill("3")
+    page.get_by_label("Min Value", exact=True).fill("1")
     page.get_by_label("Max Value", exact=True).fill("9")
     page.get_by_label("Steps", exact=True).fill("3")
-    page.get_by_role("radio", name="Linear", exact=True).check()
+    page.get_by_role("radio", name="Geometric", exact=True).check()
 
     # Intercept the API call and click the submit button
     with page.expect_response("**/api/simulate/sweep") as response_info:
@@ -124,7 +127,7 @@ def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> 
 
     data = response.json()
     assert data["sweep_id"]
-    assert data["values"] == [3.0, 6.0, 9.0]
+    assert data["values"] == [1.0, 3.0, 9.0]
 
     job_ids = data["job_ids"]
     assert len(job_ids) == 3
