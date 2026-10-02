@@ -1,11 +1,13 @@
 """Tests for validation and sanity checks."""
 
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from solar_challenge.home import SimulationResults
-from solar_challenge.pv import PVConfig, wired_dc_capacity_kw
+from solar_challenge.pv import PVConfig, create_simple_module_params, wired_dc_capacity_kw
 from solar_challenge.validation import (
     ValidationReport,
     ValidationResult,
@@ -122,6 +124,16 @@ def _annual_yield_check(results: list[ValidationResult]) -> ValidationResult:
     return next(r for r in results if r.check_name == "annual_yield_range")
 
 
+def _peak_check(results: list[ValidationResult]) -> ValidationResult:
+    return next(r for r in results if r.check_name == "peak_within_capacity")
+
+
+# Wires four 250 W modules, 1.0 kWp; the default 400.428 W module would wire three, 1.2 kWp.
+_PVWATTS_250_W_AT_1_1_KW = PVConfig(
+    capacity_kw=1.1, custom_module_params=create_simple_module_params(module_power_w=250.0)
+)
+
+
 class TestValidationResult:
     """Tests for ValidationResult dataclass."""
 
@@ -194,7 +206,7 @@ class TestValidatePVGeneration:
         index = _create_minute_index(7)
         generation = _create_valid_generation(index, capacity_kw=4.0)
 
-        results = validate_pv_generation(generation, capacity_kw=4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         assert all(r.passed for r in results)
 
@@ -204,7 +216,7 @@ class TestValidatePVGeneration:
         generation = _create_valid_generation(index, capacity_kw=4.0)
         generation.iloc[100] = -1.0  # Introduce negative value
 
-        results = validate_pv_generation(generation, capacity_kw=4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         non_negative_check = next(r for r in results if "non_negative" in r.check_name)
         assert non_negative_check.passed is False
@@ -215,7 +227,7 @@ class TestValidatePVGeneration:
         generation = _create_valid_generation(index, capacity_kw=4.0)
         generation.iloc[500] = 10.0  # Way above 4 kW capacity
 
-        results = validate_pv_generation(generation, capacity_kw=4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         peak_check = next(r for r in results if "peak" in r.check_name)
         assert peak_check.passed is False
@@ -225,7 +237,7 @@ class TestValidatePVGeneration:
         index = _create_minute_index(7)
         generation = pd.Series(np.full(len(index), 0.5), index=index)  # Constant 0.5 kW
 
-        results = validate_pv_generation(generation, capacity_kw=4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         night_check = next(r for r in results if "night" in r.check_name)
         assert night_check.passed is False
@@ -235,7 +247,7 @@ class TestValidatePVGeneration:
         index = _create_minute_index(7)
         generation = _create_valid_generation(index, capacity_kw=4.0)
 
-        results = validate_pv_generation(generation, capacity_kw=4.0, check_annual=False)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=False)
 
         night_check = next(r for r in results if "night" in r.check_name)
         assert night_check.passed is True
@@ -246,7 +258,7 @@ class TestValidatePVGeneration:
     ) -> None:
         generation = _create_valid_generation(_create_minute_index(days), capacity_kw=4.0)
 
-        results = validate_pv_generation(generation, capacity_kw=4.0, check_annual=True)
+        results = validate_pv_generation(generation, PVConfig(capacity_kw=4.0), check_annual=True)
 
         assert ("annual_yield_range" in [r.check_name for r in results]) is checked
 
@@ -258,11 +270,12 @@ class TestAnnualYieldPerWiredKwp:
     def test_a_typical_uk_yield_passes_whatever_the_module_rounding(
         self, capacity_kw: float
     ) -> None:
-        wired_kw = wired_dc_capacity_kw(PVConfig(capacity_kw=capacity_kw))
+        pv_config = PVConfig(capacity_kw=capacity_kw)
+        wired_kw = wired_dc_capacity_kw(pv_config)
         generation = _year_of_generation(1000.0 * wired_kw)
 
         result = _annual_yield_check(
-            validate_pv_generation(generation, capacity_kw=capacity_kw, check_annual=True)
+            validate_pv_generation(generation, pv_config, check_annual=True)
         )
 
         assert result.passed is True
@@ -275,11 +288,12 @@ class TestAnnualYieldPerWiredKwp:
     def test_a_yield_outside_the_uk_benchmark_fails(
         self, capacity_kw: float, kwh_per_wired_kwp: float
     ) -> None:
-        wired_kw = wired_dc_capacity_kw(PVConfig(capacity_kw=capacity_kw))
+        pv_config = PVConfig(capacity_kw=capacity_kw)
+        wired_kw = wired_dc_capacity_kw(pv_config)
         generation = _year_of_generation(kwh_per_wired_kwp * wired_kw)
 
         result = _annual_yield_check(
-            validate_pv_generation(generation, capacity_kw=capacity_kw, check_annual=True)
+            validate_pv_generation(generation, pv_config, check_annual=True)
         )
 
         assert result.passed is False
@@ -290,11 +304,33 @@ class TestAnnualYieldPerWiredKwp:
         generation = _year_of_generation(400.428)
 
         result = _annual_yield_check(
-            validate_pv_generation(generation, capacity_kw=0.3, check_annual=True)
+            validate_pv_generation(generation, PVConfig(capacity_kw=0.3), check_annual=True)
         )
 
         assert result.passed is True
         assert result.value == pytest.approx(1000.0)
+
+    @pytest.mark.parametrize(
+        ("kwh_per_wired_kwp", "passed"),
+        [(800.0, True), (1200.0, False)],
+    )
+    def test_a_custom_module_is_judged_per_the_dc_its_modules_wire(
+        self, kwh_per_wired_kwp: float, passed: bool
+    ) -> None:
+        """1.0 kWp is the four 250 W modules _PVWATTS_250_W_AT_1_1_KW wires.
+
+        Per the default module's 1.2 kWp, 800 would read 666 and fail, and 1200
+        would read 999 and pass.
+        """
+        assert wired_dc_capacity_kw(PVConfig(capacity_kw=1.1)) != pytest.approx(1.0)
+        generation = _year_of_generation(kwh_per_wired_kwp * 1.0)
+
+        result = _annual_yield_check(
+            validate_pv_generation(generation, _PVWATTS_250_W_AT_1_1_KW, check_annual=True)
+        )
+
+        assert result.passed is passed
+        assert result.value == pytest.approx(kwh_per_wired_kwp)
 
     @pytest.mark.parametrize(
         ("kwh_per_wired_kwp", "passed"),
@@ -303,14 +339,46 @@ class TestAnnualYieldPerWiredKwp:
     def test_the_uk_benchmark_band_runs_from_700_to_1100(
         self, kwh_per_wired_kwp: float, passed: bool
     ) -> None:
-        wired_kw = wired_dc_capacity_kw(PVConfig(capacity_kw=4.0))
+        pv_config = PVConfig(capacity_kw=4.0)
+        wired_kw = wired_dc_capacity_kw(pv_config)
         generation = _year_of_generation(kwh_per_wired_kwp * wired_kw)
 
         result = _annual_yield_check(
-            validate_pv_generation(generation, capacity_kw=4.0, check_annual=True)
+            validate_pv_generation(generation, pv_config, check_annual=True)
         )
 
         assert result.passed is passed
+
+
+class TestPeakWithinWiredCapacity:
+    """The peak may exceed the DC of the modules the PV model wires by 10%."""
+
+    def test_a_peak_above_the_configured_capacity_passes_within_the_wired_dc(self) -> None:
+        """0.7 kW wires two 400.428 W modules, 0.80 kWp.
+
+        Behind a 1.0 kW inverter the model's AC peaked at 0.804 kW, as
+        docs/pv-annual-yield-benchmark.md §4 records.
+        """
+        pv_config = PVConfig(capacity_kw=0.7, inverter_capacity_kw=1.0)
+        generation = _create_valid_generation(_create_minute_index(7), capacity_kw=0.7)
+        generation.iloc[780] = 0.80
+
+        result = _peak_check(validate_pv_generation(generation, pv_config, check_annual=False))
+
+        assert result.passed is True
+
+    def test_a_peak_over_the_wired_dc_fails_though_within_the_configured_capacity(self) -> None:
+        """The limit is 10% over the 1.0 kWp four 250 W modules wire: 1.1 kW, not 1.21 kW."""
+        generation = _create_valid_generation(_create_minute_index(7), capacity_kw=1.1)
+        generation.iloc[780] = 1.15
+
+        result = _peak_check(
+            validate_pv_generation(generation, _PVWATTS_250_W_AT_1_1_KW, check_annual=False)
+        )
+
+        assert result.passed is False
+        assert result.expected_range is not None
+        assert result.expected_range[1] == pytest.approx(1.1)
 
 
 class TestValidateConsumption:
@@ -476,7 +544,7 @@ class TestValidateSimulation:
 
         report = validate_simulation(
             results,
-            pv_capacity_kw=4.0,
+            PVConfig(capacity_kw=4.0),
             battery_capacity_kwh=None,
             target_annual_consumption_kwh=3400,
         )
@@ -496,7 +564,7 @@ class TestValidateSimulation:
 
         report = validate_simulation(
             results,
-            pv_capacity_kw=4.0,
+            PVConfig(capacity_kw=4.0),
             battery_capacity_kwh=5.0,
             target_annual_consumption_kwh=3400,
         )
@@ -505,3 +573,19 @@ class TestValidateSimulation:
         # Should include battery benchmark check
         check_names = [r.check_name for r in report.results]
         assert any("battery" in name for name in check_names)
+
+    def test_the_pv_checks_use_the_wired_dc_of_the_pv_config_given(self) -> None:
+        """Per the 1.0 kWp of four 250 W modules: 800 kWh/kWp, and a 1.1 kW peak limit."""
+        results = dataclasses.replace(
+            _create_simulation_results(_create_minute_index(365)),
+            generation=_year_of_generation(800.0),
+        )
+
+        report = validate_simulation(results, _PVWATTS_250_W_AT_1_1_KW)
+
+        annual_yield = _annual_yield_check(report.results)
+        assert annual_yield.passed is True
+        assert annual_yield.value == pytest.approx(800.0)
+        peak = _peak_check(report.results)
+        assert peak.expected_range is not None
+        assert peak.expected_range[1] == pytest.approx(1.1)

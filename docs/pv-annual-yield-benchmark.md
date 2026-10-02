@@ -1,6 +1,6 @@
 # PV Annual-Yield Benchmark: kWh per Wired kWp
 
-**Task:** #239 (follow-up from #203)
+**Task:** #239 (follow-up from #203), #324
 **Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `_UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`)
 
 ---
@@ -20,7 +20,10 @@ DC that `create_pv_system` wires, `pv.wired_dc_capacity_kw`, not by the configur
 
 The yields are §3's Bristol measurements. Divided by the nameplate, these correct
 simulations failed the band; divided by the wired DC, they were inside it.
-`validate_pv_generation` receives only a capacity, so it assumes the default module.
+`validate_pv_generation` and `validate_simulation` take the `PVConfig` that produced the
+generation, so the wired DC is that of the config's own module, `custom_module_params`
+included. The `validate results` CLI holds only a capacity, `--pv-kw`, so it validates
+against a `PVConfig` of the default module at that capacity.
 
 ## 2. The Band Is a Real-World Benchmark
 
@@ -86,3 +89,25 @@ read above 1100. Readings fell below 700 only for:
 | Glasgow | 55.86, −4.25 | 1003.0 |
 | Stornoway | 58.21, −6.39 | 930.1 |
 | Lerwick | 60.15, −1.15 | 891.3 |
+
+## 4. The Peak Check Uses the Same Wired DC
+
+`peak_within_capacity` fails a peak more than 10% above the wired DC, the
+`pv.wired_dc_capacity_kw` the annual yield divides by. Until task 324 it allowed 10%
+over the configured `capacity_kw`. That failed correct simulations whose modules round
+up past the configured capacity and whose inverter does not clip below them.
+
+This is a dated record. Re-measure before relying on it.
+
+- **Provenance.** Measured 2026-10-02 on main 3c4fb55: CPython 3.12.3, pandas 3.0.3,
+  pvlib 0.15.1, numpy 2.4.6, and §3's Bristol 1990 TMY. The peak is
+  `simulate_pv_output(config, location, get_tmy_data(location)).max()`.
+- **Per wired DC.** The AC peak reached at most 1.029 × the wired DC (0.6 kW: 0.412 kW
+  on 0.40 kWp), and 10% over it failed none of these configs:
+  - the default module at 0.3–3.0 kW in 0.1 kW steps and at 4.0, 5.9, 7.0 and 10.8 kW;
+  - `inverter_capacity_kw` 1.0, 2.0, 0.5 and 6.0 on 0.7, 1.5, 0.3 and 4.0 kW;
+  - 250 W and 600 W PVWatts modules from `create_simple_module_params`, at 1.1, 4.0
+    and 7.0 kW.
+- **Per configured capacity.** 10% over it failed two of them:
+  - 0.7 kW behind a 1.0 kW inverter peaked at 0.804 kW (limit 0.77) on 0.80 kWp;
+  - 0.3 kW behind a 0.5 kW inverter peaked at 0.408 kW (limit 0.33) on 0.40 kWp.

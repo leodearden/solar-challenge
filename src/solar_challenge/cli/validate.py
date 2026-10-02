@@ -16,6 +16,7 @@ from solar_challenge.cli.utils import (
     print_success,
 )
 from solar_challenge.config import ConfigurationError, load_config
+from solar_challenge.pv import PVConfig
 from solar_challenge.validation import (
     ValidationReport,
     validate_consumption,
@@ -76,7 +77,7 @@ def results(
         float,
         typer.Option(
             "--pv-kw",
-            help="Configured PV capacity in kW (PVConfig.capacity_kw)",
+            help="Configured PV capacity in kW (PVConfig.capacity_kw) of a default-module system",
         ),
     ] = 4.0,
     consumption_kwh: Annotated[
@@ -92,7 +93,7 @@ def results(
     Checks PV generation and consumption values for sanity:
     - Generation never negative
     - Generation zero at night
-    - Peak generation within capacity
+    - Peak generation within 10% over the DC of the modules wired for --pv-kw
     - Annual yield per kWp of the modules wired for --pv-kw within the UK benchmark band
     - Consumption never negative or unrealistically high
     - Baseload present
@@ -126,7 +127,7 @@ def results(
     # Validate PV
     pv_results = validate_pv_generation(
         generation,
-        pv_kw,
+        PVConfig(capacity_kw=pv_kw),
         check_annual=True,
     )
     all_results.extend(pv_results)
