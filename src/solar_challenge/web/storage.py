@@ -93,16 +93,12 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
 
     kwargs: dict[str, Any] = {}
     for field_name, value in data.items():
-        if value is None:
-            kwargs[field_name] = None
-            continue
-
         field_type = field_types.get(field_name)
         if field_type is None:
             # Field not in dataclass definition, skip
             continue
 
-        kwargs[field_name] = _deserialize_value(value, field_type)
+        kwargs[field_name] = None if value is None else _deserialize_value(value, field_type)
 
     return cls(**kwargs)
 

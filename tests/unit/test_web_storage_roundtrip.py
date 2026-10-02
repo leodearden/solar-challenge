@@ -9,6 +9,7 @@ Tests cover:
 - A config holding every field shape, its battery's dispatch strategy and grid
   charging included, loads equal to the one saved
 - Every saved config and summary is written as its dataclass field tree in JSON
+- A stored config holding a retired field's key set to null still loads
 - Corrupted parquet graceful error handling
 - Missing run directory graceful error handling
 - Delete run removes DB record and filesystem files
@@ -644,6 +645,33 @@ class TestPersistedJson:
         for i, home_summary in enumerate(home_summaries):
             home_summary_path = run_dir / "homes" / f"home_{i}_summary.json"
             assert _read_json(home_summary_path) == _json_field_tree(home_summary)
+
+
+class TestRunSavedWithRetiredOptionalField:
+    """A run saved before an Optional field was retired still loads.
+
+    Every Optional field left at its default is stored as null, so the retired
+    field's key is on disk with a null value.
+    """
+
+    def test_stored_non_field_key_set_to_null_is_skipped(
+        self, storage: RunStorage
+    ) -> None:
+        config = _make_home_config()
+        storage.save_home_run(
+            run_id="retired-null-001",
+            config=config,
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+        )
+        config_path = storage.data_dir / "runs" / "retired-null-001" / "config.json"
+        stored = _read_json(config_path)
+        stored["pv_config"]["retired_optional_field"] = None
+        config_path.write_text(json.dumps(stored, indent=2))
+
+        loaded_config, _, _ = storage.load_home_run("retired-null-001")
+
+        assert loaded_config == config
 
 
 class TestCorruptedParquet:
