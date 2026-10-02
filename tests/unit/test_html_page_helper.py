@@ -115,6 +115,29 @@ def test_tag_and_attribute_names_are_read_in_lower_case() -> None:
     assert element_count(page, "input", {"x-model": "name"}) == 1
 
 
+@pytest.mark.parametrize(
+    ("tag", "attributes", "refused"),
+    [
+        pytest.param("Input", {"x-model": "name"}, "Input", id="tag"),
+        pytest.param("input", {"X-Model": "name"}, "X-Model", id="attribute-name"),
+    ],
+)
+def test_a_name_not_in_lower_case_raises_rather_than_counting_none(
+    tag: str, attributes: dict[str, str], refused: str
+) -> None:
+    page = '<input x-model="name">'
+
+    with pytest.raises(ValueError, match=f"in lower case.*; got '{refused}'$"):
+        element_count(page, tag, attributes)
+
+
+def test_a_repeated_attribute_keeps_its_first_value() -> None:
+    page = '<input x-model="name" x-model="saveName">'
+
+    assert element_count(page, "input", {"x-model": "name"}) == 1
+    assert element_count(page, "input", {"x-model": "saveName"}) == 0
+
+
 def test_an_element_inside_script_text_does_not_count() -> None:
     page = "<nav></nav><script>menu.innerHTML = '<nav></nav>';</script>"
 
