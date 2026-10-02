@@ -21,7 +21,7 @@ import dataclasses
 import math
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, List, NamedTuple, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, List, Mapping, NamedTuple, Optional, Sequence
 
 import pandas as pd
 
@@ -1402,6 +1402,9 @@ class _NodeData(NamedTuple):
     annualised_from_days: int
     """Shortest per-home simulated window (days) the energy totals were annualised from."""
 
+    per_home_throughput: List[float]
+    """Per-home cumulative battery throughput (kWh) from installation to this age, which its battery SOH counts."""
+
 
 def _aged_homes(
     homes: "list[Any]",  # list[HomeConfig]
@@ -1452,6 +1455,30 @@ def _aged_homes(
     return result
 
 
+def _throughput_at(age: int, seeds: Mapping[int, _NodeData]) -> List[float]:
+    """Per-home cumulative battery throughput (kWh) from installation to ``age``.
+
+    Throughput accrues at the annual discharge simulated at the latest seed age
+    at or below ``age``.  Every sampled age, seed or bisection trial, reads this
+    one rule, so throughput is a continuous, non-decreasing function of age and
+    the battery SOH :func:`battery.compute_soh` derives from it never rises.
+
+    Args:
+        age: System age in calendar years; ``seeds`` must hold an age at or below it.
+        seeds: The seed-age nodes simulated so far, keyed by age.
+
+    Returns:
+        One cumulative throughput (kWh) per home, in fleet order.
+    """
+    base_age = max(seed_age for seed_age in seeds if seed_age <= age)
+    base = seeds[base_age]
+    years = age - base_age
+    return [
+        throughput + discharge * years
+        for throughput, discharge in zip(base.per_home_throughput, base.per_home_discharge, strict=True)
+    ]
+
+
 def project_multi_year(
     scenario: "ScenarioConfig",
     finance: "FinanceConfig",
@@ -1464,7 +1491,9 @@ def project_multi_year(
     Performs a forward-march over the asset lifetime, simulating the fleet at
     a set of *sampled ages* (seeded at 0, asset_life//2, asset_life-1 and
     adaptively refined via bisection in step-16), then interpolating the
-    resulting per-year curves with PCHIP.
+    resulting per-year curves with PCHIP.  Each sampled age is simulated with
+    every home's battery SOH counting its battery throughput from installation
+    to that age (:func:`_throughput_at`), so ``battery_soh`` never rises.
 
     Args:
         scenario: ScenarioConfig with homes, period, and location.
@@ -1523,14 +1552,6 @@ def project_multi_year(
     # ---- Seed nodes ---------------------------------------------------------
     seed_ages: list[int] = sorted({0, asset_life // 2, asset_life - 1})
 
-    # ---- Forward-march: simulate at each seed age, collect aggregates -------
-    # Per-home cumulative throughput (kWh): tracks battery history across ages.
-    # Initialised to 0 at age 0; accumulated trapezoidally (step-12).
-    n_homes = len(homes)
-    cum_throughput: list[float] = [0.0] * n_homes
-
-    sampled_data: dict[int, _NodeData] = {}
-
     # Memo dict for the capacity_at_events grid-services figure (PRD decision 7 / Open Q1).
     # Computed once from the representative (age-0) simulation, reused for all ages
     # and all bisection trial nodes.  Captured by the _simulate_age closure.
@@ -1541,7 +1562,6 @@ def project_multi_year(
         cum_tp: list[float],
     ) -> _NodeData:
         """Simulate the fleet at a given age, compute SOH, and return aggregates."""
-        from solar_challenge.battery import compute_soh
         from solar_challenge.fleet import FleetConfig
         from solar_challenge.home import calculate_summary
         from solar_challenge.pv import calculate_degradation_factor
@@ -1606,19 +1626,8 @@ def project_multi_year(
         ]
         mean_pv_soh = sum(pv_sohs) / len(pv_sohs) if pv_sohs else 1.0
 
-        # Battery SOH: mean of per-home compute_soh (1.0 if no batteries)
-        battery_sohs: list[float] = []
-        for i, home in enumerate(homes):
-            bc = home.battery_config
-            if bc is not None:
-                usable = bc.capacity_kwh * (bc.max_soc_fraction - bc.min_soc_fraction)
-                soh_i = compute_soh(
-                    system_age_years=float(age),
-                    cumulative_throughput_kwh=cum_tp[i],
-                    usable_capacity_kwh=usable,
-                    params=bc,
-                )
-                battery_sohs.append(soh_i)
+        # Battery SOH: mean of the SOH _aged_homes gave each simulated battery (1.0 if no batteries)
+        battery_sohs: list[float] = [h.battery_config.soh for h in aged if h.battery_config is not None]
         mean_battery_soh = sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0
 
         return _NodeData(
@@ -1630,23 +1639,14 @@ def project_multi_year(
             mean_battery_soh=mean_battery_soh,
             fleet_revenue=fleet_revenue,
             annualised_from_days=min(s.simulation_days for s in per_home_summaries),
+            per_home_throughput=list(cum_tp),
         )
 
-    # ---- Seed forward-march (snapshot cum_tp BEFORE each simulation) ---------
-    # cum_tp_snapshot[age] = per-home throughput used as input for that age's sim.
-    cum_tp_snapshot: dict[int, List[float]] = {}
-    prev_age: Optional[int] = None
-    for age in seed_ages:
-        cum_tp_snapshot[age] = list(cum_throughput)      # snapshot before sim
-        node = _simulate_age(age, list(cum_throughput))
-        sampled_data[age] = node
-        # Accumulate cumulative throughput toward next node (trapezoidal; step-12)
-        if prev_age is not None:
-            dt = age - prev_age
-            prev_discharge = sampled_data[prev_age].per_home_discharge
-            for i in range(n_homes):
-                cum_throughput[i] += 0.5 * (prev_discharge[i] + node.per_home_discharge[i]) * dt
-        prev_age = age
+    # ---- Seed forward-march: ascending ages, each aged by _throughput_at ----
+    seeds: dict[int, _NodeData] = {0: _simulate_age(0, [0.0] * len(homes))}
+    for age in seed_ages[1:]:
+        seeds[age] = _simulate_age(age, _throughput_at(age, seeds))
+    sampled_data: dict[int, _NodeData] = dict(seeds)
 
     # ---- Short-window annualisation warning (once per projection) -----------
     window_days = sampled_data[0].annualised_from_days
@@ -1673,11 +1673,9 @@ def project_multi_year(
     max_deviation: float = 0.0
     capped: bool = False
 
-    # Cache trial node results by midpoint age to avoid re-simulating the same
-    # midpoint on subsequent bisection passes.  The cache is keyed by age: a given
-    # mid always has the same lower boundary (a_k) and therefore the same forward-
-    # Euler cum_tp estimate throughout the loop, so the result is stable.
-    _trial_cache: dict[int, tuple[_NodeData, List[float]]] = {}
+    # Trial nodes are memoised by age: _throughput_at reads only the seeds, so a
+    # trial's throughput, and hence its simulation, depends on its age alone.
+    _trial_cache: dict[int, _NodeData] = {}
 
     while True:
         current_ages = sorted(sampled_data.keys())
@@ -1694,7 +1692,7 @@ def project_multi_year(
         rev_interp_now = _interpolate_per_year(current_ages, rev_vals_now, asset_life)
 
         # Scan adjacent intervals for bisectable midpoints above the error target
-        to_bisect: List[tuple[int, _NodeData, List[float]]] = []
+        to_bisect: List[tuple[int, _NodeData]] = []
         current_max_dev: float = 0.0
 
         for i_interval in range(len(current_ages) - 1):
@@ -1709,14 +1707,8 @@ def project_multi_year(
             # Retrieve or compute the trial node at mid (memoised by age to avoid
             # re-simulating on subsequent passes when intervals haven't changed).
             if mid not in _trial_cache:
-                cum_tp_for_mid = list(cum_tp_snapshot[a_k])
-                discharge_at_k: List[float] = sampled_data[a_k].per_home_discharge
-                for j in range(n_homes):
-                    cum_tp_for_mid[j] += discharge_at_k[j] * float(mid - a_k)
-                trial_node = _simulate_age(mid, cum_tp_for_mid)
-                _trial_cache[mid] = (trial_node, list(cum_tp_for_mid))
-            else:
-                trial_node, cum_tp_for_mid = _trial_cache[mid]
+                _trial_cache[mid] = _simulate_age(mid, _throughput_at(mid, seeds))
+            trial_node = _trial_cache[mid]
 
             # Max PCHIP deviation across all driven metrics (percentage)
             dev = max(
@@ -1728,7 +1720,7 @@ def project_multi_year(
             current_max_dev = max(current_max_dev, dev)
 
             if dev > error_target_pct:
-                to_bisect.append((mid, trial_node, cum_tp_for_mid))
+                to_bisect.append((mid, trial_node))
 
         # Always update the convergence invariant with the latest check
         max_deviation = current_max_dev
@@ -1742,12 +1734,11 @@ def project_multi_year(
             break
 
         # Add bisection nodes (stop if we hit the cap mid-iteration)
-        for mid_age, trial_node, cum_tp_for_mid in to_bisect:
+        for mid_age, trial_node in to_bisect:
             if len(sampled_data) >= MAX_NODES:
                 capped = True
                 break
             sampled_data[mid_age] = trial_node
-            cum_tp_snapshot[mid_age] = list(cum_tp_for_mid)
 
         if capped:
             break

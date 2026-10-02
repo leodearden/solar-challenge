@@ -8,6 +8,7 @@
 **Unreleased on main** (task 219): CBS revenue no longer deducts the grid-charge cost (§4); the 0.5.0 tag still does.
 **Unreleased on main** (task 271): on a simulated window under 360 days, `project_multi_year` annualises own-use, export, import and battery-discharge kWh (§4, §7.6); the 0.5.0 tag sums them over the window.
 **Unreleased on main** (task 281): with `self_consumption_override` set, each home's own-use is capped at its demand and the surplus generation is counted as export (§3, §4); the 0.5.0 tag bills override × generation uncapped.
+**Unreleased on main** (task 295): each simulated age's battery SOH counts the battery throughput from installation to that age (§4, §7.6); the 0.5.0 tag ages each seed with the throughput up to the previous seed only, so a battery fleet's mid-life battery SOH and own-use read high there.
 
 ---
 
@@ -279,6 +280,18 @@ annualised discharge is the yearly throughput that battery cycle ageing
 integrates.  Grid-services income is already annual.  Full-year windows are
 unchanged (`k_h = 1`).  A short window is still one season's sample, so board
 figures want `scenario.period` to cover about one full year.
+
+**Battery ageing.** `project_multi_year` simulates each sampled age `t` with
+every home's battery at `battery.compute_soh(t, T_h(t))`, where `T_h(t)` is the
+home's cumulative battery throughput (kWh) from installation to `t`.  Throughput
+accrues at the annualised discharge simulated at the latest seed age (0,
+`asset_life_years // 2`, `asset_life_years − 1`) at or below `t`, for seed and
+bisection-trial ages alike (`_throughput_at`).  `T_h` never falls and
+`compute_soh` never rises in age or throughput, so `YearPoint.battery_soh` is
+non-increasing year on year
+(`tests/unit/test_finance_projection.py::TestBatterySohCountsThroughputToEachAge`).
+A faded battery stores less, which lowers later years' basis-C own-use and its
+revenue.
 
 **No-flex identity** (flat-rate fleet, grid_services = 0):
 
@@ -593,8 +606,8 @@ anchor's (§7.3), for three reasons:
   £525,000 and carry £131,250 of debt (§6, §7.4).  `TestPhysicsColumnPremises` asserts
   this premise in the fast suite.
 - **The homes age.**  The column re-simulates the fleet at sampled ages, so PV
-  degradation and battery fade lower its later-year own-use.  The anchor's injected
-  results are the same at every age (§7.4).
+  degradation and battery fade (§4, *Battery ageing*) lower its later-year own-use.
+  The anchor's injected results are the same at every age (§7.4).
 
 Nor is the printed saving a [FEAS] figure: it is the representative home's §3 saving at
 the column's own solved rate, on its annualised window.
