@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, ids and texts.
+"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, ids, texts and headings.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a page test that uses it pass vacuously.
@@ -7,7 +7,14 @@ letting a page test that uses it pass vacuously.
 
 import pytest
 
-from tests._html_page import doctype, element_count, element_ids, texts, texts_after
+from tests._html_page import (
+    doctype,
+    element_count,
+    element_ids,
+    headings,
+    texts,
+    texts_after,
+)
 
 
 def test_element_ids_come_from_tags_and_not_from_script_text() -> None:
@@ -182,3 +189,56 @@ def test_a_repeated_doctype_raises_rather_than_picking_one() -> None:
         ValueError, match="at most one doctype declaration on the page; found 2"
     ):
         doctype(page)
+
+
+@pytest.mark.parametrize("tag", ["h1", "h2", "h3", "h4", "h5", "h6"])
+def test_a_heading_at_every_level_is_listed(tag: str) -> None:
+    page = f"<{tag}>PV Capacity</{tag}>"
+
+    assert headings(page) == ["PV Capacity"]
+
+
+def test_headings_lists_heading_texts_in_document_order_and_no_other_text() -> None:
+    page = (
+        "<h1>Fleet Simulation</h1>"
+        "<p>Distribution of PV system sizes (kW)</p>"
+        "<h3>PV Capacity</h3>"
+        '<label><span class="sr-only">PV Capacity </span>Mean</label>'
+        "<h3>Battery Capacity</h3>"
+    )
+
+    assert headings(page) == ["Fleet Simulation", "PV Capacity", "Battery Capacity"]
+
+
+def test_a_heading_text_is_all_its_character_data_decoded_and_collapsed() -> None:
+    page = "<h2>Battery &amp;\n        <em>Finance</em></h2>"
+
+    assert headings(page) == ["Battery & Finance"]
+
+
+def test_a_heading_with_no_text_reads_as_empty() -> None:
+    page = '<h3 x-text="title"></h3>'
+
+    assert headings(page) == [""]
+
+
+def test_a_heading_inside_script_text_does_not_count() -> None:
+    page = (
+        "<h1>Dashboard</h1><script>panel.innerHTML = '<h3>PV Capacity</h3>';</script>"
+    )
+
+    assert headings(page) == ["Dashboard"]
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        pytest.param("<h3>PV Capacity<h3>Battery Capacity</h3>", id="next-heading"),
+        pytest.param("<h3>PV Capacity<p>Distribution</p>", id="end-of-page"),
+    ],
+)
+def test_a_heading_left_open_raises_rather_than_guessing_where_it_ends(
+    page: str,
+) -> None:
+    with pytest.raises(ValueError, match="closed by its end tag.*; 1 left open"):
+        headings(page)

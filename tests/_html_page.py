@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to a rendered HTML page: the document type it declares, its
-elements and the ids they carry, and the texts it shows, in document order.
+elements and the ids they carry, the texts it shows and its headings, in document order.
 
 A text is one run of character data between two tags, outside script and style elements,
 with character references decoded and whitespace collapsed. Blank runs are dropped, and an
@@ -10,12 +10,13 @@ repeats an attribute carries only its first value, as HTML reads it.
 
 Usage::
 
-    from tests._html_page import doctype, element_count, element_ids, texts, texts_after
+    from tests._html_page import doctype, element_count, element_ids, headings, texts, texts_after
 
     page = response.get_data(as_text=True)
     assert doctype(page) == "html"
     assert element_count(page, "input", {"x-model": "name"}) == 1
     assert "chart-sankey" in element_ids(page)
+    assert headings(page).count("PV Capacity") == 1
     assert texts(page).count("YAML Preview") == 1
     assert texts_after(page, "Total Demand", 2) == ["12.0", "kWh"]
 """
@@ -25,6 +26,7 @@ from collections.abc import Mapping
 from html.parser import HTMLParser
 
 _RAW_TEXT_ELEMENTS = frozenset({"script", "style"})
+_HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 
 
 def doctype(page: str) -> str | None:
@@ -88,6 +90,24 @@ def element_ids(page: str) -> set[str]:
     return set(elements_per_id)
 
 
+def headings(page: str) -> list[str]:
+    """The text of each heading of *page*, h1 to h6, in document order.
+
+    A heading's text is all the character data inside it, its child elements' included,
+    with character references decoded and whitespace collapsed; a heading with none reads
+    as ''. A heading inside script text does not count. Raises ValueError, rather than
+    guess where it ends, when a heading is not closed by its end tag before the next
+    heading starts or the page ends.
+    """
+    reader = _read(page)
+    if reader.headings_left_open:
+        raise ValueError(
+            "Expected each heading closed by its end tag before the next heading or the"
+            f" end of the page; {reader.headings_left_open} left open"
+        )
+    return reader.headings
+
+
 def texts(page: str) -> list[str]:
     """The texts of *page*, in document order; a text that occurs more than once is listed each time."""
     return _read(page).texts
@@ -110,14 +130,17 @@ def texts_after(page: str, label: str, count: int) -> list[str]:
 
 
 class _PageReader(HTMLParser):
-    """Collects the doctypes, the elements with their attributes, and the texts of one HTML page, in document order."""
+    """Collects the doctypes, the elements with their attributes, the texts and the headings of one HTML page, in document order."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.doctypes: list[str] = []
         self.elements: list[tuple[str, dict[str, str | None]]] = []
         self.texts: list[str] = []
+        self.headings: list[str] = []
+        self.headings_left_open = 0
         self._in_raw_text = False
+        self._open_heading: list[str] | None = None
 
     def handle_decl(self, decl: str) -> None:
         self.doctypes.append(" ".join(decl.split()[1:]).lower())
@@ -129,15 +152,32 @@ class _PageReader(HTMLParser):
         self.elements.append((tag, carried))
         if tag in _RAW_TEXT_ELEMENTS:
             self._in_raw_text = True
+        if tag in _HEADING_ELEMENTS:
+            if self._open_heading is not None:
+                self.headings_left_open += 1
+            self._open_heading = []
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _RAW_TEXT_ELEMENTS:
             self._in_raw_text = False
+        if tag in _HEADING_ELEMENTS and self._open_heading is not None:
+            self.headings.append(" ".join("".join(self._open_heading).split()))
+            self._open_heading = None
 
     def handle_data(self, data: str) -> None:
+        if self._in_raw_text:
+            return
+        if self._open_heading is not None:
+            self._open_heading.append(data)
         text = " ".join(data.split())
-        if text and not self._in_raw_text:
+        if text:
             self.texts.append(text)
+
+    def close(self) -> None:
+        super().close()
+        if self._open_heading is not None:
+            self.headings_left_open += 1
+            self._open_heading = None
 
 
 def _read(page: str) -> _PageReader:
