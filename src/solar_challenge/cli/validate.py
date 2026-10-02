@@ -76,7 +76,7 @@ def results(
         float,
         typer.Option(
             "--pv-kw",
-            help="Configured PV capacity in kW (PVConfig.capacity_kw)",
+            help="Configured PV capacity in kW (PVConfig.capacity_kw) of a default-module system",
         ),
     ] = 4.0,
     consumption_kwh: Annotated[

@@ -1,6 +1,6 @@
 # PV Annual-Yield Benchmark: kWh per Wired kWp
 
-**Task:** #239 (follow-up from #203)
+**Task:** #239 (follow-up from #203), #324
 **Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `_UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`)
 
 ---
@@ -20,7 +20,10 @@ DC that `create_pv_system` wires, `pv.wired_dc_capacity_kw`, not by the configur
 
 The yields are §3's Bristol measurements. Divided by the nameplate, these correct
 simulations failed the band; divided by the wired DC, they were inside it.
-`validate_pv_generation` receives only a capacity, so it assumes the default module.
+`validate_pv_generation` and `validate_simulation` take the `PVConfig` that produced the
+generation, so the wired DC is that of the config's own module, `custom_module_params`
+included. A bare capacity, as the `validate results` CLI's `--pv-kw` gives, stands for a
+system of the default module.
 
 ## 2. The Band Is a Real-World Benchmark
 
