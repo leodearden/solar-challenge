@@ -574,7 +574,8 @@ class TestValidateSimulation:
         check_names = [r.check_name for r in report.results]
         assert any("battery" in name for name in check_names)
 
-    def test_the_annual_yield_is_per_the_wired_dc_of_the_pv_config_given(self) -> None:
+    def test_the_pv_checks_use_the_wired_dc_of_the_pv_config_given(self) -> None:
+        """Per the 1.0 kWp of four 250 W modules: 800 kWh/kWp, and a 1.1 kW peak limit."""
         results = dataclasses.replace(
             _create_simulation_results(_create_minute_index(365)),
             generation=_year_of_generation(800.0),
@@ -582,6 +583,9 @@ class TestValidateSimulation:
 
         report = validate_simulation(results, _PVWATTS_250_W_AT_1_1_KW)
 
-        result = _annual_yield_check(report.results)
-        assert result.passed is True
-        assert result.value == pytest.approx(800.0)
+        annual_yield = _annual_yield_check(report.results)
+        assert annual_yield.passed is True
+        assert annual_yield.value == pytest.approx(800.0)
+        peak = _peak_check(report.results)
+        assert peak.expected_range is not None
+        assert peak.expected_range[1] == pytest.approx(1.1)
