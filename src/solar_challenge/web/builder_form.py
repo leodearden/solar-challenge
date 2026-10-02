@@ -21,9 +21,8 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.scenario_writer import location_block, scenario_yaml
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.shared import LOCATION_PRESETS
-
-_MAX_HOMES = 10_000
 
 
 class _Component(NamedTuple):
@@ -136,7 +135,7 @@ def _present_fields(form: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
-    """The dashboard's own rules: a scenario name, 1 to 10,000 homes, and a fixed PV size of 0.5-20 kW.
+    """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and a fixed PV size of 0.5-20 kW.
 
     A value that does not read as a number is left to scenario_from_builder_form to report.
     """
@@ -144,7 +143,7 @@ def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
     if "name" not in fields:
         errors.append("Scenario name is required.")
     if not _home_count_allowed(_readable(fields, "n_homes", _as_count)):
-        errors.append("Number of homes must be between 1 and 10,000.")
+        errors.append(f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}.")
     pv_capacity_kw = _readable(fields, "pv_capacity_kw", _as_float)
     if pv_capacity_kw is not None and not 0.5 <= pv_capacity_kw <= 20.0:
         errors.append("PV capacity must be between 0.5 and 20 kW.")
@@ -152,8 +151,8 @@ def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
 
 
 def _home_count_allowed(n_homes: Optional[float]) -> bool:
-    """Whether the dashboard allows *n_homes*: absent, or within 1 to 10,000."""
-    return n_homes is None or 1 <= n_homes <= _MAX_HOMES
+    """Whether the dashboard allows *n_homes*: absent, or within 1 to MAX_FLEET_HOMES."""
+    return n_homes is None or 1 <= n_homes <= MAX_FLEET_HOMES
 
 
 def _readable(

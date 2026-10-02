@@ -21,6 +21,10 @@ if TYPE_CHECKING:
     from solar_challenge.seg import SEGTariff
     from solar_challenge.tariff import TariffConfig
 
+#: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, a
+#: shuffled-pool row that assigns its value to more homes, and a preview that draws more values.
+MAX_FLEET_HOMES = 10_000
+
 
 def apply_fleet_overlay(
     configs: list[HomeConfig],
