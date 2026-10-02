@@ -54,8 +54,9 @@ class FinanceConfig:
             (default 23.0 p/kWh).
         self_consumption_override: Optional fixed self-consumption fraction
             (0, 1]; if None the simulator uses the modelled value.  When set,
-            each home's own-use is min(override × generation, demand) and the
-            surplus generation is counted as export.
+            each home's own-use is min(override × generation, demand), on the
+            householder bill and the CBS own-use revenue alike, and the surplus
+            generation is counted as export.
         pv_cost_per_kwp_gbp: PV hardware + install cost per kWp (default 1000.0).
         roof_fit_cost_gbp: Fixed per-home roof-fitting cost (default 1000.0).
         battery_cost_per_kwh_gbp: Battery hardware cost per kWh (default 250.0).
@@ -716,6 +717,35 @@ def _cbs_own_use_kwh(summary: "SummaryStatistics") -> float:
 
 
 # ---------------------------------------------------------------------------
+# _billed_own_use_kwh — the own-use energy the CBS bills a home for
+# ---------------------------------------------------------------------------
+
+
+def _billed_own_use_kwh(summary: "SummaryStatistics", finance: "FinanceConfig") -> float:
+    """The own-use energy the CBS bills a home for over its simulated window (kWh).
+
+    Basis C (:func:`_cbs_own_use_kwh`) on the physics path, the figure
+    :func:`bill_distribution` bills.  With ``self_consumption_override`` set,
+    the override's own-use capped at demand (:func:`_override_energy_split`),
+    the figure :func:`householder_bill` bills.  Silent when the cap binds,
+    since this runs per home at every sampled age; :func:`householder_bill`
+    warns instead.
+
+    Window totals, not annualised: ``min(o·k·g, k·d) == k·min(o·g, d)`` for
+    ``k > 0``, so a caller that scales the result by the annualisation factor
+    ``k`` gets the own-use :func:`householder_bill` splits from annualised totals.
+    """
+    override = finance.self_consumption_override
+    if override is None:
+        return _cbs_own_use_kwh(summary)
+    return _override_energy_split(
+        override,
+        generation_kwh=summary.total_generation_kwh,
+        demand_kwh=summary.total_demand_kwh,
+    ).own_use_kwh
+
+
+# ---------------------------------------------------------------------------
 # bill() — period-native billing core (task 83 §1)
 # ---------------------------------------------------------------------------
 
@@ -993,10 +1023,15 @@ class YearPoint:
     """Total self-consumed solar energy for the fleet that year (kWh, ≥ 0).
 
     .. note::
-        **Physics path** (:func:`project_multi_year` / ``_simulate_age``):
-        this field holds **basis-C own-use** (Σ demand − import per home),
-        NOT the physics self-consumption series.  The name is retained for
-        back-compat; read it as "fleet basis-C own-use kWh" on this path.
+        **Projection path** (:func:`project_multi_year` / ``_simulate_age``):
+        this field holds the fleet's **billed own-use**
+        (:func:`_billed_own_use_kwh`), NOT the physics self-consumption
+        series: basis C (Σ demand − import per home) with no
+        ``self_consumption_override``, and Σ min(override × generation,
+        demand) with the override set.  ``fleet_export_kwh`` and
+        ``fleet_import_kwh`` stay the simulated grid flows on both paths.
+        The name is retained for back-compat; read it as "fleet billed
+        own-use kWh" on this path.
 
         **Flat-assumption curve path** (:func:`spreadsheet_revenue_curve`):
         this field holds a fraction-based figure
@@ -1392,7 +1427,7 @@ class _NodeData(NamedTuple):
     """
 
     fleet_sc: float
-    """Fleet basis-C own-use (Σ demand − import), annualised to a 365-day year (kWh/yr)."""
+    """Fleet billed own-use (Σ :func:`_billed_own_use_kwh`), annualised to a 365-day year (kWh/yr)."""
 
     fleet_exp: float
     """Fleet grid export, annualised to a 365-day year (kWh/yr)."""
@@ -1588,19 +1623,18 @@ def project_multi_year(
             for r in fleet_results.per_home_results
         ]
 
-        # Basis C (task-84 §6): own-use = demand − import (CBS-supplied energy consumed).
-        # Arbitrage-immune: grid-charged battery discharge inflates
-        # total_self_consumption_kwh but NOT demand − import.
+        # fleet_sc is the own-use the CBS bills (_billed_own_use_kwh); export, import
+        # and discharge stay the simulated flows (docs/cost-recovery-finance-model.md §4).
         # Each home's window totals are annualised by its own simulated days, the
         # days _seg_export_income_gbp annualises that home's SEG income by.
         scaled_summaries = [(_annualisation_scale(s.simulation_days), s) for s in per_home_summaries]
-        fleet_sc = sum(k * _cbs_own_use_kwh(s) for k, s in scaled_summaries)
+        fleet_sc = sum(k * _billed_own_use_kwh(s, finance) for k, s in scaled_summaries)
         fleet_exp = sum(k * s.total_grid_export_kwh for k, s in scaled_summaries)
         fleet_imp = sum(k * s.total_grid_import_kwh for k, s in scaled_summaries)
         per_home_discharge = [k * s.total_battery_discharge_kwh for k, s in scaled_summaries]
 
         # CBS fleet revenue (PRD §3.2), every term per 365-day year:
-        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100   (fleet_sc = Σ annualised basis C)
+        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100   (fleet_sc = Σ annualised _billed_own_use_kwh)
         #   seg_revenue     = Σ _seg_export_income_gbp(s, finance, s.simulation_days)   (same rule)
         #   grid_services   = model-dependent (flat or capacity_at_events), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
@@ -2248,7 +2282,7 @@ def solve_cost_recovery_rate(
     Step 2 is exact while the ``max(0.0, rev_per_year[y])`` clamp that
     ``project_multi_year`` applies to ``fleet_revenue_gbp`` does not bind.  It
     cannot bind today: every CBS revenue term is non-negative (own-use = rate
-    (≥ 0) × basis-C kWh (clamped at 0); SEG ≥ 0; grid-services ≥ 0 under both
+    (≥ 0) × billed own-use kWh (≥ 0); SEG ≥ 0; grid-services ≥ 0 under both
     models, the event model paying gross × (1 − aggregator_share)), and the
     PCHIP / Fritsch–Carlson interpolation is shape-preserving, so no
     interpolated year falls below its non-negative nodes.  A future negative
