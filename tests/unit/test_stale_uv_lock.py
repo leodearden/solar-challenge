@@ -29,7 +29,6 @@ from tests._orchestrator_config import (
     sole_offline_lane_job,
 )
 from tests._pyproject import load_project_table
-from tests._uv_env import isolated_uv_env
 
 pytestmark = requires_uv
 
@@ -57,18 +56,6 @@ def _fails_naming_the_fix(result: subprocess.CompletedProcess[str]) -> bool:
 def _lock_digest(project: Path) -> str:
     """Return the SHA-256 of *project*'s uv.lock, so a failed comparison shows two digests, not two whole locks."""
     return hashlib.sha256((project / "uv.lock").read_bytes()).hexdigest()
-
-
-@pytest.fixture
-def uv_probe_environment(tmp_path: Path) -> dict[str, str]:
-    """Return an isolated_uv_env whose uv project environment is the probe's own, under *tmp_path*.
-
-    No probe may touch an environment another run uses: inside the interpreter
-    matrix, UV_PROJECT_ENVIRONMENT names that case's own venv. The lane job
-    probes drop the uv lock mode of the shell running these tests, as the verify
-    probes do: the lane takes its environment from the orchestrator, not that shell.
-    """
-    return isolated_uv_env(tmp_path / "venv")
 
 
 @pytest.fixture
