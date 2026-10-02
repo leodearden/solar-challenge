@@ -111,6 +111,27 @@ def _check_annual_yield(
     )
 
 
+def _check_peak_within_capacity(
+    generation: pd.Series, config: PVConfig
+) -> ValidationResult:
+    """The peak against 10% over the DC wired for config."""
+    wired_kw = wired_dc_capacity_kw(config)
+    max_value = float(generation.max())
+    max_allowed = wired_kw * 1.1
+    passed = max_value <= max_allowed
+    placement = "within" if passed else "more than"
+    return ValidationResult(
+        passed=passed,
+        check_name="peak_within_capacity",
+        message=(
+            f"Peak generation ({max_value:.2f} kW) {placement} 10% over the "
+            f"{wired_kw:.2f} kWp wired for {config.capacity_kw} kW"
+        ),
+        value=max_value,
+        expected_range=(0, max_allowed),
+    )
+
+
 def validate_pv_generation(
     generation: pd.Series,
     pv_config: Union[PVConfig, float],
@@ -121,18 +142,17 @@ def validate_pv_generation(
     Checks:
     - Generation is never negative
     - Generation is zero at night (approximately)
-    - Peak generation does not exceed system capacity
+    - Peak generation within 10% over the DC the PV model wires (pv.wired_dc_capacity_kw)
     - Annual yield per kWp wired within the UK benchmark band (if full year data)
 
-    docs/pv-annual-yield-benchmark.md records the band's source and its denominator.
+    docs/pv-annual-yield-benchmark.md records the band's source and the wired DC both checks use.
 
     Args:
         generation: PV generation time series in kW
         pv_config: The PVConfig that produced generation, or its capacity_kw
-            for a system of the default module. The peak check compares
-            against its configured capacity_kw; the annual yield is per kWp of
-            the DC the PV model wires for it (pv.wired_dc_capacity_kw),
-            custom_module_params included.
+            for a system of the default module. The peak check and the annual
+            yield both use the DC the PV model wires for it
+            (pv.wired_dc_capacity_kw), custom_module_params included.
         check_annual: Whether to check annual yield (requires ~1 year data)
 
     Returns:
@@ -167,28 +187,8 @@ def validate_pv_generation(
             value=min_value,
         ))
 
-    # Check 2: Peak does not exceed capacity (with 10% tolerance for transients)
-    max_value = float(generation.max())
-    max_allowed = config.capacity_kw * 1.1  # 10% tolerance
-    if max_value > max_allowed:
-        results.append(ValidationResult(
-            passed=False,
-            check_name="peak_within_capacity",
-            message=(
-                f"Peak generation ({max_value:.2f} kW) exceeds "
-                f"capacity ({config.capacity_kw:.2f} kW) by more than 10%"
-            ),
-            value=max_value,
-            expected_range=(0, max_allowed),
-        ))
-    else:
-        results.append(ValidationResult(
-            passed=True,
-            check_name="peak_within_capacity",
-            message=f"Peak generation ({max_value:.2f} kW) within capacity limits",
-            value=max_value,
-            expected_range=(0, max_allowed),
-        ))
+    # Check 2: Peak within 10% over the wired DC
+    results.append(_check_peak_within_capacity(generation, config))
 
     # Check 3: Night-time generation is approximately zero
     # Night defined as hours 22:00 - 05:00 (local time)

@@ -92,7 +92,7 @@ def results(
     Checks PV generation and consumption values for sanity:
     - Generation never negative
     - Generation zero at night
-    - Peak generation within capacity
+    - Peak generation within 10% over the DC of the modules wired for --pv-kw
     - Annual yield per kWp of the modules wired for --pv-kw within the UK benchmark band
     - Consumption never negative or unrealistically high
     - Baseload present
