@@ -5,6 +5,7 @@ import tempfile
 import types
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
@@ -150,6 +151,57 @@ class TestValidateCLI:
         """Test validate config --help."""
         result = runner.invoke(app, ["validate", "config", "--help"])
         assert result.exit_code == 0
+
+
+def _write_results_csv(path: Path, generation_column: str = "generation_kw") -> Path:
+    """Write a synthetic 7-day, 1-minute results CSV: a 4 kW daytime sinusoid and flat demand."""
+    index = pd.date_range(
+        "2024-06-01", periods=7 * 24 * 60, freq="1min", tz="Europe/London"
+    )
+    hours = index.hour + index.minute / 60.0
+    daylight = (hours >= 6) & (hours < 21)
+    sine = np.sin(np.pi * (hours - 6) / 15)
+    generation = np.where(daylight, 4.0 * sine, 0.0).clip(min=0.0)
+    df = pd.DataFrame(
+        {generation_column: generation, "demand_kw": 0.4}, index=index
+    )
+    df.to_csv(path)
+    return path
+
+
+class TestValidateResultsCommand:
+    """Functional tests for `validate results` running a CSV through the command."""
+
+    def test_valid_csv_passes_all_checks(self, tmp_path: Path) -> None:
+        csv_file = _write_results_csv(tmp_path / "results.csv")
+
+        result = runner.invoke(
+            app, ["validate", "results", str(csv_file), "--pv-kw", "4.0"]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Validation Results" in result.output
+        assert "All 6 checks passed" in " ".join(result.output.split())
+
+    def test_zero_pv_capacity_is_refused(self, tmp_path: Path) -> None:
+        csv_file = _write_results_csv(tmp_path / "results.csv")
+
+        result = runner.invoke(
+            app, ["validate", "results", str(csv_file), "--pv-kw", "0"]
+        )
+
+        assert result.exit_code == 1
+        assert "Capacity must be positive" in " ".join(result.output.split())
+
+    def test_csv_without_generation_column_is_refused(self, tmp_path: Path) -> None:
+        csv_file = _write_results_csv(tmp_path / "results.csv", generation_column="output_kw")
+
+        result = runner.invoke(app, ["validate", "results", str(csv_file)])
+
+        assert result.exit_code == 1
+        assert "CSV must contain a 'generation' column" in " ".join(
+            result.output.split()
+        )
 
 
 class TestConfigCLI:
