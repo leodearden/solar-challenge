@@ -568,8 +568,6 @@ home:
             captured["home_config"] = home_config
             return real_simulate_home(home_config, start_date, end_date, progress_callback)
 
-        # Patch get_tmy_data to avoid PVGIS network call
-        monkeypatch.setattr(_home_module, "get_tmy_data", lambda loc: synthetic_june_weather("2024-06-21"))
         # Patch simulate_home in the CLI module (local binding)
         monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)
 
