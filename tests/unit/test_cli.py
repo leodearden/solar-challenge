@@ -5,6 +5,7 @@ import tempfile
 import types
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
@@ -150,6 +151,74 @@ class TestValidateCLI:
         """Test validate config --help."""
         result = runner.invoke(app, ["validate", "config", "--help"])
         assert result.exit_code == 0
+
+
+def _valid_results_frame() -> pd.DataFrame:
+    """A valid 7-day, 1-minute results frame: a 3.5 kW daytime sinusoid and flat demand."""
+    index = pd.date_range(
+        "2024-06-01", periods=7 * 24 * 60, freq="1min", tz="Europe/London"
+    )
+    hours = index.hour + index.minute / 60.0
+    daylight = (hours >= 6) & (hours < 21)
+    sine = np.sin(np.pi * (hours - 6) / 15)
+    generation = np.where(daylight, 3.5 * sine, 0.0)
+    return pd.DataFrame({"generation_kw": generation, "demand_kw": 0.4}, index=index)
+
+
+class TestValidateResultsCommand:
+    """Functional tests for `validate results` running a CSV through the command."""
+
+    def _validate_results(
+        self, tmp_path: Path, frame: pd.DataFrame, *options: str
+    ) -> Result:
+        """Write *frame* as the results CSV and run `validate results` on it with *options*."""
+        csv_file = tmp_path / "results.csv"
+        frame.to_csv(csv_file)
+        return runner.invoke(app, ["validate", "results", str(csv_file), *options])
+
+    def test_valid_csv_passes_all_checks(self, tmp_path: Path) -> None:
+        result = self._validate_results(
+            tmp_path, _valid_results_frame(), "--pv-kw", "4.0"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Validation Results" in result.output
+        assert "All 6 checks passed" in " ".join(result.output.split())
+
+    def test_failed_check_is_reported_and_exits_nonzero(self, tmp_path: Path) -> None:
+        frame = _valid_results_frame()
+        at_night = frame.index.hour == 23
+        frame.loc[at_night, "generation_kw"] = 1.0
+
+        result = self._validate_results(tmp_path, frame)
+
+        assert result.exit_code == 1
+        assert "FAIL" in result.output
+        assert "5/6 checks passed" in " ".join(result.output.split())
+
+    def test_zero_pv_capacity_is_refused(self, tmp_path: Path) -> None:
+        result = self._validate_results(
+            tmp_path, _valid_results_frame(), "--pv-kw", "0"
+        )
+
+        assert result.exit_code == 1
+        assert "Capacity must be positive" in " ".join(result.output.split())
+
+    @pytest.mark.parametrize(
+        ("column", "required"),
+        [("generation_kw", "generation"), ("demand_kw", "demand")],
+    )
+    def test_csv_missing_a_required_column_is_refused(
+        self, tmp_path: Path, column: str, required: str
+    ) -> None:
+        frame = _valid_results_frame().rename(columns={column: "unrelated_kw"})
+
+        result = self._validate_results(tmp_path, frame)
+
+        assert result.exit_code == 1
+        assert f"CSV must contain a '{required}' column" in " ".join(
+            result.output.split()
+        )
 
 
 class TestConfigCLI:
