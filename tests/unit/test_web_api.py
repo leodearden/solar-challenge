@@ -1302,6 +1302,31 @@ class TestErrorPaths:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            pytest.param("POST", "/api/simulate/home", id="simulate-home"),
+            pytest.param("POST", "/api/simulate/fleet", id="simulate-fleet"),
+            pytest.param("POST", "/api/presets", id="save-preset"),
+            pytest.param("POST", "/api/fleet/preview-distribution", id="preview-distribution"),
+            pytest.param("POST", "/api/simulate/fleet-from-distribution", id="fleet-from-distribution"),
+            pytest.param("POST", "/api/fleet/export-yaml", id="export-fleet-yaml"),
+            pytest.param("POST", "/api/simulate/sweep", id="sweep"),
+            pytest.param("PATCH", "/api/history/runs/no-such-run", id="patch-run"),
+            pytest.param("POST", "/api/scenarios/preview-yaml", id="scenario-preview-yaml"),
+            pytest.param("POST", "/api/scenarios/validate", id="scenario-validate"),
+            pytest.param("POST", "/api/scenarios/save", id="scenario-save"),
+        ],
+    )
+    def test_every_json_endpoint_answers_a_non_object_body_with_the_shared_400(
+        self, client: FlaskClient, mock_job_manager: MagicMock, method: str, path: str
+    ) -> None:
+        """The body is refused, naming its type, before any run lookup, save or job submission."""
+        resp = client.open(path, method=method, json=[1])
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "Request body must be a JSON object, got list"}
+        assert mock_job_manager.method_calls == []
+
     def test_get_method_not_allowed_simulate_home(self, client: FlaskClient) -> None:
         """GET on POST-only endpoint returns 405."""
         resp = client.get("/api/simulate/home")
