@@ -39,6 +39,12 @@ class WeatherCache:
     timezone and frequency, keyed by prefix, location and an optional date range.
     """
 
+    _KEY_VERSION = 2
+    """Part of every key: bump it whenever what an entry means changes, so that older entries are never read.
+
+    2: get_tmy_data caches the TMY scaled to the 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md).
+    """
+
     def __init__(self, cache_dir: Optional[Path] = None) -> None:
         """Initialize the cache.
 
@@ -53,6 +59,7 @@ class WeatherCache:
                   end_date: Optional[pd.Timestamp] = None) -> str:
         """Generate cache key from parameters."""
         key_parts = [
+            f"v{self._KEY_VERSION}",
             prefix,
             f"{location.latitude:.4f}",
             f"{location.longitude:.4f}",
