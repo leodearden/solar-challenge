@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from flask import current_app
+from flask import current_app, request
 
 from solar_challenge.location import Location
 from solar_challenge.web.jobs import JobManager
@@ -20,6 +20,23 @@ def get_storage() -> RunStorage:
 def get_job_manager() -> JobManager:
     """Return the JobManager singleton from current Flask app extensions."""
     return current_app.extensions["job_manager"]  # type: ignore[no-any-return]
+
+
+class RequestBodyNotAJsonObject(ValueError):
+    """The request body is not a JSON object; the message names the type the body parsed to."""
+
+
+def request_json_object() -> dict[str, Any]:
+    """Return the current request's body, which must be a JSON object.
+
+    Raises:
+        RequestBodyNotAJsonObject: For any other body. An absent, non-JSON or
+            unparseable body, or JSON null, reads as NoneType.
+    """
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        raise RequestBodyNotAJsonObject(f"Request body must be a JSON object, got {type(body).__name__}")
+    return body
 
 
 LOCATION_PRESETS: dict[str, Location] = {
