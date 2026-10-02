@@ -16,18 +16,6 @@ html.dark {
     --color-primary: #fbbf24;
 }
 
-/* --- Chart Container Sizing --- */
-.chart-container {
-    width: 100%;
-    min-height: 350px;
-}
-
-@media (max-width: 768px) {
-    .chart-container {
-        min-height: 280px;
-    }
-}
-
 /* --- Tailwind Overrides --- */
 /* Ensure range inputs look correct across browsers */
 input[type="range"] {

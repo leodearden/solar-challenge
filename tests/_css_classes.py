@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to the CSS names the dashboard and its stylesheets share:
 the classes templates and scripts apply and selectors name, the custom properties
-stylesheets declare and var() reads, and the @keyframes stylesheets define.
+stylesheets declare and var() reads, the @keyframes stylesheets define, and the
+properties lone-class rules declare and inline style attributes set.
 
 Usage::
 
@@ -30,10 +31,23 @@ applied_classes_in_template miss a class the page does apply.
 A custom property counts as read only through a ``var()`` in some source: a
 script's ``getPropertyValue()`` read is not counted, and a ``var()`` inside a
 comment is.
+
+A class declares a property only in a lone-class rule, one with that class alone as
+an entry of its selector list, at any @media depth, and only without ``!important``.
+An element sets a property inline only through its static ``style`` attribute. On both
+sides a property name is read lower-cased, as CSS matches it case-insensitively, but a
+custom property's name is read as written, as CSS matches it case-sensitively. Five
+gaps are known, and each makes a check miss an override, never report a false one:
+pseudo-class, compound and descendant selectors (so ``hover:``, ``dark:`` and the
+other variant utilities); classes a Jinja expression writes into the element's
+attributes, such as a macro's ``classes`` argument; Alpine ``:style`` bindings;
+style writes from scripts; and a shorthand set against its longhands, such as an
+inline ``margin`` against a class's ``margin-top``.
 """
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from html.parser import HTMLParser
 
 import jinja2
@@ -71,6 +85,8 @@ _CLASS_SELECTOR = re.compile(
 _CUSTOM_PROPERTY_DECLARATION = re.compile(r"(?<![\w-])(--[\w-]+)\s*:")
 _CUSTOM_PROPERTY_REFERENCE = re.compile(r"\bvar\(\s*(--[\w-]+)")
 _KEYFRAMES_RULE = re.compile(r"@(?:-[a-zA-Z]+-)?keyframes\s+([\w-]+)")
+_CSS_RULE = re.compile(r"(?P<selectors>[^{};]*)\{(?P<declarations>[^{}]*)\}")
+_IMPORTANT = re.compile(r"!\s*important", re.IGNORECASE)
 
 
 def applied_classes_in_template(source: str) -> set[str]:
@@ -129,6 +145,37 @@ def keyframes_names(stylesheet: str) -> set[str]:
     return set(_KEYFRAMES_RULE.findall(_literal_free(stylesheet)))
 
 
+def declared_properties_by_class(stylesheet: str) -> dict[str, set[str]]:
+    r"""The properties the lone-class rules of *stylesheet* declare without ``!important``, keyed
+    by decoded class name, so the rules of ``.md\:flex`` key ``md:flex``."""
+    declared: dict[str, set[str]] = {}
+    for rule in _CSS_RULE.finditer(_literal_free(stylesheet)):
+        properties = {
+            name for name, value in _declarations(rule["declarations"]) if not _IMPORTANT.search(value)
+        }
+        for class_name in _lone_classes(rule["selectors"]):
+            declared.setdefault(class_name, set()).update(properties)
+    return declared
+
+
+@dataclass(frozen=True)
+class InlineStyledElement:
+    """An element of a template's literal markup that has a static style attribute, with the
+    classes its own attributes apply and the properties that style sets."""
+
+    classes: frozenset[str]
+    inline_properties: frozenset[str]
+
+
+def inline_styled_elements(source: str) -> list[InlineStyledElement]:
+    """The elements of the Jinja template *source* that have a static ``style`` attribute, in
+    source order, read with every Jinja tag blanked."""
+    markup = _InlineStyledMarkup()
+    markup.feed(_markup(source))
+    markup.close()
+    return markup.elements
+
+
 def linked_stylesheets(template_source: str) -> list[str]:
     """The .css files *template_source* links through ``url_for('static', filename=...)``, in source order."""
     calls = _JINJA.parse(template_source).find_all(nodes.Call)
@@ -146,12 +193,7 @@ class _TemplateMarkup(HTMLParser):
         self._in_script = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.class_lists.extend(
-            class_list
-            for name, value in attrs
-            if value is not None
-            for class_list in _attribute_class_lists(name, value)
-        )
+        self.class_lists.extend(_element_class_lists(attrs))
         if tag == "script":
             self.script_bodies.append("")
             self._in_script = True
@@ -165,9 +207,37 @@ class _TemplateMarkup(HTMLParser):
             self.script_bodies[-1] += data
 
 
+class _InlineStyledMarkup(HTMLParser):
+    """Collects the elements of a template's literal markup that have a static style attribute."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.elements: list[InlineStyledElement] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        style = next((value or "" for name, value in attrs if name == "style"), None)
+        if style is not None:
+            self.elements.append(
+                InlineStyledElement(
+                    classes=frozenset(_split(_element_class_lists(attrs))),
+                    inline_properties=frozenset(name for name, _ in _declarations(style)),
+                )
+            )
+
+
 def _markup(source: str) -> str:
     """*source* with every Jinja tag, expression and comment blanked, so the literal markup of every branch survives."""
     return "".join(value if kind == "data" else " " for _, kind, value in _JINJA.lex(source))
+
+
+def _element_class_lists(attrs: list[tuple[str, str | None]]) -> list[str]:
+    """The class lists the attributes *attrs* of one start tag apply."""
+    return [
+        class_list
+        for name, value in attrs
+        if value is not None
+        for class_list in _attribute_class_lists(name, value)
+    ]
 
 
 def _attribute_class_lists(name: str, value: str) -> list[str]:
@@ -254,6 +324,25 @@ def _is_static_url_for(call: nodes.Call) -> bool:
         and len(call.args) > 0
         and _string_value(call.args[0]) == "static"
     )
+
+
+def _lone_classes(selector_list: str) -> list[str]:
+    """The decoded classes of the *selector_list* entries that are one class selector alone."""
+    matches = (_CLASS_SELECTOR.fullmatch(entry.strip()) for entry in selector_list.split(","))
+    return [_unescape(match["identifier"]) for match in matches if match is not None]
+
+
+def _declarations(block: str) -> list[tuple[str, str]]:
+    """(property, value) for each declaration of *block*, a declaration block or a style
+    attribute's value, read with comments, strings and url()s blanked. A property name is
+    lower-cased, as CSS matches it case-insensitively, unless it names a custom property,
+    which CSS matches case-sensitively."""
+    pieces = (piece.partition(":") for piece in _literal_free(block).split(";"))
+    return [
+        (name if name.startswith("--") else name.lower(), value)
+        for written, colon, value in pieces
+        if colon and (name := written.strip())
+    ]
 
 
 def _literal_free(stylesheet: str) -> str:
