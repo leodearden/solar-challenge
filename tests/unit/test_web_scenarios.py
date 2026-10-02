@@ -504,24 +504,26 @@ class TestBuilderScenarioYaml:
     @pytest.mark.parametrize(
         "omitted",
         [
-            pytest.param("latitude", id="without latitude"),
-            pytest.param("longitude", id="without longitude"),
-            pytest.param("altitude", id="without altitude"),
+            pytest.param(("latitude",), id="without latitude"),
+            pytest.param(("longitude",), id="without longitude"),
+            pytest.param(("altitude",), id="without altitude"),
+            pytest.param(("latitude", "longitude", "altitude"), id="without any coordinate"),
         ],
     )
-    def test_a_custom_location_without_a_coordinate_leaves_it_to_the_loader(
-        self, client: FlaskClient, tmp_path: Path, omitted: str
+    def test_each_custom_coordinate_the_form_omits_is_left_to_the_loader(
+        self, client: FlaskClient, tmp_path: Path, omitted: tuple[str, ...]
     ) -> None:
         """A custom coordinate the form omits is left to the loader, the one home of its default.
 
-        The form sends *omitted* as '', the cleared input scenarioFormFields leaves for an
-        uploaded location: block without that key.  The block holds the coordinates given,
-        the homes are where load_fleet_config puts a hand-written block with the same keys,
-        and the form validates.
+        The form sends each *omitted* coordinate as '', the cleared input scenarioFormFields
+        leaves for an uploaded location: block without that key.  The block holds the
+        coordinates given, the homes are where load_fleet_config puts a hand-written block
+        with the same keys, and the form validates.
         """
         coordinates = {"latitude": 53.4, "longitude": -2.2, "altitude": 38.0}
-        given = {key: value for key, value in coordinates.items() if key != omitted}
-        form = {**self._DEFAULT_FORM, "location_preset": "custom", **given, omitted: ""}
+        given = {key: value for key, value in coordinates.items() if key not in omitted}
+        cleared = dict.fromkeys(omitted, "")
+        form = {**self._DEFAULT_FORM, "location_preset": "custom", **given, **cleared}
 
         yaml_text, document = _preview_document(client, form)
         path = tmp_path / "builder.yaml"
