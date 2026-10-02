@@ -53,6 +53,7 @@ def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Pa
 
 
 @requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(project_root: Path) -> None:
     """Run as the lane runs it, the interpreter-matrix job collects one case per off-pin admitted minor.
 

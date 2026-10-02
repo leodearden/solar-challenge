@@ -27,6 +27,7 @@ def test_offline_lane_runs_one_enabled_e2e_job(project_root: Path) -> None:
 
 
 @requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 def test_e2e_job_collects_the_e2e_suite_and_nothing_else(project_root: Path) -> None:
     """Run as the lane runs it, the e2e job collects at least one test, every one under tests/e2e/.
 

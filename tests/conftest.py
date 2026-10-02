@@ -24,6 +24,17 @@ def test_data_dir(project_root: Path) -> Path:
     return project_root / "tests" / "data"
 
 
+@pytest.fixture
+def callers_uv_lock_mode_is_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set UV_FROZEN=1 in this process's environment for the test, as the shell running the suite may.
+
+    The orchestrator gives the offline lane no uv lock mode, so a test that runs a
+    lane job's command as the lane runs it must pass whatever lock mode its own
+    shell has: inherited, UV_FROZEN makes that command's `uv run --locked` an error.
+    """
+    monkeypatch.setenv("UV_FROZEN", "1")
+
+
 def _live_job_managers() -> frozenset[Any]:
     jobs_mod: Any = sys.modules.get("solar_challenge.web.jobs")
     if jobs_mod is None:
