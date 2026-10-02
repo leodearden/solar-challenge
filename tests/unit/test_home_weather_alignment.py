@@ -67,17 +67,61 @@ class TestAlignTMYToDemand:
         # Most values should be zero since TMY data doesn't cover this time
         assert aligned.iloc[0] == 0.0
 
-    def test_leap_day_has_no_tmy_match_and_maps_to_zero(self, tmy_minute_year):
-        demand = _london_minute_demand("2024-02-28 00:00", "2024-03-01 23:59")
+    @pytest.mark.parametrize(
+        "demand_tz",
+        [
+            pytest.param("Europe/London", id="london"),
+            pytest.param("Asia/Tokyo", id="tokyo-local-days-straddle-utc-days"),
+        ],
+    )
+    def test_29_february_the_tmy_lacks_reads_its_28_february_at_the_same_utc_time(
+        self, tmy_minute_year, demand_tz
+    ):
+        utc_minutes = pd.date_range("2024-02-28 00:00", "2024-03-01 23:59", freq="1min", tz="UTC")
+        demand = pd.Series(1.0, index=utc_minutes.tz_convert(demand_tz))
 
         aligned = _align_tmy_to_demand(tmy_minute_year, demand)
 
         expected = _expected_alignment(
             demand,
             tmy_minute_year.loc["1990-02-28"],
-            np.zeros(1440),
+            tmy_minute_year.loc["1990-02-28"],
             tmy_minute_year.loc["1990-03-01"],
         )
+        pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
+    def test_tmy_with_its_own_29_february_keeps_it(self):
+        leap_year_tmy = pd.Series(
+            np.arange(1, 4321, dtype=float),
+            index=pd.date_range("1992-02-28", periods=4320, freq="1min", tz="UTC"),
+        )
+        demand = _london_minute_demand("2024-02-28 00:00", "2024-03-01 23:59")
+
+        aligned = _align_tmy_to_demand(leap_year_tmy, demand)
+
+        pd.testing.assert_series_equal(aligned, _expected_alignment(demand, leap_year_tmy), check_exact=True)
+
+    def test_tmy_with_part_of_29_february_keeps_that_part_and_the_rest_reads_28_february(self, tmy_minute_year):
+        own_29_february_noon = pd.Series([0.5], index=pd.DatetimeIndex(["1992-02-29 12:00"], tz="UTC"))
+        demand = _london_minute_demand("2024-02-29 00:00", "2024-02-29 23:59")
+
+        aligned = _align_tmy_to_demand(pd.concat([tmy_minute_year, own_29_february_noon]), demand)
+
+        expected = _expected_alignment(
+            demand,
+            tmy_minute_year.loc["1990-02-28 00:00":"1990-02-28 11:59"],
+            own_29_february_noon,
+            tmy_minute_year.loc["1990-02-28 12:01":"1990-02-28 23:59"],
+        )
+        pd.testing.assert_series_equal(aligned, expected, check_exact=True)
+
+    def test_29_february_whose_28_february_is_missing_too_maps_to_zero(self, tmy_minute_year):
+        march_only = tmy_minute_year.loc["1990-03-01"]
+        demand = _london_minute_demand("2024-02-29 00:00", "2024-03-01 23:59")
+
+        aligned = _align_tmy_to_demand(march_only, demand)
+
+        expected = _expected_alignment(demand, np.zeros(1440), march_only)
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
 
     def test_spring_forward_day_matches_tmy_by_utc_instant(self, tmy_minute_year):
@@ -271,3 +315,51 @@ class TestSimulateHomeAlignsWeatherByUTCInstant:
             _NOON_HOUR_BST_ON_2024_06_21,
             check_names=False,
         )
+
+
+class TestSimulateHomeRepeatsTheTMYs28FebruaryOnALeapDay:
+    """A leap year's 29 February repeats the non-leap TMY's 28 February, for PV output and for the heat pump's air temperature."""
+
+    def test_pv_output_on_29_february_repeats_28_february(self):
+        weather = _utc_tmy_with_one_marked_hour("1990-02-28 12:00", ghi=400.0, dni=600.0, dhi=100.0)
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(seed=42),
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-02-28"),
+            end_date=pd.Timestamp("2024-02-29"),
+            weather_data=weather,
+        )
+
+        feb_28 = results.generation.loc["2024-02-28"]
+        assert feb_28.sum() > 0
+        np.testing.assert_array_equal(results.generation.loc["2024-02-29"].to_numpy(), feb_28.to_numpy())
+
+    def test_heat_pump_load_on_29_february_repeats_28_february(self):
+        weather = _utc_tmy_with_one_marked_hour("1990-02-28 12:00", temp_air=5.0)
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(seed=42),
+            heat_pump_config=HeatPumpConfig(
+                heat_pump_type="ASHP",
+                thermal_capacity_kw=8.0,
+                annual_heat_demand_kwh=8000.0,
+            ),
+            location=Location.bristol(),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-02-28"),
+            end_date=pd.Timestamp("2024-02-29"),
+            weather_data=weather,
+        )
+
+        assert results.heat_pump_load is not None
+        feb_28 = results.heat_pump_load.loc["2024-02-28"]
+        assert feb_28.sum() > 0
+        np.testing.assert_array_equal(results.heat_pump_load.loc["2024-02-29"].to_numpy(), feb_28.to_numpy())
