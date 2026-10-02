@@ -887,7 +887,7 @@ class TestErrorPages:
         assert "Solar Challenge" in html
         # Check it extends the base layout (has nav and footer elements)
         assert element_count(html, "nav") >= 1
-        assert "<footer" in html
+        assert element_count(html, "footer") >= 1
         # Contains the 404-specific content
         assert "404" in html
         assert "Back to Dashboard" in html
@@ -909,7 +909,7 @@ class TestErrorPages:
                 html = response.data.decode("utf-8")
                 # Should render within the base layout
                 assert "Solar Challenge" in html
-                assert "<footer" in html
+                assert element_count(html, "footer") >= 1
                 # Contains the 500-specific content
                 assert texts_after(html, "500", 1) == ["Internal Server Error"]
                 assert "Back to Dashboard" in html
@@ -964,6 +964,4 @@ class TestSimulateHomePageRendering:
         # Should have a proper HTML document
         assert doctype(html) == "html"
         assert element_count(html, "head") == 1
-        assert "</head>" in html
-        assert "<body" in html
-        assert "</body>" in html
+        assert element_count(html, "body") == 1
