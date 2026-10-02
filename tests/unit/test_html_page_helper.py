@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, ids, texts and headings.
+"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts and headings.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a page test that uses it pass vacuously.
@@ -9,6 +9,7 @@ import pytest
 
 from tests._html_page import (
     doctype,
+    element_attributes,
     element_count,
     element_ids,
     headings,
@@ -149,6 +150,36 @@ def test_an_element_inside_script_text_does_not_count() -> None:
     page = "<nav></nav><script>menu.innerHTML = '<nav></nav>';</script>"
 
     assert element_count(page, "nav") == 1
+
+
+def test_element_attributes_lists_the_attributes_of_each_element_with_the_tag_in_document_order() -> (
+    None
+):
+    page = (
+        '<script src="/static/a.js"></script>'
+        '<link rel="stylesheet" href="/static/s.css">'
+        '<script src="/static/b.js" integrity="sha384-b"></script>'
+    )
+
+    assert element_attributes(page, "script") == [
+        {"src": "/static/a.js"},
+        {"src": "/static/b.js", "integrity": "sha384-b"},
+    ]
+
+
+def test_a_valueless_attribute_reads_none() -> None:
+    page = '<script defer src="/static/a.js"></script>'
+
+    assert element_attributes(page, "script") == [
+        {"defer": None, "src": "/static/a.js"}
+    ]
+
+
+def test_element_attributes_refuses_a_tag_not_in_lower_case() -> None:
+    page = '<script src="/static/a.js"></script>'
+
+    with pytest.raises(ValueError, match="in lower case.*; got 'Script'$"):
+        element_attributes(page, "Script")
 
 
 @pytest.mark.parametrize(
