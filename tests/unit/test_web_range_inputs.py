@@ -2,10 +2,9 @@
 """Guards the invariant that the range_input macro in components/macros.html draws
 every range input on the dashboard.
 
-static/style.css shapes every range thumb (appearance none, a 1rem circle, a white
-border, a shadow) but leaves its fill to the theme utilities range_input applies. A
-range input written out in any other template therefore shows a hollow thumb: task 235
-measured it in Chromium, where the slate-200 track shows through.
+static/style.css shapes every range thumb but leaves its fill to the theme utilities
+range_input applies, so a range input written out in any other template shows a
+hollow thumb.
 """
 
 from html.parser import HTMLParser

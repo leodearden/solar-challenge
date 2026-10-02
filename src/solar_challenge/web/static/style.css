@@ -4,7 +4,7 @@
    All component-level styling is handled by Tailwind utility classes.
    tests/unit/test_web_hand_written_css.py fails on any class or custom property
    defined here that the dashboard does not use, and on @keyframes dist/style.css
-   already defines. tests/unit/test_web_theme_colours.py fails on any colour
+   already defines. tests/unit/test_web_theme_colours.py fails on any hex colour
    tailwind.config.js defines. */
 
 /* --- Tailwind Overrides --- */

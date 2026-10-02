@@ -1,17 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Guards the invariant that tailwind.config.js is the one home of the dashboard's
-theme colours, so no template and no hand-written stylesheet writes a colour value
-the theme defines.
+"""Guards the invariant that no template and no hand-written stylesheet writes out a
+hex colour that tailwind.config.js defines.
 
 An element reaches a theme colour through a Tailwind utility: bg-primary-500, or on a
 pseudo-element an arbitrary variant such as [&::-webkit-slider-thumb]:bg-primary-500.
-A written-out value is a second home that a theme edit does not reach. Task 235 found
-the range thumbs' --color-primary and a commented-out copy of the whole theme in
-base.html.
+A written-out value is a second home that a theme edit does not reach.
 
 A colour is a six-digit hex literal, matched case-insensitively anywhere in a source,
 comments included. The compiled dist/style.css derives from the theme and is not
 checked. Scripts hand colour strings to chart libraries and are not checked either.
+Nor are utilities naming Tailwind's built-in palettes, such as bg-amber-500, even
+where their values equal the theme's.
 """
 
 import re
