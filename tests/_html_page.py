@@ -5,7 +5,8 @@ elements and the ids they carry, and the texts it shows, in document order.
 A text is one run of character data between two tags, outside script and style elements,
 with character references decoded and whitespace collapsed. Blank runs are dropped, and an
 attribute value is never a text. Tag and attribute names are read in lower case, as HTML
-reads them in any case; attribute values and texts keep their case.
+reads them in any case; attribute values and texts keep their case. An element that
+repeats an attribute carries only its first value, as HTML reads it.
 
 Usage::
 
@@ -46,14 +47,22 @@ def element_count(
 ) -> int:
     """How many *tag* elements of *page* carry every one of *attributes*, each with exactly that value.
 
-    Give *tag* and the attribute names in lower case. An element inside script text does
-    not count.
+    Raises ValueError, rather than count none, when *tag* or an attribute name is not in
+    lower case: the page's names are read in lower case, so no element could match. An
+    element inside script text does not count.
     """
-    required = (attributes or {}).items()
+    required = attributes or {}
+    not_in_lower_case = [name for name in (tag, *required) if name != name.lower()]
+    if not_in_lower_case:
+        raise ValueError(
+            "Expected tag and attribute names in lower case, as the page is read;"
+            f" got {', '.join(map(repr, not_in_lower_case))}"
+        )
     return sum(
         1
         for name, carried in _read(page).elements
-        if name == tag and all(carried.get(key) == value for key, value in required)
+        if name == tag
+        and all(carried.get(key) == value for key, value in required.items())
     )
 
 
@@ -114,7 +123,10 @@ class _PageReader(HTMLParser):
         self.doctypes.append(" ".join(decl.split()[1:]).lower())
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.elements.append((tag, dict(attrs)))
+        carried: dict[str, str | None] = {}
+        for name, value in attrs:
+            carried.setdefault(name, value)
+        self.elements.append((tag, carried))
         if tag in _RAW_TEXT_ELEMENTS:
             self._in_raw_text = True
 
