@@ -812,3 +812,9 @@ class TestFinanceConfigParsingGridServices:
                     "event_windows": ["not-a-dict"],  # list entry is a string
                 },
             })
+
+    def test_null_grid_services_events_parses_to_no_events_config(self) -> None:
+        """An explicit null grid_services_events block parses to a FinanceConfig with no events config."""
+        assert parse_finance_config(
+            {**self._BASE, "grid_services_events": None}
+        ) == FinanceConfig(**self._BASE)
