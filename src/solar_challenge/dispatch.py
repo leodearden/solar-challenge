@@ -230,9 +230,12 @@ class DispatchStrategy(ABC):
             battery_capacity_kwh: Total battery capacity in kWh
             timestep_minutes: Duration of timestep in minutes
             grid_charge_ctx: Optional rate-aware grid-charging context.
-                When provided, downstream strategies (α2/α3) may use this
-                to compute grid_charge_kw.  In the base substrate (this
-                task) it is accepted and ignored.
+                A strategy that grid-charges passes it to
+                ``compute_grid_charge_power_kw`` to fill ``grid_charge_kw``,
+                and only when it is not discharging, because
+                ``DispatchDecision`` forbids ``grid_charge_kw > 0`` together
+                with ``discharge_kw > 0``.  A strategy that does not
+                grid-charge ignores it.  ``None`` means no grid charging.
 
         Returns:
             DispatchDecision specifying charge_kw or discharge_kw
@@ -420,8 +423,8 @@ class TOUOptimizedStrategy(DispatchStrategy):
                 the strategy will grid-charge the battery (via
                 ``compute_grid_charge_power_kw``) provided the battery is not
                 already being discharged.  The context's own Gate 1/Gate 2/
-                Gate 3 checks give defence-in-depth.  Pass ``None`` (default)
-                to disable grid-charging and preserve prior behaviour exactly.
+                Gate 3 checks give defence-in-depth.  ``None`` (default)
+                means no grid charging: ``grid_charge_kw`` is always 0.
 
         Returns:
             DispatchDecision optimized for TOU tariffs:
@@ -579,9 +582,9 @@ class PeakShavingStrategy(DispatchStrategy):
                 the strategy will grid-charge the battery (via
                 ``compute_grid_charge_power_kw``) provided the battery is not
                 already being discharged to shave a peak.  The context's own
-                Gate 1/Gate 2/Gate 3 checks give defence-in-depth.  Pass
-                ``None`` (default) to disable grid-charging and preserve prior
-                behaviour exactly.
+                Gate 1/Gate 2/Gate 3 checks give defence-in-depth.  ``None``
+                (default) means no grid charging: ``grid_charge_kw`` is
+                always 0.
 
         Returns:
             DispatchDecision with:
