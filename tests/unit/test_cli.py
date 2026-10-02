@@ -185,6 +185,17 @@ class TestValidateResultsCommand:
         assert "Validation Results" in result.output
         assert "All 6 checks passed" in " ".join(result.output.split())
 
+    def test_failed_check_is_reported_and_exits_nonzero(self, tmp_path: Path) -> None:
+        frame = _valid_results_frame()
+        at_night = frame.index.hour == 23
+        frame.loc[at_night, "generation_kw"] = 1.0
+
+        result = self._validate_results(tmp_path, frame)
+
+        assert result.exit_code == 1
+        assert "FAIL" in result.output
+        assert "5/6 checks passed" in " ".join(result.output.split())
+
     def test_zero_pv_capacity_is_refused(self, tmp_path: Path) -> None:
         result = self._validate_results(
             tmp_path, _valid_results_frame(), "--pv-kw", "0"
@@ -193,13 +204,19 @@ class TestValidateResultsCommand:
         assert result.exit_code == 1
         assert "Capacity must be positive" in " ".join(result.output.split())
 
-    def test_csv_without_generation_column_is_refused(self, tmp_path: Path) -> None:
-        frame = _valid_results_frame().rename(columns={"generation_kw": "output_kw"})
+    @pytest.mark.parametrize(
+        ("column", "required"),
+        [("generation_kw", "generation"), ("demand_kw", "demand")],
+    )
+    def test_csv_missing_a_required_column_is_refused(
+        self, tmp_path: Path, column: str, required: str
+    ) -> None:
+        frame = _valid_results_frame().rename(columns={column: "unrelated_kw"})
 
         result = self._validate_results(tmp_path, frame)
 
         assert result.exit_code == 1
-        assert "CSV must contain a 'generation' column" in " ".join(
+        assert f"CSV must contain a '{required}' column" in " ".join(
             result.output.split()
         )
 
