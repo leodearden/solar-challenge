@@ -23,7 +23,7 @@ pytest.importorskip("jinja2")
 from tests._dashboard_sources import (
     HAND_WRITTEN_STYLESHEET_KEY,
     dashboard_template_sources,
-    served_stylesheet_sources,
+    hand_written_stylesheet_source,
     tailwind_config_source,
 )
 
@@ -65,13 +65,8 @@ def test_no_template_writes_a_theme_colour() -> None:
 
 
 def test_the_hand_written_stylesheet_writes_no_theme_colour() -> None:
-    served = served_stylesheet_sources()
-    assert HAND_WRITTEN_STYLESHEET_KEY in served, (
-        f"base.html no longer links {HAND_WRITTEN_STYLESHEET_KEY}, so none of its rules apply: "
-        "delete the file or link it again"
-    )
     written = _written_theme_colours(
-        {HAND_WRITTEN_STYLESHEET_KEY: served[HAND_WRITTEN_STYLESHEET_KEY]}
+        {HAND_WRITTEN_STYLESHEET_KEY: hand_written_stylesheet_source()}
     )
 
     assert written == {}, (

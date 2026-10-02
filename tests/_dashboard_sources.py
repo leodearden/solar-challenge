@@ -49,6 +49,18 @@ def served_stylesheet_sources() -> dict[str, str]:
     return _sources(_STATIC_DIR / name for name in linked)
 
 
+def hand_written_stylesheet_source() -> str:
+    """Source of static/style.css, the stylesheet base.html serves as-is, never compiled.
+
+    Fails if base.html no longer links it."""
+    served = served_stylesheet_sources()
+    assert HAND_WRITTEN_STYLESHEET_KEY in served, (
+        f"base.html no longer links {HAND_WRITTEN_STYLESHEET_KEY}, so none of its rules apply: "
+        "delete the file or link it again"
+    )
+    return served[HAND_WRITTEN_STYLESHEET_KEY]
+
+
 def tailwind_config_source() -> str:
     """Source of tailwind.config.js, the home of the dashboard's theme."""
     return (_WEB_DIR / "tailwind.config.js").read_text(encoding="utf-8")
