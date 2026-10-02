@@ -796,16 +796,17 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
       Homes that already have a battery therefore retain their individual power,
       state-of-charge and dispatch characteristics, while only capacity is
       swept; two homes at one :class:`ConfigPoint` can thus have different
-      usable windows.  A fabricated battery gets the ``BatteryConfig`` defaults.
+      usable windows.
     - Household load profile (``load_config``) and home-level dispatch strategy
       (``HomeConfig.dispatch_strategy``) — occupancy diversity and the board
       dispatch are preserved (PRD §3.2, W-H2).
 
     .. note::
-        Because battery power limits and ``grid_charging`` are left diverse,
-        two homes at the same :class:`ConfigPoint` may behave economically
-        differently if their base configs differ in those fields.  "Homogeneous
-        install" means equal *install capacity*, not equal *dispatch behaviour*.
+        Because battery power limits, state-of-charge limits and
+        ``grid_charging`` are left diverse, two homes at the same
+        :class:`ConfigPoint` may behave economically differently if their base
+        configs differ in those fields.  "Homogeneous install" means equal
+        *install capacity*, not equal *dispatch behaviour*.
 
     *PV/inverter*: ``pv_config.capacity_kw`` and ``pv_config.inverter_capacity_kw``
     are set to *point.pv_kwp* and *point.inverter_kw* respectively.
