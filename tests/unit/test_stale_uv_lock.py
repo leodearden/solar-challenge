@@ -12,7 +12,6 @@ lock check would only collect its tests.
 """
 
 import hashlib
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,6 +26,7 @@ from tests._orchestrator_config import (
     sole_offline_lane_job,
 )
 from tests._pyproject import load_project_table
+from tests._uv_env import isolated_uv_env
 
 pytestmark = requires_uv
 
@@ -58,14 +58,14 @@ def _lock_digest(project: Path) -> str:
 
 @pytest.fixture
 def uv_probe_environment(tmp_path: Path) -> dict[str, str]:
-    """Return this process's environment, minus VIRTUAL_ENV, with a uv project environment of its own under *tmp_path*.
+    """Return an isolated_uv_env whose uv project environment is the probe's own, under *tmp_path*.
 
     No probe may touch an environment another run uses: inside the interpreter
-    matrix, UV_PROJECT_ENVIRONMENT names that case's own venv.
+    matrix, UV_PROJECT_ENVIRONMENT names that case's own venv. The lane job
+    probes drop the uv lock mode of the shell running these tests, as the verify
+    probes do: the lane takes its environment from the orchestrator, not that shell.
     """
-    env = {name: value for name, value in os.environ.items() if name != "VIRTUAL_ENV"}
-    env["UV_PROJECT_ENVIRONMENT"] = str(tmp_path / "venv")
-    return env
+    return isolated_uv_env(tmp_path / "venv")
 
 
 @pytest.fixture
