@@ -9,6 +9,7 @@ Tests cover:
 - A config holding every field shape, its battery's dispatch strategy and grid
   charging included, loads equal to the one saved
 - Every saved config and summary is written as its dataclass field tree in JSON
+- A stored config holding a retired field's key set to null still loads
 - Corrupted parquet graceful error handling
 - Missing run directory graceful error handling
 - Delete run removes DB record and filesystem files
