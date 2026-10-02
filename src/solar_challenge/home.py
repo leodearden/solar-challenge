@@ -421,10 +421,26 @@ def simulate_home(
     )
 
 
+def _in_utc(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """The index in UTC; a naive index is read as UTC."""
+    return index if index.tz is None else index.tz_convert("UTC")
+
+
 def _utc_time_of_year_keys(index: pd.DatetimeIndex) -> pd.Index:
     """Each timestamp's UTC month, day, hour and minute packed as MMDDhhmm; a naive index is read as UTC."""
-    utc = index if index.tz is None else index.tz_convert("UTC")
+    utc = _in_utc(index)
     return ((utc.month * 100 + utc.day) * 100 + utc.hour) * 100 + utc.minute
+
+
+def _tmy_keys_to_read(demand_index: pd.DatetimeIndex, tmy_keys: pd.Index) -> pd.Index:
+    """The UTC time-of-year key each demand timestamp reads from the TMY.
+
+    That is its own key, except on a UTC 29 February the TMY lacks, where it is 28 February's.
+    """
+    own_keys = _utc_time_of_year_keys(demand_index)
+    utc = _in_utc(demand_index)
+    reads_28_february = (utc.month == 2) & (utc.day == 29) & ~own_keys.isin(tmy_keys)
+    return own_keys.where(~reads_28_february, _utc_time_of_year_keys(demand_index - pd.Timedelta(days=1)))
 
 
 def _align_tmy_to_demand(
@@ -437,14 +453,16 @@ def _align_tmy_to_demand(
     hour and minute, so a TMY hour lands on the same instant whatever the
     demand's timezone or DST state; pvlib places the sun at the TMY's UTC
     instants. A naive index on either side is read as UTC, following pvlib's
-    convention. A demand timestamp with no match (e.g. 29 February against a
-    non-leap TMY year) maps to 0.0. Where the TMY repeats a UTC time of year,
-    the later value wins. The result carries the demand's index and the TMY
-    series' name.
+    convention. A demand timestamp on a UTC 29 February the TMY lacks, as a
+    non-leap TMY year does, takes the TMY value at the same UTC time on
+    28 February, so a leap year's extra day repeats the day before it. Any
+    other demand timestamp with no match maps to 0.0. Where the TMY repeats a
+    UTC time of year, the later value wins. The result carries the demand's
+    index and the TMY series' name.
     """
     lookup = tmy.set_axis(_utc_time_of_year_keys(tmy.index))
     lookup = lookup[~lookup.index.duplicated(keep="last")]
-    aligned = lookup.reindex(_utc_time_of_year_keys(demand.index), fill_value=0.0)
+    aligned = lookup.reindex(_tmy_keys_to_read(demand.index, lookup.index), fill_value=0.0)
     return pd.Series(aligned.to_numpy(), index=demand.index, name=tmy.name)
 
 
