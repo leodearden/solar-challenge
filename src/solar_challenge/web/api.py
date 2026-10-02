@@ -80,13 +80,15 @@ def simulate_home_api() -> tuple[Response, int]:
 def simulate_fleet_api() -> tuple[Response, int]:
     """Submit a fleet simulation job for background execution.
 
-    Expects a JSON body with a list of home configs under 'homes' key.
+    Expects a JSON body with a non-empty array of home configs under the 'homes' key.
 
     Returns:
         JSON with job_id and run_id, HTTP 201 on success.
     """
     data = request_json_object()
     homes_data = data.get("homes", [])
+    if not isinstance(homes_data, list):
+        return jsonify({"error": f"homes must be a JSON array, got {type(homes_data).__name__}"}), 400
     if not homes_data:
         return jsonify({"error": "Fleet requires at least one home config in 'homes' array"}), 400
     try:
