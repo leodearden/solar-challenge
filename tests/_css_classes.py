@@ -35,19 +35,26 @@ comment is.
 A class declares a property only in a lone-class rule: one with that class alone as an
 entry of its selector list and no rule nested in it, inside nothing but @media,
 @supports and @layer blocks, at any depth, and only without ``!important``. Those three
-at-rules limit when a rule applies, never which elements it reaches. An element sets a
-property inline only through its static ``style`` attribute. On both sides a property
-name is read lower-cased, as CSS matches it case-insensitively, but a custom property's
-name is read as written, as CSS matches it case-sensitively. Six gaps are known, and each
-makes a check miss an override, never report a false one: pseudo-class, compound and
-descendant selectors (so ``hover:``, ``dark:`` and the other variant utilities); a rule
-nested in a style rule, which native CSS nesting makes relative to its parent, or inside
-an at-rule other than those three, such as @container or @scope, which limit it to some
-elements of its class, and the rule that nests another, skipped whole with its own
-declarations; classes a Jinja expression writes into the element's attributes, such as a
-macro's ``classes`` argument; Alpine ``:style`` bindings; style writes from scripts; and
-a shorthand set against its longhands, such as an inline ``margin`` against a class's
-``margin-top``.
+at-rules limit when a rule applies, never which elements it reaches: the code calls them
+document-wide. An element sets a property inline only through its static ``style``
+attribute. On both sides a property name is read lower-cased, as CSS matches it
+case-insensitively, but a custom property's name is read as written, as CSS matches it
+case-sensitively.
+
+Six gaps are known, and each makes a check miss an override, never report a false one:
+
+- pseudo-class, compound and descendant selectors (so ``hover:``, ``dark:`` and the
+  other variant utilities);
+- nested and scoped rules: a rule nested in a style rule, which native CSS nesting makes
+  relative to its parent, or inside an at-rule other than those three, such as @container
+  or @scope, which limit it to some elements of its class; and the style rule that nests
+  another, skipped whole with its own declarations;
+- classes a Jinja expression writes into the element's attributes, such as a macro's
+  ``classes`` argument;
+- Alpine ``:style`` bindings;
+- style writes from scripts;
+- a shorthand set against its longhands, such as an inline ``margin`` against a class's
+  ``margin-top``.
 """
 
 import re
@@ -127,6 +134,10 @@ def selector_classes(stylesheet: str) -> set[str]:
     in them (a URL, a file name, an attribute value) is never read as a class; neither
     is a number such as ``.5rem`` in an at-rule prelude, because an identifier cannot
     start with a digit.
+
+    Every selector counts wherever it sits, inside nested rules and any at-rule included,
+    so unlike declared_properties_by_class this needs no rule structure: blanking the
+    innermost blocks leaves them all.
     """
     selectors_and_preludes = _INNERMOST_BLOCK.sub(" ", _literal_free(stylesheet))
     return {
@@ -334,9 +345,8 @@ def _is_static_url_for(call: nodes.Call) -> bool:
 
 
 def _document_wide_rules(css: str) -> Iterator[tuple[str, str]]:
-    """(selectors, declarations) for each rule of *css* that nests no rule and sits inside nothing
-    but @media, @supports and @layer blocks. Every other block is skipped whole: a style rule that
-    nests a rule (the nested rule with it), @scope, @container, @keyframes."""
+    """(selectors, declarations) for each rule of *css* that nests no rule and sits inside
+    nothing but document-wide at-rules."""
     for prelude, contents in _top_level_blocks(css):
         if _is_document_wide(prelude):
             yield from _document_wide_rules(contents)
@@ -345,8 +355,7 @@ def _document_wide_rules(css: str) -> Iterator[tuple[str, str]]:
 
 
 def _is_document_wide(prelude: str) -> bool:
-    """True when *prelude* opens an @media, @supports or @layer block, the at-rules that limit when
-    their rules apply but never which elements the rules reach. CSS at-keywords are ASCII
+    """True when *prelude* opens a document-wide at-rule block; at-keywords are ASCII
     case-insensitive."""
     at_keyword = _AT_KEYWORD.match(prelude)
     return at_keyword is not None and at_keyword[1].lower() in _DOCUMENT_WIDE_AT_RULES
