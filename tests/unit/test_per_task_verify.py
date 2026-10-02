@@ -13,7 +13,6 @@ import pytest
 
 from tests._collect_only import describe_outcome, requires_uv, run_collect_only
 from tests._orchestrator_config import load_orchestrator_config
-from tests._uv_env import isolated_uv_env
 
 pytestmark = requires_uv
 
@@ -21,17 +20,16 @@ _WEB_TEST_MODULE = "tests/unit/test_web_app.py"
 
 
 def _collect_with_test_command(
-    project_root: Path, workdir: Path, *pytest_args: str
+    project_root: Path, uv_probe_environment: dict[str, str], *pytest_args: str
 ) -> subprocess.CompletedProcess[str]:
-    """Run test_command verbatim, collect-only, with *pytest_args*, in a fresh uv environment under *workdir*.
+    """Run test_command verbatim, collect-only, with *pytest_args*, in the probe's fresh uv environment.
 
     The environment holds exactly the extras the command names. The shared
     environment would prove nothing: `uv run` syncs inexactly, so it keeps any
     extra an earlier `uv run` installed.
     """
     command = load_orchestrator_config(project_root)["test_command"]
-    env = isolated_uv_env(workdir / "venv")
-    return run_collect_only(command, project_root, *pytest_args, env=env)
+    return run_collect_only(command, project_root, *pytest_args, env=uv_probe_environment)
 
 
 def _modules_skipped_at_collection(junit_report: Path) -> dict[str, str]:
@@ -48,7 +46,9 @@ def _modules_skipped_at_collection(junit_report: Path) -> dict[str, str]:
     return skipped_modules
 
 
-def test_verify_collects_the_web_tests_instead_of_skipping_them(project_root: Path, tmp_path: Path) -> None:
+def test_verify_collects_the_web_tests_instead_of_skipping_them(
+    project_root: Path, uv_probe_environment: dict[str, str]
+) -> None:
     """Run as the orchestrator runs it, test_command collects a web test module instead of skipping it.
 
     The module skips through pytest.importorskip("flask") unless test_command
@@ -60,7 +60,7 @@ def test_verify_collects_the_web_tests_instead_of_skipping_them(project_root: Pa
         "pytest.importorskip('flask')"
     )
 
-    result = _collect_with_test_command(project_root, tmp_path, _WEB_TEST_MODULE)
+    result = _collect_with_test_command(project_root, uv_probe_environment, _WEB_TEST_MODULE)
 
     assert result.returncode == pytest.ExitCode.OK, (
         f"test_command {result.args!r} did not collect {_WEB_TEST_MODULE}; without "
@@ -70,7 +70,9 @@ def test_verify_collects_the_web_tests_instead_of_skipping_them(project_root: Pa
     )
 
 
-def test_verify_collects_every_test_module_instead_of_skipping_any(project_root: Path, tmp_path: Path) -> None:
+def test_verify_collects_every_test_module_instead_of_skipping_any(
+    project_root: Path, tmp_path: Path, uv_probe_environment: dict[str, str]
+) -> None:
     """Run as the orchestrator runs it, test_command collects the whole default suite without skipping a module.
 
     A module whose optional dependency test_command does not install skips itself
@@ -79,7 +81,7 @@ def test_verify_collects_every_test_module_instead_of_skipping_any(project_root:
     """
     junit_report = tmp_path / "collection.xml"
 
-    result = _collect_with_test_command(project_root, tmp_path, f"--junitxml={junit_report}")
+    result = _collect_with_test_command(project_root, uv_probe_environment, f"--junitxml={junit_report}")
 
     assert result.returncode == pytest.ExitCode.OK, (
         f"test_command {result.args!r} failed to collect the default suite\n{describe_outcome(result)}"

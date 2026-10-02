@@ -48,10 +48,10 @@ def uv_probe_environment(tmp_path: Path) -> dict[str, str]:
     """Return an isolated_uv_env whose uv project environment is the probe's own, fresh under *tmp_path*.
 
     No probe may touch an environment another run uses: inside the interpreter
-    matrix, UV_PROJECT_ENVIRONMENT names that case's own venv. The offline lane,
-    too, runs each job in a fresh one, as it cleans its worktree before every
-    run; and like the verify, it takes its environment from the orchestrator,
-    not from the shell running these tests.
+    matrix, UV_PROJECT_ENVIRONMENT names that case's own venv. The offline lane
+    and the per-task verify, too, run each command in a fresh one, as each
+    starts from a clean worktree; and they take their environment from the
+    orchestrator, not from the shell running these tests.
     """
     return isolated_uv_env(tmp_path / "venv")
 
