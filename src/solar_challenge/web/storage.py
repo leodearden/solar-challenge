@@ -13,6 +13,7 @@ Storage structure:
     └── data.parquet        # SimulationResults time series
 """
 
+import functools
 import json
 import re
 import shutil
@@ -21,7 +22,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from types import UnionType
+from types import MappingProxyType, UnionType
 from typing import Any, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
@@ -106,8 +107,11 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
     return cls(**kwargs)
 
 
-def _field_types(cls: type) -> dict[str, Any]:
+@functools.cache
+def _field_types(cls: type) -> Mapping[str, Any]:
     """Return the type each field of dataclass *cls* is annotated with.
+
+    Resolved once per class and shared by every later call, so the mapping is read-only.
 
     Names resolve in cls's module first, then in solar_challenge.config. config.py
     defines DispatchStrategyConfig and GridChargeConfig, which battery.py can name
@@ -117,7 +121,7 @@ def _field_types(cls: type) -> dict[str, Any]:
         NameError: An annotation names a type neither module binds.
     """
     namespace = {**vars(solar_challenge.config), **vars(sys.modules[cls.__module__])}
-    return get_type_hints(cls, globalns=namespace)
+    return MappingProxyType(get_type_hints(cls, globalns=namespace))
 
 
 def _deserialize_value(value: Any, annotation: Any) -> Any:
