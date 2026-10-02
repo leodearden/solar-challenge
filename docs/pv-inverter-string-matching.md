@@ -174,6 +174,8 @@ left" is the most hours any config in the column still spends above the ceiling.
   and the review briefing's "~700-1100".
 - The headline 3, 4, 5 and 6 kWp at default rating read 995.7–1082.0 kWh per nameplate
   kWp.
-- `validate_pv_generation` divides by the nameplate `capacity_kw`, while the model wires
-  whole modules, so 10 of the 248 read outside the band (0.3 kW, one 400 W module:
-  1407.5). This task does not change that; task 239 owns it.
+- At this measurement `validate_pv_generation` divided by the nameplate `capacity_kw`,
+  while the model wires whole modules, so 10 of the 248 read outside the band (0.3 kW,
+  one 400 W module: 1407.5). Task 239 moved the check to the wired DC
+  (`pv.wired_dc_capacity_kw`), under which all 248 read inside it; see
+  [pv-annual-yield-benchmark.md](pv-annual-yield-benchmark.md).

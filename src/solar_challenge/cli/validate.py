@@ -76,7 +76,7 @@ def results(
         float,
         typer.Option(
             "--pv-kw",
-            help="PV system capacity in kW (for validation)",
+            help="Configured PV capacity in kW (PVConfig.capacity_kw)",
         ),
     ] = 4.0,
     consumption_kwh: Annotated[
@@ -93,7 +93,7 @@ def results(
     - Generation never negative
     - Generation zero at night
     - Peak generation within capacity
-    - Annual yield within UK range (800-1000 kWh/kWp)
+    - Annual yield per kWp of the modules wired for --pv-kw within the UK benchmark band
     - Consumption never negative or unrealistically high
     - Baseload present
     """

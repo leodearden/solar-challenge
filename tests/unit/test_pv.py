@@ -18,6 +18,7 @@ from solar_challenge.pv import (
     create_simple_module_params,
     interpolate_to_minute_resolution,
     simulate_pv_output,
+    wired_dc_capacity_kw,
 )
 
 
@@ -895,3 +896,35 @@ class TestInverterModelMatchesModuleModel:
         assert peak_kw == pytest.approx(3.0), (
             f"a custom 3 kW PVWatts inverter on 4 kW of PVWatts modules peaked at {peak_kw:.3f} kW"
         )
+
+
+class TestWiredDcCapacity:
+    """wired_dc_capacity_kw is the DC capacity create_pv_system wires: a whole number of modules, so not always the configured capacity_kw."""
+
+    @pytest.mark.parametrize(
+        "config", [PVConfig(capacity_kw=0.3), *SYSTEM_SIZE_CONFIGS], ids=_config_id
+    )
+    def test_is_the_dc_of_the_modules_create_pv_system_wires(self, config: PVConfig) -> None:
+        system = create_pv_system(config)
+        wired_w = sum(
+            array.modules_per_string * array.strings * array.module_parameters["STC"]
+            for array in system.arrays
+        )
+
+        assert wired_dc_capacity_kw(config) == pytest.approx(wired_w / 1000), (
+            f"{config.capacity_kw} kW wired as {_wiring(system)} "
+            f"(modules per string, strings) is {wired_w:.0f} W of modules"
+        )
+
+    @pytest.mark.parametrize(
+        ("capacity_kw", "expected_kw"), [(4.0, 4.0), (1.1, 1.0), (0.3, 0.25)]
+    )
+    def test_counts_whole_modules_of_the_configured_rating(
+        self, capacity_kw: float, expected_kw: float
+    ) -> None:
+        config = PVConfig(
+            capacity_kw=capacity_kw,
+            custom_module_params=create_simple_module_params(module_power_w=250.0),
+        )
+
+        assert wired_dc_capacity_kw(config) == pytest.approx(expected_kw)

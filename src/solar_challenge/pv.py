@@ -470,6 +470,16 @@ def _arrays(
     ]
 
 
+def _module_rating_w(module_params: dict[str, float]) -> float:
+    """Each module's rated DC power at STC in watts, 400 W when the parameters give none."""
+    return module_params.get("STC", 400.0)
+
+
+def _module_count(config: PVConfig, module_params: dict[str, float]) -> int:
+    """The whole number of modules nearest the configured capacity, and at least one."""
+    return max(1, round(config.capacity_kw * 1000 / _module_rating_w(module_params)))
+
+
 def create_pv_system(config: PVConfig) -> PVSystem:
     """Create a pvlib PVSystem from configuration.
 
@@ -501,12 +511,27 @@ def create_pv_system(config: PVConfig) -> PVSystem:
         35.0
     """
     module_params = _module_parameters(config)
-    module_count = max(1, round(config.capacity_kw * 1000 / module_params.get("STC", 400)))
+    module_count = _module_count(config, module_params)
     inverter_params, wiring = _inverter_and_wiring(config, module_params, module_count)
     return PVSystem(
         arrays=_arrays(config, module_params, wiring),
         inverter_parameters=inverter_params,
     )
+
+
+def wired_dc_capacity_kw(config: PVConfig) -> float:
+    """The DC capacity, in kW, of the modules create_pv_system wires for config.
+
+    The system holds a whole number of modules, so this differs from
+    config.capacity_kw unless the module's rating divides it: 0.3 kW of the
+    default 400.428 W module wires one module.
+
+    Example:
+        >>> round(wired_dc_capacity_kw(PVConfig(capacity_kw=0.3)), 3)
+        0.4
+    """
+    module_params = _module_parameters(config)
+    return _module_count(config, module_params) * _module_rating_w(module_params) / 1000
 
 
 def _require_compatible_dc_and_ac_models(model_chain: ModelChain) -> None:
