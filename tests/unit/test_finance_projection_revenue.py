@@ -29,8 +29,8 @@ class TestProjectMultiYearRevenue:
     def _make_revenue_scenario(
         self,
         n_homes: int = 2,
-        self_consumption_override: Optional[float] = None,
-        seg_tariff_pence: Optional[float] = 5.0,
+        self_consumption_override: float | None = None,
+        seg_tariff_pence: float | None = 5.0,
     ) -> tuple:
         """Build scenario + finance for revenue tests."""
         from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
@@ -52,16 +52,6 @@ class TestProjectMultiYearRevenue:
         )
         return scenario, finance
 
-    def _fixed_fleet_results(
-        self,
-        n_homes: int,
-        self_kwh: float,
-        export_kwh: float,
-        import_kwh: float,
-    ) -> "FleetResults":  # type: ignore[name-defined]
-        return make_fleet_results(n_homes=n_homes, self_kwh=self_kwh,
-                                   export_kwh=export_kwh, import_kwh=import_kwh)
-
     def test_fleet_revenue_at_sampled_age_matches_householder_bill_sum(self) -> None:
         """fleet_revenue_gbp at age 0 equals CBS formula: own_use + seg (no grid-charge term).
 
@@ -78,7 +68,7 @@ class TestProjectMultiYearRevenue:
         n_homes = 2
         sc, exp, imp = 3000.0, 1500.0, 500.0
         scenario, finance = self._make_revenue_scenario(n_homes=n_homes)
-        fr = self._fixed_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
+        fr = make_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
 
         # Expected CBS revenue (PRD §3.2)
         summaries = [calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
@@ -159,7 +149,7 @@ class TestProjectMultiYearRevenue:
 
         fr = make_fleet_results(n_homes=1, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
 
-        def year_0(self_consumption_override: Optional[float]) -> "YearPoint":  # type: ignore[name-defined]
+        def year_0(self_consumption_override: float | None) -> "YearPoint":  # type: ignore[name-defined]
             scenario, finance = self._make_revenue_scenario(
                 n_homes=1, self_consumption_override=self_consumption_override
             )
