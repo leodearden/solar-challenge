@@ -15,122 +15,19 @@ import dataclasses
 
 import pytest
 
+from tests._finance_builders import (
+    make_fleet_results,
+    make_home_config,
+    make_load_config,
+    make_pv_config,
+    make_scenario_and_finance,
+    make_sim_results,
+)
+
 
 # ---------------------------------------------------------------------------
 # project_multi_year — shape + energy aggregation (step-7 / step-8)
 # ---------------------------------------------------------------------------
-
-
-def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
-    from solar_challenge.pv import PVConfig
-
-    return PVConfig(
-        capacity_kw=4.0,
-        azimuth=180.0,
-        tilt=35.0,
-        system_age_years=system_age_years,
-        degradation_rate_per_year=0.005,
-    )
-
-
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
-    from solar_challenge.load import LoadConfig
-
-    return LoadConfig(annual_consumption_kwh=3500.0)
-
-
-def _make_home_config(system_age_years: float = 0.0) -> "HomeConfig":  # type: ignore[name-defined]
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
-
-    return HomeConfig(
-        pv_config=_make_pv_config(system_age_years),
-        load_config=_make_load_config(),
-        location=Location.bristol(),
-    )
-
-
-def _make_scenario(
-    n_homes: int = 1,
-    asset_life_years: int = 5,
-    start: str = "2020-01-01",
-    end: str = "2020-12-31",
-) -> tuple:  # returns (ScenarioConfig, FinanceConfig)
-    from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
-
-    homes = [_make_home_config() for _ in range(n_homes)]
-    finance = FinanceConfig(
-        standing_charge_pence_per_day=28.0,
-        asset_life_years=asset_life_years,
-        loan_term_years=min(asset_life_years, 15),  # must be <= asset_life_years
-    )
-    scenario = ScenarioConfig(
-        name="test-scenario",
-        period=SimulationPeriod(start_date=start, end_date=end),
-        description="Unit test scenario",
-        homes=homes,
-    )
-    return scenario, finance
-
-
-def _make_sim_results(
-    self_kwh: float = 24.0,
-    export_kwh: float = 48.0,
-    import_kwh: float = 12.0,
-    discharge_kwh: float = 0.0,
-    export_revenue_gbp: float = 0.0,
-    n_steps: int = 8760,
-) -> "SimulationResults":  # type: ignore[name-defined]
-    """Constant-power SimulationResults whose totals are the kWh and £ arguments; a full year by default.
-
-    Hourly index with kW = kWh / (n_steps / 60), so calculate_summary's 1/60
-    integration returns the kWh totals, and the default 8760 steps give
-    simulation_days 365.  export_revenue_gbp is spread evenly over the steps,
-    so it is the summary's total_export_revenue_gbp, the physics SEG income.
-    """
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
-    idx = pd.date_range("2020-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / (n_steps / 60.0)
-    exp_kw = export_kwh / (n_steps / 60.0)
-    imp_kw = import_kwh / (n_steps / 60.0)
-    dis_kw = discharge_kwh / (n_steps / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw - dis_kw
-
-    zeros = pd.Series(0.0, index=idx)
-
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=pd.Series(dis_kw, index=idx),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=pd.Series(export_revenue_gbp / n_steps, index=idx),
-        tariff_rate=zeros.copy(),
-    )
-
-
-def _make_fleet_results(
-    n_homes: int = 1,
-    self_kwh: float = 24.0,
-    export_kwh: float = 48.0,
-    import_kwh: float = 12.0,
-) -> "FleetResults":  # type: ignore[name-defined]
-    from solar_challenge.fleet import FleetResults
-
-    homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [_make_sim_results(self_kwh, export_kwh, import_kwh)
-                for _ in range(n_homes)]
-    return FleetResults(
-        per_home_results=per_home,
-        home_configs=homes,
-    )
 
 
 def _make_grid_charging_sim_results(
@@ -190,8 +87,8 @@ class TestProjectMultiYearShape:
         """project_multi_year returns a MultiYearCurve."""
         from solar_challenge.finance import MultiYearCurve, project_multi_year  # type: ignore[attr-defined]
 
-        scenario, finance = _make_scenario(asset_life_years=5)
-        fr = _make_fleet_results(n_homes=1)
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        fr = make_fleet_results(n_homes=1)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         assert isinstance(curve, MultiYearCurve)
 
@@ -199,8 +96,8 @@ class TestProjectMultiYearShape:
         """len(curve.points) == finance.asset_life_years."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        scenario, finance = _make_scenario(asset_life_years=5)
-        fr = _make_fleet_results(n_homes=1)
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        fr = make_fleet_results(n_homes=1)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         assert len(curve.points) == 5
 
@@ -208,8 +105,8 @@ class TestProjectMultiYearShape:
         """points[i].year == i (ascending 0..asset_life-1)."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        scenario, finance = _make_scenario(asset_life_years=5)
-        fr = _make_fleet_results(n_homes=1)
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        fr = make_fleet_results(n_homes=1)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         for i, pt in enumerate(curve.points):
             assert pt.year == i
@@ -218,8 +115,8 @@ class TestProjectMultiYearShape:
         """sampled_ages is sorted in ascending order."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        scenario, finance = _make_scenario(asset_life_years=5)
-        fr = _make_fleet_results(n_homes=1)
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        fr = make_fleet_results(n_homes=1)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         assert list(curve.sampled_ages) == sorted(curve.sampled_ages)
 
@@ -227,8 +124,8 @@ class TestProjectMultiYearShape:
         """All sampled_ages are within [0, asset_life)."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        scenario, finance = _make_scenario(asset_life_years=5)
-        fr = _make_fleet_results(n_homes=1)
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        fr = make_fleet_results(n_homes=1)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         for age in curve.sampled_ages:
             assert 0 <= age < 5
@@ -237,8 +134,8 @@ class TestProjectMultiYearShape:
         """sampled_ages includes age 0 (seed start) and asset_life-1 (seed end)."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        scenario, finance = _make_scenario(asset_life_years=5)
-        fr = _make_fleet_results(n_homes=1)
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        fr = make_fleet_results(n_homes=1)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         assert 0 in curve.sampled_ages
         assert 4 in curve.sampled_ages  # asset_life-1
@@ -250,8 +147,8 @@ class TestProjectMultiYearShape:
 
         n_homes = 2
         sc_per_home = 1000.0
-        scenario, finance = _make_scenario(n_homes=n_homes, asset_life_years=5)
-        fr = _make_fleet_results(n_homes=n_homes, self_kwh=sc_per_home)
+        scenario, finance = make_scenario_and_finance(n_homes=n_homes, asset_life_years=5)
+        fr = make_fleet_results(n_homes=n_homes, self_kwh=sc_per_home)
 
         # Compute expected total from calculate_summary
         expected_sc = sum(
@@ -273,8 +170,8 @@ class TestProjectMultiYearShape:
 
         n_homes = 2
         exp_per_home = 500.0
-        scenario, finance = _make_scenario(n_homes=n_homes, asset_life_years=5)
-        fr = _make_fleet_results(n_homes=n_homes, export_kwh=exp_per_home)
+        scenario, finance = make_scenario_and_finance(n_homes=n_homes, asset_life_years=5)
+        fr = make_fleet_results(n_homes=n_homes, export_kwh=exp_per_home)
 
         expected_export = sum(
             calculate_summary(r).total_grid_export_kwh
@@ -291,8 +188,8 @@ class TestProjectMultiYearShape:
 
         n_homes = 2
         imp_per_home = 200.0
-        scenario, finance = _make_scenario(n_homes=n_homes, asset_life_years=5)
-        fr = _make_fleet_results(n_homes=n_homes, import_kwh=imp_per_home)
+        scenario, finance = make_scenario_and_finance(n_homes=n_homes, asset_life_years=5)
+        fr = make_fleet_results(n_homes=n_homes, import_kwh=imp_per_home)
 
         expected_import = sum(
             calculate_summary(r).total_grid_import_kwh
@@ -333,7 +230,7 @@ def _make_degrading_simulate(
         pv_factor = calculate_degradation_factor(mean_age, degradation_rate)
 
         per_home = [
-            _make_sim_results(
+            make_sim_results(
                 self_kwh=base_sc * pv_factor,
                 export_kwh=base_export * pv_factor,
                 import_kwh=base_import,
@@ -353,7 +250,7 @@ class TestProjectMultiYearSOH:
         """points.pv_soh is monotone non-increasing across years."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        scenario, finance = _make_scenario(asset_life_years=25)
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
         sim = _make_degrading_simulate()
         curve = project_multi_year(scenario, finance, simulate=sim)
         for i in range(1, len(curve.points)):
@@ -366,7 +263,7 @@ class TestProjectMultiYearSOH:
         """pv_soh at end of life is strictly less than at installation."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        scenario, finance = _make_scenario(asset_life_years=25)
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
         sim = _make_degrading_simulate(degradation_rate=0.005)
         curve = project_multi_year(scenario, finance, simulate=sim)
         assert curve.points[-1].pv_soh < curve.points[0].pv_soh
@@ -393,7 +290,7 @@ class TestProjectMultiYearSOH:
             mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
             pv_factor = calculate_degradation_factor(mean_age, 0.005)
             per_home = [
-                _make_sim_results(
+                make_sim_results(
                     self_kwh=5000.0 * pv_factor,
                     export_kwh=2000.0 * pv_factor,
                     import_kwh=1000.0,
@@ -408,8 +305,8 @@ class TestProjectMultiYearSOH:
 
         homes = [
             HomeConfig(
-                pv_config=_make_pv_config(),
-                load_config=_make_load_config(),
+                pv_config=make_pv_config(),
+                load_config=make_load_config(),
                 battery_config=bc,
                 location=Location.bristol(),
             )
@@ -449,7 +346,7 @@ class TestProjectMultiYearSOH:
             mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
             pv_factor = calculate_degradation_factor(mean_age, 0.005)
             per_home = [
-                _make_sim_results(
+                make_sim_results(
                     self_kwh=5000.0 * pv_factor,
                     export_kwh=2000.0 * pv_factor,
                     import_kwh=1000.0,
@@ -465,8 +362,8 @@ class TestProjectMultiYearSOH:
 
         homes = [
             HomeConfig(
-                pv_config=_make_pv_config(),
-                load_config=_make_load_config(),
+                pv_config=make_pv_config(),
+                load_config=make_load_config(),
                 battery_config=bc,
                 location=Location.bristol(),
             )
@@ -487,7 +384,7 @@ class TestProjectMultiYearSOH:
         from solar_challenge.pv import calculate_degradation_factor
 
         rate = 0.005
-        scenario, finance = _make_scenario(asset_life_years=25)
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
         sim = _make_degrading_simulate(degradation_rate=rate)
         curve = project_multi_year(scenario, finance, simulate=sim)
 
@@ -503,8 +400,8 @@ class TestProjectMultiYearSOH:
         """battery_soh == 1.0 for all years when the fleet has no batteries."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        scenario, finance = _make_scenario(asset_life_years=25)
-        fr = _make_fleet_results(n_homes=1)
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
+        fr = make_fleet_results(n_homes=1)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         for pt in curve.points:
             assert pt.battery_soh == pytest.approx(1.0)
@@ -536,8 +433,8 @@ def _make_battery_scenario(
     )
     homes = [
         HomeConfig(
-            pv_config=_make_pv_config(),
-            load_config=_make_load_config(),
+            pv_config=make_pv_config(),
+            load_config=make_load_config(),
             battery_config=bc,
             location=Location.bristol(),
         )
@@ -566,7 +463,7 @@ class TestCycleFadeEngagement:
             from solar_challenge.fleet import FleetResults
 
             per_home = [
-                _make_sim_results(
+                make_sim_results(
                     self_kwh=3000.0,
                     export_kwh=1000.0,
                     import_kwh=500.0,
@@ -626,8 +523,8 @@ class TestCycleFadeEngagement:
 
         homes = [
             HomeConfig(
-                pv_config=_make_pv_config(),
-                load_config=_make_load_config(),
+                pv_config=make_pv_config(),
+                load_config=make_load_config(),
                 battery_config=bc,
                 location=Location.bristol(),
             )
@@ -678,7 +575,7 @@ def _make_battery_ageing_simulate(
             pv_decay = math.exp(-0.1 * home.pv_config.system_age_years)
             discharge = discharge_kwh(home)
             per_home.append(
-                _make_sim_results(
+                make_sim_results(
                     self_kwh=3000.0 * pv_decay + discharge,
                     export_kwh=1000.0 * pv_decay,
                     import_kwh=500.0,
@@ -826,7 +723,7 @@ class TestProjectMultiYearRevenue:
         """Build scenario + finance for revenue tests."""
         from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
 
-        homes = [_make_home_config() for _ in range(n_homes)]
+        homes = [make_home_config() for _ in range(n_homes)]
         finance = FinanceConfig(
             standing_charge_pence_per_day=28.0,
             asset_life_years=25,
@@ -850,7 +747,7 @@ class TestProjectMultiYearRevenue:
         export_kwh: float,
         import_kwh: float,
     ) -> "FleetResults":  # type: ignore[name-defined]
-        return _make_fleet_results(n_homes=n_homes, self_kwh=self_kwh,
+        return make_fleet_results(n_homes=n_homes, self_kwh=self_kwh,
                                    export_kwh=export_kwh, import_kwh=import_kwh)
 
     def test_fleet_revenue_at_sampled_age_matches_householder_bill_sum(self) -> None:
@@ -905,8 +802,8 @@ class TestProjectMultiYearRevenue:
         # Battery-equipped home so max_discharge_kw is available
         bat_config = BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5)
         home_with_bat = HomeConfig(
-            pv_config=_make_pv_config(),
-            load_config=_make_load_config(),
+            pv_config=make_pv_config(),
+            load_config=make_load_config(),
             location=Location.bristol(),
             battery_config=bat_config,
         )
@@ -930,7 +827,7 @@ class TestProjectMultiYearRevenue:
 
         # Synthetic fleet results with no grid_charge_cost
         fr_bat = FleetResults(
-            per_home_results=[_make_sim_results(self_kwh=3000.0, export_kwh=500.0, import_kwh=300.0)
+            per_home_results=[make_sim_results(self_kwh=3000.0, export_kwh=500.0, import_kwh=300.0)
                                for _ in range(n_homes)],
             home_configs=homes,
         )
@@ -954,7 +851,7 @@ class TestProjectMultiYearRevenue:
         """
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
-        fr = _make_fleet_results(n_homes=1, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
+        fr = make_fleet_results(n_homes=1, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
 
         def year_0(self_consumption_override: Optional[float]) -> "YearPoint":  # type: ignore[name-defined]
             scenario, finance = self._make_revenue_scenario(
@@ -983,12 +880,12 @@ class TestProjectMultiYearRevenue:
         n_homes = 2
         fleet = FleetResults(
             per_home_results=[
-                _make_sim_results(
+                make_sim_results(
                     self_kwh=1600.0, export_kwh=2400.0, import_kwh=1200.0, export_revenue_gbp=72.0
                 )
                 for _ in range(n_homes)
             ],
-            home_configs=[_make_home_config() for _ in range(n_homes)],
+            home_configs=[make_home_config() for _ in range(n_homes)],
         )
         scenario, finance = self._make_revenue_scenario(
             n_homes=n_homes, self_consumption_override=0.90
@@ -1007,7 +904,7 @@ class TestProjectMultiYearRevenue:
 
         scenario, finance = self._make_revenue_scenario(n_homes=1)
         # every CBS revenue term is non-negative
-        fr = _make_fleet_results(n_homes=1, self_kwh=2000.0, export_kwh=800.0, import_kwh=300.0)
+        fr = make_fleet_results(n_homes=1, self_kwh=2000.0, export_kwh=800.0, import_kwh=300.0)
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         for pt in curve.points:
             assert pt.fleet_revenue_gbp >= 0.0
@@ -1029,7 +926,7 @@ class TestGridChargeEnergyPaidOnce:
 
         return FleetResults(
             per_home_results=[_make_grid_charging_sim_results() for _ in range(self.N_HOMES)],
-            home_configs=[_make_home_config() for _ in range(self.N_HOMES)],
+            home_configs=[make_home_config() for _ in range(self.N_HOMES)],
         )
 
     @staticmethod
@@ -1074,7 +971,7 @@ class TestGridChargeEnergyPaidOnce:
         """
         from solar_challenge.home import calculate_summary
 
-        _, finance = _make_scenario(n_homes=self.N_HOMES, asset_life_years=5)
+        _, finance = make_scenario_and_finance(n_homes=self.N_HOMES, asset_life_years=5)
         load_import_only_gbp = 800.0 * 30.0 / 100.0
         for result in self._fleet().per_home_results:
             summary = calculate_summary(result)
@@ -1090,7 +987,7 @@ class TestGridChargeEnergyPaidOnce:
         """
         from solar_challenge.home import calculate_summary
 
-        scenario, finance = _make_scenario(n_homes=self.N_HOMES, asset_life_years=5)
+        scenario, finance = make_scenario_and_finance(n_homes=self.N_HOMES, asset_life_years=5)
         fleet = self._fleet()
         summaries = [calculate_summary(r) for r in fleet.per_home_results]
         assert all(s.total_export_revenue_gbp == 0.0 for s in summaries), "premise: no SEG"
@@ -1113,7 +1010,7 @@ class TestGridChargeEnergyPaidOnce:
         """
         from solar_challenge.home import calculate_summary
 
-        scenario, finance = _make_scenario(n_homes=self.N_HOMES, asset_life_years=5)
+        scenario, finance = make_scenario_and_finance(n_homes=self.N_HOMES, asset_life_years=5)
         fleet = self._fleet()
         summaries = [calculate_summary(r) for r in fleet.per_home_results]
 
@@ -1313,7 +1210,7 @@ def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignor
         mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
         factor = math.exp(-curvature * mean_age)
         per_home = [
-            _make_sim_results(
+            make_sim_results(
                 self_kwh=max(0.1, BASE_SC * factor),
                 export_kwh=max(0.1, BASE_EXP * factor),
                 import_kwh=500.0,
@@ -1329,7 +1226,7 @@ def _make_adaptive_scenario(asset_life: int = 10) -> tuple:
     """Build a scenario+finance pair for adaptive refinement tests."""
     from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
 
-    homes = [_make_home_config()]
+    homes = [make_home_config()]
     finance = FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life,
@@ -1466,7 +1363,7 @@ class TestReconcileSegHomes:
         """(a) When scenario_seg_rate is None, return the homes list unchanged."""
         from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
 
-        home = _make_home_config()
+        home = make_home_config()
         result = _reconcile_seg_homes([home], scenario_seg_rate=None)
         assert result == [home]
         assert result[0] is home  # same object, no copy
@@ -1480,7 +1377,7 @@ class TestReconcileSegHomes:
         from solar_challenge.finance import _reconcile_seg_homes  # type: ignore[attr-defined]
         from solar_challenge.seg import SEGTariff
 
-        home = _make_home_config()
+        home = make_home_config()
         assert home.seg_tariff is None  # pre-condition
 
         result = _reconcile_seg_homes([home], scenario_seg_rate=6.0)
@@ -1504,7 +1401,7 @@ class TestReconcileSegHomes:
         from solar_challenge.seg import SEGTariff
 
         tariff = SEGTariff(name="export", rate_pence_per_kwh=4.0)
-        home = dataclasses.replace(_make_home_config(), seg_tariff=tariff)
+        home = dataclasses.replace(make_home_config(), seg_tariff=tariff)
         result = _reconcile_seg_homes([home], scenario_seg_rate=None)
         assert result == [home]
         assert result[0].seg_tariff is tariff
@@ -1515,7 +1412,7 @@ class TestReconcileSegHomes:
         from solar_challenge.seg import SEGTariff
 
         tariff = SEGTariff(name="", rate_pence_per_kwh=6.0)
-        home = dataclasses.replace(_make_home_config(), seg_tariff=tariff)
+        home = dataclasses.replace(make_home_config(), seg_tariff=tariff)
         # Must not raise; home is returned as-is (rates match)
         result = _reconcile_seg_homes([home], scenario_seg_rate=6.0)
         assert len(result) == 1
@@ -1527,7 +1424,7 @@ class TestReconcileSegHomes:
         from solar_challenge.seg import SEGTariff
 
         tariff = SEGTariff(name="", rate_pence_per_kwh=4.0)
-        home = dataclasses.replace(_make_home_config(), seg_tariff=tariff)
+        home = dataclasses.replace(make_home_config(), seg_tariff=tariff)
         import re
 
         with pytest.raises(ValueError, match=re.compile(r"inconsistent.*SEG", re.IGNORECASE)):
@@ -1618,7 +1515,7 @@ class TestProjectHonoursScenarioLevelSeg:
         from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
         from solar_challenge.seg import SEGTariff
 
-        homes_no_seg = [_make_home_config() for _ in range(self._N_HOMES)]
+        homes_no_seg = [make_home_config() for _ in range(self._N_HOMES)]
         homes_with_seg = [
             dataclasses.replace(h, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=self._SEG_RATE))
             for h in homes_no_seg
@@ -1771,7 +1668,7 @@ class TestProjectHonoursScenarioLevelSeg:
 
         homes_inconsistent = [
             dataclasses.replace(
-                _make_home_config(),
+                make_home_config(),
                 seg_tariff=SEGTariff(name="", rate_pence_per_kwh=4.0),
             )
             for _ in range(self._N_HOMES)
@@ -1825,8 +1722,8 @@ def _make_full_year_and_short_window_fleets() -> tuple:
     )
     homes = [
         HomeConfig(
-            pv_config=_make_pv_config(),
-            load_config=_make_load_config(),
+            pv_config=make_pv_config(),
+            load_config=make_load_config(),
             location=Location.bristol(),
             battery_config=battery_config,
         )
@@ -1848,13 +1745,13 @@ def _make_full_year_and_short_window_fleets() -> tuple:
         share_of_year = window_days / 365
         return FleetResults(
             per_home_results=[
-                _make_sim_results(
+                make_sim_results(
                     self_kwh=3000.0 * share_of_year,
                     export_kwh=1000.0 * share_of_year,
                     import_kwh=500.0 * share_of_year,
                     discharge_kwh=800.0 * share_of_year,
                     export_revenue_gbp=150.0 * share_of_year,
-                    n_steps=24 * window_days,
+                    days=window_days,
                 )
                 for _ in homes
             ],
