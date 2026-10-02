@@ -330,7 +330,7 @@ accrues at the annualised discharge simulated at the latest seed age (0,
 bisection-trial ages alike (`_throughput_at`).  `T_h` never falls and
 `compute_soh` never rises in age or throughput, so `YearPoint.battery_soh` is
 non-increasing year on year
-(`tests/unit/test_finance_projection.py::TestBatterySohCountsThroughputToEachAge`).
+(`tests/unit/test_finance_projection_ageing.py::TestBatterySohCountsThroughputToEachAge`).
 A faded battery stores less, which lowers later years' basis-C own-use and its
 revenue.
 
