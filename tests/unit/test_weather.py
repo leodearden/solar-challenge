@@ -229,6 +229,24 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
         assert second["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
 
+    @pytest.mark.parametrize(
+        "truncate",
+        [
+            pytest.param(lambda series: series.loc[:"2019"], id="year 2020 missing"),
+            pytest.param(lambda series: series.loc[:"2020-12-30"], id="last day of 2020 missing"),
+        ],
+    )
+    def test_refuses_a_series_short_of_a_climate_years_hours(
+        self, weather_cache, pvgis_hourly_series, pvgis_requests, truncate
+    ):
+        """A series lacking any hour of the climate years raises, naming the year, and leaves nothing cached."""
+        pvgis_requests.hourly.return_value = (truncate(pvgis_hourly_series), {})
+
+        with pytest.raises(RuntimeError, match="2020"):
+            get_tmy_data(Location.bristol())
+
+        assert weather_cache.get("tmy", Location.bristol()) is None
+
 
 class TestScaleTmyToAnnualGhi:
     """scale_tmy_to_annual_ghi rescales one TMY year's irradiance to a given annual GHI."""
