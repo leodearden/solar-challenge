@@ -1,6 +1,6 @@
 {# Heat pump configuration partial for the home simulation form.
    Parent x-data must expose formData with heat_pump_* fields. #}
-{% from "components/macros.html" import toggle_switch %}
+{% from "components/macros.html" import toggle_switch, range_input %}
 
 <div class="space-y-6">
     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Heat Pump Configuration</h3>
@@ -32,16 +32,7 @@
                     <span x-text="formData.heat_pump_capacity_kw"></span> kW
                 </span>
             </div>
-            <input
-                type="range"
-                id="heat_pump_capacity_kw"
-                name="heat_pump_capacity_kw"
-                min="1"
-                max="50"
-                step="0.5"
-                x-model.number="formData.heat_pump_capacity_kw"
-                class="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
-            >
+            {{ range_input(id='heat_pump_capacity_kw', name='heat_pump_capacity_kw', model='formData.heat_pump_capacity_kw', min=1, max=50, step=0.5) }}
             <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
                 <span>1 kW</span>
                 <span>50 kW</span>

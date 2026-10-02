@@ -85,3 +85,18 @@
     <div id="{{ id }}" class="w-full" style="min-height: {{ height }};"></div>
 </div>
 {% endmacro %}
+
+
+{# Range slider bound to the Alpine expression model; its thumb takes the theme's primary colour #}
+{% macro range_input(id, model, min, max, step, name='', width_class='w-full') %}
+<input
+    type="range"
+    id="{{ id }}"
+    {% if name %}name="{{ name }}"{% endif %}
+    min="{{ min }}"
+    max="{{ max }}"
+    step="{{ step }}"
+    x-model.number="{{ model }}"
+    class="{{ width_class }} h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-primary-500 [&::-webkit-slider-thumb]:bg-primary-500 dark:[&::-webkit-slider-thumb]:bg-primary-400 [&::-moz-range-thumb]:bg-primary-500 dark:[&::-moz-range-thumb]:bg-primary-400"
+>
+{% endmacro %}

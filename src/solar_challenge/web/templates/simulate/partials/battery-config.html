@@ -1,7 +1,7 @@
 {# Battery configuration partial for the home simulation form.
    Uses Alpine.js for enable/disable toggle and reactive slider values.
    Expected parent x-data must include formData object with battery fields. #}
-{% from "components/macros.html" import toggle_switch %}
+{% from "components/macros.html" import toggle_switch, range_input %}
 
 <div class="space-y-6">
     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Battery Storage Configuration</h3>
@@ -19,16 +19,7 @@
                     <span x-text="formData.battery_kwh"></span> kWh
                 </span>
             </div>
-            <input
-                type="range"
-                id="battery_kwh"
-                name="battery_kwh"
-                min="1"
-                max="20"
-                step="0.5"
-                x-model="formData.battery_kwh"
-                class="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
-            >
+            {{ range_input(id='battery_kwh', name='battery_kwh', model='formData.battery_kwh', min=1, max=20, step=0.5) }}
             <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
                 <span>1 kWh</span>
                 <span>20 kWh</span>
@@ -43,16 +34,7 @@
                     <span x-text="formData.max_charge_kw"></span> kW
                 </span>
             </div>
-            <input
-                type="range"
-                id="max_charge_kw"
-                name="max_charge_kw"
-                min="0.5"
-                max="10"
-                step="0.1"
-                x-model="formData.max_charge_kw"
-                class="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
-            >
+            {{ range_input(id='max_charge_kw', name='max_charge_kw', model='formData.max_charge_kw', min=0.5, max=10, step=0.1) }}
             <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
                 <span>0.5 kW</span>
                 <span>10 kW</span>
@@ -67,16 +49,7 @@
                     <span x-text="formData.max_discharge_kw"></span> kW
                 </span>
             </div>
-            <input
-                type="range"
-                id="max_discharge_kw"
-                name="max_discharge_kw"
-                min="0.5"
-                max="10"
-                step="0.1"
-                x-model="formData.max_discharge_kw"
-                class="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
-            >
+            {{ range_input(id='max_discharge_kw', name='max_discharge_kw', model='formData.max_discharge_kw', min=0.5, max=10, step=0.1) }}
             <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
                 <span>0.5 kW</span>
                 <span>10 kW</span>
