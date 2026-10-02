@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 from pathlib import Path
 
+from tests._uv_env import isolated_uv_env
+
 # Out of every default collection, even with `-o addopts=`; the offline lane runs it by explicit path.
 collect_ignore = ["interpreter_matrix"]
 
@@ -33,6 +35,19 @@ def callers_uv_lock_mode_is_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
     shell has: inherited, UV_FROZEN makes that command's `uv run --locked` an error.
     """
     monkeypatch.setenv("UV_FROZEN", "1")
+
+
+@pytest.fixture
+def uv_probe_environment(tmp_path: Path) -> dict[str, str]:
+    """Return an isolated_uv_env whose uv project environment is the probe's own, fresh under *tmp_path*.
+
+    No probe may touch an environment another run uses: inside the interpreter
+    matrix, UV_PROJECT_ENVIRONMENT names that case's own venv. The offline lane,
+    too, runs each job in a fresh one, as it cleans its worktree before every
+    run; and like the verify, it takes its environment from the orchestrator,
+    not from the shell running these tests.
+    """
+    return isolated_uv_env(tmp_path / "venv")
 
 
 def _live_job_managers() -> frozenset[Any]:

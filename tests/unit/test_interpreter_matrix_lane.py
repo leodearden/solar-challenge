@@ -21,7 +21,6 @@ from tests._orchestrator_config import (
     lane_job_enabled,
     sole_offline_lane_job,
 )
-from tests._uv_env import isolated_uv_env
 
 _MATRIX_JOB = "interpreter-matrix"
 
@@ -56,20 +55,17 @@ def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Pa
 @requires_uv
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(
-    project_root: Path, tmp_path: Path
+    project_root: Path, uv_probe_environment: dict[str, str]
 ) -> None:
     """Run as the lane runs it, the interpreter-matrix job collects one case per off-pin admitted minor.
 
     Each case's node-id must name its interpreter: that node-id is the only
     attribution a fix task filed by the lane carries.
-
-    The job syncs a fresh uv environment, as in the lane's worktree, which is
-    cleaned before every run.
     """
     job = sole_offline_lane_job(project_root, _MATRIX_JOB)
     command = job["command"]
 
-    result = run_collect_only(command, lane_job_directory(project_root, job), env=isolated_uv_env(tmp_path / "venv"))
+    result = run_collect_only(command, lane_job_directory(project_root, job), env=uv_probe_environment)
 
     assert result.returncode == pytest.ExitCode.OK, (
         f"the {_MATRIX_JOB!r} lane job {command!r} failed to collect\n{describe_outcome(result)}"

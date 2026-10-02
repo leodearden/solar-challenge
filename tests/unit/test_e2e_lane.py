@@ -13,7 +13,6 @@ import pytest
 
 from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
 from tests._orchestrator_config import lane_job_directory, lane_job_enabled, sole_offline_lane_job
-from tests._uv_env import isolated_uv_env
 
 _E2E_JOB = "e2e"
 
@@ -29,20 +28,21 @@ def test_offline_lane_runs_one_enabled_e2e_job(project_root: Path) -> None:
 
 @requires_uv
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
-def test_e2e_job_collects_the_e2e_suite_and_nothing_else(project_root: Path, tmp_path: Path) -> None:
+def test_e2e_job_collects_the_e2e_suite_and_nothing_else(
+    project_root: Path, uv_probe_environment: dict[str, str]
+) -> None:
     """Run as the lane runs it, the e2e job collects at least one test, every one under tests/e2e/.
 
     The repo's pytest addopts stay in force, as they do in the lane, so this also
     pins that the job's explicit tests/e2e path overrides their --ignore=tests/e2e.
 
-    The job syncs a fresh uv environment, as in the lane's worktree, which is
-    cleaned before every run: it holds only the extras the job names, and the
-    job's sync never touches the environment running this suite.
+    The job's uv environment is fresh, as the lane's is, so it holds only the
+    extras the job names.
     """
     job = sole_offline_lane_job(project_root, _E2E_JOB)
     command = job["command"]
 
-    result = run_collect_only(command, lane_job_directory(project_root, job), env=isolated_uv_env(tmp_path / "venv"))
+    result = run_collect_only(command, lane_job_directory(project_root, job), env=uv_probe_environment)
 
     assert result.returncode == pytest.ExitCode.OK, (
         f"the {_E2E_JOB!r} lane job {command!r} failed to collect\n{describe_outcome(result)}"
