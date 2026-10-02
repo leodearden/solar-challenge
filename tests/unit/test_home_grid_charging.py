@@ -19,7 +19,7 @@ def night_weather_data() -> pd.DataFrame:
 
     All irradiance (GHI/DNI/DHI) is zero so PV generation is ~0.
     Any battery_charge > 0 is unambiguously from grid charging, not excess PV.
-    Covers all 24 hours so _align_tmy_to_demand maps every simulation minute to a valid row.
+    Covers all 24 hours so align_tmy_to_index maps every simulation minute to a valid row.
     Avoids a PVGIS network call.
     """
     index = pd.date_range(

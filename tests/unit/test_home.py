@@ -21,7 +21,7 @@ from solar_challenge.tariff import TariffConfig, TariffPeriod
 def june21_weather_data() -> pd.DataFrame:
     """Synthetic June 21 hourly weather data for Bristol.
 
-    Covers all 24 hours so _align_tmy_to_demand maps every simulation
+    Covers all 24 hours so align_tmy_to_index maps every simulation
     minute to a valid weather value.  Using synthetic data avoids a
     PVGIS network call / disk cache in SEG pricing tests whose assertions
     concern revenue arithmetic rather than PV output magnitude.

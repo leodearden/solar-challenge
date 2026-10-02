@@ -48,7 +48,7 @@ def _synth_weather(day: str = "2024-06-21", tz: str = "Europe/London") -> pd.Dat
     """Build a 1-day hourly weather DataFrame with a smooth midday solar bump.
 
     Mirrors the shape of tests/unit/test_pv.py's sample_weather_data fixture
-    but covers all 24 hours so _align_tmy_to_demand maps correctly for any
+    but covers all 24 hours so align_tmy_to_index maps correctly for any
     sim window on the same day.
     """
     index = pd.date_range(day, periods=24, freq="h", tz=tz)

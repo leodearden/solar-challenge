@@ -242,3 +242,46 @@ def get_tmy_data(
 
     except Exception as e:
         raise RuntimeError(f"Failed to retrieve TMY data from PVGIS: {e}") from e
+
+
+def align_tmy_to_index(tmy: pd.Series, index: pd.DatetimeIndex) -> pd.Series:
+    """Map a TMY series onto index by UTC time of year.
+
+    Each timestamp of index takes the TMY value from the same UTC month, day,
+    hour and minute, so a TMY hour lands on the same instant whatever the
+    index's timezone or DST state; pvlib places the sun at the TMY's UTC
+    instants. A naive index on either side is read as UTC, following pvlib's
+    convention. A timestamp on a UTC 29 February with no TMY match takes the
+    TMY value at the same UTC time on 28 February, so against a non-leap TMY
+    year a leap year's extra day repeats the day before it, while a TMY with
+    part of 29 February keeps that part. Any other timestamp with no match
+    maps to 0.0. Where the TMY repeats a UTC time of year, the later value
+    wins. The result carries index and the TMY series' name.
+    """
+    lookup = tmy.set_axis(_utc_time_of_year_keys(tmy.index))
+    lookup = lookup[~lookup.index.duplicated(keep="last")]
+    aligned = lookup.reindex(_tmy_keys_to_read(index, lookup.index), fill_value=0.0)
+    return pd.Series(aligned.to_numpy(), index=index, name=tmy.name)
+
+
+def _tmy_keys_to_read(index: pd.DatetimeIndex, tmy_keys: pd.Index) -> pd.Index:
+    """The UTC time-of-year key each timestamp of index reads from the TMY.
+
+    That is its own key, unless the timestamp is on a UTC 29 February and the TMY lacks that key;
+    then it is the key of the same UTC time on 28 February.
+    """
+    utc = _in_utc(index)
+    own_keys = _utc_time_of_year_keys(utc)
+    reads_28_february = (utc.month == 2) & (utc.day == 29) & ~own_keys.isin(tmy_keys)
+    return own_keys.where(~reads_28_february, _utc_time_of_year_keys(utc - pd.Timedelta(days=1)))
+
+
+def _utc_time_of_year_keys(index: pd.DatetimeIndex) -> pd.Index:
+    """Each timestamp's UTC month, day, hour and minute packed as MMDDhhmm; a naive index is read as UTC."""
+    utc = _in_utc(index)
+    return ((utc.month * 100 + utc.day) * 100 + utc.hour) * 100 + utc.minute
+
+
+def _in_utc(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """The index in UTC; a naive index is read as UTC."""
+    return index if index.tz is None else index.tz_convert("UTC")

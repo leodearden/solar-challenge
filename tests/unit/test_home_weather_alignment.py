@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for aligning TMY weather to the simulated demand by UTC instant."""
+"""Tests for mapping TMY weather onto the simulated minutes by UTC time of year.
+
+weather.align_tmy_to_index is the rule itself; simulate_home applies it to PV output
+and to the heat pump's air temperature.
+"""
 
 import time
 
@@ -7,10 +11,11 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.heat_pump import HeatPumpConfig
-from solar_challenge.home import HomeConfig, _align_tmy_to_demand, simulate_home
+from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.weather import align_tmy_to_index
 
 
 @pytest.fixture
@@ -23,16 +28,16 @@ def tmy_minute_year() -> pd.Series:
     return pd.Series(np.arange(1, len(index) + 1, dtype=float), index=index)
 
 
-def _london_minute_demand(first: str, last: str) -> pd.Series:
-    return pd.Series(1.0, index=pd.date_range(first, last, freq="1min", tz="Europe/London"))
+def _london_minutes(first: str, last: str) -> pd.DatetimeIndex:
+    return pd.date_range(first, last, freq="1min", tz="Europe/London")
 
 
-def _expected_alignment(demand: pd.Series, *value_runs: pd.Series | np.ndarray) -> pd.Series:
-    """The aligned series of value_runs, in order, on the demand's index; unnamed, like the TMY series aligned here."""
-    return pd.Series(np.concatenate(value_runs), index=demand.index)
+def _expected_alignment(index: pd.DatetimeIndex, *value_runs: pd.Series | np.ndarray) -> pd.Series:
+    """The aligned series of value_runs, in order, on index; unnamed, like the TMY series aligned here."""
+    return pd.Series(np.concatenate(value_runs), index=index)
 
 
-class TestAlignTMYToDemand:
+class TestAlignTMYToIndex:
     """Test TMY data alignment."""
 
     def test_aligns_by_time_of_year(self):
@@ -41,11 +46,10 @@ class TestAlignTMYToDemand:
         tmy_index = pd.date_range("2024-06-21 10:00", periods=60, freq="1min")
         tmy_gen = pd.Series(range(60), index=tmy_index, dtype=float)
 
-        # Demand for same time in a different year
-        demand_index = pd.date_range("2025-06-21 10:00", periods=60, freq="1min")
-        demand = pd.Series([1.0] * 60, index=demand_index)
+        # The same time in a different year
+        minutes = pd.date_range("2025-06-21 10:00", periods=60, freq="1min")
 
-        aligned = _align_tmy_to_demand(tmy_gen, demand)
+        aligned = align_tmy_to_index(tmy_gen, minutes)
 
         assert len(aligned) == 60
         # Values should be preserved from TMY
@@ -58,32 +62,30 @@ class TestAlignTMYToDemand:
         tmy_index = pd.date_range("2024-06-21 12:00", periods=1, freq="1min")
         tmy_gen = pd.Series([5.0], index=tmy_index)
 
-        # Demand for earlier time
-        demand_index = pd.date_range("2025-06-21 10:00", periods=60, freq="1min")
-        demand = pd.Series([1.0] * 60, index=demand_index)
+        # An earlier time
+        minutes = pd.date_range("2025-06-21 10:00", periods=60, freq="1min")
 
-        aligned = _align_tmy_to_demand(tmy_gen, demand)
+        aligned = align_tmy_to_index(tmy_gen, minutes)
 
         # Most values should be zero since TMY data doesn't cover this time
         assert aligned.iloc[0] == 0.0
 
     @pytest.mark.parametrize(
-        "demand_tz",
+        "minutes_tz",
         [
             pytest.param("Europe/London", id="london"),
             pytest.param("Asia/Tokyo", id="tokyo-local-days-straddle-utc-days"),
         ],
     )
     def test_29_february_the_tmy_lacks_reads_its_28_february_at_the_same_utc_time(
-        self, tmy_minute_year, demand_tz
+        self, tmy_minute_year, minutes_tz
     ):
-        utc_minutes = pd.date_range("2024-02-28 00:00", "2024-03-01 23:59", freq="1min", tz="UTC")
-        demand = pd.Series(1.0, index=utc_minutes.tz_convert(demand_tz))
+        minutes = pd.date_range("2024-02-28 00:00", "2024-03-01 23:59", freq="1min", tz="UTC").tz_convert(minutes_tz)
 
-        aligned = _align_tmy_to_demand(tmy_minute_year, demand)
+        aligned = align_tmy_to_index(tmy_minute_year, minutes)
 
         expected = _expected_alignment(
-            demand,
+            minutes,
             tmy_minute_year.loc["1990-02-28"],
             tmy_minute_year.loc["1990-02-28"],
             tmy_minute_year.loc["1990-03-01"],
@@ -95,20 +97,20 @@ class TestAlignTMYToDemand:
             np.arange(1, 4321, dtype=float),
             index=pd.date_range("1992-02-28", periods=4320, freq="1min", tz="UTC"),
         )
-        demand = _london_minute_demand("2024-02-28 00:00", "2024-03-01 23:59")
+        minutes = _london_minutes("2024-02-28 00:00", "2024-03-01 23:59")
 
-        aligned = _align_tmy_to_demand(leap_year_tmy, demand)
+        aligned = align_tmy_to_index(leap_year_tmy, minutes)
 
-        pd.testing.assert_series_equal(aligned, _expected_alignment(demand, leap_year_tmy), check_exact=True)
+        pd.testing.assert_series_equal(aligned, _expected_alignment(minutes, leap_year_tmy), check_exact=True)
 
     def test_tmy_with_part_of_29_february_keeps_that_part_and_the_rest_reads_28_february(self, tmy_minute_year):
         own_29_february_noon = pd.Series([0.5], index=pd.DatetimeIndex(["1992-02-29 12:00"], tz="UTC"))
-        demand = _london_minute_demand("2024-02-29 00:00", "2024-02-29 23:59")
+        minutes = _london_minutes("2024-02-29 00:00", "2024-02-29 23:59")
 
-        aligned = _align_tmy_to_demand(pd.concat([tmy_minute_year, own_29_february_noon]), demand)
+        aligned = align_tmy_to_index(pd.concat([tmy_minute_year, own_29_february_noon]), minutes)
 
         expected = _expected_alignment(
-            demand,
+            minutes,
             tmy_minute_year.loc["1990-02-28 00:00":"1990-02-28 11:59"],
             own_29_february_noon,
             tmy_minute_year.loc["1990-02-28 12:01":"1990-02-28 23:59"],
@@ -117,78 +119,78 @@ class TestAlignTMYToDemand:
 
     def test_29_february_whose_28_february_is_missing_too_maps_to_zero(self, tmy_minute_year):
         march_only = tmy_minute_year.loc["1990-03-01"]
-        demand = _london_minute_demand("2024-02-29 00:00", "2024-03-01 23:59")
+        minutes = _london_minutes("2024-02-29 00:00", "2024-03-01 23:59")
 
-        aligned = _align_tmy_to_demand(march_only, demand)
+        aligned = align_tmy_to_index(march_only, minutes)
 
-        expected = _expected_alignment(demand, np.zeros(1440), march_only)
+        expected = _expected_alignment(minutes, np.zeros(1440), march_only)
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
 
     def test_spring_forward_day_matches_tmy_by_utc_instant(self, tmy_minute_year):
-        demand = _london_minute_demand("2024-03-31 00:00", "2024-03-31 23:59")
-        assert len(demand) == 1380
+        minutes = _london_minutes("2024-03-31 00:00", "2024-03-31 23:59")
+        assert len(minutes) == 1380
 
-        aligned = _align_tmy_to_demand(tmy_minute_year, demand)
+        aligned = align_tmy_to_index(tmy_minute_year, minutes)
 
         expected = _expected_alignment(
-            demand,
+            minutes,
             tmy_minute_year.loc["1990-03-31 00:00":"1990-03-31 22:59"],
         )
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
 
     def test_fall_back_day_repeated_local_hour_takes_consecutive_utc_hours(self, tmy_minute_year):
-        demand = _london_minute_demand("2024-10-27 00:00", "2024-10-27 23:59")
-        assert len(demand) == 1500
+        minutes = _london_minutes("2024-10-27 00:00", "2024-10-27 23:59")
+        assert len(minutes) == 1500
 
-        aligned = _align_tmy_to_demand(tmy_minute_year, demand)
+        aligned = align_tmy_to_index(tmy_minute_year, minutes)
 
         expected = _expected_alignment(
-            demand,
+            minutes,
             tmy_minute_year.loc["1990-10-26 23:00":"1990-10-27 23:59"],
         )
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
 
     def test_bst_day_matches_tmy_by_utc_instant(self, tmy_minute_year):
-        demand = _london_minute_demand("2024-06-21 00:00", "2024-06-21 23:59")
+        minutes = _london_minutes("2024-06-21 00:00", "2024-06-21 23:59")
 
-        aligned = _align_tmy_to_demand(tmy_minute_year, demand)
+        aligned = align_tmy_to_index(tmy_minute_year, minutes)
 
         expected = _expected_alignment(
-            demand,
+            minutes,
             tmy_minute_year.loc["1990-06-20 23:00":"1990-06-21 22:59"],
         )
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
 
     def test_naive_tmy_is_read_as_utc(self, tmy_minute_year):
-        demand = _london_minute_demand("2024-06-21 00:00", "2024-06-21 23:59")
+        minutes = _london_minutes("2024-06-21 00:00", "2024-06-21 23:59")
 
-        aligned = _align_tmy_to_demand(tmy_minute_year.tz_localize(None), demand)
+        aligned = align_tmy_to_index(tmy_minute_year.tz_localize(None), minutes)
 
         expected = _expected_alignment(
-            demand,
+            minutes,
             tmy_minute_year.loc["1990-06-20 23:00":"1990-06-21 22:59"],
         )
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
 
-    def test_tmy_in_the_demands_timezone_aligns_minute_for_minute(self):
+    def test_tmy_in_the_same_timezone_as_the_index_aligns_minute_for_minute(self):
         tmy = pd.Series(
             np.arange(1, 1441, dtype=float),
             index=pd.date_range("1990-06-21", periods=1440, freq="1min", tz="Europe/London"),
         )
-        demand = _london_minute_demand("2024-06-21 00:00", "2024-06-21 23:59")
+        minutes = _london_minutes("2024-06-21 00:00", "2024-06-21 23:59")
 
-        aligned = _align_tmy_to_demand(tmy, demand)
+        aligned = align_tmy_to_index(tmy, minutes)
 
-        expected = _expected_alignment(demand, np.arange(1, 1441, dtype=float))
+        expected = _expected_alignment(minutes, np.arange(1, 1441, dtype=float))
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
 
     def test_range_crossing_year_end_wraps_to_start_of_tmy_year(self, tmy_minute_year):
-        demand = _london_minute_demand("2024-12-31 00:00", "2025-01-01 23:59")
+        minutes = _london_minutes("2024-12-31 00:00", "2025-01-01 23:59")
 
-        aligned = _align_tmy_to_demand(tmy_minute_year, demand)
+        aligned = align_tmy_to_index(tmy_minute_year, minutes)
 
         expected = _expected_alignment(
-            demand,
+            minutes,
             tmy_minute_year.loc["1990-12-31"],
             tmy_minute_year.loc["1990-01-01"],
         )
@@ -203,44 +205,44 @@ class TestAlignTMYToDemand:
             np.arange(10_001, 11_441, dtype=float),
             index=pd.date_range("1991-06-21", periods=1440, freq="1min"),
         )
-        demand = pd.Series(1.0, index=pd.date_range("2024-06-21", periods=1440, freq="1min"))
+        minutes = pd.date_range("2024-06-21", periods=1440, freq="1min")
 
-        aligned = _align_tmy_to_demand(pd.concat([earlier, later]), demand)
+        aligned = align_tmy_to_index(pd.concat([earlier, later]), minutes)
 
-        pd.testing.assert_series_equal(aligned, _expected_alignment(demand, later), check_exact=True)
+        pd.testing.assert_series_equal(aligned, _expected_alignment(minutes, later), check_exact=True)
 
     def test_nan_in_tmy_is_kept_and_only_unmatched_minutes_map_to_zero(self):
         tmy = pd.Series([np.nan], index=pd.to_datetime(["1990-06-21 12:00"]))
-        demand = pd.Series(1.0, index=pd.date_range("2024-06-21 12:00", periods=2, freq="1min"))
+        minutes = pd.date_range("2024-06-21 12:00", periods=2, freq="1min")
 
-        aligned = _align_tmy_to_demand(tmy, demand)
+        aligned = align_tmy_to_index(tmy, minutes)
 
-        expected = _expected_alignment(demand, np.array([np.nan, 0.0]))
+        expected = _expected_alignment(minutes, np.array([np.nan, 0.0]))
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
 
     def test_repeated_tmy_time_of_year_keeps_a_later_nan(self):
         tmy = pd.Series([5.0, np.nan], index=pd.to_datetime(["1990-06-21 12:00", "1991-06-21 12:00"]))
-        demand = pd.Series(1.0, index=pd.to_datetime(["2024-06-21 12:00"]))
+        minutes = pd.to_datetime(["2024-06-21 12:00"])
 
-        aligned = _align_tmy_to_demand(tmy, demand)
+        aligned = align_tmy_to_index(tmy, minutes)
 
-        expected = _expected_alignment(demand, np.array([np.nan]))
+        expected = _expected_alignment(minutes, np.array([np.nan]))
         pd.testing.assert_series_equal(aligned, expected, check_exact=True)
 
-    def test_result_takes_the_tmy_series_name_not_the_demands(self):
+    def test_result_takes_the_tmy_series_name(self):
         tmy = pd.Series([7.0], index=pd.to_datetime(["1990-06-21 12:00"]), name="temp_air")
-        demand = pd.Series(1.0, index=pd.to_datetime(["2024-06-21 12:00"]), name="demand_kw")
+        minutes = pd.to_datetime(["2024-06-21 12:00"])
 
-        aligned = _align_tmy_to_demand(tmy, demand)
+        aligned = align_tmy_to_index(tmy, minutes)
 
         assert aligned.name == "temp_air"
 
     def test_full_year_minute_tmy_aligns_within_cpu_budget(self, tmy_minute_year):
-        demand = _london_minute_demand("2024-06-01 00:00", "2024-06-01 23:59")
+        minutes = _london_minutes("2024-06-01 00:00", "2024-06-01 23:59")
         budget_cpu_seconds = 1.0
 
         started = time.thread_time()
-        _align_tmy_to_demand(tmy_minute_year, demand)
+        align_tmy_to_index(tmy_minute_year, minutes)
         cpu_seconds = time.thread_time() - started
 
         assert cpu_seconds < budget_cpu_seconds, (
