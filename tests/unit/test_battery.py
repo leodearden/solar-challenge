@@ -935,6 +935,31 @@ class TestComputeSOH:
         assert result == pytest.approx(max(params.soh_floor, min(1.0, expected)))
 
 
+class TestBatteryConfigNominalUsableCapacity:
+    """nominal_usable_capacity_kwh is the capacity between the SOC limits, before SOH de-rating."""
+
+    @pytest.mark.parametrize(
+        ("config", "expected_kwh"),
+        [
+            pytest.param(BatteryConfig(capacity_kwh=5.0), 4.0, id="default-soc-limits"),
+            pytest.param(
+                BatteryConfig(capacity_kwh=10.0, min_soc_fraction=0.2, max_soc_fraction=0.7),
+                5.0,
+                id="asymmetric-soc-limits",
+            ),
+            pytest.param(
+                BatteryConfig(capacity_kwh=10.0, system_age_years=10.0, soh=0.7),
+                8.0,
+                id="aged-with-soh-override",
+            ),
+        ],
+    )
+    def test_is_capacity_between_soc_limits_before_soh_derating(
+        self, config: BatteryConfig, expected_kwh: float
+    ) -> None:
+        assert config.nominal_usable_capacity_kwh == pytest.approx(expected_kwh)
+
+
 class TestBatterySOHDerating:
     """Battery de-rates usable capacity by SOH."""
 
