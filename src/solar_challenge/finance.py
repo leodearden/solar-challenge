@@ -1562,7 +1562,6 @@ def project_multi_year(
         cum_tp: list[float],
     ) -> _NodeData:
         """Simulate the fleet at a given age, compute SOH, and return aggregates."""
-        from solar_challenge.battery import compute_soh
         from solar_challenge.fleet import FleetConfig
         from solar_challenge.home import calculate_summary
         from solar_challenge.pv import calculate_degradation_factor
@@ -1627,19 +1626,8 @@ def project_multi_year(
         ]
         mean_pv_soh = sum(pv_sohs) / len(pv_sohs) if pv_sohs else 1.0
 
-        # Battery SOH: mean of per-home compute_soh (1.0 if no batteries)
-        battery_sohs: list[float] = []
-        for i, home in enumerate(homes):
-            bc = home.battery_config
-            if bc is not None:
-                usable = bc.capacity_kwh * (bc.max_soc_fraction - bc.min_soc_fraction)
-                soh_i = compute_soh(
-                    system_age_years=float(age),
-                    cumulative_throughput_kwh=cum_tp[i],
-                    usable_capacity_kwh=usable,
-                    params=bc,
-                )
-                battery_sohs.append(soh_i)
+        # Battery SOH: mean of the SOH _aged_homes gave each simulated battery (1.0 if no batteries)
+        battery_sohs: list[float] = [h.battery_config.soh for h in aged if h.battery_config is not None]
         mean_battery_soh = sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0
 
         return _NodeData(
