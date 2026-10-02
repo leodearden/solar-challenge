@@ -1,9 +1,10 @@
 """End-to-end tests for the Parameter Sweep page (/scenarios/sweep).
 
 Verifies page loading, that each form control is found by role and by the name
-its label gives it, preview calculations, that submitting a sweep filled into
-the form returns one background job per sweep point, and detects Bug B1
-(Alpine race condition with external JS).
+its label gives it, preview calculations (the preview lists its values in the
+list named "Sweep values"), that submitting a sweep filled into the form
+returns one background job per sweep point, and detects Bug B1 (Alpine race
+condition with external JS).
 """
 
 import pytest
@@ -85,7 +86,7 @@ def test_sweep_form_control_is_named_by_its_label(
 
 
 def test_sweep_preview_updates(page: Page, live_server: str) -> None:
-    """Filling in min=1, max=10, steps=5 previews the five linear sweep values from 1 to 10."""
+    """Filling in min=1, max=10, steps=5 previews the five linear sweep values from 1 to 10, listed in the list named "Sweep values"."""
     page.goto(live_server + "/scenarios/sweep")
 
     page.get_by_label("Min Value", exact=True).fill("1")
@@ -93,7 +94,8 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
     page.get_by_label("Steps", exact=True).fill("5")
 
     expect(page.get_by_text("5 values will be tested", exact=True)).to_be_visible()
-    expect(page.locator(".flex.flex-wrap.gap-2 span.rounded-full")).to_have_text(
+    sweep_values = page.get_by_role("list", name="Sweep values", exact=True)
+    expect(sweep_values.get_by_role("listitem")).to_have_text(
         ["1", "3.25", "5.5", "7.75", "10"]
     )
 
