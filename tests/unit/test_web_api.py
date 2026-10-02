@@ -833,6 +833,33 @@ class TestSimulateSweep:
         assert resp.status_code == 400
         assert "Invalid numeric" in resp.get_json()["error"]
 
+    @pytest.mark.parametrize(
+        ("base_config", "type_name"),
+        [
+            pytest.param("abc", "str", id="string"),
+            pytest.param("", "str", id="empty-string"),
+            pytest.param(5, "int", id="number"),
+            pytest.param([1], "list", id="array"),
+            pytest.param([], "list", id="empty-array"),
+            pytest.param(True, "bool", id="boolean"),
+            pytest.param(None, "NoneType", id="null"),
+            pytest.param([["battery_kwh", 5.0]], "list", id="array-of-key-value-pairs"),
+        ],
+    )
+    def test_base_config_that_is_not_a_json_object_returns_400_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, base_config: object, type_name: str
+    ) -> None:
+        """A base_config that is not a JSON object is refused naming base_config and its type, and no sweep point is submitted."""
+        resp = client.post(
+            "/api/simulate/sweep",
+            json={"min": 1.0, "max": 5.0, "steps": 2, "base_config": base_config},
+        )
+        assert resp.status_code == 400
+        error = resp.get_json()["error"]
+        assert "base_config" in error
+        assert type_name in error
+        mock_job_manager.submit_home_job.assert_not_called()
+
     def test_sweep_default_parameter_name(self, client: FlaskClient) -> None:
         """Default parameter name is pv_capacity_kw."""
         resp = client.post(
