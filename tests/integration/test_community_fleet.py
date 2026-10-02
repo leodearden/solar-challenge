@@ -297,10 +297,8 @@ class TestFleetRunCommunityCLI:
     (monkeypatches don't propagate across processes).
     """
 
-    def test_community_run_exits_zero(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_community_run_exits_zero(self, tmp_path: Path) -> None:
         """fleet run with community block: exit code 0."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         tmp_report = tmp_path / "community_report.md"
         result = runner.invoke(
             app,
@@ -314,12 +312,8 @@ class TestFleetRunCommunityCLI:
         )
         assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}:\n{result.output}"
 
-    def test_community_run_stdout_contains_community_section(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_community_run_stdout_contains_community_section(self, tmp_path: Path) -> None:
         """fleet run output includes a community section."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         tmp_report = tmp_path / "community_report.md"
         result = runner.invoke(
             app,
@@ -334,12 +328,8 @@ class TestFleetRunCommunityCLI:
         assert result.exit_code == 0
         assert "Community" in result.output
 
-    def test_community_report_file_written(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_community_report_file_written(self, tmp_path: Path) -> None:
         """fleet run writes --community-report file with correct headings."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         tmp_report = tmp_path / "community_report.md"
         result = runner.invoke(
             app,
@@ -359,12 +349,8 @@ class TestFleetRunCommunityCLI:
         assert "Grid Export" in report_text
         assert "Self-Sufficiency" in report_text
 
-    def test_community_report_netting_reduces_import(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_community_report_netting_reduces_import(self, tmp_path: Path) -> None:
         """Community Grid Import < Unshared Grid Import (netting reduces import)."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         tmp_report = tmp_path / "community_report.md"
         result = runner.invoke(
             app,
@@ -434,12 +420,8 @@ homes:
         path.write_text(content)
         return path
 
-    def test_no_community_block_exits_zero(
-        self, monkeypatch: pytest.MonkeyPatch, plain_scenario: Path
-    ) -> None:
+    def test_no_community_block_exits_zero(self, plain_scenario: Path) -> None:
         """fleet run on plain config: exit code 0."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         result = runner.invoke(
             app,
             ["fleet", "run", str(plain_scenario), "--sequential",
@@ -447,12 +429,8 @@ homes:
         )
         assert result.exit_code == 0, result.output
 
-    def test_no_community_section_in_stdout(
-        self, monkeypatch: pytest.MonkeyPatch, plain_scenario: Path
-    ) -> None:
+    def test_no_community_section_in_stdout(self, plain_scenario: Path) -> None:
         """fleet run on plain config does NOT print a community section."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         result = runner.invoke(
             app,
             ["fleet", "run", str(plain_scenario), "--sequential",
@@ -462,13 +440,8 @@ homes:
         # "Community Sharing" is the rich Table title; should be absent
         assert "Community Sharing" not in result.output
 
-    def test_fleet_summary_additive_only(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_fleet_summary_additive_only(self, tmp_path: Path) -> None:
         """Fleet summary lines are the same with and without a community block."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
-
         # Build a minimal homes list (same for both runs)
         homes_yaml = """
 homes:
@@ -525,11 +498,9 @@ community:
         )
 
     def test_report_without_block_warns_and_skips(
-        self, monkeypatch: pytest.MonkeyPatch, plain_scenario: Path, tmp_path: Path
+        self, plain_scenario: Path, tmp_path: Path
     ) -> None:
         """--community-report with no community: block warns and does NOT write file."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         report_path = tmp_path / "should_not_exist.md"
         result = runner.invoke(
             app,
@@ -817,14 +788,8 @@ class TestFleetRunCommunityBillingCLI:
     --community-report billing section (implemented in step-6).
     """
 
-    def test_community_report_has_billing_section(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
+    def test_community_report_has_billing_section(self, tmp_path: Path) -> None:
         """Written --community-report contains 'Community Billing' and 'Savings'."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         report_path = tmp_path / "billing_report.md"
         result = runner.invoke(
             app,
@@ -842,14 +807,8 @@ class TestFleetRunCommunityBillingCLI:
         )
         assert "Savings" in report_text
 
-    def test_community_report_savings_non_negative(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
+    def test_community_report_savings_non_negative(self, tmp_path: Path) -> None:
         """Parsed savings figure from the report is >= 0."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         report_path = tmp_path / "billing_report2.md"
         result = runner.invoke(
             app,
@@ -875,13 +834,8 @@ class TestFleetRunCommunityBillingCLI:
             f"Expected community_net ({community:.4f}) <= baseline ({baseline:.4f})"
         )
 
-    def test_cli_stdout_has_billing_rows(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    def test_cli_stdout_has_billing_rows(self) -> None:
         """CLI stdout community table includes billing rows (step-8 drives this)."""
-        monkeypatch.setattr("solar_challenge.home.get_tmy_data", lambda *a, **k: _synth_weather())
-        monkeypatch.setattr("solar_challenge.fleet.get_tmy_data", lambda *a, **k: _synth_weather())
         result = runner.invoke(
             app,
             [
