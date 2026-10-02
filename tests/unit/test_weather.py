@@ -1,5 +1,6 @@
 """Tests for weather data handling."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,9 @@ from solar_challenge.weather import (
 )
 from solar_challenge.location import Location
 from tests._synthetic_weather import synthetic_june_weather
+
+PRE_SCALING_BRISTOL_TMY_STEM = "tmy_5dc8c8bca218"
+"""The file stem of Bristol's cached TMY before task 285, when the cache held PVGIS's TMY unscaled."""
 
 
 @pytest.fixture
@@ -228,6 +232,28 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
 
         assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
         assert second["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+
+    def test_a_tmy_cached_before_scaling_is_never_served(self, weather_cache, pvgis_tmy, pvgis_requests):
+        """Bristol's unscaled TMY, as the cache stored it before task 285, is fetched afresh and scaled instead."""
+        pvgis_tmy.to_csv(weather_cache.cache_dir / f"{PRE_SCALING_BRISTOL_TMY_STEM}.csv")
+        (weather_cache.cache_dir / f"{PRE_SCALING_BRISTOL_TMY_STEM}.meta.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "tmy",
+                    "latitude": 51.45,
+                    "longitude": -2.58,
+                    "start_date": None,
+                    "end_date": None,
+                    "timezone": "UTC",
+                    "freq": None,
+                }
+            )
+        )
+
+        result = get_tmy_data(Location.bristol())
+
+        pvgis_requests.tmy.assert_called_once()
+        assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
 
     @pytest.mark.parametrize(
         "truncate",
