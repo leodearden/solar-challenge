@@ -2,8 +2,11 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Unit tests for tests/_finance_builders.py, the finance tests' synthetic homes, scenarios and constant-power simulation results."""
 
+import dataclasses
+
 import pytest
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
@@ -47,7 +50,7 @@ def test_fleet_results_pair_each_default_home_with_the_given_annual_totals() -> 
         self_kwh=2000.0,
         export_kwh=800.0,
         import_kwh=1200.0,
-        export_revenue_gbp_per_year=40.0,
+        export_revenue_gbp=40.0,
     )
 
     assert fleet.home_configs == [make_home_config()] * 3
@@ -64,6 +67,49 @@ def test_fleet_results_pair_each_default_home_with_the_given_annual_totals() -> 
     assert per_home_totals == [pytest.approx((2000.0, 800.0, 1200.0, 40.0, 365))] * 3
 
 
+def test_fleet_results_pair_the_given_homes_with_the_totals_over_the_window() -> None:
+    homes = [make_home_config(), make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0))]
+
+    fleet = make_fleet_results(
+        homes=homes,
+        self_kwh=30.0,
+        export_kwh=10.0,
+        import_kwh=5.0,
+        discharge_kwh=8.0,
+        export_revenue_gbp=1.5,
+        days=3,
+    )
+
+    assert fleet.home_configs == homes
+    per_home_totals = [
+        (
+            summary.total_self_consumption_kwh,
+            summary.total_grid_export_kwh,
+            summary.total_grid_import_kwh,
+            summary.total_battery_discharge_kwh,
+            summary.total_export_revenue_gbp,
+            summary.simulation_days,
+        )
+        for summary in map(calculate_summary, fleet.per_home_results)
+    ]
+    assert per_home_totals == [pytest.approx((30.0, 10.0, 5.0, 8.0, 1.5, 3))] * 2
+
+
+def test_fleet_results_refuse_both_homes_and_n_homes() -> None:
+    with pytest.raises(TypeError, match="homes or n_homes"):
+        make_fleet_results(n_homes=2, homes=[make_home_config()])
+
+
+def test_home_config_is_the_default_home_with_the_given_battery() -> None:
+    battery = BatteryConfig(capacity_kwh=5.0)
+
+    home = make_home_config(battery_config=battery)
+
+    assert make_home_config().battery_config is None
+    assert home.battery_config == battery
+    assert dataclasses.replace(home, battery_config=None) == make_home_config()
+
+
 def test_scenario_holds_n_default_homes_and_the_given_seg_rate() -> None:
     scenario = make_scenario(n_homes=2, seg_tariff_pence_per_kwh=5.0)
 
@@ -76,16 +122,28 @@ def test_scenario_holds_n_default_homes_and_the_given_seg_rate() -> None:
     assert default_scenario.seg_tariff_pence_per_kwh is None
 
 
+def test_scenario_builders_give_every_home_the_given_battery() -> None:
+    battery = BatteryConfig(capacity_kwh=5.0)
+    battery_home = make_home_config(battery_config=battery)
+
+    scenario, _ = make_scenario_and_finance(n_homes=2, battery_config=battery)
+
+    assert make_scenario(n_homes=2, battery_config=battery).homes == [battery_home] * 2
+    assert scenario.homes == [battery_home] * 2
+
+
 @pytest.mark.parametrize(
-    "asset_life_years",
+    ("asset_life_years", "loan_term_years"),
     [
-        pytest.param(5, id="life-shorter-than-the-default-loan"),
-        pytest.param(25, id="life-longer-than-the-default-loan"),
+        pytest.param(5, 5, id="life-shorter-than-the-default-loan"),
+        pytest.param(25, 15, id="life-longer-than-the-default-loan"),
     ],
 )
-def test_scenario_and_finance_fit_the_loan_within_the_asset_life(asset_life_years: int) -> None:
+def test_scenario_and_finance_cut_the_default_15_year_loan_to_the_asset_life(
+    asset_life_years: int, loan_term_years: int
+) -> None:
     scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=asset_life_years)
 
     assert len(scenario.homes) == 2
     assert finance.asset_life_years == asset_life_years
-    assert finance.loan_term_years <= asset_life_years
+    assert finance.loan_term_years == loan_term_years
