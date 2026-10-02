@@ -2,6 +2,7 @@
 """Tests for the finance: block and the FinanceConfig it parses into."""
 
 import dataclasses
+import itertools
 import pickle
 from pathlib import Path
 
@@ -335,6 +336,11 @@ _FLOAT_FIELDS = tuple(
     for f in dataclasses.fields(FinanceConfig)
     if f.name not in {*_YEAR_FIELDS, "grid_services_model", "grid_services_events"}
 )
+_NUMERIC_FIELDS = tuple(
+    f.name
+    for f in dataclasses.fields(FinanceConfig)
+    if f.name in {*_FLOAT_FIELDS, *_YEAR_FIELDS}
+)
 
 
 class TestFinanceConfigParsing:
@@ -501,6 +507,22 @@ class TestFinanceConfigParsing:
             parse_finance_config(
                 {"standing_charge_pence_per_day": 60.0, "grid_services_model": None}
             )
+
+    @pytest.mark.parametrize(("first", "second"), itertools.pairwise(_NUMERIC_FIELDS))
+    def test_first_declared_of_two_non_numeric_values_is_reported(
+        self, first: str, second: str
+    ) -> None:
+        """Of two non-numeric values, the error names the field FinanceConfig declares first.
+
+        The block lists the later-declared field first, so the block's key order cannot decide it.
+        """
+        block: dict[str, object] = {
+            second: f"not-a-number:{second}",
+            first: f"not-a-number:{first}",
+        }
+        block.setdefault("standing_charge_pence_per_day", 60.0)
+        with pytest.raises(ConfigurationError, match=f"'not-a-number:{first}'"):
+            parse_finance_config(block)
 
 
 class TestScenarioFinance:
