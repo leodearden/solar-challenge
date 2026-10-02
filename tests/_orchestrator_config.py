@@ -8,11 +8,13 @@ Usage::
         lane_job_directory,
         lane_job_enabled,
         load_orchestrator_config,
+        offline_lane_jobs,
         sole_offline_lane_job,
     )
 
     test_command = load_orchestrator_config(project_root)["test_command"]
     offline_lane_enabled = git_config(project_root).get("offline_lane_enabled")
+    lane_job_names = [job["name"] for job in offline_lane_jobs(project_root)]
     matrix_job = sole_offline_lane_job(project_root, "interpreter-matrix")
     matrix_directory = lane_job_directory(project_root, matrix_job)
     matrix_enabled = lane_job_enabled(matrix_job)
@@ -38,12 +40,15 @@ def git_config(project_root: Path) -> dict[str, Any]:
     return git
 
 
+def offline_lane_jobs(project_root: Path) -> list[dict[str, Any]]:
+    """Return *project_root*'s offline-lane jobs (git.offline_lane_commands entries) in config order; none when that key is absent or empty."""
+    jobs: list[dict[str, Any]] = git_config(project_root).get("offline_lane_commands") or []
+    return jobs
+
+
 def sole_offline_lane_job(project_root: Path, name: str) -> dict[str, Any]:
     """Return the offline-lane job (git.offline_lane_commands entry) named *name*, asserting it is the only one."""
-    git = git_config(project_root)
-    jobs: list[dict[str, Any]] = [
-        job for job in git.get("offline_lane_commands") or [] if job.get("name") == name
-    ]
+    jobs = [job for job in offline_lane_jobs(project_root) if job.get("name") == name]
     assert len(jobs) == 1, (
         f"git.offline_lane_commands has {len(jobs)} entries named {name!r}; with none the lane "
         "never runs that job, with several every merge runs it more than once"
