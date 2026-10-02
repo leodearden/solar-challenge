@@ -837,8 +837,10 @@ class TestSimulateSweep:
         ("base_config", "type_name"),
         [
             pytest.param("abc", "str", id="string"),
+            pytest.param("", "str", id="empty-string"),
             pytest.param(5, "int", id="number"),
             pytest.param([1], "list", id="array"),
+            pytest.param([], "list", id="empty-array"),
             pytest.param(True, "bool", id="boolean"),
             pytest.param(None, "NoneType", id="null"),
             pytest.param([["battery_kwh", 5.0]], "list", id="array-of-key-value-pairs"),
