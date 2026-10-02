@@ -932,7 +932,7 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
     is_fleet = row["type"] == "fleet"
     try:
         homes = stored_fleet_home_configs(config) if is_fleet else [stored_home_config(config)]
-    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+    except (TypeError, ValueError, KeyError, AttributeError, ConfigurationError) as exc:
         return jsonify({"error": f"Invalid config data: {exc}"}), 500
 
     run_name = row["name"] or "run"
