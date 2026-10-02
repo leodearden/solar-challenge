@@ -578,6 +578,38 @@ def _override_energy_split(
 
 
 # ---------------------------------------------------------------------------
+# _physics_import_cost_gbp — the missing-tariff retail fallback
+# ---------------------------------------------------------------------------
+
+
+def _physics_import_cost_gbp(phys: _AnnualisedPhysics, retail_rate_pence: float) -> float:
+    """A home's annualised import cost, priced at retail when no tariff priced it.
+
+    Missing-tariff fallback (§3.2 robustness).  Homes generated from a
+    fleet_distribution carry ``tariff_config=None`` (config.py), and
+    ``simulate_home`` then reports ``total_import_cost_gbp == 0`` even though
+    energy was genuinely imported (home.py: import costs are all-zero when
+    ``tariff_config`` is None).  Billing real imported energy at £0 would
+    silently understate the outlay for the canonical scenario
+    (scenarios/bristol-phase1.yaml has no ``tariff_config``), so a £0 cost on
+    a positive import is priced at the retail baseline rate instead, with a
+    :class:`UserWarning` attributed to :func:`householder_bill`'s caller.
+    """
+    if phys.import_cost_physics == 0.0 and phys.import_kwh > 0.0:
+        warnings.warn(
+            f"Physics import cost is £0 but {phys.import_kwh:.1f} kWh was "
+            f"imported (no tariff configured on this home); pricing grid "
+            f"imports at the retail baseline rate "
+            f"({retail_rate_pence:.1f} p/kWh) so the bill reflects actual "
+            f"imported energy.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return phys.import_kwh * retail_rate_pence / 100.0
+    return phys.import_cost_physics
+
+
+# ---------------------------------------------------------------------------
 # _seg_export_income_gbp — CBS SEG revenue helper (extracted from W2 model)
 # ---------------------------------------------------------------------------
 
@@ -829,7 +861,9 @@ def householder_bill(
       * Resolve the physics/override self-consumption path.  The override's
         own-use is capped at demand (:func:`_override_energy_split`), with a
         :class:`UserWarning` when the cap binds.
-      * Apply the missing-tariff retail fallback with a :class:`UserWarning`.
+      * Apply the missing-tariff retail fallback (:func:`_physics_import_cost_gbp`,
+        with a :class:`UserWarning`) before the physics/override switch, so
+        both paths price an untariffed home's import at retail.
       * Always call bill(period_days=365, ...) so standing charge is
         annual regardless of the original simulation length.
 
@@ -869,7 +903,7 @@ def householder_bill(
     gen_kwh = phys.gen_kwh
     demand_kwh = phys.demand_kwh
     import_kwh = phys.import_kwh
-    import_cost_physics = phys.import_cost_physics
+    import_cost_physics = _physics_import_cost_gbp(phys, retail_rate_pence)
     # export_kwh / export_rev_physics not needed here: SEG moved to
     # _seg_export_income_gbp in CR3; householder_bill no longer computes export income.
 
@@ -881,26 +915,6 @@ def householder_bill(
         # import_kwh_for_bill matches phys.import_kwh (set above) — the energy
         # quantity priced by import_cost_gbp on the physics path.
         import_kwh_for_bill = import_kwh
-
-        # Missing-tariff fallback (§3.2 robustness).  Homes generated from a
-        # fleet_distribution carry tariff_config=None (config.py), and
-        # simulate_home then reports total_import_cost_gbp == 0 even though
-        # energy was genuinely imported (home.py: import_costs are all-zero
-        # when tariff_config is None).  Pricing real imported energy at £0
-        # would silently understate the headline bill for the canonical
-        # scenario (bristol-phase1.yaml has no tariff_config), so fall back to
-        # the retail baseline rate and warn loudly rather than emit £0.
-        if import_cost_gbp == 0.0 and import_kwh > 0.0:
-            import_cost_gbp = import_kwh * retail_rate_pence / 100.0
-            warnings.warn(
-                f"Physics import cost is £0 but {import_kwh:.1f} kWh was "
-                f"imported (no tariff configured on this home); pricing grid "
-                f"imports at the retail baseline rate "
-                f"({retail_rate_pence:.1f} p/kWh) so the bill reflects actual "
-                f"imported energy.",
-                UserWarning,
-                stacklevel=2,
-            )
     else:
         # Spreadsheet path: override the self-consumption fraction
         split = _override_energy_split(override, generation_kwh=gen_kwh, demand_kwh=demand_kwh)
