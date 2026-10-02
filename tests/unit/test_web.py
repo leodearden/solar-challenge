@@ -128,15 +128,18 @@ class TestSimulateHomeRoute:
         assert "Run Simulation" in html_data
 
     def test_simulate_home_page_contains_tabs(self, client: FlaskClient) -> None:
-        """Test GET /simulate/home response contains tab navigation."""
+        """GET /simulate/home renders one tab list and, per tab, one panel shown while it is active."""
         response = client.get("/simulate/home")
-        html_data = response.data.decode("utf-8")
-        assert "activeTab" in html_data
-        assert "'pv'" in html_data or '"pv"' in html_data
-        assert "'battery'" in html_data or '"battery"' in html_data
-        assert "'load'" in html_data or '"load"' in html_data
-        assert "'location'" in html_data or '"location"' in html_data
-        assert "'period'" in html_data or '"period"' in html_data
+        page = response.get_data(as_text=True)
+        assert element_count(page, "nav", {"role": "tablist"}) == 1
+        tab_ids = ("pv", "battery", "load", "heat_pump", "tariff", "location", "period")
+        panels_per_tab = {
+            tab_id: element_count(
+                page, "div", {"role": "tabpanel", "x-show": f"activeTab === '{tab_id}'"}
+            )
+            for tab_id in tab_ids
+        }
+        assert panels_per_tab == dict.fromkeys(tab_ids, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -376,10 +379,10 @@ class TestFleetConfigRoute:
         assert response.status_code == 200
 
     def test_fleet_page_contains_distribution_editors(self, client: FlaskClient) -> None:
-        """Test GET /simulate/fleet response contains distribution editors."""
+        """GET /simulate/fleet renders three distribution editors, one per card, and the n_homes input."""
         response = client.get("/simulate/fleet")
         page = response.get_data(as_text=True)
-        assert "distribution" in page.lower()
+        assert element_count(page, "select", {"x-model": "dist.type"}) == 3
         assert "n_homes" in element_ids(page)
 
     def test_fleet_page_contains_pv_battery_load_sections(self, client: FlaskClient) -> None:
