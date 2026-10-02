@@ -72,7 +72,7 @@ def apply_fleet_overlay(
 
 
 def sample_distribution(
-    dist_type: str, params: object, n_samples: int = 100
+    dist_type: str, params: object, n_samples: object = 100
 ) -> list[float]:
     """Generate sample values from a distribution for preview histogram.
 
@@ -82,19 +82,20 @@ def sample_distribution(
         params: Distribution parameters (varies by type), read the way
             :func:`_build_distribution_dict` reads a fleet form's spec; must be
             a dict.
-        n_samples: Number of samples to generate.
+        n_samples: Number of samples to generate, read as int() reads it; from 1
+            to :data:`MAX_FLEET_HOMES`.
 
     Returns:
         List of sampled float values.
 
     Raises:
         ValueError: If dist_type is unknown or params are invalid, params are
-            not a dict (see :func:`_require_dict`), or a
+            not a dict (see :func:`_require_dict`), a
             weighted_discrete/shuffled_pool row list is malformed (see
-            :func:`_dict_list`).
+            :func:`_dict_list`), or n_samples is not an integer from 1 to
+            MAX_FLEET_HOMES (see :func:`_as_int_within`).
     """
-    if n_samples < 1:
-        raise ValueError("n_samples must be at least 1")
+    n_samples = _as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
     spec = _build_distribution_dict({**params, "type": dist_type})
 
@@ -217,6 +218,32 @@ def _dict_list(spec: dict[str, Any], key: str) -> list[dict[str, Any]]:
     if not isinstance(rows, list):
         raise ValueError(f"{key} must be a list, got {type(rows).__name__}")
     return [_require_dict(row, f"{key}[{index}]") for index, row in enumerate(rows)]
+
+
+def _as_int(value: Any, field: str) -> int:
+    """Return *value* read as int() reads it.
+
+    Raises:
+        ValueError: If int() cannot read *value* (not a number or numeric string, NaN,
+            or infinite); the error names *field* and the value sent.
+    """
+    try:
+        return int(value)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ValueError(f"{field} must be an integer, got {value!r}") from exc
+
+
+def _as_int_within(value: Any, field: str, low: int, high: int) -> int:
+    """Return *value* read by :func:`_as_int`, refusing one outside *low* to *high* inclusive.
+
+    Raises:
+        ValueError: If :func:`_as_int` refuses *value*, or it is outside *low* to *high*;
+            the range error names *field*, the range and the value sent.
+    """
+    number = _as_int(value, field)
+    if not low <= number <= high:
+        raise ValueError(f"{field} must be between {low} and {high}, got {value!r}")
+    return number
 
 
 def _parse_component_distribution(
