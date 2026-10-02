@@ -124,6 +124,10 @@ def _annual_yield_check(results: list[ValidationResult]) -> ValidationResult:
     return next(r for r in results if r.check_name == "annual_yield_range")
 
 
+def _peak_check(results: list[ValidationResult]) -> ValidationResult:
+    return next(r for r in results if r.check_name == "peak_within_capacity")
+
+
 # Wires four 250 W modules, 1.0 kWp; the default 400.428 W module would wire three, 1.2 kWp.
 _PVWATTS_250_W_AT_1_1_KW = PVConfig(
     capacity_kw=1.1, custom_module_params=create_simple_module_params(module_power_w=250.0)
@@ -350,6 +354,43 @@ class TestAnnualYieldPerWiredKwp:
         )
 
         assert result.passed is passed
+
+
+class TestPeakWithinWiredCapacity:
+    """The peak may exceed the DC of the modules the PV model wires by 10%."""
+
+    @pytest.mark.parametrize(
+        "pv_config",
+        [PVConfig(capacity_kw=0.7, inverter_capacity_kw=1.0), 0.7],
+        ids=["pv_config", "capacity_kw"],
+    )
+    def test_a_peak_above_the_configured_capacity_passes_within_the_wired_dc(
+        self, pv_config: PVConfig | float
+    ) -> None:
+        """0.7 kW wires two 400.428 W modules, 0.80 kWp.
+
+        Behind a 1.0 kW inverter the model's AC peaked at 0.804 kW, as
+        docs/pv-annual-yield-benchmark.md §4 records.
+        """
+        generation = _create_valid_generation(_create_minute_index(7), capacity_kw=0.7)
+        generation.iloc[780] = 0.80
+
+        result = _peak_check(validate_pv_generation(generation, pv_config, check_annual=False))
+
+        assert result.passed is True
+
+    def test_a_peak_over_the_wired_dc_fails_though_within_the_configured_capacity(self) -> None:
+        """The limit is 10% over the 1.0 kWp four 250 W modules wire: 1.1 kW, not 1.21 kW."""
+        generation = _create_valid_generation(_create_minute_index(7), capacity_kw=1.1)
+        generation.iloc[780] = 1.15
+
+        result = _peak_check(
+            validate_pv_generation(generation, _PVWATTS_250_W_AT_1_1_KW, check_annual=False)
+        )
+
+        assert result.passed is False
+        assert result.expected_range is not None
+        assert result.expected_range[1] == pytest.approx(1.1)
 
 
 class TestValidateConsumption:
