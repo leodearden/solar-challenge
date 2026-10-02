@@ -25,11 +25,6 @@ from tests._finance_builders import (
 )
 
 
-# ---------------------------------------------------------------------------
-# project_multi_year — shape + energy aggregation (step-7 / step-8)
-# ---------------------------------------------------------------------------
-
-
 def _make_grid_charging_sim_results(
     sc_kwh: float = 2000.0,
     export_kwh: float = 400.0,
@@ -198,11 +193,6 @@ class TestProjectMultiYearShape:
 
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         assert curve.points[0].fleet_import_kwh == pytest.approx(expected_import, rel=1e-4)
-
-
-# ---------------------------------------------------------------------------
-# SOH + degradation behaviour over 25-yr projection (step-9 / step-10)
-# ---------------------------------------------------------------------------
 
 
 def _make_degrading_simulate(
@@ -407,11 +397,6 @@ class TestProjectMultiYearSOH:
             assert pt.battery_soh == pytest.approx(1.0)
 
 
-# ---------------------------------------------------------------------------
-# Cycle-fade term engagement (H3 final clause) — step-11 / step-12
-# ---------------------------------------------------------------------------
-
-
 def _make_battery_scenario(
     discharge_kwh: float = 1000.0,
     cycle_fade: float = 0.0002,
@@ -547,10 +532,6 @@ class TestCycleFadeEngagement:
         # The interpolated value at year 24 should match the sampled node
         assert curve.points[24].battery_soh == pytest.approx(expected_soh, rel=1e-4)
 
-
-# ---------------------------------------------------------------------------
-# Battery SOH counts the throughput up to each sampled age
-# ---------------------------------------------------------------------------
 
 _ANNUAL_DISCHARGE_KWH = 800.0
 
@@ -706,11 +687,6 @@ class TestBatterySohCountsThroughputToEachAge:
         assert rises == [], f"battery_soh rose at (year, previous SOH, SOH): {rises}"
 
 
-# ---------------------------------------------------------------------------
-# fleet_revenue_gbp + self-consumption override (step-13 / step-14)
-# ---------------------------------------------------------------------------
-
-
 class TestProjectMultiYearRevenue:
     """fleet_revenue_gbp aggregation and self-consumption override switch."""
 
@@ -753,10 +729,8 @@ class TestProjectMultiYearRevenue:
     def test_fleet_revenue_at_sampled_age_matches_householder_bill_sum(self) -> None:
         """fleet_revenue_gbp at age 0 equals CBS formula: own_use + seg (no grid-charge term).
 
-        CR2 RED test: the old formula used self_consumption_saving_gbp (priced at
-        retail_baseline_rate=30p/kWh); the new formula uses own_use_rate_pence_per_kwh
-        (default 15p/kWh) × fleet_sc + Σ _seg_export_income_gbp.
-        CR3: SEG is now computed via _seg_export_income_gbp (extracted from householder_bill).
+        Own-use is own_use_rate_pence_per_kwh × fleet own-use and SEG is the sum of
+        _seg_export_income_gbp; neither is priced at retail_baseline_rate.
         """
         from solar_challenge.finance import (  # type: ignore[attr-defined]
             _annualise_physics,
@@ -770,11 +744,11 @@ class TestProjectMultiYearRevenue:
         scenario, finance = self._make_revenue_scenario(n_homes=n_homes)
         fr = self._fixed_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
 
-        # Compute expected CBS revenue via new formula (PRD §3.2)
+        # Expected CBS revenue (PRD §3.2)
         summaries = [calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
                      for r in fr.per_home_results]
         fleet_sc_kwh = sum(s.total_self_consumption_kwh for s in summaries)
-        # New formula (no grid_services since homes have no battery):
+        # No grid services: the homes have no battery
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc_kwh / 100.0
         seg_revenue = sum(
             _seg_export_income_gbp(_annualise_physics(s, s.simulation_days), finance)
@@ -787,11 +761,7 @@ class TestProjectMultiYearRevenue:
         assert curve.points[0].fleet_revenue_gbp == pytest.approx(expected_revenue, rel=1e-4)
 
     def test_grid_services_included_in_fleet_revenue(self) -> None:
-        """fleet_revenue_gbp includes grid_services = rate × Σ max_discharge_kw when rate > 0.
-
-        CR2 RED test: the old _simulate_age has no grid_services term, so this assertion
-        will fail until step-6 adds it.
-        """
+        """fleet_revenue_gbp includes grid_services = rate × Σ max_discharge_kw when rate > 0."""
         from solar_challenge.battery import BatteryConfig
         from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
         from solar_challenge.fleet import FleetResults
@@ -899,7 +869,7 @@ class TestProjectMultiYearRevenue:
         )
 
     def test_fleet_revenue_non_negative(self) -> None:
-        """fleet_revenue_gbp is non-negative for all years (updated for CR2 formula)."""
+        """fleet_revenue_gbp is non-negative for all years."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
         scenario, finance = self._make_revenue_scenario(n_homes=1)
@@ -1028,11 +998,6 @@ class TestGridChargeEnergyPaidOnce:
         )
 
 
-# ---------------------------------------------------------------------------
-# _seg_export_income_gbp — direct unit tests (amendment: suggestion 3)
-# ---------------------------------------------------------------------------
-
-
 def _make_seg_summary(
     total_generation_kwh: float = 4000.0,
     total_grid_export_kwh: float = 800.0,
@@ -1063,7 +1028,7 @@ def _make_seg_summary(
 
 
 class TestSegExportIncomeGbp:
-    """Direct unit tests for _seg_export_income_gbp (amendment: reviewer suggestion 3).
+    """Direct unit tests for _seg_export_income_gbp.
 
     The helper's zero-export fallback and override-path arithmetic are not
     covered by hand-computed assertions in the projection tests (which use the
@@ -1185,11 +1150,6 @@ class TestSegExportIncomeGbp:
         assert result == pytest.approx(expected, rel=1e-6)
 
 
-# ---------------------------------------------------------------------------
-# Adaptive node refinement — H4 (step-15 / step-16)
-# ---------------------------------------------------------------------------
-
-
 def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignore[name-defined]
     """Return a synthetic simulate with strongly non-linear (exponential) decline.
 
@@ -1244,21 +1204,17 @@ def _make_adaptive_scenario(asset_life: int = 10) -> tuple:
 
 
 class TestProjectMultiYearAdaptive:
-    """Adaptive node refinement tests (H4) for step-15/step-16.
+    """Adaptive node refinement tests (H4).
 
     Uses an injected simulate that returns an exponential decline, which has
     substantial PCHIP midpoint error when only 3 coarse seed nodes are used.
-    The tests assert that adaptive bisection (step-16) reduces that error.
+    The tests assert that adaptive bisection reduces that error.
     """
 
     _ASSET_LIFE = 10  # short life makes tests faster; {0, 5, 9} are the 3 seeds
 
     def test_adaptive_adds_nodes_beyond_seeds_with_tight_target(self) -> None:
-        """With a curved simulate and tight error target, more than 3 nodes are sampled.
-
-        Currently FAILS (RED) because project_multi_year always returns exactly
-        the 3 seed ages with no adaptive bisection (step-16 not yet implemented).
-        """
+        """With a curved simulate and tight error target, more than 3 nodes are sampled."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
@@ -1273,11 +1229,7 @@ class TestProjectMultiYearAdaptive:
         )
 
     def test_tighter_target_yields_strictly_more_nodes(self) -> None:
-        """A tighter error_target_pct produces strictly more sampled_ages than a loose target.
-
-        Currently FAILS (RED): both loose and tight targets return exactly 3 nodes
-        because adaptive bisection is not yet implemented.
-        """
+        """A tighter error_target_pct produces strictly more sampled_ages than a loose target."""
         from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
 
         scenario, finance = _make_adaptive_scenario(asset_life=self._ASSET_LIFE)
@@ -1349,11 +1301,6 @@ class TestProjectMultiYearAdaptive:
                 f"{curve.points[i].fleet_self_consumption_kwh:.3f} > "
                 f"{curve.points[i-1].fleet_self_consumption_kwh:.3f}"
             )
-
-
-# ---------------------------------------------------------------------------
-# _reconcile_seg_homes — unit tests (task-89 step-1)
-# ---------------------------------------------------------------------------
 
 
 class TestReconcileSegHomes:
@@ -1429,11 +1376,6 @@ class TestReconcileSegHomes:
 
         with pytest.raises(ValueError, match=re.compile(r"inconsistent.*SEG", re.IGNORECASE)):
             _reconcile_seg_homes([home], scenario_seg_rate=6.0)
-
-
-# ---------------------------------------------------------------------------
-# SEG-aware factory + TestProjectHonoursScenarioLevelSeg (task-89 step-3)
-# ---------------------------------------------------------------------------
 
 
 def _seg_aware_fleet_results_factory(
@@ -1622,7 +1564,7 @@ class TestProjectHonoursScenarioLevelSeg:
             f"feasible: scenario_seg={sol_seg.feasible} != home_ref={sol_ref.feasible}"
         )
         # Outlay-path equivalence: representative_outlay and saving both flow through
-        # the step-6 age-0 outlay path (finance.py:2225); assert they match so a future
+        # the solve's age-0 outlay path; assert they match so a future
         # regression where the outlay path is export-dependent cannot go undetected.
         assert sol_seg.representative_outlay_gbp == pytest.approx(
             sol_ref.representative_outlay_gbp, rel=1e-6
@@ -1690,10 +1632,6 @@ class TestProjectHonoursScenarioLevelSeg:
         with pytest.raises(ValueError, match=re.compile(r"inconsistent.*SEG", re.IGNORECASE)):
             project_multi_year(scenario_inconsistent, finance, simulate=sim)
 
-
-# ---------------------------------------------------------------------------
-# Short-window annualisation — a sub-360-day window projects as its 365-day year
-# ---------------------------------------------------------------------------
 
 _SHORT_WINDOW_DAYS = 3
 
