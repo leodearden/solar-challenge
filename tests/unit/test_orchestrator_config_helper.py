@@ -2,11 +2,22 @@
 """Unit tests for tests/_orchestrator_config.py, the orchestrator contract tests' reader of dark-factory-orchestrator.yaml."""
 
 import textwrap
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+import yaml
 
-from tests._orchestrator_config import git_config, lane_job_directory, lane_job_enabled
+from tests._orchestrator_config import (
+    git_config,
+    lane_job_directory,
+    lane_job_enabled,
+    sole_offline_lane_job,
+)
+
+
+def _write_orchestrator_config(project_root: Path, git: Mapping[str, object]) -> None:
+    (project_root / "dark-factory-orchestrator.yaml").write_text(yaml.safe_dump({"git": git}), encoding="utf-8")
 
 
 def test_the_git_mapping_is_read_whole_from_the_project_roots_orchestrator_config(tmp_path: Path) -> None:
@@ -30,6 +41,47 @@ def test_the_git_mapping_is_read_whole_from_the_project_roots_orchestrator_confi
         "offline_lane_enabled": True,
         "offline_lane_commands": [{"name": "probe", "command": "pytest"}],
     }
+
+
+def test_a_lane_job_named_once_is_returned_whole(tmp_path: Path) -> None:
+    probe_job = {"name": "probe", "command": "pytest", "fix_task_priority": "medium"}
+    _write_orchestrator_config(
+        tmp_path, {"offline_lane_commands": [{"name": "e2e", "command": "pytest tests/e2e"}, probe_job]}
+    )
+
+    assert sole_offline_lane_job(tmp_path, "probe") == probe_job
+
+
+@pytest.mark.parametrize(
+    ("git", "count"),
+    [
+        pytest.param(
+            {"offline_lane_commands": [{"name": "e2e", "command": "pytest tests/e2e"}]}, 0, id="no-job-named-probe"
+        ),
+        pytest.param({"offline_lane_commands": None}, 0, id="bare-offline-lane-commands-key"),
+        pytest.param({"main_branch": "main"}, 0, id="no-offline-lane-commands-key"),
+        pytest.param(
+            {
+                "offline_lane_commands": [
+                    {"name": "probe", "command": "pytest"},
+                    {"name": "probe", "command": "pytest tests/unit"},
+                ]
+            },
+            2,
+            id="two-jobs-named-probe",
+        ),
+    ],
+)
+def test_a_lane_job_named_other_than_once_fails_naming_the_job_and_its_count(
+    tmp_path: Path, git: Mapping[str, object], count: int
+) -> None:
+    _write_orchestrator_config(tmp_path, git)
+
+    with pytest.raises(AssertionError) as failure:
+        sole_offline_lane_job(tmp_path, "probe")
+
+    assert "'probe'" in str(failure.value)
+    assert f"{count} entries" in str(failure.value)
 
 
 def test_a_lane_job_without_a_cwd_runs_in_the_project_root(tmp_path: Path) -> None:
