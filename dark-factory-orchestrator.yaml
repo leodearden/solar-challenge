@@ -32,6 +32,12 @@ escalation:
 # which resolves pyproject deps into an ephemeral per-worktree .venv. Validated
 # during factory-init: `uv run --extra dev` builds the package + imports cleanly.
 #
+# Every `uv run` here and in git.offline_lane_commands passes --locked, so uv
+# refuses a uv.lock that pyproject.toml has outgrown, with an error naming the
+# fix (`uv lock`), instead of silently re-locking it in the worktree. That
+# silent re-lock let a commit that forgot `uv lock` pass verify and merge its
+# stale lock (tests/unit/test_stale_uv_lock.py guards this).
+#
 # Tests exclude the `slow` marker (real PVGIS network calls) and `e2e`
 # (playwright browser tests) — neither belongs in a per-task verify loop; the
 # offline lane's e2e job runs the non-slow e2e suite after every merge instead.
@@ -41,12 +47,12 @@ escalation:
 # (tests/unit/test_per_task_verify.py guards this). `--ignore=tests/e2e` keeps
 # the playwright suite out of collection (the `not e2e` marker only deselects
 # post-collection, which still trips the playwright import).
-test_command: "uv run --extra dev --extra web pytest -m 'not slow and not e2e' --ignore=tests/e2e"
+test_command: "uv run --locked --extra dev --extra web pytest -m 'not slow and not e2e' --ignore=tests/e2e"
 # No standalone linter configured; mypy strict (type_check_command) is the
 # static-analysis gate. Use a no-op rather than a command that always fails.
 # `--extra web` so web/* modules type-check against their real deps (flask).
 lint_command: "true"
-type_check_command: "uv run --extra dev --extra web mypy src/solar_challenge"
+type_check_command: "uv run --locked --extra dev --extra web mypy src/solar_challenge"
 
 git:
   main_branch: "main"
@@ -72,10 +78,10 @@ git:
   offline_lane_infra_enabled: false
   offline_lane_commands:
     - name: interpreter-matrix
-      command: "uv run --extra dev pytest tests/interpreter_matrix"
+      command: "uv run --locked --extra dev pytest tests/interpreter_matrix"
       fix_task_priority: "medium"
     - name: e2e
-      command: "timeout -k 60 1800 uv run --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider"
+      command: "timeout -k 60 1800 uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider"
       fix_task_priority: "medium"
 
 # OS filesystem sandbox (Landlock) — dark-factory-fleet OS filesystem sandbox

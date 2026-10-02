@@ -8,7 +8,7 @@ collection, so it runs only when its path is passed explicitly.
 
 Manual run::
 
-    uv run --extra dev pytest tests/interpreter_matrix [-k 3.13]
+    uv run --locked --extra dev pytest tests/interpreter_matrix [-k 3.13]
 
 Inside a sandbox that cannot write uv's python directory, set
 UV_PYTHON_INSTALL_DIR to a writable path.
@@ -25,6 +25,7 @@ import pytest
 
 from tests._interpreters import off_pin_minor_versions
 from tests._orchestrator_config import load_orchestrator_config
+from tests._uv_env import isolated_uv_env
 
 # Parametrization happens at collection time, before any fixture exists.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -55,10 +56,9 @@ def _matrix_venv(major: int, minor: int) -> Path:
 
 def _suite_env(major: int, minor: int) -> dict[str, str]:
     """Return an environment in which the verify command runs on the GIL build of *major*.*minor*."""
-    env = {name: value for name, value in os.environ.items() if name != "VIRTUAL_ENV"}
+    env = isolated_uv_env(_matrix_venv(major, minor))
     # "+gil" is load-bearing: a plain 3.14 request selects the free-threaded 3.14t on the factory host.
     env["UV_PYTHON"] = f"{major}.{minor}+gil"
-    env["UV_PROJECT_ENVIRONMENT"] = str(_matrix_venv(major, minor))
     # The suite must never collect this matrix, even if tests/conftest.py stops ignoring it.
     env["PYTEST_ADDOPTS"] = "--ignore=tests/interpreter_matrix"
     return env
