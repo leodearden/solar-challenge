@@ -119,13 +119,11 @@ class TestSimulateHomeRoute:
         assert response.status_code == 200
 
     def test_simulate_home_page_contains_form(self, client: FlaskClient) -> None:
-        """Test GET /simulate/home response contains form elements for PV, Battery, etc."""
+        """GET /simulate/home renders the PV capacity, battery capacity and annual consumption inputs, and one submit button."""
         response = client.get("/simulate/home")
-        html_data = response.data.decode("utf-8")
-        assert "pv_kw" in html_data
-        assert "battery_kwh" in html_data
-        assert "consumption_kwh" in html_data
-        assert "Run Simulation" in html_data
+        page = response.get_data(as_text=True)
+        assert {"pv_kw", "battery_kwh", "consumption_kwh"} <= element_ids(page)
+        assert element_count(page, "button", {"type": "submit"}) == 1
 
     def test_simulate_home_page_contains_tabs(self, client: FlaskClient) -> None:
         """GET /simulate/home renders one tab list and, per tab, one panel shown while it is active."""
