@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from solar_challenge.tariff import TariffConfig
 
 #: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, a
-#: shuffled-pool row that assigns its value to more homes, and a preview that draws more values.
+#: shuffled pool that holds values for more homes, and a preview that draws more values.
 MAX_FLEET_HOMES = 10_000
 
 
@@ -93,8 +93,9 @@ def sample_distribution(
             not a dict (see :func:`_require_dict`), a
             weighted_discrete/shuffled_pool row list is malformed (see
             :func:`_dict_list`), n_samples is one int() cannot read or outside
-            1 to MAX_FLEET_HOMES, or a shuffled_pool count is one int() cannot
-            read or outside 0 to MAX_FLEET_HOMES (see :func:`_as_int_within`).
+            1 to MAX_FLEET_HOMES (see :func:`_as_int_within`), or a shuffled_pool
+            count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
+            the counts total more than that (see :func:`_pool_counts`).
     """
     n_samples = _as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
@@ -160,8 +161,8 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             :func:`_as_int`), a pv/battery/load block is not a dict (see
             :func:`_component_block`), a weighted_discrete/shuffled_pool
             row list is malformed (see :func:`_dict_list`), or a shuffled_pool
-            count is one int() cannot read or outside 0 to MAX_FLEET_HOMES
-            (see :func:`_as_int_within`).
+            count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
+            the counts total more than that (see :func:`_pool_counts`).
     """
     config: dict[str, Any] = {
         "n_homes": _as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
@@ -297,7 +298,8 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
     Raises:
         ValueError: If a weighted_discrete/shuffled_pool row list is malformed
             (see :func:`_dict_list`), or a shuffled_pool count is one int() cannot
-            read or outside 0 to MAX_FLEET_HOMES (see :func:`_as_int_within`).
+            read or outside 0 to MAX_FLEET_HOMES, or the counts total more than
+            that (see :func:`_pool_counts`).
     """
     dist_type = data["type"]
     result: dict[str, Any] = {"type": dist_type}
@@ -322,12 +324,27 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
     elif dist_type == "shuffled_pool":
         entries = _dict_list(data, "entries")
         result["values"] = [float(e.get("value", 0)) for e in entries]
-        result["counts"] = [
-            _as_int_within(entry.get("count", 1), f"entries[{index}].count", 0, MAX_FLEET_HOMES)
-            for index, entry in enumerate(entries)
-        ]
+        result["counts"] = _pool_counts(entries)
 
     return result
+
+
+def _pool_counts(entries: list[dict[str, Any]]) -> list[int]:
+    """Return the count of each shuffled_pool row in *entries*, an absent count reading as 1.
+
+    Raises:
+        ValueError: If a count is one int() cannot read or outside 0 to MAX_FLEET_HOMES
+            (see :func:`_as_int_within`), or the counts total more than MAX_FLEET_HOMES,
+            more values than a dashboard fleet has homes to take; that error names the total.
+    """
+    counts = [
+        _as_int_within(entry.get("count", 1), f"entries[{index}].count", 0, MAX_FLEET_HOMES)
+        for index, entry in enumerate(entries)
+    ]
+    total = sum(counts)
+    if total > MAX_FLEET_HOMES:
+        raise ValueError(f"entries counts must total at most {MAX_FLEET_HOMES}, got {total}")
+    return counts
 
 
 def fleet_distribution_to_yaml(config: dict[str, Any]) -> str:
