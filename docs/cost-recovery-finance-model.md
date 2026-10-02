@@ -9,6 +9,7 @@
 **Unreleased on main** (task 271): on a simulated window under 360 days, `project_multi_year` annualises own-use, export, import and battery-discharge kWh (§4, §7.6); the 0.5.0 tag sums them over the window.
 **Unreleased on main** (task 281): with `self_consumption_override` set, each home's own-use is capped at its demand and the surplus generation is counted as export (§3, §4); the 0.5.0 tag bills override × generation uncapped.
 **Unreleased on main** (task 295): each simulated age's battery SOH counts the battery throughput from installation to that age (§4, §7.6); the 0.5.0 tag ages each seed with the throughput up to the previous seed only, so a battery fleet's mid-life battery SOH and own-use read high there.
+**Unreleased on main** (task 307): on a home with no tariff configured, the override path prices its grid import at the retail baseline rate, with the physics path's `UserWarning` (§3); the 0.5.0 tag prices that import at £0.
 
 ---
 
@@ -182,7 +183,11 @@ override fraction instead of basis C:
 own_use_kwh = min(self_consumption_override × generation_kwh, demand_kwh)
 import_kwh  = demand_kwh − own_use_kwh
               (priced at the home's effective import rate: physics import cost /
-               physics import kWh × 100, or retail when physics import is 0)
+               physics import kWh × 100, or retail when physics import is 0.
+               A home with no tariff configured reports a £0 physics import
+               cost; householder_bill first prices that at retail, with a
+               UserWarning, on both paths, so the home's effective rate is
+               retail too)
 ```
 
 Every other identity above is unchanged, applied to this `own_use_kwh`.  A home
@@ -217,6 +222,27 @@ self_consumption_fraction = 3,400 / 5,775 = 0.589  (rendered 58.9%)
 
 Uncapped, the 0.5.0 tag bills this home for 4,042.5 kWh: own-use
 15 × 4,042.5 / 100 = £606.375, outlay £866.64, saving £184.41.
+
+**Untariffed override example** (`TestOverrideExactValues`; 4,000 kWh generation,
+3,400 kWh demand, 1,200 kWh physics import at £0 with no tariff configured,
+override 0.70, own-use 15 p/kWh, retail 23 p/kWh):
+
+```
+own_use_kwh          = min(0.70 × 4,000, 3,400) = 2,800 kWh/yr   (cap not binding)
+import_kwh           = 3,400 − 2,800 = 600 kWh/yr
+effective import rate = 23 p/kWh   (retail fallback: physics import cost is £0; warned)
+import_cost_gbp      = 600 × 23 / 100 = £138.00/yr
+own_use_payment_gbp  = 15 × 2,800 / 100 = £420.00/yr
+cbs_amount_due_gbp   = 420 + 0.05 × 420 = £441.00/yr   (import is paid to the retailer, so the fallback leaves this unchanged)
+standing_charge_gbp  = 60 × 365 / 100 = £219.00/yr
+vat_gbp              = 0.05 × (138 + 219 + 420) = £38.85/yr
+total_outlay_gbp     = (138 + 219 + 420) × 1.05 = £815.85/yr
+baseline_bill_gbp    = (3,400 × 23 / 100 + 219) × 1.05 = £1,051.05/yr
+saving_vs_baseline   = 1,051.05 − 815.85 = £235.20/yr
+                     = 2,800 × (23 − 15) × 1.05 / 100  (H3, exact)
+```
+
+The 0.5.0 tag bills this import at £0: outlay (0 + 219 + 420) × 1.05 = £670.95, saving £380.10.
 
 ---
 

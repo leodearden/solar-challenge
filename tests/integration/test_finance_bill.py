@@ -10,6 +10,7 @@ Layout:
 NOTE: This file intentionally mixes fast and slow tests; it must NOT be
 added to test_marker_registration.py's INTEGRATION_FILES list.
 """
+import dataclasses
 import warnings
 from typing import Optional
 
@@ -519,6 +520,25 @@ class TestOverrideExactValues:
                 simulation_days=365,
             )
 
+    @staticmethod
+    def _untariffed_override_bill(override: float = 0.70) -> "BillBreakdown":  # type: ignore[name-defined]
+        """householder_bill at *override* for a home with no tariff; the retail fallback must warn."""
+        from solar_challenge.finance import householder_bill
+
+        summary = _make_summary(
+            total_import_cost_gbp=0.0,
+            total_export_revenue_gbp=0.0,
+            net_cost_gbp=0.0,
+            seg_revenue_gbp=None,
+        )
+        with pytest.warns(UserWarning, match="no tariff configured"):
+            return householder_bill(
+                summary=summary,
+                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                finance=_make_finance(self_consumption_override=override),
+                simulation_days=365,
+            )
+
     def test_override_own_use_capped_at_demand(self) -> None:
         """Own-use is billed on the 3,400 kWh demand, not the implied 4,042.5 kWh (£606.375)."""
         bill = self._fin_override_bill()
@@ -567,6 +587,43 @@ class TestOverrideExactValues:
 
         assert bill.own_use_payment_gbp == pytest.approx(420.0)
         assert bill.import_cost_gbp == pytest.approx(138.0)  # 600 kWh × 23 p
+
+    def test_override_untariffed_import_priced_at_retail(self) -> None:
+        """With no tariff, the override's 600 kWh import is priced at the 23 p retail rate, not £0."""
+        bill = self._untariffed_override_bill()
+
+        assert bill.import_cost_gbp == pytest.approx(138.0)
+
+    def test_override_untariffed_exact_total_outlay(self) -> None:
+        """The retail-priced import carries into VAT and outlay, and the H3 saving holds exactly."""
+        bill = self._untariffed_override_bill()
+
+        assert bill.vat_gbp == pytest.approx(38.85)
+        assert bill.total_outlay_gbp == pytest.approx(815.85)
+        assert bill.saving_vs_baseline_gbp == pytest.approx(2800.0 * (23.0 - 15.0) * 1.05 / 100.0)
+
+    def test_override_untariffed_bills_like_a_retail_tariffed_home(self) -> None:
+        """A missing tariff bills every field as the same home on a 23 p (retail) tariff does."""
+        from solar_challenge.finance import householder_bill
+
+        tariffed_summary = _make_summary()  # its 1,200 kWh import cost £276, i.e. 23 p
+        tariffed = householder_bill(
+            summary=tariffed_summary,
+            annual_self_consumption_kwh=tariffed_summary.total_self_consumption_kwh,
+            finance=_make_finance(self_consumption_override=0.70),
+            simulation_days=365,
+        )
+
+        untariffed = self._untariffed_override_bill()
+
+        assert dataclasses.astuple(untariffed) == pytest.approx(dataclasses.astuple(tariffed))
+
+    def test_override_untariffed_capped_home_bills_no_import_yet_warns_twice(self) -> None:
+        """At 0.90 own-use is capped at the 3,400 kWh demand, so no import is billed, yet both warnings fire."""
+        with pytest.warns(UserWarning, match="capped at demand"):
+            bill = self._untariffed_override_bill(override=0.90)
+
+        assert bill.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
 
     def test_override_zero_import_kwh_fallback(self) -> None:
         """When total_grid_import_kwh==0, effective import rate falls back to retail_baseline_rate."""
