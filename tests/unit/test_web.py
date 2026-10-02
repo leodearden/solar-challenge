@@ -887,7 +887,7 @@ class TestErrorPages:
         assert "text/html" in response.content_type
         html = response.data.decode("utf-8")
         # Should contain the custom 404 template content
-        assert "Page Not Found" in html
+        assert headings(html).count("Page Not Found") == 1
         # Should NOT be a raw error string like "Not Found"
         assert doctype(html) == "html"
 
@@ -896,14 +896,15 @@ class TestErrorPages:
         response = client.get("/nonexistent")
         assert response.status_code == 404
         html = response.data.decode("utf-8")
+        page_texts = texts(html)
         # The base template includes sidebar navigation and footer
-        assert "Solar Challenge" in html
+        assert "Solar Challenge" in page_texts
         # Check it extends the base layout (has nav and footer elements)
         assert element_count(html, "nav") >= 1
         assert element_count(html, "footer") >= 1
         # Contains the 404-specific content
-        assert "404" in html
-        assert "Back to Dashboard" in html
+        assert texts_after(html, "404", 1) == ["Page Not Found"]
+        assert page_texts.count("Back to Dashboard") == 1
 
     def test_500_page_renders_within_app_layout(self, app: Flask) -> None:
         """Test custom 500 page is rendered within the base app layout."""
@@ -920,12 +921,13 @@ class TestErrorPages:
                 response = test_client.get("/trigger-500")
                 assert response.status_code == 500
                 html = response.data.decode("utf-8")
+                page_texts = texts(html)
                 # Should render within the base layout
-                assert "Solar Challenge" in html
+                assert "Solar Challenge" in page_texts
                 assert element_count(html, "footer") >= 1
                 # Contains the 500-specific content
                 assert texts_after(html, "500", 1) == ["Internal Server Error"]
-                assert "Back to Dashboard" in html
+                assert page_texts.count("Back to Dashboard") == 1
         finally:
             app.config["TESTING"] = True
 
