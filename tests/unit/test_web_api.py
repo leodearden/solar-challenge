@@ -14,6 +14,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.web.api import api_bp
 from tests._web_app import build_test_app
 
 
@@ -1290,6 +1291,27 @@ class TestImportFleetYAML:
 # Error path tests (miscellaneous)
 # ===================================================================
 
+_API_ENDPOINTS_THAT_READ_NO_JSON_BODY = frozenset({"api.import_fleet_yaml"})
+
+
+def _api_body_method_routes() -> list[tuple[str, str, str]]:
+    """Return the endpoint, method and path of every POST, PUT and PATCH route of the api blueprint.
+
+    A path argument is filled with a value that names no record, e.g. no-such-run_id.
+    """
+    api_only = Flask(__name__, static_folder=None)
+    api_only.register_blueprint(api_bp)
+    urls = api_only.url_map.bind("localhost")
+    return [
+        (
+            rule.endpoint,
+            method,
+            urls.build(rule.endpoint, {name: f"no-such-{name}" for name in rule.arguments}, method=method),
+        )
+        for rule in api_only.url_map.iter_rules()
+        for method in sorted({"POST", "PUT", "PATCH"}.intersection(rule.methods or ()))
+    ]
+
 
 class TestErrorPaths:
     """Catch-all tests for error handling across the API."""
@@ -1333,17 +1355,9 @@ class TestErrorPaths:
     @pytest.mark.parametrize(
         ("method", "path"),
         [
-            pytest.param("POST", "/api/simulate/home", id="simulate-home"),
-            pytest.param("POST", "/api/simulate/fleet", id="simulate-fleet"),
-            pytest.param("POST", "/api/presets", id="save-preset"),
-            pytest.param("POST", "/api/fleet/preview-distribution", id="preview-distribution"),
-            pytest.param("POST", "/api/simulate/fleet-from-distribution", id="fleet-from-distribution"),
-            pytest.param("POST", "/api/fleet/export-yaml", id="export-fleet-yaml"),
-            pytest.param("POST", "/api/simulate/sweep", id="sweep"),
-            pytest.param("PATCH", "/api/history/runs/no-such-run", id="patch-run"),
-            pytest.param("POST", "/api/scenarios/preview-yaml", id="scenario-preview-yaml"),
-            pytest.param("POST", "/api/scenarios/validate", id="scenario-validate"),
-            pytest.param("POST", "/api/scenarios/save", id="scenario-save"),
+            pytest.param(method, path, id=endpoint)
+            for endpoint, method, path in _api_body_method_routes()
+            if endpoint not in _API_ENDPOINTS_THAT_READ_NO_JSON_BODY
         ],
     )
     def test_every_json_endpoint_answers_a_non_object_body_with_the_shared_400(
@@ -1353,6 +1367,27 @@ class TestErrorPaths:
         resp = client.open(path, method=method, json=[1])
         assert resp.status_code == 400
         assert resp.get_json() == {"error": "Request body must be a JSON object, got list"}
+        assert mock_job_manager.method_calls == []
+
+    def test_no_stale_endpoint_is_listed_as_reading_no_json_body(self) -> None:
+        """Every endpoint exempted from the shared 400 is still a POST, PUT or PATCH route of the api blueprint."""
+        body_method_endpoints = {endpoint for endpoint, _, _ in _api_body_method_routes()}
+        assert _API_ENDPOINTS_THAT_READ_NO_JSON_BODY - body_method_endpoints == set()
+
+    @pytest.mark.parametrize(
+        ("data", "content_type"),
+        [
+            pytest.param(None, None, id="absent"),
+            pytest.param("null", "application/json", id="json-null"),
+        ],
+    )
+    def test_an_absent_or_null_body_is_refused_as_nonetype(
+        self, client: FlaskClient, mock_job_manager: MagicMock, data: str | None, content_type: str | None
+    ) -> None:
+        """No body at all, and a JSON null, are both refused naming NoneType."""
+        resp = client.post("/api/simulate/home", data=data, content_type=content_type)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "Request body must be a JSON object, got NoneType"}
         assert mock_job_manager.method_calls == []
 
     def test_get_method_not_allowed_simulate_home(self, client: FlaskClient) -> None:
