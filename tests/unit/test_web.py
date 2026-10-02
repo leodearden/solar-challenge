@@ -610,12 +610,17 @@ class TestFleetConfigHelpers:
                 f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got -1",
                 id="negative",
             ),
+            pytest.param(
+                MAX_FLEET_HOMES - 1,
+                f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="pool-total-one-above-the-fleet-limit",
+            ),
         ],
     )
     def test_sample_distribution_refuses_a_shuffled_pool_count_it_cannot_use(
         self, count: float, message: str
     ) -> None:
-        """A preview refuses a shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, naming the row's count and the value sent."""
+        """A preview refuses a shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, naming the row's count and the value sent; it refuses a count that takes the pool's total above that limit, naming the total."""
         from solar_challenge.web.fleet_config import sample_distribution
 
         with pytest.raises(ValueError, match=re.escape(message)):
@@ -862,12 +867,17 @@ class TestFleetConfigHelpers:
                 f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
                 id="huge-float",
             ),
+            pytest.param(
+                MAX_FLEET_HOMES - 1,
+                f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="pool-total-one-above-the-fleet-limit",
+            ),
         ],
     )
     def test_form_to_fleet_distribution_config_refuses_a_shuffled_pool_count_it_cannot_use(
         self, count: object, message: str
     ) -> None:
-        """A shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, is refused, naming the row's count and the value sent."""
+        """A shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, is refused, naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
         from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
 
         spec = {
@@ -882,7 +892,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_accepts_shuffled_pool_counts_from_0_to_max_fleet_homes(
         self,
     ) -> None:
-        """A shuffled_pool row may assign its value to no home, or to as many homes as a dashboard fleet holds."""
+        """A shuffled_pool row may assign its value to no home, or to as many homes as a dashboard fleet holds; the pool may total exactly that many values."""
         from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
 
         spec = {

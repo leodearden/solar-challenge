@@ -108,6 +108,24 @@ MALFORMED_SEG_BODIES = [
     pytest.param([1, 2], id="array"),
 ]
 
+UNUSABLE_SHUFFLED_POOL_ENTRIES = [
+    pytest.param(
+        [{"value": 4.0, "count": float("inf")}],
+        "entries[0].count must be an integer, got inf",
+        id="infinity",
+    ),
+    pytest.param(
+        [{"value": 4.0, "count": 1e300}],
+        f"entries[0].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
+        id="huge-float",
+    ),
+    pytest.param(
+        [{"value": 4.0, "count": MAX_FLEET_HOMES}, {"value": 5.0, "count": 1}],
+        f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+        id="pool-total-one-above-the-fleet-limit",
+    ),
+]
+
 
 # ===================================================================
 # POST /api/simulate/home
@@ -989,29 +1007,14 @@ class TestPreviewDistribution:
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
 
-    @pytest.mark.parametrize(
-        ("count", "message"),
-        [
-            pytest.param(
-                float("inf"), "entries[0].count must be an integer, got inf", id="infinity"
-            ),
-            pytest.param(
-                1e300,
-                f"entries[0].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
-                id="huge-float",
-            ),
-        ],
-    )
+    @pytest.mark.parametrize(("entries", "message"), UNUSABLE_SHUFFLED_POOL_ENTRIES)
     def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
-        self, client: FlaskClient, count: float, message: str
+        self, client: FlaskClient, entries: list, message: str
     ) -> None:
-        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent."""
+        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
         resp = client.post(
             "/api/fleet/preview-distribution",
-            json={
-                "type": "shuffled_pool",
-                "params": {"entries": [{"value": 1.0, "count": count}]},
-            },
+            json={"type": "shuffled_pool", "params": {"entries": entries}},
         )
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
@@ -1285,33 +1288,16 @@ class TestFleetFromDistribution:
         assert message in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
-    @pytest.mark.parametrize(
-        ("count", "message"),
-        [
-            pytest.param(
-                float("inf"), "entries[0].count must be an integer, got inf", id="infinity"
-            ),
-            pytest.param(
-                1e300,
-                f"entries[0].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
-                id="huge-float",
-            ),
-        ],
-    )
+    @pytest.mark.parametrize(("entries", "message"), UNUSABLE_SHUFFLED_POOL_ENTRIES)
     def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock, count: float, message: str
+        self, client: FlaskClient, mock_job_manager: MagicMock, entries: list, message: str
     ) -> None:
-        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; no fleet is queued."""
+        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total. No fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={
                 **self._VALID_BODY,
-                "pv": {
-                    "capacity_kw": {
-                        "type": "shuffled_pool",
-                        "entries": [{"value": 4.0, "count": count}],
-                    }
-                },
+                "pv": {"capacity_kw": {"type": "shuffled_pool", "entries": entries}},
             },
         )
         assert resp.status_code == 400
