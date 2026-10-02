@@ -1,5 +1,7 @@
 """Tests for weather data handling."""
 
+from types import SimpleNamespace
+
 import pytest
 import pandas as pd
 import numpy as np
@@ -7,7 +9,6 @@ from unittest.mock import patch
 
 from solar_challenge.weather import (
     WeatherCache,
-    set_weather_cache,
     get_tmy_data,
     scale_tmy_to_annual_ghi,
 )
@@ -30,6 +31,42 @@ def pvgis_tmy():
         .set_axis(utc_1990)
         .assign(relative_humidity=80.0)
     )
+
+
+@pytest.fixture
+def pvgis_hourly_series():
+    """PVGIS's 2005-2020 hourly series as get_pvgis_hourly returns it for components=False at surface_tilt=0.
+
+    Its poa_global is then GHI. PVGIS stamps each hour HH:10 UTC. Calendar year Y's GHI sums to
+    1000 + 10·(Y − 2005) kWh/m², so the 16 years' mean is 1075.0 kWh/m² and no single year equals it.
+    """
+    index = pd.date_range("2005-01-01 00:10", "2020-12-31 23:10", freq="h", tz="UTC")
+    hours_after_six = index.hour + index.minute / 60 - 6
+    daylight = pd.Series(np.sin(hours_after_six / 12 * np.pi), index=index).clip(lower=0.0)
+    year_ghi_wh_per_m2 = 1000.0 * (1000 + 10 * (index.year.to_numpy() - 2005))
+    return pd.DataFrame(
+        {
+            "poa_global": daylight / daylight.groupby(index.year).transform("sum") * year_ghi_wh_per_m2,
+            "solar_elevation": 60.0 * daylight,
+            "temp_air": 10.0,
+            "wind_speed": 3.0,
+            "Int": 0,
+        },
+        index=index,
+    )
+
+
+@pytest.fixture
+def pvgis_requests(pvgis_tmy, pvgis_hourly_series):
+    """weather.py's two PVGIS requests, patched: .tmy answers pvgis_tmy and .hourly pvgis_hourly_series.
+
+    Each answers as pvlib does, with a (data, metadata) pair.
+    """
+    with (
+        patch("solar_challenge.weather.get_pvgis_tmy", return_value=(pvgis_tmy, {})) as tmy,
+        patch("solar_challenge.weather.get_pvgis_hourly", return_value=(pvgis_hourly_series, {})) as hourly,
+    ):
+        yield SimpleNamespace(tmy=tmy, hourly=hourly)
 
 
 class TestWeatherCache:
@@ -123,15 +160,6 @@ class TestGetTmyDataWithCache:
     """Test TMY data retrieval with caching."""
 
     @pytest.fixture
-    def temp_cache(self, tmp_path):
-        """Set up temporary cache."""
-        cache_dir = tmp_path / "weather_cache"
-        cache = WeatherCache(cache_dir=cache_dir)
-        set_weather_cache(cache)
-        yield cache
-        set_weather_cache(None)
-
-    @pytest.fixture
     def mock_tmy_data(self, sample_index):
         """Mock TMY data from PVGIS."""
         return pd.DataFrame({
@@ -141,25 +169,65 @@ class TestGetTmyDataWithCache:
             "temp_air": np.linspace(5, 15, 24),
         }, index=sample_index)
 
-    def test_uses_cache_when_available(self, temp_cache, mock_tmy_data):
-        """Uses cached data when available."""
+    def test_uses_cache_when_available(self, weather_cache, pvgis_requests, mock_tmy_data):
+        """Uses cached data when available, returned exactly as stored."""
         location = Location.bristol()
-        temp_cache.put(mock_tmy_data, "tmy", location)
+        weather_cache.put(mock_tmy_data, "tmy", location)
 
-        with patch("solar_challenge.weather.get_pvgis_tmy") as mock_api:
-            result = get_tmy_data(location, use_cache=True)
-            mock_api.assert_not_called()
-            pd.testing.assert_frame_equal(result, mock_tmy_data)
+        result = get_tmy_data(location, use_cache=True)
 
-    def test_skips_cache_when_disabled(self, temp_cache, mock_tmy_data):
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+        pd.testing.assert_frame_equal(result, mock_tmy_data)
+
+    def test_skips_cache_when_disabled(self, weather_cache, pvgis_requests, mock_tmy_data):
         """Skips cache when use_cache=False."""
         location = Location.bristol()
-        temp_cache.put(mock_tmy_data, "tmy", location)
+        weather_cache.put(mock_tmy_data, "tmy", location)
 
-        with patch("solar_challenge.weather.get_pvgis_tmy") as mock_api:
-            mock_api.return_value = (mock_tmy_data, None, None, None)
-            result = get_tmy_data(location, use_cache=False)
-            mock_api.assert_called_once()
+        get_tmy_data(location, use_cache=False)
+
+        pvgis_requests.tmy.assert_called_once()
+        pvgis_requests.hourly.assert_called_once()
+
+
+class TestGetTmyDataScalesToLongTermMeanGhi:
+    """get_tmy_data scales PVGIS's TMY to the mean annual GHI of PVGIS's 2005-2020 hourly series."""
+
+    def test_annual_ghi_is_the_series_mean(self, pvgis_tmy, pvgis_requests):
+        """The TMY's GHI sums to the mean of the series' calendar-year totals; its temperatures are PVGIS's."""
+        result = get_tmy_data(Location.bristol(), use_cache=False)
+
+        assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pd.testing.assert_series_equal(result["temp_air"], pvgis_tmy["temp_air"])
+
+    def test_series_is_requested_as_ghi_for_the_tmys_point_years_and_horizon(self, pvgis_requests):
+        """The series request asks for the TMY request's data as one GHI column, the response pvgis_hourly_series mirrors."""
+        get_tmy_data(Location.bristol(), use_cache=False)
+
+        tmy_request = pvgis_requests.tmy.call_args.kwargs
+        series_request = pvgis_requests.hourly.call_args.kwargs
+        for series_arg, tmy_arg in [
+            ("latitude", "latitude"),
+            ("longitude", "longitude"),
+            ("url", "url"),
+            ("start", "startyear"),
+            ("end", "endyear"),
+            ("usehorizon", "usehorizon"),
+        ]:
+            assert series_request[series_arg] == tmy_request[tmy_arg], series_arg
+        assert series_request["surface_tilt"] == 0
+        assert series_request["components"] is False
+
+    def test_scaled_tmy_is_cached(self, weather_cache, pvgis_requests):
+        """Once fetched, the scaled TMY is served from the cache, with no further PVGIS request."""
+        first = get_tmy_data(Location.bristol())
+        pvgis_requests.tmy.side_effect = AssertionError("the TMY was requested again")
+        pvgis_requests.hourly.side_effect = AssertionError("the series was requested again")
+        second = get_tmy_data(Location.bristol())
+
+        assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        assert second["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
 
 
 class TestScaleTmyToAnnualGhi:

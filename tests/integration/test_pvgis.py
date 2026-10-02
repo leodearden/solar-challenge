@@ -67,3 +67,7 @@ class TestPVGISTMY:
 
         # Night hours should have zero irradiance
         assert (bristol_tmy["ghi"] == 0).any()
+
+    def test_tmy_annual_ghi_matches_the_2005_2020_mean(self):
+        """Fetched live, Bristol's TMY sums to PVGIS's 2005-2020 mean GHI; docs/tmy-irradiation-scaling.md has the figure."""
+        assert get_tmy_data(BRISTOL, use_cache=False)["ghi"].sum() / 1000 == pytest.approx(1069.5, rel=0.01)
