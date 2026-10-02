@@ -522,13 +522,6 @@ def multi_peak_tou_strategy():
     return TOUOptimizedStrategy(peak_hours=[(7, 9), (17, 20)])
 
 
-@pytest.fixture
-def explicit_offpeak_tou_strategy():
-    """Create a TOU strategy with explicit off-peak hours."""
-    # Peak hours: 5 PM to 8 PM, Off-peak: 9 AM to 4 PM
-    return TOUOptimizedStrategy(peak_hours=[(17, 20)], off_peak_hours=[(9, 16)])
-
-
 class TestTOUOptimizedStrategyBasics:
     """Test basic TOUOptimizedStrategy functionality."""
 
@@ -545,13 +538,6 @@ class TestTOUOptimizedStrategyBasics:
     def test_instantiate_with_multiple_peak_periods(self):
         """Can instantiate with multiple peak periods."""
         strategy = TOUOptimizedStrategy(peak_hours=[(7, 9), (17, 20)])
-        assert isinstance(strategy, TOUOptimizedStrategy)
-
-    def test_instantiate_with_off_peak_hours(self):
-        """Can instantiate with explicit off-peak hours."""
-        strategy = TOUOptimizedStrategy(
-            peak_hours=[(17, 20)], off_peak_hours=[(9, 16)]
-        )
         assert isinstance(strategy, TOUOptimizedStrategy)
 
     def test_returns_dispatch_decision(self, standard_tou_strategy):
@@ -590,15 +576,11 @@ class TestTOUOptimizedStrategyValidation:
         with pytest.raises(ValueError, match="start must be before end"):
             TOUOptimizedStrategy(peak_hours=[(17, 17)])
 
-    def test_invalid_offpeak_hour_range_raises(self):
-        """Off-peak hours outside 0-23 range raises error."""
-        with pytest.raises(ValueError, match="must be in range 0-23"):
-            TOUOptimizedStrategy(peak_hours=[(17, 20)], off_peak_hours=[(25, 30)])
-
-    def test_offpeak_start_after_end_raises(self):
-        """Off-peak period with start >= end raises error."""
-        with pytest.raises(ValueError, match="start must be before end"):
-            TOUOptimizedStrategy(peak_hours=[(17, 20)], off_peak_hours=[(6, 2)])
+    def test_off_peak_hours_is_refused(self):
+        """Every hour outside peak_hours is off-peak, so an off-peak window is
+        refused rather than silently ignored."""
+        with pytest.raises(TypeError, match="off_peak_hours"):
+            TOUOptimizedStrategy(peak_hours=[(17, 20)], off_peak_hours=[(0, 7)])
 
     def test_negative_generation_raises(self, standard_tou_strategy):
         """Negative generation raises error."""
