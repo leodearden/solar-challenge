@@ -4,20 +4,12 @@
    All component-level styling is handled by Tailwind utility classes.
    tests/unit/test_web_hand_written_css.py fails on any class or custom property
    defined here that the dashboard does not use, and on @keyframes dist/style.css
-   already defines. */
-
-/* --- CSS Custom Properties (Light Mode) --- */
-:root {
-    --color-primary: #f59e0b;       /* amber - solar */
-}
-
-/* --- CSS Custom Properties (Dark Mode) --- */
-html.dark {
-    --color-primary: #fbbf24;
-}
+   already defines. tests/unit/test_web_theme_colours.py fails on any hex colour
+   tailwind.config.js defines. */
 
 /* --- Tailwind Overrides --- */
-/* Ensure range inputs look correct across browsers */
+/* Range inputs: the thumb's shape lives here; its fill is the theme's primary,
+   applied by the range_input macro in templates/components/macros.html */
 input[type="range"] {
     -webkit-appearance: none;
     appearance: none;
@@ -29,7 +21,6 @@ input[type="range"]::-webkit-slider-thumb {
     width: 1rem;
     height: 1rem;
     border-radius: 50%;
-    background: var(--color-primary);
     cursor: pointer;
     border: 2px solid white;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
@@ -39,7 +30,6 @@ input[type="range"]::-moz-range-thumb {
     width: 1rem;
     height: 1rem;
     border-radius: 50%;
-    background: var(--color-primary);
     cursor: pointer;
     border: 2px solid white;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);

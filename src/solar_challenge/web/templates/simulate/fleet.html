@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
-{% from "components/macros.html" import toggle_switch %}
+{% from "components/macros.html" import toggle_switch, range_input %}
 {% from "simulate/partials/distribution-editor.html" import distribution_editor %}
 
 {% block title %}Fleet Simulation{% endblock %}
@@ -27,13 +27,7 @@
             <div class="flex-1 w-full">
                 <label for="n_homes" class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">Number of Homes</label>
                 <div class="flex items-center gap-4">
-                    <input
-                        type="range"
-                        id="n_homes_range"
-                        min="10" max="500" step="10"
-                        x-model.number="n_homes"
-                        class="flex-1 h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                    >
+                    {{ range_input(id='n_homes_range', model='n_homes', min=10, max=500, step=10, width_class='flex-1') }}
                     <input
                         type="number"
                         id="n_homes"
