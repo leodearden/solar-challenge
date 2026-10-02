@@ -34,7 +34,9 @@ comment is.
 
 A class declares a property only in a lone-class rule, one with that class alone as
 an entry of its selector list, at any @media depth, and only without ``!important``.
-An element sets a property inline only through its static ``style`` attribute. Five
+An element sets a property inline only through its static ``style`` attribute. On both
+sides a property name is read lower-cased, as CSS matches it case-insensitively, but a
+custom property's name is read as written, as CSS matches it case-sensitively. Five
 gaps are known, and each makes a check miss an override, never report a false one:
 pseudo-class, compound and descendant selectors (so ``hover:``, ``dark:`` and the
 other variant utilities); classes a Jinja expression writes into the element's
@@ -332,9 +334,15 @@ def _lone_classes(selector_list: str) -> list[str]:
 
 def _declarations(block: str) -> list[tuple[str, str]]:
     """(property, value) for each declaration of *block*, a declaration block or a style
-    attribute's value, read with comments, strings and url()s blanked."""
+    attribute's value, read with comments, strings and url()s blanked. A property name is
+    lower-cased, as CSS matches it case-insensitively, unless it names a custom property,
+    which CSS matches case-sensitively."""
     pieces = (piece.partition(":") for piece in _literal_free(block).split(";"))
-    return [(name, value) for written, colon, value in pieces if colon and (name := written.strip())]
+    return [
+        (name if name.startswith("--") else name.lower(), value)
+        for written, colon, value in pieces
+        if colon and (name := written.strip())
+    ]
 
 
 def _literal_free(stylesheet: str) -> str:

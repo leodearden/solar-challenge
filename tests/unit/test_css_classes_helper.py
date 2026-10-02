@@ -275,3 +275,20 @@ def test_inline_styled_elements_pair_a_static_style_with_the_classes_its_element
             inline_properties=frozenset({"grid-template-columns", "content"}),
         ),
     ]
+
+
+def test_declared_and_inline_property_names_are_lower_cased_except_custom_properties() -> None:
+    """CSS matches a property name case-insensitively, a vendor-prefixed one included, so both
+    readers lower-case it; a custom property's name is case-sensitive, so --Bar-Color keeps its case."""
+    stylesheet = ".line-clamp-3{-WebKit-Line-Clamp:3;--Bar-Color:#f59e0b}"
+    source = '<p class="line-clamp-3" style="-WEBKIT-LINE-CLAMP: 2; --Bar-Color: red"></p>'
+
+    assert declared_properties_by_class(stylesheet) == {
+        "line-clamp-3": {"-webkit-line-clamp", "--Bar-Color"}
+    }
+    assert inline_styled_elements(source) == [
+        InlineStyledElement(
+            classes=frozenset({"line-clamp-3"}),
+            inline_properties=frozenset({"-webkit-line-clamp", "--Bar-Color"}),
+        )
+    ]
