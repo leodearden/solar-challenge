@@ -400,18 +400,22 @@ class TestFleetConfigRoute:
         assert headings_per_subject == dict.fromkeys(subjects, 1)
 
     def test_fleet_page_contains_action_buttons(self, client: FlaskClient) -> None:
-        """Test GET /simulate/fleet contains import/export/run buttons."""
+        """GET /simulate/fleet renders the Import YAML and Export YAML controls and one button that runs the fleet simulation."""
         response = client.get("/simulate/fleet")
-        html_data = response.data.decode("utf-8")
-        assert "Import YAML" in html_data
-        assert "Export YAML" in html_data
-        assert "Run Fleet Simulation" in html_data
+        page = response.get_data(as_text=True)
+        page_texts = texts(page)
+        assert page_texts.count("Import YAML") == 1
+        assert page_texts.count("Export YAML") == 1
+        assert element_count(page, "button", {"@click": "submitFleet()"}) == 1
 
     def test_fleet_page_has_correct_page_identifier(self, client: FlaskClient) -> None:
-        """Test GET /simulate/fleet passes simulate-fleet page identifier."""
+        """GET /simulate/fleet renders the sidebar with the simulate-fleet page identifier, so the Simulate group's links show on this page."""
         response = client.get("/simulate/fleet")
-        html_data = response.data.decode("utf-8")
-        assert "simulate-fleet" in html_data
+        page = response.get_data(as_text=True)
+        simulate_links_condition = (
+            "(openGroup === 'simulate' || 'simulate-fleet'.startsWith('simulate')) && sidebarOpen"
+        )
+        assert element_count(page, "div", {"x-show": simulate_links_condition}) == 1
 
 
 VALID_DISTRIBUTION_FORM: dict = {
