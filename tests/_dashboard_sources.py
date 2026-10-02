@@ -30,6 +30,7 @@ _WEB_DIR = Path(solar_challenge.web.__file__).parent
 _STATIC_DIR = _WEB_DIR / "static"
 BASE_TEMPLATE_KEY = "templates/base.html"
 _BASE_TEMPLATE = _WEB_DIR / BASE_TEMPLATE_KEY
+HAND_WRITTEN_STYLESHEET_KEY = "static/style.css"
 
 
 def dashboard_template_sources() -> dict[str, str]:

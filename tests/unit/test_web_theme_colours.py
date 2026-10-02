@@ -20,7 +20,12 @@ from collections.abc import Mapping
 import pytest
 
 pytest.importorskip("jinja2")
-from tests._dashboard_sources import dashboard_template_sources, tailwind_config_source
+from tests._dashboard_sources import (
+    HAND_WRITTEN_STYLESHEET_KEY,
+    dashboard_template_sources,
+    served_stylesheet_sources,
+    tailwind_config_source,
+)
 
 _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
@@ -43,14 +48,39 @@ def _written_theme_colours(sources: Mapping[str, str]) -> dict[str, list[str]]:
     }
 
 
+def _listing(written: Mapping[str, list[str]]) -> str:
+    return "".join(f"\n  {path}: {' '.join(colours)}" for path, colours in written.items())
+
+
 def test_no_template_writes_a_theme_colour() -> None:
     written = _written_theme_colours(dashboard_template_sources())
 
-    listing = "".join(f"\n  {path}: {' '.join(colours)}" for path, colours in written.items())
     assert written == {}, (
         "These templates write out colours that tailwind.config.js defines, so a theme "
-        f"edit does not reach them:{listing}\n"
+        f"edit does not reach them:{_listing(written)}\n"
         "Name the colour through a Tailwind utility instead, such as bg-primary-500, then "
         "rebuild with `cd src/solar_challenge/web && npm install && npm run build:css` and "
         "commit static/dist/style.css. Delete a commented-out copy."
+    )
+
+
+def test_the_hand_written_stylesheet_writes_no_theme_colour() -> None:
+    served = served_stylesheet_sources()
+    assert HAND_WRITTEN_STYLESHEET_KEY in served, (
+        f"base.html no longer links {HAND_WRITTEN_STYLESHEET_KEY}, so none of its rules apply: "
+        "delete the file or link it again"
+    )
+    written = _written_theme_colours(
+        {HAND_WRITTEN_STYLESHEET_KEY: served[HAND_WRITTEN_STYLESHEET_KEY]}
+    )
+
+    assert written == {}, (
+        "The hand-written stylesheet writes out colours that tailwind.config.js defines, so "
+        f"a theme edit does not reach them:{_listing(written)}\n"
+        f"{HAND_WRITTEN_STYLESHEET_KEY} is served as-is, never compiled, so it cannot name a "
+        "theme colour. Colour the element with a Tailwind utility instead (on a pseudo-element, "
+        "an arbitrary variant such as [&::-webkit-slider-thumb]:bg-primary-500), then rebuild "
+        "with `cd src/solar_challenge/web && npm install && npm run build:css` and commit "
+        "static/dist/style.css. Delete the declaration, including both the :root and the "
+        "html.dark copy of a variable."
     )
