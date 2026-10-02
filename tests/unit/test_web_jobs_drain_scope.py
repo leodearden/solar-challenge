@@ -34,6 +34,7 @@ SCENARIOS = """
     @pytest.fixture(scope="module")
     def module_app(tmp_path_factory):
         app = build_test_app(tmp_path_factory.mktemp("module_app"))
+        app.extensions["job_manager"].shutdown(wait=True)
         app.extensions["job_manager"] = JobManager(simulate_home=no_simulation)
         yield app
         with app.app_context():
