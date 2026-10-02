@@ -895,7 +895,7 @@ def parse_tariff_config(
             kwargs["evening_end"] = data["evening_end"]
         return TariffConfig.economy_10(**kwargs)
 
-    else:
+    elif tariff_type == "custom":
         if "periods" not in data:
             raise ConfigurationError("custom tariff requires 'periods' field")
 
@@ -928,6 +928,8 @@ def parse_tariff_config(
             periods=tuple(periods),
             name=data.get("name", "")
         )
+
+    raise AssertionError(f"tariff type {tariff_type!r} has recognised keys but no parser branch")
 
 
 _HEAT_PUMP_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -1181,7 +1183,7 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
         counts = tuple(int(c) for c in data["counts"])
         return ShuffledPoolDistribution(values=values, counts=counts)
 
-    else:
+    elif dist_type == "proportional_to":
         if "source" not in data:
             raise ConfigurationError(
                 f"proportional_to distribution for '{param_name}' requires 'source'"
@@ -1210,6 +1212,8 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
             multiplier=multiplier,
             offset=float(data.get("offset", 0.0)),
         )
+
+    raise AssertionError(f"distribution type {dist_type!r} has recognised keys but no parser branch")
 
 
 def _sample_from_distribution(spec: DistributionSpec, rng: random.Random) -> Optional[float]:
