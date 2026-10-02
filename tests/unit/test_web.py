@@ -10,7 +10,14 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
-from tests._html_page import doctype, element_count, element_ids, headings, texts_after
+from tests._html_page import (
+    doctype,
+    element_count,
+    element_ids,
+    headings,
+    texts,
+    texts_after,
+)
 from tests._web_app import build_test_app
 
 
@@ -70,44 +77,44 @@ class TestDashboardRoute:
         assert response.status_code == 200
 
     def test_dashboard_contains_dashboard_text(self, client: FlaskClient) -> None:
-        """Test GET / response contains 'Dashboard' text."""
+        """GET / renders one Dashboard heading, the page's title."""
         response = client.get("/")
-        assert b"Dashboard" in response.data
+        page = response.get_data(as_text=True)
+        assert headings(page).count("Dashboard") == 1
 
     def test_dashboard_contains_sidebar_navigation(self, client: FlaskClient) -> None:
-        """Test GET / response contains sidebar navigation elements."""
+        """GET / renders the Simulate, Scenarios and History group labels once in each of its two sidebars, desktop and mobile."""
         response = client.get("/")
-        html_data = response.data.decode("utf-8")
-        # Sidebar should contain navigation group labels
-        assert "Simulate" in html_data
-        assert "Scenarios" in html_data
-        assert "History" in html_data
+        page = response.get_data(as_text=True)
+        labels = ("Simulate", "Scenarios", "History")
+        page_texts = texts(page)
+        texts_per_label = {label: page_texts.count(label) for label in labels}
+        assert texts_per_label == dict.fromkeys(labels, 2)
 
     def test_dashboard_contains_quick_start_cards(self, client: FlaskClient) -> None:
-        """Test GET / response contains quick-start action cards."""
+        """GET / renders one heading per quick-start card: Run Single Home, Run Fleet Simulation and Build Scenario."""
         response = client.get("/")
-        html_data = response.data.decode("utf-8")
-        assert "Run Single Home" in html_data
-        assert "Run Fleet Simulation" in html_data
-        assert "Build Scenario" in html_data
+        page = response.get_data(as_text=True)
+        titles = ("Run Single Home", "Run Fleet Simulation", "Build Scenario")
+        page_headings = headings(page)
+        headings_per_title = {title: page_headings.count(title) for title in titles}
+        assert headings_per_title == dict.fromkeys(titles, 1)
 
     def test_dashboard_contains_stats_section(self, client: FlaskClient) -> None:
-        """Test GET / response contains aggregate stats section."""
+        """GET / renders one label per aggregate stat: Total Runs, Homes Simulated and Energy Modelled."""
         response = client.get("/")
-        html_data = response.data.decode("utf-8")
-        assert "Total Runs" in html_data
-        assert "Homes Simulated" in html_data
-        assert "Energy Modelled" in html_data
+        page = response.get_data(as_text=True)
+        labels = ("Total Runs", "Homes Simulated", "Energy Modelled")
+        page_texts = texts(page)
+        texts_per_label = {label: page_texts.count(label) for label in labels}
+        assert texts_per_label == dict.fromkeys(labels, 1)
 
     def test_dashboard_contains_recent_runs_section(self, client: FlaskClient) -> None:
-        """Test GET / response contains recent runs section."""
+        """GET / with no saved runs renders the Recent Runs heading and its empty-state message."""
         response = client.get("/")
-        html_data = response.data.decode("utf-8")
-        assert "Recent Runs" in html_data
-        # Should show either existing runs in a table or the empty state message
-        has_runs_table = "recent-runs-table" in html_data
-        has_empty_state = "No simulation runs yet" in html_data
-        assert has_runs_table or has_empty_state
+        page = response.get_data(as_text=True)
+        assert headings(page).count("Recent Runs") == 1
+        assert texts(page).count("No simulation runs yet.") == 1
 
 
 class TestSimulateHomeRoute:
