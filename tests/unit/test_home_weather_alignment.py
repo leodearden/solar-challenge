@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for aligning TMY weather to the simulated demand by UTC instant."""
+"""Tests for mapping TMY weather onto the simulated minutes by UTC time of year.
+
+weather.align_tmy_to_index is the rule itself; simulate_home applies it to PV output
+and to the heat pump's air temperature.
+"""
 
 import time
 
