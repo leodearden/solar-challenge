@@ -528,7 +528,7 @@ def simulate_sweep() -> tuple[Response, int]:
     background home-simulation job per point.  Returns the sweep id, the
     rounded sweep values and the ids of the submitted jobs.
 
-    Expects a JSON body with:
+    Expects a JSON object whose fields are all optional, so ``{}`` runs the default sweep:
       - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
       - min: float
       - max: float

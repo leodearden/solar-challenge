@@ -841,6 +841,17 @@ class TestSimulateSweep:
         assert resp.status_code == 201
         assert resp.get_json()["parameter"] == "pv_capacity_kw"
 
+    def test_empty_object_body_submits_the_default_sweep(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """Every field is optional: {} sweeps PV capacity linearly from 1 to 10 kW in 5 steps, one home job per step."""
+        resp = client.post("/api/simulate/sweep", json={})
+        assert resp.status_code == 201
+        default_pv_kw = [1.0, 3.25, 5.5, 7.75, 10.0]
+        assert (resp.get_json()["parameter"], resp.get_json()["values"]) == ("pv_capacity_kw", default_pv_kw)
+        submitted_homes = [call.kwargs["config"] for call in mock_job_manager.submit_home_job.call_args_list]
+        assert [home.pv_config.capacity_kw for home in submitted_homes] == default_pv_kw
+
 
 # ===================================================================
 # POST /api/fleet/preview-distribution
