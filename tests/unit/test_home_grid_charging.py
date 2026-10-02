@@ -307,7 +307,7 @@ class TestSimulateHomeGridChargeCost:
         )
         summary = calculate_summary(results)
         assert summary.total_grid_charge_cost_gbp > 0.0, (
-            "With TOU tariff + grid-charging battery + zero PV, CBS grid charge cost must be > 0"
+            "With TOU tariff + grid-charging battery + zero PV, the grid-charge cost must be > 0"
         )
 
     def test_tou_grid_charging_cost_priced_at_offpeak_rate(
@@ -415,5 +415,5 @@ class TestSimulateHomeGridChargeCost:
         )
         summary = calculate_summary(results)
         assert summary.total_grid_charge_cost_gbp == pytest.approx(0.0), (
-            "Without grid_charging, CBS grid charge cost must be 0.0 (H5 invariant)"
+            "Without grid_charging, the grid-charge cost must be 0.0 (H5 invariant)"
         )
