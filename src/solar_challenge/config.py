@@ -639,6 +639,11 @@ def _refuse_unrecognised_keys(
     return mapping
 
 
+def _float_or_none(value: Any) -> Optional[float]:
+    """Coerce *value* to a float, keeping a null as None."""
+    return None if value is None else float(value)
+
+
 _LOCATION_BLOCK_KEYS: frozenset[str] = frozenset({
     "latitude", "longitude", "timezone", "altitude", "name",
 })
@@ -1156,8 +1161,8 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
         return NormalDistribution(
             mean=float(data["mean"]),
             std=float(data["std"]),
-            min=float(data["min"]) if data.get("min") is not None else None,
-            max=float(data["max"]) if data.get("max") is not None else None,
+            min=_float_or_none(data.get("min")),
+            max=_float_or_none(data.get("max")),
         )
 
     elif dist_type == "uniform":
@@ -1172,10 +1177,7 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
             raise ConfigurationError(
                 f"fixed distribution for '{param_name}' requires 'value'"
             )
-        value = data["value"]
-        if value is None:
-            return None
-        return float(value)
+        return _float_or_none(data["value"])
 
     elif dist_type == "shuffled_pool":
         if "values" not in data or "counts" not in data:
@@ -1815,11 +1817,6 @@ def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
         return SEGTariff(name="", rate_pence_per_kwh=rate).rate_pence_per_kwh
     except ValueError as exc:
         raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
-
-
-def _float_or_none(value: Any) -> Optional[float]:
-    """Coerce *value* to a float, keeping a null as None."""
-    return None if value is None else float(value)
 
 
 # Rows follow FinanceConfig's field order, which decides the first bad value reported.
