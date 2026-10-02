@@ -379,10 +379,10 @@ class TestFleetConfigRoute:
         assert response.status_code == 200
 
     def test_fleet_page_contains_distribution_editors(self, client: FlaskClient) -> None:
-        """Test GET /simulate/fleet response contains distribution editors."""
+        """GET /simulate/fleet renders three distribution editors, one per card, and the n_homes input."""
         response = client.get("/simulate/fleet")
         page = response.get_data(as_text=True)
-        assert "distribution" in page.lower()
+        assert element_count(page, "select", {"x-model": "dist.type"}) == 3
         assert "n_homes" in element_ids(page)
 
     def test_fleet_page_contains_pv_battery_load_sections(self, client: FlaskClient) -> None:
