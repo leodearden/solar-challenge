@@ -19,6 +19,7 @@ from solar_challenge.config import (
     WeightedDiscreteDistribution,
     load_fleet_config,
     parse_fleet_distribution_config,
+    parse_location_block,
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
@@ -218,6 +219,12 @@ class TestScenarioAPI:
             pytest.param((), {"seg_rate_pence_per_kwh": -1}, "seg", id="negative SEG rate"),
             pytest.param((), {"import_rate": -0.1}, "negative", id="negative import rate"),
             pytest.param((), {"end_date": ""}, "end_date", id="cleared end date"),
+            pytest.param(
+                (),
+                {"location_preset": "custom", "latitude": 95, "longitude": -2.2, "altitude": 38.0},
+                "Latitude must be between -90 and 90",
+                id="custom latitude out of range",
+            ),
             pytest.param((), {"export_rate": 0.15}, "export_rate", id="unread export_rate"),
         ],
     )
@@ -494,6 +501,39 @@ class TestBuilderScenarioYaml:
         assert document[block] is None
         assert validation == {"valid": True, "errors": []}
 
+    @pytest.mark.parametrize(
+        "omitted",
+        [
+            pytest.param("latitude", id="without latitude"),
+            pytest.param("longitude", id="without longitude"),
+            pytest.param("altitude", id="without altitude"),
+        ],
+    )
+    def test_a_custom_location_without_a_coordinate_leaves_it_to_the_loader(
+        self, client: FlaskClient, tmp_path: Path, omitted: str
+    ) -> None:
+        """A custom coordinate the form omits is left to the loader, the one home of its default.
+
+        The form sends *omitted* as '', the cleared input scenarioFormFields leaves for an
+        uploaded location: block without that key.  The block holds the coordinates given,
+        the homes are where load_fleet_config puts a hand-written block with the same keys,
+        and the form validates.
+        """
+        coordinates = {"latitude": 53.4, "longitude": -2.2, "altitude": 38.0}
+        given = {key: value for key, value in coordinates.items() if key != omitted}
+        form = {**self._DEFAULT_FORM, "location_preset": "custom", **given, omitted: ""}
+
+        yaml_text, document = _preview_document(client, form)
+        path = tmp_path / "builder.yaml"
+        path.write_text(yaml_text, encoding="utf-8")
+        validation = client.post("/api/scenarios/validate", json=form).get_json()
+
+        assert document["location"] == given
+        assert {home.location for home in load_fleet_config(path).homes} == {
+            parse_location_block(given)
+        }
+        assert validation == {"valid": True, "errors": []}
+
     def test_a_form_key_the_builder_does_not_read_is_refused(self, client: FlaskClient) -> None:
         """A key the builder does not read gets 400 naming it, instead of being dropped from the YAML."""
         response = client.post(
@@ -502,6 +542,24 @@ class TestBuilderScenarioYaml:
 
         assert response.status_code == 400
         assert "export_rate" in response.get_json()["error"]
+
+    def test_a_custom_coordinate_that_is_not_a_number_is_refused(
+        self, client: FlaskClient
+    ) -> None:
+        """A custom coordinate that does not read as a number gets 400 naming it."""
+        response = client.post(
+            "/api/scenarios/preview-yaml",
+            json={
+                **self._DEFAULT_FORM,
+                "location_preset": "custom",
+                "latitude": "north",
+                "longitude": -2.2,
+                "altitude": 38.0,
+            },
+        )
+
+        assert response.status_code == 400
+        assert "latitude" in response.get_json()["error"]
 
 
 class TestSweepAPI:
