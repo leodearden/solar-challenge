@@ -12,6 +12,7 @@ from tests._orchestrator_config import (
     git_config,
     lane_job_directory,
     lane_job_enabled,
+    offline_lane_jobs,
     sole_offline_lane_job,
 )
 
@@ -41,6 +42,30 @@ def test_the_git_mapping_is_read_whole_from_the_project_roots_orchestrator_confi
         "offline_lane_enabled": True,
         "offline_lane_commands": [{"name": "probe", "command": "pytest"}],
     }
+
+
+def test_every_lane_job_is_listed_whole_in_config_order(tmp_path: Path) -> None:
+    lane_jobs = [
+        {"name": "probe", "command": "pytest", "fix_task_priority": "medium"},
+        {"name": "e2e", "command": "pytest tests/e2e"},
+    ]
+    _write_orchestrator_config(tmp_path, {"offline_lane_commands": lane_jobs})
+
+    assert offline_lane_jobs(tmp_path) == lane_jobs
+
+
+@pytest.mark.parametrize(
+    "git",
+    [
+        pytest.param({"main_branch": "main"}, id="no-offline-lane-commands-key"),
+        pytest.param({"offline_lane_commands": None}, id="bare-offline-lane-commands-key"),
+        pytest.param({"offline_lane_commands": []}, id="empty-offline-lane-commands-list"),
+    ],
+)
+def test_a_git_mapping_without_lane_jobs_lists_none(tmp_path: Path, git: Mapping[str, object]) -> None:
+    _write_orchestrator_config(tmp_path, git)
+
+    assert offline_lane_jobs(tmp_path) == []
 
 
 def test_a_lane_job_named_once_is_returned_whole(tmp_path: Path) -> None:
