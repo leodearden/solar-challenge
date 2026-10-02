@@ -1,15 +1,15 @@
-"""Tests for battery dispatch strategy framework."""
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Tests for the rate-aware grid-charge controller, from its GridChargeContext to the grid_charge_ctx keyword every strategy takes."""
+
+from datetime import datetime
 
 import pytest
-from datetime import datetime
+
 from solar_challenge.dispatch import (
-    DispatchDecision,
-    DispatchStrategy,
     GridChargeContext,
+    PeakShavingStrategy,
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
-    PeakShavingStrategy,
-    TariffPeriod,
     compute_grid_charge_power_kw,
 )
 
@@ -337,10 +337,7 @@ class TestComputeGridChargePowerKw:
 
 
 class TestDecideActionAcceptsGridChargeCtx:
-    """Test that decide_action accepts keyword-only grid_charge_ctx and ignores it.
-
-    In this task the param is accept-and-ignore; real logic lands in α2/α3.
-    """
+    """Test that each strategy's decide_action takes grid_charge_ctx keyword-only, with charge_kw and discharge_kw the same as without it."""
 
     # A "favourable" context that would normally trigger grid charging
     _CHEAP_CTX = GridChargeContext(
