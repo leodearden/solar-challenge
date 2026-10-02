@@ -15,6 +15,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.api import api_bp
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from tests._web_app import build_test_app
 
 
@@ -961,6 +962,30 @@ class TestPreviewDistribution:
     ) -> None:
         """Params that are not an object, or a distribution row that is not an object, is a 400 naming it and the type sent."""
         resp = client.post("/api/fleet/preview-distribution", json=body)
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+
+    @pytest.mark.parametrize(
+        ("n_samples", "message"),
+        [
+            pytest.param("x", "n_samples must be an integer, got 'x'", id="str"),
+            pytest.param(None, "n_samples must be an integer, got None", id="null"),
+            pytest.param(float("inf"), "n_samples must be an integer, got inf", id="infinity"),
+            pytest.param(
+                MAX_FLEET_HOMES + 1,
+                f"n_samples must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="one-above-the-fleet-limit",
+            ),
+        ],
+    )
+    def test_n_samples_that_is_not_an_integer_in_range_returns_400_naming_it(
+        self, client: FlaskClient, n_samples: object, message: str
+    ) -> None:
+        """An n_samples that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming n_samples and the value sent."""
+        resp = client.post(
+            "/api/fleet/preview-distribution",
+            json={"type": "normal", "params": {"mean": 4.0, "std": 1.0}, "n_samples": n_samples},
+        )
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
 

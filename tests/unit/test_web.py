@@ -10,6 +10,7 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from tests._html_page import (
     doctype,
     element_count,
@@ -534,6 +535,64 @@ class TestFleetConfigHelpers:
 
         with pytest.raises(ValueError, match=re.escape(message)):
             sample_distribution(dist_type, params)
+
+    @pytest.mark.parametrize(
+        "n_samples",
+        [
+            pytest.param("x", id="str"),
+            pytest.param(None, id="null"),
+            pytest.param(float("inf"), id="infinity"),
+            pytest.param(float("-inf"), id="negative-infinity"),
+            pytest.param(float("nan"), id="nan"),
+            pytest.param([100], id="list"),
+            pytest.param("2.5", id="decimal-str"),
+        ],
+    )
+    def test_sample_distribution_refuses_an_n_samples_int_cannot_read(
+        self, n_samples: object
+    ) -> None:
+        """An n_samples that int() cannot read is refused, naming n_samples and the value sent."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        with pytest.raises(
+            ValueError, match=re.escape(f"n_samples must be an integer, got {n_samples!r}")
+        ):
+            sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
+
+    @pytest.mark.parametrize(
+        "n_samples",
+        [
+            pytest.param(0, id="zero"),
+            pytest.param(-1, id="negative"),
+            pytest.param(0.5, id="fraction-read-as-zero"),
+            pytest.param(1e300, id="huge-float"),
+            pytest.param(MAX_FLEET_HOMES + 1, id="one-above-the-fleet-limit"),
+        ],
+    )
+    def test_sample_distribution_refuses_an_n_samples_outside_1_to_max_fleet_homes(
+        self, n_samples: float
+    ) -> None:
+        """An n_samples below 1 or above the dashboard's fleet limit is refused, naming n_samples, the range and the value sent."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                f"n_samples must be between 1 and {MAX_FLEET_HOMES}, got {n_samples!r}"
+            ),
+        ):
+            sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
+
+    @pytest.mark.parametrize("n_samples", [1, MAX_FLEET_HOMES])
+    def test_sample_distribution_draws_n_samples_from_1_to_max_fleet_homes(
+        self, n_samples: int
+    ) -> None:
+        """A preview draws any number of samples from 1 to the dashboard's fleet limit."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        result = sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
+
+        assert len(result) == n_samples
 
     def test_form_to_fleet_distribution_config(self) -> None:
         """Test converting form data to fleet distribution config."""
