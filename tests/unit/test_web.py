@@ -405,7 +405,9 @@ class TestFleetConfigRoute:
         page = response.get_data(as_text=True)
         page_texts = texts(page)
         assert page_texts.count("Import YAML") == 1
+        assert element_count(page, "input", {"type": "file", "@change": "importYaml($event)"}) == 1
         assert page_texts.count("Export YAML") == 1
+        assert element_count(page, "button", {"@click": "exportYaml()"}) == 1
         assert element_count(page, "button", {"@click": "submitFleet()"}) == 1
 
     def test_fleet_page_has_correct_page_identifier(self, client: FlaskClient) -> None:
