@@ -29,9 +29,12 @@ from solar_challenge.config import load_community_config, load_fleet_config
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff
+from solar_challenge.weather import WeatherCache
+from tests._synthetic_weather import synthetic_june_weather
 
 pytestmark = pytest.mark.integration
 
@@ -157,6 +160,18 @@ def _build_injected_fleet(
     all_configs = exporter_configs + importer_configs
     results = [simulate_home(h, start, end, weather_data=weather) for h in all_configs]
     return FleetResults(per_home_results=results, home_configs=all_configs)
+
+
+@pytest.fixture
+def clear_june_tmy(weather_cache: WeatherCache) -> None:
+    """Serve a clear 21 June as Bristol's TMY, the location of every fleet these tests run.
+
+    get_tmy_data reads it from the test's weather cache, so no PVGIS call is made.
+    The cache is installed in this process only, so each `fleet run` here passes
+    --sequential: a worker process started with forkserver, Python 3.14's default,
+    would read the working directory's cache instead, outside the offline guard.
+    """
+    weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
 
 
 # ---------------------------------------------------------------------------
@@ -288,13 +303,11 @@ class TestDemoScenario:
         assert cfg.community_battery.capacity_kwh > 0
 
 
+@pytest.mark.usefixtures("clear_june_tmy")
 class TestFleetRunCommunityCLI:
     """CLI integration tests for `fleet run` with community wiring.
 
-    get_tmy_data is monkeypatched in BOTH solar_challenge.home and
-    solar_challenge.fleet so the in-process sequential path is deterministic
-    (no PVGIS calls).  Must use --sequential so ProcessPoolExecutor is skipped
-    (monkeypatches don't propagate across processes).
+    They run on the clear June day clear_june_tmy serves as Bristol's TMY.
     """
 
     def test_community_run_exits_zero(self, tmp_path: Path) -> None:
@@ -381,6 +394,7 @@ class TestFleetRunCommunityCLI:
         )
 
 
+@pytest.mark.usefixtures("clear_june_tmy")
 class TestFleetRunNoCommunityPath:
     """Tests for the community-LESS path and guard against report-without-block.
 
@@ -780,10 +794,11 @@ class TestCommunityBillingAB:
         assert cr.community_net_cost_gbp < cr.baseline_net_cost_gbp  # type: ignore[operator]
 
 
+@pytest.mark.usefixtures("clear_june_tmy")
 class TestFleetRunCommunityBillingCLI:
     """CLI integration test: fleet run on bristol-community.yaml produces billing section.
 
-    Uses monkeypatched weather to avoid PVGIS calls.  Step-7 RED for the
+    Weather comes from clear_june_tmy.  Step-7 RED for the
     _print_community_section billing rows (implemented in step-8) and the
     --community-report billing section (implemented in step-6).
     """
