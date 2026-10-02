@@ -47,32 +47,6 @@ runner = CliRunner()
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _synth_weather(day: str = "2024-06-21", tz: str = "Europe/London") -> pd.DataFrame:
-    """Build a 1-day hourly weather DataFrame with a smooth midday solar bump.
-
-    Mirrors the shape of tests/unit/test_pv.py's sample_weather_data fixture
-    but covers all 24 hours so align_tmy_to_index maps correctly for any
-    sim window on the same day.
-    """
-    index = pd.date_range(day, periods=24, freq="h", tz=tz)
-    # Smooth midday solar curve: zero at night, peak ~850 W/m² at noon
-    ghi =       [0, 0, 0, 0, 0, 0,  50, 200, 400, 600, 750, 820, 850, 820, 750, 600, 400, 200,  50,  0,  0,  0,  0,  0]
-    dni =       [0, 0, 0, 0, 0, 0, 100, 350, 550, 750, 850, 900, 920, 900, 850, 750, 550, 350, 100,  0,  0,  0,  0,  0]
-    dhi =       [0, 0, 0, 0, 0, 0,  30,  80, 120, 150, 170, 180, 185, 180, 170, 150, 120,  80,  30,  0,  0,  0,  0,  0]
-    temp_air =  [14, 14, 14, 14, 14, 14, 15, 16, 17, 19, 21, 23, 24, 24, 23, 22, 20, 18, 17, 16, 15, 15, 15, 14]
-    wind_speed = [2] * 24
-    return pd.DataFrame(
-        {
-            "ghi": ghi,
-            "dni": dni,
-            "dhi": dhi,
-            "temp_air": temp_air,
-            "wind_speed": wind_speed,
-        },
-        index=index,
-    )
-
-
 def _make_home_result(
     index: pd.DatetimeIndex,
     gen: list[float],
@@ -543,7 +517,7 @@ class TestCommunityPipelineAB:
     @pytest.fixture
     def synth_fleet(self) -> FleetResults:
         """Build a FleetResults with injected weather (no PVGIS)."""
-        weather = _synth_weather()
+        weather = synthetic_june_weather("2024-06-21")
         start = pd.Timestamp("2024-06-21", tz="Europe/London")
         end = pd.Timestamp("2024-06-21", tz="Europe/London")
         return _build_injected_fleet(start, end, weather)
@@ -615,7 +589,7 @@ class TestCommunityPipelineAB:
 
     @pytest.mark.slow
     def test_real_pvgis_smoke(self, tmp_path: Path) -> None:
-        """Smoke test: fleet run with real PVGIS calls (marked slow, no monkeypatch)."""
+        """Smoke test: fleet run on live PVGIS weather (marked slow, so no TMY is seeded)."""
         tmp_report = tmp_path / "smoke_report.md"
         result = runner.invoke(
             app,
@@ -738,7 +712,7 @@ class TestCommunityBillingAB:
 
     @pytest.fixture
     def synth_fleet(self) -> FleetResults:
-        weather = _synth_weather()
+        weather = synthetic_june_weather("2024-06-21")
         start = pd.Timestamp("2024-06-21", tz="Europe/London")
         end = pd.Timestamp("2024-06-21", tz="Europe/London")
         return _build_injected_fleet(start, end, weather)
