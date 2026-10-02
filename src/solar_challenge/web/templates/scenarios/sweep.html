@@ -139,12 +139,12 @@
 
                     <!-- Values list -->
                     <div class="mt-8 pt-4 border-t border-slate-200 dark:border-slate-700">
-                        <div class="flex flex-wrap gap-2">
+                        <ul role="list" aria-label="Sweep values" class="flex flex-wrap gap-2">
                             <template x-for="(val, idx) in previewValues" :key="idx">
-                                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300"
-                                    x-text="val"></span>
+                                <li class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300"
+                                    x-text="val"></li>
                             </template>
-                        </div>
+                        </ul>
                     </div>
 
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-2">
