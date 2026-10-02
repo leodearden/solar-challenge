@@ -329,6 +329,14 @@ class TestFinanceConfigValidation:
         assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
 
 
+_YEAR_FIELDS = ("loan_term_years", "asset_life_years")
+_FLOAT_FIELDS = tuple(
+    f.name
+    for f in dataclasses.fields(FinanceConfig)
+    if f.name not in {*_YEAR_FIELDS, "grid_services_model", "grid_services_events"}
+)
+
+
 class TestFinanceConfigParsing:
     """Tests for parse_finance_config parser function."""
 
@@ -464,6 +472,34 @@ class TestFinanceConfigParsing:
                     "standing_charge_pence_per_day": 60.0,
                     "grid_services_income_per_kw_per_year_gbp": -1.0,
                 }
+            )
+
+    @pytest.mark.parametrize(
+        "key",
+        [k for k in (*_FLOAT_FIELDS, *_YEAR_FIELDS) if k != "self_consumption_override"],
+    )
+    def test_null_numeric_value_raises_configuration_error(self, key: str) -> None:
+        """A null for a numeric key is refused as non-numeric, not read as the field's default."""
+        with pytest.raises(ConfigurationError, match="non-numeric"):
+            parse_finance_config({"standing_charge_pence_per_day": 60.0, key: None})
+
+    @pytest.mark.parametrize("key", _FLOAT_FIELDS)
+    def test_fractional_value_reaches_float_field(self, key: str) -> None:
+        """A fractional value set for a float key reaches FinanceConfig unchanged."""
+        block = {"standing_charge_pence_per_day": 60.0, key: 0.5}
+        assert parse_finance_config(block) == FinanceConfig(**block)
+
+    def test_null_self_consumption_override_parses_to_no_override(self) -> None:
+        """A null self_consumption_override parses to a FinanceConfig with no override."""
+        assert parse_finance_config(
+            {"standing_charge_pence_per_day": 60.0, "self_consumption_override": None}
+        ) == FinanceConfig(standing_charge_pence_per_day=60.0)
+
+    def test_null_grid_services_model_raises_configuration_error(self) -> None:
+        """A null grid_services_model is refused, not read as the default flat model."""
+        with pytest.raises(ConfigurationError, match="grid_services_model"):
+            parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, "grid_services_model": None}
             )
 
 
