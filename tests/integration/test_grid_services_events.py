@@ -119,7 +119,7 @@ def _isolate_gs_component(
     """Isolate the grid_services component via the flat-rate-0 delta.
 
     Returns rev(capacity_at_events, year) - rev(flat, rate=0, year).
-    Since own_use_revenue, seg_revenue, and cbs_grid_charge are invariant
+    Since own_use_revenue and seg_revenue are invariant
     across the two models (same simulate, same scenario), the delta equals
     exactly the grid_services contribution.
     """
