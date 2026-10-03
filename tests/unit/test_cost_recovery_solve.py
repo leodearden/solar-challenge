@@ -13,6 +13,7 @@ from typing import Optional
 import pytest
 
 from tests._factories import make_bill_distribution
+from tests._finance_builders import make_fleet_results, make_scenario
 
 
 # ---------------------------------------------------------------------------
@@ -151,128 +152,13 @@ class TestCostRecoverySolution:
 
 
 # ---------------------------------------------------------------------------
-# Helpers shared across solve tests (copied + adapted from test_finance_projection.py)
+# The solve tests' scenario and finance
 # ---------------------------------------------------------------------------
 
 
-def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
-    from solar_challenge.pv import PVConfig
-
-    return PVConfig(
-        capacity_kw=4.0,
-        azimuth=180.0,
-        tilt=35.0,
-        system_age_years=system_age_years,
-        degradation_rate_per_year=0.005,
-    )
-
-
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
-    from solar_challenge.load import LoadConfig
-
-    return LoadConfig(annual_consumption_kwh=3500.0)
-
-
-def _make_home_config(system_age_years: float = 0.0) -> "HomeConfig":  # type: ignore[name-defined]
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
-
-    return HomeConfig(
-        pv_config=_make_pv_config(system_age_years),
-        load_config=_make_load_config(),
-        location=Location.bristol(),
-    )
-
-
-def _make_sim_results(
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    export_revenue_gbp: float = 0.0,
-    n_minutes: int = 525600,  # 365 days
-) -> "SimulationResults":  # type: ignore[name-defined]
-    """Build a minimal SimulationResults with constant power series.
-
-    The energy and revenue arguments are totals over the n_minutes series, so
-    they are annual at the default length.
-
-    Args:
-        self_kwh: Self-consumed solar energy (kWh).
-        export_kwh: Grid export energy (kWh).
-        import_kwh: Grid import energy (kWh).
-        export_revenue_gbp: SEG export revenue (£).
-            Non-zero values allow ``_seg_export_income_gbp`` to see real SEG income.
-        n_minutes: Simulation length in minutes (default 525600 = 365 days).
-    """
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
-    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-
-    # export_revenue is monetary (£/minute); sum() = total GBP over the period.
-    exp_rev_per_min = export_revenue_gbp / n_minutes if n_minutes > 0 else 0.0
-    export_revenue_series = pd.Series(exp_rev_per_min, index=idx)
-
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=export_revenue_series,
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
-
-
-def _make_fleet_results(
-    n_homes: int = 5,
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    export_revenue_gbp_per_year: float = 0.0,
-) -> "FleetResults":  # type: ignore[name-defined]
-    from solar_challenge.fleet import FleetResults
-
-    homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results(self_kwh, export_kwh, import_kwh,
-                          export_revenue_gbp=export_revenue_gbp_per_year)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(
-        per_home_results=per_home,
-        home_configs=homes,
-    )
-
-
-def _make_scenario(
-    n_homes: int = 5,
-    asset_life_years: int = 25,
-    start: str = "2020-01-01",
-    end: str = "2020-12-31",
-    seg_tariff_pence: float = 5.0,
-) -> "ScenarioConfig":  # type: ignore[name-defined]
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
-    homes = [_make_home_config() for _ in range(n_homes)]
-    return ScenarioConfig(
-        name="cr4-test",
-        period=SimulationPeriod(start_date=start, end_date=end),
-        description="CR4 unit test scenario",
-        homes=homes,
-        seg_tariff_pence_per_kwh=seg_tariff_pence,
-    )
+def _make_scenario(n_homes: int) -> "ScenarioConfig":  # type: ignore[name-defined]
+    """The solve tests' scenario: *n_homes* default homes on a 5 p/kWh scenario-level SEG rate."""
+    return make_scenario(n_homes=n_homes, seg_tariff_pence_per_kwh=5.0)
 
 
 def _make_finance(
@@ -319,8 +205,7 @@ class TestSolveCostRecoveryRateInterior:
         Hence r* is strictly between 0 and 30p.
         """
         # 5 homes × 4 kWp each → 20 kWp; moderate capex
-        # self_kwh=2000/home/yr → fleet_sc=10_000 kWh/yr @ 1 day sim (annualised)
-        # But we use 365-day sim (525600 minutes) so no annualisation needed
+        # self_kwh=2000/home over a 365-day sim → fleet_sc=10_000 kWh/yr, no annualisation
         scenario = _make_scenario(n_homes=n_homes)
         # High capex + small grant → high r* (but below retail)
         finance = _make_finance(
@@ -331,7 +216,7 @@ class TestSolveCostRecoveryRateInterior:
             retail_baseline_rate=30.0,
             n_homes=n_homes,
         )
-        fr = _make_fleet_results(
+        fr = make_fleet_results(
             n_homes=n_homes,
             self_kwh=2000.0,
             export_kwh=800.0,
@@ -483,7 +368,7 @@ class TestSolveCostRecoveryRateInterior:
             finance.own_use_rate_pence_per_kwh, rel=1e-3
         ), "Interior test fixture should yield a rate different from r0=15p"
 
-        # Each synthetic home has self_kwh=2000.0 (from _make_sim_results / 365-day full-year sim)
+        # Each synthetic home has self_kwh=2000.0 (from make_sim_results / 365-day full-year sim)
         # own_use_payment_gbp (ex-VAT) = rate_pence × sc_kwh / 100
         sc_kwh = 2000.0
         expected_payment = sol.own_use_rate_pence_per_kwh * sc_kwh / 100.0
@@ -526,7 +411,7 @@ class TestSolveCostRecoveryRateInterior:
         ) -> "FleetResults":  # type: ignore[name-defined]
             age = fc.homes[0].pv_config.system_age_years
             factor = max(0.0, 1.0 - 0.005 * age)
-            return _make_fleet_results(
+            return make_fleet_results(
                 n_homes=n_homes,
                 self_kwh=2000.0 * factor,
                 export_kwh=800.0 * factor,
@@ -565,7 +450,7 @@ class TestSolveCostRecoveryRateClamps:
     def test_over_feasible_binding_rate_clamped_zero(self) -> None:
         """Over-feasible: surplus(0) > floor → binding='rate_clamped_zero', rate==0, feasible=True.
 
-        Set-up: zero capex (grant >= capex) + large SEG income (via export_revenue_gbp_per_year)
+        Set-up: zero capex (grant >= capex) + large SEG income (via export_revenue_gbp)
         ensures fleet_revenue(r=0) = SEG > fleet_opex + floor×n_homes, so surplus(r=0) > floor
         without needing any own-use payment.
         """
@@ -573,7 +458,7 @@ class TestSolveCostRecoveryRateClamps:
 
         n_homes = 5
         # fleet_opex = 131 × 5 = 655 GBP/yr; floor×n_homes = 10 × 5 = 50 GBP/yr
-        # Need SEG > 705 GBP/yr → set export_revenue_gbp_per_year=200/home → 1000/fleet >> 705
+        # Need SEG > 705 GBP/yr → set export_revenue_gbp=200/home → 1000/fleet >> 705
         scenario = _make_scenario(n_homes=n_homes)
         finance = _make_finance(
             pv_cost_per_kwp_gbp=200.0,
@@ -584,12 +469,12 @@ class TestSolveCostRecoveryRateClamps:
             n_homes=n_homes,
         )
         # SEG income = 200 GBP/yr per home → 1000 GBP/yr fleet, beats opex+floor=705
-        fr = _make_fleet_results(
+        fr = make_fleet_results(
             n_homes=n_homes,
             self_kwh=2000.0,
             export_kwh=800.0,
             import_kwh=1200.0,
-            export_revenue_gbp_per_year=200.0,
+            export_revenue_gbp=200.0,
         )
         simulate = lambda fc, s, e: fr  # noqa: E731
 
@@ -615,7 +500,7 @@ class TestSolveCostRecoveryRateClamps:
             retail_baseline_rate=30.0,
             n_homes=n_homes,
         )
-        fr = _make_fleet_results(
+        fr = make_fleet_results(
             n_homes=n_homes,
             self_kwh=2000.0,
             export_kwh=800.0,
@@ -651,7 +536,7 @@ class TestSolveCostRecoveryRateClamps:
             retained_cash_floor=10000.0,
             retail_baseline_rate=30.0,
         )
-        fr = _make_fleet_results(
+        fr = make_fleet_results(
             n_homes=n_homes,
             self_kwh=2000.0,
             export_kwh=800.0,
@@ -702,12 +587,12 @@ class TestSolveCostRecoveryRateDegenerate:
 
         n_homes = 5
         # self_kwh=0.0 → fleet_sc=0 → slope=0 exactly
-        fr = _make_fleet_results(
+        fr = make_fleet_results(
             n_homes=n_homes,
             self_kwh=0.0,
             export_kwh=2800.0,
             import_kwh=4000.0,
-            export_revenue_gbp_per_year=200.0,  # SEG: 200 × 5 = 1000 GBP/yr fleet
+            export_revenue_gbp=200.0,  # SEG: 200 × 5 = 1000 GBP/yr fleet
         )
         scenario = _make_scenario(n_homes=n_homes)
         # pv_cost_per_kwp_gbp must be > 0 (FinanceConfig validation); use minimal value.
@@ -744,7 +629,7 @@ class TestSolveCostRecoveryRateDegenerate:
 
         n_homes = 5
         # self_kwh=0.0 → slope=0; export_kwh=0 so SEG revenue is also zero
-        fr = _make_fleet_results(
+        fr = make_fleet_results(
             n_homes=n_homes,
             self_kwh=0.0,
             export_kwh=0.0,
@@ -792,7 +677,6 @@ class TestSolveCostRecoveryRateShortWindow:
     def test_short_window_solves_like_the_equivalent_full_year(self) -> None:
         """Rate, surplus, outlay, binding and feasibility all match the full-year solve."""
         from solar_challenge.finance import solve_cost_recovery_rate
-        from solar_challenge.fleet import FleetResults
 
         n_homes = 5
         window_days = 3
@@ -805,26 +689,21 @@ class TestSolveCostRecoveryRateShortWindow:
             retail_baseline_rate=30.0,
             n_homes=n_homes,
         )
-        fleet_full_year = _make_fleet_results(
+        fleet_full_year = make_fleet_results(
             n_homes=n_homes,
             self_kwh=2000.0,
             export_kwh=800.0,
             import_kwh=1200.0,
-            export_revenue_gbp_per_year=40.0,
+            export_revenue_gbp=40.0,
         )
         share_of_year = window_days / 365
-        fleet_short = FleetResults(
-            per_home_results=[
-                _make_sim_results(
-                    2000.0 * share_of_year,
-                    800.0 * share_of_year,
-                    1200.0 * share_of_year,
-                    export_revenue_gbp=40.0 * share_of_year,
-                    n_minutes=window_days * 1440,
-                )
-                for _ in scenario.homes
-            ],
-            home_configs=list(scenario.homes),
+        fleet_short = make_fleet_results(
+            n_homes=n_homes,
+            self_kwh=2000.0 * share_of_year,
+            export_kwh=800.0 * share_of_year,
+            import_kwh=1200.0 * share_of_year,
+            export_revenue_gbp=40.0 * share_of_year,
+            days=window_days,
         )
 
         sol_full = solve_cost_recovery_rate(

@@ -2,7 +2,7 @@
 
 **Task**: W2-CR + task-84 §6 — authoritative specification (CR6, task/62; basis-C amendment, task/84)
 **Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/output.py`
-**Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_projection.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4); `tests/integration/test_finance_bill.py::TestOverrideExactValues` (override path, §3); `tests/unit/test_finance_projection.py::TestProjectMultiYearRevenue` (override path, §4)
+**Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4); `tests/integration/test_finance_bill.py::TestOverrideExactValues` (override path, §3); `tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue` (override path, §4)
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
 **Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
 **Unreleased on main** (task 219): CBS revenue no longer deducts the grid-charge cost (§4); the 0.5.0 tag still does.
@@ -308,7 +308,7 @@ drives both revenue terms: `own_use_revenue` prices each home's own-use,
 own-use leaves over, `generation − own-use`.  So own-use revenue is exactly what
 the §3 override bills charge.  `YearPoint.fleet_export_kwh`, `fleet_import_kwh` and
 the battery throughput behind ageing stay the simulated flows
-(`tests/unit/test_finance_projection.py::TestProjectMultiYearRevenue`).
+(`tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue`).
 
 **Annual basis.** Every projection year is a 365-day year.  When a home's
 simulated window is under 360 days, `project_multi_year` scales that home's
@@ -316,7 +316,7 @@ own-use, export, import and battery-discharge kWh, and its SEG income, by
 `k_h = 365 / sim_days_h`, and emits one `UserWarning` per projection.  Each home
 is annualised once (`a_h`) before the override splits it, as `householder_bill`
 annualises before it bills (§3;
-`tests/unit/test_finance_projection.py::TestProjectMultiYearAnnualisesShortWindow`).  The
+`tests/unit/test_finance_projection_short_window.py::TestProjectMultiYearAnnualisesShortWindow`).  The
 annualised discharge is the yearly throughput that battery cycle ageing
 integrates.  Grid-services income is already annual.  Full-year windows are
 unchanged (`k_h = 1`).  A short window is still one season's sample, so board
@@ -330,7 +330,7 @@ accrues at the annualised discharge simulated at the latest seed age (0,
 bisection-trial ages alike (`_throughput_at`).  `T_h` never falls and
 `compute_soh` never rises in age or throughput, so `YearPoint.battery_soh` is
 non-increasing year on year
-(`tests/unit/test_finance_projection.py::TestBatterySohCountsThroughputToEachAge`).
+(`tests/unit/test_finance_projection_ageing.py::TestBatterySohCountsThroughputToEachAge`).
 A faded battery stores less, which lowers later years' basis-C own-use and its
 revenue.
 
@@ -360,7 +360,7 @@ appears in no CBS equation.  Each grid-charged kWh is paid once:
 ```
 Σ_homes import_cost_gbp (householder)  +  0 (CBS)  =  Σ_homes total_import_cost_gbp
 (full-year physics path with a configured tariff; hard-asserted in
- tests/unit/test_finance_projection.py::TestGridChargeEnergyPaidOnce)
+ tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce)
 ```
 
 This is the basis-C ruling (Leo, 2026-06-22; platform `billing-engine-s4-s5.md`
