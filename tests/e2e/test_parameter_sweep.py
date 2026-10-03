@@ -1,7 +1,8 @@
 """End-to-end tests for the Parameter Sweep page (/scenarios/sweep).
 
 Verifies page loading, that each form control is found by role and by the name
-its label gives it, preview calculations (the preview lists its values in the
+its label gives it, that the Linear and Geometric radios are the radio group
+named "Sweep Mode", preview calculations (the preview lists its values in the
 list named "Sweep values"), that submitting a sweep filled into the form
 returns one background job per sweep point, and detects Bug B1 (Alpine race
 condition with external JS).
@@ -80,6 +81,23 @@ def test_sweep_form_control_is_named_by_its_label(
     page.goto(live_server + "/scenarios/sweep")
 
     expect(page.get_by_role(role, name=label, exact=True)).to_be_visible()
+
+
+# -- Sweep form control groups ---------------------------------------------
+
+
+def test_sweep_mode_radio_group_holds_the_linear_and_geometric_radios(
+    page: Page, live_server: str
+) -> None:
+    """The radio group named "Sweep Mode" holds exactly two radios, Linear and Geometric."""
+    page.goto(live_server + "/scenarios/sweep")
+
+    sweep_mode = page.get_by_role("radiogroup", name="Sweep Mode", exact=True)
+    expect(sweep_mode.get_by_role("radio")).to_have_count(2)
+    expect(sweep_mode.get_by_role("radio", name="Linear", exact=True)).to_be_visible()
+    expect(
+        sweep_mode.get_by_role("radio", name="Geometric", exact=True)
+    ).to_be_visible()
 
 
 # -- Preview updates when inputs change ------------------------------------
