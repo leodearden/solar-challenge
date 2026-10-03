@@ -4,6 +4,7 @@ import io
 import tempfile
 import types
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -371,6 +372,21 @@ class TestErrorHandling:
             config_path.write_text("invalid: yaml: syntax: [")
             result = runner.invoke(app, ["config", "show", str(config_path)])
             assert result.exit_code != 0
+
+    def test_a_pvgis_failure_is_reported_in_one_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A command whose weather PVGIS cannot supply exits 1 with one error line naming why, and raises nothing."""
+        monkeypatch.setattr(
+            "solar_challenge.weather.get_pvgis_tmy", Mock(side_effect=ConnectionError("PVGIS is unreachable"))
+        )
+
+        result = runner.invoke(
+            app, ["home", "run", "--start", "2024-06-21", "--end", "2024-06-21"], catch_exceptions=False
+        )
+
+        assert result.exit_code == 1
+        assert " ".join(result.stderr.split()) == (
+            "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
+        )
 
 
 class TestCLIOutputFormats:
