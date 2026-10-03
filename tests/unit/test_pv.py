@@ -142,6 +142,14 @@ class TestPVConfigValidation:
         with pytest.raises(ValueError, match="0-1"):
             PVConfig(capacity_kw=4.0, degradation_rate_per_year=-0.1)
 
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    def test_a_degradation_rate_that_is_not_finite_is_refused(self, value: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"Degradation rate must be 0-1, got {value}"),
+        ):
+            dataclasses.replace(PVConfig(capacity_kw=4.0), degradation_rate_per_year=value)
+
     def test_system_age_valid_boundaries(self):
         """Valid boundary values for system_age_years are accepted without error."""
         PVConfig(capacity_kw=4.0, system_age_years=0.0)  # new system
@@ -432,6 +440,14 @@ class TestDegradationFactor:
             calculate_degradation_factor(5, degradation_rate_per_year=1.5)
         with pytest.raises(ValueError, match="0-1"):
             calculate_degradation_factor(5, degradation_rate_per_year=-0.1)
+
+    @pytest.mark.parametrize("rate", [math.nan, math.inf, -math.inf])
+    def test_a_non_finite_rate_raises(self, rate: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"Degradation rate must be 0-1, got {rate}"),
+        ):
+            calculate_degradation_factor(5, degradation_rate_per_year=rate)
 
     def test_factor_clamped_at_zero(self):
         """Factor can't go below zero."""
