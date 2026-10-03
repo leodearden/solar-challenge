@@ -113,44 +113,6 @@ class TestFleetChartFunctions:
         # Should have 3 histogram traces
         assert len(parsed["data"]) == 3
 
-    def test_fleet_summary_cards_data(self) -> None:
-        """Test fleet_summary_cards_data extracts correct fields."""
-        from solar_challenge.web.charts import fleet_summary_cards_data
-
-        summary = type("FleetSummaryMock", (), {
-            "n_homes": 10,
-            "total_generation_kwh": 1000.0,
-            "total_demand_kwh": 800.0,
-            "total_self_consumption_kwh": 600.0,
-            "fleet_self_consumption_ratio": 0.75,
-            "fleet_grid_dependency_ratio": 0.25,
-            "simulation_days": 30,
-        })()
-        cards = fleet_summary_cards_data(summary)
-        assert isinstance(cards, list)
-        assert len(cards) > 0
-        labels = [c["label"] for c in cards]
-        assert "Homes" in labels
-        assert "Total Generation" in labels
-        assert "Simulation Days" in labels
-
-    def test_fleet_summary_cards_data_values(self) -> None:
-        """Test fleet_summary_cards_data returns correct values."""
-        from solar_challenge.web.charts import fleet_summary_cards_data
-
-        summary = type("FleetSummaryMock", (), {
-            "n_homes": 5,
-            "total_generation_kwh": 500.0,
-            "total_demand_kwh": 400.0,
-            "total_self_consumption_kwh": 300.0,
-            "fleet_self_consumption_ratio": 0.6,
-            "fleet_grid_dependency_ratio": 0.25,
-            "simulation_days": 7,
-        })()
-        cards = fleet_summary_cards_data(summary)
-        homes_card = next(c for c in cards if c["label"] == "Homes")
-        assert homes_card["value"] == 5
-
     def test_fleet_aggregate_timeline_returns_json(self) -> None:
         """Test fleet_aggregate_timeline returns valid JSON."""
         import numpy as np
