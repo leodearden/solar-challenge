@@ -26,6 +26,7 @@ from solar_challenge.weather import (
     IRRADIANCE_COLUMNS,
     PVGIS_API_URL,
     PVGIS_TIMEOUT_S,
+    PVGIS_TMY_REQUEST,
     scale_tmy_to_annual_ghi,
 )
 
@@ -78,17 +79,8 @@ class SiteMeasurement:
 
 
 def fetch_tmy(location: Location) -> tuple[pd.DataFrame, dict[int, int]]:
-    """PVGIS's TMY requested as get_tmy_data requests it, and the real year each month comes from."""
-    tmy, meta = get_pvgis_tmy(
-        latitude=location.latitude,
-        longitude=location.longitude,
-        usehorizon=True,
-        startyear=CLIMATE_YEARS[0],
-        endyear=CLIMATE_YEARS[-1],
-        url=PVGIS_API_URL,
-        timeout=PVGIS_TIMEOUT_S,
-        map_variables=True,
-    )
+    """PVGIS's TMY requested with get_tmy_data's PVGIS_TMY_REQUEST, and the real year each month comes from."""
+    tmy, meta = get_pvgis_tmy(latitude=location.latitude, longitude=location.longitude, **PVGIS_TMY_REQUEST)
     return tmy, {selected["month"]: selected["year"] for selected in meta["months_selected"]}
 
 

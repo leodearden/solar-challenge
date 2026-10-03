@@ -60,8 +60,8 @@ outline:
   3.0.3, numpy 2.4.6. The architect's prototype gave the same figures on 2026-10-01.
 - **Sites.** Seven UK points, pinned in the script, because a site's factor depends on
   the exact point: Glasgow's read 0.978 at a nearby one.
-- **The TMY.** Requested as `get_tmy_data` requests it, keeping the metadata's
-  `months_selected`: the real year each month comes from.
+- **The TMY.** Requested with `get_tmy_data`'s own arguments, `PVGIS_TMY_REQUEST`,
+  keeping the metadata's `months_selected`: the real year each month comes from.
 - **The real years.** The 2005–2020 hourly series with `components=True` on a horizontal
   plane, decomposed by task 290's recipe: ghi = `poa_direct` + `poa_sky_diffuse`,
   dhi = `poa_sky_diffuse`, and dni = `poa_direct` / sin(solar elevation) with the sun up,

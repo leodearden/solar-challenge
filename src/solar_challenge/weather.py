@@ -4,7 +4,9 @@
 import calendar
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Optional
 
 import pandas as pd
@@ -30,6 +32,19 @@ CLIMATE_YEARS = range(2005, 2021)
 
 PVGIS_TIMEOUT_S = 120
 """Seconds to wait for each PVGIS response; the 2005-2020 hourly series takes about 9 s to arrive."""
+
+PVGIS_TMY_REQUEST: Mapping[str, object] = MappingProxyType(
+    {
+        "outputformat": "json",
+        "usehorizon": True,
+        "startyear": CLIMATE_YEARS[0],
+        "endyear": CLIMATE_YEARS[-1],
+        "url": PVGIS_API_URL,
+        "timeout": PVGIS_TIMEOUT_S,
+        "map_variables": True,
+    }
+)
+"""The arguments of get_tmy_data's get_pvgis_tmy request, except the point's latitude and longitude."""
 
 
 class WeatherCache:
@@ -265,18 +280,10 @@ def get_tmy_data(
 
 
 def _fetch_pvgis_tmy(location: Location) -> pd.DataFrame:
-    """PVGIS's TMY for location, built from CLIMATE_YEARS with the horizon, in pvlib's column names."""
+    """PVGIS's TMY for location, requested with PVGIS_TMY_REQUEST, so in pvlib's column names."""
     try:
         tmy: pd.DataFrame = get_pvgis_tmy(
-            latitude=location.latitude,
-            longitude=location.longitude,
-            outputformat="json",
-            usehorizon=True,
-            startyear=CLIMATE_YEARS[0],
-            endyear=CLIMATE_YEARS[-1],
-            url=PVGIS_API_URL,
-            timeout=PVGIS_TIMEOUT_S,
-            map_variables=True,
+            latitude=location.latitude, longitude=location.longitude, **PVGIS_TMY_REQUEST
         )[0]
 
         required_columns = {"temp_air", *IRRADIANCE_COLUMNS}

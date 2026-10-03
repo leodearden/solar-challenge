@@ -6,9 +6,10 @@ from types import SimpleNamespace
 import pytest
 import pandas as pd
 import numpy as np
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from solar_challenge.weather import (
+    PVGIS_TMY_REQUEST,
     WeatherCache,
     get_tmy_data,
     scale_tmy_to_annual_ghi,
@@ -204,6 +205,15 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
 
         assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
         pd.testing.assert_series_equal(result["temp_air"], pvgis_tmy["temp_air"])
+
+    def test_tmy_is_requested_with_pvgis_tmy_request(self, pvgis_requests):
+        """The TMY request is PVGIS_TMY_REQUEST at the location's point, so whatever imports it asks for the same TMY."""
+        bristol = Location.bristol()
+        get_tmy_data(bristol, use_cache=False)
+
+        assert pvgis_requests.tmy.call_args == call(
+            latitude=bristol.latitude, longitude=bristol.longitude, **PVGIS_TMY_REQUEST
+        )
 
     def test_series_is_requested_as_ghi_for_the_tmys_point_years_and_horizon(self, pvgis_requests):
         """The series request asks for the TMY request's data as one GHI column, the response pvgis_hourly_series mirrors."""
