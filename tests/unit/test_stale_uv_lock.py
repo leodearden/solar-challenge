@@ -74,6 +74,9 @@ def offline_uv_probe_environment(uv_probe_environment: dict[str, str]) -> dict[s
     would need PyPI on most runs. Offline, the cache must already hold the index
     data that resolution reads: `uv sync` does not fetch it, but
     `uv lock --dry-run --refresh`, run once with network access, does.
+
+    test_uv_in_the_probe_environment_reads_the_package_index_only_from_its_cache
+    pins the offline switch: dropping UV_OFFLINE fails it.
     """
     return {**uv_probe_environment, "UV_OFFLINE": "1"}
 
