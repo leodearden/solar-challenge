@@ -280,12 +280,14 @@ class BatteryDistributionConfig:
         max_charge_kw: Distribution for max charge rate (default: 2.5)
         max_discharge_kw: Distribution for max discharge rate (default: 2.5)
         grid_charging: Grid-charging configuration of every home with a battery (optional)
+        dispatch_strategy: Dispatch strategy of every home with a battery (optional)
     """
 
     capacity_kwh: DistributionSpec
     max_charge_kw: DistributionSpec = 2.5
     max_discharge_kw: DistributionSpec = 2.5
     grid_charging: Optional[GridChargeConfig] = None
+    dispatch_strategy: Optional["DispatchStrategyConfig"] = None
 
 
 @dataclass
@@ -1293,7 +1295,7 @@ def _parse_pv_distribution_config(
 
 
 _BATTERY_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
-    "capacity_kwh", "max_charge_kw", "max_discharge_kw", "grid_charging",
+    "capacity_kwh", "max_charge_kw", "max_discharge_kw", "grid_charging", "dispatch_strategy",
 })
 
 
@@ -1320,6 +1322,9 @@ def _parse_battery_distribution_config(
         ),
         grid_charging=_parse_grid_charge_config(
             data.get("grid_charging"), block_path=_child_path(block_path, "grid_charging")
+        ),
+        dispatch_strategy=parse_dispatch_strategy_config(
+            data.get("dispatch_strategy"), block_path=_child_path(block_path, "dispatch_strategy")
         ),
     )
 
@@ -1687,6 +1692,7 @@ def generate_homes_from_distribution(
                     max_charge_kw=charge_kw if charge_kw is not None else 2.5,
                     max_discharge_kw=discharge_kw if discharge_kw is not None else 2.5,
                     grid_charging=fleet_grid_charging or config.battery.grid_charging,
+                    dispatch_strategy=config.battery.dispatch_strategy,
                 )
 
         # Sample load parameters
