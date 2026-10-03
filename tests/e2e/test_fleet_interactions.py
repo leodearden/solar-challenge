@@ -43,7 +43,7 @@ def _value_inputs(page: Page, subject: str) -> Locator:
 
 
 def _expect_only_row_list_shown(page: Page, subject: str, row_field: str) -> None:
-    """Wait until the card shows the row list with row_field, then until its outgoing list, with the same control names, is hidden."""
+    """Wait until the card shows its row_field row list, then until that is its only visible row list: both row lists name their button "<subject> Add Row", so one visible button means the other list has hidden."""
     expect(
         page.get_by_role("spinbutton", name=f"{subject} {row_field} 1", exact=True)
     ).to_have_count(1)
