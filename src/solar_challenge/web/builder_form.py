@@ -22,7 +22,9 @@ from solar_challenge.config import (
 )
 from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
-from solar_challenge.web.shared import LOCATION_PRESETS, require_json_object
+from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
+
+_BUILDER_FORM = "Builder form"
 
 
 class _Component(NamedTuple):
@@ -88,7 +90,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
             key the builder does not send, a value that is not the number it should be,
             an unknown location preset or distribution type, or a malformed distribution row.
     """
-    form = require_json_object(form, "Builder form")
+    form = require_json_object(form, _BUILDER_FORM)
     _refuse_unrecognised_keys(form)
     fields = _present_fields(form)
 
@@ -113,12 +115,16 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
 def builder_form_errors(form: object) -> list[str]:
     """Every reason the dashboard refuses the builder *form*; none for a scenario it accepts.
 
-    The dashboard's own limits come first.  Then the form becomes its scenario, and,
-    unless its number of homes is out of bounds, the scenario readers judge the YAML
-    text the builder previews: load_fleet_config, the seg: reader and the period's dates.
+    A form that is not a JSON object has that one reason.  For any other, the dashboard's
+    own limits come first.  Then the form becomes its scenario, and, unless its number of
+    homes is out of bounds, the scenario readers judge the YAML text the builder previews:
+    load_fleet_config, the seg: reader and the period's dates.
     """
-    fields = _present_fields(form) if isinstance(form, Mapping) else {}
-    errors = _dashboard_limit_errors(fields)
+    try:
+        form = require_json_object(form, _BUILDER_FORM)
+    except NotAJsonObject as refusal:
+        return [str(refusal)]
+    errors = _dashboard_limit_errors(_present_fields(form))
     try:
         document = scenario_from_builder_form(form)
     except ValueError as exc:
