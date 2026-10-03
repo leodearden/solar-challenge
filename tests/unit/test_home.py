@@ -171,7 +171,7 @@ class TestSimulationResults:
         pd.testing.assert_series_equal(df["grid_charge_cost_gbp"], grid_charge_cost, check_names=False)
 
     def test_from_dataframe_restores_every_series_to_dataframe_wrote(self):
-        """from_dataframe gives back every series to_dataframe wrote, optional ones included."""
+        """from_dataframe gives back every series to_dataframe wrote, under the same name, optional ones included."""
         original = _results_with_every_series_set()
 
         restored = SimulationResults.from_dataframe(
@@ -181,10 +181,35 @@ class TestSimulationResults:
         assert restored.heat_pump_load is not None
         assert restored.grid_charge_cost is not None
         for name in _series_field_names():
-            pd.testing.assert_series_equal(
-                getattr(restored, name), getattr(original, name), check_names=False, obj=name
-            )
+            pd.testing.assert_series_equal(getattr(restored, name), getattr(original, name), obj=name)
         assert restored.strategy_name == "tou_optimized"
+
+    @pytest.mark.parametrize(
+        "built_name",
+        [pytest.param(None, id="unnamed"), pytest.param("demand_kw", id="named-another-series-column")],
+    )
+    def test_each_series_is_named_the_column_to_dataframe_writes_it_under(self, built_name):
+        """Each series is named the column to_dataframe writes it under, whatever it was named when built."""
+        built = _results_with_every_series_set()
+        results = dataclasses.replace(
+            built, **{name: getattr(built, name).rename(built_name) for name in _series_field_names()}
+        )
+
+        frame = results.to_dataframe()
+
+        for name in _series_field_names():
+            series = getattr(results, name)
+            (column,) = [column for column in frame.columns if frame[column].equals(series)]
+            assert series.name == column, name
+
+    def test_the_series_it_was_built_from_keep_their_names(self):
+        """Naming its series does not rename the series a SimulationResults was built from."""
+        built = _results_with_every_series_set()
+        given = {name: getattr(built, name).rename("temp_air") for name in _series_field_names()}
+
+        dataclasses.replace(built, **given)
+
+        assert {name: series.name for name, series in given.items()} == dict.fromkeys(given, "temp_air")
 
     def test_optional_series_left_unset_come_back_none(self, sample_results):
         """An optional series left unset is written as no column, and comes back None rather than NaN or zero."""
