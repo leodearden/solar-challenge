@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import pandas as pd
 
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.home import HOURS_PER_MINUTE, SimulationResults, calculate_summary
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
@@ -105,11 +105,10 @@ def generate_summary_report(
             winter_demand = results.demand[winter_mask]
             summer_demand = results.demand[summer_mask]
 
-            # Convert kW to kWh (1-minute resolution: divide by 60)
-            winter_hp_kwh = float(winter_hp_load.sum() / 60) if len(winter_hp_load) > 0 else 0.0
-            summer_hp_kwh = float(summer_hp_load.sum() / 60) if len(summer_hp_load) > 0 else 0.0
-            winter_demand_kwh = float(winter_demand.sum() / 60) if len(winter_demand) > 0 else 0.0
-            summer_demand_kwh = float(summer_demand.sum() / 60) if len(summer_demand) > 0 else 0.0
+            winter_hp_kwh = float(winter_hp_load.sum() * HOURS_PER_MINUTE) if len(winter_hp_load) > 0 else 0.0
+            summer_hp_kwh = float(summer_hp_load.sum() * HOURS_PER_MINUTE) if len(summer_hp_load) > 0 else 0.0
+            winter_demand_kwh = float(winter_demand.sum() * HOURS_PER_MINUTE) if len(winter_demand) > 0 else 0.0
+            summer_demand_kwh = float(summer_demand.sum() * HOURS_PER_MINUTE) if len(summer_demand) > 0 else 0.0
 
             winter_peak_hp_kw = float(winter_hp_load.max()) if len(winter_hp_load) > 0 else 0.0
             summer_peak_hp_kw = float(summer_hp_load.max()) if len(summer_hp_load) > 0 else 0.0
@@ -279,14 +278,13 @@ def calculate_seasonal_metrics(
         index=summer_generation.index,
     )
 
-    # Convert kW to kWh (1-minute resolution: divide by 60)
-    winter_generation_kwh = float(winter_generation.sum() / 60)
-    winter_demand_kwh = float(winter_demand.sum() / 60)
-    winter_self_consumption_kwh = float(winter_self_consumption.sum() / 60)
+    winter_generation_kwh = float(winter_generation.sum() * HOURS_PER_MINUTE)
+    winter_demand_kwh = float(winter_demand.sum() * HOURS_PER_MINUTE)
+    winter_self_consumption_kwh = float(winter_self_consumption.sum() * HOURS_PER_MINUTE)
 
-    summer_generation_kwh = float(summer_generation.sum() / 60)
-    summer_demand_kwh = float(summer_demand.sum() / 60)
-    summer_self_consumption_kwh = float(summer_self_consumption.sum() / 60)
+    summer_generation_kwh = float(summer_generation.sum() * HOURS_PER_MINUTE)
+    summer_demand_kwh = float(summer_demand.sum() * HOURS_PER_MINUTE)
+    summer_self_consumption_kwh = float(summer_self_consumption.sum() * HOURS_PER_MINUTE)
 
     # Calculate ratios with safety checks
     winter_self_consumption_ratio = (
