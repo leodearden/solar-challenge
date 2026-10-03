@@ -7,11 +7,12 @@ Usage::
 
     collection = collect_lane_job(project_root, "e2e", env=uv_probe_environment)
     assert collection.node_ids, f"{collection.command!r} collected no tests\n{collection.outcome}"
+    assert not collection.node_ids_outside("tests/e2e"), f"{collection.command!r} collected tests outside tests/e2e"
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -26,6 +27,14 @@ class LaneJobCollection:
     command: str
     node_ids: tuple[str, ...]
     outcome: str
+
+    def node_ids_outside(self, path: str) -> tuple[str, ...]:
+        """Return the node ids whose test file is neither *path* nor under it; *path* is relative to the rootdir, as node ids are."""
+        return tuple(
+            node_id
+            for node_id in self.node_ids
+            if not PurePosixPath(node_id.partition("::")[0]).is_relative_to(path)
+        )
 
 
 def collect_lane_job(project_root: Path, name: str, *, env: Mapping[str, str]) -> LaneJobCollection:
