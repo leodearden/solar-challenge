@@ -17,8 +17,9 @@ import pytest
 
 from solar_challenge.location import Location
 from solar_challenge.weather import DEFAULT_CACHE_DIR, TMY_HOURS, WeatherCache
-from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
-from tests._orchestrator_config import lane_job_directory, lane_job_enabled, sole_offline_lane_job
+from tests._collect_only import requires_uv
+from tests._lane_collection import collect_lane_job
+from tests._orchestrator_config import lane_job_enabled, sole_offline_lane_job
 
 _PVGIS_JOB = "pvgis"
 _PVGIS_CONTRACT_TESTS = "tests/integration/test_pvgis.py"
@@ -44,24 +45,17 @@ def test_pvgis_job_collects_the_pvgis_contract_tests_and_nothing_else(
     The job's uv environment is fresh, as the lane's is, so it holds only the
     extras the job names.
     """
-    job = sole_offline_lane_job(project_root, _PVGIS_JOB)
-    command = job["command"]
+    collection = collect_lane_job(project_root, _PVGIS_JOB, env=uv_probe_environment)
 
-    result = run_collect_only(command, lane_job_directory(project_root, job), env=uv_probe_environment)
-
-    assert result.returncode == pytest.ExitCode.OK, (
-        f"the {_PVGIS_JOB!r} lane job {command!r} failed to collect\n{describe_outcome(result)}"
-    )
-    node_ids = collected_node_ids(result.stdout)
-    assert node_ids, (
-        f"the {_PVGIS_JOB!r} lane job {command!r} collected no tests, so the lane stays green "
-        f"while the PVGIS contract tests go unrun\n{describe_outcome(result)}"
+    assert collection.node_ids, (
+        f"the {_PVGIS_JOB!r} lane job {collection.command!r} collected no tests, so the lane stays green "
+        f"while the PVGIS contract tests go unrun\n{collection.outcome}"
     )
     outside_contract_tests = [
-        node_id for node_id in node_ids if not node_id.startswith(f"{_PVGIS_CONTRACT_TESTS}::")
+        node_id for node_id in collection.node_ids if not node_id.startswith(f"{_PVGIS_CONTRACT_TESTS}::")
     ]
     assert not outside_contract_tests, (
-        f"the {_PVGIS_JOB!r} lane job {command!r} collected tests outside {_PVGIS_CONTRACT_TESTS}, "
+        f"the {_PVGIS_JOB!r} lane job {collection.command!r} collected tests outside {_PVGIS_CONTRACT_TESTS}, "
         f"which either the per-task verify already runs or hit PVGIS for other reasons: {outside_contract_tests}"
     )
 
