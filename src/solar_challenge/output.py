@@ -321,30 +321,61 @@ def calculate_seasonal_metrics(
     }
 
 
+# Each SimulationResults row is one minute, so a kW sample times this is that minute's kWh.
+_HOURS_PER_MINUTE = 1 / 60
+
+
+def _per_minute_amounts(results: SimulationResults) -> pd.DataFrame:
+    """Each minute's energy in kWh and money in £, so a period's total is their sum.
+
+    The battery state of charge and the tariff rate are left out because neither
+    adds up over time.
+    """
+    amounts = {
+        "generation_kwh": results.generation * _HOURS_PER_MINUTE,
+        "demand_kwh": results.demand * _HOURS_PER_MINUTE,
+        "self_consumption_kwh": results.self_consumption * _HOURS_PER_MINUTE,
+        "battery_charge_kwh": results.battery_charge * _HOURS_PER_MINUTE,
+        "battery_discharge_kwh": results.battery_discharge * _HOURS_PER_MINUTE,
+        "grid_import_kwh": results.grid_import * _HOURS_PER_MINUTE,
+        "grid_export_kwh": results.grid_export * _HOURS_PER_MINUTE,
+        "import_cost_gbp": results.import_cost,
+        "export_revenue_gbp": results.export_revenue,
+    }
+    if results.heat_pump_load is not None:
+        amounts["heat_pump_load_kwh"] = results.heat_pump_load * _HOURS_PER_MINUTE
+    if results.grid_charge_cost is not None:
+        amounts["grid_charge_cost_gbp"] = results.grid_charge_cost
+    return pd.DataFrame(amounts)
+
+
+def _aggregate_by_period(results: SimulationResults, freq: str) -> pd.DataFrame:
+    """Sum each period's per-minute amounts and take its peak generation and demand.
+
+    Args:
+        results: Simulation results with 1-minute resolution
+        freq: pandas offset alias of the period, e.g. "D" or "ME"
+    """
+    totals = _per_minute_amounts(results).resample(freq).sum()
+    peaks = pd.DataFrame(
+        {"peak_generation_kw": results.generation, "peak_demand_kw": results.demand}
+    ).resample(freq).max()
+    return pd.concat([totals, peaks], axis=1)
+
+
 def aggregate_daily(results: SimulationResults) -> pd.DataFrame:
-    """Aggregate 1-minute results to daily totals.
+    """Aggregate 1-minute results to daily totals and peaks.
 
     Args:
         results: Simulation results with 1-minute resolution
 
     Returns:
-        DataFrame with daily DatetimeIndex and energy totals in kWh
+        DataFrame with a daily DatetimeIndex holding each day's energy totals in
+        kWh, money totals in £ (sums of the per-minute £ amounts) and peak
+        generation and demand in kW. ``heat_pump_load_kwh`` and
+        ``grid_charge_cost_gbp`` appear only when the run has those series.
     """
-    df = results.to_dataframe()
-
-    # Convert power (kW) to energy (kWh) - sum of 1-minute kW values / 60
-    # Resample to daily and sum, then divide by 60 to get kWh
-    daily = df.resample("D").sum() / 60
-
-    # Rename columns to indicate energy
-    daily.columns = [col.replace("_kw", "_kwh") for col in daily.columns]
-
-    # Also add daily peak values
-    peaks = df.resample("D").max()
-    daily["peak_generation_kw"] = peaks["generation_kw"]
-    daily["peak_demand_kw"] = peaks["demand_kw"]
-
-    return daily
+    return _aggregate_by_period(results, "D")
 
 
 def aggregate_monthly(results: SimulationResults) -> pd.DataFrame:
