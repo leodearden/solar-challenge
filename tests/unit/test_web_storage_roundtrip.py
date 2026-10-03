@@ -3,12 +3,16 @@
 Tests cover:
 - C3 regression: list_runs with offset but no limit
 - C4 regression: heat_pump_load survives home and fleet roundtrips
+- grid_charge_cost survives home and fleet roundtrips, and a run saved without it
+  reloads it as None
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
 - Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
 - A config holding every field shape, its battery's dispatch strategy and grid
   charging included, loads equal to the one saved
 - Every saved config and summary is written as its dataclass field tree in JSON
+- Each column of a stored data.parquet, under the names runs on disk use, loads
+  into its field
 - A stored config holding a retired field's key set to null still loads
 - Corrupted parquet graceful error handling
 - Missing run directory graceful error handling
@@ -92,6 +96,7 @@ def _make_home_config(name: str = "Test Home") -> HomeConfig:
 def _make_simulation_results(
     index: pd.DatetimeIndex | None = None,
     include_heat_pump: bool = False,
+    include_grid_charge_cost: bool = False,
 ) -> SimulationResults:
     """Create a SimulationResults with realistic data for all fields."""
     if index is None:
@@ -110,6 +115,9 @@ def _make_simulation_results(
         tariff_rate=_make_series(index, 0.25, "tariff_rate_per_kwh"),
         strategy_name="self_consumption",
         heat_pump_load=_make_series(index, 0.6, "heat_pump_load_kw") if include_heat_pump else None,
+        grid_charge_cost=(
+            _make_series(index, 0.01, "grid_charge_cost_gbp") if include_grid_charge_cost else None
+        ),
     )
 
 
@@ -318,6 +326,64 @@ class TestHeatPumpFleetRoundtrip:
                 check_names=False,
                 check_freq=False,
             )
+
+
+class TestGridChargeCostRoundtrip:
+    """A run simulated with a tariff keeps its grid_charge_cost series when reloaded,
+    as its summary keeps total_grid_charge_cost_gbp."""
+
+    def test_home_run_reloads_grid_charge_cost(self, storage: RunStorage) -> None:
+        results = _make_simulation_results(include_grid_charge_cost=True)
+        storage.save_home_run(
+            run_id="grid-charge-home-001",
+            config=_make_home_config(),
+            results=results,
+            summary=_make_summary(),
+        )
+
+        _, loaded_results, _ = storage.load_home_run("grid-charge-home-001")
+
+        assert loaded_results.grid_charge_cost is not None
+        pd.testing.assert_series_equal(
+            loaded_results.grid_charge_cost, results.grid_charge_cost, check_freq=False
+        )
+
+    def test_fleet_run_reloads_each_homes_grid_charge_cost(self, storage: RunStorage) -> None:
+        index = _make_index()
+        home_results = [
+            _make_simulation_results(index, include_grid_charge_cost=True) for _ in range(2)
+        ]
+        storage.save_fleet_run(
+            run_id="grid-charge-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=home_results,
+                home_configs=[_make_home_config(f"Home {i}") for i in range(2)],
+            ),
+            fleet_summary=_make_fleet_summary(n_homes=2),
+            per_home_summaries=[_make_summary(), _make_summary()],
+        )
+
+        loaded_fleet, _, _ = storage.load_fleet_run("grid-charge-fleet-001")
+
+        for loaded, saved in zip(loaded_fleet.per_home_results, home_results, strict=True):
+            assert loaded.grid_charge_cost is not None
+            pd.testing.assert_series_equal(
+                loaded.grid_charge_cost, saved.grid_charge_cost, check_freq=False
+            )
+
+    def test_run_saved_without_grid_charge_cost_reloads_none(self, storage: RunStorage) -> None:
+        """An untariffed run's data.parquet, like every one written before grid_charge_cost
+        had a column, holds no such column."""
+        storage.save_home_run(
+            run_id="no-grid-charge-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+        )
+
+        _, loaded_results, _ = storage.load_home_run("no-grid-charge-001")
+
+        assert loaded_results.grid_charge_cost is None
 
 
 class TestCompletedAtTimestamp:
@@ -645,6 +711,56 @@ class TestPersistedJson:
         for i, home_summary in enumerate(home_summaries):
             home_summary_path = run_dir / "homes" / f"home_{i}_summary.json"
             assert _read_json(home_summary_path) == _json_field_tree(home_summary)
+
+
+class TestStoredParquetColumns:
+    """A data.parquet in the column format runs on disk were written in loads each column into its field.
+
+    Saving and loading share SimulationResults' one column table, so a round trip cannot
+    notice a renamed or misspelt column; this test, writing the file column by column, is
+    what pins the names.
+    """
+
+    def test_each_stored_column_loads_into_its_field(self, storage: RunStorage) -> None:
+        stored_column_by_field = {
+            "generation": "generation_kw",
+            "demand": "demand_kw",
+            "self_consumption": "self_consumption_kw",
+            "battery_charge": "battery_charge_kw",
+            "battery_discharge": "battery_discharge_kw",
+            "battery_soc": "battery_soc_kwh",
+            "grid_import": "grid_import_kw",
+            "grid_export": "grid_export_kw",
+            "import_cost": "import_cost_gbp",
+            "export_revenue": "export_revenue_gbp",
+            "tariff_rate": "tariff_rate_per_kwh",
+            "heat_pump_load": "heat_pump_load_kw",
+            "grid_charge_cost": "grid_charge_cost_gbp",
+        }
+        storage.save_home_run(
+            run_id="columns-home-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+        )
+        index = _make_index()
+        stored_frame = pd.DataFrame(
+            {
+                column: np.full(len(index), float(position))
+                for position, column in enumerate(stored_column_by_field.values())
+            },
+            index=index,
+        )
+        stored_frame.to_parquet(
+            storage.data_dir / "runs" / "columns-home-001" / "data.parquet", engine="pyarrow"
+        )
+
+        _, loaded_results, _ = storage.load_home_run("columns-home-001")
+
+        for position, field_name in enumerate(stored_column_by_field):
+            series = getattr(loaded_results, field_name)
+            assert series is not None, field_name
+            assert (series == float(position)).all(), field_name
 
 
 class TestRunSavedWithRetiredOptionalField:
