@@ -145,21 +145,25 @@ class SimulationResults:
             if _COLUMN in attribute.metadata:
                 yield attribute.name, attribute.metadata[_COLUMN]
 
+    def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
+        """Each amount's column and its per-minute amounts, in declaration order, for every series that is set."""
+        for attribute in fields(self):
+            amount = attribute.metadata.get(_AMOUNT)
+            series = getattr(self, attribute.name)
+            if isinstance(amount, _PerMinuteAmount) and series is not None:
+                yield amount.column, series * amount.factor
+
     def per_minute_amounts(self) -> pd.DataFrame:
         """Each minute's energy in kWh and money in £, one column per amount, so a period's totals are its column sums.
 
         The battery state of charge and the tariff rate have no column, as neither adds up over
         time, and nor has an optional series that is None.
         """
-        return pd.concat(
-            {
-                amount.column: series * amount.factor
-                for attribute in fields(self)
-                if isinstance(amount := attribute.metadata.get(_AMOUNT), _PerMinuteAmount)
-                and (series := getattr(self, attribute.name)) is not None
-            },
-            axis=1,
-        )
+        return pd.concat(dict(self._amount_series()), axis=1)
+
+    def total_amounts(self) -> dict[str, float]:
+        """The run's total of each amount: per_minute_amounts' column sums, keyed by column."""
+        return {column: float(amounts.sum()) for column, amounts in self._amount_series()}
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to a DataFrame with one column per series that is set."""
@@ -528,21 +532,21 @@ def calculate_summary(
         ``seg_revenue_gbp != total_export_revenue_gbp``, which is not an error
         but may mislead callers that compare the two.
     """
-    totals = results.per_minute_amounts().sum()
-    total_gen = float(totals["generation_kwh"])
-    total_demand = float(totals["demand_kwh"])
-    total_self = float(totals["self_consumption_kwh"])
-    total_import = float(totals["grid_import_kwh"])
-    total_export = float(totals["grid_export_kwh"])
-    total_charge = float(totals["battery_charge_kwh"])
-    total_discharge = float(totals["battery_discharge_kwh"])
+    totals = results.total_amounts()
+    total_gen = totals["generation_kwh"]
+    total_demand = totals["demand_kwh"]
+    total_self = totals["self_consumption_kwh"]
+    total_import = totals["grid_import_kwh"]
+    total_export = totals["grid_export_kwh"]
+    total_charge = totals["battery_charge_kwh"]
+    total_discharge = totals["battery_discharge_kwh"]
 
     peak_gen = float(results.generation.max())
     peak_demand = float(results.demand.max())
 
     # Calculate financial totals
-    total_import_cost = float(totals["import_cost_gbp"])
-    total_export_revenue = float(totals["export_revenue_gbp"])
+    total_import_cost = totals["import_cost_gbp"]
+    total_export_revenue = totals["export_revenue_gbp"]
     net_cost = total_import_cost - total_export_revenue
 
     # Calculate ratios with zero-division protection
@@ -564,14 +568,14 @@ def calculate_summary(
         )
 
     # Grid-charge cost: the slice of total_import_cost spent charging the battery from the grid
-    total_grid_charge_cost = float(totals.get("grid_charge_cost_gbp", 0.0))
+    total_grid_charge_cost = totals.get("grid_charge_cost_gbp", 0.0)
 
     # Calculate heat pump metrics if heat pump load is present
     total_heat_pump_kwh: Optional[float] = None
     peak_heat_pump_kw: Optional[float] = None
     heat_pump_ratio: Optional[float] = None
     if results.heat_pump_load is not None:
-        total_heat_pump_kwh = float(totals["heat_pump_load_kwh"])
+        total_heat_pump_kwh = totals["heat_pump_load_kwh"]
         peak_heat_pump_kw = float(results.heat_pump_load.max())
         heat_pump_ratio = total_heat_pump_kwh / total_demand if total_demand > 0 else 0.0
 

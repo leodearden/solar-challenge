@@ -209,7 +209,7 @@ class TestSimulationResults:
 
 
 class TestPerMinuteAmounts:
-    """Test SimulationResults.per_minute_amounts: each minute's energy and money, which every total sums."""
+    """Test SimulationResults.per_minute_amounts, each minute's energy and money, and total_amounts, their run totals."""
 
     def test_power_becomes_each_minutes_kwh_and_money_stays_its_pounds(self):
         """Each kW series becomes its minute's kWh, each £ series stays as it is, and a level has no column."""
@@ -253,6 +253,17 @@ class TestPerMinuteAmounts:
                 "export_revenue_gbp",
             ]
         )
+
+    @pytest.mark.parametrize(
+        "unset",
+        [{}, {"heat_pump_load": None, "grid_charge_cost": None}],
+        ids=["every_series_set", "optional_series_unset"],
+    )
+    def test_total_amounts_are_the_per_minute_amounts_summed_over_the_run(self, unset):
+        """Each run total is its per-minute amount column's sum, keyed by that column."""
+        results = dataclasses.replace(_results_with_every_series_set(), **unset)
+
+        assert results.total_amounts() == pytest.approx(results.per_minute_amounts().sum().to_dict())
 
 
 class TestSimulateHomeSEGPricing:
