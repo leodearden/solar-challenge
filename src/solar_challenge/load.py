@@ -34,8 +34,9 @@ class LoadConfig:
     Attributes:
         annual_consumption_kwh: Target annual electricity consumption in kWh.
             If not specified and household_occupants is set, derived from Ofgem TDCV.
-        household_occupants: Number of household occupants (1-5+).
-            Affects consumption and profile shape.
+        household_occupants: Number of household occupants, a whole number from
+            1 to 10. A whole-number float such as 3.0 is held as the int 3; a
+            bool is refused. Affects consumption and profile shape.
         name: Optional identifier for the load profile
         use_stochastic: Use the windowed richardsonpy stochastic model (default True).
             richardsonpy is a hard dependency so this path is always available.
@@ -67,6 +68,7 @@ class LoadConfig:
             raise ValueError(
                 f"Household occupants must be a whole number, got {self.household_occupants}"
             )
+        object.__setattr__(self, "household_occupants", whole_occupants)
 
         # Validate annual_consumption if provided
         if self.annual_consumption_kwh is not None and not 0 < self.annual_consumption_kwh < math.inf:
