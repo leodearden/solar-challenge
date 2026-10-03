@@ -35,6 +35,11 @@ uv run --locked --extra dev pytest tests/interpreter_matrix
 # (~3.5 min); the per-task verify never runs it
 uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider
 
+# PVGIS contract tests: what the offline lane's pvgis job runs after every merge
+# (~15 s); they check PVGIS's live response, so they need network access, and the
+# per-task verify never runs them
+uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider
+
 # CLI entry point
 solar-challenge --help
 ```
@@ -135,3 +140,15 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   `uv run --extra e2e playwright install --dry-run chromium-headless-shell`.
   Installing it (the same command without `--dry-run`) has to happen outside
   the sandbox.
+- The lane's `pvgis` job runs `tests/integration/test_pvgis.py`, the PVGIS
+  contract tests, after every merge. They check PVGIS's live response, never a
+  cached TMY, so a change in PVGIS's or pvlib's response turns the lane red. A
+  fix task it files names `test_pvgis.py` node-ids, or `pvgis::nonzero-exit`
+  when the red run printed no failing node-id (it hit the job's `timeout`, or
+  pytest could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
+  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. If the
+  named tests pass, the red was a PVGIS outage that outlasted the run and its
+  confirm re-run; it needs no code change. If every test ERRORs at setup of
+  `bristol_tmy` and the cause is a connection error, a timeout or an HTTP 5xx,
+  PVGIS is still out of reach: retry later before changing code. Any other
+  failure means PVGIS's response, or pvlib's mapping of it, has changed.
