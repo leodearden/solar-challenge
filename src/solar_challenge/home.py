@@ -531,23 +531,21 @@ def calculate_summary(
         ``seg_revenue_gbp != total_export_revenue_gbp``, which is not an error
         but may mislead callers that compare the two.
     """
-    # Convert power (kW) to energy (kWh) - 1 minute = 1/60 hour
-    minutes_to_hours = 1 / 60
-
-    total_gen = float(results.generation.sum() * minutes_to_hours)
-    total_demand = float(results.demand.sum() * minutes_to_hours)
-    total_self = float(results.self_consumption.sum() * minutes_to_hours)
-    total_import = float(results.grid_import.sum() * minutes_to_hours)
-    total_export = float(results.grid_export.sum() * minutes_to_hours)
-    total_charge = float(results.battery_charge.sum() * minutes_to_hours)
-    total_discharge = float(results.battery_discharge.sum() * minutes_to_hours)
+    totals = results.per_minute_amounts().sum()
+    total_gen = float(totals["generation_kwh"])
+    total_demand = float(totals["demand_kwh"])
+    total_self = float(totals["self_consumption_kwh"])
+    total_import = float(totals["grid_import_kwh"])
+    total_export = float(totals["grid_export_kwh"])
+    total_charge = float(totals["battery_charge_kwh"])
+    total_discharge = float(totals["battery_discharge_kwh"])
 
     peak_gen = float(results.generation.max())
     peak_demand = float(results.demand.max())
 
     # Calculate financial totals
-    total_import_cost = float(results.import_cost.sum())
-    total_export_revenue = float(results.export_revenue.sum())
+    total_import_cost = float(totals["import_cost_gbp"])
+    total_export_revenue = float(totals["export_revenue_gbp"])
     net_cost = total_import_cost - total_export_revenue
 
     # Calculate ratios with zero-division protection
@@ -569,18 +567,14 @@ def calculate_summary(
         )
 
     # Grid-charge cost: the slice of total_import_cost spent charging the battery from the grid
-    total_grid_charge_cost = (
-        float(results.grid_charge_cost.sum())
-        if results.grid_charge_cost is not None
-        else 0.0
-    )
+    total_grid_charge_cost = float(totals.get("grid_charge_cost_gbp", 0.0))
 
     # Calculate heat pump metrics if heat pump load is present
     total_heat_pump_kwh: Optional[float] = None
     peak_heat_pump_kw: Optional[float] = None
     heat_pump_ratio: Optional[float] = None
     if results.heat_pump_load is not None:
-        total_heat_pump_kwh = float(results.heat_pump_load.sum() * minutes_to_hours)
+        total_heat_pump_kwh = float(totals["heat_pump_load_kwh"])
         peak_heat_pump_kw = float(results.heat_pump_load.max())
         heat_pump_ratio = total_heat_pump_kwh / total_demand if total_demand > 0 else 0.0
 
