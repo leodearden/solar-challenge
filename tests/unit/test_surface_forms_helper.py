@@ -10,6 +10,7 @@ does not import annotations from __future__. The classes whose qualified names a
 asserted are defined at module level, where a qualified name carries no '<locals>'.
 """
 
+import collections.abc
 import datetime
 import enum
 import pathlib
@@ -76,6 +77,17 @@ def test_a_typing_alias_is_spelled_by_its_builtin_origin() -> None:
     assert (
         surface_form(f)
         == "(a: list[tuple[int, int]], b: dict[str, float], c: tuple[int, ...], d: list[str]) -> None"
+    )
+
+
+def test_a_bare_typing_alias_is_spelled_by_its_origin_alone() -> None:
+    def bare(
+        a: List, b: Dict, c: Tuple, d: Callable, e: list, f: collections.abc.Callable
+    ) -> None: ...
+
+    assert (
+        surface_form(bare)
+        == "(a: list, b: dict, c: tuple, d: Callable, e: list, f: Callable) -> None"
     )
 
 
