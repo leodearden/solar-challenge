@@ -3,10 +3,12 @@
 Verifies page loading, accordion sections, YAML preview, Download YAML
 button, that each section's form control is found by role and by the name its
 caption gives it and sets its own field of the form the builder sends to
-/api/scenarios/validate, that the YAML the builder previews loads through the
-scenario loaders, that uploading a YAML sets the form to it (or, for a YAML
-the form cannot hold, leaves the form as it was), and detects Bug B1 (Alpine
-race condition with external JS).
+/api/scenarios/validate, that each distribution card is a group named by its
+heading whose controls do the same, that switching a card to weighted rows at
+phone width keeps its combobox's width, that the YAML the builder previews
+loads through the scenario loaders, that uploading a YAML sets the form to it
+(or, for a YAML the form cannot hold, leaves the form as it was), and detects
+Bug B1 (Alpine race condition with external JS).
 """
 
 import re
@@ -213,6 +215,69 @@ def test_custom_location_controls_named_by_their_captions_set_the_location_the_b
         "longitude": "-2.2",
         "altitude": "38",
     }
+
+
+_DISTRIBUTION_CARDS = (
+    pytest.param("PV Capacity (kW)", "pv", id="pv"),
+    pytest.param("Battery Capacity (kWh)", "battery", id="battery"),
+    pytest.param("Annual Consumption (kWh)", "load", id="load"),
+)
+"""(card heading, the prefix of its form fields)."""
+
+
+@pytest.mark.parametrize(("card", "prefix"), _DISTRIBUTION_CARDS)
+def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set_its_distribution(
+    page: Page, live_server: str, card: str, prefix: str
+) -> None:
+    """The group named by a distribution card's heading holds that heading, and one combobox, Distribution Type.
+
+    Choosing Normal Distribution there shows four spinbuttons, Mean, Std Dev, Min and Max,
+    which set that card's fields of the form the builder sends.
+    """
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Fleet Distribution")
+
+    card_group = page.get_by_role("group", name=card, exact=True)
+    expect(card_group.get_by_role("combobox")).to_have_count(1)
+    expect(card_group.get_by_role("heading", name=card, exact=True)).to_be_visible()
+    card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(
+        label="Normal Distribution"
+    )
+    for caption, value in {"Mean": "7", "Std Dev": "3", "Min": "1", "Max": "9"}.items():
+        card_group.get_by_role("spinbutton", name=caption, exact=True).fill(value)
+    expect(card_group.get_by_role("spinbutton")).to_have_count(4)
+
+    sent = _form_sent_on_validate(page)
+
+    assert {field: value for field, value in sent.items() if field.startswith(prefix + "_")} == {
+        f"{prefix}_distribution_type": "normal",
+        f"{prefix}_mean": "7",
+        f"{prefix}_std": "3",
+        f"{prefix}_min": "1",
+        f"{prefix}_max": "9",
+    }
+
+
+def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_type_combobox(
+    page: Page, live_server: str
+) -> None:
+    """At phone width, choosing Weighted Discrete leaves the Distribution Type combobox as wide as it was.
+
+    The rows Weighted Discrete shows are wider than the card, and a fieldset is as wide as
+    its content unless it resets that, which would widen the combobox beyond the card's edge.
+    """
+    page.set_viewport_size({"width": 375, "height": 800})
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Fleet Distribution")
+    card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
+    distribution_type = card_group.get_by_role("combobox", name="Distribution Type", exact=True)
+    expect(distribution_type).to_be_visible()
+    width_before = distribution_type.bounding_box()["width"]
+
+    distribution_type.select_option(label="Weighted Discrete")
+    expect(card_group.get_by_role("button", name="+ Add value", exact=True)).to_be_visible()
+
+    assert distribution_type.bounding_box()["width"] == width_before
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────
