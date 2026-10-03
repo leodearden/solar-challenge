@@ -3,6 +3,7 @@
 import io
 import tempfile
 import types
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -17,7 +18,15 @@ from typer.testing import CliRunner, Result
 import solar_challenge.cli.home as _cli_home_module
 import solar_challenge.home as _home_module
 from solar_challenge.cli.main import app
-from solar_challenge.cli.utils import create_summary_table, handle_errors, parse_location
+from solar_challenge.cli.utils import (
+    create_summary_table,
+    handle_errors,
+    parse_location,
+    print_error,
+    print_info,
+    print_success,
+    print_warning,
+)
 from solar_challenge.config import ConfigurationError
 from solar_challenge.home import HomeConfig, SummaryStatistics
 from solar_challenge.location import Location
@@ -26,6 +35,8 @@ from solar_challenge.weather import WeatherCache, WeatherDataError
 from tests._synthetic_weather import synthetic_june_weather
 
 runner = CliRunner()
+
+_TEXT_RICH_WOULD_PARSE = "columns [ghi, dni] missing, no tag [/b] open, the :sun: set, in C:\\data\\"
 
 
 class TestMainCLI:
@@ -246,6 +257,18 @@ class TestConfigCLI:
             assert output_path.exists()
             content = output_path.read_text()
             assert "location" in content or "pv" in content
+
+    def test_config_template_reports_its_output_path_verbatim(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An output path Rich would read as markup ([draft]) or an emoji code (:sun:) is reported as the user typed it."""
+        monkeypatch.chdir(tmp_path)
+        output = "[draft] :sun:.yaml"
+
+        result = runner.invoke(app, ["config", "template", "home", "--output", output], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        assert " ".join(result.stdout.split()) == f"Template written to {output}"
 
     def test_config_template_invalid_type(self) -> None:
         """Test config template with invalid type."""
@@ -630,17 +653,42 @@ class TestErrorHandling:
         self, capsys: pytest.CaptureFixture[str], error_type: type[Exception], label: str
     ) -> None:
         """Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the error has it."""
-        text = "columns [ghi, dni] missing, no tag [/b] open, the :sun: set, in C:\\data\\"
 
         @handle_errors
         def fail() -> None:
-            raise error_type(text)
+            raise error_type(_TEXT_RICH_WOULD_PARSE)
 
         with pytest.raises(typer.Exit) as exit_:
             fail()
 
         assert exit_.value.exit_code == 1
-        assert " ".join(capsys.readouterr().err.split()) == f"{label}: {text}"
+        assert " ".join(capsys.readouterr().err.split()) == f"{label}: {_TEXT_RICH_WOULD_PARSE}"
+
+
+class TestPrintHelpers:
+    """Tests for the print_* message helpers."""
+
+    @pytest.mark.parametrize(
+        "print_message",
+        [
+            pytest.param(print_success, id="print_success"),
+            pytest.param(print_warning, id="print_warning"),
+            pytest.param(print_info, id="print_info"),
+        ],
+    )
+    def test_a_message_is_printed_verbatim_on_stdout(
+        self, capsys: pytest.CaptureFixture[str], print_message: Callable[[str], None]
+    ) -> None:
+        """Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the caller gave it."""
+        print_message(_TEXT_RICH_WOULD_PARSE)
+
+        assert " ".join(capsys.readouterr().out.split()) == _TEXT_RICH_WOULD_PARSE
+
+    def test_an_error_message_is_printed_verbatim_on_stderr(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the caller gave it."""
+        print_error(_TEXT_RICH_WOULD_PARSE)
+
+        assert " ".join(capsys.readouterr().err.split()) == _TEXT_RICH_WOULD_PARSE
 
 
 class TestCLIOutputFormats:
