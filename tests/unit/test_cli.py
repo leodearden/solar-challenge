@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import numpy as np
 import pandas as pd
 import pytest
+import typer
 import yaml
 from rich.console import Console
 from typer.testing import CliRunner, Result
@@ -16,11 +17,12 @@ from typer.testing import CliRunner, Result
 import solar_challenge.cli.home as _cli_home_module
 import solar_challenge.home as _home_module
 from solar_challenge.cli.main import app
-from solar_challenge.cli.utils import create_summary_table, parse_location
+from solar_challenge.cli.utils import create_summary_table, handle_errors, parse_location
+from solar_challenge.config import ConfigurationError
 from solar_challenge.home import HomeConfig, SummaryStatistics
 from solar_challenge.location import Location
 from solar_challenge.seg import SEG_PRESETS
-from solar_challenge.weather import WeatherCache
+from solar_challenge.weather import WeatherCache, WeatherDataError
 from tests._synthetic_weather import synthetic_june_weather
 
 runner = CliRunner()
@@ -387,6 +389,31 @@ class TestErrorHandling:
         assert " ".join(result.stderr.split()) == (
             "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
         )
+
+    @pytest.mark.parametrize(
+        ("error_type", "label"),
+        [
+            pytest.param(ConfigurationError, "Configuration error", id="ConfigurationError"),
+            pytest.param(FileNotFoundError, "File not found", id="FileNotFoundError"),
+            pytest.param(ValueError, "Invalid value", id="ValueError"),
+            pytest.param(WeatherDataError, "Weather data unavailable", id="WeatherDataError"),
+        ],
+    )
+    def test_an_errors_text_is_printed_verbatim(
+        self, capsys: pytest.CaptureFixture[str], error_type: type[Exception], label: str
+    ) -> None:
+        """Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the error has it."""
+        text = "columns [ghi, dni] missing, no tag [/b] open, the :sun: set, in C:\\data\\"
+
+        @handle_errors
+        def fail() -> None:
+            raise error_type(text)
+
+        with pytest.raises(typer.Exit) as exit_:
+            fail()
+
+        assert exit_.value.exit_code == 1
+        assert " ".join(capsys.readouterr().err.split()) == f"{label}: {text}"
 
 
 class TestCLIOutputFormats:
