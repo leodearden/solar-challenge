@@ -435,67 +435,19 @@ def simulate_home(
 
     return SimulationResults(
         strategy_name=strategy_name,
-        generation=pd.Series(
-            [r.generation * minute_kwh_to_kw for r in results_list],
-            index=index,
-            name="generation_kw",
-        ),
-        demand=pd.Series(
-            [r.demand * minute_kwh_to_kw for r in results_list],
-            index=index,
-            name="demand_kw",
-        ),
-        self_consumption=pd.Series(
-            [r.self_consumption * minute_kwh_to_kw for r in results_list],
-            index=index,
-            name="self_consumption_kw",
-        ),
-        battery_charge=pd.Series(
-            [r.battery_charge * minute_kwh_to_kw for r in results_list],
-            index=index,
-            name="battery_charge_kw",
-        ),
-        battery_discharge=pd.Series(
-            [r.battery_discharge * minute_kwh_to_kw for r in results_list],
-            index=index,
-            name="battery_discharge_kw",
-        ),
-        battery_soc=pd.Series(
-            [r.battery_soc for r in results_list],
-            index=index,
-            name="battery_soc_kwh",
-        ),
-        grid_import=pd.Series(
-            [r.grid_import * minute_kwh_to_kw for r in results_list],
-            index=index,
-            name="grid_import_kw",
-        ),
-        grid_export=pd.Series(
-            [r.grid_export * minute_kwh_to_kw for r in results_list],
-            index=index,
-            name="grid_export_kw",
-        ),
-        import_cost=pd.Series(
-            import_costs,
-            index=index,
-            name="import_cost_gbp",
-        ),
-        export_revenue=pd.Series(
-            export_revenues,
-            index=index,
-            name="export_revenue_gbp",
-        ),
-        tariff_rate=pd.Series(
-            tariff_rates,
-            index=index,
-            name="tariff_rate_per_kwh",
-        ),
+        generation=pd.Series([r.generation * minute_kwh_to_kw for r in results_list], index=index),
+        demand=pd.Series([r.demand * minute_kwh_to_kw for r in results_list], index=index),
+        self_consumption=pd.Series([r.self_consumption * minute_kwh_to_kw for r in results_list], index=index),
+        battery_charge=pd.Series([r.battery_charge * minute_kwh_to_kw for r in results_list], index=index),
+        battery_discharge=pd.Series([r.battery_discharge * minute_kwh_to_kw for r in results_list], index=index),
+        battery_soc=pd.Series([r.battery_soc for r in results_list], index=index),
+        grid_import=pd.Series([r.grid_import * minute_kwh_to_kw for r in results_list], index=index),
+        grid_export=pd.Series([r.grid_export * minute_kwh_to_kw for r in results_list], index=index),
+        import_cost=pd.Series(import_costs, index=index),
+        export_revenue=pd.Series(export_revenues, index=index),
+        tariff_rate=pd.Series(tariff_rates, index=index),
         heat_pump_load=heat_pump_load_series,
-        grid_charge_cost=pd.Series(
-            grid_charge_costs,
-            index=index,
-            name="grid_charge_cost_gbp",
-        ) if config.tariff_config is not None else None,
+        grid_charge_cost=pd.Series(grid_charge_costs, index=index) if config.tariff_config is not None else None,
     )
 
 
