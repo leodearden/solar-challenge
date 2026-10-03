@@ -170,6 +170,32 @@ def test_get_tmy_data_reads_the_tmy_a_test_seeds_into_weather_cache_after_a_modu
     result.assert_outcomes(passed=1)
 
 
+def test_a_fast_test_whose_weather_cache_directory_cannot_be_removed_leaves_the_session_running(
+    suite: pytest.Pytester,
+) -> None:
+    """A job still writing into the cache could make removing it fail, and the window closes after the test is reported, where an error would abort the session."""
+    scenario = suite.makepyfile(
+        """
+        files_left_behind = []
+
+
+        def test_leaves_a_file_where_its_weather_cache_directory_was(weather_cache):
+            weather_cache.cache_dir.rmdir()
+            weather_cache.cache_dir.touch()
+            files_left_behind.append(weather_cache.cache_dir)
+
+
+        def test_runs_next_and_removes_that_file():
+            files_left_behind.pop().unlink(missing_ok=True)
+        """
+    )
+
+    result = suite.runpytest_subprocess(scenario)
+
+    result.assert_outcomes(passed=2)
+    assert result.ret == pytest.ExitCode.OK
+
+
 def test_a_slow_test_that_requests_weather_cache_errors_at_setup(suite: pytest.Pytester) -> None:
     """A slow test reads the working directory's weather cache, so it has none of its own for weather_cache to return."""
     scenario = suite.makepyfile(

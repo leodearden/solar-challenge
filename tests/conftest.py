@@ -90,7 +90,11 @@ _OFFLINE_WINDOW_KEY = pytest.StashKey[_OfflineWindow]()
 
 @contextmanager
 def _open_offline_window() -> Iterator[_OfflineWindow]:
-    with tempfile.TemporaryDirectory(prefix="weather-cache-") as cache_dir, refusing_network() as refused:
+    """Open a test's window, which closes after the test is reported, where an error would abort the session."""
+    with (
+        tempfile.TemporaryDirectory(prefix="weather-cache-", ignore_cleanup_errors=True) as cache_dir,
+        refusing_network() as refused,
+    ):
         window = _OfflineWindow(WeatherCache(cache_dir=Path(cache_dir)), refused)
         set_weather_cache(window.weather_cache)
         try:
