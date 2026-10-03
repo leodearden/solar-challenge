@@ -65,6 +65,36 @@ class HomeConfig:
 
 
 _COLUMN = "column"
+_AMOUNT = "per_minute_amount"
+
+HOURS_PER_MINUTE = 1 / 60
+"""Each SimulationResults row is one minute, so a kW sample times this is that minute's kWh."""
+
+
+@dataclass(frozen=True)
+class _PerMinuteAmount:
+    """How a series' sample becomes that minute's amount: the sample times factor, under column."""
+
+    column: str
+    factor: float
+
+
+def _power(column: str, energy_column: str) -> dict[str, object]:
+    """Metadata of a kW series written under column; its amount is each minute's kWh, under energy_column."""
+    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(energy_column, HOURS_PER_MINUTE)}
+
+
+def _money(column: str) -> dict[str, object]:
+    """Metadata of a £ series written under column; each sample already is its minute's amount."""
+    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(column, 1.0)}
+
+
+def _level(column: str) -> dict[str, object]:
+    """Metadata of a series written under column that holds a level, which has no amount.
+
+    A state of charge or a rate does not add up over time.
+    """
+    return {_COLUMN: column}
 
 
 @dataclass
@@ -91,22 +121,22 @@ class SimulationResults:
         heat_pump_load: Optional heat pump electrical load in kW (None if no heat pump)
     """
 
-    generation: pd.Series = field(metadata={_COLUMN: "generation_kw"})
-    demand: pd.Series = field(metadata={_COLUMN: "demand_kw"})
-    self_consumption: pd.Series = field(metadata={_COLUMN: "self_consumption_kw"})
-    battery_charge: pd.Series = field(metadata={_COLUMN: "battery_charge_kw"})
-    battery_discharge: pd.Series = field(metadata={_COLUMN: "battery_discharge_kw"})
-    battery_soc: pd.Series = field(metadata={_COLUMN: "battery_soc_kwh"})
-    grid_import: pd.Series = field(metadata={_COLUMN: "grid_import_kw"})
-    grid_export: pd.Series = field(metadata={_COLUMN: "grid_export_kw"})
-    import_cost: pd.Series = field(metadata={_COLUMN: "import_cost_gbp"})
-    export_revenue: pd.Series = field(metadata={_COLUMN: "export_revenue_gbp"})
-    tariff_rate: pd.Series = field(metadata={_COLUMN: "tariff_rate_per_kwh"})
+    generation: pd.Series = field(metadata=_power("generation_kw", "generation_kwh"))
+    demand: pd.Series = field(metadata=_power("demand_kw", "demand_kwh"))
+    self_consumption: pd.Series = field(metadata=_power("self_consumption_kw", "self_consumption_kwh"))
+    battery_charge: pd.Series = field(metadata=_power("battery_charge_kw", "battery_charge_kwh"))
+    battery_discharge: pd.Series = field(metadata=_power("battery_discharge_kw", "battery_discharge_kwh"))
+    battery_soc: pd.Series = field(metadata=_level("battery_soc_kwh"))
+    grid_import: pd.Series = field(metadata=_power("grid_import_kw", "grid_import_kwh"))
+    grid_export: pd.Series = field(metadata=_power("grid_export_kw", "grid_export_kwh"))
+    import_cost: pd.Series = field(metadata=_money("import_cost_gbp"))
+    export_revenue: pd.Series = field(metadata=_money("export_revenue_gbp"))
+    tariff_rate: pd.Series = field(metadata=_level("tariff_rate_per_kwh"))
     strategy_name: str = "self_consumption"
-    heat_pump_load: Optional[pd.Series] = field(default=None, metadata={_COLUMN: "heat_pump_load_kw"})
+    heat_pump_load: Optional[pd.Series] = field(default=None, metadata=_power("heat_pump_load_kw", "heat_pump_load_kwh"))
     # Per-timestep slice of import_cost spent charging the battery from the grid, in £
     # (None when tariff_config is None).
-    grid_charge_cost: Optional[pd.Series] = field(default=None, metadata={_COLUMN: "grid_charge_cost_gbp"})
+    grid_charge_cost: Optional[pd.Series] = field(default=None, metadata=_money("grid_charge_cost_gbp"))
 
     @classmethod
     def _series_columns(cls) -> Iterator[tuple[str, str]]:
@@ -114,6 +144,22 @@ class SimulationResults:
         for attribute in fields(cls):
             if _COLUMN in attribute.metadata:
                 yield attribute.name, attribute.metadata[_COLUMN]
+
+    def per_minute_amounts(self) -> pd.DataFrame:
+        """Each minute's energy in kWh and money in £, one column per amount, so a period's totals are its column sums.
+
+        The battery state of charge and the tariff rate have no column, as neither adds up over
+        time, and nor has an optional series that is None.
+        """
+        return pd.concat(
+            {
+                amount.column: series * amount.factor
+                for attribute in fields(self)
+                if isinstance(amount := attribute.metadata.get(_AMOUNT), _PerMinuteAmount)
+                and (series := getattr(self, attribute.name)) is not None
+            },
+            axis=1,
+        )
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to a DataFrame with one column per series that is set."""
