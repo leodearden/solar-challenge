@@ -5,8 +5,10 @@ This document is the consumer-facing recipe for depending on the
 `solar-challenge-platform`) as a **git dependency pinned to a release tag**.
 
 The authoritative public surface is `solar_challenge.__all__` (defined in
-`src/solar_challenge/__init__.py`), which is frozen and contract-tested by
-`tests/unit/test_init_lazy_surface.py`.
+`src/solar_challenge/__init__.py`). It is frozen by
+`tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
+public name and that name's signature, while
+`tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
 
 ---
 
@@ -175,7 +177,9 @@ changed. Rebuild a pre-built cache with `my_test_cache.put(df, "tmy", location)`
 ## Frozen public surface
 
 The authoritative public surface is `solar_challenge.__all__`, defined in
-`src/solar_challenge/__init__.py`.  It is frozen and contract-tested by
-`tests/unit/test_init_lazy_surface.py`, and enforced at import time via the
-module's `__getattr__` guard.  Consumers should reference `__all__` directly
-rather than relying on any copy maintained in this document.
+`src/solar_challenge/__init__.py`.  It is frozen by
+`tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
+public name and that name's signature, and enforced at import time via the
+module's `__getattr__` guard; `tests/unit/test_init_lazy_surface.py` checks the
+lazy loader's structure.  Consumers should reference `__all__` directly rather
+than relying on any copy maintained in this document.
