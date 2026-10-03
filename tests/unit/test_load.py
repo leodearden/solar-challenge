@@ -103,6 +103,18 @@ class TestLoadConfigValidation:
         ):
             LoadConfig(household_occupants=occupants)
 
+    @pytest.mark.parametrize(
+        "occupants",
+        [pytest.param(3.0, id="float"), pytest.param(np.int64(3), id="numpy-int64")],
+    )
+    def test_a_whole_number_occupant_count_of_another_numeric_type_is_held_as_an_int(
+        self, occupants: float
+    ) -> None:
+        config = LoadConfig(household_occupants=occupants)
+
+        assert type(config.household_occupants) is int
+        assert config.household_occupants == 3
+
 
 class TestGenerateLoadProfile:
     """Test LOAD-002/LOAD-006: Elexon profile generation."""
