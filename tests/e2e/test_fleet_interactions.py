@@ -1,13 +1,15 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
 Verifies slider-input sync, that each distribution editor's controls are named
-for their card, export YAML button, that the simulation name reaches the
-submitted run, and that the period selector offers presets and a custom date
-range.
+for their card, that each card's row buttons change only its rows, export YAML
+button, that the simulation name reaches the submitted run, and that the period
+selector offers presets and a custom date range.
 """
 
+import re
+
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Locator, Page, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -27,11 +29,23 @@ def test_fleet_slider_input_sync(page: Page, live_server: str) -> None:
 # -- Distribution editor control names -------------------------------------
 
 
+CARD_SUBJECTS = ("PV Capacity", "Battery Capacity", "Annual Consumption")
 DISTRIBUTION_CARDS = [
-    pytest.param("PV Capacity", id="pv_capacity"),
-    pytest.param("Battery Capacity", id="battery_capacity"),
-    pytest.param("Annual Consumption", id="annual_consumption"),
+    pytest.param(subject, id=subject.lower().replace(" ", "_")) for subject in CARD_SUBJECTS
 ]
+
+
+def _value_inputs(page: Page, subject: str) -> Locator:
+    """The Value input of each row in the card's shown row list."""
+    return page.get_by_role("spinbutton", name=re.compile(rf"^{subject} Value \d+$"))
+
+
+def _expect_only_row_list_shown(page: Page, subject: str, row_field: str) -> None:
+    """Wait until the card shows the row list with row_field, then until its outgoing list, with the same control names, is hidden."""
+    expect(
+        page.get_by_role("spinbutton", name=f"{subject} {row_field} 1", exact=True)
+    ).to_have_count(1)
+    expect(page.get_by_role("button", name=f"{subject} Add Row", exact=True)).to_have_count(1)
 
 
 @pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
@@ -103,6 +117,51 @@ def test_fleet_distribution_row_buttons_are_named_for_their_card(
         expect(
             page.get_by_role("button", name=f"{card} {name}", exact=True)
         ).to_have_count(1)
+
+
+NEW_ROW_VALUES = {"PV Capacity": "4", "Battery Capacity": "5", "Annual Consumption": "3500"}
+
+
+@pytest.mark.parametrize(
+    ("distribution_type", "row_field"),
+    [
+        pytest.param("Weighted Discrete", "Weight", id="weighted_discrete"),
+        pytest.param("Shuffled Pool", "Count", id="shuffled_pool"),
+    ],
+)
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_row_buttons_change_only_their_cards_rows(
+    page: Page, live_server: str, card: str, distribution_type: str, row_field: str
+) -> None:
+    """A card's Add Row button appends a row to that card alone, starting at the card's value and a weight or count of 10, and its Remove Row 1 button removes that card's first row alone."""
+    page.goto(live_server + "/simulate/fleet")
+    for subject in CARD_SUBJECTS:
+        page.get_by_role(
+            "combobox", name=f"{subject} Distribution Type", exact=True
+        ).select_option(label=distribution_type)
+        _expect_only_row_list_shown(page, subject, row_field)
+    row_counts = {subject: _value_inputs(page, subject).count() for subject in CARD_SUBJECTS}
+    other_cards = [subject for subject in CARD_SUBJECTS if subject != card]
+
+    page.get_by_role("button", name=f"{card} Add Row", exact=True).click()
+    added_row = row_counts[card] + 1
+    expect(_value_inputs(page, card)).to_have_count(added_row)
+    for other in other_cards:
+        expect(_value_inputs(page, other)).to_have_count(row_counts[other])
+    expect(
+        page.get_by_role("spinbutton", name=f"{card} Value {added_row}", exact=True)
+    ).to_have_value(NEW_ROW_VALUES[card])
+    expect(
+        page.get_by_role("spinbutton", name=f"{card} {row_field} {added_row}", exact=True)
+    ).to_have_value("10")
+
+    second_value = page.get_by_role("spinbutton", name=f"{card} Value 2", exact=True).input_value()
+    page.get_by_role("button", name=f"{card} Remove Row 1", exact=True).click()
+    for subject in (card, *other_cards):
+        expect(_value_inputs(page, subject)).to_have_count(row_counts[subject])
+    expect(page.get_by_role("spinbutton", name=f"{card} Value 1", exact=True)).to_have_value(
+        second_value
+    )
 
 
 # -- Export YAML button -----------------------------------------------------
