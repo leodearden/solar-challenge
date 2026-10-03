@@ -22,6 +22,7 @@ from rich.table import Table
 
 from solar_challenge.config import ConfigurationError, load_config
 from solar_challenge.location import Location
+from solar_challenge.weather import WeatherDataError
 
 console = Console()
 error_console = Console(stderr=True)
@@ -44,6 +45,9 @@ def handle_errors(func: F) -> F:
             raise typer.Exit(1) from e
         except ValueError as e:
             error_console.print(f"[red]Invalid value:[/red] {e}")
+            raise typer.Exit(1) from e
+        except WeatherDataError as e:
+            error_console.print(f"[red]Weather data unavailable:[/red] {e}")
             raise typer.Exit(1) from e
         except KeyboardInterrupt:
             error_console.print("\n[yellow]Interrupted by user[/yellow]")
