@@ -166,17 +166,18 @@ class BatteryConfig:
             self.discharge_efficiency,
         )
 
-        if self.system_age_years < 0:
+        if not 0 <= self.system_age_years < math.inf:
             raise ValueError(
-                f"system_age_years must be >= 0, got {self.system_age_years}"
+                f"system_age_years must be >= 0 and finite, got {self.system_age_years}"
             )
-        if self.calendar_fade_rate_per_year < 0:
+        if not 0 <= self.calendar_fade_rate_per_year < math.inf:
             raise ValueError(
-                f"calendar_fade_rate_per_year must be >= 0, got {self.calendar_fade_rate_per_year}"
+                f"calendar_fade_rate_per_year must be >= 0 and finite, "
+                f"got {self.calendar_fade_rate_per_year}"
             )
-        if self.cycle_fade_per_equivalent_full_cycle < 0:
+        if not 0 <= self.cycle_fade_per_equivalent_full_cycle < math.inf:
             raise ValueError(
-                f"cycle_fade_per_equivalent_full_cycle must be >= 0, "
+                f"cycle_fade_per_equivalent_full_cycle must be >= 0 and finite, "
                 f"got {self.cycle_fade_per_equivalent_full_cycle}"
             )
         if not 0 < self.soh_floor <= 1:
