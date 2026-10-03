@@ -51,9 +51,7 @@ def test_pvgis_job_collects_the_pvgis_contract_tests_and_nothing_else(
         f"the {_PVGIS_JOB!r} lane job {collection.command!r} collected no tests, so the lane stays green "
         f"while the PVGIS contract tests go unrun\n{collection.outcome}"
     )
-    outside_contract_tests = [
-        node_id for node_id in collection.node_ids if not node_id.startswith(f"{_PVGIS_CONTRACT_TESTS}::")
-    ]
+    outside_contract_tests = collection.node_ids_outside(_PVGIS_CONTRACT_TESTS)
     assert not outside_contract_tests, (
         f"the {_PVGIS_JOB!r} lane job {collection.command!r} collected tests outside {_PVGIS_CONTRACT_TESTS}, "
         f"which either the per-task verify already runs or hit PVGIS for other reasons: {outside_contract_tests}"

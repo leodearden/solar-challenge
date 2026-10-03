@@ -46,7 +46,7 @@ def test_e2e_job_collects_the_e2e_suite_and_nothing_else(
         f"the {_E2E_JOB!r} lane job {collection.command!r} collected no tests, so the lane stays green "
         f"while the e2e suite goes unrun\n{collection.outcome}"
     )
-    outside_e2e = [node_id for node_id in collection.node_ids if not node_id.startswith("tests/e2e/")]
+    outside_e2e = collection.node_ids_outside("tests/e2e")
     assert not outside_e2e, (
         f"the {_E2E_JOB!r} lane job {collection.command!r} collected tests outside tests/e2e/, which the "
         f"per-task verify already runs: {outside_e2e}"
