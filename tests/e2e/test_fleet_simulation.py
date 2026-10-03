@@ -41,9 +41,7 @@ def test_fleet_page_no_js_errors(
     an uncaught ReferenceError.
     """
     page.goto(live_server + "/simulate/fleet")
-    # Give deferred scripts time to load and Alpine to initialise
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
     assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
