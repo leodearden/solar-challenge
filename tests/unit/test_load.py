@@ -93,6 +93,44 @@ class TestLoadConfigValidation:
         with pytest.raises(ValueError, match=re.escape(message)):
             LoadConfig(household_occupants=occupants)
 
+    @pytest.mark.parametrize(
+        "occupants",
+        [2.5, 7.5, True, pytest.param(np.True_, id="numpy-bool")],
+    )
+    def test_an_occupant_count_that_is_not_a_whole_number_is_refused(
+        self, occupants: object
+    ) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"Household occupants must be a whole number, got {occupants}"),
+        ):
+            LoadConfig(household_occupants=occupants)
+
+    @pytest.mark.parametrize(
+        ("occupants", "message"),
+        [
+            (0.5, "Household occupants must be at least 1, got 0.5"),
+            (10.5, "Household occupants seems unrealistic: 10.5"),
+        ],
+    )
+    def test_a_fractional_occupant_count_outside_the_range_is_refused_as_out_of_range(
+        self, occupants: float, message: str
+    ) -> None:
+        with pytest.raises(ValueError, match=re.escape(message)):
+            LoadConfig(household_occupants=occupants)
+
+    @pytest.mark.parametrize(
+        "occupants",
+        [pytest.param(3.0, id="float"), pytest.param(np.int64(3), id="numpy-int64")],
+    )
+    def test_a_whole_number_occupant_count_of_another_numeric_type_is_held_as_an_int(
+        self, occupants: object
+    ) -> None:
+        config = LoadConfig(household_occupants=occupants)
+
+        assert type(config.household_occupants) is int
+        assert config.household_occupants == 3
+
 
 class TestGenerateLoadProfile:
     """Test LOAD-002/LOAD-006: Elexon profile generation."""
