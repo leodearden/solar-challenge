@@ -3,10 +3,9 @@
 """Integration tests for sensitivity_panel (W3 task D/#67).
 
 All tests are offline/fast — no PVGIS/network is touched.  An injected
-constant synthetic simulate stands in for the real fleet simulator.
-Per the repo's per-file convention there are NO cross-test-file imports;
-all builders are self-contained copies/adaptations of the helpers in
-tests/integration/test_optimize_sweep.py.
+constant synthetic simulate stands in for the real fleet simulator.  The
+synthetic homes, scenarios and simulation results come from
+tests/_finance_builders.py.
 """
 from __future__ import annotations
 
@@ -15,97 +14,17 @@ from typing import Optional
 
 import pytest
 
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.fleet import FleetResults
+from tests._finance_builders import make_fleet_results, make_scenario, make_sim_results
+
 
 # ---------------------------------------------------------------------------
 # Shared offline scaffolding
 # ---------------------------------------------------------------------------
 
 _N_HOMES = 5  # default fleet size for all sensitivity tests
-
-
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
-    from solar_challenge.load import LoadConfig
-
-    return LoadConfig(annual_consumption_kwh=3500.0)
-
-
-def _make_home_config(
-    capacity_kw: float = 4.0,
-    system_age_years: float = 0.0,
-    with_battery: bool = False,
-) -> "HomeConfig":  # type: ignore[name-defined]
-    """Build a HomeConfig; pass with_battery=True to include a BatteryConfig."""
-    from solar_challenge.battery import BatteryConfig
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
-    from solar_challenge.pv import PVConfig
-
-    pv = PVConfig(
-        capacity_kw=capacity_kw,
-        azimuth=180.0,
-        tilt=35.0,
-        system_age_years=system_age_years,
-        degradation_rate_per_year=0.005,
-    )
-    battery_config = BatteryConfig(capacity_kwh=5.0) if with_battery else None
-    return HomeConfig(
-        pv_config=pv,
-        load_config=_make_load_config(),
-        location=Location.bristol(),
-        battery_config=battery_config,
-    )
-
-
-def _make_sim_results(
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    export_revenue_gbp_per_year: float = 0.0,
-    n_minutes: int = 525600,  # 365 days
-) -> "SimulationResults":  # type: ignore[name-defined]
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
-    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-    exp_rev_per_min = export_revenue_gbp_per_year / n_minutes if n_minutes > 0 else 0.0
-    export_revenue_series = pd.Series(exp_rev_per_min, index=idx)
-
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=export_revenue_series,
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
-
-
-def _make_fleet_results(
-    n_homes: int = _N_HOMES,
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-) -> "FleetResults":  # type: ignore[name-defined]
-    from solar_challenge.fleet import FleetResults
-
-    homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results(self_kwh, export_kwh, import_kwh)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
 
 
 def _make_finance(
@@ -135,25 +54,9 @@ def _make_finance(
     )
 
 
-def _make_scenario(
-    n_homes: int = _N_HOMES,
-    start: str = "2020-01-01",
-    end: str = "2020-12-31",
-    seg_tariff_pence: float = 5.0,
-    finance: "Optional[FinanceConfig]" = None,  # type: ignore[name-defined]
-    with_battery: bool = False,
-) -> "ScenarioConfig":  # type: ignore[name-defined]
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
-    homes = [_make_home_config(with_battery=with_battery) for _ in range(n_homes)]
-    return ScenarioConfig(
-        name="sensitivity-test",
-        period=SimulationPeriod(start_date=start, end_date=end),
-        description="W3 sensitivity integration test scenario",
-        homes=homes,
-        seg_tariff_pence_per_kwh=seg_tariff_pence,
-        finance=finance,
-    )
+def _make_scenario(n_homes: int = _N_HOMES, finance: FinanceConfig | None = None) -> ScenarioConfig:
+    """make_scenario's *n_homes* default homes carrying *finance*, pinned to a 5 p/kWh scenario SEG rate."""
+    return make_scenario(n_homes=n_homes, seg_tariff_pence_per_kwh=5.0, finance=finance)
 
 
 def _interior_finance() -> "FinanceConfig":  # type: ignore[name-defined]
@@ -169,15 +72,10 @@ def _interior_finance() -> "FinanceConfig":  # type: ignore[name-defined]
     )
 
 
-# Build the constant FleetResults ONCE at module scope so that _const_simulate
-# returns the same object on every call.  This eliminates repeated allocation
-# of ~5×525,600-row pandas Series across ~150 config evaluations in the suite,
-# driving the full file runtime from ~386s to well under 30s.
-# NOTE: keep the 365-day 1-minute index (525,600 rows) — calculate_summary
-# hardcodes minutes_to_hours=1/60 and derives sim_days from the index span,
-# so coarsening resolution would silently scale every kWh total by 60× and
-# break the tuned W-H4 coupling constants.
-_CONST_FLEET_RESULTS: "FleetResults" = _make_fleet_results(n_homes=_N_HOMES)  # type: ignore[name-defined]
+# The one FleetResults that _const_simulate returns, whatever fleet it is asked to simulate.
+_CONST_FLEET_RESULTS: FleetResults = make_fleet_results(
+    n_homes=_N_HOMES, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0
+)
 
 
 def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
@@ -204,7 +102,7 @@ def _make_seg_priced_scenario(seg_rate: float, finance) -> "ScenarioConfig":  # 
     """Build the fleet shape `optimize configs` produces: the seg: rate on the scenario AND on every home."""
     from solar_challenge.seg import SEGTariff
 
-    scenario = _make_scenario(n_homes=_N_HOMES, seg_tariff_pence=seg_rate, finance=finance)
+    scenario = make_scenario(n_homes=_N_HOMES, seg_tariff_pence_per_kwh=seg_rate, finance=finance)
     tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
     return dataclasses.replace(
         scenario,
@@ -237,9 +135,11 @@ class _SegPricingSimulate:
 
     def _results_at(self, rate: Optional[float]) -> "SimulationResults":  # type: ignore[name-defined]
         if rate not in self._results_by_rate:
-            self._results_by_rate[rate] = _make_sim_results(
+            self._results_by_rate[rate] = make_sim_results(
+                self_kwh=2000.0,
                 export_kwh=self._EXPORT_KWH,
-                export_revenue_gbp_per_year=self._EXPORT_KWH * (rate or 0.0) / 100.0,
+                import_kwh=1200.0,
+                export_revenue_gbp=self._EXPORT_KWH * (rate or 0.0) / 100.0,
             )
         return self._results_by_rate[rate]
 
@@ -1001,12 +901,7 @@ class TestSensitivityPanelGuards:
 
 
 class TestConstSimulateCaching:
-    """_const_simulate must return the SAME FleetResults object on every call.
-
-    Caching at module scope eliminates repeated 525,600-row pandas allocation
-    across ~150 config evaluations, driving the full test file from ~386s to
-    well under 30s.
-    """
+    """_const_simulate must return the SAME FleetResults object on every call."""
 
     def test_same_instance_every_call(self) -> None:
         """Two calls with identical args return the exact same object (identity)."""
