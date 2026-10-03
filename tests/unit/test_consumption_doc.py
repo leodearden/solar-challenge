@@ -5,8 +5,9 @@ Verifies that docs/domain-library-consumption.md exists and is non-empty —
 a deliverable-presence guard for the consumer-facing recipe document.
 
 The authoritative public surface is ``solar_challenge.__all__`` (defined in
-``src/solar_challenge/__init__.py``), which is frozen and contract-tested by
-``tests/unit/test_init_lazy_surface.py``.
+``src/solar_challenge/__init__.py``), which is frozen by ``tests/unit/test_public_api_surface.py``
+(``FROZEN_SURFACE`` pins every public name and its signature).
+``tests/unit/test_init_lazy_surface.py`` checks the lazy loader's structure.
 """
 
 from pathlib import Path
@@ -28,10 +29,10 @@ def test_consumption_doc_exists(project_root: Path) -> None:
 
     This is a deliberate deliverable-presence smoke check.  The authoritative
     public-surface contract is separately enforced by
-    ``tests/unit/test_init_lazy_surface.py`` (which asserts
-    ``solar_challenge.__all__`` matches the frozen set) and by the import-time
-    guard in ``src/solar_challenge/__init__.py``, so no symbol-list mirroring
-    is needed here.
+    ``tests/unit/test_public_api_surface.py`` (whose ``FROZEN_SURFACE`` pins
+    every public name and its signature) and by the import-time guard in
+    ``src/solar_challenge/__init__.py``, so no symbol-list mirroring is
+    needed here.
     """
     doc_path = project_root / DOC_REL_PATH
     assert doc_path.exists(), (
