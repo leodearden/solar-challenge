@@ -1,6 +1,7 @@
 """Tests for output and reporting functions."""
 
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -193,6 +194,16 @@ class TestAggregateDaily:
 
         # £0.01 a minute for 1440 minutes a day
         assert daily["export_revenue_gbp"].tolist() == pytest.approx([14.40, 14.40])
+
+    def test_peak_is_the_days_largest_sample_wherever_it_falls(self, sample_results):
+        """A day's peak is its largest sample, even when the day ends back at its base."""
+        spiked_demand = sample_results.demand.copy()
+        spiked_demand[pd.Timestamp("2024-06-21 12:00", tz="Europe/London")] = 6.0
+
+        daily = aggregate_daily(replace(sample_results, demand=spiked_demand))
+
+        # 6 kW at noon on the first day, 2 kW all day on the second
+        assert daily["peak_demand_kw"].tolist() == [6.0, 2.0]
 
 
 class TestAggregateMonthly:
