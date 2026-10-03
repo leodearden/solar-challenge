@@ -11,6 +11,7 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
@@ -60,28 +61,68 @@ def _counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
     return {key: items.count(key) for key in keys}
 
 
+def _run_storage(app: Flask) -> RunStorage:
+    """The RunStorage *app* keeps its runs in: the one create_app registers, which its pages read."""
+    storage: RunStorage = app.extensions["storage"]
+    return storage
+
+
+def _home_config(name: str) -> HomeConfig:
+    """The 4 kW PV, 3500 kWh home named *name* that the page tests save."""
+    return HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(annual_consumption_kwh=3500),
+        name=name,
+    )
+
+
 def _save_home_run(
     app: Flask,
     name: str,
     results: SimulationResults,
     *,
     created_at: str | None = None,
+    status: str = "completed",
 ) -> str:
-    """Save *results* to *app*'s store as a completed home run named *name*, as a finished job does; return its run id.
+    """Save *results* to *app*'s store as a home run named *name*, as a finished job saves its run; return its run id.
+
+    *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
+    *status* is the status the run is recorded with; it defaults to completed.
+    """
+    run_id = str(uuid.uuid4())
+    _run_storage(app).save_home_run(
+        run_id=run_id,
+        config=_home_config(name),
+        results=results,
+        summary=calculate_summary(results),
+        name=name,
+        status=status,
+        created_at=created_at,
+    )
+    return run_id
+
+
+def _save_fleet_run(
+    app: Flask,
+    name: str,
+    per_home_results: list[SimulationResults],
+    *,
+    created_at: str | None = None,
+) -> str:
+    """Save a completed fleet run named *name* to *app*'s store, one home per item of *per_home_results*, as a finished job does; return its run id.
 
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
     """
     run_id = str(uuid.uuid4())
-    storage = RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"])
-    storage.save_home_run(
+    fleet = FleetResults(
+        per_home_results=per_home_results,
+        home_configs=[_home_config(f"{name} home {number}") for number in range(1, len(per_home_results) + 1)],
+    )
+    _run_storage(app).save_fleet_run(
         run_id=run_id,
-        config=HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3500),
-            name=name,
-        ),
-        results=results,
-        summary=calculate_summary(results),
+        fleet_results=fleet,
+        fleet_summary=calculate_fleet_summary(fleet),
+        per_home_summaries=[calculate_summary(results) for results in per_home_results],
         name=name,
         created_at=created_at,
     )
@@ -166,37 +207,45 @@ class TestDashboardRoute:
     def test_dashboard_recent_runs_table_rows_show_each_run_newest_first(
         self, app: Flask, client: FlaskClient
     ) -> None:
-        """GET / lists the saved runs newest first in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's results page."""
-        created_at_by_name = {
-            "North Roof": "2024-06-01T09:00:00+00:00",
-            "South Roof": "2024-06-02T09:00:00+00:00",
-        }
-        run_ids = {
-            name: _save_home_run(app, name, _make_sim_results(days=1), created_at=created_at)
-            for name, created_at in created_at_by_name.items()
-        }
+        """GET / lists the saved runs newest first by creation time in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's home or fleet results page."""
+        results = _make_sim_results(days=1)
+        fleet_run_id = _save_fleet_run(
+            app, "Community Fleet", [results, results], created_at="2024-06-02T09:00:00+00:00"
+        )
+        failed_run_id = _save_home_run(
+            app, "South Roof", results, created_at="2024-06-03T09:00:00+00:00", status="failed"
+        )
+        home_run_id = _save_home_run(app, "North Roof", results, created_at="2024-06-01T09:00:00+00:00")
         response = client.get("/")
         page = response.get_data(as_text=True)
-        assert texts_after(page, "Status", 8) == [
-            "South Roof", "home", "2024-06-02", "completed",
+        assert texts_after(page, "Status", 12) == [
+            "South Roof", "home", "2024-06-03", "failed",
+            "Community Fleet", "fleet", "2024-06-02", "completed",
             "North Roof", "home", "2024-06-01", "completed",
         ]
-        for name, run_id in run_ids.items():
-            assert element_count(page, "a", {"href": f"/results/home/{run_id}"}) == 1, name
+        link_by_name = {
+            "South Roof": f"/results/home/{failed_run_id}",
+            "Community Fleet": f"/results/fleet/{fleet_run_id}",
+            "North Roof": f"/results/home/{home_run_id}",
+        }
+        for name, link in link_by_name.items():
+            assert element_count(page, "a", {"href": link}) == 1, name
 
-    def test_dashboard_stats_count_and_total_the_saved_runs(
+    def test_dashboard_stats_count_and_total_only_the_completed_runs(
         self, app: Flask, client: FlaskClient
     ) -> None:
-        """GET / with two saved one-day runs reads Total Runs 2 and Homes Simulated 2, and reads Energy Modelled as the two runs' total generation in MWh."""
+        """GET / reads Total Runs as the completed runs, Homes Simulated as their homes, each home of a fleet run counted, and Energy Modelled as those homes' total generation in MWh; a failed run adds to none of them."""
         results = _make_sim_results(days=1)
-        for run_name in ("North Roof", "South Roof"):
-            _save_home_run(app, run_name, results)
+        _save_home_run(app, "North Roof", results)
+        _save_fleet_run(app, "Community Fleet", [results, results])
+        _save_home_run(app, "South Roof", results, status="failed")
         response = client.get("/")
         page = response.get_data(as_text=True)
-        two_runs_generation_mwh = 2 * calculate_summary(results).total_generation_kwh / 1000
+        completed_homes = 3
+        completed_homes_generation_mwh = completed_homes * calculate_summary(results).total_generation_kwh / 1000
         assert texts_after(page, "Total Runs", 1) == ["2"]
-        assert texts_after(page, "Homes Simulated", 1) == ["2"]
-        assert texts_after(page, "Energy Modelled", 2) == [str(round(two_runs_generation_mwh, 2)), "MWh"]
+        assert texts_after(page, "Homes Simulated", 1) == [str(completed_homes)]
+        assert texts_after(page, "Energy Modelled", 2) == [str(round(completed_homes_generation_mwh, 2)), "MWh"]
 
 
 class TestSimulateHomeRoute:
