@@ -3,9 +3,10 @@
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
-from solar_challenge.home import SimulationResults
+from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.output import (
     aggregate_annual,
     aggregate_daily,
@@ -37,6 +38,33 @@ def sample_results() -> SimulationResults:
         import_cost=pd.Series([0.0] * 2880, index=index),
         export_revenue=pd.Series([0.01] * 2880, index=index),  # 0.01 £ per minute
         tariff_rate=pd.Series([0.20] * 2880, index=index),  # 0.20 £/kWh constant
+    )
+
+
+def _run_with_distinct_rising_series(
+    start: str, days: int, *, with_optional_series: bool
+) -> SimulationResults:
+    """Every series climbs steadily from its own base, so no two series share values and every day's peak exceeds its mean."""
+    index = pd.date_range(start, periods=days * 1440, freq="1min", tz="Europe/London")
+    rise = np.linspace(1.0, 2.0, len(index))
+
+    def series(base: float) -> pd.Series:
+        return pd.Series(base * rise, index=index)
+
+    return SimulationResults(
+        generation=series(3.0),
+        demand=series(2.0),
+        self_consumption=series(1.5),
+        battery_charge=series(0.75),
+        battery_discharge=series(0.25),
+        battery_soc=series(4.0),
+        grid_import=series(0.5),
+        grid_export=series(0.6),
+        import_cost=series(0.002),
+        export_revenue=series(0.001),
+        tariff_rate=series(0.3),
+        heat_pump_load=series(1.2) if with_optional_series else None,
+        grid_charge_cost=series(0.0005) if with_optional_series else None,
     )
 
 
@@ -159,6 +187,13 @@ class TestAggregateDaily:
         assert "peak_generation_kw" in daily.columns
         assert "peak_demand_kw" in daily.columns
 
+    def test_money_is_summed_without_a_unit_conversion(self, sample_results):
+        """A money series is already £ per minute, so a day's total is its plain sum."""
+        daily = aggregate_daily(sample_results)
+
+        # £0.01 a minute for 1440 minutes a day
+        assert daily["export_revenue_gbp"].tolist() == pytest.approx([14.40, 14.40])
+
 
 class TestAggregateMonthly:
     """Test OUT-007: Monthly aggregation."""
@@ -176,6 +211,71 @@ class TestAggregateMonthly:
 
         # 2 days * 72 kWh/day = 144 kWh
         assert monthly["generation_kwh"].iloc[0] == pytest.approx(144.0, rel=0.01)
+
+
+@pytest.mark.parametrize("aggregate", [aggregate_daily], ids=["daily"])
+class TestPeriodTotalsAndPeaks:
+    """Each row holds that period's energy (kWh) and money (£) totals and its peak power (kW), and nothing else."""
+
+    @pytest.mark.parametrize(
+        "with_optional_series",
+        [False, True],
+        ids=["required_series_only", "with_optional_series"],
+    )
+    def test_columns_are_the_runs_totals_and_peaks(
+        self, aggregate, with_optional_series
+    ):
+        """The columns are the run's energy totals, money totals and peaks."""
+        results = _run_with_distinct_rising_series(
+            "2024-06-29 00:00", 3, with_optional_series=with_optional_series
+        )
+
+        frame = aggregate(results)
+
+        expected = [
+            "generation_kwh",
+            "demand_kwh",
+            "self_consumption_kwh",
+            "battery_charge_kwh",
+            "battery_discharge_kwh",
+            "grid_import_kwh",
+            "grid_export_kwh",
+            "import_cost_gbp",
+            "export_revenue_gbp",
+            "peak_generation_kw",
+            "peak_demand_kw",
+        ]
+        if with_optional_series:
+            expected += ["heat_pump_load_kwh", "grid_charge_cost_gbp"]
+        assert sorted(frame.columns) == sorted(expected)
+
+    def test_totals_over_all_periods_equal_the_run_summary(self, aggregate):
+        """Adding up every period gives the run's own summary totals and peaks."""
+        results = _run_with_distinct_rising_series(
+            "2024-06-29 00:00", 3, with_optional_series=True
+        )
+        summary = calculate_summary(results)
+        run_totals = {
+            "generation_kwh": summary.total_generation_kwh,
+            "demand_kwh": summary.total_demand_kwh,
+            "self_consumption_kwh": summary.total_self_consumption_kwh,
+            "battery_charge_kwh": summary.total_battery_charge_kwh,
+            "battery_discharge_kwh": summary.total_battery_discharge_kwh,
+            "grid_import_kwh": summary.total_grid_import_kwh,
+            "grid_export_kwh": summary.total_grid_export_kwh,
+            "heat_pump_load_kwh": summary.total_heat_pump_load_kwh,
+            "import_cost_gbp": summary.total_import_cost_gbp,
+            "export_revenue_gbp": summary.total_export_revenue_gbp,
+            "grid_charge_cost_gbp": summary.total_grid_charge_cost_gbp,
+        }
+
+        frame = aggregate(results)
+
+        assert frame[list(run_totals)].sum().to_dict() == pytest.approx(run_totals)
+        assert frame["peak_generation_kw"].max() == pytest.approx(
+            summary.peak_generation_kw
+        )
+        assert frame["peak_demand_kw"].max() == pytest.approx(summary.peak_demand_kw)
 
 
 class TestAggregateAnnual:
