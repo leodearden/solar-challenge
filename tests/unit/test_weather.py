@@ -256,17 +256,20 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
 
     @pytest.mark.parametrize(
-        "truncate",
+        "make_series",
         [
             pytest.param(lambda series: series.loc[:"2019"], id="year 2020 missing"),
             pytest.param(lambda series: series.loc[:"2020-12-30"], id="last day of 2020 missing"),
+            pytest.param(
+                lambda series: pd.concat([series, series.loc["2020-06-01"]]).sort_index(), id="a day of 2020 repeated"
+            ),
         ],
     )
-    def test_refuses_a_series_short_of_a_climate_years_hours(
-        self, weather_cache, pvgis_hourly_series, pvgis_requests, truncate
+    def test_refuses_a_series_lacking_or_repeating_a_climate_years_hours(
+        self, weather_cache, pvgis_hourly_series, pvgis_requests, make_series
     ):
-        """A series lacking any hour of the climate years raises, naming the year, and leaves nothing cached."""
-        pvgis_requests.hourly.return_value = (truncate(pvgis_hourly_series), {})
+        """A series lacking or repeating any hour of the climate years raises, naming the year, and leaves nothing cached."""
+        pvgis_requests.hourly.return_value = (make_series(pvgis_hourly_series), {})
 
         with pytest.raises(RuntimeError, match="2020"):
             get_tmy_data(Location.bristol())
