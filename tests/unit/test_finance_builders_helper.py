@@ -7,6 +7,7 @@ import dataclasses
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
@@ -120,6 +121,16 @@ def test_scenario_holds_n_default_homes_and_the_given_seg_rate() -> None:
 
     assert default_scenario.homes == [make_home_config()]
     assert default_scenario.seg_tariff_pence_per_kwh is None
+
+
+def test_scenario_carries_the_given_finance_block() -> None:
+    finance = FinanceConfig(standing_charge_pence_per_day=28.0)
+
+    scenario = make_scenario(n_homes=2, finance=finance)
+
+    assert scenario.finance is finance
+    assert scenario.homes == [make_home_config()] * 2
+    assert make_scenario().finance is None
 
 
 def test_scenario_builders_give_every_home_the_given_battery() -> None:
