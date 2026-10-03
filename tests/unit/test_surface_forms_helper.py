@@ -23,6 +23,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    ParamSpec,
     Tuple,
     Union,
 )
@@ -97,6 +98,14 @@ def test_an_empty_subscription_is_spelled_with_parentheses() -> None:
     assert (
         surface_form(f) == "(a: tuple[()], b: tuple[()], c: Callable[[], None]) -> None"
     )
+
+
+def test_a_param_spec_args_and_kwargs_are_spelled_by_their_reprs() -> None:
+    P = ParamSpec("P")
+
+    def f(*args: P.args, **kwargs: P.kwargs) -> None: ...
+
+    assert surface_form(f) == "(*args: P.args, **kwargs: P.kwargs) -> None"
 
 
 def test_a_string_annotation_is_spelled_verbatim_and_unquoted() -> None:

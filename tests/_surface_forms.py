@@ -15,7 +15,8 @@ parentheses, a class by its qualified name without its module, Callable's parame
 types as a bracketed list, and a forward reference, a string inside a generic included,
 by its name. A string annotation is spelled verbatim, never evaluated. Literal's values
 and Annotated's metadata are values, not annotations: each is spelled by its repr, so
-Literal['a'] never reads as Literal[a].
+Literal['a'] never reads as Literal[a]. A ParamSpec's args and kwargs are spelled by
+their repr as well, P.args and P.kwargs, which keeps the two apart.
 
 Usage::
 
@@ -83,6 +84,8 @@ def _annotation_text(annotation: object) -> str:
         return f"[{_annotations_text(annotation)}]"
     if _is_bare_alias(annotation):
         return _annotation_text(typing.get_origin(annotation))
+    if isinstance(annotation, (typing.ParamSpecArgs, typing.ParamSpecKwargs)):
+        return repr(annotation)
     if typing.get_origin(annotation) is not None:
         return _subscripted_text(annotation)
     if inspect.isclass(annotation):
@@ -91,9 +94,12 @@ def _annotation_text(annotation: object) -> str:
 
 
 def _is_bare_alias(annotation: object) -> bool:
-    """Bare List has an origin but no __args__ at all; tuple[()] has __args__ == ()."""
-    has_origin = typing.get_origin(annotation) is not None
-    return has_origin and not hasattr(annotation, "__args__")
+    """Bare List: a class as origin, and no __args__ at all.
+
+    Not tuple[()], whose __args__ is (), nor P.args, whose origin is no class.
+    """
+    has_class_origin = inspect.isclass(typing.get_origin(annotation))
+    return has_class_origin and not hasattr(annotation, "__args__")
 
 
 def _subscripted_text(annotation: object) -> str:
