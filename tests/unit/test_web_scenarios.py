@@ -152,6 +152,24 @@ class TestSweepRoute:
         assert texts(page).count("Sweep Point Preview") == 1
 
 
+class TestOldScenarioApiPaths:
+    """The /scenarios/api/* paths no longer resolve: the scenario builder's JSON endpoints answer only under /api/scenarios/."""
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            pytest.param("POST", "/scenarios/api/preview-yaml", id="preview-yaml"),
+            pytest.param("POST", "/scenarios/api/validate", id="validate"),
+            pytest.param("POST", "/scenarios/api/save", id="save"),
+            pytest.param("GET", "/scenarios/api/presets", id="presets"),
+            pytest.param("GET", "/scenarios/api/presets/bristol-phase1", id="preset by name"),
+        ],
+    )
+    def test_answers_404_instead_of_redirecting(self, client: FlaskClient, method: str, path: str) -> None:
+        """Each old path, requested with the method its redirect took, answers 404 rather than redirecting to /api/scenarios/*."""
+        assert client.open(path, method=method).status_code == 404
+
+
 class TestScenarioAPI:
     """Tests for the /api/scenarios/* endpoints."""
 
