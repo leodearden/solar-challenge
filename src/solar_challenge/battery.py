@@ -139,15 +139,17 @@ class BatteryConfig:
 
     def __post_init__(self) -> None:
         """Validate battery configuration parameters."""
-        if self.capacity_kwh <= 0:
-            raise ValueError(f"Capacity must be positive, got {self.capacity_kwh} kWh")
-        if self.max_charge_kw <= 0:
+        if not 0 < self.capacity_kwh < math.inf:
             raise ValueError(
-                f"Max charge power must be positive, got {self.max_charge_kw} kW"
+                f"Capacity must be positive and finite, got {self.capacity_kwh} kWh"
             )
-        if self.max_discharge_kw <= 0:
+        if not 0 < self.max_charge_kw < math.inf:
             raise ValueError(
-                f"Max discharge power must be positive, got {self.max_discharge_kw} kW"
+                f"Max charge power must be positive and finite, got {self.max_charge_kw} kW"
+            )
+        if not 0 < self.max_discharge_kw < math.inf:
+            raise ValueError(
+                f"Max discharge power must be positive and finite, got {self.max_discharge_kw} kW"
             )
         if self.efficiency is not None:
             if not 0 < self.efficiency <= 1:
