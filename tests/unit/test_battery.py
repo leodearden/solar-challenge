@@ -835,6 +835,17 @@ class TestBatterySOHFieldValidation:
         cfg = BatteryConfig(capacity_kwh=5.0, cycle_fade_per_equivalent_full_cycle=0.0)
         assert cfg.cycle_fade_per_equivalent_full_cycle == 0.0
 
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    @pytest.mark.parametrize(
+        "field",
+        ["system_age_years", "calendar_fade_rate_per_year", "cycle_fade_per_equivalent_full_cycle"],
+    )
+    def test_an_aging_input_that_is_not_finite_is_refused(self, field: str, value: float) -> None:
+        with pytest.raises(
+            ValueError, match=re.escape(f"{field} must be >= 0 and finite, got {value}")
+        ):
+            dataclasses.replace(BatteryConfig(capacity_kwh=5.0), **{field: value})
+
     # --- soh_floor ---
 
     def test_soh_floor_zero_raises(self) -> None:
