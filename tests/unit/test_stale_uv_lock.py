@@ -49,8 +49,12 @@ def _run_uv(args: list[str], project: Path, env: dict[str, str]) -> subprocess.C
     return subprocess.run(["uv", *args], cwd=project, env=env, capture_output=True, text=True, timeout=120)
 
 
+def _names_the_fix(result: subprocess.CompletedProcess[str]) -> bool:
+    return _THE_FIX in result.stdout + result.stderr
+
+
 def _fails_naming_the_fix(result: subprocess.CompletedProcess[str]) -> bool:
-    return result.returncode != 0 and _THE_FIX in result.stdout + result.stderr
+    return result.returncode != 0 and _names_the_fix(result)
 
 
 def _lock_digest(project: Path) -> str:
@@ -134,4 +138,24 @@ def test_each_lane_job_refuses_a_stale_lock_naming_uv_lock(
     assert _fails_naming_the_fix(result), (
         f"the {job_name!r} lane job {command!r} did not fail naming `{_THE_FIX}` on a stale uv.lock, so a "
         f"stale lock on main does not turn the lane red with the fix named\n{describe_outcome(result)}"
+    )
+
+
+def test_uv_in_the_probe_environment_reads_the_package_index_only_from_its_cache(
+    stale_lock_project: Path, tmp_path: Path, offline_uv_probe_environment: dict[str, str]
+) -> None:
+    """With its cache empty, uv in the probe environment cannot re-resolve the stale probe, so it gives no verdict on the lock.
+
+    Online it would fetch the index from PyPI and report the lock stale or, with PyPI out of
+    reach, fail the request (exit 2). The same outcome is what lets stale_lock_project's
+    precondition tell a cold cache from a stale lock.
+    """
+    empty_cache_environment = {**offline_uv_probe_environment, "UV_CACHE_DIR": str(tmp_path / "empty-uv-cache")}
+
+    checked = _run_uv(["lock", "--check"], stale_lock_project, empty_cache_environment)
+
+    assert checked.returncode == 1 and not _names_the_fix(checked), (
+        "with its cache empty, uv in the probe environment did not fail for want of the package index "
+        f"(exit 1, not naming `{_THE_FIX}`): it fetched the index from PyPI, or tried to (exit 2), so every "
+        f"probe here needs PyPI whenever uv's cached index pages are stale\n{describe_outcome(checked)}"
     )
