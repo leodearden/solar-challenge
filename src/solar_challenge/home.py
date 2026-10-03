@@ -391,10 +391,7 @@ def simulate_home(
 
         results_list.append(result)
 
-    # Convert energy (kWh) back to power (kW) for 1-minute timesteps
-    # Energy in kWh for 1 minute = Power in kW * (1/60) hours
-    # So Power in kW = Energy in kWh * 60
-    conversion_factor = 60.0
+    minute_kwh_to_kw = 1 / HOURS_PER_MINUTE
 
     # Calculate tariff costs if tariff is configured
     if config.tariff_config is not None:
@@ -427,27 +424,27 @@ def simulate_home(
     return SimulationResults(
         strategy_name=strategy_name,
         generation=pd.Series(
-            [r.generation * conversion_factor for r in results_list],
+            [r.generation * minute_kwh_to_kw for r in results_list],
             index=index,
             name="generation_kw",
         ),
         demand=pd.Series(
-            [r.demand * conversion_factor for r in results_list],
+            [r.demand * minute_kwh_to_kw for r in results_list],
             index=index,
             name="demand_kw",
         ),
         self_consumption=pd.Series(
-            [r.self_consumption * conversion_factor for r in results_list],
+            [r.self_consumption * minute_kwh_to_kw for r in results_list],
             index=index,
             name="self_consumption_kw",
         ),
         battery_charge=pd.Series(
-            [r.battery_charge * conversion_factor for r in results_list],
+            [r.battery_charge * minute_kwh_to_kw for r in results_list],
             index=index,
             name="battery_charge_kw",
         ),
         battery_discharge=pd.Series(
-            [r.battery_discharge * conversion_factor for r in results_list],
+            [r.battery_discharge * minute_kwh_to_kw for r in results_list],
             index=index,
             name="battery_discharge_kw",
         ),
@@ -457,12 +454,12 @@ def simulate_home(
             name="battery_soc_kwh",
         ),
         grid_import=pd.Series(
-            [r.grid_import * conversion_factor for r in results_list],
+            [r.grid_import * minute_kwh_to_kw for r in results_list],
             index=index,
             name="grid_import_kw",
         ),
         grid_export=pd.Series(
-            [r.grid_export * conversion_factor for r in results_list],
+            [r.grid_export * minute_kwh_to_kw for r in results_list],
             index=index,
             name="grid_export_kw",
         ),
