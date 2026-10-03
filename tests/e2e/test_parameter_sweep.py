@@ -45,9 +45,7 @@ def test_sweep_no_js_errors(
     an uncaught ReferenceError.
     """
     page.goto(live_server + "/scenarios/sweep")
-    # Give deferred scripts time to load and Alpine to initialise
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 

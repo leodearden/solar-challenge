@@ -47,7 +47,6 @@ def test_builder_no_js_errors(
     """
     page.goto(live_server + "/scenarios/builder")
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
     assert page_errors == [], f"Errors on /scenarios/builder: {page_errors}"
 
