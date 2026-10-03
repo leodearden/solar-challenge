@@ -19,9 +19,11 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 from rich.table import Table
+from rich.text import Text
 
 from solar_challenge.config import ConfigurationError, load_config
 from solar_challenge.location import Location
+from solar_challenge.weather import WeatherDataError
 
 console = Console()
 error_console = Console(stderr=True)
@@ -37,19 +39,27 @@ def handle_errors(func: F) -> F:
         try:
             return func(*args, **kwargs)
         except ConfigurationError as e:
-            error_console.print(f"[red]Configuration error:[/red] {e}")
+            _print_error_verbatim("Configuration error", e)
             raise typer.Exit(1) from e
         except FileNotFoundError as e:
-            error_console.print(f"[red]File not found:[/red] {e}")
+            _print_error_verbatim("File not found", e)
             raise typer.Exit(1) from e
         except ValueError as e:
-            error_console.print(f"[red]Invalid value:[/red] {e}")
+            _print_error_verbatim("Invalid value", e)
+            raise typer.Exit(1) from e
+        except WeatherDataError as e:
+            _print_error_verbatim("Weather data unavailable", e)
             raise typer.Exit(1) from e
         except KeyboardInterrupt:
             error_console.print("\n[yellow]Interrupted by user[/yellow]")
             raise typer.Exit(130) from None
 
     return wrapper  # type: ignore[return-value]
+
+
+def _print_error_verbatim(label: str, error: Exception) -> None:
+    """Print label in red, then error's text exactly as it is, never read as Rich markup or emoji codes."""
+    error_console.print(Text.assemble((f"{label}:", "red"), " ", str(error)))
 
 
 def parse_location(location_str: str) -> Location:

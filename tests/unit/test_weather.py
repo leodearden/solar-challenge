@@ -11,6 +11,7 @@ from unittest.mock import call, patch
 from solar_challenge.weather import (
     PVGIS_TMY_REQUEST,
     WeatherCache,
+    WeatherDataError,
     get_tmy_data,
     scale_tmy_to_annual_ghi,
 )
@@ -281,7 +282,7 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         """A series lacking or repeating any hour of the climate years raises, naming the year, and leaves nothing cached."""
         pvgis_requests.hourly.return_value = (make_series(pvgis_hourly_series), {})
 
-        with pytest.raises(RuntimeError, match="2020"):
+        with pytest.raises(WeatherDataError, match="2020"):
             get_tmy_data(Location.bristol())
 
         assert weather_cache.get("tmy", Location.bristol()) is None
@@ -294,15 +295,50 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         ],
     )
     def test_refuses_a_tmy_it_cannot_scale(self, weather_cache, pvgis_tmy, pvgis_requests, make_tmy):
-        """A TMY scale_tmy_to_annual_ghi refuses raises RuntimeError, as any bad PVGIS response does, and leaves nothing cached."""
+        """A TMY scale_tmy_to_annual_ghi refuses raises WeatherDataError, as any bad PVGIS response does, and leaves nothing cached."""
         pvgis_requests.tmy.return_value = (make_tmy(pvgis_tmy), {})
 
-        with pytest.raises(RuntimeError) as refusal:
+        with pytest.raises(WeatherDataError) as refusal:
             get_tmy_data(Location.bristol())
 
         assert isinstance(refusal.value.__cause__, ValueError)
         assert str(refusal.value.__cause__) in str(refusal.value)
         assert weather_cache.get("tmy", Location.bristol()) is None
+
+
+class TestGetTmyDataReportsPvgisFailures:
+    """Every failure at the PVGIS boundary raises WeatherDataError naming why, and leaves nothing cached."""
+
+    @pytest.mark.parametrize(
+        "failing_request",
+        [
+            pytest.param("tmy", id="TMY request"),
+            pytest.param("hourly", id="long-term series request"),
+        ],
+    )
+    def test_a_failed_request_raises_weather_data_error(self, weather_cache, pvgis_requests, failing_request):
+        """A PVGIS request that fails raises WeatherDataError carrying the failure's own text."""
+        getattr(pvgis_requests, failing_request).side_effect = ConnectionError("PVGIS is unreachable")
+
+        with pytest.raises(WeatherDataError, match="PVGIS is unreachable"):
+            get_tmy_data(Location.bristol())
+
+        assert weather_cache.get("tmy", Location.bristol()) is None
+
+    def test_a_tmy_lacking_a_required_column_raises_weather_data_error(
+        self, weather_cache, pvgis_tmy, pvgis_requests
+    ):
+        """A TMY lacking any of temp_air, ghi, dni and dhi raises WeatherDataError naming the missing column."""
+        pvgis_requests.tmy.return_value = (pvgis_tmy.drop(columns="ghi"), {})
+
+        with pytest.raises(WeatherDataError, match="ghi"):
+            get_tmy_data(Location.bristol())
+
+        assert weather_cache.get("tmy", Location.bristol()) is None
+
+    def test_weather_data_error_is_a_runtime_error(self):
+        """Callers that catch RuntimeError still catch every PVGIS failure."""
+        assert issubclass(WeatherDataError, RuntimeError)
 
 
 class TestScaleTmyToAnnualGhi:
