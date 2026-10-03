@@ -37,13 +37,13 @@
             </button>
             <div x-show="accordionOpen === 'general'" x-collapse class="px-5 pb-5 space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Scenario Name</label>
-                    <input type="text" x-model="name" @input="updatePreview()" placeholder="e.g. Bristol Phase 1"
+                    <label for="builder_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Scenario Name</label>
+                    <input id="builder_name" type="text" x-model="name" @input="updatePreview()" placeholder="e.g. Bristol Phase 1"
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
-                    <textarea x-model="description" @input="updatePreview()" rows="2" placeholder="Optional description"
+                    <label for="builder_description" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
+                    <textarea id="builder_description" x-model="description" @input="updatePreview()" rows="2" placeholder="Optional description"
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"></textarea>
                 </div>
             </div>
@@ -70,13 +70,13 @@
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Start Date</label>
-                        <input type="date" x-model="start_date" @change="updatePreview()"
+                        <label for="builder_start_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Start Date</label>
+                        <input id="builder_start_date" type="date" x-model="start_date" @change="updatePreview()"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">End Date</label>
-                        <input type="date" x-model="end_date" @change="updatePreview()"
+                        <label for="builder_end_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">End Date</label>
+                        <input id="builder_end_date" type="date" x-model="end_date" @change="updatePreview()"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                 </div>
@@ -96,8 +96,8 @@
             </button>
             <div x-show="accordionOpen === 'location'" x-cloak x-collapse class="px-5 pb-5 space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Location Preset</label>
-                    <select x-model="location_preset" @change="updatePreview()"
+                    <label for="builder_location_preset" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Location Preset</label>
+                    <select id="builder_location_preset" x-model="location_preset" @change="updatePreview()"
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                         <option value="bristol">Bristol, UK</option>
                         <option value="london">London, UK</option>
@@ -108,18 +108,18 @@
                 </div>
                 <div x-show="location_preset === 'custom'" x-cloak class="grid grid-cols-3 gap-4">
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
-                        <input type="number" step="0.01" x-model="latitude" @input="updatePreview()"
+                        <label for="builder_latitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
+                        <input id="builder_latitude" type="number" step="0.01" x-model="latitude" @input="updatePreview()"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Longitude</label>
-                        <input type="number" step="0.01" x-model="longitude" @input="updatePreview()"
+                        <label for="builder_longitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Longitude</label>
+                        <input id="builder_longitude" type="number" step="0.01" x-model="longitude" @input="updatePreview()"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Altitude (m)</label>
-                        <input type="number" step="1" x-model="altitude" @input="updatePreview()"
+                        <label for="builder_altitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Altitude (m)</label>
+                        <input id="builder_altitude" type="number" step="1" x-model="altitude" @input="updatePreview()"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                 </div>
@@ -139,8 +139,8 @@
             </button>
             <div x-show="accordionOpen === 'fleet'" x-cloak x-collapse class="px-5 pb-5 space-y-5">
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Number of Homes</label>
-                    <input type="number" min="1" max="10000" x-model="n_homes" @input="updatePreview()"
+                    <label for="builder_n_homes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Number of Homes</label>
+                    <input id="builder_n_homes" type="number" min="1" max="10000" x-model="n_homes" @input="updatePreview()"
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                 </div>
 
@@ -382,13 +382,13 @@
             <div x-show="accordionOpen === 'tariff'" x-cloak x-collapse class="px-5 pb-5 space-y-4">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Import Rate (GBP/kWh)</label>
-                        <input type="number" step="0.001" x-model="import_rate" @input="updatePreview()"
+                        <label for="builder_import_rate" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Import Rate (GBP/kWh)</label>
+                        <input id="builder_import_rate" type="number" step="0.001" x-model="import_rate" @input="updatePreview()"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">SEG Export Rate (p/kWh)</label>
-                        <input type="number" step="0.1" min="0" x-model="seg_rate_pence_per_kwh" @input="updatePreview()"
+                        <label for="builder_seg_rate_pence_per_kwh" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">SEG Export Rate (p/kWh)</label>
+                        <input id="builder_seg_rate_pence_per_kwh" type="number" step="0.1" min="0" x-model="seg_rate_pence_per_kwh" @input="updatePreview()"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                     </div>
                 </div>
