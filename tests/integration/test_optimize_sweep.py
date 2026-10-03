@@ -14,111 +14,26 @@ from typing import Optional
 
 import pytest
 
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.fleet import FleetResults
 from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._finance_builders import make_fleet_results, make_scenario
 
 
 # ---------------------------------------------------------------------------
-# Shared offline scaffolding (adapted from tests/unit/test_cost_recovery_solve.py)
+# Offline scaffolding: the finance builders, this module's pinned scenario and
+# fleet results over tests/_finance_builders.py, and the ConfigResult and
+# solution builders
 # ---------------------------------------------------------------------------
 
 
-def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
-    from solar_challenge.pv import PVConfig
+def _make_fleet_results(n_homes: int = 5) -> FleetResults:
+    """*n_homes* default homes, each self-consuming 2,000 kWh, exporting 800 and importing 1,200 a year.
 
-    return PVConfig(
-        capacity_kw=4.0,
-        azimuth=180.0,
-        tilt=35.0,
-        system_age_years=system_age_years,
-        degradation_rate_per_year=0.005,
-    )
-
-
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
-    from solar_challenge.load import LoadConfig
-
-    return LoadConfig(annual_consumption_kwh=3500.0)
-
-
-def _make_home_config(
-    capacity_kw: float = 4.0,
-    system_age_years: float = 0.0,
-) -> "HomeConfig":  # type: ignore[name-defined]
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
-    from solar_challenge.pv import PVConfig
-
-    pv = PVConfig(
-        capacity_kw=capacity_kw,
-        azimuth=180.0,
-        tilt=35.0,
-        system_age_years=system_age_years,
-        degradation_rate_per_year=0.005,
-    )
-    return HomeConfig(
-        pv_config=pv,
-        load_config=_make_load_config(),
-        location=Location.bristol(),
-    )
-
-
-def _make_sim_results(
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    export_revenue_gbp_per_year: float = 0.0,
-    n_minutes: int = 525600,  # 365 days
-) -> "SimulationResults":  # type: ignore[name-defined]
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
-    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-
-    exp_rev_per_min = export_revenue_gbp_per_year / n_minutes if n_minutes > 0 else 0.0
-    export_revenue_series = pd.Series(exp_rev_per_min, index=idx)
-
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=export_revenue_series,
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
-
-
-def _make_fleet_results(
-    n_homes: int = 5,
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    export_revenue_gbp_per_year: float = 0.0,
-    capacity_kw: float = 4.0,
-) -> "FleetResults":  # type: ignore[name-defined]
-    from solar_challenge.fleet import FleetResults
-
-    homes = [_make_home_config(capacity_kw=capacity_kw) for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results(self_kwh, export_kwh, import_kwh,
-                          export_revenue_gbp_per_year=export_revenue_gbp_per_year)
-        for _ in range(n_homes)
-    ]
-    return FleetResults(
-        per_home_results=per_home,
-        home_configs=homes,
-    )
+    The homes earn no export revenue.
+    """
+    return make_fleet_results(n_homes=n_homes, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
 
 
 def _make_finance(
@@ -144,24 +59,9 @@ def _make_finance(
     )
 
 
-def _make_scenario(
-    n_homes: int = 5,
-    start: str = "2020-01-01",
-    end: str = "2020-12-31",
-    seg_tariff_pence: float = 5.0,
-    finance: "Optional[FinanceConfig]" = None,  # type: ignore[name-defined]
-) -> "ScenarioConfig":  # type: ignore[name-defined]
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
-    homes = [_make_home_config() for _ in range(n_homes)]
-    return ScenarioConfig(
-        name="sweep-test",
-        period=SimulationPeriod(start_date=start, end_date=end),
-        description="W3 sweep integration test scenario",
-        homes=homes,
-        seg_tariff_pence_per_kwh=seg_tariff_pence,
-        finance=finance,
-    )
+def _make_scenario(n_homes: int = 5, finance: FinanceConfig | None = None) -> ScenarioConfig:
+    """make_scenario's *n_homes* default homes carrying *finance*, pinned to a 5 p/kWh scenario SEG rate."""
+    return make_scenario(n_homes=n_homes, seg_tariff_pence_per_kwh=5.0, finance=finance)
 
 
 def _interior_finance(n_homes: int = 5) -> "FinanceConfig":  # type: ignore[name-defined]
@@ -582,8 +482,11 @@ class TestRunSweepSingleConfig:
 class TestRunSweepMultiConfig:
     """Multi-config ranking: sorted by outlay, feasible/infeasible split, cheapest."""
 
-    def _make_pv_varying_simulate(self, n_homes: int = 5):  # type: ignore[return]
-        """Return a simulate that scales self_kwh/export with fc.homes[0].pv_config.capacity_kw."""
+    def _make_pv_varying_simulate(self):  # type: ignore[return]
+        """Return a simulate that scales self_kwh/export with fc.homes[0].pv_config.capacity_kw.
+
+        Its results are paired with the homes of the fleet it is asked to simulate.
+        """
 
         def simulate(fc, s, e):  # type: ignore[return]
             cap = fc.homes[0].pv_config.capacity_kw
@@ -591,12 +494,11 @@ class TestRunSweepMultiConfig:
             # → lower outlay (but we want variance for ordering tests)
             self_kwh = 1500.0 * (cap / 4.0)
             export_kwh = 600.0 * (cap / 4.0)
-            return _make_fleet_results(
-                n_homes=n_homes,
+            return make_fleet_results(
+                homes=fc.homes,
                 self_kwh=self_kwh,
                 export_kwh=export_kwh,
                 import_kwh=1200.0,
-                capacity_kw=cap,
             )
 
         return simulate
@@ -616,7 +518,7 @@ class TestRunSweepMultiConfig:
         n_homes = 3
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
-        simulate = self._make_pv_varying_simulate(n_homes)
+        simulate = self._make_pv_varying_simulate()
 
         from solar_challenge.optimize import enumerate_configs, run_sweep
 
@@ -636,7 +538,7 @@ class TestRunSweepMultiConfig:
         n_homes = 3
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
-        simulate = self._make_pv_varying_simulate(n_homes)
+        simulate = self._make_pv_varying_simulate()
 
         from solar_challenge.optimize import enumerate_configs, run_sweep
 
@@ -654,7 +556,7 @@ class TestRunSweepMultiConfig:
         n_homes = 3
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
-        simulate = self._make_pv_varying_simulate(n_homes)
+        simulate = self._make_pv_varying_simulate()
 
         from solar_challenge.optimize import enumerate_configs, run_sweep
 
