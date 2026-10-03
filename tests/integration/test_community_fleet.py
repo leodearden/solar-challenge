@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.main import app
@@ -39,8 +39,6 @@ from tests._synthetic_weather import synthetic_june_weather
 pytestmark = pytest.mark.integration
 
 SCENARIO = Path("scenarios/bristol-community.yaml")
-
-runner = CliRunner()
 
 
 # ---------------------------------------------------------------------------
@@ -136,14 +134,22 @@ def _build_injected_fleet(
     return FleetResults(per_home_results=results, home_configs=all_configs)
 
 
+def _fleet_run_in_process(scenario: Path, *options: str) -> Result:
+    """Invoke `fleet run` on *scenario* with *options*, simulating in this process.
+
+    A worker process sees neither this process's weather cache nor its offline
+    guard: one started with forkserver, Python 3.14's default, reads the working
+    directory's cache and can fetch PVGIS unguarded.
+    """
+    return CliRunner().invoke(app, ["fleet", "run", str(scenario), "--sequential", *options])
+
+
 @pytest.fixture
 def clear_june_tmy(weather_cache: WeatherCache) -> None:
     """Serve a clear 21 June as Bristol's TMY, the location of every fleet these tests run.
 
     get_tmy_data reads it from the test's weather cache, so no PVGIS call is made.
-    The cache is installed in this process only, so each `fleet run` here passes
-    --sequential: a worker process started with forkserver, Python 3.14's default,
-    would read the working directory's cache instead, outside the offline guard.
+    Only this process holds that cache: run `fleet run` through _fleet_run_in_process.
     """
     weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
 
@@ -287,30 +293,22 @@ class TestFleetRunCommunityCLI:
     def test_community_run_exits_zero(self, tmp_path: Path) -> None:
         """fleet run with community block: exit code 0."""
         tmp_report = tmp_path / "community_report.md"
-        result = runner.invoke(
-            app,
-            [
-                "fleet", "run", str(SCENARIO),
-                "--sequential",
-                "--start", "2024-06-21",
-                "--end", "2024-06-21",
-                "--community-report", str(tmp_report),
-            ],
+        result = _fleet_run_in_process(
+            SCENARIO,
+            "--start", "2024-06-21",
+            "--end", "2024-06-21",
+            "--community-report", str(tmp_report),
         )
         assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}:\n{result.output}"
 
     def test_community_run_stdout_contains_community_section(self, tmp_path: Path) -> None:
         """fleet run output includes a community section."""
         tmp_report = tmp_path / "community_report.md"
-        result = runner.invoke(
-            app,
-            [
-                "fleet", "run", str(SCENARIO),
-                "--sequential",
-                "--start", "2024-06-21",
-                "--end", "2024-06-21",
-                "--community-report", str(tmp_report),
-            ],
+        result = _fleet_run_in_process(
+            SCENARIO,
+            "--start", "2024-06-21",
+            "--end", "2024-06-21",
+            "--community-report", str(tmp_report),
         )
         assert result.exit_code == 0
         assert "Community" in result.output
@@ -318,15 +316,11 @@ class TestFleetRunCommunityCLI:
     def test_community_report_file_written(self, tmp_path: Path) -> None:
         """fleet run writes --community-report file with correct headings."""
         tmp_report = tmp_path / "community_report.md"
-        result = runner.invoke(
-            app,
-            [
-                "fleet", "run", str(SCENARIO),
-                "--sequential",
-                "--start", "2024-06-21",
-                "--end", "2024-06-21",
-                "--community-report", str(tmp_report),
-            ],
+        result = _fleet_run_in_process(
+            SCENARIO,
+            "--start", "2024-06-21",
+            "--end", "2024-06-21",
+            "--community-report", str(tmp_report),
         )
         assert result.exit_code == 0
         assert tmp_report.exists(), "Community report file was not written"
@@ -339,15 +333,11 @@ class TestFleetRunCommunityCLI:
     def test_community_report_netting_reduces_import(self, tmp_path: Path) -> None:
         """Community Grid Import < Unshared Grid Import (netting reduces import)."""
         tmp_report = tmp_path / "community_report.md"
-        result = runner.invoke(
-            app,
-            [
-                "fleet", "run", str(SCENARIO),
-                "--sequential",
-                "--start", "2024-06-21",
-                "--end", "2024-06-21",
-                "--community-report", str(tmp_report),
-            ],
+        result = _fleet_run_in_process(
+            SCENARIO,
+            "--start", "2024-06-21",
+            "--end", "2024-06-21",
+            "--community-report", str(tmp_report),
         )
         assert result.exit_code == 0
         report_text = tmp_report.read_text()
@@ -410,19 +400,15 @@ homes:
 
     def test_no_community_block_exits_zero(self, plain_scenario: Path) -> None:
         """fleet run on plain config: exit code 0."""
-        result = runner.invoke(
-            app,
-            ["fleet", "run", str(plain_scenario), "--sequential",
-             "--start", "2024-06-21", "--end", "2024-06-21"],
+        result = _fleet_run_in_process(
+            plain_scenario, "--start", "2024-06-21", "--end", "2024-06-21"
         )
         assert result.exit_code == 0, result.output
 
     def test_no_community_section_in_stdout(self, plain_scenario: Path) -> None:
         """fleet run on plain config does NOT print a community section."""
-        result = runner.invoke(
-            app,
-            ["fleet", "run", str(plain_scenario), "--sequential",
-             "--start", "2024-06-21", "--end", "2024-06-21"],
+        result = _fleet_run_in_process(
+            plain_scenario, "--start", "2024-06-21", "--end", "2024-06-21"
         )
         assert result.exit_code == 0
         # "Community Sharing" is the rich Table title; should be absent
@@ -461,15 +447,11 @@ community:
         community_path = tmp_path / "fleet_community.yaml"
         community_path.write_text(community_yaml)
 
-        plain_result = runner.invoke(
-            app,
-            ["fleet", "run", str(plain_path), "--sequential",
-             "--start", "2024-06-21", "--end", "2024-06-21"],
+        plain_result = _fleet_run_in_process(
+            plain_path, "--start", "2024-06-21", "--end", "2024-06-21"
         )
-        community_result = runner.invoke(
-            app,
-            ["fleet", "run", str(community_path), "--sequential",
-             "--start", "2024-06-21", "--end", "2024-06-21"],
+        community_result = _fleet_run_in_process(
+            community_path, "--start", "2024-06-21", "--end", "2024-06-21"
         )
         assert plain_result.exit_code == 0
         assert community_result.exit_code == 0
@@ -490,13 +472,10 @@ community:
     ) -> None:
         """--community-report with no community: block warns and does NOT write file."""
         report_path = tmp_path / "should_not_exist.md"
-        result = runner.invoke(
-            app,
-            [
-                "fleet", "run", str(plain_scenario), "--sequential",
-                "--start", "2024-06-21", "--end", "2024-06-21",
-                "--community-report", str(report_path),
-            ],
+        result = _fleet_run_in_process(
+            plain_scenario,
+            "--start", "2024-06-21", "--end", "2024-06-21",
+            "--community-report", str(report_path),
         )
         assert result.exit_code == 0
         assert not report_path.exists(), "Report file should NOT be written without community block"
@@ -591,15 +570,11 @@ class TestCommunityPipelineAB:
     def test_real_pvgis_smoke(self, tmp_path: Path) -> None:
         """Smoke test: fleet run on live PVGIS weather (marked slow, so no TMY is seeded)."""
         tmp_report = tmp_path / "smoke_report.md"
-        result = runner.invoke(
-            app,
-            [
-                "fleet", "run", str(SCENARIO),
-                "--sequential",
-                "--start", "2024-06-21",
-                "--end", "2024-06-21",
-                "--community-report", str(tmp_report),
-            ],
+        result = _fleet_run_in_process(
+            SCENARIO,
+            "--start", "2024-06-21",
+            "--end", "2024-06-21",
+            "--community-report", str(tmp_report),
         )
         assert result.exit_code == 0, f"smoke test failed:\n{result.output}"
         assert "Community" in result.output
@@ -780,13 +755,10 @@ class TestFleetRunCommunityBillingCLI:
     def test_community_report_has_billing_section(self, tmp_path: Path) -> None:
         """Written --community-report contains 'Community Billing' and 'Savings'."""
         report_path = tmp_path / "billing_report.md"
-        result = runner.invoke(
-            app,
-            [
-                "fleet", "run", str(SCENARIO), "--sequential",
-                "--start", "2024-06-21", "--end", "2024-06-21",
-                "--community-report", str(report_path),
-            ],
+        result = _fleet_run_in_process(
+            SCENARIO,
+            "--start", "2024-06-21", "--end", "2024-06-21",
+            "--community-report", str(report_path),
         )
         assert result.exit_code == 0, result.output
         assert report_path.exists()
@@ -799,13 +771,10 @@ class TestFleetRunCommunityBillingCLI:
     def test_community_report_savings_non_negative(self, tmp_path: Path) -> None:
         """Parsed savings figure from the report is >= 0."""
         report_path = tmp_path / "billing_report2.md"
-        result = runner.invoke(
-            app,
-            [
-                "fleet", "run", str(SCENARIO), "--sequential",
-                "--start", "2024-06-21", "--end", "2024-06-21",
-                "--community-report", str(report_path),
-            ],
+        result = _fleet_run_in_process(
+            SCENARIO,
+            "--start", "2024-06-21", "--end", "2024-06-21",
+            "--community-report", str(report_path),
         )
         assert result.exit_code == 0, result.output
         report_text = report_path.read_text()
@@ -825,12 +794,8 @@ class TestFleetRunCommunityBillingCLI:
 
     def test_cli_stdout_has_billing_rows(self) -> None:
         """CLI stdout community table includes billing rows (step-8 drives this)."""
-        result = runner.invoke(
-            app,
-            [
-                "fleet", "run", str(SCENARIO), "--sequential",
-                "--start", "2024-06-21", "--end", "2024-06-21",
-            ],
+        result = _fleet_run_in_process(
+            SCENARIO, "--start", "2024-06-21", "--end", "2024-06-21"
         )
         assert result.exit_code == 0, result.output
         # Billing rows in the Rich table — implemented in step-8
