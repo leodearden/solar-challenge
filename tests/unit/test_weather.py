@@ -337,7 +337,7 @@ class TestGetTmyDataReportsPvgisFailures:
         assert weather_cache.get("tmy", Location.bristol()) is None
 
     def test_weather_data_error_is_a_runtime_error(self):
-        """Callers that catch RuntimeError, as get_tmy_data documented before WeatherDataError existed, still catch every PVGIS failure."""
+        """Callers that catch RuntimeError still catch every PVGIS failure."""
         assert issubclass(WeatherDataError, RuntimeError)
 
 

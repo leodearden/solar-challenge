@@ -48,10 +48,7 @@ PVGIS_TMY_REQUEST: Mapping[str, object] = MappingProxyType(
 
 
 class WeatherDataError(RuntimeError):
-    """PVGIS could not supply usable weather for a point: a request failed, or what it returned could not be used.
-
-    It is a RuntimeError, as get_tmy_data's failures always were.
-    """
+    """PVGIS could not supply usable weather for a point: a request failed, or what it returned could not be used."""
 
 
 class WeatherCache:
