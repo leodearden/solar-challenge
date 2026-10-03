@@ -149,9 +149,12 @@ _SUMMARY = {
 
 _FIGURES: dict[str, Callable[[], str | None]] = {
     "power_flow_timeline": lambda: charts.power_flow_timeline(_year()),
+    "battery_soc_chart": lambda: charts.battery_soc_chart(_year(), battery_capacity_kwh=10.0),
     "sankey_diagram": lambda: charts.sankey_diagram(_SUMMARY),
     "daily_energy_balance": lambda: charts.daily_energy_balance(_year()),
     "monthly_summary": lambda: charts.monthly_summary(_year()),
+    "financial_breakdown": lambda: charts.financial_breakdown(_year()),
+    "seasonal_comparison": lambda: charts.seasonal_comparison(_year()),
     "heat_pump_load_profile": lambda: charts.heat_pump_analysis(_year_with_heat_pump())["cop_chart"],
     "heat_pump_share": lambda: charts.heat_pump_analysis(_year_with_heat_pump())["load_share_chart"],
     "fleet_aggregate_timeline": lambda: charts.fleet_aggregate_timeline(_year()),
