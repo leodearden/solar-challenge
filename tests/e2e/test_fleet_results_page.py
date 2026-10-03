@@ -5,7 +5,7 @@ the page's action links, its chart tabs, and that it renders without errors.
 """
 
 import pytest
-from playwright.sync_api import ConsoleMessage, Page, expect
+from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -95,26 +95,17 @@ def test_fleet_results_page_shows_every_tab_without_errors(
     page: Page,
     live_server: str,
     seeded_fleet_run: tuple[str, str],
+    page_errors: list[str],
 ) -> None:
     """Loading the page and showing each of its tabs logs no console error and throws no uncaught exception.
 
     chart-renderer.js draws a hidden tab's charts only once the tab is shown, so every tab is shown.
-    Playwright reports an uncaught exception as a pageerror, not as a console message.
     """
     run_id, _ = seeded_fleet_run
-    errors: list[str] = []
-
-    def _on_console(msg: ConsoleMessage) -> None:
-        if msg.type == "error":
-            errors.append(msg.text)
-
-    page.on("console", _on_console)
-    page.on("pageerror", lambda error: errors.append(str(error)))
-
     response = page.goto(live_server + f"/results/fleet/{run_id}")
     assert response is not None
     assert response.status == 200
     for tab_name in _CHART_IDS_BY_TAB:
         _show_tab(page, tab_name)
 
-    assert errors == [], f"Errors on /results/fleet/{run_id}: {errors}"
+    assert page_errors == [], f"Errors on /results/fleet/{run_id}: {page_errors}"

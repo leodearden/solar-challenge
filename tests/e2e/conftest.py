@@ -6,7 +6,7 @@ configures Playwright's base_url so tests can use relative paths.
 Includes data-seeding fixtures for tests that need pre-existing
 simulation runs (results pages, history interactions, compare page).
 Also stubs the Run History page's runs-list API for tests that need it
-empty or unanswered.
+empty or unanswered, and collects the errors a page reports.
 
 It imports nothing from playwright: tests/unit/test_e2e_job_wait.py runs
 a copy of this module in the verify environment, which lacks the e2e extra.
@@ -407,3 +407,25 @@ def runs_api_never_answers(page) -> Iterator[None]:
     assert held_requests, "the page made no runs-list request for runs_api_never_answers to hold"
     for route in held_requests:
         route.abort()
+
+
+# ---------------------------------------------------------------------------
+# Page errors
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def page_errors(page) -> list[str]:
+    """The text of each console error the page logs and each uncaught exception it throws during the test.
+
+    Playwright reports an uncaught exception, such as an Alpine expression error, only as a pageerror.
+    """
+    errors: list[str] = []
+
+    def _collect_console_error(message) -> None:
+        if message.type == "error":
+            errors.append(message.text)
+
+    page.on("console", _collect_console_error)
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    return errors
