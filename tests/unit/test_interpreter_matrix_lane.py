@@ -13,14 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
+from tests._collect_only import requires_uv
 from tests._interpreters import off_pin_minor_versions, python_version_pin
-from tests._orchestrator_config import (
-    git_config,
-    lane_job_directory,
-    lane_job_enabled,
-    sole_offline_lane_job,
-)
+from tests._lane_collection import collect_lane_job
+from tests._orchestrator_config import git_config, lane_job_enabled, sole_offline_lane_job
 
 _MATRIX_JOB = "interpreter-matrix"
 
@@ -62,19 +58,12 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(
     Each case's node-id must name its interpreter: that node-id is the only
     attribution a fix task filed by the lane carries.
     """
-    job = sole_offline_lane_job(project_root, _MATRIX_JOB)
-    command = job["command"]
+    collection = collect_lane_job(project_root, _MATRIX_JOB, env=uv_probe_environment)
 
-    result = run_collect_only(command, lane_job_directory(project_root, job), env=uv_probe_environment)
-
-    assert result.returncode == pytest.ExitCode.OK, (
-        f"the {_MATRIX_JOB!r} lane job {command!r} failed to collect\n{describe_outcome(result)}"
-    )
     expected = sorted(f"{major}.{minor}" for major, minor in off_pin_minor_versions(project_root))
-    node_ids = collected_node_ids(result.stdout)
-    collected = sorted(node_id.rpartition("[")[2].removesuffix("]") for node_id in node_ids)
+    collected = sorted(node_id.rpartition("[")[2].removesuffix("]") for node_id in collection.node_ids)
     assert collected == expected, (
-        f"the {_MATRIX_JOB!r} lane job collected {node_ids}; expected exactly one case per minor "
+        f"the {_MATRIX_JOB!r} lane job collected {collection.node_ids}; expected exactly one case per minor "
         f"requires-python admits other than the .python-version pin {python_version_pin(project_root)}, "
         f"each node-id ending in its interpreter: {expected}"
     )
