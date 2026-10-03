@@ -3,7 +3,8 @@
 Provides a live Flask server running in a background thread and
 configures Playwright's base_url so tests can use relative paths.
 
-Includes data-seeding fixtures for tests that need pre-existing
+Includes data-seeding fixtures, which save completed runs through the
+live server's own RunStorage, for tests that need pre-existing
 simulation runs (results pages, history interactions, compare page).
 Also stubs the Run History page's runs-list API for tests that need it
 empty or unanswered, and collects the errors a page reports.
@@ -17,7 +18,6 @@ import threading
 import uuid
 from collections.abc import Iterator
 from dataclasses import replace
-from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
@@ -29,7 +29,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import get_job_manager
+from solar_challenge.web.shared import get_job_manager, get_storage
 from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
@@ -55,18 +55,13 @@ def _e2e_app(tmp_path_factory: pytest.TempPathFactory) -> Flask:
 
 
 @pytest.fixture(scope="session")
-def _e2e_db_path(_e2e_app: Flask) -> Path:
-    """Path to the database the live server's app reads.
+def _e2e_storage(_e2e_app: Flask) -> RunStorage:
+    """The RunStorage holding the runs the live server's pages show; each seeding fixture saves its runs through it.
 
-    create_app built its schema, so a fixture can seed it before the server starts.
+    create_app built its database schema, so a fixture can seed it before the server starts.
     """
-    return Path(_e2e_app.config["DATABASE"])
-
-
-@pytest.fixture(scope="session")
-def _e2e_data_dir(_e2e_app: Flask) -> Path:
-    """Root data directory for the live server's run storage."""
-    return Path(_e2e_app.config["DATA_DIR"])
+    with _e2e_app.app_context():
+        return get_storage()
 
 
 @pytest.fixture(scope="session")
@@ -145,13 +140,13 @@ def _save_seeded_home_run(
 
 
 @pytest.fixture(scope="session")
-def seeded_home_run(_e2e_db_path: Path, _e2e_data_dir: Path) -> tuple[str, str]:
+def seeded_home_run(_e2e_storage: RunStorage) -> tuple[str, str]:
     """Save a completed 1-day home run through RunStorage. Returns (run_id, run_name).
 
     Its results are make_sim_results' constant-power series, so no simulation runs and no service is reached.
     """
     return _save_seeded_home_run(
-        RunStorage(db_path=_e2e_db_path, data_dir=_e2e_data_dir),
+        _e2e_storage,
         "seed-home-001",
         "Seeded Home Alpha",
         make_sim_results(self_kwh=60.0, export_kwh=40.0, import_kwh=20.0, days=1),
@@ -159,21 +154,20 @@ def seeded_home_run(_e2e_db_path: Path, _e2e_data_dir: Path) -> tuple[str, str]:
 
 
 @pytest.fixture(scope="session")
-def seeded_home_runs_pair(_e2e_db_path: Path, _e2e_data_dir: Path) -> list[tuple[str, str]]:
+def seeded_home_runs_pair(_e2e_storage: RunStorage) -> list[tuple[str, str]]:
     """Save 2 completed 1-day home runs through RunStorage, the second importing more from the grid.
 
     Returns [(id1, name1), (id2, name2)].
     """
-    storage = RunStorage(db_path=_e2e_db_path, data_dir=_e2e_data_dir)
     return [
         _save_seeded_home_run(
-            storage,
+            _e2e_storage,
             "seed-cmp-001",
             "Compare Run A",
             make_sim_results(self_kwh=70.0, export_kwh=50.0, import_kwh=20.0, days=1),
         ),
         _save_seeded_home_run(
-            storage,
+            _e2e_storage,
             "seed-cmp-002",
             "Compare Run B",
             make_sim_results(self_kwh=50.0, export_kwh=30.0, import_kwh=50.0, days=1),
@@ -182,14 +176,14 @@ def seeded_home_runs_pair(_e2e_db_path: Path, _e2e_data_dir: Path) -> list[tuple
 
 
 @pytest.fixture(scope="session")
-def seeded_fleet_run(_e2e_db_path: Path, _e2e_data_dir: Path) -> tuple[str, str]:
+def seeded_fleet_run(_e2e_storage: RunStorage) -> tuple[str, str]:
     """Save a completed 2-home, 1-day fleet run through RunStorage. Returns (run_id, run_name).
 
     Its homes' results are make_fleet_results' constant-power series, so no simulation runs and no service is reached.
     """
     run_id, run_name = "seed-fleet-001", "Seeded Fleet Alpha"
     fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
-    RunStorage(db_path=_e2e_db_path, data_dir=_e2e_data_dir).save_fleet_run(
+    _e2e_storage.save_fleet_run(
         run_id,
         fleet,
         calculate_fleet_summary(fleet),
