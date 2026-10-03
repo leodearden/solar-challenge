@@ -6,6 +6,7 @@ the handlers, and the tool-use loop in POST /assistant/chat that runs the model'
 tool calls.
 """
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -774,3 +775,58 @@ class TestSimulationToolUseSignal:
             f"Expected '{expected_url}' in tool_result content.\n"
             f"Content: {result_content!r}"
         )
+
+    @pytest.mark.parametrize(
+        ("tool_name", "tool_input"),
+        [
+            pytest.param(
+                "run_home_simulation", {"pv_kw": 4, "heat_pump": "ASHP"}, id="home"
+            ),
+            pytest.param(
+                "run_fleet_simulation",
+                {"n_homes": 2, "pv_kw": 4, "heat_pump": "ASHP"},
+                id="fleet",
+            ),
+        ],
+    )
+    def test_non_mapping_heat_pump_comes_back_as_a_tool_result_error(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+        tool_name: str,
+        tool_input: dict[str, Any],
+    ) -> None:
+        """A heat_pump the model sends as a non-object reaches it as a tool_result error naming
+        the block, and the turn goes on to its reply; nothing is submitted."""
+        jm = MagicMock()
+        app.extensions["job_manager"] = jm
+
+        anthropic_api.set_streams([
+            make_tool_use_stream("toolu_hp_not_mapping", tool_name, tool_input),
+            make_end_turn_stream(["Let me fix that."]),
+        ])
+
+        resp = client.post("/assistant/chat", json={"message": "run it with a heat pump"})
+        events = parse_sse_events(resp.get_data(as_text=True))
+
+        error_events = [e for e in events if e.event == "error"]
+        assert not error_events, f"Expected no 'error' SSE frame; events: {events}"
+        assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
+        assert len(anthropic_api.calls) == 2, (
+            f"Expected stream() called exactly 2 times; got {len(anthropic_api.calls)}"
+        )
+        content = anthropic_api.calls[1]["messages"][-1]["content"]
+        tool_result_block = next(
+            (b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"),
+            None,
+        )
+        assert tool_result_block is not None, (
+            f"Expected tool_result block in last user message; content: {content}"
+        )
+        error = json.loads(tool_result_block["content"])["error"]
+        assert "heat_pump must be a mapping, got str" in error, (
+            f"Expected the tool_result error to name heat_pump; got: {error!r}"
+        )
+        jm.submit_home_job.assert_not_called()
+        jm.submit_fleet_job.assert_not_called()
