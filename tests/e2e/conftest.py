@@ -154,6 +154,20 @@ def seeded_home_run(_e2e_storage: RunStorage) -> tuple[str, str]:
 
 
 @pytest.fixture(scope="session")
+def seeded_multi_day_home_run(_e2e_storage: RunStorage) -> tuple[str, str]:
+    """Save a completed 3-day home run through RunStorage, for tests that need a run whose charts span several days. Returns (run_id, run_name).
+
+    Its results are make_sim_results' constant-power series: each day 30 kWh is self-consumed, 20 kWh exported and 10 kWh imported.
+    """
+    return _save_seeded_home_run(
+        _e2e_storage,
+        "seed-home-3day-001",
+        "Seeded Home Three Days",
+        make_sim_results(self_kwh=90.0, export_kwh=60.0, import_kwh=30.0, days=3),
+    )
+
+
+@pytest.fixture(scope="session")
 def seeded_home_runs_pair(_e2e_storage: RunStorage) -> list[tuple[str, str]]:
     """Save 2 completed 1-day home runs through RunStorage, the second importing more from the grid.
 

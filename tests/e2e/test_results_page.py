@@ -7,7 +7,7 @@ chart agrees with the stat cards.
 """
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Locator, Page, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -100,33 +100,40 @@ def test_results_stat_card_labels_not_truncated(
 # -- Daily balance chart agrees with the stat cards ------------------------
 
 
+def _stat_card_value(page: Page, label: str) -> Locator:
+    """The value of the stat card titled *label*: the first span under its title's parent, ahead of the unit's span."""
+    return page.get_by_title(label, exact=True).locator("..").locator("span").first
+
+
 def test_results_daily_balance_bars_add_up_to_the_stat_cards(
     page: Page,
     live_server: str,
-    seeded_home_run: tuple[str, str],
+    seeded_multi_day_home_run: tuple[str, str],
 ) -> None:
-    """Each energy flow's Daily Energy Balance bars add up to that flow's stat card.
+    """Each energy flow's Daily Energy Balance bars, one a day, add up to that flow's stat card.
 
     The cards show the run's stored summary and the chart its stored time series;
-    a run the app saved derives both from the same per-minute amounts.
+    a run the app saved derives both from the same per-minute amounts, over all its days.
     """
-    run_id, _ = seeded_home_run
+    run_id, _ = seeded_multi_day_home_run
     page.goto(live_server + f"/results/home/{run_id}")
 
     daily_balance = page.locator("#chart-daily-balance")
     expect(daily_balance.locator(".main-svg").first).to_be_attached()
-    bar_totals = daily_balance.evaluate("""chart => Object.fromEntries(chart.data.map(
-        trace => [trace.name, trace.y.reduce((total, y) => total + y, 0)]))""")
+    daily_bars = daily_balance.evaluate(
+        "chart => Object.fromEntries(chart.data.map(trace => [trace.name, trace.y]))"
+    )
 
-    for card_label, trace_name in (
+    for card_label, flow in (
         ("Total Generation", "Generation"),
         ("Total Demand", "Demand"),
         ("Self-Consumption", "Self-Consumption"),
         ("Grid Import", "Grid Import"),
         ("Grid Export", "Grid Export"),
     ):
-        card_value = page.get_by_title(card_label, exact=True).locator("..").locator("span").first
-        expect(card_value).to_have_text(f"{bar_totals[trace_name]:.1f}")
+        bars = daily_bars[flow]
+        assert len(bars) > 1, f"a multi-day run has several daily {flow} bars to add up, but the chart shows {len(bars)}"
+        expect(_stat_card_value(page, card_label)).to_have_text(f"{sum(bars):.1f}")
 
 
 # -- Download CSV returns 200 ----------------------------------------------
