@@ -1,6 +1,7 @@
 """Tests for fleet chart functions and fleet results route."""
 
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,12 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.fleet import calculate_fleet_summary
+from solar_challenge.home import calculate_summary
+from solar_challenge.web.storage import RunStorage
+
+from tests._finance_builders import make_fleet_results
+from tests._html_page import texts_after
 from tests._web_app import build_test_app
 
 
@@ -319,3 +326,45 @@ class TestFleetResultsRoute:
         # Should redirect (302) because the run doesn't exist, but NOT 404
         # which would mean the route itself doesn't exist
         assert response.status_code == 302
+
+    def test_fleet_results_page_shows_the_saved_fleet_summary_in_nine_stat_cards(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A saved two-home fleet run's results page shows nine stat cards, each reading the saved fleet summary.
+
+        Each home self-consumes 18 kWh, exports 54 kWh and imports 27 kWh in its one day.
+        """
+        fleet = make_fleet_results(
+            n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1
+        )
+        run_id = str(uuid.uuid4())
+        with app.app_context():
+            storage = RunStorage(
+                db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]
+            )
+            storage.save_fleet_run(
+                run_id=run_id,
+                fleet_results=fleet,
+                fleet_summary=calculate_fleet_summary(fleet),
+                per_home_summaries=[
+                    calculate_summary(r) for r in fleet.per_home_results
+                ],
+            )
+        response = client.get(f"/results/fleet/{run_id}")
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        expected_cards = {
+            "Homes": ["2"],
+            "Total Generation": ["144.0", "kWh"],
+            "Total Demand": ["90.0", "kWh"],
+            "Self-Consumption": ["36.0", "kWh"],
+            "Grid Import": ["54.0", "kWh"],
+            "Grid Export": ["108.0", "kWh"],
+            "Fleet Self-Consumption": ["25", "%"],
+            "Fleet Grid Dependency": ["60", "%"],
+            "Simulation Days": ["1", "days"],
+        }
+        assert {
+            label: texts_after(page, label, len(card))
+            for label, card in expected_cards.items()
+        } == expected_cards
