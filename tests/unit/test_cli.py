@@ -17,7 +17,9 @@ import solar_challenge.home as _home_module
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import create_summary_table, parse_location
 from solar_challenge.home import HomeConfig, SummaryStatistics
+from solar_challenge.location import Location
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.weather import WeatherCache
 from tests._synthetic_weather import synthetic_june_weather
 
 runner = CliRunner()
@@ -520,8 +522,14 @@ class TestCreateSummaryTableFinancials:
         assert "Number of Homes" in output, "n_homes should render"
 
 
+@pytest.mark.usefixtures("clear_june_tmy")
 class TestHomeRunFullConfigParity:
     """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
+
+    @pytest.fixture
+    def clear_june_tmy(self, weather_cache: WeatherCache) -> None:
+        """Serve a clear 21 June as the TMY of Bristol, where `home run` puts a home whose config has no location."""
+        weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
 
     def _write_home_config(self, tmp_dir: Path, seg_yaml: str) -> Path:
         """Write a temp YAML config with tariff, followed by *seg_yaml*.
@@ -568,8 +576,6 @@ home:
             captured["home_config"] = home_config
             return real_simulate_home(home_config, start_date, end_date, progress_callback)
 
-        # Patch get_tmy_data to avoid PVGIS network call
-        monkeypatch.setattr(_home_module, "get_tmy_data", lambda loc: synthetic_june_weather("2024-06-21"))
         # Patch simulate_home in the CLI module (local binding)
         monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)
 
@@ -638,9 +644,12 @@ home:
         assert "home_config" not in captured
 
     def test_home_run_location_option_reaches_home_config(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, weather_cache: WeatherCache
     ) -> None:
         """``--location`` places the simulated home where parse_location puts it."""
+        edinburgh = parse_location("55.95,-3.19")
+        weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", edinburgh)
+
         result, captured = self._run_home(
             monkeypatch,
             tmp_path,
@@ -650,4 +659,4 @@ home:
         )
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
-        assert captured["home_config"].location == parse_location("55.95,-3.19")
+        assert captured["home_config"].location == edinburgh
