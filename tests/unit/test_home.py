@@ -195,6 +195,18 @@ class TestSimulationResults:
         assert restored.heat_pump_load is None
         assert restored.grid_charge_cost is None
 
+    def test_frame_lacking_required_series_columns_is_refused_naming_them(self, sample_results):
+        """A frame lacking required series' columns is refused with a ValueError naming each, and no absent optional one."""
+        frame = sample_results.to_dataframe().drop(columns=["generation_kw", "tariff_rate_per_kwh"])
+
+        with pytest.raises(ValueError) as refusal:
+            SimulationResults.from_dataframe(frame, strategy_name="self_consumption")
+
+        message = str(refusal.value)
+        assert "generation_kw" in message
+        assert "tariff_rate_per_kwh" in message
+        assert "grid_charge_cost_gbp" not in message
+
 
 class TestSimulateHomeSEGPricing:
     """Test that simulate_home prices export at SEG rate when seg_tariff is set."""

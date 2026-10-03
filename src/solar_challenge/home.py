@@ -3,7 +3,7 @@
 
 import warnings
 from collections.abc import Iterator
-from dataclasses import dataclass, field, fields
+from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
 import pandas as pd
@@ -130,7 +130,22 @@ class SimulationResults:
         """Build the results whose to_dataframe() is frame, simulated under strategy_name.
 
         Optional series whose column is absent are None.
+
+        Raises:
+            ValueError: If frame lacks any required series' column; the message names each one.
         """
+        required_fields = {
+            attribute.name
+            for attribute in fields(cls)
+            if attribute.default is MISSING and attribute.default_factory is MISSING
+        }
+        missing_columns = [
+            column
+            for name, column in cls._series_columns()
+            if name in required_fields and column not in frame.columns
+        ]
+        if missing_columns:
+            raise ValueError(f"frame lacks required series columns: {', '.join(missing_columns)}")
         return cls(
             strategy_name=strategy_name,
             **{name: frame[column] for name, column in cls._series_columns() if column in frame.columns},
