@@ -568,7 +568,7 @@ def calculate_summary(
         )
 
     # Grid-charge cost: the slice of total_import_cost spent charging the battery from the grid
-    total_grid_charge_cost = totals.get("grid_charge_cost_gbp", 0.0)
+    total_grid_charge_cost = totals["grid_charge_cost_gbp"] if results.grid_charge_cost is not None else 0.0
 
     # Calculate heat pump metrics if heat pump load is present
     total_heat_pump_kwh: Optional[float] = None
