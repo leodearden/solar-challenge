@@ -62,6 +62,11 @@ class LoadConfig:
             raise ValueError(
                 f"Household occupants seems unrealistic: {self.household_occupants}"
             )
+        whole_occupants = int(self.household_occupants)
+        if isinstance(self.household_occupants, bool) or whole_occupants != self.household_occupants:
+            raise ValueError(
+                f"Household occupants must be a whole number, got {self.household_occupants}"
+            )
 
         # Validate annual_consumption if provided
         if self.annual_consumption_kwh is not None and not 0 < self.annual_consumption_kwh < math.inf:
