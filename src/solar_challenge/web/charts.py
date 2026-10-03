@@ -1036,31 +1036,6 @@ def fleet_distribution_histograms(home_summaries: list[dict[str, Any]]) -> str:
     return str(fig.to_json())
 
 
-def fleet_summary_cards_data(fleet_summary: Any) -> list[dict[str, Any]]:
-    """Extract FleetSummary fields for template rendering.
-
-    Converts a FleetSummary dataclass into a list of dicts with
-    ``label``, ``value``, and ``unit`` keys suitable for rendering
-    stat cards in the template.
-
-    Args:
-        fleet_summary: FleetSummary instance.
-
-    Returns:
-        List of card data dicts.
-    """
-    cards: list[dict[str, Any]] = [
-        {"label": "Homes", "value": fleet_summary.n_homes, "unit": ""},
-        {"label": "Total Generation", "value": round(fleet_summary.total_generation_kwh, 1), "unit": "kWh"},
-        {"label": "Total Demand", "value": round(fleet_summary.total_demand_kwh, 1), "unit": "kWh"},
-        {"label": "Total Self-Consumption", "value": round(fleet_summary.total_self_consumption_kwh, 1), "unit": "kWh"},
-        {"label": "Fleet Self-Consumption Ratio", "value": round(fleet_summary.fleet_self_consumption_ratio * 100, 1), "unit": "%"},
-        {"label": "Fleet Grid Dependency", "value": round(fleet_summary.fleet_grid_dependency_ratio * 100, 1), "unit": "%"},
-        {"label": "Simulation Days", "value": fleet_summary.simulation_days, "unit": "days"},
-    ]
-    return cards
-
-
 # ---------------------------------------------------------------------------
 # Parameter sweep chart
 # ---------------------------------------------------------------------------
