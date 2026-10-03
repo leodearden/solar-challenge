@@ -93,6 +93,16 @@ class TestLoadConfigValidation:
         with pytest.raises(ValueError, match=re.escape(message)):
             LoadConfig(household_occupants=occupants)
 
+    @pytest.mark.parametrize("occupants", [2.5, 7.5, True])
+    def test_an_occupant_count_that_is_not_a_whole_number_is_refused(
+        self, occupants: float
+    ) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"Household occupants must be a whole number, got {occupants}"),
+        ):
+            LoadConfig(household_occupants=occupants)
+
 
 class TestGenerateLoadProfile:
     """Test LOAD-002/LOAD-006: Elexon profile generation."""
