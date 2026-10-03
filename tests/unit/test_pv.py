@@ -675,6 +675,8 @@ NEAREST_RATED_TO_A_BATTERY_INVERTER_CONFIGS = [
     ),
 ]
 
+MODULE_LEVEL_INVERTER_MAX_W = 1500.0
+
 
 def _config_id(config: PVConfig) -> str:
     return f"{config.capacity_kw}kW-dc-{config.effective_inverter_capacity_kw}kW-ac"
@@ -875,6 +877,21 @@ class TestBatteryInverterChargersAreNotPicked:
             f"inverter, wired as {_wiring(chain.system)} (modules per string, strings), "
             f"delivered {share:.0%} of the clear June day's DC energy below the "
             f"inverter's {floor_v:.0f} V MPPT floor"
+        )
+
+    def test_a_lone_module_still_gets_a_module_level_inverter(self) -> None:
+        """Module-level inverters run at a battery bus's low DC voltage too, and stay candidates."""
+        config = PVConfig(capacity_kw=0.3, inverter_capacity_kw=3.0)
+        system = create_pv_system(config)
+        assert _wiring(system) == [(1, 1)], (
+            f"{config.capacity_kw} kW should be one module, got {_wiring(system)}"
+        )
+
+        rating_w = system.inverter_parameters["Paco"]
+        assert rating_w <= MODULE_LEVEL_INVERTER_MAX_W, (
+            f"a lone module behind a {config.effective_inverter_capacity_kw} kW rating was "
+            f"wired to a {rating_w:.0f} W inverter, above any module-level inverter's "
+            f"{MODULE_LEVEL_INVERTER_MAX_W:.0f} W"
         )
 
 
