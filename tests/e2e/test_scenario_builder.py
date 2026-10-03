@@ -1,8 +1,12 @@
 """End-to-end tests for the Scenario Builder page (/scenarios/builder).
 
 Verifies page loading, accordion sections, YAML preview, Download YAML
-button, General section inputs, and detects Bug B1 (Alpine race condition
-with external JS).
+button, that each section's form control is found by role and by the name its
+caption gives it and sets its own field of the form the builder sends to
+/api/scenarios/validate, that the YAML the builder previews loads through the
+scenario loaders, that uploading a YAML sets the form to it (or, for a YAML
+the form cannot hold, leaves the form as it was), and detects Bug B1 (Alpine
+race condition with external JS).
 """
 
 import re
@@ -124,52 +128,91 @@ def test_download_yaml_button(page: Page, live_server: str) -> None:
     expect(download_btn).to_be_enabled()
 
 
-# ── General section inputs ───────────────────────────────────────────
+# ── Form controls: each caption names its control ────────────────────
 
 
-def test_general_section_inputs(page: Page, live_server: str) -> None:
-    """Opening the General accordion reveals Name and Description inputs.
+def _open_section(page: Page, section: str) -> None:
+    """Open the accordion section whose header button is named *section*, closing the open one; General is open when the page loads."""
+    page.get_by_role("button", name=section, exact=True).click()
 
-    The General accordion uses Alpine ``x-collapse``, which may keep the
-    panel at ``height: 0`` with ``overflow: hidden`` depending on the CDN
-    load order of the Alpine collapse plugin.  We verify that the inputs
-    exist in the DOM (attached) and fall back to checking their
-    ``x-model`` bindings to confirm correct wiring.
-    """
+
+def _form_sent_on_validate(page: Page) -> dict[str, Any]:
+    """Click Validate and return the form the builder sends to /api/scenarios/validate."""
+    with page.expect_response("**/api/scenarios/validate") as validated:
+        page.get_by_role("button", name="Validate", exact=True).click()
+    return validated.value.request.post_data_json
+
+
+def test_general_section_textboxes_set_the_name_and_description_the_builder_sends(
+    page: Page, live_server: str
+) -> None:
+    """The textboxes named Scenario Name and Description, which the General section shows when the page opens, set the name and description of the form the builder sends."""
     page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
 
-    # Wait for Alpine + external JS to fully initialise
-    page.wait_for_timeout(1000)
+    page.get_by_role("textbox", name="Scenario Name", exact=True).fill("Bristol Phase 1")
+    page.get_by_role("textbox", name="Description", exact=True).fill("First 100 homes")
 
-    general_btn = page.locator("button", has_text="General").first
-    expect(general_btn).to_be_visible()
+    sent = _form_sent_on_validate(page)
 
-    # Try clicking the General accordion to open it.  Toggle closed
-    # then open to ensure we end in the open state.
-    general_btn.click()
-    page.wait_for_timeout(400)
-    general_btn.click()
-    page.wait_for_timeout(600)
+    assert (sent["name"], sent["description"]) == ("Bristol Phase 1", "First 100 homes")
 
-    # Verify Scenario Name input exists in the DOM
-    name_input = page.locator('input[placeholder="e.g. Bristol Phase 1"]')
-    expect(name_input).to_be_attached()
 
-    # Verify the input is wired with x-model="name"
-    x_model = name_input.get_attribute("x-model")
-    assert x_model == "name", (
-        f"Expected x-model='name' on Scenario Name input, got '{x_model}'"
+_SECTION_CONTROLS = (
+    pytest.param("Period", "textbox", "Start Date", "start_date", "2024-06-01", id="start_date"),
+    pytest.param("Period", "textbox", "End Date", "end_date", "2024-06-30", id="end_date"),
+    pytest.param(
+        "Fleet Distribution", "spinbutton", "Number of Homes", "n_homes", "12", id="n_homes"
+    ),
+    pytest.param(
+        "Tariff", "spinbutton", "Import Rate (GBP/kWh)", "import_rate", "0.3", id="import_rate"
+    ),
+    pytest.param(
+        "Tariff",
+        "spinbutton",
+        "SEG Export Rate (p/kWh)",
+        "seg_rate_pence_per_kwh",
+        "5.5",
+        id="seg_rate_pence_per_kwh",
+    ),
+)
+"""(accordion section, role, caption, form field, value typed) of a control the sections show; every value differs from the form's default."""
+
+
+@pytest.mark.parametrize(("section", "role", "caption", "field", "value"), _SECTION_CONTROLS)
+def test_section_control_named_by_its_caption_sets_its_field_of_the_form_the_builder_sends(
+    page: Page, live_server: str, section: str, role: str, caption: str, field: str, value: str
+) -> None:
+    """The control with *role* named *caption* in *section* sets *field* of the form the builder sends to the value typed into it."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, section)
+
+    page.get_by_role(role, name=caption, exact=True).fill(value)
+
+    assert _form_sent_on_validate(page)[field] == value
+
+
+def test_custom_location_controls_named_by_their_captions_set_the_location_the_builder_sends(
+    page: Page, live_server: str
+) -> None:
+    """Choosing Custom Location in the combobox named Location Preset shows the spinbuttons Latitude, Longitude and Altitude (m), which set the location of the form the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Location")
+
+    page.get_by_role("combobox", name="Location Preset", exact=True).select_option(
+        label="Custom Location"
     )
+    page.get_by_role("spinbutton", name="Latitude", exact=True).fill("53.4")
+    page.get_by_role("spinbutton", name="Longitude", exact=True).fill("-2.2")
+    page.get_by_role("spinbutton", name="Altitude (m)", exact=True).fill("38")
 
-    # Verify Description textarea exists in the DOM
-    desc_textarea = page.locator('textarea[placeholder="Optional description"]')
-    expect(desc_textarea).to_be_attached()
+    sent = _form_sent_on_validate(page)
 
-    x_model_desc = desc_textarea.get_attribute("x-model")
-    assert x_model_desc == "description", (
-        f"Expected x-model='description' on textarea, got '{x_model_desc}'"
-    )
+    assert {key: sent[key] for key in ("location_preset", "latitude", "longitude", "altitude")} == {
+        "location_preset": "custom",
+        "latitude": "53.4",
+        "longitude": "-2.2",
+        "altitude": "38",
+    }
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────
@@ -355,6 +398,4 @@ def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
     expect(page.locator("pre")).to_have_text(
         re.compile(rf"^# scenario\.yaml was not loaded: .*{re.escape(refusal)}")
     )
-    with page.expect_response("**/api/scenarios/validate") as validated:
-        page.get_by_role("button", name="Validate", exact=True).click()
-    assert validated.value.request.post_data_json == form_before_upload
+    assert _form_sent_on_validate(page) == form_before_upload
