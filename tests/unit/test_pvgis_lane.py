@@ -86,7 +86,7 @@ def test_no_pvgis_contract_test_passes_on_a_cached_tmy_while_pvgis_is_out_of_rea
     """
     bristol = Location.bristol()
     WeatherCache(cache_dir=pytester.path / DEFAULT_CACHE_DIR).put(_clear_sky_tmy(bristol), "tmy", bristol)
-    # Every request then fails at the dead proxy, so no test can reach PVGIS.
+    # Every PVGIS fetch then fails at the dead proxy, as long as requests honours these variables.
     for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
         monkeypatch.setenv(name, _DEAD_PROXY)
     for name in ("NO_PROXY", "no_proxy"):
@@ -98,8 +98,10 @@ def test_no_pvgis_contract_test_passes_on_a_cached_tmy_while_pvgis_is_out_of_rea
 
     outcomes = result.parseoutcomes()
     assert outcomes.get("passed", 0) == 0 and outcomes.get("failed", 0) + outcomes.get("errors", 0) > 0, (
-        f"with PVGIS out of reach, the PVGIS contract tests ended {outcomes}: a test that passes checked "
-        "the TMY cached in its working directory, not PVGIS's current response; fetch it with "
-        "get_tmy_data(..., use_cache=False), as test_pvgis.py's bristol_tmy fixture does\n"
+        f"with PVGIS behind a dead proxy, the PVGIS contract tests ended {outcomes}. A test that passes either "
+        "checked the TMY cached in its working directory, not PVGIS's current response: fetch it with "
+        "get_tmy_data(..., use_cache=False), as test_pvgis.py's bristol_tmy fixture does. Or it reached PVGIS "
+        "around the dead proxy, because requests no longer honours HTTP(S)_PROXY, and this probe needs "
+        "another way to keep PVGIS out of reach\n"
         f"stdout tail:\n{result.stdout.str()[-5000:]}"
     )
