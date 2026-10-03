@@ -30,7 +30,7 @@ from werkzeug.serving import make_server
 
 from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.home import calculate_summary
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.database import get_db
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager
 from solar_challenge.web.storage import RunStorage
@@ -59,7 +59,10 @@ def _e2e_app(tmp_path_factory: pytest.TempPathFactory) -> Flask:
 
 @pytest.fixture(scope="session")
 def _e2e_db_path(_e2e_app: Flask) -> Path:
-    """Path to the database the live server's app reads."""
+    """Path to the database the live server's app reads.
+
+    create_app built its schema, so a fixture can seed it before the server starts.
+    """
     return Path(_e2e_app.config["DATABASE"])
 
 
@@ -307,11 +310,8 @@ def _seed_run(
 
 
 @pytest.fixture(scope="session")
-def seeded_home_run(_e2e_db_path, _e2e_data_dir, live_server):
-    """Insert a single completed home run. Returns (run_id, run_name).
-
-    Depends on live_server to ensure the DB schema is initialised.
-    """
+def seeded_home_run(_e2e_db_path, _e2e_data_dir):
+    """Insert a single completed home run. Returns (run_id, run_name)."""
     return _seed_run(
         _e2e_db_path,
         _e2e_data_dir,
@@ -321,7 +321,7 @@ def seeded_home_run(_e2e_db_path, _e2e_data_dir, live_server):
 
 
 @pytest.fixture(scope="session")
-def seeded_home_runs_pair(_e2e_db_path, _e2e_data_dir, live_server):
+def seeded_home_runs_pair(_e2e_db_path, _e2e_data_dir):
     """Insert 2 completed home runs with different summary values.
 
     Returns [(id1, name1), (id2, name2)].
