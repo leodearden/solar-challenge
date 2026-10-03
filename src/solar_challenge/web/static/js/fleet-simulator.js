@@ -1,4 +1,24 @@
 document.addEventListener('alpine:init', () => {
+    // The scope of one distribution_editor call (templates/simulate/partials/distribution-editor.html). dist calls getDist on
+    // every read because applyConfig replaces the form's distributions (pinned by test_fleet_import_yaml_shows_each_distribution_in_its_card).
+    Alpine.data('distributionEditor', (getDist, newRowValue) => ({
+        get dist() { return getDist(); },
+        addRow() {
+            if (this.dist.type === 'weighted_discrete') {
+                this.dist.values.push({ value: newRowValue, weight: 10 });
+            } else if (this.dist.type === 'shuffled_pool') {
+                this.dist.entries.push({ value: newRowValue, count: 10 });
+            }
+        },
+        removeRow(idx) {
+            if (this.dist.type === 'weighted_discrete' && this.dist.values.length > 1) {
+                this.dist.values.splice(idx, 1);
+            } else if (this.dist.type === 'shuffled_pool' && this.dist.entries.length > 1) {
+                this.dist.entries.splice(idx, 1);
+            }
+        },
+    }));
+
     Alpine.data('fleetSimulator', () => ({
         n_homes: 100,
         submitting: false,
@@ -88,52 +108,6 @@ document.addEventListener('alpine:init', () => {
                 { value: 3500, count: 40 },
                 { value: 4500, count: 30 }
             ]
-        },
-
-        /* ---- Helper functions for distribution rows ---- */
-        addPvRow() {
-            if (this.pvDist.type === 'weighted_discrete') {
-                this.pvDist.values.push({ value: 4.0, weight: 10 });
-            } else if (this.pvDist.type === 'shuffled_pool') {
-                this.pvDist.entries.push({ value: 4.0, count: 10 });
-            }
-        },
-        removePvRow(idx) {
-            if (this.pvDist.type === 'weighted_discrete' && this.pvDist.values.length > 1) {
-                this.pvDist.values.splice(idx, 1);
-            } else if (this.pvDist.type === 'shuffled_pool' && this.pvDist.entries.length > 1) {
-                this.pvDist.entries.splice(idx, 1);
-            }
-        },
-
-        addBatteryRow() {
-            if (this.batteryDist.type === 'weighted_discrete') {
-                this.batteryDist.values.push({ value: 5.0, weight: 10 });
-            } else if (this.batteryDist.type === 'shuffled_pool') {
-                this.batteryDist.entries.push({ value: 5.0, count: 10 });
-            }
-        },
-        removeBatteryRow(idx) {
-            if (this.batteryDist.type === 'weighted_discrete' && this.batteryDist.values.length > 1) {
-                this.batteryDist.values.splice(idx, 1);
-            } else if (this.batteryDist.type === 'shuffled_pool' && this.batteryDist.entries.length > 1) {
-                this.batteryDist.entries.splice(idx, 1);
-            }
-        },
-
-        addLoadRow() {
-            if (this.loadDist.type === 'weighted_discrete') {
-                this.loadDist.values.push({ value: 3500, weight: 10 });
-            } else if (this.loadDist.type === 'shuffled_pool') {
-                this.loadDist.entries.push({ value: 3500, count: 10 });
-            }
-        },
-        removeLoadRow(idx) {
-            if (this.loadDist.type === 'weighted_discrete' && this.loadDist.values.length > 1) {
-                this.loadDist.values.splice(idx, 1);
-            } else if (this.loadDist.type === 'shuffled_pool' && this.loadDist.entries.length > 1) {
-                this.loadDist.entries.splice(idx, 1);
-            }
         },
 
         /* ---- Form validation ---- */

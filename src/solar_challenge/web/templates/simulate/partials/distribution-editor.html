@@ -5,8 +5,13 @@
     and every control's accessible name starts with it, e.g.
     "PV Capacity Distribution Type".
 
-    The macro must be called inside an Alpine.js component that provides
-    a `dist` object with the shape:
+    The macro must be called inside the distributionEditor Alpine.js
+    component, registered in static/js/fleet-simulator.js, which supplies:
+        - dist           : the distribution data object (reactive)
+        - addRow()       : adds a row to values or entries
+        - removeRow(idx) : removes a row from values or entries
+
+    `dist` has the shape:
 
         {
             type: 'normal' | 'uniform' | 'weighted_discrete' | 'shuffled_pool',
@@ -18,15 +23,10 @@
             entries: [{value: number, count: number}, ...]
         }
 
-    The enclosing Alpine.js scope must expose:
-        - dist           : the distribution data object (reactive)
-        - addRow()       : adds a row to values or entries
-        - removeRow(idx) : removes a row from values or entries
-
     Usage (from fleet.html): import it with
         {% from "simulate/partials/distribution-editor.html" import distribution_editor %}
-    then call it inside the card's x-data element:
-        {{ distribution_editor('PV Capacity') }}
+    then call it inside the element that creates the component:
+        <div x-data="distributionEditor(() => pvDist, 4.0)">{{ distribution_editor('PV Capacity') }}</div>
 #}
 
 {% macro _label_text(subject, text) -%}<span class="sr-only">{{ subject }} </span>{{ text }}{%- endmacro %}
