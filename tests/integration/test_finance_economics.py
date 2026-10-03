@@ -13,12 +13,17 @@ added to test_marker_registration.py's INTEGRATION_FILES list.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import Optional
 
 import pytest
 
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.home import HomeConfig
 from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._finance_builders import make_home_config, make_pv_config, make_scenario
 
 
 # ---------------------------------------------------------------------------
@@ -50,39 +55,26 @@ def _make_curve(revenues: list[float]) -> "MultiYearCurve":  # type: ignore[name
     )
 
 
-def _make_home_config(
+def _make_sized_home(
     pv_kwp: float,
     battery_kwh: Optional[float] = None,
     inverter_kw: Optional[float] = None,
-) -> "HomeConfig":  # type: ignore[name-defined]
-    """Build a minimal HomeConfig for economics tests."""
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.pv import PVConfig
-    from solar_challenge.load import LoadConfig
-    from solar_challenge.battery import BatteryConfig
+) -> HomeConfig:
+    """The shared home fitted with the install project_economics prices.
 
-    pv = PVConfig(capacity_kw=pv_kwp, inverter_capacity_kw=inverter_kw)
-    load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
-    batt = BatteryConfig(capacity_kwh=battery_kwh) if battery_kwh is not None else None
-    return HomeConfig(pv_config=pv, load_config=load, battery_config=batt)
-
-
-def _make_scenario(
-    homes: Optional[list] = None,
-) -> "ScenarioConfig":  # type: ignore[name-defined]
-    """Build a minimal ScenarioConfig for economics tests."""
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
-    period = SimulationPeriod(
-        start_date="2024-01-01",
-        end_date="2024-12-31",
+    A *pv_kwp* array on an *inverter_kw* inverter, sized to the array by default,
+    and a *battery_kwh* battery, none by default.
+    """
+    battery = None if battery_kwh is None else BatteryConfig(capacity_kwh=battery_kwh)
+    return dataclasses.replace(
+        make_home_config(battery_config=battery),
+        pv_config=dataclasses.replace(make_pv_config(), capacity_kw=pv_kwp, inverter_capacity_kw=inverter_kw),
     )
-    if homes is None:
-        homes = [_make_home_config(4.0, battery_kwh=5.0)]
-    return ScenarioConfig(
-        name="Test",
-        period=period,
-        homes=homes,
-    )
+
+
+def _make_scenario(homes: list[HomeConfig]) -> ScenarioConfig:
+    """make_scenario's scenario, holding exactly *homes*."""
+    return dataclasses.replace(make_scenario(), homes=homes)
 
 
 def _make_finance(
@@ -254,8 +246,8 @@ class TestProjectEconomicsCapex:
         """
         from solar_challenge.finance import project_economics
 
-        home_a = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
-        home_b = _make_home_config(pv_kwp=3.0, battery_kwh=None)
+        home_a = _make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
+        home_b = _make_sized_home(pv_kwp=3.0, battery_kwh=None)
         scenario = _make_scenario(homes=[home_a, home_b])
         finance = _make_finance(
             pv_cost_per_kwp_gbp=1000.0,
@@ -276,7 +268,7 @@ class TestProjectEconomicsCapex:
         """grant_gbp in ProjectEconomics must equal FinanceConfig.grant_gbp."""
         from solar_challenge.finance import project_economics
 
-        home = _make_home_config(pv_kwp=4.0)
+        home = _make_sized_home(pv_kwp=4.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(grant_gbp=5000.0)
         curve = _make_curve([8000.0] * 25)
@@ -289,7 +281,7 @@ class TestProjectEconomicsCapex:
         """equity_gbp + debt_gbp must equal (capex - grant); equity fraction correct."""
         from solar_challenge.finance import project_economics
 
-        home = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
+        home = _make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(
             pv_cost_per_kwp_gbp=1000.0,
@@ -314,7 +306,7 @@ class TestProjectEconomicsCapex:
         """When grant >= capex, financed=0, equity=0, debt=0."""
         from solar_challenge.finance import project_economics
 
-        home = _make_home_config(pv_kwp=2.0)
+        home = _make_sized_home(pv_kwp=2.0)
         scenario = _make_scenario(homes=[home])
         # capex = 2*1000 + 1000 + 0 = 3000; grant=50000 >> capex
         finance = _make_finance(grant_gbp=50000.0)
@@ -343,7 +335,7 @@ class TestProjectEconomicsCapex:
         # Instead: test project_economics with a patched scenario-like object.
         import dataclasses
 
-        valid_scenario = _make_scenario(homes=[_make_home_config(4.0)])
+        valid_scenario = _make_scenario(homes=[_make_sized_home(4.0)])
         finance = _make_finance()
         curve = _make_curve([8000.0] * 25)
 
@@ -372,7 +364,7 @@ class TestProjectEconomicsDebtService:
         # Known debt, rate, term
         # capex = 1*1000 + 1000 + 0 = 2000; grant=0; equity_frac=0.5
         # financed=2000; equity=1000; debt=1000
-        home = _make_home_config(pv_kwp=1.0, battery_kwh=None)
+        home = _make_sized_home(pv_kwp=1.0, battery_kwh=None)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(
             pv_cost_per_kwp_gbp=1000.0,
@@ -399,7 +391,7 @@ class TestProjectEconomicsDebtService:
         """loan_rate==0 → annual_debt_service == debt / loan_term_years."""
         from solar_challenge.finance import _annuity_payment, project_economics
 
-        home = _make_home_config(pv_kwp=2.0, battery_kwh=None)
+        home = _make_sized_home(pv_kwp=2.0, battery_kwh=None)
         scenario = _make_scenario(homes=[home])
         # capex = 2*800+1000=2600; grant=0; debt=2600*0.5=1300
         finance = _make_finance(
@@ -425,7 +417,7 @@ class TestProjectEconomicsDebtService:
         """When debt==0 (grant covers all), annual_debt_service_gbp==0."""
         from solar_challenge.finance import project_economics
 
-        home = _make_home_config(pv_kwp=2.0)
+        home = _make_sized_home(pv_kwp=2.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(grant_gbp=999999.0)  # grant >> capex
         curve = _make_curve([5000.0] * 25)
@@ -480,8 +472,8 @@ class TestProjectEconomicsSurplusDSCR:
         from solar_challenge.finance import _annuity_payment
 
         homes = [
-            _make_home_config(pv_kwp=4.0, battery_kwh=5.0),
-            _make_home_config(pv_kwp=3.0, battery_kwh=None),
+            _make_sized_home(pv_kwp=4.0, battery_kwh=5.0),
+            _make_sized_home(pv_kwp=3.0, battery_kwh=None),
         ]
         finance = _make_finance(
             pv_cost_per_kwp_gbp=1000.0,
@@ -554,8 +546,8 @@ class TestProjectEconomicsSurplusDSCR:
         # Post-loan year 15..24 → (1000-400)/annual_ds which would be low
         # But min_dscr must only look at y<15
         homes = [
-            _make_home_config(pv_kwp=4.0, battery_kwh=5.0),
-            _make_home_config(pv_kwp=3.0, battery_kwh=None),
+            _make_sized_home(pv_kwp=4.0, battery_kwh=5.0),
+            _make_sized_home(pv_kwp=3.0, battery_kwh=None),
         ]
         finance = _make_finance(
             pv_cost_per_kwp_gbp=1000.0,
@@ -594,7 +586,7 @@ class TestProjectEconomicsSurplusDSCR:
         """When annual_debt_service_gbp==0, min_dscr must be float('inf')."""
         from solar_challenge.finance import project_economics
 
-        home = _make_home_config(pv_kwp=2.0)
+        home = _make_sized_home(pv_kwp=2.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(grant_gbp=999999.0)  # no debt
         curve = _make_curve([5000.0] * 25)
@@ -657,7 +649,7 @@ class TestProjectEconomicsIRRPayback:
         from solar_challenge.finance import _npv, project_economics
 
         # Profitable project: flat 8000 revenue, small equity investment
-        home = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
+        home = _make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(
             pv_cost_per_kwp_gbp=1000.0,
@@ -689,7 +681,7 @@ class TestProjectEconomicsIRRPayback:
         # capex = 1*1000+1000+0=2000; grant=0; equity=2000; debt=0; debt_service=0
         # flat revenue=600/yr; opex=100; surplus=500/yr
         # cumulative: -2000+500=-1500, +500=-1000, +500=-500, +500=0 → payback=year 4
-        home = _make_home_config(pv_kwp=1.0, battery_kwh=None)
+        home = _make_sized_home(pv_kwp=1.0, battery_kwh=None)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(
             pv_cost_per_kwp_gbp=1000.0,
@@ -716,7 +708,7 @@ class TestProjectEconomicsIRRPayback:
         """Never-profitable project → payback_years is None."""
         from solar_challenge.finance import project_economics
 
-        home = _make_home_config(pv_kwp=4.0)
+        home = _make_sized_home(pv_kwp=4.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(
             grant_gbp=0.0,
@@ -737,7 +729,7 @@ class TestProjectEconomicsIRRPayback:
         """Never-profitable project → equity_irr is NaN."""
         from solar_challenge.finance import project_economics
 
-        home = _make_home_config(pv_kwp=4.0)
+        home = _make_sized_home(pv_kwp=4.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(
             grant_gbp=0.0,
@@ -757,7 +749,7 @@ class TestProjectEconomicsIRRPayback:
         """Two project_economics calls with same inputs return bit-identical results."""
         from solar_challenge.finance import project_economics
 
-        home = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
+        home = _make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance()
         curve = _make_curve([7000.0] * 25)
@@ -1069,8 +1061,8 @@ class TestProjectEconomicsInverterCapex:
         """
         from solar_challenge.finance import project_economics
 
-        home_a = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
-        home_b = _make_home_config(pv_kwp=3.0, battery_kwh=None)
+        home_a = _make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
+        home_b = _make_sized_home(pv_kwp=3.0, battery_kwh=None)
         scenario = _make_scenario(homes=[home_a, home_b])
         finance = _make_finance(
             pv_cost_per_kwp_gbp=1000.0,
@@ -1101,8 +1093,8 @@ class TestProjectEconomicsInverterCapex:
         """With inverter_cost=200.0, capex rises by sum(eff_inv_kw * 200.0)."""
         from solar_challenge.finance import project_economics
 
-        home_a = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
-        home_b = _make_home_config(pv_kwp=3.0, battery_kwh=None)
+        home_a = _make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
+        home_b = _make_sized_home(pv_kwp=3.0, battery_kwh=None)
         homes = [home_a, home_b]
         scenario = _make_scenario(homes=homes)
         curve = _make_curve([10000.0] * 25)
@@ -1131,9 +1123,9 @@ class TestProjectEconomicsInverterCapex:
         from solar_challenge.finance import project_economics
 
         # Home with explicit AC inverter cap smaller than DC rating
-        home_clipped = _make_home_config(pv_kwp=4.0, inverter_kw=2.5)
+        home_clipped = _make_sized_home(pv_kwp=4.0, inverter_kw=2.5)
         # Home using default (effective == DC)
-        home_default = _make_home_config(pv_kwp=3.0)
+        home_default = _make_sized_home(pv_kwp=3.0)
         homes = [home_clipped, home_default]
         scenario = _make_scenario(homes=homes)
         curve = _make_curve([10000.0] * 25)
@@ -1166,7 +1158,7 @@ class TestProjectEconomicsInverterCapex:
         """
         from solar_challenge.finance import project_economics
 
-        home_clipped = _make_home_config(pv_kwp=4.0, inverter_kw=2.5)
+        home_clipped = _make_sized_home(pv_kwp=4.0, inverter_kw=2.5)
         scenario = _make_scenario(homes=[home_clipped])
         curve = _make_curve([10000.0] * 25)
 
