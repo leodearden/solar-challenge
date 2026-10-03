@@ -1,9 +1,4 @@
-"""End-to-end tests for the Scenario Builder page (/scenarios/builder).
-
-Verifies page loading, accordion sections, YAML preview, Download YAML
-button, General section inputs, and detects Bug B1 (Alpine race condition
-with external JS).
-"""
+"""End-to-end tests for the Scenario Builder page (/scenarios/builder)."""
 
 import re
 from pathlib import Path
@@ -11,7 +6,7 @@ from typing import Any
 
 import pytest
 import yaml
-from playwright.sync_api import ConsoleMessage, Page, Response, expect
+from playwright.sync_api import ConsoleMessage, Locator, Page, Response, expect
 
 from solar_challenge.config import load_fleet_config
 from solar_challenge.home import HomeConfig
@@ -124,52 +119,161 @@ def test_download_yaml_button(page: Page, live_server: str) -> None:
     expect(download_btn).to_be_enabled()
 
 
-# ── General section inputs ───────────────────────────────────────────
+# ── Form controls: each caption names its control ────────────────────
 
 
-def test_general_section_inputs(page: Page, live_server: str) -> None:
-    """Opening the General accordion reveals Name and Description inputs.
+def _open_section(page: Page, section: str) -> None:
+    """Open the accordion section whose header button is named *section*, closing the open one; General is open when the page loads."""
+    page.get_by_role("button", name=section, exact=True).click()
 
-    The General accordion uses Alpine ``x-collapse``, which may keep the
-    panel at ``height: 0`` with ``overflow: hidden`` depending on the CDN
-    load order of the Alpine collapse plugin.  We verify that the inputs
-    exist in the DOM (attached) and fall back to checking their
-    ``x-model`` bindings to confirm correct wiring.
+
+def _form_sent_on_validate(page: Page) -> dict[str, Any]:
+    """Click Validate and return the form the builder sends to /api/scenarios/validate."""
+    with page.expect_response("**/api/scenarios/validate") as validated:
+        page.get_by_role("button", name="Validate", exact=True).click()
+    return validated.value.request.post_data_json
+
+
+def test_general_section_textboxes_set_the_name_and_description_the_builder_sends(
+    page: Page, live_server: str
+) -> None:
+    """The textboxes named Scenario Name and Description, which the General section shows when the page opens, set the name and description of the form the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+
+    page.get_by_role("textbox", name="Scenario Name", exact=True).fill("Bristol Phase 1")
+    page.get_by_role("textbox", name="Description", exact=True).fill("First 100 homes")
+
+    sent = _form_sent_on_validate(page)
+
+    assert (sent["name"], sent["description"]) == ("Bristol Phase 1", "First 100 homes")
+
+
+_SECTION_CONTROLS = (
+    pytest.param("Period", "textbox", "Start Date", "start_date", "2024-06-01", id="start_date"),
+    pytest.param("Period", "textbox", "End Date", "end_date", "2024-06-30", id="end_date"),
+    pytest.param(
+        "Fleet Distribution", "spinbutton", "Number of Homes", "n_homes", "12", id="n_homes"
+    ),
+    pytest.param(
+        "Tariff", "spinbutton", "Import Rate (GBP/kWh)", "import_rate", "0.3", id="import_rate"
+    ),
+    pytest.param(
+        "Tariff",
+        "spinbutton",
+        "SEG Export Rate (p/kWh)",
+        "seg_rate_pence_per_kwh",
+        "5.5",
+        id="seg_rate_pence_per_kwh",
+    ),
+)
+"""(accordion section, role, caption, form field, value typed) of a control the sections show; every value differs from the form's default."""
+
+
+@pytest.mark.parametrize(("section", "role", "caption", "field", "value"), _SECTION_CONTROLS)
+def test_section_control_named_by_its_caption_sets_its_field_of_the_form_the_builder_sends(
+    page: Page, live_server: str, section: str, role: str, caption: str, field: str, value: str
+) -> None:
+    """The control with *role* named *caption* in *section* sets *field* of the form the builder sends to the value typed into it."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, section)
+
+    page.get_by_role(role, name=caption, exact=True).fill(value)
+
+    assert _form_sent_on_validate(page)[field] == value
+
+
+def test_custom_location_controls_named_by_their_captions_set_the_location_the_builder_sends(
+    page: Page, live_server: str
+) -> None:
+    """Choosing Custom Location in the combobox named Location Preset shows the spinbuttons Latitude, Longitude and Altitude (m), which set the location of the form the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Location")
+
+    page.get_by_role("combobox", name="Location Preset", exact=True).select_option(
+        label="Custom Location"
+    )
+    page.get_by_role("spinbutton", name="Latitude", exact=True).fill("53.4")
+    page.get_by_role("spinbutton", name="Longitude", exact=True).fill("-2.2")
+    page.get_by_role("spinbutton", name="Altitude (m)", exact=True).fill("38")
+
+    sent = _form_sent_on_validate(page)
+
+    assert {key: sent[key] for key in ("location_preset", "latitude", "longitude", "altitude")} == {
+        "location_preset": "custom",
+        "latitude": "53.4",
+        "longitude": "-2.2",
+        "altitude": "38",
+    }
+
+
+_DISTRIBUTION_CARDS = (
+    pytest.param("PV Capacity (kW)", "pv", id="pv"),
+    pytest.param("Battery Capacity (kWh)", "battery", id="battery"),
+    pytest.param("Annual Consumption (kWh)", "load", id="load"),
+)
+"""(card heading, the prefix of its form fields)."""
+
+
+@pytest.mark.parametrize(("card", "prefix"), _DISTRIBUTION_CARDS)
+def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set_its_distribution(
+    page: Page, live_server: str, card: str, prefix: str
+) -> None:
+    """The group named by a distribution card's heading holds that heading, and one combobox, Distribution Type.
+
+    Choosing Normal Distribution there shows four spinbuttons, Mean, Std Dev, Min and Max,
+    which set that card's fields of the form the builder sends.
     """
     page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
+    _open_section(page, "Fleet Distribution")
 
-    # Wait for Alpine + external JS to fully initialise
-    page.wait_for_timeout(1000)
-
-    general_btn = page.locator("button", has_text="General").first
-    expect(general_btn).to_be_visible()
-
-    # Try clicking the General accordion to open it.  Toggle closed
-    # then open to ensure we end in the open state.
-    general_btn.click()
-    page.wait_for_timeout(400)
-    general_btn.click()
-    page.wait_for_timeout(600)
-
-    # Verify Scenario Name input exists in the DOM
-    name_input = page.locator('input[placeholder="e.g. Bristol Phase 1"]')
-    expect(name_input).to_be_attached()
-
-    # Verify the input is wired with x-model="name"
-    x_model = name_input.get_attribute("x-model")
-    assert x_model == "name", (
-        f"Expected x-model='name' on Scenario Name input, got '{x_model}'"
+    card_group = page.get_by_role("group", name=card, exact=True)
+    expect(card_group.get_by_role("combobox")).to_have_count(1)
+    expect(card_group.get_by_role("heading", name=card, exact=True)).to_be_visible()
+    card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(
+        label="Normal Distribution"
     )
+    for caption, value in {"Mean": "7", "Std Dev": "3", "Min": "1", "Max": "9"}.items():
+        card_group.get_by_role("spinbutton", name=caption, exact=True).fill(value)
+    expect(card_group.get_by_role("spinbutton")).to_have_count(4)
 
-    # Verify Description textarea exists in the DOM
-    desc_textarea = page.locator('textarea[placeholder="Optional description"]')
-    expect(desc_textarea).to_be_attached()
+    sent = _form_sent_on_validate(page)
 
-    x_model_desc = desc_textarea.get_attribute("x-model")
-    assert x_model_desc == "description", (
-        f"Expected x-model='description' on textarea, got '{x_model_desc}'"
-    )
+    assert {field: value for field, value in sent.items() if field.startswith(prefix + "_")} == {
+        f"{prefix}_distribution_type": "normal",
+        f"{prefix}_mean": "7",
+        f"{prefix}_std": "3",
+        f"{prefix}_min": "1",
+        f"{prefix}_max": "9",
+    }
+
+
+def _rendered_width(control: Locator) -> float:
+    """The width in pixels that *control* is laid out at."""
+    box = control.bounding_box()
+    assert box is not None, "the control has no layout box"
+    return box["width"]
+
+
+def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_type_combobox(
+    page: Page, live_server: str
+) -> None:
+    """At phone width, choosing Weighted Discrete leaves the Distribution Type combobox as wide as it was, to within half a pixel.
+
+    The rows Weighted Discrete shows are wider than the card, and a fieldset is as wide as
+    its content unless it resets that, which would widen the combobox beyond the card's edge.
+    """
+    page.set_viewport_size({"width": 375, "height": 800})
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Fleet Distribution")
+    card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
+    distribution_type = card_group.get_by_role("combobox", name="Distribution Type", exact=True)
+    expect(distribution_type).to_be_visible()
+    width_before = _rendered_width(distribution_type)
+
+    distribution_type.select_option(label="Weighted Discrete")
+    expect(card_group.get_by_role("button", name="+ Add value", exact=True)).to_be_visible()
+
+    assert _rendered_width(distribution_type) == pytest.approx(width_before, abs=0.5)
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────
@@ -355,6 +459,4 @@ def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
     expect(page.locator("pre")).to_have_text(
         re.compile(rf"^# scenario\.yaml was not loaded: .*{re.escape(refusal)}")
     )
-    with page.expect_response("**/api/scenarios/validate") as validated:
-        page.get_by_role("button", name="Validate", exact=True).click()
-    assert validated.value.request.post_data_json == form_before_upload
+    assert _form_sent_on_validate(page) == form_before_upload
