@@ -58,8 +58,13 @@ def handle_errors(func: F) -> F:
 
 
 def _print_error_verbatim(label: str, error: Exception) -> None:
-    """Print label in red, then error's text exactly as it is, never read as Rich markup or emoji codes."""
-    error_console.print(Text.assemble((f"{label}:", "red"), " ", str(error)))
+    """Print label in red, then error's text exactly as it is."""
+    _print_verbatim(error_console, (f"{label}:", "red"), " ", str(error))
+
+
+def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
+    """Print parts on target exactly as they are, never read as Rich markup or emoji codes; a (text, style) part is printed in that style."""
+    target.print(Text.assemble(*parts))
 
 
 def parse_location(location_str: str) -> Location:
@@ -247,20 +252,20 @@ def create_fleet_progress() -> Progress:
 
 
 def print_success(message: str) -> None:
-    """Print success message."""
-    console.print(f"[green]{message}[/green]")
+    """Print message in green, exactly as it is."""
+    _print_verbatim(console, (message, "green"))
 
 
 def print_warning(message: str) -> None:
-    """Print warning message."""
-    console.print(f"[yellow]{message}[/yellow]")
+    """Print message in yellow, exactly as it is."""
+    _print_verbatim(console, (message, "yellow"))
 
 
 def print_error(message: str) -> None:
-    """Print error message to stderr."""
-    error_console.print(f"[red]{message}[/red]")
+    """Print message in red to stderr, exactly as it is."""
+    _print_verbatim(error_console, (message, "red"))
 
 
 def print_info(message: str) -> None:
-    """Print info message."""
-    console.print(f"[blue]{message}[/blue]")
+    """Print message in blue, exactly as it is."""
+    _print_verbatim(console, (message, "blue"))
