@@ -664,6 +664,19 @@ STOCKED_RATING_CONFIGS = [
     PVConfig(capacity_kw=6.0, inverter_capacity_kw=3.68),
 ]
 
+NEAREST_RATED_TO_A_BATTERY_INVERTER_CONFIGS = [
+    PVConfig(capacity_kw=2.6),
+    PVConfig(capacity_kw=7.2),
+    *(
+        PVConfig(capacity_kw=capacity_kw, inverter_capacity_kw=inverter_capacity_kw)
+        for capacity_kw, inverter_capacity_kw in (
+            (0.3, 3.0), (0.7, 3.0), (0.3, 3.68), (0.7, 3.68), (0.3, 5.0)
+        )
+    ),
+]
+
+MODULE_LEVEL_INVERTER_MAX_W = 1500.0
+
 
 def _config_id(config: PVConfig) -> str:
     return f"{config.capacity_kw}kW-dc-{config.effective_inverter_capacity_kw}kW-ac"
@@ -672,6 +685,12 @@ def _config_id(config: PVConfig) -> str:
 def _wiring(system: pvlib.pvsystem.PVSystem) -> list[tuple[int, int]]:
     """(modules per string, strings) for each array, one array per MPPT input."""
     return [(array.modules_per_string, array.strings) for array in system.arrays]
+
+
+def _dc_per_array(chain: pvlib.modelchain.ModelChain) -> tuple[pd.DataFrame, ...]:
+    """The run's DC results, one frame per array: pvlib gives a bare frame for one array."""
+    dc = chain.results.dc
+    return dc if isinstance(dc, tuple) else (dc,)
 
 
 def _usable_cec_inverters() -> pd.DataFrame:
@@ -828,6 +847,52 @@ class TestInverterMatchesStringVoltage:
 
         with pytest.raises(ValueError, match="custom_inverter_params"):
             create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=sapm_module))
+
+
+class TestBatteryInverterChargersAreNotPicked:
+    """For these configs the CEC inverter rated nearest whose MPPT window takes the strings is a battery inverter/charger.
+
+    Its window is the battery bus's voltage range, floored at or just under the module's
+    STC V_mp, so a module wired straight to it runs below the window whenever its cells are
+    warm: there pvlib's Sandia model extrapolates and a real inverter cannot track
+    (docs/pv-inverter-string-matching.md §7).
+    """
+
+    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    @pytest.mark.parametrize("config", NEAREST_RATED_TO_A_BATTERY_INVERTER_CONFIGS, ids=_config_id)
+    def test_strings_deliver_a_clear_summer_days_dc_energy_above_the_mppt_floor(
+        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+    ) -> None:
+        chain = create_model_chain(config, Location.bristol())
+        chain.run_model(clear_june_daytime)
+        floor_v = chain.system.inverter_parameters["Mppt_low"]
+
+        arrays = _dc_per_array(chain)
+        dc_wh = sum(array["p_mp"].sum() for array in arrays)
+        below_floor_wh = sum(array["p_mp"][array["v_mp"] < floor_v].sum() for array in arrays)
+        share = below_floor_wh / dc_wh
+
+        assert share < 0.01, (
+            f"{config.capacity_kw} kW dc on a {config.effective_inverter_capacity_kw} kW "
+            f"inverter, wired as {_wiring(chain.system)} (modules per string, strings), "
+            f"delivered {share:.0%} of the clear June day's DC energy below the "
+            f"inverter's {floor_v:.0f} V MPPT floor"
+        )
+
+    def test_a_lone_module_still_gets_a_module_level_inverter(self) -> None:
+        """Module-level inverters run at a battery bus's low DC voltage too, and stay candidates."""
+        config = PVConfig(capacity_kw=0.3, inverter_capacity_kw=3.0)
+        system = create_pv_system(config)
+        assert _wiring(system) == [(1, 1)], (
+            f"{config.capacity_kw} kW should be one module, got {_wiring(system)}"
+        )
+
+        rating_w = system.inverter_parameters["Paco"]
+        assert rating_w <= MODULE_LEVEL_INVERTER_MAX_W, (
+            f"a lone module behind a {config.effective_inverter_capacity_kw} kW rating was "
+            f"wired to a {rating_w:.0f} W inverter, above any module-level inverter's "
+            f"{MODULE_LEVEL_INVERTER_MAX_W:.0f} W"
+        )
 
 
 class TestPVWattsModule:
