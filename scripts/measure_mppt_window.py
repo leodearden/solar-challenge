@@ -386,15 +386,24 @@ def edge_error_summary(errors: pd.DataFrame) -> pd.Series:
     )
 
 
+def _aligned_with_stc(
+    rows: pd.DataFrame, label: str
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
+    """The labelled sizing's rows and STC's, both indexed by configuration, and which configurations the sizing re-picks: another inverter or wiring."""
+    keys = ["inverter_kw", "dc_kw"]
+    alt = rows[rows["sizing"] == label].set_index(keys)
+    stc = rows[rows["sizing"] == STC.label].set_index(keys)
+    repicked = (alt["inverter"] != stc["inverter"]) | (alt["wiring"] != stc["wiring"])
+    return alt, stc, repicked
+
+
 def headroom_table(rows: pd.DataFrame) -> pd.DataFrame:
     """Per window-edge sizing and inverter column: re-picked configs, their annual AC change, the hours still beyond each edge."""
-    keys = ["inverter_kw", "dc_kw"]
-    stc = rows[rows["sizing"] == STC.label].set_index(keys)
-    edges = rows[~rows["sizing"].isin([STC.label, BATTERY_INVERTERS_KEPT.label])]
+    labels = rows["sizing"]
+    edge_labels = labels[~labels.isin([STC.label, BATTERY_INVERTERS_KEPT.label])].unique()
     blocks = {}
-    for label, alternative in edges.groupby("sizing", sort=False):
-        alt = alternative.set_index(keys)
-        repicked = (alt["inverter"] != stc["inverter"]) | (alt["wiring"] != stc["wiring"])
+    for label in edge_labels:
+        alt, stc, repicked = _aligned_with_stc(rows, label)
         change = (alt["ac_kwh"] / stc["ac_kwh"] - 1)[repicked] * 100
         column = alt.index.get_level_values("inverter_kw")
         blocks[label] = pd.DataFrame(
@@ -411,15 +420,12 @@ def headroom_table(rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def repicks(rows: pd.DataFrame, sizing: Sizing) -> pd.DataFrame:
-    """The configurations whose inverter or wiring differs between the sizing and STC.
+    """The configurations the sizing re-picks, with its pick and STC's.
 
     change % is STC's annual AC over the sizing's, less one: the change from
     the sizing's pick to pv.py's.
     """
-    keys = ["inverter_kw", "dc_kw"]
-    alt = rows[rows["sizing"] == sizing.label].set_index(keys)
-    stc = rows[rows["sizing"] == STC.label].set_index(keys)
-    repicked = (alt["inverter"] != stc["inverter"]) | (alt["wiring"] != stc["wiring"])
+    alt, stc, repicked = _aligned_with_stc(rows, sizing.label)
     return pd.DataFrame(
         {
             "sizing's inverter": alt["inverter"],
