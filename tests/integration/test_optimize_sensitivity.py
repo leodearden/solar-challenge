@@ -37,8 +37,6 @@ def _make_finance(
     grid_services_income: float = 0.0,
     asset_life_years: int = 25,
 ) -> "FinanceConfig":  # type: ignore[name-defined]
-    from solar_challenge.config import FinanceConfig
-
     return FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life_years,
@@ -124,8 +122,6 @@ class _SegPricingSimulate:
         self._results_by_rate: dict[Optional[float], "SimulationResults"] = {}  # type: ignore[name-defined]
 
     def __call__(self, fleet_config, start, end):  # type: ignore[no-untyped-def]
-        from solar_challenge.fleet import FleetResults
-
         rates = _home_seg_rates(fleet_config.homes)
         self.rates_per_call.append(frozenset(rates))
         return FleetResults(

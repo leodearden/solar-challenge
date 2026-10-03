@@ -158,7 +158,6 @@ class TestProjectEconomicsDataclass:
 
     def test_frozen_raises_on_assignment(self) -> None:
         """ProjectEconomics must be frozen (FrozenInstanceError on field assignment)."""
-        import dataclasses
         econ = self._make_economics()
         with pytest.raises(dataclasses.FrozenInstanceError):
             econ.total_capex_gbp = 99999.0  # type: ignore[misc]
@@ -333,8 +332,6 @@ class TestProjectEconomicsCapex:
         # constructing a valid 1-home scenario and monkeypatching (not possible
         # without object.__setattr__).
         # Instead: test project_economics with a patched scenario-like object.
-        import dataclasses
-
         valid_scenario = _make_scenario(homes=[_make_sized_home(4.0)])
         finance = _make_finance()
         curve = _make_curve([8000.0] * 25)

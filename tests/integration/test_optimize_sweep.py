@@ -44,8 +44,6 @@ def _make_finance(
     retail_baseline_rate: float = 30.0,
     asset_life_years: int = 25,
 ) -> "FinanceConfig":  # type: ignore[name-defined]
-    from solar_challenge.config import FinanceConfig
-
     return FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life_years,
