@@ -1,6 +1,8 @@
 """Tests for PV configuration."""
 
 import dataclasses
+import math
+import re
 
 import numpy as np
 import pandas as pd
@@ -79,6 +81,20 @@ class TestPVConfigValidation:
             PVConfig(capacity_kw=0)
         with pytest.raises(ValueError, match="Capacity"):
             PVConfig(capacity_kw=-1.0)
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    @pytest.mark.parametrize(
+        ("field", "invariant"),
+        [
+            ("capacity_kw", "Capacity must be positive and finite"),
+            ("inverter_capacity_kw", "Inverter capacity must be positive and finite"),
+        ],
+    )
+    def test_a_capacity_that_is_not_finite_is_refused(
+        self, field: str, invariant: str, value: float
+    ) -> None:
+        with pytest.raises(ValueError, match=re.escape(f"{invariant}, got {value} kW")):
+            dataclasses.replace(PVConfig(capacity_kw=4.0), **{field: value})
 
     def test_azimuth_range(self):
         """Azimuth must be 0-360."""
