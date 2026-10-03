@@ -6,7 +6,7 @@ Bug B1 (Alpine race condition) and Bug B2 (wrong results URL).
 """
 
 import pytest
-from playwright.sync_api import ConsoleMessage, Page, expect
+from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -29,29 +29,23 @@ def test_fleet_page_loads(page: Page, live_server: str) -> None:
 # ── Bug B1: Alpine race condition with external JS ───────────────────
 
 
-def test_fleet_page_no_js_errors(page: Page, live_server: str) -> None:
-    """The fleet page should load without JavaScript console errors.
+def test_fleet_page_no_js_errors(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """The fleet page should load without JavaScript errors.
 
     The ``fleetSimulator()`` component is defined in an external JS file
     loaded via ``defer`` in ``{% block head %}``.  Depending on script
     execution order, Alpine.js may try to evaluate the ``x-data``
-    attribute before the component function is registered, causing a
-    console error.
+    attribute before the component function is registered, which throws
+    an uncaught ReferenceError.
     """
-    errors: list[str] = []
-
-    def _on_console(msg: ConsoleMessage) -> None:
-        if msg.type == "error":
-            errors.append(msg.text)
-
-    page.on("console", _on_console)
     page.goto(live_server + "/simulate/fleet")
     # Give deferred scripts time to load and Alpine to initialise
     page.wait_for_load_state("networkidle")
     page.wait_for_timeout(1000)
-    page.remove_listener("console", _on_console)
 
-    assert errors == [], f"Console errors on /simulate/fleet: {errors}"
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
 
 # ── Fleet size controls ──────────────────────────────────────────────
@@ -130,19 +124,3 @@ def test_fleet_completed_results_url(page: Page, live_server: str) -> None:
         "Bug B2: fleet 'View Results' link uses wrong URL pattern "
         "('/results?run_id=<id>' instead of '/results/fleet/<id>')"
     )
-
-
-# ── Fleet results page (skip) ───────────────────────────────────────
-
-
-@pytest.mark.skip(reason="Requires a completed fleet run, which cannot be "
-                         "easily created in e2e without a long simulation")
-def test_fleet_results_page_has_export_buttons(
-    page: Page, live_server: str,
-) -> None:
-    """Fleet results page should contain export buttons for CSV/PDF download.
-
-    Skipped because rendering the fleet results template requires a real
-    completed simulation run stored in the database.
-    """
-    pass

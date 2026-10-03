@@ -49,36 +49,37 @@ def test_search_filter_updates_table(
     expect(empty_msg).to_be_visible()
 
 
-# -- Type filter dropdown filters ------------------------------------------
+# -- Type filter lists a run only under its own type -----------------------
 
 
-def test_type_filter_dropdown_filters(
+@pytest.mark.parametrize(
+    ("seeded_run", "run_type", "other_type"),
+    [("seeded_home_run", "home", "fleet"), ("seeded_fleet_run", "fleet", "home")],
+    ids=["home", "fleet"],
+)
+def test_type_filter_lists_a_seeded_run_only_under_its_own_type(
     page: Page,
     live_server: str,
-    seeded_home_run: tuple[str, str],
+    request: pytest.FixtureRequest,
+    seeded_run: str,
+    run_type: str,
+    other_type: str,
 ) -> None:
-    """Select 'home' -> seeded run visible; select 'fleet' -> empty state."""
-    _, run_name = seeded_home_run
+    """Searched by name, a seeded run is listed under its own type's filter and not under the other's.
+
+    The search narrows the list to that run, whatever else the shared session DB holds.
+    The other type is selected first, so the run's row can reappear only from its own type's list.
+    """
+    _, run_name = request.getfixturevalue(seeded_run)
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(2000)
+    page.get_by_label("Search", exact=True).fill(run_name)
+    type_filter = page.get_by_label("Type", exact=True)
 
-    type_select = page.locator("#filter-type")
-    expect(type_select).to_be_visible()
+    type_filter.select_option(value=other_type)
+    expect(page.get_by_text("No simulation runs found")).to_be_visible()
 
-    # Filter by "home" type - seeded run should appear
-    type_select.select_option(value="home")
-    page.wait_for_timeout(1000)
-
-    row = page.locator("td", has_text=run_name)
-    expect(row.first).to_be_visible()
-
-    # Filter by "fleet" type - should show empty state (only home runs seeded)
-    type_select.select_option(value="fleet")
-    page.wait_for_timeout(1000)
-
-    empty_msg = page.locator("text=No simulation runs found")
-    expect(empty_msg).to_be_visible()
+    type_filter.select_option(value=run_type)
+    expect(page.get_by_role("row").filter(has_text=run_name)).to_be_visible()
 
 
 # -- Finding a seeded run --------------------------------------------------

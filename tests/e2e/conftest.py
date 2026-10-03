@@ -6,7 +6,7 @@ configures Playwright's base_url so tests can use relative paths.
 Includes data-seeding fixtures for tests that need pre-existing
 simulation runs (results pages, history interactions, compare page).
 Also stubs the Run History page's runs-list API for tests that need it
-empty or unanswered.
+empty or unanswered, and collects the errors a page reports.
 
 It imports nothing from playwright: tests/unit/test_e2e_job_wait.py runs
 a copy of this module in the verify environment, which lacks the e2e extra.
@@ -28,10 +28,14 @@ pytest.importorskip("werkzeug")
 from flask import Flask
 from werkzeug.serving import make_server
 
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.fleet import calculate_fleet_summary
+from solar_challenge.home import calculate_summary
+from solar_challenge.web.database import get_db
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager
+from solar_challenge.web.storage import RunStorage
 
+from tests._finance_builders import make_fleet_results
 from tests._web_app import build_test_app
 
 
@@ -55,7 +59,10 @@ def _e2e_app(tmp_path_factory: pytest.TempPathFactory) -> Flask:
 
 @pytest.fixture(scope="session")
 def _e2e_db_path(_e2e_app: Flask) -> Path:
-    """Path to the database the live server's app reads."""
+    """Path to the database the live server's app reads.
+
+    create_app built its schema, so a fixture can seed it before the server starts.
+    """
     return Path(_e2e_app.config["DATABASE"])
 
 
@@ -303,11 +310,8 @@ def _seed_run(
 
 
 @pytest.fixture(scope="session")
-def seeded_home_run(_e2e_db_path, _e2e_data_dir, live_server):
-    """Insert a single completed home run. Returns (run_id, run_name).
-
-    Depends on live_server to ensure the DB schema is initialised.
-    """
+def seeded_home_run(_e2e_db_path, _e2e_data_dir):
+    """Insert a single completed home run. Returns (run_id, run_name)."""
     return _seed_run(
         _e2e_db_path,
         _e2e_data_dir,
@@ -317,7 +321,7 @@ def seeded_home_run(_e2e_db_path, _e2e_data_dir, live_server):
 
 
 @pytest.fixture(scope="session")
-def seeded_home_runs_pair(_e2e_db_path, _e2e_data_dir, live_server):
+def seeded_home_runs_pair(_e2e_db_path, _e2e_data_dir):
     """Insert 2 completed home runs with different summary values.
 
     Returns [(id1, name1), (id2, name2)].
@@ -353,6 +357,24 @@ def seeded_home_runs_pair(_e2e_db_path, _e2e_data_dir, live_server):
     return [r1, r2]
 
 
+@pytest.fixture(scope="session")
+def seeded_fleet_run(_e2e_db_path: Path, _e2e_data_dir: Path) -> tuple[str, str]:
+    """Save a completed 2-home, 1-day fleet run through RunStorage. Returns (run_id, run_name).
+
+    Its homes' results are make_fleet_results' constant-power series, so no simulation runs and no service is reached.
+    """
+    run_id, run_name = "seed-fleet-001", "Seeded Fleet Alpha"
+    fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+    RunStorage(db_path=_e2e_db_path, data_dir=_e2e_data_dir).save_fleet_run(
+        run_id,
+        fleet,
+        calculate_fleet_summary(fleet),
+        [calculate_summary(home_results) for home_results in fleet.per_home_results],
+        name=run_name,
+    )
+    return run_id, run_name
+
+
 # ---------------------------------------------------------------------------
 # Run History API stubs
 # ---------------------------------------------------------------------------
@@ -385,3 +407,25 @@ def runs_api_never_answers(page) -> Iterator[None]:
     assert held_requests, "the page made no runs-list request for runs_api_never_answers to hold"
     for route in held_requests:
         route.abort()
+
+
+# ---------------------------------------------------------------------------
+# Page errors
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def page_errors(page) -> list[str]:
+    """The text of each console error the page logs and each uncaught exception it throws during the test.
+
+    Playwright reports an uncaught exception, such as an Alpine expression error, only as a pageerror.
+    """
+    errors: list[str] = []
+
+    def _collect_console_error(message) -> None:
+        if message.type == "error":
+            errors.append(message.text)
+
+    page.on("console", _collect_console_error)
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    return errors
