@@ -1,6 +1,6 @@
-"""Integration tests for PVGIS API calls.
+"""Contract tests of PVGIS's TMY for Bristol, as get_tmy_data returns it.
 
-These tests make real API calls and may be slow or flaky.
+Each test checks PVGIS's live response, fetched once for the module.
 """
 
 import pytest
@@ -17,8 +17,11 @@ BRISTOL = Location.bristol()
 
 @pytest.fixture(scope="module")
 def bristol_tmy() -> pd.DataFrame:
-    """Bristol's TMY, retrieved once for every test in this module."""
-    return get_tmy_data(BRISTOL)
+    """Bristol's TMY, fetched live from PVGIS once for every test in this module.
+
+    It is never read from or written to a weather cache, whose copy may be months old.
+    """
+    return get_tmy_data(BRISTOL, use_cache=False)
 
 
 @pytest.mark.slow
@@ -68,6 +71,6 @@ class TestPVGISTMY:
         # Night hours should have zero irradiance
         assert (bristol_tmy["ghi"] == 0).any()
 
-    def test_tmy_annual_ghi_matches_the_2005_2020_mean(self):
-        """Fetched live, Bristol's TMY sums to PVGIS's 2005-2020 mean GHI; docs/tmy-irradiation-scaling.md has the figure."""
-        assert get_tmy_data(BRISTOL, use_cache=False)["ghi"].sum() / 1000 == pytest.approx(1069.5, rel=0.01)
+    def test_tmy_annual_ghi_matches_the_2005_2020_mean(self, bristol_tmy):
+        """Bristol's TMY sums to PVGIS's 2005-2020 mean GHI; docs/tmy-irradiation-scaling.md has the figure."""
+        assert bristol_tmy["ghi"].sum() / 1000 == pytest.approx(1069.5, rel=0.01)
