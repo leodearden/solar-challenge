@@ -1249,6 +1249,31 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param("", id="empty-string"),
+            pytest.param(False, id="false"),
+            pytest.param({}, id="empty-object"),
+        ],
+    )
+    def test_empty_or_falsy_dispatch_strategy_gets_the_answer_simulate_home_gives(
+        self, client: FlaskClient, mock_job_manager: MagicMock, dispatch_strategy: object
+    ) -> None:
+        """An empty or falsy dispatch_strategy gets the same 400 here as at /api/simulate/home, and neither queues a job."""
+        home = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "dispatch_strategy": dispatch_strategy},
+        )
+        fleet = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "dispatch_strategy": dispatch_strategy},
+        )
+        assert fleet.status_code == 400
+        assert (home.status_code, home.get_json()) == (fleet.status_code, fleet.get_json())
+        mock_job_manager.submit_home_job.assert_not_called()
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
         ("key", "distribution"),
         [("pv", "pv.capacity_kw"), ("load", "load.annual_consumption_kwh")],
     )
