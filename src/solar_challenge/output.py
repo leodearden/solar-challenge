@@ -379,24 +379,15 @@ def aggregate_daily(results: SimulationResults) -> pd.DataFrame:
 
 
 def aggregate_monthly(results: SimulationResults) -> pd.DataFrame:
-    """Aggregate results to monthly totals.
+    """Aggregate 1-minute results to monthly totals and peaks.
 
     Args:
-        results: Simulation results
+        results: Simulation results with 1-minute resolution
 
     Returns:
-        DataFrame with monthly period index and energy totals in kWh
+        DataFrame indexed by month end, with the columns of :func:`aggregate_daily`
     """
-    daily = aggregate_daily(results)
-
-    # Resample to monthly - sum energy columns
-    energy_cols = [col for col in daily.columns if "_kwh" in col]
-    peak_cols = [col for col in daily.columns if "peak_" in col]
-
-    monthly_energy = daily[energy_cols].resample("ME").sum()
-    monthly_peaks = daily[peak_cols].resample("ME").max()
-
-    return pd.concat([monthly_energy, monthly_peaks], axis=1)
+    return _aggregate_by_period(results, "ME")
 
 
 def aggregate_annual(
