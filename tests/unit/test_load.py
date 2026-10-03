@@ -1,5 +1,8 @@
 """Tests for load profile generation."""
 
+import math
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -67,6 +70,28 @@ class TestLoadConfigValidation:
         """Unrealistically high occupants raises error."""
         with pytest.raises(ValueError, match="unrealistic"):
             LoadConfig(household_occupants=15)
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    def test_an_annual_consumption_that_is_not_finite_is_refused(self, value: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"Annual consumption must be positive and finite, got {value} kWh"),
+        ):
+            LoadConfig(annual_consumption_kwh=value)
+
+    @pytest.mark.parametrize(
+        ("occupants", "message"),
+        [
+            (math.nan, "Household occupants must be at least 1, got nan"),
+            (-math.inf, "Household occupants must be at least 1, got -inf"),
+            (math.inf, "Household occupants seems unrealistic: inf"),
+        ],
+    )
+    def test_an_occupant_count_that_is_not_finite_is_refused(
+        self, occupants: float, message: str
+    ) -> None:
+        with pytest.raises(ValueError, match=re.escape(message)):
+            LoadConfig(household_occupants=occupants)
 
 
 class TestGenerateLoadProfile:
