@@ -306,6 +306,11 @@ fleet_distribution:
       multiplier: {type: sweep, min: 0.5, max: 2.0, steps: 3}
 """
 
+# The UserWarning load_fleet_config raises for a tou_optimized fleet with no top-level tariff:.
+_TOU_ADVISORY = (
+    "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff is configured"
+)
+
 
 class TestValidateConfig:
     """Tests for validate config command."""
@@ -524,6 +529,19 @@ home:
                 "Annual consumption 25000.0 kWh seems high for domestic (2 of 2 homes above 20000 kWh)",
                 id="consumption-fleet-distribution",
             ),
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  battery:\n"
+                "    capacity_kwh:\n"
+                "      type: proportional_to\n"
+                "      source: pv.capacity_kw\n"
+                "      multiplier: {type: sweep, min: 10, max: 30, steps: 3, mode: linear}\n",
+                "Battery capacity 120.0 kWh seems high for domestic "
+                "(2 of 6 homes above 100 kWh, across 3 sweep points)",
+                id="battery-sweep",
+            ),
         ],
     )
     def test_a_home_above_a_domestic_ceiling_is_one_warning_row(
@@ -534,6 +552,37 @@ home:
         assert result.exit_code == 0
         assert f"WARNING {warning}" in _table_text(result.stdout)
         assert _table_text(result.stdout).count("WARNING") == 1
+
+    def test_a_loader_advisory_is_a_warning_row_not_a_python_warning(
+        self, tmp_path: Path, recwarn: pytest.WarningsRecorder
+    ) -> None:
+        result = self._validate_config(
+            tmp_path,
+            "fleet_distribution:\n"
+            "  n_homes: 2\n"
+            "  pv: {capacity_kw: 4.0}\n"
+            "  dispatch_strategy: tou_optimized\n",
+        )
+
+        assert result.exit_code == 0
+        assert f"WARNING {_TOU_ADVISORY}" in _table_text(result.stdout)
+        assert "OK Configuration is valid" not in _table_text(result.stdout)
+        assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
+
+    def test_a_loader_advisory_raised_before_a_refusal_is_shown_beside_it(
+        self, tmp_path: Path
+    ) -> None:
+        result = self._validate_config(
+            tmp_path,
+            "fleet_distribution:\n"
+            "  n_homes: 2\n"
+            "  pv: {capacity_kw: 4.0, tilt: 100}\n"
+            "  dispatch_strategy: tou_optimized\n",
+        )
+
+        assert result.exit_code == 1
+        assert "ERROR Tilt must be 0-90 degrees, got 100.0" in _table_text(result.stdout)
+        assert f"WARNING {_TOU_ADVISORY}" in _table_text(result.stdout)
 
 
 class TestErrorHandling:

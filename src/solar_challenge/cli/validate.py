@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable, Mapping, Optional, Sequence
+from warnings import WarningMessage, catch_warnings, simplefilter
 
 import pandas as pd
 import typer
@@ -160,12 +161,24 @@ def results(
         raise typer.Exit(1)
 
 
+@dataclass(frozen=True)
+class _DefinedHomes:
+    """The homes a config file defines.
+
+    A YAML-defined sweep builds the file's fleet once per sweep point, so *homes* holds
+    each of its homes once per point, and *sweep_points* is the number of points.
+    """
+
+    homes: Sequence[HomeConfig]
+    sweep_points: int = 1
+
+
 def _scenario_homes(scenario: ScenarioConfig) -> list[HomeConfig]:
     """The homes a scenario simulates: its single home, or else its fleet."""
     return [scenario.home] if scenario.home is not None else scenario.homes
 
 
-def _fleet_homes(config_file: Path, document: Mapping[str, Any]) -> list[HomeConfig]:
+def _fleet_homes(config_file: Path, document: Mapping[str, Any]) -> _DefinedHomes:
     """The homes `fleet run` builds from the file.
 
     For a YAML-defined sweep, the homes `fleet sweep` builds at every sweep point.
@@ -174,29 +187,34 @@ def _fleet_homes(config_file: Path, document: Mapping[str, Any]) -> list[HomeCon
         distribution = parse_fleet_distribution_config(document["fleet_distribution"])
         if detect_sweep_spec(distribution) is not None:
             location = parse_location_block(document.get("location"))
-            return [
-                home
+            fleets = [
+                generate_homes_from_distribution(point, location)
                 for _, point in expand_sweep_configs(distribution)
-                for home in generate_homes_from_distribution(point, location)
             ]
-    return load_fleet_config(config_file).homes
+            return _DefinedHomes(
+                homes=[home for fleet in fleets for home in fleet],
+                sweep_points=len(fleets),
+            )
+    return _DefinedHomes(homes=load_fleet_config(config_file).homes)
 
 
-def _homes_defined_by(config_file: Path) -> list[HomeConfig]:
+def _homes_defined_by(config_file: Path) -> _DefinedHomes:
     """The homes the file defines, built by the config.py loader its shape needs.
 
     Raises the loader's own ConfigurationError or ValueError when the file is refused.
     """
     document = load_config(config_file)
     if "scenarios" in document or "scenario" in document:
-        return [
-            home
-            for scenario in load_scenarios(config_file)
-            for home in _scenario_homes(scenario)
-        ]
+        return _DefinedHomes(
+            homes=[
+                home
+                for scenario in load_scenarios(config_file)
+                for home in _scenario_homes(scenario)
+            ]
+        )
     if "fleet_distribution" in document or "homes" in document:
         return _fleet_homes(config_file, document)
-    return [load_home_config(config_file)]
+    return _DefinedHomes(homes=[load_home_config(config_file)])
 
 
 @dataclass(frozen=True)
@@ -208,18 +226,23 @@ class _DomesticCeiling:
     ceiling: float
     size_of: Callable[[HomeConfig], Optional[float]]
 
-    def warning(self, homes: Sequence[HomeConfig]) -> Optional[str]:
-        """One line naming the largest size above the ceiling and how many *homes* exceed it, or None when none do."""
+    def warning(self, defined: _DefinedHomes) -> Optional[str]:
+        """One line naming the largest size above the ceiling and how many *defined* homes exceed it, or None when none do."""
         sizes = [
             size
-            for home in homes
+            for home in defined.homes
             if (size := self.size_of(home)) is not None and size > self.ceiling
         ]
         if not sizes:
             return None
+        across = (
+            f", across {defined.sweep_points} sweep points"
+            if defined.sweep_points > 1
+            else ""
+        )
         return (
             f"{self.subject} {max(sizes)} {self.unit} seems high for domestic "
-            f"({len(sizes)} of {len(homes)} homes above {self.ceiling} {self.unit})"
+            f"({len(sizes)} of {len(defined.homes)} homes above {self.ceiling} {self.unit}{across})"
         )
 
 
@@ -248,6 +271,37 @@ _DOMESTIC_CEILINGS: tuple[_DomesticCeiling, ...] = (
         size_of=lambda home: home.load_config.annual_consumption_kwh,
     ),
 )
+
+
+def _domestic_scale_warnings(defined: _DefinedHomes) -> list[str]:
+    """One line for each domestic ceiling that some defined home exceeds."""
+    return [
+        warning
+        for ceiling in _DOMESTIC_CEILINGS
+        if (warning := ceiling.warning(defined)) is not None
+    ]
+
+
+def _user_warnings(caught: Sequence[WarningMessage]) -> list[str]:
+    """The messages of the UserWarnings among *caught*: the advisories a loader raises as it builds."""
+    return [
+        str(item.message) for item in caught if issubclass(item.category, UserWarning)
+    ]
+
+
+def _findings(config_file: Path) -> tuple[list[str], list[str]]:
+    """The (errors, warnings) of validating the file.
+
+    The errors are the loader's first refusal, if any. The warnings are the advisories
+    the loader raised on the way, then each domestic-scale size above its ceiling.
+    """
+    with catch_warnings(record=True) as caught:
+        simplefilter("always")
+        try:
+            defined = _homes_defined_by(config_file)
+        except (ConfigurationError, ValueError) as refusal:
+            return [str(refusal)], _user_warnings(caught)
+    return [], _user_warnings(caught) + _domestic_scale_warnings(defined)
 
 
 def _print_config_findings(
@@ -283,26 +337,19 @@ def config(
         ),
     ],
 ) -> None:
-    """Validate a configuration file by loading it as the run commands do.
+    """Validate a configuration file by building the homes it defines.
 
-    The file's shape picks how it is loaded:
+    The file's shape picks which loader builds them:
     - scenarios: or scenario: files load as scenarios
-    - homes: or fleet_distribution: files load as a fleet
+    - homes: or fleet_distribution: files load as a fleet, as `fleet run` loads them
     - any other file loads as a home file: a home: block, or a flat home
 
-    A YAML-defined sweep is checked at every sweep point. The first value or key
-    the file's loader refuses is an ERROR. Sizes beyond a domestic install are
-    WARNINGs.
+    A YAML-defined sweep is built at every sweep point, as `fleet sweep` builds it.
+    The first value or key the loader refuses is an ERROR. The loader's advisories,
+    and sizes beyond a domestic install, are WARNINGs. Only the homes are checked,
+    not the file's other top-level blocks, such as seg: or finance:.
     """
-    try:
-        homes = _homes_defined_by(config_file)
-    except (ConfigurationError, ValueError) as refusal:
-        _print_config_findings(config_file, errors=[str(refusal)], warnings=[])
-        raise typer.Exit(1) from refusal
-
-    warnings = [
-        warning
-        for ceiling in _DOMESTIC_CEILINGS
-        if (warning := ceiling.warning(homes)) is not None
-    ]
-    _print_config_findings(config_file, errors=[], warnings=warnings)
+    errors, warnings = _findings(config_file)
+    _print_config_findings(config_file, errors=errors, warnings=warnings)
+    if errors:
+        raise typer.Exit(1)
