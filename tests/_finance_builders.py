@@ -70,11 +70,14 @@ def make_scenario(
     n_homes: int = 1,
     seg_tariff_pence_per_kwh: float | None = None,
     battery_config: BatteryConfig | None = None,
+    finance: FinanceConfig | None = None,
 ) -> ScenarioConfig:
     """A 2020 scenario of *n_homes* make_home_config homes, each with *battery_config*.
 
-    The scenario-level SEG rate is *seg_tariff_pence_per_kwh*.  By default the
-    homes have no battery and the scenario has no SEG rate.
+    The scenario-level SEG rate is *seg_tariff_pence_per_kwh*.  Its finance block
+    is *finance*, which enumerate_configs copies into each config and run_sweep
+    reads.  By default the homes have no battery and the scenario has no SEG rate
+    or finance block.
     """
     return ScenarioConfig(
         name="test-scenario",
@@ -82,6 +85,7 @@ def make_scenario(
         description="Unit test scenario",
         homes=[make_home_config(battery_config=battery_config) for _ in range(n_homes)],
         seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
+        finance=finance,
     )
 
 
