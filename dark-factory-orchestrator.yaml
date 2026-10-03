@@ -40,7 +40,9 @@ escalation:
 #
 # Tests exclude the `slow` marker (real PVGIS network calls) and `e2e`
 # (playwright browser tests) — neither belongs in a per-task verify loop; the
-# offline lane's e2e job runs the non-slow e2e suite after every merge instead.
+# offline lane's e2e job runs the non-slow e2e suite after every merge instead,
+# and its pvgis job runs the PVGIS contract tests, the slow tests that check
+# PVGIS itself.
 # The `web` extra is required: every test module that needs it calls
 # pytest.importorskip, so without it those modules skip rather than fail and
 # the verify passes while silently losing their coverage
@@ -67,6 +69,11 @@ git:
   # - e2e: the non-slow Playwright suite. LaneCommand has no timeout field and
   #   the lane is single-flight, so without `timeout` a hung browser run would
   #   stall every later lane run; 1800 s is ~8x the measured 214 s run.
+  # - pvgis: the PVGIS contract tests (tests/integration/test_pvgis.py). They
+  #   check PVGIS's live TMY, so a change in PVGIS or pvlib is seen; an outage
+  #   outlasting a run and its confirm re-run files a fix task, never a silent
+  #   green (CLAUDE.md says how to tell one). `timeout` caps a hung request at
+  #   600 s; a run measures ~20 s: uv syncs a fresh .venv, then 11 s of tests.
   # The legacy numeric and infra seams are off: this repo has neither
   # scripts/run-offline-deep.sh nor reify's tests/infra/run_all.sh.
   # offline_lane_enabled and persistent_offline_deep_worktree take effect at
@@ -82,6 +89,9 @@ git:
       fix_task_priority: "medium"
     - name: e2e
       command: "timeout -k 60 1800 uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider"
+      fix_task_priority: "medium"
+    - name: pvgis
+      command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider"
       fix_task_priority: "medium"
 
 # OS filesystem sandbox (Landlock) — dark-factory-fleet OS filesystem sandbox
