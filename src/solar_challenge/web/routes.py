@@ -300,6 +300,6 @@ def fleet_results(run_id: str) -> Any:
         charts=charts,
         n_homes=fleet_summary.n_homes,
         run_id=run_id,
-        run_name="Fleet Simulation",
+        run_name=storage.run_name(run_id) or "Fleet Simulation",
         page="results",
     )
