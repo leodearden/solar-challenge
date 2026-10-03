@@ -65,8 +65,8 @@ class PVConfig:
 
     def __post_init__(self) -> None:
         """Validate PV configuration parameters."""
-        if self.capacity_kw <= 0:
-            raise ValueError(f"Capacity must be positive, got {self.capacity_kw} kW")
+        if not 0 < self.capacity_kw < math.inf:
+            raise ValueError(f"Capacity must be positive and finite, got {self.capacity_kw} kW")
         if not 0 <= self.azimuth <= 360:
             raise ValueError(f"Azimuth must be 0-360 degrees, got {self.azimuth}")
         if not 0 <= self.tilt <= 90:
@@ -83,9 +83,9 @@ class PVConfig:
             raise ValueError(
                 f"Inverter efficiency must be (0, 1], got {self.inverter_efficiency}"
             )
-        if self.inverter_capacity_kw is not None and self.inverter_capacity_kw <= 0:
+        if self.inverter_capacity_kw is not None and not 0 < self.inverter_capacity_kw < math.inf:
             raise ValueError(
-                f"Inverter capacity must be positive, got {self.inverter_capacity_kw} kW"
+                f"Inverter capacity must be positive and finite, got {self.inverter_capacity_kw} kW"
             )
         # NOTE: The error messages below intentionally mirror the guards in
         # calculate_degradation_factor (see pv.py). Both use the same substrings
