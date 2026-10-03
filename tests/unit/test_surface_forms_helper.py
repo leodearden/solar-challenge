@@ -91,6 +91,14 @@ def test_a_bare_typing_alias_is_spelled_by_its_origin_alone() -> None:
     )
 
 
+def test_an_empty_subscription_is_spelled_with_parentheses() -> None:
+    def f(a: tuple[()], b: Tuple[()], c: Callable[[], None]) -> None: ...
+
+    assert (
+        surface_form(f) == "(a: tuple[()], b: tuple[()], c: Callable[[], None]) -> None"
+    )
+
+
 def test_a_string_annotation_is_spelled_verbatim_and_unquoted() -> None:
     def f(a: "Optional[Foo]", b: "'Bar'") -> "Baz": ...  # noqa: F821
 
