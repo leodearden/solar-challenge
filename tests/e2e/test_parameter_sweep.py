@@ -1,10 +1,12 @@
 """End-to-end tests for the Parameter Sweep page (/scenarios/sweep).
 
 Verifies page loading, that each form control is found by role and by the name
-its label gives it, preview calculations (the preview lists its values in the
-list named "Sweep values"), that submitting a sweep filled into the form
-returns one background job per sweep point, and detects Bug B1 (Alpine race
-condition with external JS).
+its label gives it, that the radio group named "Sweep Mode" holds the Linear
+and Geometric radios and the group named "Base Configuration" holds the
+Battery (kWh), Location and Days controls, preview calculations (the preview
+lists its values in the list named "Sweep values"), that submitting a sweep
+filled into the form returns one background job per sweep point, and detects
+Bug B1 (Alpine race condition with external JS).
 """
 
 import pytest
@@ -80,6 +82,45 @@ def test_sweep_form_control_is_named_by_its_label(
     page.goto(live_server + "/scenarios/sweep")
 
     expect(page.get_by_role(role, name=label, exact=True)).to_be_visible()
+
+
+# -- Sweep form control groups ---------------------------------------------
+
+
+def test_sweep_mode_radio_group_holds_the_linear_and_geometric_radios(
+    page: Page, live_server: str
+) -> None:
+    """The radio group named "Sweep Mode" holds exactly two radios, Linear and Geometric."""
+    page.goto(live_server + "/scenarios/sweep")
+
+    sweep_mode = page.get_by_role("radiogroup", name="Sweep Mode", exact=True)
+    expect(sweep_mode.get_by_role("radio")).to_have_count(2)
+    expect(sweep_mode.get_by_role("radio", name="Linear", exact=True)).to_be_visible()
+    expect(
+        sweep_mode.get_by_role("radio", name="Geometric", exact=True)
+    ).to_be_visible()
+
+
+def test_base_configuration_group_holds_the_battery_location_and_days_controls(
+    page: Page, live_server: str
+) -> None:
+    """The group named "Base Configuration" holds exactly two spinbuttons, Battery (kWh) and Days, and one combobox, Location."""
+    page.goto(live_server + "/scenarios/sweep")
+
+    base_configuration = page.get_by_role(
+        "group", name="Base Configuration", exact=True
+    )
+    expect(base_configuration.get_by_role("spinbutton")).to_have_count(2)
+    expect(base_configuration.get_by_role("combobox")).to_have_count(1)
+    expect(
+        base_configuration.get_by_role("spinbutton", name="Battery (kWh)", exact=True)
+    ).to_be_visible()
+    expect(
+        base_configuration.get_by_role("combobox", name="Location", exact=True)
+    ).to_be_visible()
+    expect(
+        base_configuration.get_by_role("spinbutton", name="Days", exact=True)
+    ).to_be_visible()
 
 
 # -- Preview updates when inputs change ------------------------------------

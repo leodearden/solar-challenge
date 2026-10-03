@@ -57,8 +57,8 @@
                 </div>
 
                 <!-- Mode Radio Buttons -->
-                <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Sweep Mode</label>
+                <fieldset role="radiogroup">
+                    <legend class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Sweep Mode</legend>
                     <div class="flex gap-6">
                         <label class="inline-flex items-center gap-2 cursor-pointer">
                             <input type="radio" x-model="mode" value="linear"
@@ -71,33 +71,35 @@
                             <span class="text-sm text-slate-600 dark:text-slate-300">Geometric</span>
                         </label>
                     </div>
-                </div>
+                </fieldset>
 
                 <!-- Base Config -->
                 <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Base Configuration</label>
-                    <div class="grid grid-cols-2 gap-3">
-                        <div>
-                            <label for="sweep_base_battery_kwh" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Battery (kWh)</label>
-                            <input id="sweep_base_battery_kwh" type="number" step="0.1" x-model="baseConfig.battery_kwh"
-                                class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                    <fieldset>
+                        <legend class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Base Configuration</legend>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label for="sweep_base_battery_kwh" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Battery (kWh)</label>
+                                <input id="sweep_base_battery_kwh" type="number" step="0.1" x-model="baseConfig.battery_kwh"
+                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                            </div>
+                            <div>
+                                <label for="sweep_base_location" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Location</label>
+                                <select id="sweep_base_location" x-model="baseConfig.location"
+                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <option value="bristol">Bristol</option>
+                                    <option value="london">London</option>
+                                    <option value="edinburgh">Edinburgh</option>
+                                    <option value="manchester">Manchester</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="sweep_base_days" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Days</label>
+                                <input id="sweep_base_days" type="number" min="1" max="365" x-model="baseConfig.days"
+                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                            </div>
                         </div>
-                        <div>
-                            <label for="sweep_base_location" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Location</label>
-                            <select id="sweep_base_location" x-model="baseConfig.location"
-                                class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                <option value="bristol">Bristol</option>
-                                <option value="london">London</option>
-                                <option value="edinburgh">Edinburgh</option>
-                                <option value="manchester">Manchester</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label for="sweep_base_days" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Days</label>
-                            <input id="sweep_base_days" type="number" min="1" max="365" x-model="baseConfig.days"
-                                class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                        </div>
-                    </div>
+                    </fieldset>
                 </div>
 
                 <!-- Submit -->
