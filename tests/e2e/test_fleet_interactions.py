@@ -1,12 +1,14 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
 Verifies slider-input sync, that each distribution editor's controls are named
-for their card, that each card's row buttons change only its rows, export YAML
-button, that the simulation name reaches the submitted run, and that the period
-selector offers presets and a custom date range.
+for their card, that each card's row buttons change only its rows, that Import
+YAML shows each distribution in its card, export YAML button, that the
+simulation name reaches the submitted run, and that the period selector offers
+presets and a custom date range.
 """
 
 import re
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
@@ -162,6 +164,47 @@ def test_fleet_distribution_row_buttons_change_only_their_cards_rows(
     expect(page.get_by_role("spinbutton", name=f"{card} Value 1", exact=True)).to_have_value(
         second_value
     )
+
+
+# -- Import YAML ------------------------------------------------------------
+
+
+IMPORTED_FLEET = """\
+fleet_distribution:
+  n_homes: 100
+  pv:
+    capacity_kw: {type: weighted_discrete, values: [2.5, 7.5], weights: [1, 3]}
+  battery:
+    capacity_kwh: {type: weighted_discrete, values: [0, 9.5], weights: [1, 1]}
+  load:
+    annual_consumption_kwh: {type: weighted_discrete, values: [2500, 4100, 5200], weights: [1, 1, 1]}
+"""
+IMPORTED_VALUES = {
+    "PV Capacity": ["2.5", "7.5"],
+    "Battery Capacity": ["0", "9.5"],
+    "Annual Consumption": ["2500", "4100", "5200"],
+}
+
+
+def test_fleet_import_yaml_shows_each_distribution_in_its_card(
+    page: Page, live_server: str, tmp_path: Path
+) -> None:
+    """Import YAML puts a fleet file's PV, battery and consumption distributions in their cards, each showing its distribution's rows."""
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(IMPORTED_FLEET)
+    page.goto(live_server + "/simulate/fleet")
+
+    with page.expect_file_chooser() as chooser:
+        page.get_by_text("Import YAML", exact=True).click()
+    chooser.value.set_files(fleet_file)
+
+    for subject, values in IMPORTED_VALUES.items():
+        _expect_only_row_list_shown(page, subject, "Weight")
+        expect(_value_inputs(page, subject)).to_have_count(len(values))
+        for row, value in enumerate(values, start=1):
+            expect(
+                page.get_by_role("spinbutton", name=f"{subject} Value {row}", exact=True)
+            ).to_have_value(value)
 
 
 # -- Export YAML button -----------------------------------------------------
