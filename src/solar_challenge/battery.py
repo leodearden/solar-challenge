@@ -139,15 +139,17 @@ class BatteryConfig:
 
     def __post_init__(self) -> None:
         """Validate battery configuration parameters."""
-        if self.capacity_kwh <= 0:
-            raise ValueError(f"Capacity must be positive, got {self.capacity_kwh} kWh")
-        if self.max_charge_kw <= 0:
+        if not 0 < self.capacity_kwh < math.inf:
             raise ValueError(
-                f"Max charge power must be positive, got {self.max_charge_kw} kW"
+                f"Capacity must be positive and finite, got {self.capacity_kwh} kWh"
             )
-        if self.max_discharge_kw <= 0:
+        if not 0 < self.max_charge_kw < math.inf:
             raise ValueError(
-                f"Max discharge power must be positive, got {self.max_discharge_kw} kW"
+                f"Max charge power must be positive and finite, got {self.max_charge_kw} kW"
+            )
+        if not 0 < self.max_discharge_kw < math.inf:
+            raise ValueError(
+                f"Max discharge power must be positive and finite, got {self.max_discharge_kw} kW"
             )
         if self.efficiency is not None:
             if not 0 < self.efficiency <= 1:
@@ -164,17 +166,18 @@ class BatteryConfig:
             self.discharge_efficiency,
         )
 
-        if self.system_age_years < 0:
+        if not 0 <= self.system_age_years < math.inf:
             raise ValueError(
-                f"system_age_years must be >= 0, got {self.system_age_years}"
+                f"system_age_years must be >= 0 and finite, got {self.system_age_years}"
             )
-        if self.calendar_fade_rate_per_year < 0:
+        if not 0 <= self.calendar_fade_rate_per_year < math.inf:
             raise ValueError(
-                f"calendar_fade_rate_per_year must be >= 0, got {self.calendar_fade_rate_per_year}"
+                f"calendar_fade_rate_per_year must be >= 0 and finite, "
+                f"got {self.calendar_fade_rate_per_year}"
             )
-        if self.cycle_fade_per_equivalent_full_cycle < 0:
+        if not 0 <= self.cycle_fade_per_equivalent_full_cycle < math.inf:
             raise ValueError(
-                f"cycle_fade_per_equivalent_full_cycle must be >= 0, "
+                f"cycle_fade_per_equivalent_full_cycle must be >= 0 and finite, "
                 f"got {self.cycle_fade_per_equivalent_full_cycle}"
             )
         if not 0 < self.soh_floor <= 1:

@@ -2,6 +2,7 @@
 """Load profile generation for domestic energy consumption."""
 
 import logging
+import math
 import random
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
@@ -53,7 +54,7 @@ class LoadConfig:
     def __post_init__(self) -> None:
         """Validate load configuration parameters."""
         # Validate household_occupants
-        if self.household_occupants < 1:
+        if not self.household_occupants >= 1:
             raise ValueError(
                 f"Household occupants must be at least 1, got {self.household_occupants}"
             )
@@ -63,9 +64,9 @@ class LoadConfig:
             )
 
         # Validate annual_consumption if provided
-        if self.annual_consumption_kwh is not None and self.annual_consumption_kwh <= 0:
+        if self.annual_consumption_kwh is not None and not 0 < self.annual_consumption_kwh < math.inf:
             raise ValueError(
-                f"Annual consumption must be positive, got {self.annual_consumption_kwh} kWh"
+                f"Annual consumption must be positive and finite, got {self.annual_consumption_kwh} kWh"
             )
 
     def get_annual_consumption(self) -> float:
