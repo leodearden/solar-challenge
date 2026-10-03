@@ -22,21 +22,30 @@ def get_job_manager() -> JobManager:
     return current_app.extensions["job_manager"]  # type: ignore[no-any-return]
 
 
-class RequestBodyNotAJsonObject(ValueError):
-    """The request body is not a JSON object; the message names the type the body parsed to."""
+class NotAJsonObject(ValueError):
+    """A JSON value the web reads as an object is not one; the message names the value and the type received."""
+
+
+def require_json_object(value: object, what: str) -> dict[str, Any]:
+    """Return *value*, which must be a JSON object: a dict, the type a JSON object parses to.
+
+    Raises:
+        NotAJsonObject: For any other value, naming *what* and the type of *value*.
+    """
+    if not isinstance(value, dict):
+        raise NotAJsonObject(f"{what} must be a JSON object, got {type(value).__name__}")
+    return value
 
 
 def request_json_object() -> dict[str, Any]:
     """Return the current request's body, which must be a JSON object.
 
     Raises:
-        RequestBodyNotAJsonObject: For any other body. An absent, non-JSON or
-            unparseable body, or JSON null, reads as NoneType.
+        NotAJsonObject: From require_json_object, which refuses any other body
+            as the "Request body". An absent, non-JSON or unparseable body, or
+            JSON null, reads as NoneType.
     """
-    body = request.get_json(silent=True)
-    if not isinstance(body, dict):
-        raise RequestBodyNotAJsonObject(f"Request body must be a JSON object, got {type(body).__name__}")
-    return body
+    return require_json_object(request.get_json(silent=True), "Request body")
 
 
 LOCATION_PRESETS: dict[str, Location] = {

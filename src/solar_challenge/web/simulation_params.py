@@ -19,7 +19,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
-from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.shared import require_json_object, resolve_location
 
 # Each parser's recognised top-level keys, and the value each reads as when absent.
 _DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
@@ -155,8 +155,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             error names the block and the type received), or if required
             fields are missing or invalid.
     """
-    if not isinstance(data, Mapping):
-        raise ValueError(f"Home config must be a JSON object, got {type(data).__name__}")
+    data = require_json_object(data, "Home config")
     _refuse_unrecognised_keys(data)
     params = {**_HOME_CONFIG_DEFAULTS, **data}
     pv_kw = float(params["pv_kw"])

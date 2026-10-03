@@ -28,7 +28,7 @@ from flask.typing import ResponseReturnValue
 
 from solar_challenge.web import database
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import RequestBodyNotAJsonObject, get_job_manager, request_json_object
+from solar_challenge.web.shared import NotAJsonObject, get_job_manager, request_json_object
 from solar_challenge.web.simulation_params import parse_home_config
 
 bp = Blueprint("assistant", __name__)
@@ -827,7 +827,7 @@ def chat() -> Response:
     """
     try:
         data = request_json_object()
-    except RequestBodyNotAJsonObject as refusal:
+    except NotAJsonObject as refusal:
         return _event_stream([_error_frame(str(refusal))])
     user_message: str = str(data.get("message", "")).strip()
     run_id: str = str(data.get("run_id", "")).strip()

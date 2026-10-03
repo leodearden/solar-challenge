@@ -7,6 +7,7 @@ pytest.importorskip("flask")
 
 from solar_challenge.config import ConfigurationError
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
+from solar_challenge.web.shared import NotAJsonObject
 from solar_challenge.web.simulation_params import (
     parse_date_range,
     parse_home_config,
@@ -133,10 +134,10 @@ class TestParseHomeConfigKeys:
     def test_home_config_that_is_not_an_object_is_refused_naming_its_type(
         self, home_config: object, type_name: str
     ) -> None:
-        """A JSON value that is not an object is refused with a ValueError that names the type sent."""
-        with pytest.raises(ValueError, match=rf"\b{type_name}\b") as exc_info:
+        """A JSON value that is not an object is refused with the web's shared NotAJsonObject, naming the type sent."""
+        with pytest.raises(NotAJsonObject) as exc_info:
             parse_home_config(home_config)
-        assert "JSON object" in str(exc_info.value)
+        assert str(exc_info.value) == f"Home config must be a JSON object, got {type_name}"
 
     @pytest.mark.parametrize(
         "payload",

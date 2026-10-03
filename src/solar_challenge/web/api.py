@@ -27,10 +27,11 @@ from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scena
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import (
-    RequestBodyNotAJsonObject,
+    NotAJsonObject,
     get_job_manager,
     get_storage,
     request_json_object,
+    require_json_object,
     resolve_location,
 )
 from solar_challenge.web.simulation_params import parse_date_range, parse_home_config, parse_seg_tariff
@@ -41,9 +42,12 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 
-@api_bp.errorhandler(RequestBodyNotAJsonObject)
-def _refuse_body_that_is_not_a_json_object(refusal: RequestBodyNotAJsonObject) -> tuple[Response, int]:
-    """Any endpoint of this blueprint whose body is not a JSON object gets HTTP 400 naming the type sent."""
+@api_bp.errorhandler(NotAJsonObject)
+def _refuse_a_value_that_is_not_a_json_object(refusal: NotAJsonObject) -> tuple[Response, int]:
+    """Answer HTTP 400 with the refusal of a request value that must be a JSON object and is not one.
+
+    Any endpoint of this blueprint that reads such a value is answered this way.
+    """
     return jsonify({"error": str(refusal)}), 400
 
 
@@ -567,11 +571,7 @@ def simulate_sweep() -> tuple[Response, int]:
     if min_val >= max_val:
         return jsonify({"error": "Min must be less than max"}), 400
     mode = str(data.get("mode", "linear"))
-    base_config = data.get("base_config", {})
-    if not isinstance(base_config, Mapping):
-        return jsonify({
-            "error": f"base_config must be a JSON object, got {type(base_config).__name__}",
-        }), 400
+    base_config = require_json_object(data.get("base_config", {}), "base_config")
 
     # Generate sweep points
     if mode == "geometric":
