@@ -231,19 +231,21 @@ class TestDashboardRoute:
         for name, link in link_by_name.items():
             assert element_count(page, "a", {"href": link}) == 1, name
 
-    def test_dashboard_stats_count_and_total_the_saved_runs(
+    def test_dashboard_stats_count_and_total_only_the_completed_runs(
         self, app: Flask, client: FlaskClient
     ) -> None:
-        """GET / with two saved one-day runs reads Total Runs 2 and Homes Simulated 2, and reads Energy Modelled as the two runs' total generation in MWh."""
+        """GET / reads Total Runs as the completed runs, Homes Simulated as their homes, each home of a fleet run counted, and Energy Modelled as those homes' total generation in MWh; a failed run adds to none of them."""
         results = _make_sim_results(days=1)
-        for run_name in ("North Roof", "South Roof"):
-            _save_home_run(app, run_name, results)
+        _save_home_run(app, "North Roof", results)
+        _save_fleet_run(app, "Community Fleet", [results, results])
+        _save_home_run(app, "South Roof", results, status="failed")
         response = client.get("/")
         page = response.get_data(as_text=True)
-        two_runs_generation_mwh = 2 * calculate_summary(results).total_generation_kwh / 1000
+        completed_homes = 3
+        completed_homes_generation_mwh = completed_homes * calculate_summary(results).total_generation_kwh / 1000
         assert texts_after(page, "Total Runs", 1) == ["2"]
-        assert texts_after(page, "Homes Simulated", 1) == ["2"]
-        assert texts_after(page, "Energy Modelled", 2) == [str(round(two_runs_generation_mwh, 2)), "MWh"]
+        assert texts_after(page, "Homes Simulated", 1) == [str(completed_homes)]
+        assert texts_after(page, "Energy Modelled", 2) == [str(round(completed_homes_generation_mwh, 2)), "MWh"]
 
 
 class TestSimulateHomeRoute:
