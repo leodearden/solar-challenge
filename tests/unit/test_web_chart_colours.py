@@ -146,6 +146,7 @@ _SUMMARY = {
     "grid_dependency_ratio": 0.375,
     "export_ratio": 0.4,
 }
+_FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
 
 _FIGURES: dict[str, Callable[[], str | None]] = {
     "power_flow_timeline": lambda: charts.power_flow_timeline(_year()),
@@ -157,6 +158,9 @@ _FIGURES: dict[str, Callable[[], str | None]] = {
     "seasonal_comparison": lambda: charts.seasonal_comparison(_year()),
     "heat_pump_load_profile": lambda: charts.heat_pump_analysis(_year_with_heat_pump())["cop_chart"],
     "heat_pump_share": lambda: charts.heat_pump_analysis(_year_with_heat_pump())["load_share_chart"],
+    "overlaid_power_flows": lambda: charts.overlaid_power_flows([_year()] * 5, _FIVE_RUNS),
+    "comparison_bar_chart": lambda: charts.comparison_bar_chart([_SUMMARY] * 5, _FIVE_RUNS),
+    "comparison_radar": lambda: charts.comparison_radar([_SUMMARY] * 5, _FIVE_RUNS),
     "fleet_aggregate_timeline": lambda: charts.fleet_aggregate_timeline(_year()),
     "fleet_grid_impact": lambda: charts.fleet_grid_impact(_year()),
     "fleet_heatmap": lambda: charts.fleet_heatmap([_SUMMARY] * 3),
