@@ -23,7 +23,9 @@ import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, NamedTuple, Optional, Sequence
 
+import numpy as np
 import pandas as pd
+from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
 from solar_challenge.seg import SEGTariff
 
@@ -1234,9 +1236,6 @@ def _interpolate_per_year(
         raise ValueError("sampled_ages must be non-empty")
     if len(sampled_ages) == 1:
         return [sampled_values[0]] * all_years
-
-    import numpy as np
-    from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
     xs = np.array(sampled_ages, dtype=float)
     ys = np.array(sampled_values, dtype=float)
