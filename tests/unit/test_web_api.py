@@ -15,6 +15,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.api import api_bp
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from tests._web_app import build_test_app
 
 
@@ -105,6 +106,24 @@ MALFORMED_SEG_BODIES = [
     pytest.param({"preset": "Octopus", "rate_pence_per_kwh": 9}, id="preset-and-rate"),
     pytest.param({"preset": "custom", "rate_pence_per_kwh": 5.5}, id="custom-preset-and-rate"),
     pytest.param([1, 2], id="array"),
+]
+
+UNUSABLE_SHUFFLED_POOL_ENTRIES = [
+    pytest.param(
+        [{"value": 4.0, "count": float("inf")}],
+        "entries[0].count must be an integer, got inf",
+        id="infinity",
+    ),
+    pytest.param(
+        [{"value": 4.0, "count": 1e300}],
+        f"entries[0].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
+        id="huge-float",
+    ),
+    pytest.param(
+        [{"value": 4.0, "count": MAX_FLEET_HOMES}, {"value": 5.0, "count": 1}],
+        f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+        id="pool-total-one-above-the-fleet-limit",
+    ),
 ]
 
 
@@ -964,6 +983,42 @@ class TestPreviewDistribution:
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
 
+    @pytest.mark.parametrize(
+        ("n_samples", "message"),
+        [
+            pytest.param("x", "n_samples must be an integer, got 'x'", id="str"),
+            pytest.param(None, "n_samples must be an integer, got None", id="null"),
+            pytest.param(float("inf"), "n_samples must be an integer, got inf", id="infinity"),
+            pytest.param(
+                MAX_FLEET_HOMES + 1,
+                f"n_samples must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="one-above-the-fleet-limit",
+            ),
+        ],
+    )
+    def test_n_samples_that_is_not_an_integer_in_range_returns_400_naming_it(
+        self, client: FlaskClient, n_samples: object, message: str
+    ) -> None:
+        """An n_samples that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming n_samples and the value sent."""
+        resp = client.post(
+            "/api/fleet/preview-distribution",
+            json={"type": "normal", "params": {"mean": 4.0, "std": 1.0}, "n_samples": n_samples},
+        )
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+
+    @pytest.mark.parametrize(("entries", "message"), UNUSABLE_SHUFFLED_POOL_ENTRIES)
+    def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
+        self, client: FlaskClient, entries: list, message: str
+    ) -> None:
+        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
+        resp = client.post(
+            "/api/fleet/preview-distribution",
+            json={"type": "shuffled_pool", "params": {"entries": entries}},
+        )
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+
 
 # ===================================================================
 # POST /api/simulate/fleet-from-distribution
@@ -1041,6 +1096,36 @@ class TestFleetFromDistribution:
             json={"n_homes": 0},
         )
         assert resp.status_code == 400
+
+    @pytest.mark.parametrize(
+        ("patch", "message"),
+        [
+            pytest.param(
+                {"n_homes": float("inf")},
+                "n_homes must be an integer, got inf",
+                id="n_homes-infinity",
+            ),
+            pytest.param(
+                {"seed": float("inf")}, "seed must be an integer, got inf", id="seed-infinity"
+            ),
+            pytest.param(
+                {"n_homes": MAX_FLEET_HOMES + 1},
+                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="n_homes-one-above-the-fleet-limit",
+            ),
+        ],
+    )
+    def test_n_homes_or_seed_it_cannot_use_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, message: str
+    ) -> None:
+        """An n_homes or seed that int() cannot read, or a fleet above the dashboard's fleet limit, is a 400 naming the field and the value sent; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, **patch},
+        )
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
         self, client: FlaskClient, mock_job_manager: MagicMock
@@ -1198,6 +1283,22 @@ class TestFleetFromDistribution:
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, **block},
+        )
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(("entries", "message"), UNUSABLE_SHUFFLED_POOL_ENTRIES)
+    def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock, entries: list, message: str
+    ) -> None:
+        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total. No fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "pv": {"capacity_kw": {"type": "shuffled_pool", "entries": entries}},
+            },
         )
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]

@@ -388,15 +388,17 @@ def get_preset(name: str) -> tuple[Response, int]:
 def preview_distribution() -> tuple[Response, int]:
     """Generate sample data for distribution histogram preview.
 
-    Expects a JSON body with ``type``, ``params``, and optional ``n_samples``.
+    Expects a JSON body with ``type``, ``params``, and an optional ``n_samples``
+    from 1 to MAX_FLEET_HOMES (default 100).
 
     Returns:
-        JSON with ``samples`` array, HTTP 200 on success.
+        JSON with ``samples`` array, HTTP 200 on success; or the ``error``,
+        HTTP 400, when sample_distribution refuses the type, params or n_samples.
     """
     data = request_json_object()
     dist_type = data.get("type", "normal")
     params = data.get("params", {})
-    n_samples = int(data.get("n_samples", 100))
+    n_samples = data.get("n_samples", 100)
 
     from solar_challenge.web.fleet_config import sample_distribution  # noqa: PLC0415
 

@@ -10,6 +10,7 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from tests._html_page import (
     doctype,
     element_count,
@@ -535,6 +536,99 @@ class TestFleetConfigHelpers:
         with pytest.raises(ValueError, match=re.escape(message)):
             sample_distribution(dist_type, params)
 
+    @pytest.mark.parametrize(
+        "n_samples",
+        [
+            pytest.param("x", id="str"),
+            pytest.param(None, id="null"),
+            pytest.param(float("inf"), id="infinity"),
+            pytest.param(float("-inf"), id="negative-infinity"),
+            pytest.param(float("nan"), id="nan"),
+            pytest.param([100], id="list"),
+            pytest.param("2.5", id="decimal-str"),
+        ],
+    )
+    def test_sample_distribution_refuses_an_n_samples_int_cannot_read(
+        self, n_samples: object
+    ) -> None:
+        """An n_samples that int() cannot read is refused, naming n_samples and the value sent."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        with pytest.raises(
+            ValueError, match=re.escape(f"n_samples must be an integer, got {n_samples!r}")
+        ):
+            sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
+
+    @pytest.mark.parametrize(
+        "n_samples",
+        [
+            pytest.param(0, id="zero"),
+            pytest.param(-1, id="negative"),
+            pytest.param(0.5, id="fraction-read-as-zero"),
+            pytest.param(1e300, id="huge-float"),
+            pytest.param(MAX_FLEET_HOMES + 1, id="one-above-the-fleet-limit"),
+        ],
+    )
+    def test_sample_distribution_refuses_an_n_samples_outside_1_to_max_fleet_homes(
+        self, n_samples: float
+    ) -> None:
+        """An n_samples below 1 or above the dashboard's fleet limit is refused, naming n_samples, the range and the value sent."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                f"n_samples must be between 1 and {MAX_FLEET_HOMES}, got {n_samples!r}"
+            ),
+        ):
+            sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
+
+    @pytest.mark.parametrize("n_samples", [1, MAX_FLEET_HOMES])
+    def test_sample_distribution_draws_n_samples_from_1_to_max_fleet_homes(
+        self, n_samples: int
+    ) -> None:
+        """A preview draws any number of samples from 1 to the dashboard's fleet limit."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        result = sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
+
+        assert len(result) == n_samples
+
+    @pytest.mark.parametrize(
+        ("count", "message"),
+        [
+            pytest.param(
+                float("inf"), "entries[1].count must be an integer, got inf", id="infinity"
+            ),
+            pytest.param(
+                1e300,
+                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
+                id="huge-float",
+            ),
+            pytest.param(
+                -1,
+                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got -1",
+                id="negative",
+            ),
+            pytest.param(
+                MAX_FLEET_HOMES - 1,
+                f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="pool-total-one-above-the-fleet-limit",
+            ),
+        ],
+    )
+    def test_sample_distribution_refuses_a_shuffled_pool_count_it_cannot_use(
+        self, count: float, message: str
+    ) -> None:
+        """A preview refuses a shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, naming the row's count and the value sent; it refuses a count that takes the pool's total above that limit, naming the total."""
+        from solar_challenge.web.fleet_config import sample_distribution
+
+        with pytest.raises(ValueError, match=re.escape(message)):
+            sample_distribution(
+                "shuffled_pool",
+                {"entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}]},
+            )
+
     def test_form_to_fleet_distribution_config(self) -> None:
         """Test converting form data to fleet distribution config."""
         from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
@@ -562,6 +656,59 @@ class TestFleetConfigHelpers:
         assert config["n_homes"] == 50
         assert "pv" in config
         assert "load" in config
+
+    @pytest.mark.parametrize(
+        ("key", "value", "message"),
+        [
+            pytest.param(
+                "n_homes", float("inf"), "n_homes must be an integer, got inf", id="n_homes-infinity"
+            ),
+            pytest.param("n_homes", "x", "n_homes must be an integer, got 'x'", id="n_homes-str"),
+            pytest.param("n_homes", None, "n_homes must be an integer, got None", id="n_homes-null"),
+            pytest.param(
+                "n_homes",
+                0,
+                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got 0",
+                id="n_homes-zero",
+            ),
+            pytest.param(
+                "n_homes",
+                MAX_FLEET_HOMES + 1,
+                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="n_homes-one-above-the-fleet-limit",
+            ),
+            pytest.param(
+                "n_homes",
+                1e300,
+                f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got 1e+300",
+                id="n_homes-huge-float",
+            ),
+            pytest.param("seed", float("inf"), "seed must be an integer, got inf", id="seed-infinity"),
+            pytest.param(
+                "seed", float("-inf"), "seed must be an integer, got -inf", id="seed-negative-infinity"
+            ),
+            pytest.param("seed", "x", "seed must be an integer, got 'x'", id="seed-str"),
+            pytest.param("seed", None, "seed must be an integer, got None", id="seed-null"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_an_n_homes_or_seed_it_cannot_use(
+        self, key: str, value: object, message: str
+    ) -> None:
+        """An n_homes or seed that int() cannot read, or an n_homes outside 1 to the dashboard's fleet limit, is refused, naming the field and the value sent."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        with pytest.raises(ValueError, match=re.escape(message)):
+            form_to_fleet_distribution_config({**VALID_DISTRIBUTION_FORM, key: value})
+
+    def test_form_to_fleet_distribution_config_accepts_a_fleet_of_max_fleet_homes(self) -> None:
+        """A fleet form may ask for as many homes as a dashboard fleet holds."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        config = form_to_fleet_distribution_config(
+            {**VALID_DISTRIBUTION_FORM, "n_homes": MAX_FLEET_HOMES}
+        )
+
+        assert config["n_homes"] == MAX_FLEET_HOMES
 
     @pytest.mark.parametrize(
         ("key", "value"),
@@ -689,6 +836,74 @@ class TestFleetConfigHelpers:
             form_to_fleet_distribution_config(
                 {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
             )
+
+    @pytest.mark.parametrize(
+        ("count", "message"),
+        [
+            pytest.param(
+                float("inf"), "entries[1].count must be an integer, got inf", id="infinity"
+            ),
+            pytest.param(
+                float("-inf"),
+                "entries[1].count must be an integer, got -inf",
+                id="negative-infinity",
+            ),
+            pytest.param(float("nan"), "entries[1].count must be an integer, got nan", id="nan"),
+            pytest.param("x", "entries[1].count must be an integer, got 'x'", id="str"),
+            pytest.param(None, "entries[1].count must be an integer, got None", id="null"),
+            pytest.param(
+                -1,
+                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got -1",
+                id="negative",
+            ),
+            pytest.param(
+                MAX_FLEET_HOMES + 1,
+                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, "
+                f"got {MAX_FLEET_HOMES + 1}",
+                id="one-above-the-fleet-limit",
+            ),
+            pytest.param(
+                1e300,
+                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
+                id="huge-float",
+            ),
+            pytest.param(
+                MAX_FLEET_HOMES - 1,
+                f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                id="pool-total-one-above-the-fleet-limit",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_shuffled_pool_count_it_cannot_use(
+        self, count: object, message: str
+    ) -> None:
+        """A shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, is refused, naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        spec = {
+            "type": "shuffled_pool",
+            "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}],
+        }
+        with pytest.raises(ValueError, match=re.escape(message)):
+            form_to_fleet_distribution_config(
+                {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+            )
+
+    def test_form_to_fleet_distribution_config_accepts_shuffled_pool_counts_from_0_to_max_fleet_homes(
+        self,
+    ) -> None:
+        """A shuffled_pool row may assign its value to no home, or to as many homes as a dashboard fleet holds; the pool may total exactly that many values."""
+        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
+
+        spec = {
+            "type": "shuffled_pool",
+            "entries": [{"value": 3.0, "count": 0}, {"value": 5.0, "count": MAX_FLEET_HOMES}],
+        }
+        config = form_to_fleet_distribution_config(
+            {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+        )
+
+        assert config["pv"]["capacity_kw"]["counts"] == [0, MAX_FLEET_HOMES]
 
     def test_fleet_distribution_to_yaml(self) -> None:
         """Test converting fleet config to YAML string."""

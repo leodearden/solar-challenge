@@ -300,6 +300,27 @@ class TestScenarioAPI:
         data = response.get_json()
         assert data["valid"] is False
 
+    def test_validate_refuses_only_a_fleet_above_the_dashboard_fleet_limit(
+        self, client: FlaskClient
+    ) -> None:
+        """The builder accepts a fleet of exactly the dashboard's fleet limit, and refuses one home more, naming the limit."""
+        from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+
+        at_limit = client.post(
+            "/api/scenarios/validate",
+            json={**TestBuilderScenarioYaml._DEFAULT_FORM, "n_homes": MAX_FLEET_HOMES},
+        )
+        above_limit = client.post(
+            "/api/scenarios/validate",
+            json={**TestBuilderScenarioYaml._DEFAULT_FORM, "n_homes": MAX_FLEET_HOMES + 1},
+        )
+
+        assert at_limit.get_json() == {"valid": True, "errors": []}
+        assert above_limit.get_json() == {
+            "valid": False,
+            "errors": [f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."],
+        }
+
     def test_list_presets(self, client: FlaskClient) -> None:
         """Test GET /api/scenarios/presets returns a list."""
         response = client.get("/api/scenarios/presets")
