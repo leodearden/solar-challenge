@@ -1,5 +1,7 @@
 """Tests for solar_challenge.web.simulation_params, called directly with parameter dicts."""
 
+import re
+
 import pytest
 pytest.importorskip("flask")
 
@@ -252,6 +254,42 @@ class TestParseHomeConfigCapabilities:
         }
         home_config, _start, _end, _name = parse_home_config(payload)
         assert home_config.battery_config is None  # no battery => no dispatch either
+
+
+class TestParseHomeConfigHeatPumpBlock:
+    """The heat_pump block: the web form's keys, defaulted when omitted; a value that is not a mapping is refused."""
+
+    @pytest.mark.parametrize(
+        ("value", "type_name"),
+        [
+            pytest.param("ASHP", "str", id="string"),
+            pytest.param(True, "bool", id="boolean"),
+            pytest.param(["ASHP"], "list", id="array"),
+            pytest.param(5, "int", id="number"),
+        ],
+    )
+    def test_heat_pump_that_is_not_a_mapping_is_refused_naming_its_type(
+        self, value: object, type_name: str
+    ) -> None:
+        """A heat_pump that is not an object is refused with a ValueError naming heat_pump and the type sent."""
+        with pytest.raises(
+            ValueError, match=re.escape(f"heat_pump must be a mapping, got {type_name}")
+        ):
+            parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": value})
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(None, id="null"),
+            pytest.param({}, id="empty-object"),
+        ],
+    )
+    def test_null_or_empty_heat_pump_means_no_heat_pump(self, value: object) -> None:
+        """A null or empty heat_pump means no heat pump, not a default one."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "heat_pump": value}
+        )
+        assert home_config.heat_pump_config is None
 
 
 class TestParseHomeConfigBatteryEfficiency:

@@ -1229,6 +1229,26 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("tariff", "flat_rate"),
+            ("dispatch_strategy", "self_consumption"),
+            ("seg", "Octopus"),
+        ],
+    )
+    def test_non_mapping_overlay_block_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock, key: str, value: str
+    ) -> None:
+        """A tariff/dispatch_strategy/seg block sent as a non-object is a 400 naming the block and the type sent; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, key: value},
+        )
+        assert resp.status_code == 400
+        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
         ("key", "distribution"),
         [("pv", "pv.capacity_kw"), ("load", "load.annual_consumption_kwh")],
     )
@@ -1613,6 +1633,68 @@ class TestParseHomeConfigErrorPaths:
         assert resp.status_code == 400
         data = resp.get_json()
         assert "error" in data
+
+    @pytest.mark.parametrize(
+        ("url", "body", "key"),
+        [
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "heat_pump": "ASHP"},
+                "heat_pump",
+                id="home-heat_pump",
+            ),
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "seg": "Octopus"},
+                "seg",
+                id="home-seg",
+            ),
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "tariff": "flat_rate"},
+                "tariff",
+                id="home-tariff",
+            ),
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "dispatch_strategy": "self_consumption"},
+                "dispatch_strategy",
+                id="home-dispatch_strategy",
+            ),
+            pytest.param(
+                "/api/simulate/fleet",
+                {"homes": [{**VALID_HOME_PAYLOAD, "heat_pump": "ASHP"}]},
+                "heat_pump",
+                id="fleet-heat_pump",
+            ),
+            pytest.param(
+                "/api/simulate/sweep",
+                {
+                    "parameter": "pv_capacity_kw",
+                    "min": 1,
+                    "max": 5,
+                    "steps": 2,
+                    "base_config": {"heat_pump": "ASHP"},
+                },
+                "heat_pump",
+                id="sweep-heat_pump",
+            ),
+        ],
+    )
+    def test_non_mapping_block_returns_400_naming_it_and_submits_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        url: str,
+        body: dict,
+        key: str,
+    ) -> None:
+        """A nested block sent as a non-object is a 400 naming the block and the type sent, never a 500; nothing is submitted."""
+        resp = client.post(url, json=body)
+        assert resp.status_code == 400
+        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
 
 # ===================================================================
