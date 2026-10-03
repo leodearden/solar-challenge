@@ -10,6 +10,7 @@ does not import annotations from __future__. The classes whose qualified names a
 asserted are defined at module level, where a qualified name carries no '<locals>'.
 """
 
+import collections.abc
 import datetime
 import enum
 import pathlib
@@ -19,10 +20,13 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Iterable,
     List,
     Literal,
     Optional,
+    ParamSpec,
     Tuple,
+    Type,
     Union,
 )
 
@@ -77,6 +81,40 @@ def test_a_typing_alias_is_spelled_by_its_builtin_origin() -> None:
         surface_form(f)
         == "(a: list[tuple[int, int]], b: dict[str, float], c: tuple[int, ...], d: list[str]) -> None"
     )
+
+
+def test_a_bare_typing_alias_is_spelled_by_its_origin_alone() -> None:
+    def bare(
+        a: List,
+        b: Dict,
+        c: Tuple,
+        d: Callable,
+        e: list,
+        f: collections.abc.Callable,
+        g: Type,
+        h: Iterable,
+    ) -> None: ...
+
+    assert (
+        surface_form(bare)
+        == "(a: list, b: dict, c: tuple, d: Callable, e: list, f: Callable, g: type, h: Iterable) -> None"
+    )
+
+
+def test_an_empty_subscription_is_spelled_with_parentheses() -> None:
+    def f(a: tuple[()], b: Tuple[()], c: Callable[[], None]) -> None: ...
+
+    assert (
+        surface_form(f) == "(a: tuple[()], b: tuple[()], c: Callable[[], None]) -> None"
+    )
+
+
+def test_a_param_spec_args_and_kwargs_are_spelled_by_their_reprs() -> None:
+    P = ParamSpec("P")
+
+    def f(*args: P.args, **kwargs: P.kwargs) -> None: ...
+
+    assert surface_form(f) == "(*args: P.args, **kwargs: P.kwargs) -> None"
 
 
 def test_a_string_annotation_is_spelled_verbatim_and_unquoted() -> None:

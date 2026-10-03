@@ -9,12 +9,14 @@ A surface form is spelled identically on every Python minor that requires-python
 because inspect's own rendering is not. Measured: 3.11 renders an Enum's call signature
 unlike 3.12, 3.13 renders pathlib.Path as pathlib._local.Path, and 3.14 renders an
 evaluated Optional[X] as X | None. So inspect lays out the signature, and each annotation
-is respelled: a union with bars, a typing alias by its builtin origin, a class by its
-qualified name without its module, Callable's parameter types as a bracketed list, and a
-forward reference, a string inside a generic included, by its name. A string annotation
-is spelled verbatim, never evaluated. Literal's values and Annotated's metadata are
-values, not annotations: each is spelled by its repr, so Literal['a'] never reads as
-Literal[a].
+is respelled: a union with bars, a typing alias by its builtin origin (a bare one, as
+List is, by that origin alone), an empty subscription, as tuple[()] is, with
+parentheses, a class by its qualified name without its module, Callable's parameter
+types as a bracketed list, and a forward reference, a string inside a generic included,
+by its name. A string annotation is spelled verbatim, never evaluated. Literal's values
+and Annotated's metadata are values, not annotations: each is spelled by its repr, so
+Literal['a'] never reads as Literal[a]. A ParamSpec's args and kwargs are spelled by
+their repr as well, P.args and P.kwargs, which keeps the two apart.
 
 Usage::
 
@@ -80,11 +82,24 @@ def _annotation_text(annotation: object) -> str:
         return "..."
     if isinstance(annotation, list):
         return f"[{_annotations_text(annotation)}]"
+    if _is_bare_alias(annotation):
+        return _annotation_text(typing.get_origin(annotation))
+    if isinstance(annotation, (typing.ParamSpecArgs, typing.ParamSpecKwargs)):
+        return repr(annotation)
     if typing.get_origin(annotation) is not None:
         return _subscripted_text(annotation)
     if inspect.isclass(annotation):
         return annotation.__qualname__
     return repr(annotation)
+
+
+def _is_bare_alias(annotation: object) -> bool:
+    """Bare List: a class as origin, and no __args__ at all.
+
+    Not tuple[()], whose __args__ is (), nor P.args, whose origin is no class.
+    """
+    has_class_origin = inspect.isclass(typing.get_origin(annotation))
+    return has_class_origin and not hasattr(annotation, "__args__")
 
 
 def _subscripted_text(annotation: object) -> str:
@@ -97,6 +112,8 @@ def _subscripted_text(annotation: object) -> str:
     if origin is typing.Annotated:
         annotated, *metadata = arguments
         return f"Annotated[{_annotation_text(annotated)}, {_values_text(metadata)}]"
+    if not arguments:
+        return f"{_annotation_text(origin)}[()]"
     return f"{_annotation_text(origin)}[{_annotations_text(arguments)}]"
 
 
