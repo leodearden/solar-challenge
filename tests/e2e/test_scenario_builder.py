@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 import yaml
-from playwright.sync_api import ConsoleMessage, Locator, Page, Response, expect
+from playwright.sync_api import Locator, Page, Response, expect
 
 from solar_challenge.config import load_fleet_config
 from solar_challenge.home import HomeConfig
@@ -35,27 +35,20 @@ def test_builder_page_loads(page: Page, live_server: str) -> None:
 # ── Bug B1: Alpine race condition with external JS ───────────────────
 
 
-def test_builder_no_js_errors(page: Page, live_server: str) -> None:
-    """The scenario builder page should load without JS console errors.
+def test_builder_no_js_errors(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """The scenario builder page should load without JS errors.
 
     The ``scenarioBuilder()`` component is defined in an external JS file
     loaded via ``defer`` in ``{% block head %}``.  Alpine.js may evaluate
-    the ``x-data`` before the component function is registered, causing
-    a ReferenceError in the console.
+    the ``x-data`` before the component function is registered, which
+    throws an uncaught ReferenceError.
     """
-    errors: list[str] = []
-
-    def _on_console(msg: ConsoleMessage) -> None:
-        if msg.type == "error":
-            errors.append(msg.text)
-
-    page.on("console", _on_console)
     page.goto(live_server + "/scenarios/builder")
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
-    page.remove_listener("console", _on_console)
 
-    assert errors == [], f"Console errors on /scenarios/builder: {errors}"
+    assert page_errors == [], f"Errors on /scenarios/builder: {page_errors}"
 
 
 # ── Accordion sections ───────────────────────────────────────────────

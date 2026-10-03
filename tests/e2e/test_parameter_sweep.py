@@ -10,7 +10,7 @@ Bug B1 (Alpine race condition with external JS).
 """
 
 import pytest
-from playwright.sync_api import ConsoleMessage, Page, expect
+from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -33,29 +33,21 @@ def test_sweep_page_loads(page: Page, live_server: str) -> None:
 # -- Bug B1: Alpine race condition with external JS -----------------------
 
 
-def test_sweep_no_js_errors(page: Page, live_server: str) -> None:
-    """The sweep page should load without JavaScript console errors.
+def test_sweep_no_js_errors(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """The sweep page should load without JavaScript errors.
 
     The ``parameterSweep()`` component is defined in an external JS file
     loaded via ``defer`` in ``{% block head %}``.  Depending on script
     execution order, Alpine.js may try to evaluate the ``x-data``
-    attribute before the component function is registered, causing a
-    console error.
+    attribute before the component function is registered, which throws
+    an uncaught ReferenceError.
     """
-    errors: list[str] = []
-
-    def _on_console(msg: ConsoleMessage) -> None:
-        if msg.type == "error":
-            errors.append(msg.text)
-
-    page.on("console", _on_console)
     page.goto(live_server + "/scenarios/sweep")
-    # Give deferred scripts time to load and Alpine to initialise
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
-    page.remove_listener("console", _on_console)
 
-    assert errors == [], f"Console errors on /scenarios/sweep: {errors}"
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
 # -- Sweep configuration form controls -------------------------------------
