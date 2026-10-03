@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._finance_builders import make_fleet_results
 
 
 # ---------------------------------------------------------------------------
@@ -352,95 +353,8 @@ class TestFinanceCLICostRecoveryHelp:
 
 
 # ---------------------------------------------------------------------------
-# §E — Helpers for fast patched CLI tests (adapted from test_cost_recovery_solve.py)
+# §E — The patched CLI tests' scenario writer
 # ---------------------------------------------------------------------------
-
-
-def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
-    from solar_challenge.pv import PVConfig
-    return PVConfig(
-        capacity_kw=4.0,
-        azimuth=180.0,
-        tilt=35.0,
-        system_age_years=system_age_years,
-        degradation_rate_per_year=0.005,
-    )
-
-
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
-    from solar_challenge.load import LoadConfig
-    return LoadConfig(annual_consumption_kwh=3500.0)
-
-
-def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
-    return HomeConfig(
-        pv_config=_make_pv_config(),
-        load_config=_make_load_config(),
-        location=Location.bristol(),
-    )
-
-
-def _make_sim_results(
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    n_minutes: int = 525600,
-) -> "SimulationResults":  # type: ignore[name-defined]
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
-    idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
-
-
-def _make_fleet_results_interior(n_homes: int = 5) -> "FleetResults":  # type: ignore[name-defined]
-    """Build a FleetResults that yields binding='floor', feasible=True when solved.
-
-    Uses the interior-regime shape from test_cost_recovery_solve.py:
-    high capex (£2000/kWp), no grant, floor=100, retail=30p, sc=2000 kWh/home/yr.
-
-    Uses a full-year unscaled Series (525600 minutes = 365 days, identical to the
-    proven CR4 fixture in _setup_interior).  With a full-year Series AND the CLI's
-    default full-year window (days=366 ≥ the 360 annualisation threshold) NEITHER
-    the bill-block path NOR solve_cost_recovery_rate's internal sim annualises —
-    both see a true 365-day Series so all paths are mutually consistent and the
-    solve yields binding='floor', feasible=True, net_surplus == floor (£100/home/yr),
-    solved rate ≈ 18.96 p/kWh.
-    """
-    from solar_challenge.fleet import FleetResults
-
-    homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [
-        _make_sim_results(
-            self_kwh=2000.0,
-            export_kwh=800.0,
-            import_kwh=1200.0,
-            n_minutes=525600,  # 365 * 24 * 60 — full year, no annualisation needed
-        )
-        for _ in range(n_homes)
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
 
 
 def _write_interior_scenario(tmp_path: "Path", n_homes: int = 5) -> "Path":  # type: ignore[name-defined]
@@ -484,12 +398,14 @@ def _write_interior_scenario(tmp_path: "Path", n_homes: int = 5) -> "Path":  # t
 
 @pytest.fixture(scope="module")
 def interior_fleet_results() -> "FleetResults":  # type: ignore[name-defined]
-    """Module-scoped fixture: build interior-regime FleetResults once per module.
+    """Five default homes, each self-consuming 2,000 kWh, exporting 800 and importing 1,200 a year.
 
-    Building once avoids reconstructing ~9 MB of per-minute Series four times
-    across the E2E test class.
+    Under _write_interior_scenario's finance (£2,000/kWp, no grant, a £100 floor,
+    30p retail) the --cost-recovery solve binds at the floor and is feasible.
+    The results span 365 days, at least the 360-day threshold, so neither the
+    bill block nor the solve annualises them.
     """
-    return _make_fleet_results_interior()
+    return make_fleet_results(n_homes=5, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
 
 
 class TestFinanceCLICostRecoveryE2EFast:
