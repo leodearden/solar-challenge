@@ -16,6 +16,11 @@ SOC/eff/aging, `compute_soh`, `FinanceConfig`, `FleetSummary` financial fields, 
 θ→δ,η). **One PASS-conditional binding:** `scipy.interpolate.PchipInterpolator`
 import — bound below with a no-new-dep fallback; confirm at ζ/θ start.
 
+Amended 2026-10-03 (task 352): the scipy binding resolved PASS at decompose
+(`PchipInterpolator` importable), and the no-new-dep fallback has since been
+removed — scipy is a declared core dependency and PCHIP is the only interpolant.
+The ζ row below that names the fallback is historical (decompose-time 2026-06-16).
+
 ---
 
 ## α — BATTERY-SOC-EFFICIENCY-CONFIG (gap 3) — intermediate
