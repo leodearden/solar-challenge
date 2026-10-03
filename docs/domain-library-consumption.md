@@ -140,7 +140,9 @@ Consumers that want to avoid the pvlib cost must not touch these symbols.
 
 ### Network I/O
 
-`weather.get_tmy_data` makes an **outbound HTTPS request to the PVGIS API**.
+On a cache miss, `weather.get_tmy_data` makes **two outbound HTTPS requests to the
+PVGIS API**: the TMY, and the 2005–2020 hourly series whose mean annual GHI it scales
+the TMY to (see [tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)).
 In test environments and CI, consumers **must inject a mock or a pre-cached
 `WeatherCache`** rather than calling `get_tmy_data` directly:
 
@@ -150,6 +152,10 @@ import solar_challenge
 # Inject a pre-built cache instead of hitting the network
 solar_challenge.set_weather_cache(my_test_cache)
 ```
+
+A cache directory written before that scaling is ignored, because its entries' keys
+changed. Rebuild a pre-built cache with `my_test_cache.put(df, "tmy", location)`, which
+`get_tmy_data` serves exactly as stored.
 
 ---
 

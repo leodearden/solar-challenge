@@ -45,7 +45,16 @@ This is a dated record. Re-measure with the method below before relying on it.
   pvlib 0.15.1, numpy 2.4.6. The 0.3–7.0 kW figures were re-measured identical on main
   df664c7 (2026-10-01).
 - **Weather.** PVGIS TMYs through `weather.get_tmy_data`. Bristol's is the 1990 TMY,
-  GHI 992.3 kWh/m², cached as `tmy_5dc8c8bca218`.
+  GHI 992.3 kWh/m², cached as `tmy_5dc8c8bca218`. **[Amended 2026-10-03, task 285:
+  `get_tmy_data` now scales this TMY's irradiance by 1.078, to GHI 1069.5 kWh/m²
+  ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)), so §3 and §4 describe the
+  unscaled year. Re-measured on the scaled TMY by §3's and §4's methods (2026-10-03,
+  main 89b9299): the 248 capacities read 1051.4–1183.5 kWh/kWp (median 1162.9), 230 of
+  them above 1100, and 4 kW reads 1164.7. The AC peak reaches at most 1.100078 × the
+  wired DC, at 0.6 kW (0.440502 kW against a limit of 0.440471), so 0.6 kW fails the 10%
+  bound by 0.007%; 0.5 kW reads 1.0875 ×. These figures hold until task 252's system
+  losses land. §3's other sites are likewise unscaled, and each site's factor
+  differs.]**
 - **Model.** `pv.create_model_chain` applied no soiling, wiring, mismatch or
   availability losses.
 - **Method.** South-facing at 35° unless stated. The hourly AC in kW, summed, is kWh:

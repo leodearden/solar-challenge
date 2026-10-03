@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Weather data retrieval and handling."""
 
+import calendar
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Optional
+from types import MappingProxyType
+from typing import Optional
 
 import pandas as pd
-from pvlib.iotools import get_pvgis_tmy
+from pvlib.iotools import get_pvgis_hourly, get_pvgis_tmy
 
 from solar_challenge.location import Location
 
@@ -15,12 +18,46 @@ from solar_challenge.location import Location
 # Default cache directory
 DEFAULT_CACHE_DIR = Path(".cache/weather")
 
+IRRADIANCE_COLUMNS = ("ghi", "dni", "dhi")
+"""The TMY's irradiance columns, in W/m²: global horizontal, direct normal and diffuse horizontal."""
+
+TMY_HOURS = 8760
+"""The rows of PVGIS's TMY as pvlib returns it: one hourly year, coerced to the non-leap 1990."""
+
+PVGIS_API_URL = "https://re.jrc.ec.europa.eu/api/v5_3/"
+"""The one PVGIS release, v5.3 (PVGIS-SARAH3 radiation), that both the TMY and its long-term mean come from."""
+
+CLIMATE_YEARS = range(2005, 2021)
+"""The years PVGIS builds the TMY from, and the years its mean annual GHI is taken over."""
+
+PVGIS_TIMEOUT_S = 120
+"""Seconds to wait for each PVGIS response; the 2005-2020 hourly series takes about 9 s to arrive."""
+
+PVGIS_TMY_REQUEST: Mapping[str, object] = MappingProxyType(
+    {
+        "outputformat": "json",
+        "usehorizon": True,
+        "startyear": CLIMATE_YEARS[0],
+        "endyear": CLIMATE_YEARS[-1],
+        "url": PVGIS_API_URL,
+        "timeout": PVGIS_TIMEOUT_S,
+        "map_variables": True,
+    }
+)
+"""The arguments of get_tmy_data's get_pvgis_tmy request, except the point's latitude and longitude."""
+
 
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
     Stores each DataFrame as a CSV file, with a JSON sidecar recording its
     timezone and frequency, keyed by prefix, location and an optional date range.
+    """
+
+    _KEY_VERSION = 2
+    """Part of every key: bump it whenever what an entry means changes, so that older entries are never read.
+
+    2: get_tmy_data caches the TMY scaled to the 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md).
     """
 
     def __init__(self, cache_dir: Optional[Path] = None) -> None:
@@ -37,6 +74,7 @@ class WeatherCache:
                   end_date: Optional[pd.Timestamp] = None) -> str:
         """Generate cache key from parameters."""
         key_parts = [
+            f"v{self._KEY_VERSION}",
             prefix,
             f"{location.latitude:.4f}",
             f"{location.longitude:.4f}",
@@ -182,14 +220,31 @@ def set_weather_cache(cache: Optional[WeatherCache]) -> None:
     _weather_cache = cache
 
 
+def scale_tmy_to_annual_ghi(tmy: pd.DataFrame, annual_ghi_kwh_per_m2: float) -> pd.DataFrame:
+    """A copy of tmy whose ghi, dni and dhi are multiplied by one factor, so its GHI sums to annual_ghi_kwh_per_m2.
+
+    tmy must be one TMY year of TMY_HOURS hourly rows with some GHI, and the target positive; else ValueError.
+    """
+    if len(tmy) != TMY_HOURS:
+        raise ValueError(f"the TMY must be one year of {TMY_HOURS} hourly rows, got {len(tmy)}")
+    if annual_ghi_kwh_per_m2 <= 0:
+        raise ValueError(f"annual_ghi_kwh_per_m2 must be positive, got {annual_ghi_kwh_per_m2}")
+    tmy_annual_ghi_kwh_per_m2 = tmy["ghi"].sum() / 1000.0
+    if tmy_annual_ghi_kwh_per_m2 <= 0:
+        raise ValueError(f"the TMY's annual ghi total must be positive, got {tmy_annual_ghi_kwh_per_m2} kWh/m²")
+    factor = annual_ghi_kwh_per_m2 / tmy_annual_ghi_kwh_per_m2
+    return tmy.assign(**{column: tmy[column] * factor for column in IRRADIANCE_COLUMNS})
+
+
 def get_tmy_data(
     location: Location,
     use_cache: bool = True,
 ) -> pd.DataFrame:
-    """Retrieve Typical Meteorological Year (TMY) data from PVGIS.
+    """Retrieve PVGIS's Typical Meteorological Year (TMY) for location, scaled to the point's long-term mean GHI.
 
-    Uses pvlib.iotools.get_pvgis_tmy() to fetch TMY data for the given location.
-    Results are cached to avoid repeated API calls.
+    The TMY's ghi, dni and dhi are multiplied by one factor so that the year's GHI equals the mean annual GHI
+    of PVGIS's 2005-2020 hourly series at the point; docs/tmy-irradiation-scaling.md has the measurements
+    and the rejected alternatives. The scaled TMY is cached, and a cached TMY is returned as stored.
 
     Args:
         location: Location object with latitude, longitude, and altitude
@@ -205,43 +260,75 @@ def get_tmy_data(
         Index is DatetimeIndex in UTC.
 
     Raises:
-        RuntimeError: If PVGIS API request fails
+        RuntimeError: If a PVGIS request fails, its hourly series lacks or repeats hours of a climate year,
+            or scale_tmy_to_annual_ghi refuses what PVGIS returned, its ValueError then being the cause
     """
-    # Check cache first
     if use_cache:
-        cache = get_weather_cache()
-        cached_data = cache.get("tmy", location)
+        cached_data = get_weather_cache().get("tmy", location)
         if cached_data is not None:
             return cached_data
 
+    pvgis_tmy = _fetch_pvgis_tmy(location)
+    annual_ghi_kwh_per_m2 = _fetch_mean_annual_ghi_kwh_per_m2(location)
     try:
-        # PVGIS returns a tuple: (data, months_selected, inputs, metadata)
-        data: tuple[pd.DataFrame, Any, Any, Any] = get_pvgis_tmy(
-            latitude=location.latitude,
-            longitude=location.longitude,
-            outputformat="json",
-            usehorizon=True,
-            startyear=2005,
-            endyear=2020,
-            map_variables=True,  # Map to standard pvlib column names
-        )
-        tmy_data = data[0]
+        tmy = scale_tmy_to_annual_ghi(pvgis_tmy, annual_ghi_kwh_per_m2)
+    except ValueError as e:
+        raise RuntimeError(f"Failed to scale PVGIS's TMY to its long-term mean GHI: {e}") from e
+    if use_cache:
+        get_weather_cache().put(tmy, "tmy", location)
+    return tmy
 
-        # Ensure we have the expected columns
-        required_columns = {"temp_air", "ghi", "dni", "dhi"}
-        if not required_columns.issubset(tmy_data.columns):
-            missing = required_columns - set(tmy_data.columns)
+
+def _fetch_pvgis_tmy(location: Location) -> pd.DataFrame:
+    """PVGIS's TMY for location, requested with PVGIS_TMY_REQUEST, so in pvlib's column names."""
+    try:
+        tmy: pd.DataFrame = get_pvgis_tmy(
+            latitude=location.latitude, longitude=location.longitude, **PVGIS_TMY_REQUEST
+        )[0]
+
+        required_columns = {"temp_air", *IRRADIANCE_COLUMNS}
+        if not required_columns.issubset(tmy.columns):
+            missing = required_columns - set(tmy.columns)
             raise RuntimeError(f"TMY data missing required columns: {missing}")
-
-        # Cache the result
-        if use_cache:
-            cache = get_weather_cache()
-            cache.put(tmy_data, "tmy", location)
-
-        return tmy_data
+        return tmy
 
     except Exception as e:
         raise RuntimeError(f"Failed to retrieve TMY data from PVGIS: {e}") from e
+
+
+def _fetch_mean_annual_ghi_kwh_per_m2(location: Location) -> float:
+    """The mean of the calendar-year GHI totals, in kWh/m², of PVGIS's CLIMATE_YEARS hourly series at location.
+
+    The series is requested for a horizontal plane, so its poa_global is GHI. A series that lacks or repeats
+    hours of any of CLIMATE_YEARS raises RuntimeError naming those years, since its mean would be skewed.
+    """
+    try:
+        series: pd.DataFrame = get_pvgis_hourly(
+            latitude=location.latitude,
+            longitude=location.longitude,
+            start=CLIMATE_YEARS[0],
+            end=CLIMATE_YEARS[-1],
+            components=False,
+            surface_tilt=0,
+            usehorizon=True,
+            url=PVGIS_API_URL,
+            timeout=PVGIS_TIMEOUT_S,
+            map_variables=True,
+        )[0]
+        ghi_by_year = series["poa_global"].groupby(series.index.year)
+        hours_by_year = ghi_by_year.size()
+        incomplete_years = [year for year in CLIMATE_YEARS if hours_by_year.get(year) != _hours_in(year)]
+        if incomplete_years:
+            raise ValueError(f"the hourly series lacks or repeats hours of {incomplete_years}")
+        return float((ghi_by_year.sum() / 1000.0).mean())
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to retrieve long-term irradiation from PVGIS: {e}") from e
+
+
+def _hours_in(year: int) -> int:
+    """The number of hours in calendar year year."""
+    return 24 * (366 if calendar.isleap(year) else 365)
 
 
 def align_tmy_to_index(tmy: pd.Series, index: pd.DatetimeIndex) -> pd.Series:
