@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Measure how long CEC-inverter strings run outside the MPPT window, and what that costs.
 
-docs/pv-inverter-string-matching.md §3 describes this method and §4-§6 record
+docs/pv-inverter-string-matching.md §3 describes this method and §4-§7 record
 what it printed. From the repository root:
 
     uv run --extra dev python scripts/measure_mppt_window.py --csv /tmp/mppt-window.csv
@@ -45,6 +45,7 @@ from solar_challenge.weather import (
 DC_CAPACITIES_KW = tuple(tenths / 10 for tenths in range(3, 251))
 INVERTER_CAPACITIES_KW: tuple[Optional[float], ...] = (None, 3.0, 3.68, 5.0)
 DESIGN_CELL_TEMPERATURES_C = (10.0, 0.0, -10.0)
+HOT_DESIGN_CELL_TEMPERATURES_C = (45.0, 55.0, 65.0)
 CEILING_MARGINS = (1.05, 1.10)
 NEAR_CEILING = 0.9
 HEADLINE_KWP = (3.0, 4.0, 5.0, 6.0)
@@ -62,38 +63,61 @@ COLUMNS = [_column_label(inverter_kw) for inverter_kw in INVERTER_CAPACITIES_KW]
 
 @dataclass(frozen=True)
 class Sizing:
-    """Wire strings so that their STC voltage times ceiling_factor stays at or under Mppt_high."""
+    """Wire strings so that their STC voltage times ceiling_factor stays at or under Mppt_high, and times floor_factor at or over Mppt_low.
+
+    keeps_battery_inverters picks from every usable CEC row, as pv.py did
+    before task 240.
+    """
 
     label: str
-    ceiling_factor: float
+    ceiling_factor: float = 1.0
+    floor_factor: float = 1.0
+    keeps_battery_inverters: bool = False
 
 
-STC = Sizing("STC", 1.0)
+STC = Sizing("STC")
+BATTERY_INVERTERS_KEPT = Sizing(
+    "STC, battery inverter/chargers kept", keeps_battery_inverters=True
+)
 
 
 def sizings(module: Mapping[str, Any]) -> tuple[Sizing, ...]:
-    """The code's STC sizing, cold-cell sizings on the beta_oc / V_oc_ref proxy, and fixed margins."""
+    """The code's STC sizing; cold-cell ceilings, fixed ceiling margins and hot-cell floors; and STC with the battery inverter/chargers kept.
+
+    The cell temperatures use the beta_oc / V_oc_ref proxy.
+    """
     per_kelvin = module["beta_oc"] / module["V_oc_ref"]
     cold = (
-        Sizing(f"cell {t:g} °C", 1 + per_kelvin * (t - 25))
+        Sizing(f"cell {t:g} °C", ceiling_factor=1 + per_kelvin * (t - 25))
         for t in DESIGN_CELL_TEMPERATURES_C
     )
-    margins = (Sizing(f"Mppt_high / {m:.2f}", m) for m in CEILING_MARGINS)
-    return (STC, *cold, *margins)
+    margins = (Sizing(f"Mppt_high / {m:.2f}", ceiling_factor=m) for m in CEILING_MARGINS)
+    hot = (
+        Sizing(f"floor cell {t:g} °C", floor_factor=1 + per_kelvin * (t - 25))
+        for t in HOT_DESIGN_CELL_TEMPERATURES_C
+    )
+    return (STC, *cold, *margins, *hot, BATTERY_INVERTERS_KEPT)
 
 
 @contextmanager
 def picking_by(sizing: Sizing) -> Iterator[None]:
-    """pv.py's own inverter pick and wiring, with every catalogue ceiling divided by the sizing's factor.
+    """pv.py's own inverter pick and wiring, with every catalogue ceiling divided by the sizing's ceiling_factor and every floor by its floor_factor.
 
-    Dividing the ceiling is the same check as multiplying the string voltage;
-    the floor and the ranking are untouched.
+    Dividing an edge is the same check as multiplying the string voltage; the
+    ranking is untouched.
     """
-    derated = tuple(
-        dataclasses.replace(inverter, mppt_high_v=inverter.mppt_high_v / sizing.ceiling_factor)
-        for inverter in pv._cec_inverters()
+    catalogue = (
+        pv._usable_cec_inverters() if sizing.keeps_battery_inverters else pv._cec_inverters()
     )
-    with mock.patch.object(pv, "_cec_inverters", return_value=derated):
+    moved = tuple(
+        dataclasses.replace(
+            inverter,
+            mppt_low_v=inverter.mppt_low_v / sizing.floor_factor,
+            mppt_high_v=inverter.mppt_high_v / sizing.ceiling_factor,
+        )
+        for inverter in catalogue
+    )
+    with mock.patch.object(pv, "_cec_inverters", return_value=moved):
         yield
 
 
@@ -363,11 +387,12 @@ def edge_error_summary(errors: pd.DataFrame) -> pd.Series:
 
 
 def headroom_table(rows: pd.DataFrame) -> pd.DataFrame:
-    """Per alternative sizing and inverter column: re-picked configs, their annual AC change, the hours still above."""
+    """Per window-edge sizing and inverter column: re-picked configs, their annual AC change, the hours still beyond each edge."""
     keys = ["inverter_kw", "dc_kw"]
     stc = rows[rows["sizing"] == STC.label].set_index(keys)
+    edges = rows[~rows["sizing"].isin([STC.label, BATTERY_INVERTERS_KEPT.label])]
     blocks = {}
-    for label, alternative in rows[rows["sizing"] != STC.label].groupby("sizing", sort=False):
+    for label, alternative in edges.groupby("sizing", sort=False):
         alt = alternative.set_index(keys)
         repicked = (alt["inverter"] != stc["inverter"]) | (alt["wiring"] != stc["wiring"])
         change = (alt["ac_kwh"] / stc["ac_kwh"] - 1)[repicked] * 100
@@ -378,10 +403,32 @@ def headroom_table(rows: pd.DataFrame) -> pd.DataFrame:
                 "|dAC| median %": change.abs().groupby(level="inverter_kw").median(),
                 "|dAC| max %": change.abs().groupby(level="inverter_kw").max(),
                 "mean dAC %": change.groupby(level="inverter_kw").mean(),
-                "hours left": alt[f"{CEILING}_hours"].groupby(column, sort=False).max(),
+                "hours left above": alt[f"{CEILING}_hours"].groupby(column, sort=False).max(),
+                "hours left below": alt[f"{FLOOR}_hours"].groupby(column, sort=False).max(),
             }
         ).T[COLUMNS]
     return pd.concat(blocks)
+
+
+def repicks(rows: pd.DataFrame, sizing: Sizing) -> pd.DataFrame:
+    """The configurations whose inverter or wiring differs between the sizing and STC.
+
+    change % is STC's annual AC over the sizing's, less one: the change from
+    the sizing's pick to pv.py's.
+    """
+    keys = ["inverter_kw", "dc_kw"]
+    alt = rows[rows["sizing"] == sizing.label].set_index(keys)
+    stc = rows[rows["sizing"] == STC.label].set_index(keys)
+    repicked = (alt["inverter"] != stc["inverter"]) | (alt["wiring"] != stc["wiring"])
+    return pd.DataFrame(
+        {
+            "sizing's inverter": alt["inverter"],
+            "sizing's wiring": alt["wiring"],
+            "STC inverter": stc["inverter"],
+            "STC wiring": stc["wiring"],
+            "change %": (stc["ac_kwh"] / alt["ac_kwh"] - 1) * 100,
+        }
+    )[repicked].reset_index()
 
 
 def identical_picks(rows: pd.DataFrame) -> list[tuple[str, str]]:
@@ -492,6 +539,31 @@ def catalogue_ceilings() -> pd.Series:
     )
 
 
+def battery_inverters() -> tuple[pd.DataFrame, pd.Series]:
+    """The usable CEC rows pv.py leaves out as battery inverter/chargers, and the gaps between them and the rows it keeps."""
+    kept = pd.DataFrame(map(dataclasses.asdict, pv._cec_inverters()))
+    left_out = set(pv._usable_cec_inverters()) - set(pv._cec_inverters())
+    dropped = pd.DataFrame(map(dataclasses.asdict, left_out)).sort_values(
+        ["vdco_v", "paco_w", "name"], ignore_index=True
+    )
+    largest_vdco_v = dropped["vdco_v"].max()
+    smallest_paco_w = dropped["paco_w"].min()
+    gaps = pd.Series(
+        {
+            "left out": len(dropped),
+            "their largest Vdco V": largest_vdco_v,
+            "their smallest Paco W": smallest_paco_w,
+            "largest kept Paco W at Vdco <= theirs": kept.loc[
+                kept["vdco_v"] <= largest_vdco_v, "paco_w"
+            ].max(),
+            "lowest kept Vdco V at Paco >= theirs": kept.loc[
+                kept["paco_w"] >= smallest_paco_w, "vdco_v"
+            ].min(),
+        }
+    )
+    return dropped, gaps
+
+
 def _show(title: str, body: Union[pd.DataFrame, pd.Series, str]) -> None:
     print(f"\n## {title}\n")
     with pd.option_context(
@@ -526,13 +598,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     _show(
         "Weather",
         f"{location.name} PVGIS TMY: {len(weather)} hours, years "
-        f"{sorted(set(weather.index.year))}, minimum air {weather['temp_air'].min():.2f} C",
+        f"{sorted(set(weather.index.year))}, minimum air {weather['temp_air'].min():.2f} C, "
+        f"GHI {weather['ghi'].sum() / 1000:.1f} kWh/m²",
     )
     cold_hours, default = operating_voltage(location, weather, module)
     _show(f"Hours with module V_mp above {COLD_RATIO} x V_mp_ref", cold_hours)
     _show("Default system", default)
     _show("Cold V_mp factors", proxy_coefficient(module))
     _show("Catalogue", catalogue_ceilings())
+    left_out, gaps = battery_inverters()
+    _show("Battery inverter/chargers left out", left_out)
+    _show("Their gaps", gaps)
 
     rows = census(location, weather, module)
     if args.csv is not None:
@@ -548,6 +624,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     floor = edge_error(stc, FLOOR)
     _show("Floor: error of STC sizing", edge_error_summary(floor))
     _show("Floor: worst pairs", floor.head(10))
+    kept = rows[rows["sizing"] == BATTERY_INVERTERS_KEPT.label]
+    floor_kept = edge_error(kept, FLOOR)
+    _show("Floor: error with battery inverter/chargers kept", edge_error_summary(floor_kept))
+    _show("Floor: worst pairs with battery inverter/chargers kept", floor_kept.head(10))
+    _show(
+        "Re-picked by leaving battery inverter/chargers out",
+        repicks(rows, BATTERY_INVERTERS_KEPT),
+    )
     _show("Annual yield at default rating, kWh/kWp", annual_yield(stc, module["STC"]))
 
 
