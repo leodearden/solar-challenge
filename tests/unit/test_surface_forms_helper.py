@@ -20,11 +20,13 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Iterable,
     List,
     Literal,
     Optional,
     ParamSpec,
     Tuple,
+    Type,
     Union,
 )
 
@@ -83,12 +85,19 @@ def test_a_typing_alias_is_spelled_by_its_builtin_origin() -> None:
 
 def test_a_bare_typing_alias_is_spelled_by_its_origin_alone() -> None:
     def bare(
-        a: List, b: Dict, c: Tuple, d: Callable, e: list, f: collections.abc.Callable
+        a: List,
+        b: Dict,
+        c: Tuple,
+        d: Callable,
+        e: list,
+        f: collections.abc.Callable,
+        g: Type,
+        h: Iterable,
     ) -> None: ...
 
     assert (
         surface_form(bare)
-        == "(a: list, b: dict, c: tuple, d: Callable, e: list, f: Callable) -> None"
+        == "(a: list, b: dict, c: tuple, d: Callable, e: list, f: Callable, g: type, h: Iterable) -> None"
     )
 
 
