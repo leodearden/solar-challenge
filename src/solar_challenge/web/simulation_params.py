@@ -110,6 +110,24 @@ def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
+def _parse_heat_pump_block(data: object) -> HeatPumpConfig | None:
+    """Read a request body's ``heat_pump`` value with the web form's keys, defaulting those it omits.
+
+    The form sends ``type`` where config's YAML heat_pump block requires ``heat_pump_type``.
+    A falsy value means no heat pump; any other value that is not a mapping raises
+    ``ValueError`` naming ``heat_pump`` and the type received.
+    """
+    if not data:
+        return None
+    if not isinstance(data, Mapping):
+        raise ValueError(f"heat_pump must be a mapping, got {type(data).__name__}")
+    return HeatPumpConfig(
+        heat_pump_type=data.get("type", "ASHP"),
+        thermal_capacity_kw=float(data.get("thermal_capacity_kw", 8.0)),
+        annual_heat_demand_kwh=float(data.get("annual_heat_demand_kwh", 8000.0)),
+    )
+
+
 def _refuse_unrecognised_keys(data: Mapping[str, Any]) -> None:
     recognised = _HOME_CONFIG_DEFAULTS.keys() | _DATE_RANGE_DEFAULTS.keys()
     unrecognised = sorted(data.keys() - recognised)
@@ -132,8 +150,10 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     Raises:
         ValueError: If *data* is not a JSON object (the error names the type
             received), if it has a top-level key outside the recognised set
-            (the error names each such key), or if required fields are
-            missing or invalid.
+            (the error names each such key), if a nested block it reads
+            (heat_pump, seg, tariff, dispatch_strategy) is not a mapping (the
+            error names the block and the type received), or if required
+            fields are missing or invalid.
     """
     if not isinstance(data, Mapping):
         raise ValueError(f"Home config must be a JSON object, got {type(data).__name__}")
@@ -209,15 +229,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         use_stochastic=stochastic,
     )
 
-    # Web contract uses "type" and defaults; config._parse_heat_pump_config requires the YAML keys
-    heat_pump_config: HeatPumpConfig | None = None
-    hp_data = params["heat_pump"]
-    if hp_data:
-        heat_pump_config = HeatPumpConfig(
-            heat_pump_type=hp_data.get("type", "ASHP"),
-            thermal_capacity_kw=float(hp_data.get("thermal_capacity_kw", 8.0)),
-            annual_heat_demand_kwh=float(hp_data.get("annual_heat_demand_kwh", 8000.0)),
-        )
+    heat_pump_config = _parse_heat_pump_block(params["heat_pump"])
 
     # Build optional tariff config
     try:
