@@ -2,7 +2,8 @@
 """Single home simulation combining PV, battery, and load."""
 
 import warnings
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
 import pandas as pd
@@ -63,11 +64,16 @@ class HomeConfig:
     """
 
 
+_COLUMN = "column"
+
+
 @dataclass
 class SimulationResults:
     """Comprehensive results from a home simulation.
 
     All time series have 1-minute resolution and matching DatetimeIndex.
+    Each series field's column metadata names the column to_dataframe writes it
+    under and from_dataframe reads it from.
 
     Attributes:
         generation: PV generation in kW
@@ -85,48 +91,65 @@ class SimulationResults:
         heat_pump_load: Optional heat pump electrical load in kW (None if no heat pump)
     """
 
-    generation: pd.Series
-    demand: pd.Series
-    self_consumption: pd.Series
-    battery_charge: pd.Series
-    battery_discharge: pd.Series
-    battery_soc: pd.Series
-    grid_import: pd.Series
-    grid_export: pd.Series
-    import_cost: pd.Series
-    export_revenue: pd.Series
-    tariff_rate: pd.Series
+    generation: pd.Series = field(metadata={_COLUMN: "generation_kw"})
+    demand: pd.Series = field(metadata={_COLUMN: "demand_kw"})
+    self_consumption: pd.Series = field(metadata={_COLUMN: "self_consumption_kw"})
+    battery_charge: pd.Series = field(metadata={_COLUMN: "battery_charge_kw"})
+    battery_discharge: pd.Series = field(metadata={_COLUMN: "battery_discharge_kw"})
+    battery_soc: pd.Series = field(metadata={_COLUMN: "battery_soc_kwh"})
+    grid_import: pd.Series = field(metadata={_COLUMN: "grid_import_kw"})
+    grid_export: pd.Series = field(metadata={_COLUMN: "grid_export_kw"})
+    import_cost: pd.Series = field(metadata={_COLUMN: "import_cost_gbp"})
+    export_revenue: pd.Series = field(metadata={_COLUMN: "export_revenue_gbp"})
+    tariff_rate: pd.Series = field(metadata={_COLUMN: "tariff_rate_per_kwh"})
     strategy_name: str = "self_consumption"
-    heat_pump_load: Optional[pd.Series] = None
+    heat_pump_load: Optional[pd.Series] = field(default=None, metadata={_COLUMN: "heat_pump_load_kw"})
     # Per-timestep slice of import_cost spent charging the battery from the grid, in £
     # (None when tariff_config is None).
-    grid_charge_cost: Optional[pd.Series] = None
+    grid_charge_cost: Optional[pd.Series] = field(default=None, metadata={_COLUMN: "grid_charge_cost_gbp"})
+
+    @classmethod
+    def _series_columns(cls) -> Iterator[tuple[str, str]]:
+        """Each series field's name and column, in declaration order."""
+        for attribute in fields(cls):
+            if _COLUMN in attribute.metadata:
+                yield attribute.name, attribute.metadata[_COLUMN]
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Convert results to DataFrame.
+        """Convert results to a DataFrame with one column per series that is set."""
+        return pd.DataFrame(
+            {
+                column: series
+                for name, column in self._series_columns()
+                if (series := getattr(self, name)) is not None
+            }
+        )
 
-        Returns:
-            DataFrame with all time series as columns
+    @classmethod
+    def from_dataframe(cls, frame: pd.DataFrame, *, strategy_name: str) -> "SimulationResults":
+        """Build the results whose to_dataframe() is frame, simulated under strategy_name.
+
+        Optional series whose column is absent are None.
+
+        Raises:
+            ValueError: If frame lacks any required series' column; the message names each one.
         """
-        data = {
-            "generation_kw": self.generation,
-            "demand_kw": self.demand,
-            "self_consumption_kw": self.self_consumption,
-            "battery_charge_kw": self.battery_charge,
-            "battery_discharge_kw": self.battery_discharge,
-            "battery_soc_kwh": self.battery_soc,
-            "grid_import_kw": self.grid_import,
-            "grid_export_kw": self.grid_export,
-            "import_cost_gbp": self.import_cost,
-            "export_revenue_gbp": self.export_revenue,
-            "tariff_rate_per_kwh": self.tariff_rate,
+        required_fields = {
+            attribute.name
+            for attribute in fields(cls)
+            if attribute.default is MISSING and attribute.default_factory is MISSING
         }
-
-        # Include heat pump load if present
-        if self.heat_pump_load is not None:
-            data["heat_pump_load_kw"] = self.heat_pump_load
-
-        return pd.DataFrame(data)
+        missing_columns = [
+            column
+            for name, column in cls._series_columns()
+            if name in required_fields and column not in frame.columns
+        ]
+        if missing_columns:
+            raise ValueError(f"frame lacks required series columns: {', '.join(missing_columns)}")
+        return cls(
+            strategy_name=strategy_name,
+            **{name: frame[column] for name, column in cls._series_columns() if column in frame.columns},
+        )
 
 
 @dataclass

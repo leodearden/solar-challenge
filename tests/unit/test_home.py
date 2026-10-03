@@ -1,5 +1,9 @@
 """Tests for HomeConfig, SimulationResults, calculate_summary and SEG export pricing in simulate_home."""
 
+import dataclasses
+import typing
+
+import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
@@ -105,6 +109,28 @@ class TestHomeConfigSEGField:
         assert config.seg_tariff is None
 
 
+def _series_field_names() -> list[str]:
+    """SimulationResults' fields annotated pd.Series or Optional[pd.Series], in declaration order."""
+    hints = typing.get_type_hints(SimulationResults)
+    return [
+        field.name
+        for field in dataclasses.fields(SimulationResults)
+        if pd.Series in (hints[field.name], *typing.get_args(hints[field.name]))
+    ]
+
+
+def _results_with_every_series_set() -> SimulationResults:
+    """Results whose every series, optional ones included, varies and holds values no other series holds."""
+    index = pd.date_range("2024-06-21 10:00", periods=60, freq="1min", tz="Europe/London")
+    return SimulationResults(
+        strategy_name="tou_optimized",
+        **{
+            name: pd.Series(np.arange(60.0) + 100.0 * position, index=index)
+            for position, name in enumerate(_series_field_names())
+        },
+    )
+
+
 class TestSimulationResults:
     """Test SimulationResults functionality."""
 
@@ -134,6 +160,52 @@ class TestSimulationResults:
         assert "generation_kw" in df.columns
         assert "demand_kw" in df.columns
         assert "battery_soc_kwh" in df.columns
+
+    def test_to_dataframe_appends_a_set_grid_charge_cost_as_grid_charge_cost_gbp(self, sample_results):
+        """A set grid_charge_cost is one more column, grid_charge_cost_gbp, after the columns of a run without it."""
+        grid_charge_cost = pd.Series(0.01, index=sample_results.generation.index)
+
+        df = dataclasses.replace(sample_results, grid_charge_cost=grid_charge_cost).to_dataframe()
+
+        assert list(df.columns) == [*sample_results.to_dataframe().columns, "grid_charge_cost_gbp"]
+        pd.testing.assert_series_equal(df["grid_charge_cost_gbp"], grid_charge_cost, check_names=False)
+
+    def test_from_dataframe_restores_every_series_to_dataframe_wrote(self):
+        """from_dataframe gives back every series to_dataframe wrote, optional ones included."""
+        original = _results_with_every_series_set()
+
+        restored = SimulationResults.from_dataframe(
+            original.to_dataframe(), strategy_name=original.strategy_name
+        )
+
+        assert restored.heat_pump_load is not None
+        assert restored.grid_charge_cost is not None
+        for name in _series_field_names():
+            pd.testing.assert_series_equal(
+                getattr(restored, name), getattr(original, name), check_names=False, obj=name
+            )
+        assert restored.strategy_name == "tou_optimized"
+
+    def test_optional_series_left_unset_come_back_none(self, sample_results):
+        """An optional series left unset is written as no column, and comes back None rather than NaN or zero."""
+        restored = SimulationResults.from_dataframe(
+            sample_results.to_dataframe(), strategy_name="self_consumption"
+        )
+
+        assert restored.heat_pump_load is None
+        assert restored.grid_charge_cost is None
+
+    def test_frame_lacking_required_series_columns_is_refused_naming_them(self, sample_results):
+        """A frame lacking required series' columns is refused with a ValueError naming each, and no absent optional one."""
+        frame = sample_results.to_dataframe().drop(columns=["generation_kw", "tariff_rate_per_kwh"])
+
+        with pytest.raises(ValueError) as refusal:
+            SimulationResults.from_dataframe(frame, strategy_name="self_consumption")
+
+        message = str(refusal.value)
+        assert "generation_kw" in message
+        assert "tariff_rate_per_kwh" in message
+        assert "grid_charge_cost_gbp" not in message
 
 
 class TestSimulateHomeSEGPricing:
