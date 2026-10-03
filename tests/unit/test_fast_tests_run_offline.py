@@ -140,6 +140,36 @@ def test_a_module_fixture_that_reaches_the_network_at_teardown_fails_the_fast_te
     result.stdout.fnmatch_lines(["*test_tears_down_the_fixture reached the network (example.invalid:443)*"])
 
 
+def test_get_tmy_data_reads_the_tmy_a_test_seeds_into_weather_cache_after_a_module_fixture_installs_a_cache_of_its_own(
+    suite: pytest.Pytester,
+) -> None:
+    """pytest sets the module fixture up first, inside the test's window, so weather_cache must install the test's cache over the fixture's."""
+    scenario = suite.makepyfile(
+        """
+        import pytest
+
+        from solar_challenge.location import Location
+        from solar_challenge.weather import WeatherCache, get_tmy_data, set_weather_cache
+        from tests._synthetic_weather import synthetic_june_weather
+
+
+        @pytest.fixture(scope="module")
+        def installs_a_weather_cache_of_its_own(tmp_path_factory):
+            set_weather_cache(WeatherCache(cache_dir=tmp_path_factory.mktemp("weather")))
+
+
+        def test_reads_the_tmy_it_seeds(installs_a_weather_cache_of_its_own, weather_cache):
+            weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+            get_tmy_data(Location.bristol())
+        """
+    )
+
+    result = suite.runpytest_subprocess(scenario)
+
+    result.assert_outcomes(passed=1)
+
+
 def test_a_slow_test_that_requests_weather_cache_errors_at_setup(suite: pytest.Pytester) -> None:
     """A slow test reads the working directory's weather cache, so it has none of its own for weather_cache to return."""
     scenario = suite.makepyfile(

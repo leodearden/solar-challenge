@@ -106,7 +106,8 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
     Every fixture the test sets up or tears down, whatever its scope, runs in its
     window. There get_tmy_data reads the test's own empty weather cache, and every
     name lookup or connection off this machine, from any thread, is refused. A
-    cache another fixture installs lasts only until the window closes.
+    cache another fixture installs lasts only until the window closes, or until
+    the weather_cache fixture reinstalls the test's own.
     """
     if any(item.get_closest_marker(mark) for mark in _MARKS_OF_TESTS_ALLOWED_ONLINE):
         return (yield)
@@ -135,7 +136,7 @@ def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, object, object
 
 @pytest.fixture
 def weather_cache(request: pytest.FixtureRequest) -> WeatherCache:
-    """The test's own weather cache, empty and installed as the one get_tmy_data reads; seed a TMY with its put()."""
+    """The test's own weather cache, empty and installed, over any cache installed before it, as the one get_tmy_data reads; seed a TMY with its put()."""
     window: _OfflineWindow | None = request.node.stash.get(_OFFLINE_WINDOW_KEY, None)
     if window is None:
         pytest.fail(
@@ -143,6 +144,7 @@ def weather_cache(request: pytest.FixtureRequest) -> WeatherCache:
             "weather cache; weather_cache serves a test that runs offline",
             pytrace=False,
         )
+    set_weather_cache(window.weather_cache)
     return window.weather_cache
 
 
