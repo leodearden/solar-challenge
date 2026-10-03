@@ -280,6 +280,9 @@ class _StringGroup:
 
 _Wiring = tuple[_StringGroup, ...]
 
+_BATTERY_BUS_MAX_V = 60.0
+_MICROINVERTER_MAX_W = 1500.0
+
 
 @dataclass(frozen=True)
 class _CecInverter:
@@ -294,9 +297,20 @@ class _CecInverter:
     def admits(self, string_voltage_v: float) -> bool:
         return self.mppt_low_v <= string_voltage_v <= self.mppt_high_v
 
+    @property
+    def is_battery_inverter(self) -> bool:
+        """Whether its DC input is a battery bus, which PV reaches only through a charge controller.
+
+        That is a nominal DC voltage no higher than a 48 V bank's, at a rating
+        above any module-level inverter's. The CEC does not flag these;
+        docs/pv-inverter-string-matching.md §7 lists the rows this matches and
+        why the cut sits there.
+        """
+        return self.vdco_v <= _BATTERY_BUS_MAX_V and self.paco_w > _MICROINVERTER_MAX_W
+
 
 @functools.cache
-def _cec_inverters() -> tuple[_CecInverter, ...]:
+def _usable_cec_inverters() -> tuple[_CecInverter, ...]:
     """CEC inverters with a positive finite rating, start-up power, nominal voltage and MPPT window.
 
     Read once per process. A positive start-up power (Pso) keeps pvlib's
@@ -316,6 +330,14 @@ def _cec_inverters() -> tuple[_CecInverter, ...]:
             usable["Mppt_low"],
             usable["Mppt_high"],
         )
+    )
+
+
+@functools.cache
+def _cec_inverters() -> tuple[_CecInverter, ...]:
+    """The usable CEC inverters a PV array can be wired to: every one but the battery inverter/chargers."""
+    return tuple(
+        inverter for inverter in _usable_cec_inverters() if not inverter.is_battery_inverter
     )
 
 
@@ -486,8 +508,8 @@ def create_pv_system(config: PVConfig) -> PVSystem:
     Creates a PVSystem using CEC module and inverter databases for realistic
     modelling parameters, or custom parameters if provided. The CEC inverter is
     voltage-matched to the strings; see _ranking_key and _wiring_within_window
-    for how it is chosen and how the modules are wired to it. A module with
-    PVWatts parameters (pdc0 and gamma_pdc, e.g. one from
+    for how it is chosen from _cec_inverters and how the modules are wired to
+    it. A module with PVWatts parameters (pdc0 and gamma_pdc, e.g. one from
     create_simple_module_params) gets pvlib's PVWatts inverter at the
     configured AC capacity and efficiency instead.
 
