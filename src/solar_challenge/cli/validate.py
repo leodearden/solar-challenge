@@ -2,20 +2,33 @@
 """Validation commands."""
 
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Mapping, Optional, Sequence
 
 import pandas as pd
 import typer
 from rich.table import Table
+from rich.text import Text
 
 from solar_challenge.cli.utils import (
     console,
-    error_console,
     handle_errors,
     print_error,
     print_success,
 )
-from solar_challenge.config import ConfigurationError, load_config
+from solar_challenge.config import (
+    ConfigurationError,
+    ScenarioConfig,
+    detect_sweep_spec,
+    expand_sweep_configs,
+    generate_homes_from_distribution,
+    load_config,
+    load_fleet_config,
+    load_home_config,
+    load_scenarios,
+    parse_fleet_distribution_config,
+    parse_location_block,
+)
+from solar_challenge.home import HomeConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.validation import (
     ValidationReport,
@@ -146,6 +159,87 @@ def results(
         raise typer.Exit(1)
 
 
+def _scenario_homes(scenario: ScenarioConfig) -> list[HomeConfig]:
+    """The homes a scenario simulates: its single home, or else its fleet."""
+    return [scenario.home] if scenario.home is not None else scenario.homes
+
+
+def _fleet_homes(config_file: Path, document: Mapping[str, Any]) -> list[HomeConfig]:
+    """The homes `fleet run` builds from the file.
+
+    For a YAML-defined sweep, the homes `fleet sweep` builds at every sweep point.
+    """
+    if "fleet_distribution" in document:
+        distribution = parse_fleet_distribution_config(document["fleet_distribution"])
+        if detect_sweep_spec(distribution) is not None:
+            location = parse_location_block(document.get("location"))
+            return [
+                home
+                for _, point in expand_sweep_configs(distribution)
+                for home in generate_homes_from_distribution(point, location)
+            ]
+    return load_fleet_config(config_file).homes
+
+
+def _homes_defined_by(config_file: Path) -> list[HomeConfig]:
+    """The homes the file defines, built by the config.py loader its shape needs.
+
+    Raises the loader's own ConfigurationError or ValueError when the file is refused.
+    """
+    document = load_config(config_file)
+    if "scenarios" in document or "scenario" in document:
+        return [
+            home
+            for scenario in load_scenarios(config_file)
+            for home in _scenario_homes(scenario)
+        ]
+    if "fleet_distribution" in document or "homes" in document:
+        return _fleet_homes(config_file, document)
+    return [load_home_config(config_file)]
+
+
+def _raw_home_advisories(document: Mapping[str, Any]) -> list[str]:
+    """Domestic-scale advisories read from the file's raw ``home:`` block."""
+    home = document.get("home") or {}
+    pv = home.get("pv") or {}
+    battery = home.get("battery") or {}
+    load = home.get("load") or {}
+
+    warnings = []
+    if pv.get("capacity_kw", 0) > 50:
+        warnings.append(f"PV capacity {pv['capacity_kw']} kW seems high for domestic")
+    if battery.get("capacity_kwh", 0) > 100:
+        warnings.append(
+            f"Battery capacity {battery['capacity_kwh']} kWh seems high for domestic"
+        )
+    if load.get("annual_consumption_kwh", 0) > 20000:
+        warnings.append(
+            f"Annual consumption {load['annual_consumption_kwh']} kWh seems high for domestic"
+        )
+    return warnings
+
+
+def _print_config_findings(
+    config_file: Path, errors: Sequence[str], warnings: Sequence[str]
+) -> None:
+    """Print the findings for the file as a table: its errors, then its warnings, or OK when there are none.
+
+    Each message is printed exactly as it is, never read as Rich markup or emoji codes.
+    """
+    table = Table(title=f"Config Validation: {config_file.name}")
+    table.add_column("Type", style="cyan")
+    table.add_column("Message")
+
+    for error in errors:
+        table.add_row("[red]ERROR[/red]", Text(error))
+    for warning in warnings:
+        table.add_row("[yellow]WARNING[/yellow]", Text(warning))
+    if not errors and not warnings:
+        table.add_row("[green]OK[/green]", Text("Configuration is valid"))
+
+    console.print(table)
+
+
 @app.command()
 @handle_errors
 def config(
@@ -158,114 +252,25 @@ def config(
         ),
     ],
 ) -> None:
-    """Validate a configuration file.
+    """Validate a configuration file by loading it as the run commands do.
 
-    Checks:
-    - File can be parsed (YAML/JSON syntax)
-    - Required fields are present
-    - Values are within valid ranges
+    The file's shape picks how it is loaded:
+    - scenarios: or scenario: files load as scenarios
+    - homes: or fleet_distribution: files load as a fleet
+    - any other file loads as a home file: a home: block, or a flat home
+
+    A YAML-defined sweep is checked at every sweep point. The first value or key
+    the file's loader refuses is an ERROR. Sizes beyond a domestic install are
+    WARNINGs.
     """
     try:
-        config_data = load_config(config_file)
+        homes = _homes_defined_by(config_file)
+    except (ConfigurationError, ValueError) as refusal:
+        _print_config_findings(config_file, errors=[str(refusal)], warnings=[])
+        raise typer.Exit(1) from refusal
 
-        # Basic structure validation
-        errors = []
-        warnings = []
-
-        # Check for home or homes
-        has_home = "home" in config_data
-        has_homes = "homes" in config_data
-        has_scenario = "scenario" in config_data or "scenarios" in config_data
-
-        if not (has_home or has_homes or has_scenario):
-            warnings.append("Config has no 'home', 'homes', or 'scenario' section")
-
-        # Validate PV config if present
-        home_data = config_data.get("home", {})
-        pv_data = home_data.get("pv", {})
-
-        if "capacity_kw" in pv_data:
-            cap = pv_data["capacity_kw"]
-            if cap <= 0:
-                errors.append(f"PV capacity must be positive, got {cap}")
-            elif cap > 50:
-                warnings.append(f"PV capacity {cap} kW seems high for domestic")
-
-        if "tilt" in pv_data:
-            tilt = pv_data["tilt"]
-            if not 0 <= tilt <= 90:
-                errors.append(f"PV tilt must be 0-90 degrees, got {tilt}")
-
-        if "azimuth" in pv_data:
-            az = pv_data["azimuth"]
-            if not 0 <= az <= 360:
-                errors.append(f"PV azimuth must be 0-360 degrees, got {az}")
-
-        # Validate battery config if present
-        battery_data = home_data.get("battery", {})
-        if battery_data:
-            if "capacity_kwh" in battery_data:
-                cap = battery_data["capacity_kwh"]
-                if cap <= 0:
-                    errors.append(f"Battery capacity must be positive, got {cap}")
-                elif cap > 100:
-                    warnings.append(f"Battery capacity {cap} kWh seems high for domestic")
-
-        # Validate load config if present
-        load_data = home_data.get("load", {})
-        if "annual_consumption_kwh" in load_data:
-            cons = load_data["annual_consumption_kwh"]
-            if cons <= 0:
-                errors.append(f"Annual consumption must be positive, got {cons}")
-            elif cons > 20000:
-                warnings.append(f"Annual consumption {cons} kWh seems high for domestic")
-
-        if "household_occupants" in load_data:
-            occ = load_data["household_occupants"]
-            if occ < 1:
-                errors.append(f"Household occupants must be at least 1, got {occ}")
-
-        # Validate location if present
-        loc_data = config_data.get("location", {})
-        if "latitude" in loc_data:
-            lat = loc_data["latitude"]
-            if not -90 <= lat <= 90:
-                errors.append(f"Latitude must be -90 to 90, got {lat}")
-
-        if "longitude" in loc_data:
-            lon = loc_data["longitude"]
-            if not -180 <= lon <= 180:
-                errors.append(f"Longitude must be -180 to 180, got {lon}")
-
-        # Validate period if present
-        period_data = config_data.get("period", {})
-        if period_data:
-            if "start_date" not in period_data:
-                errors.append("Period missing 'start_date'")
-            if "end_date" not in period_data:
-                errors.append("Period missing 'end_date'")
-
-        # Display results
-        table = Table(title=f"Config Validation: {config_file.name}")
-        table.add_column("Type", style="cyan")
-        table.add_column("Message")
-
-        if errors:
-            for err in errors:
-                table.add_row("[red]ERROR[/red]", err)
-
-        if warnings:
-            for warn in warnings:
-                table.add_row("[yellow]WARNING[/yellow]", warn)
-
-        if not errors and not warnings:
-            table.add_row("[green]OK[/green]", "Configuration is valid")
-
-        console.print(table)
-
-        if errors:
-            raise typer.Exit(1)
-
-    except ConfigurationError as e:
-        print_error(f"Configuration error: {e}")
-        raise typer.Exit(1) from e
+    _print_config_findings(
+        config_file,
+        errors=[],
+        warnings=_raw_home_advisories(load_config(config_file)),
+    )
