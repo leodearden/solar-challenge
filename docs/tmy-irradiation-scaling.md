@@ -14,14 +14,14 @@ horizon, from one pinned PVGIS release, `PVGIS_API_URL` (v5_3: PVGIS-SARAH3 + ER
 - PVGIS's TMY, built from `CLIMATE_YEARS`, 2005–2020;
 - the hourly series of those years on a horizontal plane, whose `poa_global` is GHI.
 
-It refuses a series that lacks or repeats any hour of those years: a `RuntimeError`
-names the years, and nothing is cached. Otherwise `scale_tmy_to_annual_ghi` multiplies
-the TMY's `ghi`, `dni` and `dhi` by one factor, so that the year's GHI equals the mean of
-the series' calendar-year totals, and `get_tmy_data` caches the scaled year. Temperature
-and wind stay as PVGIS gives them. `scale_tmy_to_annual_ghi` takes exactly one TMY year,
-8760 hourly rows with some GHI, so it never rescales a partial frame. `get_tmy_data`
-raises its refusal as a `RuntimeError`, as it does any other bad PVGIS response, and
-caches nothing.
+It refuses a series that lacks or repeats any hour of those years: a `WeatherDataError`
+(a `RuntimeError`) names the years, and nothing is cached. Otherwise
+`scale_tmy_to_annual_ghi` multiplies the TMY's `ghi`, `dni` and `dhi` by one factor, so
+that the year's GHI equals the mean of the series' calendar-year totals, and
+`get_tmy_data` caches the scaled year. Temperature and wind stay as PVGIS gives them.
+`scale_tmy_to_annual_ghi` takes exactly one TMY year, 8760 hourly rows with some GHI, so
+it never rescales a partial frame. `get_tmy_data` raises its refusal as a
+`WeatherDataError`, as it does any other bad PVGIS response, and caches nothing.
 
 A cache hit is returned as stored, never rescaled: a cache seeded with
 `put(df, "tmy", location)` serves exactly what was put.

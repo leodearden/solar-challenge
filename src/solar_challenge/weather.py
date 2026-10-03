@@ -47,6 +47,13 @@ PVGIS_TMY_REQUEST: Mapping[str, object] = MappingProxyType(
 """The arguments of get_tmy_data's get_pvgis_tmy request, except the point's latitude and longitude."""
 
 
+class WeatherDataError(RuntimeError):
+    """PVGIS could not supply usable weather for a point: a request failed, or what it returned could not be used.
+
+    It is a RuntimeError, as get_tmy_data's failures always were.
+    """
+
+
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
@@ -260,8 +267,9 @@ def get_tmy_data(
         Index is DatetimeIndex in UTC.
 
     Raises:
-        RuntimeError: If a PVGIS request fails, its hourly series lacks or repeats hours of a climate year,
-            or scale_tmy_to_annual_ghi refuses what PVGIS returned, its ValueError then being the cause
+        WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
+            or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
+            ValueError then being the cause; a WeatherDataError is a RuntimeError
     """
     if use_cache:
         cached_data = get_weather_cache().get("tmy", location)
@@ -273,7 +281,7 @@ def get_tmy_data(
     try:
         tmy = scale_tmy_to_annual_ghi(pvgis_tmy, annual_ghi_kwh_per_m2)
     except ValueError as e:
-        raise RuntimeError(f"Failed to scale PVGIS's TMY to its long-term mean GHI: {e}") from e
+        raise WeatherDataError(f"Failed to scale PVGIS's TMY to its long-term mean GHI: {e}") from e
     if use_cache:
         get_weather_cache().put(tmy, "tmy", location)
     return tmy
@@ -289,18 +297,18 @@ def _fetch_pvgis_tmy(location: Location) -> pd.DataFrame:
         required_columns = {"temp_air", *IRRADIANCE_COLUMNS}
         if not required_columns.issubset(tmy.columns):
             missing = required_columns - set(tmy.columns)
-            raise RuntimeError(f"TMY data missing required columns: {missing}")
+            raise ValueError(f"TMY data missing required columns: {missing}")
         return tmy
 
     except Exception as e:
-        raise RuntimeError(f"Failed to retrieve TMY data from PVGIS: {e}") from e
+        raise WeatherDataError(f"Failed to retrieve TMY data from PVGIS: {e}") from e
 
 
 def _fetch_mean_annual_ghi_kwh_per_m2(location: Location) -> float:
     """The mean of the calendar-year GHI totals, in kWh/m², of PVGIS's CLIMATE_YEARS hourly series at location.
 
     The series is requested for a horizontal plane, so its poa_global is GHI. A series that lacks or repeats
-    hours of any of CLIMATE_YEARS raises RuntimeError naming those years, since its mean would be skewed.
+    hours of any of CLIMATE_YEARS raises WeatherDataError naming those years, since its mean would be skewed.
     """
     try:
         series: pd.DataFrame = get_pvgis_hourly(
@@ -323,7 +331,7 @@ def _fetch_mean_annual_ghi_kwh_per_m2(location: Location) -> float:
         return float((ghi_by_year.sum() / 1000.0).mean())
 
     except Exception as e:
-        raise RuntimeError(f"Failed to retrieve long-term irradiation from PVGIS: {e}") from e
+        raise WeatherDataError(f"Failed to retrieve long-term irradiation from PVGIS: {e}") from e
 
 
 def _hours_in(year: int) -> int:
