@@ -1984,6 +1984,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
     { name = "richardsonpy" },
+    { name = "scipy" },
     { name = "typer" },
 ]
 
@@ -2023,6 +2024,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "rich", specifier = ">=12.3.0" },
     { name = "richardsonpy", specifier = ">=0.2.0" },
+    { name = "scipy", specifier = ">=1.7.2" },
     { name = "typer", specifier = ">=0.12.1" },
 ]
 provides-extras = ["dev", "stochastic", "web", "e2e"]
