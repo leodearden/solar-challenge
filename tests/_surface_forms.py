@@ -9,12 +9,12 @@ A surface form is spelled identically on every Python minor that requires-python
 because inspect's own rendering is not. Measured: 3.11 renders an Enum's call signature
 unlike 3.12, 3.13 renders pathlib.Path as pathlib._local.Path, and 3.14 renders an
 evaluated Optional[X] as X | None. So inspect lays out the signature, and each annotation
-is respelled: a union with bars, a typing alias by its builtin origin, a class by its
-qualified name without its module, Callable's parameter types as a bracketed list, and a
-forward reference, a string inside a generic included, by its name. A string annotation
-is spelled verbatim, never evaluated. Literal's values and Annotated's metadata are
-values, not annotations: each is spelled by its repr, so Literal['a'] never reads as
-Literal[a].
+is respelled: a union with bars, a typing alias by its builtin origin (a bare one, as
+List is, by that origin alone), a class by its qualified name without its module,
+Callable's parameter types as a bracketed list, and a forward reference, a string inside
+a generic included, by its name. A string annotation is spelled verbatim, never
+evaluated. Literal's values and Annotated's metadata are values, not annotations: each
+is spelled by its repr, so Literal['a'] never reads as Literal[a].
 
 Usage::
 
@@ -80,11 +80,19 @@ def _annotation_text(annotation: object) -> str:
         return "..."
     if isinstance(annotation, list):
         return f"[{_annotations_text(annotation)}]"
+    if _is_bare_alias(annotation):
+        return _annotation_text(typing.get_origin(annotation))
     if typing.get_origin(annotation) is not None:
         return _subscripted_text(annotation)
     if inspect.isclass(annotation):
         return annotation.__qualname__
     return repr(annotation)
+
+
+def _is_bare_alias(annotation: object) -> bool:
+    """Bare List has an origin but no __args__ at all; tuple[()] has __args__ == ()."""
+    has_origin = typing.get_origin(annotation) is not None
+    return has_origin and not hasattr(annotation, "__args__")
 
 
 def _subscripted_text(annotation: object) -> str:
