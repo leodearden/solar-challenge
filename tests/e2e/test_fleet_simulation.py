@@ -130,19 +130,3 @@ def test_fleet_completed_results_url(page: Page, live_server: str) -> None:
         "Bug B2: fleet 'View Results' link uses wrong URL pattern "
         "('/results?run_id=<id>' instead of '/results/fleet/<id>')"
     )
-
-
-# ── Fleet results page (skip) ───────────────────────────────────────
-
-
-@pytest.mark.skip(reason="Requires a completed fleet run, which cannot be "
-                         "easily created in e2e without a long simulation")
-def test_fleet_results_page_has_export_buttons(
-    page: Page, live_server: str,
-) -> None:
-    """Fleet results page should contain export buttons for CSV/PDF download.
-
-    Skipped because rendering the fleet results template requires a real
-    completed simulation run stored in the database.
-    """
-    pass
