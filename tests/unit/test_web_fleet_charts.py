@@ -300,18 +300,15 @@ class TestFleetResultsRoute:
             n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1
         )
         run_id = str(uuid.uuid4())
-        with app.app_context():
-            storage = RunStorage(
-                db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]
-            )
-            storage.save_fleet_run(
-                run_id=run_id,
-                fleet_results=fleet,
-                fleet_summary=calculate_fleet_summary(fleet),
-                per_home_summaries=[
-                    calculate_summary(r) for r in fleet.per_home_results
-                ],
-            )
+        storage = RunStorage(
+            db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]
+        )
+        storage.save_fleet_run(
+            run_id=run_id,
+            fleet_results=fleet,
+            fleet_summary=calculate_fleet_summary(fleet),
+            per_home_summaries=[calculate_summary(r) for r in fleet.per_home_results],
+        )
         response = client.get(f"/results/fleet/{run_id}")
         assert response.status_code == 200
         page = response.get_data(as_text=True)
