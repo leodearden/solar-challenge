@@ -6,7 +6,7 @@ regressions in routing, template rendering, and static-asset delivery.
 """
 
 import pytest
-from playwright.sync_api import ConsoleMessage, Page
+from playwright.sync_api import Page
 
 pytestmark = pytest.mark.e2e
 
@@ -83,36 +83,25 @@ def test_all_pages_have_css(page: Page, live_server: str) -> None:
         )
 
 
-# ── Console-error checks ──────────────────────────────────────────────
+# ── JS-error checks ───────────────────────────────────────────────────
 
 
-def _check_page_for_console_errors(page: Page, url: str) -> list[str]:
-    """Navigate to *url*, collect any console-level errors, and return them."""
-    errors: list[str] = []
-
-    def _on_console(msg: ConsoleMessage) -> None:
-        if msg.type == "error":
-            errors.append(msg.text)
-
-    page.on("console", _on_console)
-    page.goto(url)
-    # Give deferred scripts (Alpine.js, HTMX) time to initialise
-    page.wait_for_load_state("networkidle")
-    page.remove_listener("console", _on_console)
-    return errors
-
-
-def test_no_js_console_errors_on_static_pages(
-    page: Page, live_server: str,
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("/", id="dashboard"),
+        pytest.param("/simulate/home", id="simulate-home"),
+        pytest.param("/history/runs", id="history-runs"),
+    ],
+)
+def test_page_loads_without_js_errors(
+    page: Page, live_server: str, page_errors: list[str], path: str
 ) -> None:
-    """Pages that do not rely on heavy Alpine.js components should be
-    free of JS console errors.
+    """The page logs no console error and throws no uncaught exception while it loads.
 
-    Pages with known Alpine.js race-condition issues (/simulate/fleet,
-    /scenarios/builder, /scenarios/sweep) are excluded from this check.
+    /simulate/fleet, /scenarios/sweep and /scenarios/builder are checked by the no-JS-errors tests in their own e2e files.
     """
-    safe_pages = ["/", "/simulate/home", "/history/runs"]
+    page.goto(live_server + path)
+    page.wait_for_load_state("networkidle")
 
-    for path in safe_pages:
-        errors = _check_page_for_console_errors(page, live_server + path)
-        assert errors == [], f"Console errors on {path}: {errors}"
+    assert page_errors == [], f"Errors on {path}: {page_errors}"
