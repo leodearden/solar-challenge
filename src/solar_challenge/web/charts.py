@@ -27,6 +27,11 @@ COLOUR_PALETTE = {
     "heat_pump": "#9013fe",
     "cost": "#d0021b",
     "revenue": "#7ed321",
+    "soc_low_threshold": "#d0021b",
+    "soc_high_threshold": "#7ed321",
+    "net_savings": "#4a90e2",
+    "winter": "#4a90e2",
+    "summer": "#f5a623",
 }
 
 _SHARED_LAYOUT = dict(
@@ -203,14 +208,14 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
     fig.add_hline(
         y=low_threshold,
         line_dash="dash",
-        line_color="#d0021b",
+        line_color=COLOUR_PALETTE["soc_low_threshold"],
         annotation_text="10%",
         annotation_position="bottom right",
     )
     fig.add_hline(
         y=high_threshold,
         line_dash="dash",
-        line_color="#7ed321",
+        line_color=COLOUR_PALETTE["soc_high_threshold"],
         annotation_text="90%",
         annotation_position="top right",
     )
@@ -471,7 +476,7 @@ def financial_breakdown(results: SimulationResults) -> str:
             x=dates,
             y=cumulative_savings.tolist(),
             mode="lines",
-            line=dict(color="#4a90e2", width=2),
+            line=dict(color=COLOUR_PALETTE["net_savings"], width=2),
         ),
         secondary_y=True,
     )
@@ -536,8 +541,8 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
     ]
 
     fig = go.Figure(data=[
-        go.Bar(name="Winter (Dec-Feb)", x=categories, y=winter_vals, marker_color="#4a90e2"),
-        go.Bar(name="Summer (Jun-Aug)", x=categories, y=summer_vals, marker_color="#f5a623"),
+        go.Bar(name="Winter (Dec-Feb)", x=categories, y=winter_vals, marker_color=COLOUR_PALETTE["winter"]),
+        go.Bar(name="Summer (Jun-Aug)", x=categories, y=summer_vals, marker_color=COLOUR_PALETTE["summer"]),
     ])
 
     fig.update_layout(
