@@ -22,7 +22,7 @@ from solar_challenge.config import (
 )
 from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
-from solar_challenge.web.shared import LOCATION_PRESETS
+from solar_challenge.web.shared import LOCATION_PRESETS, require_json_object
 
 
 class _Component(NamedTuple):
@@ -88,8 +88,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
             key the builder does not send, a value that is not the number it should be,
             an unknown location preset or distribution type, or a malformed distribution row.
     """
-    if not isinstance(form, Mapping):
-        raise ValueError(f"Builder form must be a JSON object, got {type(form).__name__}")
+    form = require_json_object(form, "Builder form")
     _refuse_unrecognised_keys(form)
     fields = _present_fields(form)
 

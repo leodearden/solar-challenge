@@ -31,6 +31,7 @@ from solar_challenge.web.shared import (
     get_job_manager,
     get_storage,
     request_json_object,
+    require_json_object,
     resolve_location,
 )
 from solar_challenge.web.simulation_params import parse_date_range, parse_home_config, parse_seg_tariff
@@ -570,11 +571,7 @@ def simulate_sweep() -> tuple[Response, int]:
     if min_val >= max_val:
         return jsonify({"error": "Min must be less than max"}), 400
     mode = str(data.get("mode", "linear"))
-    base_config = data.get("base_config", {})
-    if not isinstance(base_config, Mapping):
-        return jsonify({
-            "error": f"base_config must be a JSON object, got {type(base_config).__name__}",
-        }), 400
+    base_config = require_json_object(data.get("base_config", {}), "base_config")
 
     # Generate sweep points
     if mode == "geometric":
