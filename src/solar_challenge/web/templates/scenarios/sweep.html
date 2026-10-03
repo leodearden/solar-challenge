@@ -57,8 +57,8 @@
                 </div>
 
                 <!-- Mode Radio Buttons -->
-                <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Sweep Mode</label>
+                <fieldset role="radiogroup">
+                    <legend class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Sweep Mode</legend>
                     <div class="flex gap-6">
                         <label class="inline-flex items-center gap-2 cursor-pointer">
                             <input type="radio" x-model="mode" value="linear"
@@ -71,7 +71,7 @@
                             <span class="text-sm text-slate-600 dark:text-slate-300">Geometric</span>
                         </label>
                     </div>
-                </div>
+                </fieldset>
 
                 <!-- Base Config -->
                 <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
