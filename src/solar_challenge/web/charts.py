@@ -7,6 +7,7 @@ Charts use a consistent colour palette and shared layout defaults.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
@@ -35,6 +36,20 @@ _SHARED_LAYOUT = dict(
     margin=dict(l=50, r=20, t=40, b=60),
     legend=dict(orientation="h", y=-0.15),
 )
+
+_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _with_alpha(colour: str, alpha: float) -> str:
+    """*colour* as an rgba() string at opacity *alpha*.
+
+    Raises:
+        ValueError: If *colour* is not written #rrggbb; the message names it.
+    """
+    if not _HEX_COLOUR.fullmatch(colour):
+        raise ValueError(f"a translucent chart colour derives from a #rrggbb colour, not {colour!r}")
+    red, green, blue = bytes.fromhex(colour[1:])
+    return f"rgba({red},{green},{blue},{alpha})"
 
 
 def _adaptive_downsample(df: pd.DataFrame, max_points: int = 2000) -> pd.DataFrame:
@@ -136,9 +151,6 @@ def power_flow_timeline(results: SimulationResults) -> str:
                 mode="lines",
                 stackgroup="one",
                 line=dict(width=0.5, color=colour),
-                fillcolor=colour.replace(")", ",0.3)").replace("#", "rgba(")
-                if colour.startswith("rgba")
-                else None,
             )
         )
 
@@ -179,7 +191,7 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
         mode="lines",
         fill="tozeroy",
         line=dict(color=COLOUR_PALETTE["battery_charge"], width=1.5),
-        fillcolor="rgba(80,227,194,0.15)",
+        fillcolor=_with_alpha(COLOUR_PALETTE["battery_charge"], 0.15),
     )
 
     fig = go.Figure(data=[trace])
@@ -246,6 +258,7 @@ def sankey_diagram(summary: dict[str, Any]) -> str:
     targets: list[int] = []
     values: list[float] = []
     link_colours: list[str] = []
+    link_opacity = 0.4
 
     # PV -> Self-consumption (direct to demand)
     pv_direct = max(0, total_self - total_discharge)
@@ -253,35 +266,35 @@ def sankey_diagram(summary: dict[str, Any]) -> str:
         sources.append(0)
         targets.append(3)
         values.append(round(pv_direct, 2))
-        link_colours.append("rgba(126,211,33,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["self_consumption"], link_opacity))
 
     # PV -> Battery
     if total_charge > 0.01:
         sources.append(0)
         targets.append(2)
         values.append(round(total_charge, 2))
-        link_colours.append("rgba(80,227,194,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["battery_charge"], link_opacity))
 
     # PV -> Export
     if total_export > 0.01:
         sources.append(0)
         targets.append(4)
         values.append(round(total_export, 2))
-        link_colours.append("rgba(74,144,226,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["grid_export"], link_opacity))
 
     # Grid -> Demand
     if total_import > 0.01:
         sources.append(1)
         targets.append(3)
         values.append(round(total_import, 2))
-        link_colours.append("rgba(155,155,155,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["grid_import"], link_opacity))
 
     # Battery -> Demand
     if total_discharge > 0.01:
         sources.append(2)
         targets.append(3)
         values.append(round(total_discharge, 2))
-        link_colours.append("rgba(80,227,194,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["battery_charge"], link_opacity))
 
     if not values:
         return "{}"
@@ -580,7 +593,7 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
         mode="lines",
         fill="tozeroy",
         line=dict(color=COLOUR_PALETTE["heat_pump"], width=1),
-        fillcolor="rgba(144,19,254,0.15)",
+        fillcolor=_with_alpha(COLOUR_PALETTE["heat_pump"], 0.15),
     )])
     load_fig.update_layout(
         **_SHARED_LAYOUT,
@@ -741,21 +754,12 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
             round(battery_util, 1),
         ]
 
-        # Convert hex colour to rgba for semi-transparent fill
-        if colour.startswith("#") and len(colour) == 7:
-            r = int(colour[1:3], 16)
-            g = int(colour[3:5], 16)
-            b = int(colour[5:7], 16)
-            fill_colour = f"rgba({r},{g},{b},0.1)"
-        else:
-            fill_colour = colour
-
         traces.append(go.Scatterpolar(
             name=label,
             r=r_values + [r_values[0]],  # close the polygon
             theta=theta + [theta[0]],
             fill="toself",
-            fillcolor=fill_colour,
+            fillcolor=_with_alpha(colour, 0.1),
             line=dict(color=colour, width=2),
         ))
 
@@ -817,9 +821,6 @@ def fleet_aggregate_timeline(aggregate_results: SimulationResults) -> str:
                 mode="lines",
                 stackgroup="one",
                 line=dict(width=0.5, color=colour),
-                fillcolor=colour.replace(")", ",0.3)").replace("#", "rgba(")
-                if colour.startswith("rgba")
-                else None,
             )
         )
 
@@ -867,7 +868,7 @@ def fleet_grid_impact(aggregate_results: SimulationResults) -> str:
             mode="lines",
             fill="tozeroy",
             line=dict(width=0.5, color=COLOUR_PALETTE["grid_import"]),
-            fillcolor="rgba(155,155,155,0.3)",
+            fillcolor=_with_alpha(COLOUR_PALETTE["grid_import"], 0.3),
         ),
         go.Scatter(
             name="Grid Export",
@@ -876,7 +877,7 @@ def fleet_grid_impact(aggregate_results: SimulationResults) -> str:
             mode="lines",
             fill="tozeroy",
             line=dict(width=0.5, color=COLOUR_PALETTE["grid_export"]),
-            fillcolor="rgba(74,144,226,0.3)",
+            fillcolor=_with_alpha(COLOUR_PALETTE["grid_export"], 0.3),
         ),
     ]
 
