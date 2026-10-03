@@ -245,15 +245,20 @@ def get_tmy_data(
         Index is DatetimeIndex in UTC.
 
     Raises:
-        RuntimeError: If a PVGIS request fails, or its hourly series lacks or repeats hours of a climate year
-        ValueError: If PVGIS's TMY is not one TMY_HOURS-hour year with some GHI (from scale_tmy_to_annual_ghi)
+        RuntimeError: If a PVGIS request fails, its hourly series lacks or repeats hours of a climate year,
+            or scale_tmy_to_annual_ghi refuses what PVGIS returned, its ValueError then being the cause
     """
     if use_cache:
         cached_data = get_weather_cache().get("tmy", location)
         if cached_data is not None:
             return cached_data
 
-    tmy = scale_tmy_to_annual_ghi(_fetch_pvgis_tmy(location), _fetch_mean_annual_ghi_kwh_per_m2(location))
+    pvgis_tmy = _fetch_pvgis_tmy(location)
+    annual_ghi_kwh_per_m2 = _fetch_mean_annual_ghi_kwh_per_m2(location)
+    try:
+        tmy = scale_tmy_to_annual_ghi(pvgis_tmy, annual_ghi_kwh_per_m2)
+    except ValueError as e:
+        raise RuntimeError(f"Failed to scale PVGIS's TMY to its long-term mean GHI: {e}") from e
     if use_cache:
         get_weather_cache().put(tmy, "tmy", location)
     return tmy

@@ -19,7 +19,9 @@ names the years, and nothing is cached. Otherwise `scale_tmy_to_annual_ghi` mult
 the TMY's `ghi`, `dni` and `dhi` by one factor, so that the year's GHI equals the mean of
 the series' calendar-year totals, and `get_tmy_data` caches the scaled year. Temperature
 and wind stay as PVGIS gives them. `scale_tmy_to_annual_ghi` takes exactly one TMY year,
-8760 hourly rows, so it never rescales a partial frame.
+8760 hourly rows with some GHI, so it never rescales a partial frame. `get_tmy_data`
+raises its refusal as a `RuntimeError`, as it does any other bad PVGIS response, and
+caches nothing.
 
 A cache hit is returned as stored, never rescaled: a cache seeded with
 `put(df, "tmy", location)` serves exactly what was put.

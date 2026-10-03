@@ -276,6 +276,24 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
 
         assert weather_cache.get("tmy", Location.bristol()) is None
 
+    @pytest.mark.parametrize(
+        "make_tmy",
+        [
+            pytest.param(lambda tmy: tmy.iloc[:24], id="TMY not one year"),
+            pytest.param(lambda tmy: tmy.assign(ghi=0.0), id="TMY without GHI"),
+        ],
+    )
+    def test_refuses_a_tmy_it_cannot_scale(self, weather_cache, pvgis_tmy, pvgis_requests, make_tmy):
+        """A TMY scale_tmy_to_annual_ghi refuses raises RuntimeError, as any bad PVGIS response does, and leaves nothing cached."""
+        pvgis_requests.tmy.return_value = (make_tmy(pvgis_tmy), {})
+
+        with pytest.raises(RuntimeError) as refusal:
+            get_tmy_data(Location.bristol())
+
+        assert isinstance(refusal.value.__cause__, ValueError)
+        assert str(refusal.value.__cause__) in str(refusal.value)
+        assert weather_cache.get("tmy", Location.bristol()) is None
+
 
 class TestScaleTmyToAnnualGhi:
     """scale_tmy_to_annual_ghi rescales one TMY year's irradiance to a given annual GHI."""
