@@ -500,6 +500,41 @@ home:
             result.stdout
         )
 
+    @pytest.mark.parametrize(
+        ("document", "warning"),
+        [
+            pytest.param(
+                "homes:\n"
+                "  - pv: {capacity_kw: 55.0}\n"
+                "  - pv: {capacity_kw: 60.0}\n"
+                "  - pv: {capacity_kw: 4.0}\n",
+                "PV capacity 60.0 kW seems high for domestic (2 of 3 homes above 50 kW)",
+                id="pv-homes-list",
+            ),
+            pytest.param(
+                "home:\n  battery: {capacity_kwh: 150.0}\n",
+                "Battery capacity 150.0 kWh seems high for domestic (1 of 1 homes above 100 kWh)",
+                id="battery-home",
+            ),
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  load: {annual_consumption_kwh: 25000.0}\n",
+                "Annual consumption 25000.0 kWh seems high for domestic (2 of 2 homes above 20000 kWh)",
+                id="consumption-fleet-distribution",
+            ),
+        ],
+    )
+    def test_a_home_above_a_domestic_ceiling_is_one_warning_row(
+        self, tmp_path: Path, document: str, warning: str
+    ) -> None:
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 0
+        assert f"WARNING {warning}" in _table_text(result.stdout)
+        assert _table_text(result.stdout).count("WARNING") == 1
+
 
 class TestErrorHandling:
     """Tests for CLI error handling."""
