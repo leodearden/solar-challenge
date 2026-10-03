@@ -3,6 +3,7 @@
 import dataclasses
 import math
 import pickle
+import re
 
 import pytest
 from solar_challenge.battery import BatteryConfig, Battery, compute_soh
@@ -68,6 +69,21 @@ class TestBatteryConfigValidation:
             BatteryConfig(capacity_kwh=5.0, max_discharge_kw=0)
         with pytest.raises(ValueError, match="discharge"):
             BatteryConfig(capacity_kwh=5.0, max_discharge_kw=-1.0)
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    @pytest.mark.parametrize(
+        ("field", "invariant", "unit"),
+        [
+            ("capacity_kwh", "Capacity must be positive and finite", "kWh"),
+            ("max_charge_kw", "Max charge power must be positive and finite", "kW"),
+            ("max_discharge_kw", "Max discharge power must be positive and finite", "kW"),
+        ],
+    )
+    def test_a_capacity_or_power_limit_that_is_not_finite_is_refused(
+        self, field: str, invariant: str, unit: str, value: float
+    ) -> None:
+        with pytest.raises(ValueError, match=re.escape(f"{invariant}, got {value} {unit}")):
+            dataclasses.replace(BatteryConfig(capacity_kwh=5.0), **{field: value})
 
 
 class TestBatteryConfigGridCharging:
