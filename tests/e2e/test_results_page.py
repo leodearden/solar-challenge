@@ -2,7 +2,8 @@
 
 Uses seeded data fixtures (no live simulation needed) to verify
 page rendering, chart containers, tab switching, stat cards,
-download links, and error handling.
+download links and error handling, and that the daily balance
+chart agrees with the stat cards.
 """
 
 import pytest
@@ -94,6 +95,38 @@ def test_results_stat_card_labels_not_truncated(
             box_size: [label.clientWidth, label.clientHeight],
         }))""")
     assert cut_short == [], f"Stat card labels are cut short: {cut_short}"
+
+
+# -- Daily balance chart agrees with the stat cards ------------------------
+
+
+def test_results_daily_balance_bars_add_up_to_the_stat_cards(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """Each energy flow's Daily Energy Balance bars add up to that flow's stat card.
+
+    The cards show the run's stored summary and the chart its stored time series;
+    a run the app saved derives both from the same per-minute amounts.
+    """
+    run_id, _ = seeded_home_run
+    page.goto(live_server + f"/results/home/{run_id}")
+
+    daily_balance = page.locator("#chart-daily-balance")
+    expect(daily_balance.locator(".main-svg").first).to_be_attached()
+    bar_totals = daily_balance.evaluate("""chart => Object.fromEntries(chart.data.map(
+        trace => [trace.name, trace.y.reduce((total, y) => total + y, 0)]))""")
+
+    for card_label, trace_name in (
+        ("Total Generation", "Generation"),
+        ("Total Demand", "Demand"),
+        ("Self-Consumption", "Self-Consumption"),
+        ("Grid Import", "Grid Import"),
+        ("Grid Export", "Grid Export"),
+    ):
+        card_value = page.get_by_title(card_label, exact=True).locator("..").locator("span").first
+        expect(card_value).to_have_text(f"{bar_totals[trace_name]:.1f}")
 
 
 # -- Download CSV returns 200 ----------------------------------------------
