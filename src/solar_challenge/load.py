@@ -36,7 +36,8 @@ class LoadConfig:
             If not specified and household_occupants is set, derived from Ofgem TDCV.
         household_occupants: Number of household occupants, a whole number from
             1 to 10. A whole-number float such as 3.0 is held as the int 3; a
-            bool is refused. Affects consumption and profile shape.
+            bool, Python's or numpy's, is refused. Affects consumption and
+            profile shape.
         name: Optional identifier for the load profile
         use_stochastic: Use the windowed richardsonpy stochastic model (default True).
             richardsonpy is a hard dependency so this path is always available.
@@ -64,7 +65,10 @@ class LoadConfig:
                 f"Household occupants seems unrealistic: {self.household_occupants}"
             )
         whole_occupants = int(self.household_occupants)
-        if isinstance(self.household_occupants, bool) or whole_occupants != self.household_occupants:
+        if (
+            isinstance(self.household_occupants, (bool, np.bool_))
+            or whole_occupants != self.household_occupants
+        ):
             raise ValueError(
                 f"Household occupants must be a whole number, got {self.household_occupants}"
             )
