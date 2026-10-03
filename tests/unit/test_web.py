@@ -139,6 +139,20 @@ class TestDashboardRoute:
         assert headings(page).count("Recent Runs") == 1
         assert texts(page).count("No simulation runs yet.") == 1
 
+    def test_dashboard_lists_saved_runs_in_recent_runs_table(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """GET / with saved runs renders the Recent Runs table, one row per run showing its name, and no empty-state message."""
+        run_names = ("North Roof", "South Roof")
+        for run_name in run_names:
+            _save_home_run(app, run_name, _make_sim_results(days=1))
+        response = client.get("/")
+        page = response.get_data(as_text=True)
+        page_texts = texts(page)
+        assert "recent-runs-table" in element_ids(page)
+        assert _counts_of(page_texts, run_names) == dict.fromkeys(run_names, 1)
+        assert "No simulation runs yet." not in page_texts
+
 
 class TestSimulateHomeRoute:
     """Tests for the GET /simulate/home route."""
