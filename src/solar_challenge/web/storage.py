@@ -354,24 +354,7 @@ class RunStorage:
         if not parquet_path.exists():
             raise FileNotFoundError(f"Data file not found: {parquet_path}")
         df = pd.read_parquet(parquet_path, engine="pyarrow")
-
-        # Reconstruct SimulationResults from DataFrame
-        # The DataFrame has columns matching the to_dataframe() output
-        results = SimulationResults(
-            generation=df["generation_kw"],
-            demand=df["demand_kw"],
-            self_consumption=df["self_consumption_kw"],
-            battery_charge=df["battery_charge_kw"],
-            battery_discharge=df["battery_discharge_kw"],
-            battery_soc=df["battery_soc_kwh"],
-            grid_import=df["grid_import_kw"],
-            grid_export=df["grid_export_kw"],
-            import_cost=df["import_cost_gbp"],
-            export_revenue=df["export_revenue_gbp"],
-            tariff_rate=df["tariff_rate_per_kwh"],
-            strategy_name=summary.strategy_name,  # Get from summary
-            heat_pump_load=df["heat_pump_load_kw"] if "heat_pump_load_kw" in df.columns else None,
-        )
+        results = SimulationResults.from_dataframe(df, strategy_name=summary.strategy_name)
 
         return config, results, summary
 
@@ -543,24 +526,9 @@ class RunStorage:
                 home_summary_dict = json.load(f)
             home_summary = _deserialize_dataclass(SummaryStatistics, home_summary_dict)
             per_home_summaries.append(home_summary)
-
-            # Reconstruct SimulationResults from DataFrame
-            result = SimulationResults(
-                generation=df["generation_kw"],
-                demand=df["demand_kw"],
-                self_consumption=df["self_consumption_kw"],
-                battery_charge=df["battery_charge_kw"],
-                battery_discharge=df["battery_discharge_kw"],
-                battery_soc=df["battery_soc_kwh"],
-                grid_import=df["grid_import_kw"],
-                grid_export=df["grid_export_kw"],
-                import_cost=df["import_cost_gbp"],
-                export_revenue=df["export_revenue_gbp"],
-                tariff_rate=df["tariff_rate_per_kwh"],
-                strategy_name=home_summary.strategy_name,
-                heat_pump_load=df["heat_pump_load_kw"] if "heat_pump_load_kw" in df.columns else None,
+            per_home_results.append(
+                SimulationResults.from_dataframe(df, strategy_name=home_summary.strategy_name)
             )
-            per_home_results.append(result)
 
         # Construct FleetResults
         fleet_results = FleetResults(
