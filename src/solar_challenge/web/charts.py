@@ -2,7 +2,9 @@
 """Centralized chart module for the Solar Challenge web dashboard.
 
 All functions return Plotly JSON strings via fig.to_json().
-Charts use a consistent colour palette and shared layout defaults.
+Charts share layout defaults and take every colour from COLOUR_PALETTE: a chart colour is a
+palette entry or a translucent form of one, made by _with_alpha, so a palette edit reaches it.
+tests/unit/test_web_chart_colours.py guards this.
 """
 
 from __future__ import annotations
@@ -32,6 +34,10 @@ COLOUR_PALETTE = {
     "net_savings": "#4a90e2",
     "winter": "#4a90e2",
     "summer": "#f5a623",
+    "comparison_run_1": "#f5a623",
+    "comparison_run_2": "#4a90e2",
+    "comparison_run_3": "#7ed321",
+    "comparison_run_4": "#9013fe",
 }
 
 _SHARED_LAYOUT = dict(
@@ -618,8 +624,12 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
 # Comparison charts (for run comparison page)
 # ---------------------------------------------------------------------------
 
-# Extended palette for comparison overlays — up to 4 runs
-_COMPARISON_COLOURS = ["#f5a623", "#4a90e2", "#7ed321", "#9013fe"]
+_COMPARISON_RUN_ROLES = ("comparison_run_1", "comparison_run_2", "comparison_run_3", "comparison_run_4")
+
+
+def _comparison_run_colour(run_index: int) -> str:
+    """The palette colour of the compared run at *run_index*; a fifth run starts the cycle again."""
+    return COLOUR_PALETTE[_COMPARISON_RUN_ROLES[run_index % len(_COMPARISON_RUN_ROLES)]]
 
 
 def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str]) -> str:
@@ -638,7 +648,7 @@ def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str
     """
     traces: list[Any] = []
     for i, (results, label) in enumerate(zip(results_list, labels)):
-        colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
+        colour = _comparison_run_colour(i)
 
         gen = _adaptive_downsample_series(results.generation)
         dem = _adaptive_downsample_series(results.demand)
@@ -698,7 +708,7 @@ def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> 
 
     traces: list[Any] = []
     for i, (summary, label) in enumerate(zip(summaries, labels)):
-        colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
+        colour = _comparison_run_colour(i)
         values = [round(summary.get(k, 0), 2) for k in keys]
         traces.append(go.Bar(
             name=label,
@@ -741,7 +751,7 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
 
     traces: list[Any] = []
     for i, (summary, label) in enumerate(zip(summaries, labels)):
-        colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
+        colour = _comparison_run_colour(i)
 
         sc_ratio = summary.get("self_consumption_ratio", 0) * 100
         grid_dep = summary.get("grid_dependency_ratio", 0) * 100
