@@ -103,7 +103,8 @@ class SimulationResults:
 
     All time series have 1-minute resolution and matching DatetimeIndex.
     Each series field's column metadata names the column to_dataframe writes it
-    under and from_dataframe reads it from.
+    under and from_dataframe reads it from, and each series is named that column,
+    whatever it was named when built.
 
     Attributes:
         generation: PV generation in kW
@@ -137,6 +138,13 @@ class SimulationResults:
     # Per-timestep slice of import_cost spent charging the battery from the grid, in £
     # (None when tariff_config is None).
     grid_charge_cost: Optional[pd.Series] = field(default=None, metadata=_money("grid_charge_cost_gbp"))
+
+    def __post_init__(self) -> None:
+        """Name each set series after its column, without renaming the series it was built from."""
+        for name, column in self._series_columns():
+            series = getattr(self, name)
+            if series is not None:
+                setattr(self, name, series.rename(column))
 
     @classmethod
     def _series_columns(cls) -> Iterator[tuple[str, str]]:
