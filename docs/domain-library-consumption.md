@@ -109,10 +109,12 @@ sum `own_use_payment_gbp + own_use_vat_gbp`, so derive the two rather than
 hardcoding a rounded literal. Consumers that only read the dataclass —
 including anything walking it with `dataclasses.fields()` — need no change.
 
-**Changes merged since the last tag.** Each change to the frozen public surface
-that has merged to `main` since the last tag is listed here as an
-**Unreleased on main** line, added by the commit that makes the change, and the
-next release folds these lines into its notes. A change to an exported
+**Changes merged since the last tag.** Each change merged to `main` since the
+last tag that alters the frozen public surface, or what a public name returns,
+is listed here as an **Unreleased on main** line, added by the commit that makes
+the change. A change to what a finance-model name returns is listed instead in
+the header of [cost-recovery-finance-model.md](cost-recovery-finance-model.md),
+and the next release folds both lists into its notes. A change to an exported
 signature must also edit `FROZEN_SURFACE` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
@@ -121,6 +123,20 @@ signature must also edit `FROZEN_SURFACE` in
 checks its hour ranges and otherwise ignores it. Consumers drop the argument
 when they re-pin: it never changed a decision, because every hour outside
 `peak_hours` is off-peak.
+
+**Unreleased on main** (task 285): `get_tmy_data` multiplies the TMY's `ghi`,
+`dni` and `dhi` by one factor, so that the year's GHI equals the mean annual GHI
+of PVGIS's 2005–2020 hourly series for the point; the 0.5.0 tag returns PVGIS's
+TMY unscaled. At Bristol, the TMY's annual GHI goes from 992.3 to 1069.5 kWh/m²
+and the default 4 kW system's annual AC from 4328 to 4664 kWh (+7.8%); each
+point has its own factor, from 0.936 (Glasgow) to 1.078 (Bristol) at the seven
+UK points measured
+([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md) §4, §6). Temperature
+and wind are unchanged. Fetching the TMY now also requests that hourly series,
+and every weather cache entry written before the change is ignored
+([Network I/O](#network-io)). Consumers re-baseline every figure that depends on
+PV generation when they re-pin, bills and the cost-recovery rate included, and
+rebuild any pre-built cache with `WeatherCache.put`.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
