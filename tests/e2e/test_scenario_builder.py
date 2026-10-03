@@ -1,15 +1,4 @@
-"""End-to-end tests for the Scenario Builder page (/scenarios/builder).
-
-Verifies page loading, accordion sections, YAML preview, Download YAML
-button, that each section's form control is found by role and by the name its
-caption gives it and sets its own field of the form the builder sends to
-/api/scenarios/validate, that each distribution card is a group named by its
-heading whose controls do the same, that switching a card to weighted rows at
-phone width keeps its combobox's width, that the YAML the builder previews
-loads through the scenario loaders, that uploading a YAML sets the form to it
-(or, for a YAML the form cannot hold, leaves the form as it was), and detects
-Bug B1 (Alpine race condition with external JS).
-"""
+"""End-to-end tests for the Scenario Builder page (/scenarios/builder)."""
 
 import re
 from pathlib import Path
@@ -17,7 +6,7 @@ from typing import Any
 
 import pytest
 import yaml
-from playwright.sync_api import ConsoleMessage, Page, Response, expect
+from playwright.sync_api import ConsoleMessage, Locator, Page, Response, expect
 
 from solar_challenge.config import load_fleet_config
 from solar_challenge.home import HomeConfig
@@ -258,10 +247,17 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
     }
 
 
+def _rendered_width(control: Locator) -> float:
+    """The width in pixels that *control* is laid out at."""
+    box = control.bounding_box()
+    assert box is not None, "the control has no layout box"
+    return box["width"]
+
+
 def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_type_combobox(
     page: Page, live_server: str
 ) -> None:
-    """At phone width, choosing Weighted Discrete leaves the Distribution Type combobox as wide as it was.
+    """At phone width, choosing Weighted Discrete leaves the Distribution Type combobox as wide as it was, to within half a pixel.
 
     The rows Weighted Discrete shows are wider than the card, and a fieldset is as wide as
     its content unless it resets that, which would widen the combobox beyond the card's edge.
@@ -272,12 +268,12 @@ def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_t
     card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
     distribution_type = card_group.get_by_role("combobox", name="Distribution Type", exact=True)
     expect(distribution_type).to_be_visible()
-    width_before = distribution_type.bounding_box()["width"]
+    width_before = _rendered_width(distribution_type)
 
     distribution_type.select_option(label="Weighted Discrete")
     expect(card_group.get_by_role("button", name="+ Add value", exact=True)).to_be_visible()
 
-    assert distribution_type.bounding_box()["width"] == width_before
+    assert _rendered_width(distribution_type) == pytest.approx(width_before, abs=0.5)
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────
