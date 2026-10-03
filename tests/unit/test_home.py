@@ -161,6 +161,15 @@ class TestSimulationResults:
         assert "demand_kw" in df.columns
         assert "battery_soc_kwh" in df.columns
 
+    def test_to_dataframe_appends_a_set_grid_charge_cost_as_grid_charge_cost_gbp(self, sample_results):
+        """A set grid_charge_cost is one more column, grid_charge_cost_gbp, after the columns of a run without it."""
+        grid_charge_cost = pd.Series(0.01, index=sample_results.generation.index)
+
+        df = dataclasses.replace(sample_results, grid_charge_cost=grid_charge_cost).to_dataframe()
+
+        assert list(df.columns) == [*sample_results.to_dataframe().columns, "grid_charge_cost_gbp"]
+        pd.testing.assert_series_equal(df["grid_charge_cost_gbp"], grid_charge_cost, check_names=False)
+
     def test_from_dataframe_restores_every_series_to_dataframe_wrote(self):
         """from_dataframe gives back every series to_dataframe wrote, optional ones included."""
         original = _results_with_every_series_set()
