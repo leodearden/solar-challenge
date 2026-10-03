@@ -60,8 +60,17 @@ def _counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
     return {key: items.count(key) for key in keys}
 
 
-def _save_home_run(app: Flask, name: str, results: SimulationResults) -> str:
-    """Save *results* to *app*'s store as a completed home run named *name*, as a finished job does; return its run id."""
+def _save_home_run(
+    app: Flask,
+    name: str,
+    results: SimulationResults,
+    *,
+    created_at: str | None = None,
+) -> str:
+    """Save *results* to *app*'s store as a completed home run named *name*, as a finished job does; return its run id.
+
+    *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
+    """
     run_id = str(uuid.uuid4())
     storage = RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"])
     storage.save_home_run(
@@ -74,6 +83,7 @@ def _save_home_run(app: Flask, name: str, results: SimulationResults) -> str:
         results=results,
         summary=calculate_summary(results),
         name=name,
+        created_at=created_at,
     )
     return run_id
 
@@ -152,6 +162,41 @@ class TestDashboardRoute:
         assert "recent-runs-table" in element_ids(page)
         assert _counts_of(page_texts, run_names) == dict.fromkeys(run_names, 1)
         assert "No simulation runs yet." not in page_texts
+
+    def test_dashboard_recent_runs_table_rows_show_each_run_newest_first(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """GET / lists the saved runs newest first in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's results page."""
+        created_at_by_name = {
+            "North Roof": "2024-06-01T09:00:00+00:00",
+            "South Roof": "2024-06-02T09:00:00+00:00",
+        }
+        run_ids = {
+            name: _save_home_run(app, name, _make_sim_results(days=1), created_at=created_at)
+            for name, created_at in created_at_by_name.items()
+        }
+        response = client.get("/")
+        page = response.get_data(as_text=True)
+        assert texts_after(page, "Status", 8) == [
+            "South Roof", "home", "2024-06-02", "completed",
+            "North Roof", "home", "2024-06-01", "completed",
+        ]
+        for name, run_id in run_ids.items():
+            assert element_count(page, "a", {"href": f"/results/home/{run_id}"}) == 1, name
+
+    def test_dashboard_stats_count_and_total_the_saved_runs(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """GET / with two saved one-day runs reads Total Runs 2 and Homes Simulated 2, and reads Energy Modelled as the two runs' total generation in MWh."""
+        results = _make_sim_results(days=1)
+        for run_name in ("North Roof", "South Roof"):
+            _save_home_run(app, run_name, results)
+        response = client.get("/")
+        page = response.get_data(as_text=True)
+        two_runs_generation_mwh = 2 * calculate_summary(results).total_generation_kwh / 1000
+        assert texts_after(page, "Total Runs", 1) == ["2"]
+        assert texts_after(page, "Homes Simulated", 1) == ["2"]
+        assert texts_after(page, "Energy Modelled", 2) == [str(round(two_runs_generation_mwh, 2)), "MWh"]
 
 
 class TestSimulateHomeRoute:
