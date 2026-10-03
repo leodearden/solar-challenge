@@ -35,9 +35,9 @@ uv run --locked --extra dev pytest tests/interpreter_matrix
 # (~3.5 min); the per-task verify never runs it
 uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider
 
-# PVGIS contract tests: what the offline lane's pvgis job runs after every merge
-# (~15 s); they check PVGIS's live response, so they need network access, and the
-# per-task verify never runs them
+# PVGIS contract tests: what the offline lane's pvgis job runs after every merge;
+# they check PVGIS's live response, so they need network access, and the per-task
+# verify never runs them
 uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider
 
 # CLI entry point
