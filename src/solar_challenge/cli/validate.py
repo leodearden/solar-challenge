@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Validation commands."""
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Mapping, Optional, Sequence
+from typing import Annotated, Any, Callable, Mapping, Optional, Sequence
 
 import pandas as pd
 import typer
@@ -198,25 +199,55 @@ def _homes_defined_by(config_file: Path) -> list[HomeConfig]:
     return [load_home_config(config_file)]
 
 
-def _raw_home_advisories(document: Mapping[str, Any]) -> list[str]:
-    """Domestic-scale advisories read from the file's raw ``home:`` block."""
-    home = document.get("home") or {}
-    pv = home.get("pv") or {}
-    battery = home.get("battery") or {}
-    load = home.get("load") or {}
+@dataclass(frozen=True)
+class _DomesticCeiling:
+    """A size above which a domestic install seems implausible: an advisory, never a refusal."""
 
-    warnings = []
-    if pv.get("capacity_kw", 0) > 50:
-        warnings.append(f"PV capacity {pv['capacity_kw']} kW seems high for domestic")
-    if battery.get("capacity_kwh", 0) > 100:
-        warnings.append(
-            f"Battery capacity {battery['capacity_kwh']} kWh seems high for domestic"
+    subject: str
+    unit: str
+    ceiling: float
+    size_of: Callable[[HomeConfig], Optional[float]]
+
+    def warning(self, homes: Sequence[HomeConfig]) -> Optional[str]:
+        """One line naming the largest size above the ceiling and how many *homes* exceed it, or None when none do."""
+        sizes = [
+            size
+            for home in homes
+            if (size := self.size_of(home)) is not None and size > self.ceiling
+        ]
+        if not sizes:
+            return None
+        return (
+            f"{self.subject} {max(sizes)} {self.unit} seems high for domestic "
+            f"({len(sizes)} of {len(homes)} homes above {self.ceiling} {self.unit})"
         )
-    if load.get("annual_consumption_kwh", 0) > 20000:
-        warnings.append(
-            f"Annual consumption {load['annual_consumption_kwh']} kWh seems high for domestic"
-        )
-    return warnings
+
+
+def _battery_capacity_kwh(home: HomeConfig) -> Optional[float]:
+    """The home's battery capacity, or None for a PV-only home."""
+    return None if home.battery_config is None else home.battery_config.capacity_kwh
+
+
+_DOMESTIC_CEILINGS: tuple[_DomesticCeiling, ...] = (
+    _DomesticCeiling(
+        subject="PV capacity",
+        unit="kW",
+        ceiling=50,
+        size_of=lambda home: home.pv_config.capacity_kw,
+    ),
+    _DomesticCeiling(
+        subject="Battery capacity",
+        unit="kWh",
+        ceiling=100,
+        size_of=_battery_capacity_kwh,
+    ),
+    _DomesticCeiling(
+        subject="Annual consumption",
+        unit="kWh",
+        ceiling=20000,
+        size_of=lambda home: home.load_config.annual_consumption_kwh,
+    ),
+)
 
 
 def _print_config_findings(
@@ -269,8 +300,9 @@ def config(
         _print_config_findings(config_file, errors=[str(refusal)], warnings=[])
         raise typer.Exit(1) from refusal
 
-    _print_config_findings(
-        config_file,
-        errors=[],
-        warnings=_raw_home_advisories(load_config(config_file)),
-    )
+    warnings = [
+        warning
+        for ceiling in _DOMESTIC_CEILINGS
+        if (warning := ceiling.warning(homes)) is not None
+    ]
+    _print_config_findings(config_file, errors=[], warnings=warnings)
