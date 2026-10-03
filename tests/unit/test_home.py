@@ -208,6 +208,64 @@ class TestSimulationResults:
         assert "grid_charge_cost_gbp" not in message
 
 
+class TestPerMinuteAmounts:
+    """Test SimulationResults.per_minute_amounts, each minute's energy and money, and total_amounts, their run totals."""
+
+    def test_power_becomes_each_minutes_kwh_and_money_stays_its_pounds(self):
+        """Each kW series becomes its minute's kWh, each £ series stays as it is, and a level has no column."""
+        results = _results_with_every_series_set()
+
+        amounts = results.per_minute_amounts()
+
+        expected = pd.DataFrame(
+            {
+                "generation_kwh": results.generation / 60,
+                "demand_kwh": results.demand / 60,
+                "self_consumption_kwh": results.self_consumption / 60,
+                "battery_charge_kwh": results.battery_charge / 60,
+                "battery_discharge_kwh": results.battery_discharge / 60,
+                "grid_import_kwh": results.grid_import / 60,
+                "grid_export_kwh": results.grid_export / 60,
+                "heat_pump_load_kwh": results.heat_pump_load / 60,
+                "import_cost_gbp": results.import_cost,
+                "export_revenue_gbp": results.export_revenue,
+                "grid_charge_cost_gbp": results.grid_charge_cost,
+            }
+        )
+        pd.testing.assert_frame_equal(amounts, expected, check_like=True)
+
+    def test_an_unset_optional_series_has_no_amount_column(self):
+        """An optional series left unset has no amount column."""
+        amounts = dataclasses.replace(
+            _results_with_every_series_set(), heat_pump_load=None, grid_charge_cost=None
+        ).per_minute_amounts()
+
+        assert sorted(amounts.columns) == sorted(
+            [
+                "generation_kwh",
+                "demand_kwh",
+                "self_consumption_kwh",
+                "battery_charge_kwh",
+                "battery_discharge_kwh",
+                "grid_import_kwh",
+                "grid_export_kwh",
+                "import_cost_gbp",
+                "export_revenue_gbp",
+            ]
+        )
+
+    @pytest.mark.parametrize(
+        "unset",
+        [{}, {"heat_pump_load": None, "grid_charge_cost": None}],
+        ids=["every_series_set", "optional_series_unset"],
+    )
+    def test_total_amounts_are_the_per_minute_amounts_summed_over_the_run(self, unset):
+        """Each run total is its per-minute amount column's sum, keyed by that column."""
+        results = dataclasses.replace(_results_with_every_series_set(), **unset)
+
+        assert results.total_amounts() == pytest.approx(results.per_minute_amounts().sum().to_dict())
+
+
 class TestSimulateHomeSEGPricing:
     """Test that simulate_home prices export at SEG rate when seg_tariff is set."""
 

@@ -65,6 +65,36 @@ class HomeConfig:
 
 
 _COLUMN = "column"
+_AMOUNT = "per_minute_amount"
+
+HOURS_PER_MINUTE = 1 / 60
+"""Each SimulationResults row is one minute, so a kW sample times this is that minute's kWh."""
+
+
+@dataclass(frozen=True)
+class _PerMinuteAmount:
+    """How a series' sample becomes that minute's amount: the sample times factor, under column."""
+
+    column: str
+    factor: float
+
+
+def _power(column: str, energy_column: str) -> dict[str, object]:
+    """Metadata of a kW series written under column; its amount is each minute's kWh, under energy_column."""
+    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(energy_column, HOURS_PER_MINUTE)}
+
+
+def _money(column: str) -> dict[str, object]:
+    """Metadata of a £ series written under column; each sample already is its minute's amount."""
+    return {_COLUMN: column, _AMOUNT: _PerMinuteAmount(column, 1.0)}
+
+
+def _level(column: str) -> dict[str, object]:
+    """Metadata of a series written under column that holds a level, which has no amount.
+
+    A state of charge or a rate does not add up over time.
+    """
+    return {_COLUMN: column}
 
 
 @dataclass
@@ -91,22 +121,22 @@ class SimulationResults:
         heat_pump_load: Optional heat pump electrical load in kW (None if no heat pump)
     """
 
-    generation: pd.Series = field(metadata={_COLUMN: "generation_kw"})
-    demand: pd.Series = field(metadata={_COLUMN: "demand_kw"})
-    self_consumption: pd.Series = field(metadata={_COLUMN: "self_consumption_kw"})
-    battery_charge: pd.Series = field(metadata={_COLUMN: "battery_charge_kw"})
-    battery_discharge: pd.Series = field(metadata={_COLUMN: "battery_discharge_kw"})
-    battery_soc: pd.Series = field(metadata={_COLUMN: "battery_soc_kwh"})
-    grid_import: pd.Series = field(metadata={_COLUMN: "grid_import_kw"})
-    grid_export: pd.Series = field(metadata={_COLUMN: "grid_export_kw"})
-    import_cost: pd.Series = field(metadata={_COLUMN: "import_cost_gbp"})
-    export_revenue: pd.Series = field(metadata={_COLUMN: "export_revenue_gbp"})
-    tariff_rate: pd.Series = field(metadata={_COLUMN: "tariff_rate_per_kwh"})
+    generation: pd.Series = field(metadata=_power("generation_kw", "generation_kwh"))
+    demand: pd.Series = field(metadata=_power("demand_kw", "demand_kwh"))
+    self_consumption: pd.Series = field(metadata=_power("self_consumption_kw", "self_consumption_kwh"))
+    battery_charge: pd.Series = field(metadata=_power("battery_charge_kw", "battery_charge_kwh"))
+    battery_discharge: pd.Series = field(metadata=_power("battery_discharge_kw", "battery_discharge_kwh"))
+    battery_soc: pd.Series = field(metadata=_level("battery_soc_kwh"))
+    grid_import: pd.Series = field(metadata=_power("grid_import_kw", "grid_import_kwh"))
+    grid_export: pd.Series = field(metadata=_power("grid_export_kw", "grid_export_kwh"))
+    import_cost: pd.Series = field(metadata=_money("import_cost_gbp"))
+    export_revenue: pd.Series = field(metadata=_money("export_revenue_gbp"))
+    tariff_rate: pd.Series = field(metadata=_level("tariff_rate_per_kwh"))
     strategy_name: str = "self_consumption"
-    heat_pump_load: Optional[pd.Series] = field(default=None, metadata={_COLUMN: "heat_pump_load_kw"})
+    heat_pump_load: Optional[pd.Series] = field(default=None, metadata=_power("heat_pump_load_kw", "heat_pump_load_kwh"))
     # Per-timestep slice of import_cost spent charging the battery from the grid, in £
     # (None when tariff_config is None).
-    grid_charge_cost: Optional[pd.Series] = field(default=None, metadata={_COLUMN: "grid_charge_cost_gbp"})
+    grid_charge_cost: Optional[pd.Series] = field(default=None, metadata=_money("grid_charge_cost_gbp"))
 
     @classmethod
     def _series_columns(cls) -> Iterator[tuple[str, str]]:
@@ -114,6 +144,26 @@ class SimulationResults:
         for attribute in fields(cls):
             if _COLUMN in attribute.metadata:
                 yield attribute.name, attribute.metadata[_COLUMN]
+
+    def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
+        """Each amount's column and its per-minute amounts, in declaration order, for every series that is set."""
+        for attribute in fields(self):
+            amount = attribute.metadata.get(_AMOUNT)
+            series = getattr(self, attribute.name)
+            if isinstance(amount, _PerMinuteAmount) and series is not None:
+                yield amount.column, series * amount.factor
+
+    def per_minute_amounts(self) -> pd.DataFrame:
+        """Each minute's energy in kWh and money in £, one column per amount, so a period's totals are its column sums.
+
+        The battery state of charge and the tariff rate have no column, as neither adds up over
+        time, and nor has an optional series that is None.
+        """
+        return pd.concat(dict(self._amount_series()), axis=1)
+
+    def total_amounts(self) -> dict[str, float]:
+        """The run's total of each amount: per_minute_amounts' column sums, keyed by column."""
+        return {column: float(amounts.sum()) for column, amounts in self._amount_series()}
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to a DataFrame with one column per series that is set."""
@@ -345,10 +395,7 @@ def simulate_home(
 
         results_list.append(result)
 
-    # Convert energy (kWh) back to power (kW) for 1-minute timesteps
-    # Energy in kWh for 1 minute = Power in kW * (1/60) hours
-    # So Power in kW = Energy in kWh * 60
-    conversion_factor = 60.0
+    minute_kwh_to_kw = 1 / HOURS_PER_MINUTE
 
     # Calculate tariff costs if tariff is configured
     if config.tariff_config is not None:
@@ -381,27 +428,27 @@ def simulate_home(
     return SimulationResults(
         strategy_name=strategy_name,
         generation=pd.Series(
-            [r.generation * conversion_factor for r in results_list],
+            [r.generation * minute_kwh_to_kw for r in results_list],
             index=index,
             name="generation_kw",
         ),
         demand=pd.Series(
-            [r.demand * conversion_factor for r in results_list],
+            [r.demand * minute_kwh_to_kw for r in results_list],
             index=index,
             name="demand_kw",
         ),
         self_consumption=pd.Series(
-            [r.self_consumption * conversion_factor for r in results_list],
+            [r.self_consumption * minute_kwh_to_kw for r in results_list],
             index=index,
             name="self_consumption_kw",
         ),
         battery_charge=pd.Series(
-            [r.battery_charge * conversion_factor for r in results_list],
+            [r.battery_charge * minute_kwh_to_kw for r in results_list],
             index=index,
             name="battery_charge_kw",
         ),
         battery_discharge=pd.Series(
-            [r.battery_discharge * conversion_factor for r in results_list],
+            [r.battery_discharge * minute_kwh_to_kw for r in results_list],
             index=index,
             name="battery_discharge_kw",
         ),
@@ -411,12 +458,12 @@ def simulate_home(
             name="battery_soc_kwh",
         ),
         grid_import=pd.Series(
-            [r.grid_import * conversion_factor for r in results_list],
+            [r.grid_import * minute_kwh_to_kw for r in results_list],
             index=index,
             name="grid_import_kw",
         ),
         grid_export=pd.Series(
-            [r.grid_export * conversion_factor for r in results_list],
+            [r.grid_export * minute_kwh_to_kw for r in results_list],
             index=index,
             name="grid_export_kw",
         ),
@@ -485,23 +532,21 @@ def calculate_summary(
         ``seg_revenue_gbp != total_export_revenue_gbp``, which is not an error
         but may mislead callers that compare the two.
     """
-    # Convert power (kW) to energy (kWh) - 1 minute = 1/60 hour
-    minutes_to_hours = 1 / 60
-
-    total_gen = float(results.generation.sum() * minutes_to_hours)
-    total_demand = float(results.demand.sum() * minutes_to_hours)
-    total_self = float(results.self_consumption.sum() * minutes_to_hours)
-    total_import = float(results.grid_import.sum() * minutes_to_hours)
-    total_export = float(results.grid_export.sum() * minutes_to_hours)
-    total_charge = float(results.battery_charge.sum() * minutes_to_hours)
-    total_discharge = float(results.battery_discharge.sum() * minutes_to_hours)
+    totals = results.total_amounts()
+    total_gen = totals["generation_kwh"]
+    total_demand = totals["demand_kwh"]
+    total_self = totals["self_consumption_kwh"]
+    total_import = totals["grid_import_kwh"]
+    total_export = totals["grid_export_kwh"]
+    total_charge = totals["battery_charge_kwh"]
+    total_discharge = totals["battery_discharge_kwh"]
 
     peak_gen = float(results.generation.max())
     peak_demand = float(results.demand.max())
 
     # Calculate financial totals
-    total_import_cost = float(results.import_cost.sum())
-    total_export_revenue = float(results.export_revenue.sum())
+    total_import_cost = totals["import_cost_gbp"]
+    total_export_revenue = totals["export_revenue_gbp"]
     net_cost = total_import_cost - total_export_revenue
 
     # Calculate ratios with zero-division protection
@@ -523,18 +568,14 @@ def calculate_summary(
         )
 
     # Grid-charge cost: the slice of total_import_cost spent charging the battery from the grid
-    total_grid_charge_cost = (
-        float(results.grid_charge_cost.sum())
-        if results.grid_charge_cost is not None
-        else 0.0
-    )
+    total_grid_charge_cost = totals["grid_charge_cost_gbp"] if results.grid_charge_cost is not None else 0.0
 
     # Calculate heat pump metrics if heat pump load is present
     total_heat_pump_kwh: Optional[float] = None
     peak_heat_pump_kw: Optional[float] = None
     heat_pump_ratio: Optional[float] = None
     if results.heat_pump_load is not None:
-        total_heat_pump_kwh = float(results.heat_pump_load.sum() * minutes_to_hours)
+        total_heat_pump_kwh = totals["heat_pump_load_kwh"]
         peak_heat_pump_kw = float(results.heat_pump_load.max())
         heat_pump_ratio = total_heat_pump_kwh / total_demand if total_demand > 0 else 0.0
 

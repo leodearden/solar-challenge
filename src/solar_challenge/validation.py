@@ -10,7 +10,7 @@ from typing import Optional
 
 import pandas as pd
 
-from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.home import HOURS_PER_MINUTE, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.pv import PVConfig, wired_dc_capacity_kw
 
 
@@ -85,7 +85,7 @@ def _check_annual_yield(
     duration_days = (generation.index[-1] - generation.index[0]).days + 1
     if duration_days < 365:
         return None
-    total_kwh = float(generation.sum() / 60)
+    total_kwh = float(generation.sum() * HOURS_PER_MINUTE)
     wired_kw = wired_dc_capacity_kw(config)
     yield_per_kwp = total_kwh / wired_kw
     low, high = _UK_YIELD_BENCHMARK_KWH_PER_KWP
@@ -217,7 +217,7 @@ def validate_consumption(
     - Baseload present (consumption > 0 most times)
 
     Args:
-        demand: Demand time series in kW
+        demand: 1-minute demand time series in kW
         target_annual_kwh: Expected annual consumption (optional)
 
     Returns:
@@ -293,8 +293,7 @@ def validate_consumption(
 
     # Check 4: Annual total matches target (if provided)
     if target_annual_kwh is not None:
-        # Calculate total (1-minute data: kW * 1/60 = kWh)
-        total_kwh = float(demand.sum() / 60)
+        total_kwh = float(demand.sum() * HOURS_PER_MINUTE)
         duration_days = (demand.index[-1] - demand.index[0]).days + 1
 
         # Scale to annual equivalent

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import pandas as pd
 
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.home import HOURS_PER_MINUTE, SimulationResults, calculate_summary
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
@@ -105,11 +105,10 @@ def generate_summary_report(
             winter_demand = results.demand[winter_mask]
             summer_demand = results.demand[summer_mask]
 
-            # Convert kW to kWh (1-minute resolution: divide by 60)
-            winter_hp_kwh = float(winter_hp_load.sum() / 60) if len(winter_hp_load) > 0 else 0.0
-            summer_hp_kwh = float(summer_hp_load.sum() / 60) if len(summer_hp_load) > 0 else 0.0
-            winter_demand_kwh = float(winter_demand.sum() / 60) if len(winter_demand) > 0 else 0.0
-            summer_demand_kwh = float(summer_demand.sum() / 60) if len(summer_demand) > 0 else 0.0
+            winter_hp_kwh = float(winter_hp_load.sum() * HOURS_PER_MINUTE) if len(winter_hp_load) > 0 else 0.0
+            summer_hp_kwh = float(summer_hp_load.sum() * HOURS_PER_MINUTE) if len(summer_hp_load) > 0 else 0.0
+            winter_demand_kwh = float(winter_demand.sum() * HOURS_PER_MINUTE) if len(winter_demand) > 0 else 0.0
+            summer_demand_kwh = float(summer_demand.sum() * HOURS_PER_MINUTE) if len(summer_demand) > 0 else 0.0
 
             winter_peak_hp_kw = float(winter_hp_load.max()) if len(winter_hp_load) > 0 else 0.0
             summer_peak_hp_kw = float(summer_hp_load.max()) if len(summer_hp_load) > 0 else 0.0
@@ -279,14 +278,13 @@ def calculate_seasonal_metrics(
         index=summer_generation.index,
     )
 
-    # Convert kW to kWh (1-minute resolution: divide by 60)
-    winter_generation_kwh = float(winter_generation.sum() / 60)
-    winter_demand_kwh = float(winter_demand.sum() / 60)
-    winter_self_consumption_kwh = float(winter_self_consumption.sum() / 60)
+    winter_generation_kwh = float(winter_generation.sum() * HOURS_PER_MINUTE)
+    winter_demand_kwh = float(winter_demand.sum() * HOURS_PER_MINUTE)
+    winter_self_consumption_kwh = float(winter_self_consumption.sum() * HOURS_PER_MINUTE)
 
-    summer_generation_kwh = float(summer_generation.sum() / 60)
-    summer_demand_kwh = float(summer_demand.sum() / 60)
-    summer_self_consumption_kwh = float(summer_self_consumption.sum() / 60)
+    summer_generation_kwh = float(summer_generation.sum() * HOURS_PER_MINUTE)
+    summer_demand_kwh = float(summer_demand.sum() * HOURS_PER_MINUTE)
+    summer_self_consumption_kwh = float(summer_self_consumption.sum() * HOURS_PER_MINUTE)
 
     # Calculate ratios with safety checks
     winter_self_consumption_ratio = (
@@ -321,34 +319,6 @@ def calculate_seasonal_metrics(
     }
 
 
-# Each SimulationResults row is one minute, so a kW sample times this is that minute's kWh.
-_HOURS_PER_MINUTE = 1 / 60
-
-
-def _per_minute_amounts(results: SimulationResults) -> pd.DataFrame:
-    """Each minute's energy in kWh and money in £, so a period's total is their sum.
-
-    The battery state of charge and the tariff rate are left out because neither
-    adds up over time.
-    """
-    amounts = {
-        "generation_kwh": results.generation * _HOURS_PER_MINUTE,
-        "demand_kwh": results.demand * _HOURS_PER_MINUTE,
-        "self_consumption_kwh": results.self_consumption * _HOURS_PER_MINUTE,
-        "battery_charge_kwh": results.battery_charge * _HOURS_PER_MINUTE,
-        "battery_discharge_kwh": results.battery_discharge * _HOURS_PER_MINUTE,
-        "grid_import_kwh": results.grid_import * _HOURS_PER_MINUTE,
-        "grid_export_kwh": results.grid_export * _HOURS_PER_MINUTE,
-        "import_cost_gbp": results.import_cost,
-        "export_revenue_gbp": results.export_revenue,
-    }
-    if results.heat_pump_load is not None:
-        amounts["heat_pump_load_kwh"] = results.heat_pump_load * _HOURS_PER_MINUTE
-    if results.grid_charge_cost is not None:
-        amounts["grid_charge_cost_gbp"] = results.grid_charge_cost
-    return pd.DataFrame(amounts)
-
-
 def _aggregate_by_period(results: SimulationResults, freq: str) -> pd.DataFrame:
     """Sum each period's per-minute amounts and take its peak generation and demand.
 
@@ -356,7 +326,7 @@ def _aggregate_by_period(results: SimulationResults, freq: str) -> pd.DataFrame:
         results: Simulation results with 1-minute resolution
         freq: pandas offset alias of the period, e.g. "D" or "ME"
     """
-    totals = _per_minute_amounts(results).resample(freq).sum()
+    totals = results.per_minute_amounts().resample(freq).sum()
     peaks = pd.DataFrame(
         {"peak_generation_kw": results.generation, "peak_demand_kw": results.demand}
     ).resample(freq).max()
