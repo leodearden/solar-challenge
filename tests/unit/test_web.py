@@ -1,6 +1,7 @@
 """Tests for the Flask web dashboard module."""
 
 import re
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -10,7 +11,11 @@ import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.storage import RunStorage
 from tests._html_page import (
     doctype,
     element_count,
@@ -53,6 +58,24 @@ def mock_job_manager(app: Flask) -> MagicMock:
 def _counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
     """How many times each of *keys* occurs in *items*; a key that does not occur counts 0."""
     return {key: items.count(key) for key in keys}
+
+
+def _save_home_run(app: Flask, name: str, results: SimulationResults) -> str:
+    """Save *results* to *app*'s store as a completed home run named *name*, as a finished job does; return its run id."""
+    run_id = str(uuid.uuid4())
+    storage = RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"])
+    storage.save_home_run(
+        run_id=run_id,
+        config=HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3500),
+            name=name,
+        ),
+        results=results,
+        summary=calculate_summary(results),
+        name=name,
+    )
+    return run_id
 
 
 class TestIndexRoute:
@@ -151,7 +174,7 @@ class TestSimulateHomeRoute:
 # Helpers for chart / results tests
 # ---------------------------------------------------------------------------
 
-def _make_sim_results(days: int = 3) -> "SimulationResults":
+def _make_sim_results(days: int = 3) -> SimulationResults:
     """Create a minimal SimulationResults object for testing.
 
     Builds synthetic 1-minute resolution time series spanning the
@@ -164,7 +187,6 @@ def _make_sim_results(days: int = 3) -> "SimulationResults":
         SimulationResults with simple but valid data.
     """
     import numpy as np
-    from solar_challenge.home import SimulationResults as SR
 
     freq = "min"
     index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
@@ -183,7 +205,7 @@ def _make_sim_results(days: int = 3) -> "SimulationResults":
     def _series(values: np.ndarray, name: str) -> pd.Series:
         return pd.Series(values, index=index, name=name)
 
-    return SR(
+    return SimulationResults(
         generation=_series(generation, "generation_kw"),
         demand=_series(demand, "demand_kw"),
         self_consumption=_series(self_consumption, "self_consumption_kw"),
@@ -335,34 +357,9 @@ class TestHomeResultsRoute:
         Both Overview chart containers are elements of the page, and the Total
         Generation and Total Demand cards read the saved summary's totals in kWh.
         """
-        import uuid
-        from solar_challenge.home import HomeConfig, calculate_summary
-        from solar_challenge.pv import PVConfig
-        from solar_challenge.load import LoadConfig
-        from solar_challenge.web.storage import RunStorage
-
-        # Create a test run directly via storage
-        run_id = str(uuid.uuid4())
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3500),
-            name="Test Run",
-        )
         results = _make_sim_results(days=1)
+        run_id = _save_home_run(app, "Test Run", results)
         summary = calculate_summary(results)
-
-        with app.app_context():
-            storage = RunStorage(
-                db_path=app.config["DATABASE"],
-                data_dir=app.config["DATA_DIR"],
-            )
-            storage.save_home_run(
-                run_id=run_id,
-                config=config,
-                results=results,
-                summary=summary,
-                name="Test Run",
-            )
 
         response = client.get(f"/results/home/{run_id}")
         assert response.status_code == 200
