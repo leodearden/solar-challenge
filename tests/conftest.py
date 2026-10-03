@@ -117,7 +117,10 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
         return (yield)
     with _open_offline_window() as window:
         item.stash[_OFFLINE_WINDOW_KEY] = window
-        return (yield)
+        try:
+            return (yield)
+        finally:
+            del item.stash[_OFFLINE_WINDOW_KEY]
 
 
 @pytest.hookimpl(wrapper=True)
