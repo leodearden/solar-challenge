@@ -221,6 +221,8 @@ subprojects:
         why: "Degradation is a PV-array property and simulate_pv_output already takes PVConfig → zero signature churn. Model is linear factor = max(0, 1 - age*rate); no first-year Staebler-Wronski / exponential term, by choice."
       - decision: "CEC inverter strings are sized on the module's STC V_mp_ref, not a cold-corrected V_mp, so on cold hours some strings run a little above the inverter's MPPT ceiling."
         why: "Measured by task 203 on the 1990 Bristol TMY: those hours cost at most 0.21% of annual AC (median 0.014%), while sizing with cold headroom re-picks inverters and moves affected capacities' annual AC by a median ~0.4% and up to 2.4% (3.5% on a 5 kW inverter), in either direction. docs/pv-inverter-string-matching.md has the figures and scripts/measure_mppt_window.py re-measures them; re-measure before re-flagging."
+      - decision: "Battery inverter/chargers (nominal DC <= 60 V, rated above 1.5 kW) are left out of the CEC inverter candidates, and the MPPT floor, like the ceiling, is checked at STC."
+        why: "Their MPPT window is a battery bus's voltage range, which PV reaches only through a charge controller, so modules wired straight to one ran below its floor. Measured by task 240 on the scaled Bristol TMY: leaving them out re-picked 23 of the 992 census configs, the floor's worst remaining error is about 0.12% of annual AC, and hot-cell floors move AC by more than the error they remove. docs/pv-inverter-string-matching.md §7 has the figures and scripts/measure_mppt_window.py re-measures them; re-measure before re-flagging."
 
     # (RESOLVED — no live gap) The former CommunityMetrics.sharing_mode HEURISTIC
     # ('community_battery' if the battery was active, else 'p2p') was retired by

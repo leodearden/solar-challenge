@@ -54,7 +54,11 @@ This is a dated record. Re-measure with the method below before relying on it.
   wired DC, at 0.6 kW (0.440502 kW against a limit of 0.440471), so 0.6 kW fails the 10%
   bound by 0.007%; 0.5 kW reads 1.0875 ×. These figures hold until task 252's system
   losses land. §3's other sites are likewise unscaled, and each site's factor
-  differs.]**
+  differs.]** **[Amended 2026-10-03, task 240: leaving battery inverter/chargers out of
+  the inverter candidates re-picked 2.6, 7.2 and 7.3 kW
+  ([pv-inverter-string-matching.md](pv-inverter-string-matching.md) §7). On the scaled
+  TMY the median becomes 1163.3 and 231 read above 1100, 2.6 kW now among them
+  (1121.1); the range, 4 kW and the AC peak's maximum are unchanged.]**
 - **Model.** `pv.create_model_chain` applied no soiling, wiring, mismatch or
   availability losses.
 - **Method.** South-facing at 35° unless stated. The hourly AC in kW, summed, is kWh:
