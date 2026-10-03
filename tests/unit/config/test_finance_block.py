@@ -2,6 +2,7 @@
 """Tests for the finance: block and the FinanceConfig it parses into."""
 
 import dataclasses
+import itertools
 import pickle
 from pathlib import Path
 
@@ -329,6 +330,19 @@ class TestFinanceConfigValidation:
         assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
 
 
+_YEAR_FIELDS = ("loan_term_years", "asset_life_years")
+_FLOAT_FIELDS = tuple(
+    f.name
+    for f in dataclasses.fields(FinanceConfig)
+    if f.name not in {*_YEAR_FIELDS, "grid_services_model", "grid_services_events"}
+)
+_NUMERIC_FIELDS = tuple(
+    f.name
+    for f in dataclasses.fields(FinanceConfig)
+    if f.name in {*_FLOAT_FIELDS, *_YEAR_FIELDS}
+)
+
+
 class TestFinanceConfigParsing:
     """Tests for parse_finance_config parser function."""
 
@@ -465,6 +479,50 @@ class TestFinanceConfigParsing:
                     "grid_services_income_per_kw_per_year_gbp": -1.0,
                 }
             )
+
+    @pytest.mark.parametrize(
+        "key",
+        [k for k in (*_FLOAT_FIELDS, *_YEAR_FIELDS) if k != "self_consumption_override"],
+    )
+    def test_null_numeric_value_raises_configuration_error(self, key: str) -> None:
+        """A null for a numeric key is refused as non-numeric, not read as the field's default."""
+        with pytest.raises(ConfigurationError, match="non-numeric"):
+            parse_finance_config({"standing_charge_pence_per_day": 60.0, key: None})
+
+    @pytest.mark.parametrize("key", _FLOAT_FIELDS)
+    def test_fractional_value_reaches_float_field(self, key: str) -> None:
+        """A fractional value set for a float key reaches FinanceConfig unchanged."""
+        block = {"standing_charge_pence_per_day": 60.0, key: 0.5}
+        assert parse_finance_config(block) == FinanceConfig(**block)
+
+    def test_null_self_consumption_override_parses_to_no_override(self) -> None:
+        """A null self_consumption_override parses to a FinanceConfig with no override."""
+        assert parse_finance_config(
+            {"standing_charge_pence_per_day": 60.0, "self_consumption_override": None}
+        ) == FinanceConfig(standing_charge_pence_per_day=60.0)
+
+    def test_null_grid_services_model_raises_configuration_error(self) -> None:
+        """A null grid_services_model is refused, not read as the default flat model."""
+        with pytest.raises(ConfigurationError, match="grid_services_model"):
+            parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, "grid_services_model": None}
+            )
+
+    @pytest.mark.parametrize(("first", "second"), itertools.pairwise(_NUMERIC_FIELDS))
+    def test_first_declared_of_two_non_numeric_values_is_reported(
+        self, first: str, second: str
+    ) -> None:
+        """Of two non-numeric values, the error names the field FinanceConfig declares first.
+
+        The block lists the later-declared field first, so the block's key order cannot decide it.
+        """
+        block: dict[str, object] = {
+            second: f"not-a-number:{second}",
+            first: f"not-a-number:{first}",
+        }
+        block.setdefault("standing_charge_pence_per_day", 60.0)
+        with pytest.raises(ConfigurationError, match=f"'not-a-number:{first}'"):
+            parse_finance_config(block)
 
 
 class TestScenarioFinance:
@@ -776,3 +834,9 @@ class TestFinanceConfigParsingGridServices:
                     "event_windows": ["not-a-dict"],  # list entry is a string
                 },
             })
+
+    def test_null_grid_services_events_parses_to_no_events_config(self) -> None:
+        """An explicit null grid_services_events block parses to a FinanceConfig with no events config."""
+        assert parse_finance_config(
+            {**self._BASE, "grid_services_events": None}
+        ) == FinanceConfig(**self._BASE)
