@@ -9,12 +9,13 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.fleet import calculate_fleet_summary
+from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import calculate_summary
+from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results
-from tests._html_page import texts_after
+from tests._html_page import headings, texts, texts_after
 from tests._web_app import build_test_app
 
 
@@ -28,6 +29,19 @@ def app(tmp_path: Path) -> Flask:
 def client(app: Flask) -> FlaskClient:
     """Create a Flask test client."""
     return app.test_client()
+
+
+def _save_fleet_run(app: Flask, fleet: FleetResults, name: str | None = None) -> str:
+    """Save *fleet* to *app*'s store as a completed fleet run named *name*, as a finished job saves it; return its run id."""
+    run_id = str(uuid.uuid4())
+    RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]).save_fleet_run(
+        run_id=run_id,
+        fleet_results=fleet,
+        fleet_summary=calculate_fleet_summary(fleet),
+        per_home_summaries=[calculate_summary(results) for results in fleet.per_home_results],
+        name=name,
+    )
+    return run_id
 
 
 class TestFleetChartFunctions:
@@ -296,18 +310,9 @@ class TestFleetResultsRoute:
 
         Each home self-consumes 18 kWh, exports 54 kWh and imports 27 kWh in its one day.
         """
-        fleet = make_fleet_results(
-            n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1
-        )
-        run_id = str(uuid.uuid4())
-        storage = RunStorage(
-            db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"]
-        )
-        storage.save_fleet_run(
-            run_id=run_id,
-            fleet_results=fleet,
-            fleet_summary=calculate_fleet_summary(fleet),
-            per_home_summaries=[calculate_summary(r) for r in fleet.per_home_results],
+        run_id = _save_fleet_run(
+            app,
+            make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1),
         )
         response = client.get(f"/results/fleet/{run_id}")
         assert response.status_code == 200
@@ -327,3 +332,53 @@ class TestFleetResultsRoute:
             label: texts_after(page, label, len(card))
             for label, card in expected_cards.items()
         } == expected_cards
+
+    def test_fleet_results_page_is_titled_with_the_name_its_run_was_saved_under(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """The page's h1 and its document title name the run as Run History lists it.
+
+        The name's markup characters show as text.
+        """
+        run_id = _save_fleet_run(
+            app, make_fleet_results(n_homes=2, days=1), name="Phase 1 <South> & Co"
+        )
+
+        response = client.get(f"/results/fleet/{run_id}")
+
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        assert headings(page)[0] == "Phase 1 <South> & Co"
+        assert "Results: Phase 1 <South> & Co - Solar Challenge" in texts(page)
+
+    def test_fleet_results_page_title_follows_a_run_history_rename(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Renaming a run in Run History retitles its results page."""
+        run_id = _save_fleet_run(
+            app, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
+        )
+        rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "Renamed Fleet"})
+        assert rename.status_code == 200
+
+        response = client.get(f"/results/fleet/{run_id}")
+
+        assert response.status_code == 200
+        assert headings(response.get_data(as_text=True))[0] == "Renamed Fleet"
+
+    def test_fleet_results_page_of_a_run_with_no_database_row_is_titled_fleet_simulation(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A run whose files outlived its database row, as after the database is recreated, still has a title: the page's own."""
+        run_id = _save_fleet_run(
+            app, make_fleet_results(n_homes=2, days=1), name="Probe Fleet Run"
+        )
+        with get_db(app.config["DATABASE"]) as conn:
+            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+
+        response = client.get(f"/results/fleet/{run_id}")
+
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        assert headings(page)[0] == "Fleet Simulation"
+        assert "Results: Fleet Simulation - Solar Challenge" in texts(page)

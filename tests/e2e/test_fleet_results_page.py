@@ -1,7 +1,8 @@
 """End-to-end tests for the Fleet Results page (/results/fleet/<id>).
 
 Uses the seeded_fleet_run fixture (no live simulation needed) to verify
-the page's action links, its chart tabs, and that it renders without errors.
+the page's title, its action links, its chart tabs, and that it renders
+without errors.
 """
 
 import pytest
@@ -25,6 +26,23 @@ def _show_tab(page: Page, tab_name: str) -> None:
     page.get_by_role("tab", name=tab_name, exact=True).click()
     for chart_id in _CHART_IDS_BY_TAB[tab_name]:
         expect(page.locator(f"#{chart_id}.js-plotly-plot")).to_be_visible()
+
+
+# -- The page is titled with the run's name ---------------------------------
+
+
+def test_fleet_results_page_is_titled_with_the_run_name(
+    page: Page,
+    live_server: str,
+    seeded_fleet_run: tuple[str, str],
+) -> None:
+    """GET /results/fleet/<id> returns 200, and the page's h1 is the run's name."""
+    run_id, run_name = seeded_fleet_run
+    response = page.goto(live_server + f"/results/fleet/{run_id}")
+    assert response is not None
+    assert response.status == 200
+
+    expect(page.get_by_role("heading", level=1)).to_have_text(run_name)
 
 
 # -- Action links answer 200 ------------------------------------------------
