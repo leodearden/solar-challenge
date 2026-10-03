@@ -284,6 +284,29 @@ home:
         assert result.exit_code != 0
 
 
+def _table_text(output: str) -> str:
+    """A Rich table's rows folded onto one line, each row reading "<TYPE> <message>".
+
+    CliRunner renders Rich tables at 80 columns, and a long Message cell wraps onto
+    continuation lines whose Type cell is blank. Folding the column rule "│" and all
+    whitespace to single spaces rejoins each row.
+    """
+    return " ".join(output.replace("│", " ").split())
+
+
+# Ends inside the battery block, so a case can append a battery key.
+_SWEEP_FLEET = """\
+fleet_distribution:
+  n_homes: 2
+  pv: {capacity_kw: 4.0}
+  battery:
+    capacity_kwh:
+      type: proportional_to
+      source: pv.capacity_kw
+      multiplier: {type: sweep, min: 0.5, max: 2.0, steps: 3}
+"""
+
+
 class TestValidateConfig:
     """Tests for validate config command."""
 
@@ -356,6 +379,126 @@ home:
             # Should pass but with warning
             assert result.exit_code == 0
             assert "WARNING" in result.stdout or "seems high" in result.stdout
+
+    def _validate_config(self, tmp_path: Path, document: str) -> Result:
+        """Write *document* as the config file and run `validate config` on it.
+
+        catch_exceptions=False makes an exception that escapes the command fail the test,
+        instead of passing as exit code 1.
+        """
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(document)
+        return runner.invoke(
+            app, ["validate", "config", str(config_file)], catch_exceptions=False
+        )
+
+    @pytest.mark.parametrize(
+        ("document", "refusal"),
+        [
+            pytest.param(
+                "home:\n  pv: {capacity_kw: 4.0}\n  load: {household_occupants: 2.5}\n",
+                "Household occupants must be a whole number, got 2.5",
+                id="home-occupants-not-whole",
+            ),
+            pytest.param(
+                "home:\n  load: {occupants: 3}\n",
+                "Unrecognised keys in home.load: 'occupants';",
+                id="home-unrecognised-key",
+            ),
+            pytest.param(
+                "pv: {capacity_kw: 4.0}\nload: {household_occupants: 11}\n",
+                "Household occupants seems unrealistic: 11",
+                id="flat-home",
+            ),
+            pytest.param(
+                "homes:\n  - {}\n  - load: {occupants: 3}\n",
+                "Unrecognised keys in homes[1].load: 'occupants';",
+                id="homes-list",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0, tilt: 100}\n",
+                "Tilt must be 0-90 degrees, got 100.0",
+                id="fleet-distribution",
+            ),
+            pytest.param(
+                _SWEEP_FLEET + "    max_charge_kw: -1\n",
+                "Max charge power must be positive and finite, got -1.0 kW",
+                id="fleet-sweep",
+            ),
+            pytest.param(
+                "scenarios:\n  - name: winter\n    home: {pv: {capacity_kw: 4.0}}\n",
+                "Scenario 'winter' must have a 'period' field",
+                id="scenarios",
+            ),
+            pytest.param(
+                "scenario:\n"
+                "  name: winter\n"
+                "  period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
+                "  homes:\n"
+                "    - load: {household_occupants: 2.5}\n",
+                "Household occupants must be a whole number, got 2.5",
+                id="scenario",
+            ),
+            pytest.param("home: [\n", "Invalid YAML in", id="yaml-syntax"),
+        ],
+    )
+    def test_a_file_its_loader_refuses_is_one_error_row(
+        self, tmp_path: Path, document: str, refusal: str
+    ) -> None:
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        assert f"ERROR {refusal}" in _table_text(result.stdout)
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param("pv: {capacity_kw: 4.0}\n", id="flat-home"),
+            pytest.param(
+                "homes:\n  - {}\n  - pv: {capacity_kw: 6.0}\n", id="homes-list"
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
+                id="fleet-distribution",
+            ),
+            pytest.param(_SWEEP_FLEET, id="fleet-sweep"),
+            pytest.param(
+                "scenarios:\n"
+                "  - name: winter\n"
+                "    period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
+                "    home: {pv: {capacity_kw: 4.0}}\n",
+                id="scenarios",
+            ),
+        ],
+    )
+    def test_a_file_its_loader_builds_is_valid(
+        self, tmp_path: Path, document: str
+    ) -> None:
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 0
+        assert "OK Configuration is valid" in _table_text(result.stdout)
+
+    @pytest.mark.parametrize(
+        "scenario_file",
+        sorted((Path(__file__).resolve().parents[2] / "scenarios").glob("*.yaml")),
+        ids=lambda path: path.name,
+    )
+    def test_every_committed_scenario_is_valid(self, scenario_file: Path) -> None:
+        result = runner.invoke(
+            app, ["validate", "config", str(scenario_file)], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "ERROR" not in result.stdout
+
+    def test_an_errors_text_is_shown_verbatim(self, tmp_path: Path) -> None:
+        result = self._validate_config(tmp_path, "home:\n  load: {'[bold]x': 1}\n")
+
+        assert result.exit_code == 1
+        assert "ERROR Unrecognised keys in home.load: '[bold]x';" in _table_text(
+            result.stdout
+        )
 
 
 class TestErrorHandling:
