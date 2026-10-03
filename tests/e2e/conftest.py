@@ -28,10 +28,14 @@ pytest.importorskip("werkzeug")
 from flask import Flask
 from werkzeug.serving import make_server
 
+from solar_challenge.fleet import calculate_fleet_summary
+from solar_challenge.home import calculate_summary
 from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager
+from solar_challenge.web.storage import RunStorage
 
+from tests._finance_builders import make_fleet_results
 from tests._web_app import build_test_app
 
 
@@ -351,6 +355,24 @@ def seeded_home_runs_pair(_e2e_db_path, _e2e_data_dir, live_server):
         },
     )
     return [r1, r2]
+
+
+@pytest.fixture(scope="session")
+def seeded_fleet_run(_e2e_db_path: Path, _e2e_data_dir: Path) -> tuple[str, str]:
+    """Save a completed 2-home, 1-day fleet run through RunStorage. Returns (run_id, run_name).
+
+    Its homes' results are make_fleet_results' constant-power series, so no simulation runs and no service is reached.
+    """
+    run_id, run_name = "seed-fleet-001", "Seeded Fleet Alpha"
+    fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+    RunStorage(db_path=_e2e_db_path, data_dir=_e2e_data_dir).save_fleet_run(
+        run_id,
+        fleet,
+        calculate_fleet_summary(fleet),
+        [calculate_summary(home_results) for home_results in fleet.per_home_results],
+        name=run_name,
+    )
+    return run_id, run_name
 
 
 # ---------------------------------------------------------------------------
