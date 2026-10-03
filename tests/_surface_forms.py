@@ -10,8 +10,11 @@ because inspect's own rendering is not. Measured: 3.11 renders an Enum's call si
 unlike 3.12, 3.13 renders pathlib.Path as pathlib._local.Path, and 3.14 renders an
 evaluated Optional[X] as X | None. So inspect lays out the signature, and each annotation
 is respelled: a union with bars, a typing alias by its builtin origin, a class by its
-qualified name without its module, a forward reference by its name, and a string
-annotation verbatim, never evaluated.
+qualified name without its module, Callable's parameter types as a bracketed list, and a
+forward reference, a string inside a generic included, by its name. A string annotation
+is spelled verbatim, never evaluated. Literal's values and Annotated's metadata are
+values, not annotations: each is spelled by its repr, so Literal['a'] never reads as
+Literal[a].
 
 Usage::
 
@@ -27,6 +30,7 @@ import enum
 import inspect
 import types
 import typing
+from collections.abc import Iterable
 
 
 def surface_form(obj: object) -> str:
@@ -74,15 +78,31 @@ def _annotation_text(annotation: object) -> str:
         return "None"
     if annotation is Ellipsis:
         return "..."
+    if isinstance(annotation, list):
+        return f"[{_annotations_text(annotation)}]"
+    if typing.get_origin(annotation) is not None:
+        return _subscripted_text(annotation)
+    if inspect.isclass(annotation):
+        return annotation.__qualname__
+    return repr(annotation)
+
+
+def _subscripted_text(annotation: object) -> str:
     origin = typing.get_origin(annotation)
     arguments = typing.get_args(annotation)
     if origin in (typing.Union, types.UnionType):
         return " | ".join(_annotation_text(argument) for argument in arguments)
-    if origin is not None:
-        spelled_arguments = ", ".join(
-            _annotation_text(argument) for argument in arguments
-        )
-        return f"{_annotation_text(origin)}[{spelled_arguments}]"
-    if inspect.isclass(annotation):
-        return annotation.__qualname__
-    return repr(annotation)
+    if origin is typing.Literal:
+        return f"Literal[{_values_text(arguments)}]"
+    if origin is typing.Annotated:
+        annotated, *metadata = arguments
+        return f"Annotated[{_annotation_text(annotated)}, {_values_text(metadata)}]"
+    return f"{_annotation_text(origin)}[{_annotations_text(arguments)}]"
+
+
+def _annotations_text(annotations: Iterable[object]) -> str:
+    return ", ".join(_annotation_text(annotation) for annotation in annotations)
+
+
+def _values_text(values: Iterable[object]) -> str:
+    return ", ".join(repr(value) for value in values)

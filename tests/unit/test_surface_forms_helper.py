@@ -14,7 +14,17 @@ import datetime
 import enum
 import pathlib
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from tests._surface_forms import surface_form
 
@@ -79,6 +89,38 @@ def test_a_forward_reference_inside_an_alias_is_spelled_by_its_name() -> None:
     def f(a: Optional["Foo"], b: List["Bar"]) -> None: ...  # noqa: F821
 
     assert surface_form(f) == "(a: Foo | None, b: list[Bar]) -> None"
+
+
+def test_any_is_spelled_by_its_name() -> None:
+    def f(a: Any, b: Dict[str, Any]) -> Any: ...
+
+    assert surface_form(f) == "(a: Any, b: dict[str, Any]) -> Any"
+
+
+def test_a_callable_is_spelled_with_its_parameter_types_respelled() -> None:
+    def f(
+        simulate: Callable[[pathlib.Path, Optional[int]], float],
+        hook: Callable[..., None],
+    ) -> None: ...
+
+    assert (
+        surface_form(f)
+        == "(simulate: Callable[[Path, int | None], float], hook: Callable[..., None]) -> None"
+    )
+
+
+def test_a_literal_is_spelled_with_its_values_reprs() -> None:
+    def f(sharing_mode: Literal["p2p", "community_battery"]) -> None: ...
+
+    assert (
+        surface_form(f) == "(sharing_mode: Literal['p2p', 'community_battery']) -> None"
+    )
+
+
+def test_an_annotated_is_spelled_with_its_metadata_reprs() -> None:
+    def f(power: Annotated[Optional[float], "kW"]) -> None: ...
+
+    assert surface_form(f) == "(power: Annotated[float | None, 'kW']) -> None"
 
 
 def test_a_class_form_is_its_constructor_signature() -> None:
