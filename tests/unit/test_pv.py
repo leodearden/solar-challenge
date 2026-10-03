@@ -1,6 +1,8 @@
 """Tests for PV configuration."""
 
 import dataclasses
+import math
+import re
 
 import numpy as np
 import pandas as pd
@@ -80,6 +82,20 @@ class TestPVConfigValidation:
         with pytest.raises(ValueError, match="Capacity"):
             PVConfig(capacity_kw=-1.0)
 
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    @pytest.mark.parametrize(
+        ("field", "invariant"),
+        [
+            ("capacity_kw", "Capacity must be positive and finite"),
+            ("inverter_capacity_kw", "Inverter capacity must be positive and finite"),
+        ],
+    )
+    def test_a_capacity_that_is_not_finite_is_refused(
+        self, field: str, invariant: str, value: float
+    ) -> None:
+        with pytest.raises(ValueError, match=re.escape(f"{invariant}, got {value} kW")):
+            dataclasses.replace(PVConfig(capacity_kw=4.0), **{field: value})
+
     def test_azimuth_range(self):
         """Azimuth must be 0-360."""
         # Valid boundary values
@@ -111,12 +127,28 @@ class TestPVConfigValidation:
         with pytest.raises(ValueError, match="non-negative"):
             PVConfig(capacity_kw=4.0, system_age_years=-0.001)
 
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    def test_a_system_age_that_is_not_finite_is_refused(self, value: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"System age must be non-negative and finite, got {value}"),
+        ):
+            dataclasses.replace(PVConfig(capacity_kw=4.0), system_age_years=value)
+
     def test_degradation_rate_must_be_zero_to_one(self):
         """degradation_rate_per_year outside [0, 1] raises ValueError with '0-1' message."""
         with pytest.raises(ValueError, match="0-1"):
             PVConfig(capacity_kw=4.0, degradation_rate_per_year=1.5)
         with pytest.raises(ValueError, match="0-1"):
             PVConfig(capacity_kw=4.0, degradation_rate_per_year=-0.1)
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    def test_a_degradation_rate_that_is_not_finite_is_refused(self, value: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"Degradation rate must be 0-1, got {value}"),
+        ):
+            dataclasses.replace(PVConfig(capacity_kw=4.0), degradation_rate_per_year=value)
 
     def test_system_age_valid_boundaries(self):
         """Valid boundary values for system_age_years are accepted without error."""
@@ -394,12 +426,28 @@ class TestDegradationFactor:
         with pytest.raises(ValueError, match="non-negative"):
             calculate_degradation_factor(-1)
 
+    @pytest.mark.parametrize("age", [math.nan, math.inf, -math.inf])
+    def test_a_non_finite_age_raises(self, age: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"System age must be non-negative and finite, got {age}"),
+        ):
+            calculate_degradation_factor(age)
+
     def test_invalid_rate_raises(self):
         """Invalid degradation rate raises error."""
         with pytest.raises(ValueError, match="0-1"):
             calculate_degradation_factor(5, degradation_rate_per_year=1.5)
         with pytest.raises(ValueError, match="0-1"):
             calculate_degradation_factor(5, degradation_rate_per_year=-0.1)
+
+    @pytest.mark.parametrize("rate", [math.nan, math.inf, -math.inf])
+    def test_a_non_finite_rate_raises(self, rate: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"Degradation rate must be 0-1, got {rate}"),
+        ):
+            calculate_degradation_factor(5, degradation_rate_per_year=rate)
 
     def test_factor_clamped_at_zero(self):
         """Factor can't go below zero."""

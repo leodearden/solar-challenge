@@ -18,6 +18,18 @@ if TYPE_CHECKING:
     from solar_challenge.location import Location
 
 
+def _require_valid_degradation_inputs(
+    system_age_years: float, degradation_rate_per_year: float
+) -> None:
+    """Refuse an age or annual rate outside the linear degradation model's domain."""
+    if not 0 <= system_age_years < math.inf:
+        raise ValueError(
+            f"System age must be non-negative and finite, got {system_age_years}"
+        )
+    if not 0 <= degradation_rate_per_year <= 1:
+        raise ValueError(f"Degradation rate must be 0-1, got {degradation_rate_per_year}")
+
+
 @dataclass(frozen=True)
 class PVConfig:
     """Configuration for a photovoltaic system.
@@ -65,8 +77,8 @@ class PVConfig:
 
     def __post_init__(self) -> None:
         """Validate PV configuration parameters."""
-        if self.capacity_kw <= 0:
-            raise ValueError(f"Capacity must be positive, got {self.capacity_kw} kW")
+        if not 0 < self.capacity_kw < math.inf:
+            raise ValueError(f"Capacity must be positive and finite, got {self.capacity_kw} kW")
         if not 0 <= self.azimuth <= 360:
             raise ValueError(f"Azimuth must be 0-360 degrees, got {self.azimuth}")
         if not 0 <= self.tilt <= 90:
@@ -83,23 +95,11 @@ class PVConfig:
             raise ValueError(
                 f"Inverter efficiency must be (0, 1], got {self.inverter_efficiency}"
             )
-        if self.inverter_capacity_kw is not None and self.inverter_capacity_kw <= 0:
+        if self.inverter_capacity_kw is not None and not 0 < self.inverter_capacity_kw < math.inf:
             raise ValueError(
-                f"Inverter capacity must be positive, got {self.inverter_capacity_kw} kW"
+                f"Inverter capacity must be positive and finite, got {self.inverter_capacity_kw} kW"
             )
-        # NOTE: The error messages below intentionally mirror the guards in
-        # calculate_degradation_factor (see pv.py). Both use the same substrings
-        # ("non-negative", "0-1") so that any callers matching on those strings
-        # work regardless of which layer raised. If you change the wording here,
-        # update calculate_degradation_factor (and vice versa).
-        if self.system_age_years < 0:
-            raise ValueError(
-                f"System age must be non-negative, got {self.system_age_years}"
-            )
-        if not 0 <= self.degradation_rate_per_year <= 1:
-            raise ValueError(
-                f"Degradation rate must be 0-1, got {self.degradation_rate_per_year}"
-            )
+        _require_valid_degradation_inputs(self.system_age_years, self.degradation_rate_per_year)
 
     @property
     def effective_inverter_capacity_kw(self) -> float:
@@ -660,7 +660,7 @@ def calculate_degradation_factor(
         Year 10: 0.95 (95%)
 
     Raises:
-        ValueError: If system_age_years is negative or rate is invalid
+        ValueError: If system_age_years is negative or not finite, or the rate is outside 0-1
 
     Example:
         >>> calculate_degradation_factor(0)
@@ -668,12 +668,7 @@ def calculate_degradation_factor(
         >>> calculate_degradation_factor(10, 0.005)
         0.95
     """
-    if system_age_years < 0:
-        raise ValueError(f"System age must be non-negative, got {system_age_years}")
-    if not 0 <= degradation_rate_per_year <= 1:
-        raise ValueError(
-            f"Degradation rate must be 0-1, got {degradation_rate_per_year}"
-        )
+    _require_valid_degradation_inputs(system_age_years, degradation_rate_per_year)
 
     # Linear degradation: factor = 1 - (age * rate)
     factor = 1.0 - (system_age_years * degradation_rate_per_year)

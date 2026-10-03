@@ -164,13 +164,18 @@ class TestValidateResultsCommand:
         assert "FAIL" in result.output
         assert "5/6 checks passed" in " ".join(result.output.split())
 
-    def test_zero_pv_capacity_is_refused(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("pv_kw", ["0", "nan", "inf"])
+    def test_a_pv_capacity_that_is_not_positive_and_finite_is_refused(
+        self, tmp_path: Path, pv_kw: str
+    ) -> None:
         result = self._validate_results(
-            tmp_path, _valid_results_frame(), "--pv-kw", "0"
+            tmp_path, _valid_results_frame(), "--pv-kw", pv_kw
         )
 
         assert result.exit_code == 1
-        assert "Capacity must be positive" in " ".join(result.output.split())
+        assert f"Capacity must be positive and finite, got {float(pv_kw)} kW" in " ".join(
+            result.output.split()
+        )
 
     @pytest.mark.parametrize(
         ("column", "required"),
