@@ -13,13 +13,16 @@ import pytest
 import typer
 import yaml
 from rich.console import Console
+from rich.style import Style
 from typer.testing import CliRunner, Result
 
 import solar_challenge.cli.home as _cli_home_module
 import solar_challenge.home as _home_module
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
+    console,
     create_summary_table,
+    error_console,
     handle_errors,
     parse_location,
     print_error,
@@ -689,6 +692,25 @@ class TestPrintHelpers:
         print_error(_TEXT_RICH_WOULD_PARSE)
 
         assert " ".join(capsys.readouterr().err.split()) == _TEXT_RICH_WOULD_PARSE
+
+    @pytest.mark.parametrize(
+        ("print_message", "target", "colour"),
+        [
+            pytest.param(print_success, console, "green", id="print_success"),
+            pytest.param(print_warning, console, "yellow", id="print_warning"),
+            pytest.param(print_info, console, "blue", id="print_info"),
+            pytest.param(print_error, error_console, "red", id="print_error"),
+        ],
+    )
+    def test_a_message_is_printed_in_its_colour_on_its_console(
+        self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], target: Console, colour: str
+    ) -> None:
+        """Success prints green, warning yellow, info blue (all on stdout) and error red (on stderr); recorded, because a test run is no colour terminal."""
+        monkeypatch.setattr(target, "record", True)
+
+        print_message("saved")
+
+        assert target.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
 
 
 class TestCLIOutputFormats:
