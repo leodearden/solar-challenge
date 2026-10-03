@@ -5,8 +5,10 @@ This document is the consumer-facing recipe for depending on the
 `solar-challenge-platform`) as a **git dependency pinned to a release tag**.
 
 The authoritative public surface is `solar_challenge.__all__` (defined in
-`src/solar_challenge/__init__.py`), which is frozen and contract-tested by
-`tests/unit/test_init_lazy_surface.py`.
+`src/solar_challenge/__init__.py`). It is frozen by
+`tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
+public name and that name's signature, while
+`tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
 
 ---
 
@@ -107,6 +109,19 @@ sum `own_use_payment_gbp + own_use_vat_gbp`, so derive the two rather than
 hardcoding a rounded literal. Consumers that only read the dataclass —
 including anything walking it with `dataclasses.fields()` — need no change.
 
+**Changes merged since the last tag.** Each change to the frozen public surface
+that has merged to `main` since the last tag is listed here as an
+**Unreleased on main** line, added by the commit that makes the change, and the
+next release folds these lines into its notes. A change to an exported
+signature must also edit `FROZEN_SURFACE` in
+`tests/unit/test_public_api_surface.py`, which fails until it does.
+
+**Unreleased on main** (task 326): `TOUOptimizedStrategy` no longer accepts
+`off_peak_hours`, and passing it raises `TypeError`; the 0.5.0 tag accepts it,
+checks its hour ranges and otherwise ignores it. Consumers drop the argument
+when they re-pin: it never changed a decision, because every hour outside
+`peak_hours` is off-peak.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
@@ -162,7 +177,9 @@ changed. Rebuild a pre-built cache with `my_test_cache.put(df, "tmy", location)`
 ## Frozen public surface
 
 The authoritative public surface is `solar_challenge.__all__`, defined in
-`src/solar_challenge/__init__.py`.  It is frozen and contract-tested by
-`tests/unit/test_init_lazy_surface.py`, and enforced at import time via the
-module's `__getattr__` guard.  Consumers should reference `__all__` directly
-rather than relying on any copy maintained in this document.
+`src/solar_challenge/__init__.py`.  It is frozen by
+`tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
+public name and that name's signature, and enforced at import time via the
+module's `__getattr__` guard; `tests/unit/test_init_lazy_surface.py` checks the
+lazy loader's structure.  Consumers should reference `__all__` directly rather
+than relying on any copy maintained in this document.
