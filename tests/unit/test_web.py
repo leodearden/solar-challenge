@@ -60,6 +60,21 @@ def _counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
     return {key: items.count(key) for key in keys}
 
 
+def _run_storage(app: Flask) -> RunStorage:
+    """The RunStorage *app* keeps its runs in: the one create_app registers, which its pages read."""
+    storage: RunStorage = app.extensions["storage"]
+    return storage
+
+
+def _home_config(name: str) -> HomeConfig:
+    """The 4 kW PV, 3500 kWh home named *name* that the page tests save."""
+    return HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(annual_consumption_kwh=3500),
+        name=name,
+    )
+
+
 def _save_home_run(
     app: Flask,
     name: str,
@@ -72,14 +87,9 @@ def _save_home_run(
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
     """
     run_id = str(uuid.uuid4())
-    storage = RunStorage(db_path=app.config["DATABASE"], data_dir=app.config["DATA_DIR"])
-    storage.save_home_run(
+    _run_storage(app).save_home_run(
         run_id=run_id,
-        config=HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3500),
-            name=name,
-        ),
+        config=_home_config(name),
         results=results,
         summary=calculate_summary(results),
         name=name,
