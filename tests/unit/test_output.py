@@ -212,8 +212,47 @@ class TestAggregateMonthly:
         # 2 days * 72 kWh/day = 144 kWh
         assert monthly["generation_kwh"].iloc[0] == pytest.approx(144.0, rel=0.01)
 
+    def test_each_month_totals_only_its_own_days(self):
+        """June 29 and 30 total into June, and July 1 alone into July."""
+        index = pd.date_range(
+            "2024-06-29 00:00", periods=3 * 1440, freq="1min", tz="Europe/London"
+        )
 
-@pytest.mark.parametrize("aggregate", [aggregate_daily], ids=["daily"])
+        def constant(value: float) -> pd.Series:
+            return pd.Series(value, index=index)
+
+        demand = constant(2.0)
+        demand[pd.Timestamp("2024-07-01 18:00", tz="Europe/London")] = 6.0
+        results = SimulationResults(
+            generation=constant(3.0),
+            demand=demand,
+            self_consumption=constant(1.5),
+            battery_charge=constant(0.75),
+            battery_discharge=constant(0.25),
+            battery_soc=constant(4.0),
+            grid_import=constant(0.5),
+            grid_export=constant(0.6),
+            import_cost=constant(0.002),
+            export_revenue=constant(0.001),
+            tariff_rate=constant(0.3),
+        )
+
+        monthly = aggregate_monthly(results)
+
+        assert monthly.index.tolist() == [
+            pd.Timestamp("2024-06-30", tz="Europe/London"),
+            pd.Timestamp("2024-07-31", tz="Europe/London"),
+        ]
+        # 3 kW for 2 days, then 1 day
+        assert monthly["generation_kwh"].tolist() == pytest.approx([144.0, 72.0])
+        # £0.002 a minute for 2 days, then 1 day
+        assert monthly["import_cost_gbp"].tolist() == pytest.approx([5.76, 2.88])
+        assert monthly["peak_demand_kw"].tolist() == [2.0, 6.0]
+
+
+@pytest.mark.parametrize(
+    "aggregate", [aggregate_daily, aggregate_monthly], ids=["daily", "monthly"]
+)
 class TestPeriodTotalsAndPeaks:
     """Each row holds that period's energy (kWh) and money (£) totals and its peak power (kW), and nothing else."""
 
