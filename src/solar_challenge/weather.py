@@ -188,8 +188,9 @@ class WeatherCache:
         with _staged_beside(cache_file) as staged_csv, _staged_beside(meta_file) as staged_meta:
             data.to_csv(staged_csv)
             staged_meta.write_text(json.dumps(metadata))
-            # Meta first: get takes the CSV as the entry, so whoever finds the CSV finds its meta, and a put
-            # killed between the two replaces leaves a miss.
+            # Meta first: get takes the CSV as the entry, so a get that finds the new CSV also finds the new
+            # meta. A put killed between the two replaces leaves a miss in an empty cache, else the old CSV
+            # under the new meta (see the caveat in the docstring).
             os.replace(staged_meta, meta_file)
             os.replace(staged_csv, cache_file)
 
