@@ -27,6 +27,7 @@ when ``git`` or ``uv`` is absent from PATH, or when the tree is not a git checko
 from __future__ import annotations
 
 import email
+import os
 import shutil
 import subprocess
 import zipfile
@@ -36,6 +37,12 @@ import pytest
 
 # Module-scoped fixtures cannot request the function-scoped project_root fixture.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_EXTERNAL_PROBE = PROJECT_ROOT / "tests" / "integration" / "_external_probe.py"
+
+
+def _uv_environment(**overrides: str) -> dict[str, str]:
+    """Return the environment of every uv command this module runs: this process's, with *overrides*."""
+    return {**os.environ, **overrides}
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +94,18 @@ def wheel_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return copy_root
 
 
+def _build_wheel(source: Path, out_dir: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
+    """Build a wheel of the project in *source* into *out_dir* with uv, its environment overridden by *env_overrides*."""
+    return subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(out_dir)],
+        cwd=str(source),
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env=_uv_environment(**env_overrides),
+    )
+
+
 @pytest.fixture(scope="module")
 def built_wheel(wheel_source: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Build the solar_challenge wheel once, from the wheel_source copy, and return its path.
@@ -96,13 +115,7 @@ def built_wheel(wheel_source: Path, tmp_path_factory: pytest.TempPathFactory) ->
     """
     out_dir = tmp_path_factory.mktemp("wheel_out")
 
-    result = subprocess.run(
-        ["uv", "build", "--wheel", "--out-dir", str(out_dir)],
-        cwd=str(wheel_source),
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    result = _build_wheel(wheel_source, out_dir)
     assert result.returncode == 0, (
         f"uv build --wheel failed (returncode={result.returncode}).\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -213,6 +226,18 @@ def test_built_wheel_declares_the_agpl_license_expression(built_wheel: Path) -> 
 # ---------------------------------------------------------------------------
 
 
+def _run_isolated_install(wheel: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
+    """Run _external_probe.py in a project-free uv environment holding *wheel*, its environment overridden by *env_overrides*."""
+    return subprocess.run(
+        ["uv", "run", "--no-project", "--isolated", "--with", str(wheel), "python", str(_EXTERNAL_PROBE)],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=_uv_environment(**env_overrides),
+    )
+
+
 @pytest.mark.build
 def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> None:
     """Install the wheel in a project-free env and resolve every __all__ symbol (H1).
@@ -234,28 +259,39 @@ def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> 
     the built wheel and resolves its declared deps from the uv cache.
     No ``--offline`` flag — cache-first-with-network-fallback is more robust.
     """
-    probe_path = PROJECT_ROOT / "tests" / "integration" / "_external_probe.py"
-
-    result = subprocess.run(
-        [
-            "uv",
-            "run",
-            "--no-project",
-            "--isolated",
-            "--with",
-            str(built_wheel),
-            "python",
-            str(probe_path),
-        ],
-        cwd=str(PROJECT_ROOT),
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
+    result = _run_isolated_install(built_wheel)
 
     assert result.returncode == 0 and "EXTERNAL-INSTALL-OK" in result.stdout, (
         f"External-consumer boundary test FAILED.\n"
         f"returncode: {result.returncode}\n"
         f"--- stdout ---\n{result.stdout}\n"
         f"--- stderr ---\n{result.stderr}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Offline: each uv command reads the package index, the build backend and the
+# wheels from uv's cache alone, so an empty cache fails it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.build
+def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_source: Path, tmp_path: Path) -> None:
+    """uv build exits 2 offline and when refused alike; the offline guard tells them apart, failing this test if the build reached the network."""
+    result = _build_wheel(wheel_source, tmp_path / "wheel", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
+
+    assert result.returncode != 0, (
+        "uv build succeeded with an empty cache, so it found setuptools outside uv's cache\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+@pytest.mark.build
+def test_the_isolated_install_resolves_from_uv_s_cache_alone(built_wheel: Path, tmp_path: Path) -> None:
+    result = _run_isolated_install(built_wheel, UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
+
+    assert result.returncode == 1, (
+        f"with an empty cache, the isolated install exited {result.returncode}, not 1, uv's exit offline for "
+        "want of the package index: a 2 means it fetched, or tried to fetch, from PyPI\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
