@@ -20,26 +20,32 @@ from plotly.subplots import make_subplots
 
 from solar_challenge.home import SimulationResults
 
+_AMBER = "#f5a623"
+_RED = "#d0021b"
+_GREEN = "#7ed321"
+_BLUE = "#4a90e2"
+_PURPLE = "#9013fe"
+
 COLOUR_PALETTE = {
-    "pv_generation": "#f5a623",
-    "demand": "#d0021b",
-    "self_consumption": "#7ed321",
+    "pv_generation": _AMBER,
+    "demand": _RED,
+    "self_consumption": _GREEN,
     "grid_import": "#9b9b9b",
-    "grid_export": "#4a90e2",
+    "grid_export": _BLUE,
     "battery_charge": "#50e3c2",
     "battery_discharge": "#f8a427",
-    "heat_pump": "#9013fe",
-    "cost": "#d0021b",
-    "revenue": "#7ed321",
-    "soc_low_threshold": "#d0021b",
-    "soc_high_threshold": "#7ed321",
-    "net_savings": "#4a90e2",
-    "winter": "#4a90e2",
-    "summer": "#f5a623",
-    "comparison_run_1": "#f5a623",
-    "comparison_run_2": "#4a90e2",
-    "comparison_run_3": "#7ed321",
-    "comparison_run_4": "#9013fe",
+    "heat_pump": _PURPLE,
+    "cost": _RED,
+    "revenue": _GREEN,
+    "soc_low_threshold": _RED,
+    "soc_high_threshold": _GREEN,
+    "net_savings": _BLUE,
+    "winter": _BLUE,
+    "summer": _AMBER,
+    "comparison_run_1": _AMBER,
+    "comparison_run_2": _BLUE,
+    "comparison_run_3": _GREEN,
+    "comparison_run_4": _PURPLE,
 }
 
 _SHARED_LAYOUT = dict(
