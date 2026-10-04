@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.shared's JSON-object rule, called directly."""
+"""Tests for solar_challenge.web.shared's request-body rules, called directly: a JSON object, and only recognised keys."""
 
 import pytest
 
 pytest.importorskip("flask")
 
-from solar_challenge.web.shared import NotAJsonObject, require_json_object
+from solar_challenge.web.shared import (
+    NotAJsonObject,
+    refuse_unrecognised_keys,
+    require_json_object,
+)
 
 
 class TestRequireJsonObject:
@@ -47,3 +51,23 @@ class TestRequireJsonObject:
         """Every web caller answers a ValueError, with HTTP 400 or an assistant tool_result error."""
         with pytest.raises(ValueError):
             require_json_object("x", "Home config")
+
+
+class TestRefuseUnrecognisedKeys:
+    """refuse_unrecognised_keys passes a body of recognised keys and refuses one with any other key."""
+
+    def test_a_body_of_recognised_keys_is_not_refused(self) -> None:
+        """A subset of the recognised keys is enough; none is required."""
+        refuse_unrecognised_keys({"pv_kw": 4.0}, frozenset({"pv_kw", "days"}), "home config")
+
+    def test_any_other_key_is_refused_naming_each_and_listing_the_recognised(self) -> None:
+        """*what* verbatim, each unrecognised key as its repr, sorted, then the recognised keys, sorted."""
+        with pytest.raises(ValueError) as exc_info:
+            refuse_unrecognised_keys(
+                {"pv_kw": 4.0, "tarif": {}, "heat_pump": "ASHP"},
+                frozenset({"pv_kw", "days"}),
+                "fleet form",
+            )
+        assert str(exc_info.value) == (
+            "Unrecognised fleet form keys: 'heat_pump', 'tarif'; recognised keys: days, pv_kw"
+        )
