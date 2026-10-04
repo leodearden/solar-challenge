@@ -247,7 +247,7 @@ def _simulate_home_worker(
     validate_balance: bool,
     weather_data: pd.DataFrame,
 ) -> tuple[int, SimulationResults]:
-    """Worker for parallel execution. Must be top-level for pickle."""
+    """Run one home's simulation job, from its location's TMY, tagged with the home's index. Must be top-level for pickle."""
     results = simulate_home(
         home_config, start_date, end_date, validate_balance, weather_data=weather_data
     )
@@ -263,7 +263,7 @@ def _simulate_home_worker_tagged(
     validate_balance: bool,
     weather_data: pd.DataFrame,
 ) -> tuple[int, int, SimulationResults]:
-    """Worker with sweep tagging for cross-sweep parallel execution.
+    """Run one home's simulation job, from its location's TMY, tagged with its sweep and home indices.
 
     Must be top-level for pickle.
 
@@ -325,15 +325,13 @@ def simulate_fleet_iter(
 
     if not parallel or n_homes == 1:
         for idx, home in enumerate(config.homes):
-            yield (
+            yield _simulate_home_worker(
                 idx,
-                simulate_home(
-                    home,
-                    start_date,
-                    end_date,
-                    validate_balance,
-                    weather_data=tmy_by_location[home.location],
-                ),
+                home,
+                start_date,
+                end_date,
+                validate_balance,
+                tmy_by_location[home.location],
             )
     else:
         workers = max_workers or min(n_homes, os.cpu_count() or 4)
@@ -518,14 +516,15 @@ def simulate_multi_sweep_iter(
         # Sequential execution
         for sweep_idx, (_, fleet_config) in enumerate(sweep_configs):
             for home_idx, home in enumerate(fleet_config.homes):
-                result = simulate_home(
+                yield _simulate_home_worker_tagged(
+                    sweep_idx,
+                    home_idx,
                     home,
                     start_date,
                     end_date,
                     validate_balance,
-                    weather_data=tmy_by_location[home.location],
+                    tmy_by_location[home.location],
                 )
-                yield (sweep_idx, home_idx, result)
     else:
         # Parallel execution with all jobs in single pool
         workers = max_workers or min(total_jobs, os.cpu_count() or 4)
