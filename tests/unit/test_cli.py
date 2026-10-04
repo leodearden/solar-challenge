@@ -1124,3 +1124,30 @@ class TestReportsPrintNamesVerbatim:
         printed = " ".join(result.stdout.split())
         assert f"Simulation Results: {_TEXT_RICH_WOULD_PARSE}" in printed
         assert f"# Simulation Report: {_TEXT_RICH_WOULD_PARSE}" in printed
+
+    def test_finance_run_prints_the_scenarios_name_verbatim(self) -> None:
+        """A scenario name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the report as written."""
+        Path("scenario.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": _TEXT_RICH_WOULD_PARSE,
+                    "homes": [
+                        {
+                            "pv": {"capacity_kw": 4.0},
+                            "battery": {"capacity_kwh": 5.0},
+                            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                        }
+                    ],
+                    "finance": {"standing_charge_pence_per_day": 28.0},
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app,
+            ["finance", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert f"# Finance Report: {_TEXT_RICH_WOULD_PARSE}" in " ".join(result.stdout.split())
