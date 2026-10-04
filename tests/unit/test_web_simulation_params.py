@@ -249,7 +249,7 @@ class TestParseHomeConfigCapabilities:
         assert home_config.battery_config.dispatch_strategy is not None
         assert home_config.battery_config.dispatch_strategy.strategy_type == "self_consumption"
 
-    def test_dispatch_strategy_ignored_without_battery(self) -> None:
+    def test_valid_dispatch_strategy_without_battery_makes_no_battery(self) -> None:
         """A valid dispatch_strategy makes no battery when there is none."""
         payload = {
             **VALID_HOME_PAYLOAD,
