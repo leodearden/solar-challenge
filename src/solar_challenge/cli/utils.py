@@ -171,6 +171,11 @@ def load_config_with_overrides(
     return config
 
 
+def verbatim_table_title(title: str) -> Text:
+    """*title* for a Rich Table, printed exactly as it is, never read as Rich markup or emoji codes, in Rich's table-title style."""
+    return Text(title, style="table.title")
+
+
 def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Table:
     """Create a Rich table from summary statistics.
 
@@ -181,7 +186,7 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
     Returns:
         Rich Table object
     """
-    table = Table(title=Text(title, style="table.title"))
+    table = Table(title=verbatim_table_title(title))
     table.add_column("Metric", style="cyan")
     table.add_column("Value", justify="right", style="green")
 
