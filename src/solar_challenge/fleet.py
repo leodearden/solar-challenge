@@ -4,7 +4,7 @@
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 import pandas as pd
 
@@ -245,9 +245,12 @@ def _simulate_home_worker(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     validate_balance: bool,
+    weather_data: pd.DataFrame,
 ) -> tuple[int, SimulationResults]:
     """Worker for parallel execution. Must be top-level for pickle."""
-    results = simulate_home(home_config, start_date, end_date, validate_balance)
+    results = simulate_home(
+        home_config, start_date, end_date, validate_balance, weather_data=weather_data
+    )
     return (home_index, results)
 
 
@@ -278,6 +281,14 @@ def _simulate_home_worker_tagged(
     return (sweep_index, home_index, results)
 
 
+def _tmy_by_location(homes: Iterable[HomeConfig]) -> dict[Location, pd.DataFrame]:
+    """The TMY get_tmy_data returns for each distinct location of homes, fetched once per location in this process."""
+    return {
+        location: get_tmy_data(location)
+        for location in dict.fromkeys(home.location for home in homes)
+    }
+
+
 def simulate_fleet_iter(
     config: FleetConfig,
     start_date: pd.Timestamp,
@@ -287,6 +298,12 @@ def simulate_fleet_iter(
     max_workers: int | None = None,
 ) -> Iterator[tuple[int, SimulationResults]]:
     """Yield (home_index, result) as each simulation completes.
+
+    Each home is simulated from its location's TMY, fetched once per distinct
+    location by get_tmy_data in the calling process before any home runs, and
+    handed to the home's simulation. So a worker reads no weather cache, and a
+    cache installed with set_weather_cache serves the run under any
+    multiprocessing start method.
 
     Args:
         config: Fleet configuration
@@ -300,19 +317,32 @@ def simulate_fleet_iter(
         Tuples of (home_index, SimulationResults) as each completes
     """
     n_homes = len(config.homes)
-
-    # Pre-warm weather cache
-    get_tmy_data(config.homes[0].location, use_cache=True)
+    tmy_by_location = _tmy_by_location(config.homes)
 
     if not parallel or n_homes == 1:
         for idx, home in enumerate(config.homes):
-            yield (idx, simulate_home(home, start_date, end_date, validate_balance))
+            yield (
+                idx,
+                simulate_home(
+                    home,
+                    start_date,
+                    end_date,
+                    validate_balance,
+                    weather_data=tmy_by_location[home.location],
+                ),
+            )
     else:
         workers = max_workers or min(n_homes, os.cpu_count() or 4)
         with ProcessPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
-                    _simulate_home_worker, i, h, start_date, end_date, validate_balance
+                    _simulate_home_worker,
+                    i,
+                    h,
+                    start_date,
+                    end_date,
+                    validate_balance,
+                    tmy_by_location[h.location],
                 ): i
                 for i, h in enumerate(config.homes)
             }
@@ -330,8 +360,7 @@ def simulate_fleet(
 ) -> FleetResults:
     """Simulate all homes in a fleet for a date range.
 
-    Weather data is retrieved once and shared across all homes
-    (assumes same location).
+    Weather is fetched as simulate_fleet_iter fetches it.
 
     Args:
         config: Fleet configuration
