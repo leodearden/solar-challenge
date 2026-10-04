@@ -22,9 +22,11 @@ checks enforce the invariant:
 """
 
 import dataclasses
+import inspect
 import json
 import re
 from collections.abc import Callable, Iterator
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -189,6 +191,29 @@ def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
         f"With every COLOUR_PALETTE entry recoloured, the chart still draws {', '.join(stale)}, "
         "so a palette edit does not reach it. Name the colour's role in COLOUR_PALETTE, or derive "
         "a translucent form from its palette entry."
+    )
+
+
+def _public_chart_builders() -> frozenset[Callable[..., Any]]:
+    """Each public function charts.py defines; a name it imports, such as make_subplots, is not one."""
+    return frozenset(
+        routine
+        for name, routine in inspect.getmembers(charts, inspect.isroutine)
+        if not name.startswith("_") and getattr(routine, "__module__", None) == charts.__name__
+    )
+
+
+def test_the_palette_edit_check_covers_every_public_chart_builder() -> None:
+    builders = _public_chart_builders()
+    assert builders, "charts.py defines no public function, so this guard would pass vacuously"
+
+    exercised = {case.builder for case in _FIGURES.values()}
+    unexercised = sorted(builder.__name__ for builder in builders - exercised)
+
+    assert unexercised == [], (
+        "No _FIGURES case draws a figure with these public charts.py functions: "
+        f"{', '.join(unexercised)}. The palette-edit check never reads the colours they draw. "
+        "Add each to _FIGURES with inputs that make it draw a figure."
     )
 
 
