@@ -302,10 +302,10 @@ def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_sour
 
 @pytest.mark.build
 def test_the_isolated_install_resolves_from_uv_s_cache_alone(built_wheel: Path, tmp_path: Path) -> None:
+    """With an empty cache, the isolated install fails; the offline guard, not uv's exit code, catches a fetch, failing this test if the install reached the network."""
     result = _run_isolated_install(built_wheel, UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
 
-    assert result.returncode == 1, (
-        f"with an empty cache, the isolated install exited {result.returncode}, not 1, uv's exit offline for "
-        "want of the package index: a 2 means it fetched, or tried to fetch, from PyPI\n"
+    assert result.returncode != 0, (
+        "the isolated install succeeded with an empty cache, so it found the wheel's dependencies outside uv's cache\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
