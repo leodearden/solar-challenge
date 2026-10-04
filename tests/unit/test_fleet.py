@@ -1,5 +1,9 @@
 """Tests for fleet simulation."""
 
+import multiprocessing
+from collections.abc import Iterator
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -19,6 +23,8 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.weather import WeatherCache
+from tests._synthetic_weather import synthetic_june_weather
 
 
 class TestFleetConfigBasics:
@@ -772,3 +778,63 @@ class TestMultiSweepResults:
         sweep_val, fr = results[0]
         assert sweep_val == 1.5
         assert len(fr) == 1
+
+
+class TestParallelFleetWeather:
+    """Parallel workers simulate each home from its location's TMY in the weather cache installed in this process, though forkserver (Linux's default from Python 3.14) and spawn (macOS's) pass the workers none of this process's globals."""
+
+    _BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
+    _DAY = pd.Timestamp("2024-06-21", tz="Europe/London")
+    _LOAD = LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False)
+
+    @pytest.fixture
+    def worker_start_method(self, request: pytest.FixtureRequest) -> Iterator[str]:
+        """Make request.param the start method of the default multiprocessing context, which the fleet's worker pool uses, until the test ends."""
+        previous = multiprocessing.get_start_method(allow_none=True)
+        multiprocessing.set_start_method(request.param, force=True)
+        yield request.param
+        multiprocessing.set_start_method(previous, force=True)
+
+    @pytest.fixture(autouse=True)
+    def bristol_and_bath_tmys(
+        self, weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Serve a clear 21 June as Bristol's TMY and the same day at half its irradiance as Bath's.
+
+        The test runs in an empty working directory, so a worker that falls back to
+        the default weather cache finds nothing there and writes nothing to the repository.
+        """
+        monkeypatch.chdir(tmp_path)
+        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+        weather_cache.put(synthetic_june_weather(self._DAY, irradiance_scale_per_day=(0.5,)), "tmy", self._BATH)
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
+    def test_fleet_gives_each_home_the_results_simulate_home_gives_it_here(
+        self, worker_start_method: str
+    ) -> None:
+        """simulate_fleet, sequential or parallel, gives a Bristol home and a Bath home exactly what simulate_home gives each in this process."""
+        fleet = FleetConfig(
+            homes=[
+                HomeConfig(
+                    pv_config=PVConfig(capacity_kw=4.0),
+                    load_config=self._LOAD,
+                    location=location,
+                    name=location.name,
+                )
+                for location in (Location.bristol(), self._BATH)
+            ]
+        )
+        alone = [simulate_home(home, self._DAY, self._DAY) for home in fleet.homes]
+        assert alone[1].total_amounts()["generation_kwh"] < alone[0].total_amounts()["generation_kwh"], (
+            "premise: Bath's TMY is less sunny than Bristol's, so a home simulated from the other location's TMY is caught"
+        )
+
+        for parallel in (False, True):
+            fleet_results = simulate_fleet(fleet, self._DAY, self._DAY, parallel=parallel, max_workers=2)
+            for home, in_fleet, expected in zip(fleet.homes, fleet_results.per_home_results, alone, strict=True):
+                pd.testing.assert_frame_equal(
+                    in_fleet.to_dataframe(),
+                    expected.to_dataframe(),
+                    check_exact=True,
+                    obj=f"{home.name}'s results with parallel={parallel}",
+                )
