@@ -7,7 +7,7 @@ fleet page's counterpart of builder_form.py.
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time
 from types import MappingProxyType
 from typing import Any
 
@@ -226,9 +226,19 @@ def _read_period(period: Any) -> _BlockRead:
 def _iso_date(value: Any, path: str) -> str:
     """*value*, a date as YAML reads one or a date string, as the fleet form's date string.
 
+    A YAML timestamp is its day when it is that day's midnight with no time zone.
+
     Raises:
-        ValueError: For any other value, a missing one read as None, naming *path*.
+        ValueError: For any other value, a missing one read as None, or a timestamp with a
+            time of day or a time zone, which the form's date fields cannot hold, naming *path*.
     """
+    if isinstance(value, datetime):
+        if value.tzinfo is not None or value.time() != time.min:
+            raise ValueError(
+                f"{path} must be a day, got {value!r}: the fleet page's date fields hold "
+                "no time of day or time zone"
+            )
+        return value.date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, str):

@@ -2,6 +2,7 @@
 """Tests for solar_challenge.web.fleet_scenario, called directly with fleet forms: the bodies fleet-simulator.js's buildPayload() posts."""
 
 import re
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -308,6 +309,15 @@ class TestFleetFormFromScenario:
             form=_FLEET_FORM, not_loaded=("location",)
         )
 
+    def test_a_period_of_midnight_timestamps_loads_as_its_days(self) -> None:
+        """YAML reads `2024-07-01 00:00:00` as a timestamp; at midnight it is that day, which the page's date fields hold as an ISO date."""
+        period = yaml.safe_load("start_date: 2024-07-01 00:00:00\nend_date: 2024-07-10 00:00:00\n")
+        assert isinstance(period["start_date"], datetime), "premise: YAML reads a timestamp"
+
+        assert fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period}) == ImportedFleetForm(
+            form=_FLEET_FORM, not_loaded=()
+        )
+
     def test_a_tariff_key_the_form_has_no_field_for_is_not_loaded(self) -> None:
         """An Economy 7 tariff loads its type and rates, and names the off-peak start the page has no field for."""
         tariff = {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1, "off_peak_start": "01:00"}
@@ -384,10 +394,30 @@ class TestFleetFormFromScenario:
                 f"n_homes must be between 1 and {MAX_FLEET_HOMES}",
                 id="more-homes-than-the-page-runs",
             ),
+            pytest.param(
+                {
+                    **_FLEET_SCENARIO,
+                    "period": yaml.safe_load(
+                        "start_date: 2024-07-01 12:30:00\nend_date: 2024-07-10\n"
+                    ),
+                },
+                "period.start_date",
+                id="a-timestamp-with-a-time-of-day",
+            ),
+            pytest.param(
+                {
+                    **_FLEET_SCENARIO,
+                    "period": yaml.safe_load(
+                        "start_date: 2024-07-01\nend_date: 2024-07-10T00:00:00Z\n"
+                    ),
+                },
+                "period.end_date",
+                id="a-timestamp-with-a-time-zone",
+            ),
         ],
     )
     def test_a_scenario_the_form_cannot_hold_is_refused(self, document: object, reason: str) -> None:
-        """A scenario whose fleet, tariff or dispatch the form cannot hold exactly is refused, naming the setting: loading it anyway would run a different fleet."""
+        """A scenario whose fleet, period, tariff or dispatch the form cannot hold exactly is refused, naming the setting: loading it anyway would run a different fleet."""
         with pytest.raises(ValueError, match=re.escape(reason)):
             fleet_form_from_scenario(document)
 
