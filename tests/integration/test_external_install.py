@@ -16,6 +16,7 @@ The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here.
 The consumer-side proof runs inside an isolated uv env via _external_probe.py,
 which is NOT collected by pytest (underscore-prefixed, matches _helpers.py).
+Both uv commands run offline, reading everything they need from uv's cache.
 
 Marked ``build`` (NOT ``slow``) to stay independently selectable
 (``pytest -m build``).  Note: the project's default ``addopts`` does not
@@ -40,9 +41,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _EXTERNAL_PROBE = PROJECT_ROOT / "tests" / "integration" / "_external_probe.py"
 
 
-def _uv_environment(**overrides: str) -> dict[str, str]:
-    """Return the environment of every uv command this module runs: this process's, with *overrides*."""
-    return {**os.environ, **overrides}
+def _offline_uv_environment(**overrides: str) -> dict[str, str]:
+    """Return the environment of every uv command this module runs: this process's, with uv offline, then *overrides*.
+
+    Offline, uv reads the package index, the build backend and the wheels from its
+    cache alone. The offline guard (tests/conftest.py) refuses the network access of
+    a test not marked slow, its child processes' included, and built_wheel's build
+    runs in the window of the module's first test.
+    """
+    return {**os.environ, "UV_OFFLINE": "1", **overrides}
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +109,7 @@ def _build_wheel(source: Path, out_dir: Path, **env_overrides: str) -> subproces
         capture_output=True,
         text=True,
         timeout=300,
-        env=_uv_environment(**env_overrides),
+        env=_offline_uv_environment(**env_overrides),
     )
 
 
@@ -117,7 +124,10 @@ def built_wheel(wheel_source: Path, tmp_path_factory: pytest.TempPathFactory) ->
 
     result = _build_wheel(wheel_source, out_dir)
     assert result.returncode == 0, (
-        f"uv build --wheel failed (returncode={result.returncode}).\n"
+        f"uv build --wheel failed (returncode={result.returncode}). If uv says the network is disabled, "
+        "its cache lacks the build backend: run `uv build --wheel --out-dir <a temporary directory>` once "
+        "in the checkout, with network access. In a verify, the outer `uv run`'s editable build fills "
+        "that cache first.\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
@@ -234,7 +244,7 @@ def _run_isolated_install(wheel: Path, **env_overrides: str) -> subprocess.Compl
         capture_output=True,
         text=True,
         timeout=600,
-        env=_uv_environment(**env_overrides),
+        env=_offline_uv_environment(**env_overrides),
     )
 
 
@@ -256,14 +266,18 @@ def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> 
 
     Design: ``--no-project --isolated`` gives a project-free ephemeral env
     (ignores the worktree's pyproject and venv); ``--with <wheel>`` installs
-    the built wheel and resolves its declared deps from the uv cache.
-    No ``--offline`` flag — cache-first-with-network-fallback is more robust.
+    the built wheel, and uv resolves and installs its declared deps offline,
+    from its cache alone.
     """
     result = _run_isolated_install(built_wheel)
 
     assert result.returncode == 0 and "EXTERNAL-INSTALL-OK" in result.stdout, (
         f"External-consumer boundary test FAILED.\n"
         f"returncode: {result.returncode}\n"
+        "If uv says packages were unavailable because the network was disabled, its cache lacks what "
+        f"this resolution reads: run `uv run --no-project --isolated --with {built_wheel} python "
+        "tests/integration/_external_probe.py` once in the checkout, with network access. Any wheel "
+        "built from this tree serves.\n"
         f"--- stdout ---\n{result.stdout}\n"
         f"--- stderr ---\n{result.stderr}"
     )
