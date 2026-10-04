@@ -730,6 +730,67 @@ class TestDeleteRun:
         storage.delete_run("nonexistent-run-id")
 
 
+class TestRunName:
+    """Tests for RunStorage.run_name, the name Run History lists and renames a run under."""
+
+    def test_run_name_is_the_name_each_run_was_saved_under(
+        self,
+        storage,
+        sample_home_config,
+        sample_simulation_results,
+        sample_summary,
+        sample_fleet_data,
+    ):
+        """Each run answers the name it was saved under.
+
+        A home run answers the run's name, not its home's ('Test Home').
+        """
+        storage.save_home_run(
+            run_id="named-home",
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            name="North Roof",
+        )
+        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
+        storage.save_fleet_run(
+            run_id="named-fleet",
+            fleet_results=fleet_results,
+            fleet_summary=fleet_summary,
+            per_home_summaries=per_home_summaries,
+            name="Community Fleet",
+        )
+
+        assert {run_id: storage.run_name(run_id) for run_id in ("named-home", "named-fleet")} == {
+            "named-home": "North Roof",
+            "named-fleet": "Community Fleet",
+        }
+
+    def test_run_name_of_an_id_no_run_has_is_none(self, storage):
+        """An id no run has answers None."""
+        assert storage.run_name("no-such-run") is None
+
+    def test_run_name_of_a_run_whose_name_is_null_is_none(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """A run whose name is NULL answers None, not a default name.
+
+        Every save writes a name, so the test clears the saved one in the database.
+        """
+        run_id = "null-name-home"
+        storage.save_home_run(
+            run_id=run_id,
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            name="North Roof",
+        )
+        with get_db(storage.db_path) as conn:
+            conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
+
+        assert storage.run_name(run_id) is None
+
+
 class TestDatabasePragmas:
     """Tests for SQLite pragma settings."""
 

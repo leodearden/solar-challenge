@@ -538,6 +538,16 @@ class RunStorage:
 
         return fleet_results, fleet_summary, per_home_summaries
 
+    def run_name(self, run_id: str) -> str | None:
+        """The name run *run_id* is saved under, the one Run History lists and renames.
+
+        None when no run has that id, or its name is NULL.
+        """
+        with get_db(self.db_path) as conn:
+            row = conn.execute("SELECT name FROM runs WHERE id = ?", (run_id,)).fetchone()
+        name: str | None = None if row is None else row["name"]
+        return name
+
     def list_runs(
         self,
         run_type: str | None = None,

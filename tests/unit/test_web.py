@@ -15,6 +15,7 @@ from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+from solar_challenge.web.database import get_db
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.storage import RunStorage
 from tests._html_page import (
@@ -478,6 +479,37 @@ class TestHomeResultsRoute:
             ("Total Demand", summary.total_demand_kwh),
         ):
             assert texts_after(page, label, 2) == [f"{total_kwh:.1f}", "kWh"], label
+
+    def test_home_results_page_title_follows_a_run_history_rename(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Renaming a run in Run History retitles its results page.
+
+        The run's home keeps the name it was saved with, so the page reads the run's name, not its home's.
+        """
+        run_id = _save_home_run(app, "North Roof", _make_sim_results(days=1))
+        rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "South Roof"})
+        assert rename.status_code == 200
+
+        response = client.get(f"/results/home/{run_id}")
+
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        assert headings(page)[0] == "South Roof"
+        assert "Results: South Roof - Solar Challenge" in texts(page)
+
+    def test_home_results_page_of_a_run_with_no_database_row_is_titled_home_simulation(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A run whose files outlived its database row still has a title: the page's own, not its home's name."""
+        run_id = _save_home_run(app, "North Roof", _make_sim_results(days=1))
+        with get_db(app.config["DATABASE"]) as conn:
+            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+
+        response = client.get(f"/results/home/{run_id}")
+
+        assert response.status_code == 200
+        assert headings(response.get_data(as_text=True))[0] == "Home Simulation"
 
 
 class TestFleetConfigRoute:
