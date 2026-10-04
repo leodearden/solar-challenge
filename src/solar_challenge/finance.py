@@ -1122,7 +1122,7 @@ class ProjectEconomics:
     """Project-level financial appraisal results for a community PV/battery fleet.
 
     Produced by :func:`project_economics` from a :class:`MultiYearCurve` and a
-    :class:`~solar_challenge.config.FinanceConfig`.  All monetary values are in
+    :class:`FinanceConfig`.  All monetary values are in
     nominal GBP (£).
 
     Attributes:

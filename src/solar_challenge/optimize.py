@@ -28,7 +28,8 @@ from dataclasses import dataclass, fields as dc_fields, replace
 from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import FinanceConfig, ScenarioConfig
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEGTariff
 
@@ -439,7 +440,7 @@ def _build_axis_configs(
 
     Routing rules (in priority order):
 
-    1. *name* is a field of :class:`~solar_challenge.config.FinanceConfig` →
+    1. *name* is a field of :class:`~solar_challenge.finance.FinanceConfig` →
        ``dataclasses.replace(scenario.finance, **{name: value})``.
        Raises :exc:`ValueError` if ``scenario.finance is None``.
     2. *name* in ``{'seg', 'seg_tariff_pence_per_kwh'}`` →
@@ -519,7 +520,7 @@ def sensitivity_panel(
             finance / tariff values; :func:`_build_axis_configs` applies
             exactly one knob per axis per value.
         axes: Mapping of knob name → non-empty sequence of float values.
-            Supported names: any :class:`~solar_challenge.config.FinanceConfig`
+            Supported names: any :class:`~solar_challenge.finance.FinanceConfig`
             field, ``'seg'`` / ``'seg_tariff_pence_per_kwh'``,
             ``'degradation'`` / ``'degradation_rate_per_year'``.
         retained_cash_floor_gbp: Optional panel-level floor override passed to
