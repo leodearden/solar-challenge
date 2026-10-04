@@ -770,6 +770,26 @@ class TestRunName:
         """An id no run has answers None."""
         assert storage.run_name("no-such-run") is None
 
+    def test_run_name_of_a_run_whose_name_is_null_is_none(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """A run whose name is NULL answers None, not a default name.
+
+        Every save writes a name, so the test clears the saved one in the database.
+        """
+        run_id = "null-name-home"
+        storage.save_home_run(
+            run_id=run_id,
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            name="North Roof",
+        )
+        with get_db(storage.db_path) as conn:
+            conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
+
+        assert storage.run_name(run_id) is None
+
 
 class TestDatabasePragmas:
     """Tests for SQLite pragma settings."""
