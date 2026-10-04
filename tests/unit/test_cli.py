@@ -579,10 +579,7 @@ home:
     def test_the_title_names_the_file_verbatim_in_the_table_title_style(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A file name Rich would read as markup ([draft]) or an emoji code (:sun:) titles the table as the user typed it, in Rich's table-title italics.
-
-        The recording is decoded back into styled text, so the style is read where the title starts, past the padding centring adds.
-        """
+        """A file name Rich would read as markup ([draft]) or an emoji code (:sun:) titles the table as the user typed it, in Rich's table-title italics."""
         monkeypatch.setattr(console, "record", True)
 
         result = self._validate_config(
