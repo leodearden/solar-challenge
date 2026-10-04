@@ -231,8 +231,11 @@ def template(
     template_type_lower = template_type.lower()
     if template_type_lower not in templates:
         console.print(
-            f"[red]Unknown template type: {template_type}[/red]\n"
-            f"Available: {', '.join(templates.keys())}"
+            Text.assemble(
+                (f"Unknown template type: {template_type}", "red"),
+                "\n",
+                f"Available: {', '.join(templates)}",
+            )
         )
         raise typer.Exit(1)
 
