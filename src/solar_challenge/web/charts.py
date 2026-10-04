@@ -4,7 +4,8 @@
 All functions return Plotly JSON strings via fig.to_json().
 Charts share layout defaults. Every series colour is a COLOUR_PALETTE entry, or a translucent
 form of one made by _with_alpha, so a palette edit reaches it; a chart that writes a palette
-colour out by hand fails tests/unit/test_web_chart_colours.py. Neutral chrome (backgrounds,
+colour out by hand fails tests/unit/test_web_chart_colours.py. Every COLOUR_PALETTE role is one
+some chart draws, and a role none draws fails the same test module. Neutral chrome (backgrounds,
 annotation text, outlines) and the heatmap's named colour scale mark no series and have no
 palette role.
 """
@@ -36,7 +37,6 @@ COLOUR_PALETTE = {
     "grid_import": "#9b9b9b",
     "grid_export": _BLUE,
     "battery_charge": "#50e3c2",
-    "battery_discharge": "#f8a427",
     "heat_pump": _PURPLE,
     "cost": _RED,
     "revenue": _GREEN,
