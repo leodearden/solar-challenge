@@ -3,11 +3,11 @@
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import BatteryConfig, require_valid_power_limit
 from solar_challenge.config import (
     ConfigurationError,
     parse_dispatch_strategy_config,
@@ -110,17 +110,26 @@ def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
+def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float | None:
+    """Read a home body's maximum ``direction`` power: null is unset; any other value must be one a battery accepts."""
+    if value is None:
+        return None
+    kw = float(value)
+    require_valid_power_limit(kw, direction)
+    return kw
+
+
 def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryConfig | None:
     """Read the battery a home body describes: none unless ``capacity_kwh`` is positive.
 
     Each setting is read whatever ``capacity_kwh`` is, so a value a battery refuses is
     refused without one too; a null setting is unset, leaving BatteryConfig's default.
     """
-    settings: dict[str, Any] = {}
-    if params["max_charge_kw"] is not None:
-        settings["max_charge_kw"] = float(params["max_charge_kw"])
-    if params["max_discharge_kw"] is not None:
-        settings["max_discharge_kw"] = float(params["max_discharge_kw"])
+    power_limits = {
+        "max_charge_kw": _read_power_limit(params["max_charge_kw"], "charge"),
+        "max_discharge_kw": _read_power_limit(params["max_discharge_kw"], "discharge"),
+    }
+    settings: dict[str, Any] = {key: kw for key, kw in power_limits.items() if kw is not None}
     if params["efficiency_pct"] is not None:
         efficiency_pct = float(params["efficiency_pct"])
         if not (0 < efficiency_pct <= 100):
