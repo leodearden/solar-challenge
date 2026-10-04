@@ -1,11 +1,15 @@
 """Tests for solar_challenge.web.simulation_params, called directly with parameter dicts."""
 
 import re
+from collections.abc import Callable
+from operator import attrgetter
 
 import pytest
 pytest.importorskip("flask")
 
 from solar_challenge.config import ConfigurationError
+from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.shared import NotAJsonObject
 from solar_challenge.web.simulation_params import (
@@ -278,19 +282,69 @@ class TestParseHomeConfigHeatPumpBlock:
         ):
             parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": value})
 
+    def test_empty_heat_pump_is_the_default_heat_pump(self) -> None:
+        """An empty heat_pump is a mapping whose every key defaults: an 8 kW ASHP with 8000 kWh annual heat demand."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "heat_pump": {}}
+        )
+        assert home_config.heat_pump_config == HeatPumpConfig(
+            heat_pump_type="ASHP", thermal_capacity_kw=8.0, annual_heat_demand_kwh=8000.0
+        )
+
+
+# Each nested block's key, and the HomeConfig field its parsed value fills.
+NESTED_BLOCK_FIELDS: dict[str, Callable[[HomeConfig], object]] = {
+    "heat_pump": attrgetter("heat_pump_config"),
+    "seg": attrgetter("seg_tariff"),
+    "tariff": attrgetter("tariff_config"),
+    "dispatch_strategy": attrgetter("battery_config.dispatch_strategy"),
+}
+
+
+class TestParseHomeConfigNestedBlockPresence:
+    """One presence rule for the four nested blocks: null means none; any other value must be a mapping its grammar reads.
+
+    The rule governs a block whenever parse_home_config reads it. It reads dispatch_strategy only
+    when battery_kwh is positive, as in VALID_HOME_PAYLOAD; without a battery, even a malformed
+    dispatch_strategy is ignored.
+    """
+
     @pytest.mark.parametrize(
-        "value",
+        ("key", "parsed_block"),
+        [pytest.param(key, field, id=key) for key, field in NESTED_BLOCK_FIELDS.items()],
+    )
+    def test_null_block_means_none(
+        self, key: str, parsed_block: Callable[[HomeConfig], object]
+    ) -> None:
+        """A null block, like an absent one, means none."""
+        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
+        assert parsed_block(home_config) is None
+
+    @pytest.mark.parametrize(
+        ("value", "type_name"),
         [
-            pytest.param(None, id="null"),
-            pytest.param({}, id="empty-object"),
+            pytest.param("", "str", id="empty-string"),
+            pytest.param(False, "bool", id="false"),
+            pytest.param(0, "int", id="zero"),
+            pytest.param([], "list", id="empty-array"),
         ],
     )
-    def test_null_or_empty_heat_pump_means_no_heat_pump(self, value: object) -> None:
-        """A null or empty heat_pump means no heat pump, not a default one."""
-        home_config, _start, _end, _name = parse_home_config(
-            {**VALID_HOME_PAYLOAD, "heat_pump": value}
-        )
-        assert home_config.heat_pump_config is None
+    @pytest.mark.parametrize("key", list(NESTED_BLOCK_FIELDS))
+    def test_falsy_block_is_refused_naming_it_and_its_type(
+        self, key: str, value: object, type_name: str
+    ) -> None:
+        """A falsy value other than null is not a mapping, so it is refused with a ValueError naming the block and the type sent."""
+        with pytest.raises(ValueError, match=re.escape(f"{key} must be a mapping, got {type_name}")):
+            parse_home_config({**VALID_HOME_PAYLOAD, key: value})
+
+    @pytest.mark.parametrize("key", ["seg", "tariff", "dispatch_strategy"])
+    def test_empty_block_is_refused_by_its_grammar(self, key: str) -> None:
+        """An empty block is a mapping its grammar reads; a grammar that requires a key refuses it, and the ValueError carries that grammar's ConfigurationError message."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, key: {}})
+        grammar_error = exc_info.value.__cause__
+        assert isinstance(grammar_error, ConfigurationError)
+        assert str(exc_info.value) == str(grammar_error)
 
 
 class TestParseHomeConfigBatteryEfficiency:

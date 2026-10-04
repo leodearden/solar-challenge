@@ -114,10 +114,10 @@ def _parse_heat_pump_block(data: object) -> HeatPumpConfig | None:
     """Read a request body's ``heat_pump`` value with the web form's keys, defaulting those it omits.
 
     The form sends ``type`` where config's YAML heat_pump block requires ``heat_pump_type``.
-    A falsy value means no heat pump; any other value that is not a mapping raises
+    ``None`` means no heat pump; any other value that is not a mapping raises
     ``ValueError`` naming ``heat_pump`` and the type received.
     """
-    if not data:
+    if data is None:
         return None
     if not isinstance(data, Mapping):
         raise ValueError(f"heat_pump must be a mapping, got {type(data).__name__}")
@@ -151,9 +151,10 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         ValueError: If *data* is not a JSON object (the error names the type
             received), if it has a top-level key outside the recognised set
             (the error names each such key), if a nested block it reads
-            (heat_pump, seg, tariff, dispatch_strategy) is not a mapping (the
-            error names the block and the type received), or if required
-            fields are missing or invalid.
+            (heat_pump, seg and tariff always; dispatch_strategy only when
+            battery_kwh is positive) is neither null, which reads as absent,
+            nor a mapping (the error names the block and the type received),
+            or if required fields are missing or invalid.
     """
     data = require_json_object(data, "Home config")
     _refuse_unrecognised_keys(data)
@@ -211,9 +212,9 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
                 raise ValueError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
             battery_kwargs["efficiency"] = efficiency_pct / 100
         try:
-            dispatch_data = params["dispatch_strategy"]
-            if dispatch_data:
-                battery_kwargs["dispatch_strategy"] = parse_dispatch_strategy_config(dispatch_data)
+            battery_kwargs["dispatch_strategy"] = parse_dispatch_strategy_config(
+                params["dispatch_strategy"]
+            )
         except ConfigurationError as exc:
             raise ValueError(str(exc)) from exc
         battery_config = BatteryConfig(**battery_kwargs)
