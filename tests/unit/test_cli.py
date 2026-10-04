@@ -27,6 +27,7 @@ from solar_challenge.cli.utils import (
     parse_location,
     print_error,
     print_info,
+    print_report,
     print_success,
     print_warning,
 )
@@ -40,6 +41,8 @@ from tests._synthetic_weather import synthetic_june_weather
 runner = CliRunner()
 
 _TEXT_RICH_WOULD_PARSE = "columns [ghi, dni] missing, no tag [/b] open, the :sun: set, in C:\\data\\"
+
+_TEXT_WIDER_THAN_ANY_CONSOLE = " ".join(["Bristol"] * 60)
 
 
 class TestMainCLI:
@@ -758,6 +761,23 @@ class TestPrintHelpers:
         print_message("saved")
 
         assert target.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
+
+
+class TestPrintReport:
+    """Tests that print_report prints a report on stdout exactly as it is."""
+
+    def test_a_report_is_printed_on_stdout_exactly_as_it_is(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Every line prints whole, however much wider than the console: a spaced table row is not wrapped and a separator is not folded mid-word. Text Rich would read as markup or an emoji code prints verbatim, and print_report adds only the final newline."""
+        report = (
+            f"# {_TEXT_RICH_WOULD_PARSE}\n"
+            "\n"
+            f"| {_TEXT_WIDER_THAN_ANY_CONSOLE} |\n"
+            f"|{'-' * len(_TEXT_WIDER_THAN_ANY_CONSOLE)}|\n"
+        )
+
+        print_report(report)
+
+        assert capsys.readouterr().out == report + "\n"
 
 
 class TestCLIOutputFormats:
