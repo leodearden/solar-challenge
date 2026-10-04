@@ -17,6 +17,7 @@ from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
     fleet_form_from_scenario,
+    parse_fleet_form,
     scenario_from_fleet_form,
 )
 from solar_challenge.web.shared import resolve_location
@@ -93,6 +94,29 @@ def _with_fleet_distribution(**blocks: Any) -> dict[str, Any]:
         **_FLEET_SCENARIO,
         "fleet_distribution": {**_FLEET_SCENARIO["fleet_distribution"], **blocks},
     }
+
+
+class TestParseFleetForm:
+    """parse_fleet_form's top-level keys: the fleet form's, and its refusal of any other."""
+
+    def test_a_key_the_fleet_form_does_not_have_is_refused_naming_it(self) -> None:
+        """heat_pump is a home config block the fleet has no overlay for, and tarif is a misspelt tariff.
+
+        Both are refused by name rather than dropped from a fleet that would run without them,
+        and the error lists every key of a fleet form.
+        """
+        with pytest.raises(ValueError) as exc_info:
+            parse_fleet_form(
+                {
+                    **_FLEET_FORM,
+                    "heat_pump": {"type": "ASHP"},
+                    "tarif": {"type": "flat_rate", "rate_per_kwh": 0.3},
+                }
+            )
+        assert str(exc_info.value) == (
+            "Unrecognised fleet form keys: 'heat_pump', 'tarif'; recognised keys: battery, days, "
+            "dispatch_strategy, end, load, location, n_homes, name, pv, seed, seg, start, tariff"
+        )
 
 
 class TestScenarioFromFleetForm:
