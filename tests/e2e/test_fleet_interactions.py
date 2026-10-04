@@ -4,7 +4,8 @@ Verifies slider-input sync, that each distribution editor's controls are named
 for their card, that each card's row buttons change only its rows, that Import
 YAML shows each distribution in its card, that a fleet exported as YAML imports
 back into the form, that Load Preset fills the form and names the preset's
-settings the form has no control for, that the page shows why a preset cannot
+settings the form has no control for, that a preset without a period runs the
+page's default period, that the page shows why a preset cannot
 load or a fleet cannot export, that the simulation name reaches the submitted
 run, and that the period selector offers presets and a custom date range.
 """
@@ -373,6 +374,33 @@ def test_fleet_load_preset_fills_the_form_and_names_what_it_did_not_load(
     ):
         expect(page.get_by_role("status")).to_contain_text(not_loaded)
     assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+
+def test_fleet_load_preset_without_a_period_runs_the_pages_default_period(
+    page: Page, live_server: str, tmp_path: Path
+) -> None:
+    """Load Preset of a scenario with no period, after a file with one was imported, runs the page's default 30 days, not the file's dates."""
+    # Abort the submission so no fleet job ever reaches the server's JobManager.
+    page.route("**/api/simulate/fleet-from-distribution", lambda route: route.abort())
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(IMPORTED_FLEET + "period: {start_date: 2024-07-01, end_date: 2024-07-10}\n")
+    page.goto(live_server + "/simulate/fleet")
+    # A quick preset other than the default, so keeping the last one shown would not pass.
+    page.get_by_role("button", name="90 days", exact=True).click()
+    with page.expect_file_chooser() as chooser:
+        page.get_by_text("Import YAML", exact=True).click()
+    chooser.value.set_files(fleet_file)
+    expect(page.get_by_role("radio", name="Custom range", exact=True)).to_be_checked()
+    expect(page.get_by_label("Start Date", exact=True)).to_have_value("2024-07-01")
+
+    page.get_by_role("combobox", name="Load Preset", exact=True).select_option("bristol-phase1")
+    expect(page.get_by_role("status")).to_contain_text("fleet_distribution.random_order")
+
+    expect(page.get_by_role("radio", name="Quick preset", exact=True)).to_be_checked()
+    with page.expect_request("**/api/simulate/fleet-from-distribution") as submission:
+        page.get_by_role("button", name="Run Fleet Simulation").click()
+    payload = submission.value.post_data_json
+    assert (payload.get("days"), payload.get("start"), payload.get("end")) == (30, None, None)
 
 
 def test_fleet_load_preset_shows_why_a_scenario_cannot_load(page: Page, live_server: str) -> None:

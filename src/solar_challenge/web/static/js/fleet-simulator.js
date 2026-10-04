@@ -1,4 +1,8 @@
 document.addEventListener('alpine:init', () => {
+    // The fleet form's period and seed until it is changed, and when a loaded scenario sets none.
+    const DEFAULT_PERIOD_DAYS = 30;
+    const DEFAULT_SEED = 42;
+
     // The scope of one distribution_editor call (templates/simulate/partials/distribution-editor.html). dist calls getDist on
     // every read because applyConfig replaces the form's distributions (pinned by test_fleet_import_yaml_shows_each_distribution_in_its_card).
     Alpine.data('distributionEditor', (getDist, newRowValue) => ({
@@ -21,7 +25,7 @@ document.addEventListener('alpine:init', () => {
 
     Alpine.data('fleetSimulator', () => ({
         n_homes: 100,
-        seed: 42,
+        seed: DEFAULT_SEED,
         submitting: false,
         jobId: null,
         runId: null,
@@ -31,7 +35,7 @@ document.addEventListener('alpine:init', () => {
 
         /* ---- Period state ---- */
         periodMode: 'preset',
-        periodDays: 30,
+        periodDays: DEFAULT_PERIOD_DAYS,
         startDate: '2024-06-01',
         endDate: '2024-06-30',
 
@@ -375,18 +379,14 @@ document.addEventListener('alpine:init', () => {
         applyConfig(form) {
             this.simName = form.name ?? '';
             this.n_homes = form.n_homes;
-            this.seed = form.seed ?? 42;
+            this.seed = form.seed ?? DEFAULT_SEED;
             this.pvDist = this._distFromConfig(form.pv.capacity_kw, this.pvDist);
             this.batteryEnabled = Boolean(form.battery);
             if (form.battery) {
                 this.batteryDist = this._distFromConfig(form.battery.capacity_kwh, this.batteryDist);
             }
             this.loadDist = this._distFromConfig(form.load.annual_consumption_kwh, this.loadDist);
-            if (form.start) {
-                this.periodMode = 'custom';
-                this.startDate = form.start;
-                this.endDate = form.end;
-            }
+            this._applyPeriod(form.start, form.end);
             this._applyTariff(form.tariff);
             this._applySeg(form.seg);
             this._applyDispatch(form.dispatch_strategy);
@@ -395,6 +395,18 @@ document.addEventListener('alpine:init', () => {
         /* The inverse of _buildDistPayload: the spec's fields over the card's current distribution. */
         _distFromConfig(spec, current) {
             return { ...current, ...spec };
+        },
+
+        /* A scenario without a period fixes no dates, so the form runs its default period. */
+        _applyPeriod(start, end) {
+            if (start) {
+                this.periodMode = 'custom';
+                this.startDate = start;
+                this.endDate = end;
+            } else {
+                this.periodMode = 'preset';
+                this.periodDays = DEFAULT_PERIOD_DAYS;
+            }
         },
 
         _applyTariff(tariff) {

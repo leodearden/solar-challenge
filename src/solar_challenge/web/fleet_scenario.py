@@ -104,12 +104,13 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     The document must be a fleet_distribution scenario the loaders accept: their refusal of
     its fleet, location, tariff or SEG is the refusal.  The form loads exactly what it
     holds: the name, the period's dates, the fleet size and seed, the pv, battery and load
-    distributions, the battery's dispatch strategy, the tariff and the SEG.  A null battery
-    capacity reads as 0 kWh, a home with no battery either way.  A setting the form needs
-    but cannot hold exactly is refused, naming it, since loading it anyway would run a
-    different fleet.  Every other setting, and a location other than the page's, is named
-    in not_loaded.  A form the page could not run, as scenario_from_fleet_form refuses it,
-    is refused too.
+    distributions, the battery's dispatch strategy, the tariff and the SEG.  A name, period
+    or seed the scenario leaves out is left out of the form too, and the fleet page runs its
+    own default for it.  A null battery capacity reads as 0 kWh, a home with no battery
+    either way.  A setting the form needs but cannot hold exactly is refused, naming it,
+    since loading it anyway would run a different fleet.  Every other setting, and a
+    location other than the page's, is named in not_loaded.  A form the page could not run,
+    as scenario_from_fleet_form refuses it, is refused too.
 
     Raises:
         ValueError: For a document that is not a fleet_distribution scenario, or a setting
