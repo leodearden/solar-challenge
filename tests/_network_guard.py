@@ -7,14 +7,15 @@ Unix-domain destinations still go through.
 
 A child process is reached through the standard proxy variables, which uv, curl,
 and Python's requests and urllib honour. While ``refusing_network`` is open, they
-name a proxy of its own on this machine, which forwards nothing: it records each
-request's destination as "host:port", like the socket refusals, and refuses it.
+name a proxy on this machine, which forwards nothing: it records each request's
+destination as "host:port", like the socket refusals, and refuses it.
 NO_PROXY names only this machine, so a child's loopback traffic stays direct.
 
-One limit: a client that reads the proxy variables once, when it is built, keeps
-the proxy of the ``refusing_network`` it was built under. Once that has closed,
-its requests are refused without being named. urllib's process-wide urlopen
-opener and an httpx client are such clients.
+The first ``refusing_network`` starts the proxy, which then serves until the
+process ends, and the innermost one open records what the proxy is sent. So a
+client that read the proxy variables in an earlier one, as urllib's process-wide
+urlopen opener does, is still named, but a request sent while none is open is
+refused without being named.
 
 Usage::
 
@@ -25,6 +26,7 @@ Usage::
     assert refused == []
 """
 
+import functools
 import ipaddress
 import socket
 import socketserver
@@ -84,7 +86,7 @@ def refusing_network() -> Iterator[list[str]]:
             raise refusal(address[0], address[1])
         return real_connect_ex(sock, address)
 
-    with _refusing_proxy(refused.append) as proxy, pytest.MonkeyPatch.context() as patch:
+    with _refusing_proxy().recording_with(refused.append) as proxy, pytest.MonkeyPatch.context() as patch:
         _send_child_processes_through(proxy, patch)
         patch.setattr(socket, "getaddrinfo", getaddrinfo)
         patch.setattr(socket.socket, "connect", connect)
@@ -100,33 +102,16 @@ def _send_child_processes_through(proxy: str, patch: pytest.MonkeyPatch) -> None
         patch.setenv(name, _HOSTS_A_CHILD_REACHES_DIRECTLY)
 
 
-@contextmanager
-def _refusing_proxy(record: Callable[[str], None]) -> Iterator[str]:
-    """Serve a _RefusingProxy that records with *record* until the block ends, and yield its URL.
-
-    It loops on handle_request rather than serve_forever, whose shutdown() waits out a poll interval.
-    """
-    server = _RefusingProxy(record)
-    port = server.server_address[1]
-    stopping = threading.Event()
-
-    def serve_until_stopping() -> None:
-        while not stopping.is_set():
-            server.handle_request()
-
-    thread = threading.Thread(target=serve_until_stopping, daemon=True)
-    thread.start()
-    try:
-        yield f"http://{_PROXY_HOST}:{port}"
-    finally:
-        stopping.set()
-        socket.create_connection((_PROXY_HOST, port)).close()
-        thread.join()
-        server.server_close()
+@functools.cache
+def _refusing_proxy() -> "_RefusingProxy":
+    """Start this process's _RefusingProxy, when the first window needs it, to serve until the process ends."""
+    proxy = _RefusingProxy()
+    threading.Thread(target=proxy.serve_forever, name="refusing-proxy", daemon=True).start()
+    return proxy
 
 
 class _RefusingProxy(socketserver.ThreadingTCPServer):
-    """An HTTP proxy on this machine that records every request's destination and refuses it.
+    """An HTTP proxy on this machine that refuses every request, recording its destination with the recorder of the window open.
 
     Not an http.server.HTTPServer, whose bind looks up this machine's name.
     Its handlers run in daemon threads, so a client that never sends keeps no one waiting.
@@ -134,9 +119,18 @@ class _RefusingProxy(socketserver.ThreadingTCPServer):
 
     daemon_threads = True
 
-    def __init__(self, record: Callable[[str], None]) -> None:
-        self.record = record
+    def __init__(self) -> None:
+        self.record: Callable[[str], None] = _record_nothing
         super().__init__((_PROXY_HOST, 0), _RefusingHandler)
+
+    @contextmanager
+    def recording_with(self, record: Callable[[str], None]) -> Iterator[str]:
+        """Record with *record* until the block ends, then with the recorder it replaced, and yield the proxy's URL."""
+        replaced, self.record = self.record, record
+        try:
+            yield f"http://{_PROXY_HOST}:{self.server_address[1]}"
+        finally:
+            self.record = replaced
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         """Stay silent when a client hangs up before its refusal is written."""
@@ -172,6 +166,10 @@ def _destination_of(request_target: str) -> str:
     if url.hostname is None or port is None:
         return request_target
     return f"{url.hostname}:{port}"
+
+
+def _record_nothing(destination: str) -> None:
+    """Record nothing: no window is open."""
 
 
 def _reason_for_refusing(destination: str) -> str:

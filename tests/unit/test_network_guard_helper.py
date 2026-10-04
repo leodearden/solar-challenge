@@ -191,6 +191,16 @@ class TestRefusingNetwork:
 
         assert refused == ["example.invalid:443"]
 
+    def test_a_client_built_in_an_earlier_window_is_refused_and_recorded_by_the_window_it_sends_in(self) -> None:
+        """urllib's opener reads the proxy variables once, when it is built."""
+        with refusing_network():
+            opener = urllib.request.build_opener()
+        with refusing_network() as refused:
+            with pytest.raises(urllib.error.URLError):
+                opener.open("https://example.invalid/", timeout=30)
+
+        assert refused == ["example.invalid:443"]
+
     @pytest.mark.parametrize("method", ["PROPFIND", "TRACE"])
     def test_a_request_of_any_method_through_the_proxy_is_refused_and_recorded(self, method: str) -> None:
         with refusing_network() as refused:
