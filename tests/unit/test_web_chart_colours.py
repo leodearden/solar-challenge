@@ -2,7 +2,7 @@
 """Guards the invariant that charts.py's COLOUR_PALETTE is the one home of the chart
 colours, so a palette edit reaches every copy of a chart colour.
 
-The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Two
+The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Three
 checks enforce the invariant:
 
 * No dashboard source writes out a palette colour: not tailwind.config.js, not a
@@ -15,6 +15,9 @@ checks enforce the invariant:
   recoloured, no builder's figure still draws a shipped palette colour as #rrggbb, rgb()
   or rgba(), so a translucent fill or a reused hue that charts.py writes out by hand
   fails. Plotly's default template, which no builder chooses, is not read.
+* Every palette colour is written #rrggbb, the form charts.py derives translucent colours
+  from. charts.py refuses any other form only when it draws a chart that needs one; this
+  check refuses it for the whole palette.
 """
 
 import dataclasses
@@ -185,6 +188,24 @@ def test_a_palette_edit_reaches_every_colour_a_chart_draws(
         f"With every COLOUR_PALETTE entry recoloured, the chart still draws {', '.join(stale)}, "
         "so a palette edit does not reach it. Name the colour's role in COLOUR_PALETTE, or derive "
         "a translucent form from its palette entry."
+    )
+
+
+def test_every_palette_colour_is_written_rrggbb() -> None:
+    assert COLOUR_PALETTE, "COLOUR_PALETTE defines no colour, so this guard would pass vacuously"
+
+    not_rrggbb = {
+        role: colour
+        for role, colour in COLOUR_PALETTE.items()
+        if not re.fullmatch(r"#[0-9a-f]{6}", colour, re.IGNORECASE)
+    }
+
+    listing = "".join(f"\n  {role}: {colour!r}" for role, colour in not_rrggbb.items())
+    assert not_rrggbb == {}, (
+        f"These COLOUR_PALETTE entries are not written #rrggbb:{listing}\n"
+        "charts.py derives each translucent chart colour from a #rrggbb palette colour, and "
+        "raises when it draws a chart whose colour is written another way, such as #rgb "
+        "shorthand, a colour name or rgba()."
     )
 
 
