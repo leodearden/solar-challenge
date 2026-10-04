@@ -1200,7 +1200,7 @@ class TestReportsPrintEachLineWhole:
         assert f"# Finance Report: {_TEXT_WIDER_THAN_ANY_CONSOLE}" in result.stdout.splitlines()
 
     def test_optimize_configs_prints_each_table_row_on_one_line(self) -> None:
-        """Each markdown table row closes on the line it opens on. The Cost-Recovery Rank rows are about 170 characters, twice the 80 columns Rich gives a console with no terminal, and the recommendation guard proves that table is in the report: a sweep with no feasible config prints only narrow tables."""
+        """Each markdown table row closes on the line it opens on, the Cost-Recovery Rank rows included, though they are about twice as wide as the 80 columns Rich gives a console with no terminal."""
         Path("scenario.yaml").write_text(
             yaml.safe_dump(
                 {
@@ -1226,5 +1226,6 @@ class TestReportsPrintEachLineWhole:
         )
 
         assert result.exit_code == 0
-        assert "★ RECOMMENDATION" in result.stdout
-        assert [line for line in result.stdout.splitlines() if line.startswith("|") and not line.endswith("|")] == []
+        table_rows = [line for line in result.stdout.splitlines() if line.startswith("|")]
+        assert [row for row in table_rows if not row.endswith("|")] == []
+        assert max(map(len, table_rows), default=0) > 80
