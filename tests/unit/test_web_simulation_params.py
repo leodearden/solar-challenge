@@ -408,6 +408,15 @@ class TestParseHomeConfigBatterySettings:
         )
         assert home_config.battery_config is None
 
+    def test_power_limits_reach_their_own_battery_fields(self) -> None:
+        """With a battery, max_charge_kw and max_discharge_kw each set their own BatteryConfig field."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "max_charge_kw": 3.0, "max_discharge_kw": 4.0}
+        )
+        assert home_config.battery_config == BatteryConfig(
+            capacity_kwh=VALID_HOME_PAYLOAD["battery_kwh"], max_charge_kw=3.0, max_discharge_kw=4.0
+        )
+
     def test_null_settings_leave_the_battery_defaults(self) -> None:
         """A null battery setting, like an absent one, is unset, leaving BatteryConfig's default."""
         home_config, _start, _end, _name = parse_home_config(
