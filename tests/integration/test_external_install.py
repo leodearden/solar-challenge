@@ -9,8 +9,8 @@ These tests prove that an EXTERNAL consumer can:
   - Confirm the wheel ships solar_challenge/py.typed (PEP 561).
   - Confirm the wheel ships every file under solar_challenge/web/templates and
     solar_challenge/web/static, which the dashboard renders and serves.
-  - Confirm the wheel's METADATA names the license by the PEP 639
-    License-Expression AGPL-3.0-or-later.
+  - Confirm the wheel's METADATA names its licenses by the PEP 639
+    License-Expression AGPL-3.0-or-later AND MIT.
 
 The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here.
@@ -207,27 +207,40 @@ def test_built_wheel_ships_every_file_of_the_dashboard_folder(
 
 
 # ---------------------------------------------------------------------------
-# License: the wheel names its license by a PEP 639 SPDX expression
+# License: the wheel names its licenses by a PEP 639 SPDX expression
 # ---------------------------------------------------------------------------
 
 
+def _metadata_member(wheel: zipfile.ZipFile) -> str:
+    """Return the name of the one .dist-info/METADATA member of the open *wheel*."""
+    [metadata_member] = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
+    return metadata_member
+
+
+def _wheel_metadata(wheel: zipfile.ZipFile) -> email.message.Message:
+    """Return the core metadata of the open *wheel*, parsed from its METADATA member's email-header format."""
+    return email.message_from_bytes(wheel.read(_metadata_member(wheel)))
+
+
 @pytest.mark.build
-def test_built_wheel_declares_the_agpl_license_expression(built_wheel: Path) -> None:
+def test_built_wheel_declares_the_agpl_and_mit_license_expression(built_wheel: Path) -> None:
     """Installers, PyPI and license scanners read a wheel's license from its METADATA, where
     PEP 639 makes License-Expression the field that names it.
+
+    The project's own code is AGPL-3.0-or-later. The third-party code the dashboard bundles is
+    MIT-licensed: the scripts vendored under web/static/vendor/, and Tailwind's preflight compiled
+    into static/dist/style.css. AND says both apply.
     """
-    with zipfile.ZipFile(built_wheel) as zf:
-        [metadata_member] = [
-            name for name in zf.namelist() if name.endswith(".dist-info/METADATA")
-        ]
-        metadata = email.message_from_bytes(zf.read(metadata_member))
+    with zipfile.ZipFile(built_wheel) as wheel:
+        metadata = _wheel_metadata(wheel)
 
     expressions = metadata.get_all("License-Expression")
-    assert expressions == ["AGPL-3.0-or-later"], (
+    assert expressions == ["AGPL-3.0-or-later AND MIT"], (
         f"The built wheel's METADATA carries License-Expression {expressions} and the legacy "
-        f"License {metadata.get_all('License')}, so it does not name its license by the PEP 639 "
-        'SPDX expression AGPL-3.0-or-later. Declare [project] license = "AGPL-3.0-or-later" in '
-        "pyproject.toml: an SPDX expression string, not a TOML table."
+        f"License {metadata.get_all('License')}, so it does not name its licenses by the PEP 639 "
+        "SPDX expression AGPL-3.0-or-later AND MIT. Declare [project] "
+        'license = "AGPL-3.0-or-later AND MIT" in pyproject.toml: an SPDX expression string, '
+        "not a TOML table."
     )
 
 
