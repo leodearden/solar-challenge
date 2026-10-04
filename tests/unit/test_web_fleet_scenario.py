@@ -121,6 +121,16 @@ class TestScenarioFromFleetForm:
             pytest.param(
                 {**_FLEET_FORM, "start": "not-a-date", "end": "2024-07-10"}, "not-a-date", id="start-date"
             ),
+            pytest.param(
+                {
+                    **_FLEET_FORM,
+                    "pv": {
+                        "capacity_kw": {"type": "weighted_discrete", "values": [{"value": 0, "weight": 1}]}
+                    },
+                },
+                "PV capacity must be positive",
+                id="pv-capacity-zero",
+            ),
         ],
     )
     def test_a_fleet_form_the_loaders_would_refuse_is_refused(
@@ -129,6 +139,7 @@ class TestScenarioFromFleetForm:
         """A block the loaders or the simulate endpoint refuse is refused with their reason, so no YAML is written for it.
 
         A dispatch is checked even without a battery to carry it, as the simulate endpoint checks it.
+        A fleet whose homes cannot be generated is refused too: load_fleet_config generates them.
         """
         with pytest.raises((ValueError, ConfigurationError), match=reason):
             scenario_from_fleet_form(form)

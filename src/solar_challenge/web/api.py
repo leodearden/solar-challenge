@@ -26,13 +26,13 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.database import get_db
+from solar_challenge.web.fleet_scenario import fleet_form_location, fleet_form_name
 from solar_challenge.web.shared import (
     NotAJsonObject,
     get_job_manager,
     get_storage,
     request_json_object,
     require_json_object,
-    resolve_location,
 )
 from solar_challenge.web.simulation_params import parse_date_range, parse_home_config, parse_seg_tariff
 from solar_challenge.web.storage import stored_fleet_home_configs, stored_home_config
@@ -438,7 +438,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     try:
         cfg_dict = form_to_fleet_distribution_config(data)
         fleet_cfg = parse_fleet_distribution_config(cfg_dict)
-        loc = resolve_location(data.get("location", "bristol"))
+        loc = fleet_form_location(data)
         configs = generate_homes_from_distribution(fleet_cfg, loc)
         # Apply fleet-wide overlay (tariff / dispatch / SEG) — mirrors single-home contract.
         tariff_config = parse_tariff_config(data.get("tariff"))
@@ -456,7 +456,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     except (ValueError, TypeError, ConfigurationError) as exc:
         return jsonify({"error": str(exc)}), 400
 
-    fleet_name = data.get("name", "Fleet Distribution Simulation")
+    fleet_name = fleet_form_name(data)
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
 
