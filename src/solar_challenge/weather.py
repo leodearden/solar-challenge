@@ -4,7 +4,10 @@
 import calendar
 import hashlib
 import json
-from collections.abc import Mapping
+import os
+import uuid
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from types import MappingProxyType
 from typing import Optional
@@ -49,6 +52,22 @@ PVGIS_TMY_REQUEST: Mapping[str, object] = MappingProxyType(
 
 class WeatherDataError(RuntimeError):
     """PVGIS could not supply usable weather for a point: a request failed, or what it returned could not be used."""
+
+
+@contextmanager
+def _staged_beside(entry_file: Path) -> Iterator[Path]:
+    """A fresh path beside entry_file, for the block to write entry_file's replacement to and os.replace onto it.
+
+    Beside it, so that the replace is atomic. The block creates the file, so it has the mode a plain write
+    gives, which tempfile's owner-only files would not. If the block raises, KeyboardInterrupt included, the
+    path is removed; after an os.replace there is nothing left to remove.
+    """
+    staged = entry_file.with_name(f".{entry_file.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        yield staged
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
 
 
 class WeatherCache:
@@ -136,7 +155,12 @@ class WeatherCache:
     def put(self, data: pd.DataFrame, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
             end_date: Optional[pd.Timestamp] = None) -> None:
-        """Store data in cache.
+        """Store data in cache, replacing any entry under the same key whole.
+
+        A get racing this put, in any thread or process, finds the previous entry (or none) or this one,
+        never part of either. A put that raises part-way, as on Ctrl-C, leaves the previous entry, or none,
+        as it was. Both hold while every put under one key stores the same timezone and frequency, since
+        the CSV and its metadata are replaced one after the other.
 
         Args:
             data: DataFrame to cache
@@ -149,10 +173,6 @@ class WeatherCache:
         cache_file = self._cache_path(key)
         meta_file = self._meta_path(key)
 
-        # Save data
-        data.to_csv(cache_file)
-
-        # Save metadata including timezone info
         tz_str = str(data.index.tz) if data.index.tz else None
         freq_str = data.index.freqstr if hasattr(data.index, "freqstr") and data.index.freqstr else None
         metadata = {
@@ -164,8 +184,14 @@ class WeatherCache:
             "timezone": tz_str,
             "freq": freq_str,
         }
-        with open(meta_file, "w") as f:
-            json.dump(metadata, f)
+
+        with _staged_beside(cache_file) as staged_csv, _staged_beside(meta_file) as staged_meta:
+            data.to_csv(staged_csv)
+            staged_meta.write_text(json.dumps(metadata))
+            # Meta first: get takes the CSV as the entry, so whoever finds the CSV finds its meta, and a put
+            # killed between the two replaces leaves a miss.
+            os.replace(staged_meta, meta_file)
+            os.replace(staged_csv, cache_file)
 
     def clear(self) -> int:
         """Clear all cached data.
