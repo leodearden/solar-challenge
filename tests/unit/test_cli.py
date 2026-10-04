@@ -914,6 +914,37 @@ class TestCreateSummaryTableFinancials:
         assert "Number of Homes" in output, "n_homes should render"
 
 
+class TestCreateSummaryTableTitle:
+    """Tests that create_summary_table prints its title exactly as given, in Rich's table-title style."""
+
+    def _summary(self) -> types.SimpleNamespace:
+        """A summary carrying only the five energy totals create_summary_table always reads."""
+        return types.SimpleNamespace(
+            total_generation_kwh=10.0,
+            total_demand_kwh=8.0,
+            total_self_consumption_kwh=6.0,
+            total_grid_import_kwh=2.0,
+            total_grid_export_kwh=4.0,
+        )
+
+    def test_a_title_is_printed_verbatim(self) -> None:
+        """A title Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the caller gave it.
+
+        The title wraps over several centred lines at the table's width; folding whitespace rejoins it.
+        """
+        buffer = io.StringIO()
+
+        Console(file=buffer, width=80).print(create_summary_table(self._summary(), title=_TEXT_RICH_WOULD_PARSE))
+
+        assert _TEXT_RICH_WOULD_PARSE in " ".join(buffer.getvalue().split())
+
+    def test_a_title_is_printed_in_the_table_title_style(self) -> None:
+        """The title is italic, as Rich styles a table's title; centring pads it inside the same span, so the segment's style is compared."""
+        segments = Console(width=80).render(create_summary_table(self._summary(), title="Results"))
+
+        assert any("Results" in s.text and s.style is not None and s.style.italic for s in segments)
+
+
 @pytest.mark.usefixtures("clear_june_tmy")
 class TestHomeRunFullConfigParity:
     """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
