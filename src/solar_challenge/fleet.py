@@ -156,7 +156,8 @@ class FleetResults:
             series_name: Name of the series (e.g., 'generation', 'demand')
 
         Returns:
-            Sum of the series across all homes
+            Sum of the series across all homes, named as each home's series is: its
+            SimulationResults column, which to_aggregate_dataframe relies on
         """
         series_list = [getattr(r, series_name) for r in self.per_home_results]
         return sum(series_list[1:], series_list[0])
@@ -187,14 +188,17 @@ class FleetResults:
         return self.get_aggregate_series("self_consumption")
 
     def to_aggregate_dataframe(self) -> pd.DataFrame:
-        """Get aggregate results as DataFrame."""
-        return pd.DataFrame({
-            "generation_kw": self.total_generation,
-            "demand_kw": self.total_demand,
-            "self_consumption_kw": self.total_self_consumption,
-            "grid_import_kw": self.total_grid_import,
-            "grid_export_kw": self.total_grid_export,
-        })
+        """The fleet's total generation, demand, self-consumption, grid import and grid export, each under the column SimulationResults.to_dataframe writes that series under."""
+        return pd.concat(
+            [
+                self.total_generation,
+                self.total_demand,
+                self.total_self_consumption,
+                self.total_grid_import,
+                self.total_grid_export,
+            ],
+            axis=1,
+        )
 
 
 @dataclass
