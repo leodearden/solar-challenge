@@ -261,6 +261,7 @@ def _simulate_home_worker_tagged(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     validate_balance: bool,
+    weather_data: pd.DataFrame,
 ) -> tuple[int, int, SimulationResults]:
     """Worker with sweep tagging for cross-sweep parallel execution.
 
@@ -273,11 +274,14 @@ def _simulate_home_worker_tagged(
         start_date: Start of simulation period
         end_date: End of simulation period
         validate_balance: Whether to validate energy balance
+        weather_data: The TMY of the home's location, as get_tmy_data returns it
 
     Returns:
         Tuple of (sweep_index, home_index, SimulationResults)
     """
-    results = simulate_home(home_config, start_date, end_date, validate_balance)
+    results = simulate_home(
+        home_config, start_date, end_date, validate_balance, weather_data=weather_data
+    )
     return (sweep_index, home_index, results)
 
 
@@ -487,6 +491,8 @@ def simulate_multi_sweep_iter(
     This function enables cross-sweep parallel execution: when sweep N's last batch
     has only a few jobs, sweep N+1's jobs fill the remaining worker slots.
 
+    Weather is fetched as simulate_fleet_iter fetches it, over every sweep's homes.
+
     Args:
         sweep_configs: List of (sweep_value, FleetConfig) pairs
         start_date: Start of simulation period
@@ -501,8 +507,9 @@ def simulate_multi_sweep_iter(
     if not sweep_configs:
         return
 
-    # Pre-warm weather cache using first home from first sweep
-    get_tmy_data(sweep_configs[0][1].homes[0].location, use_cache=True)
+    tmy_by_location = _tmy_by_location(
+        home for _, fleet_config in sweep_configs for home in fleet_config.homes
+    )
 
     # Count total jobs
     total_jobs = sum(len(cfg.homes) for _, cfg in sweep_configs)
@@ -511,7 +518,13 @@ def simulate_multi_sweep_iter(
         # Sequential execution
         for sweep_idx, (_, fleet_config) in enumerate(sweep_configs):
             for home_idx, home in enumerate(fleet_config.homes):
-                result = simulate_home(home, start_date, end_date, validate_balance)
+                result = simulate_home(
+                    home,
+                    start_date,
+                    end_date,
+                    validate_balance,
+                    weather_data=tmy_by_location[home.location],
+                )
                 yield (sweep_idx, home_idx, result)
     else:
         # Parallel execution with all jobs in single pool
@@ -528,6 +541,7 @@ def simulate_multi_sweep_iter(
                         start_date,
                         end_date,
                         validate_balance,
+                        tmy_by_location[home.location],
                     )
                     futures[future] = (sweep_idx, home_idx)
 
