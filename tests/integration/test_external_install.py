@@ -230,26 +230,28 @@ def _wheel_metadata(wheel: zipfile.ZipFile) -> email.message.Message:
     return email.message_from_bytes(wheel.read(_metadata_member(wheel)))
 
 
-def _shipped_license_texts(built_wheel: Path) -> dict[str, str]:
-    """Return the text of each license file *built_wheel* carries, keyed by its METADATA License-File entry.
+def _shipped_license_members(wheel: zipfile.ZipFile) -> dict[str, str]:
+    """Return the member of the open *wheel* holding each license file it carries, keyed by its METADATA License-File entry.
 
     PEP 639 keeps each license file at <dist>.dist-info/licenses/<entry>, where the entry is the
     file's path relative to the project root.
     """
-    with zipfile.ZipFile(built_wheel) as wheel:
-        licenses_dir = _metadata_member(wheel).removesuffix("METADATA") + "licenses/"
-        members = set(wheel.namelist())
-        declared = _wheel_metadata(wheel).get_all("License-File", [])
-        return {
-            entry: wheel.read(licenses_dir + entry).decode("utf-8")
-            for entry in declared
-            if licenses_dir + entry in members
-        }
+    licenses_dir = _metadata_member(wheel).removesuffix("METADATA") + "licenses/"
+    members = set(wheel.namelist())
+    declared = _wheel_metadata(wheel).get_all("License-File", [])
+    return {entry: licenses_dir + entry for entry in declared if licenses_dir + entry in members}
 
 
 def _shipped_license_files(built_wheel: Path) -> list[str]:
     """Return the License-File entries of *built_wheel*'s METADATA whose text the wheel carries."""
-    return list(_shipped_license_texts(built_wheel))
+    with zipfile.ZipFile(built_wheel) as wheel:
+        return list(_shipped_license_members(wheel))
+
+
+def _shipped_license_texts(built_wheel: Path) -> dict[str, str]:
+    """Return the text of each license file *built_wheel* carries, keyed by its METADATA License-File entry."""
+    with zipfile.ZipFile(built_wheel) as wheel:
+        return {entry: wheel.read(member).decode("utf-8") for entry, member in _shipped_license_members(wheel).items()}
 
 
 @pytest.mark.build
