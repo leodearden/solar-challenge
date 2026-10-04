@@ -118,6 +118,32 @@ and the next release folds both lists into its notes. A change to an exported
 signature must also edit `FROZEN_SURFACE` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 240): `create_pv_system` and `simulate_pv_output`
+no longer treat a battery inverter/charger as a candidate inverter, so they pick
+a different inverter for 23 of the 992 census configs; the 0.5.0 tag may pick a
+battery inverter/charger. Annual AC moves by +4.03% at 7.2 kW DC and +1.92% at
+7.3 kW, and by +3.72% at 2.6 kW, all with the inverter unset; by +11% to +44%
+for 0.3–1.0 kW arrays on 3.0, 3.68 and 5.0 kW inverters; and by −3.42% for
+0.7–1.0 kW on 3.68 kW. The headline 3, 4, 5 and 6 kWp configs keep their picks
+([pv-inverter-string-matching.md](pv-inverter-string-matching.md) §7). Consumers
+re-baseline the figures for those configs when they re-pin.
+
+**Unreleased on main** (tasks 384, 378, 332): `LoadConfig`, `BatteryConfig` and
+`PVConfig` refuse input the 0.5.0 tag accepts, and raise `ValueError`.
+`LoadConfig` refuses a `household_occupants` that is not a whole number or is a
+bool (Python's or numpy's), and holds `3.0` as the int `3`; the tag accepts e.g.
+`2.5`. All three refuse non-finite (`inf`/`NaN`) capacities, power limits,
+consumption, ageing inputs and system age; the tag accepts e.g.
+`capacity_kwh=float("inf")`. Consumers fix such inputs when they re-pin.
+
+**Unreleased on main** (task 318): `SimulationResults`, reached through
+`FleetResults.per_home_results`, gains the classmethod
+`from_dataframe(frame, *, strategy_name)`, the inverse of `to_dataframe()`.
+`to_dataframe()` also gains a trailing `grid_charge_cost_gbp` column for
+tariffed runs, so the CSV that `home run` writes and the web CSV export of home
+runs carry one more column. Consumers that read the frame by position rather
+than by name re-check it when they re-pin.
+
 **Unreleased on main** (task 460): `simulate_fleet`, `simulate_fleet_iter` and
 `simulate_multi_sweep_iter`, and so `solve_cost_recovery_rate`'s default
 `simulate`, fetch each distinct home location's TMY once, in the calling
