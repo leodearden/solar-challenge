@@ -10,6 +10,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
+    make_fleet_results_of,
     make_home_config,
     make_scenario,
     make_scenario_and_finance,
@@ -98,6 +99,32 @@ def test_fleet_results_pair_the_given_homes_with_the_totals_over_the_window() ->
 def test_fleet_results_refuse_both_homes_and_n_homes() -> None:
     with pytest.raises(TypeError, match="homes or n_homes"):
         make_fleet_results(n_homes=2, homes=[make_home_config()])
+
+
+def test_fleet_results_of_pair_each_given_result_in_order_with_a_default_home() -> None:
+    per_home_results = [make_sim_results(self_kwh=18.0, days=1), make_sim_results(self_kwh=6.0, days=1)]
+
+    fleet = make_fleet_results_of(per_home_results)
+
+    assert fleet.home_configs == [make_home_config()] * 2
+    assert [
+        calculate_summary(results).total_self_consumption_kwh for results in fleet.per_home_results
+    ] == pytest.approx([18.0, 6.0])
+
+
+def test_fleet_results_of_pair_the_given_results_with_the_given_homes() -> None:
+    homes = [make_home_config(), make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0))]
+
+    fleet = make_fleet_results_of([make_sim_results(days=1), make_sim_results(days=1)], homes=homes)
+
+    assert fleet.home_configs == homes
+
+
+def test_fleet_results_of_refuse_a_home_count_unlike_the_result_count() -> None:
+    with pytest.raises(ValueError, match="got 2 results and 3 homes"):
+        make_fleet_results_of(
+            [make_sim_results(days=1), make_sim_results(days=1)], homes=[make_home_config()] * 3
+        )
 
 
 def test_home_config_is_the_default_home_with_the_given_battery() -> None:
