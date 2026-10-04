@@ -5,15 +5,21 @@ simulations.  The JobManager is mocked so that submit/status/event
 calls return canned responses instantly.
 """
 
+import dataclasses
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
+import pandas as pd
+import yaml
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.config import DispatchStrategyConfig, load_fleet_config, parse_seg_rate
+from solar_challenge.seg import SEGTariff
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import api_bp
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from tests._web_app import build_test_app
@@ -1369,35 +1375,118 @@ class TestFleetFromDistribution:
 
 
 class TestExportFleetYAML:
-    """Tests for POST /api/fleet/export-yaml."""
+    """POST /api/fleet/export-yaml writes the fleet scenario the fleet page's form describes."""
 
-    def test_export_returns_yaml_content_type(self, client: FlaskClient) -> None:
-        """YAML export returns text/yaml content type."""
-        resp = client.post(
-            "/api/fleet/export-yaml",
-            json={"n_homes": 5, "name": "Test Fleet"},
-        )
-        assert resp.status_code == 200
-        assert "text/yaml" in resp.content_type
+    _ROUND_TRIP_BODY: dict = {
+        "name": "Export Round Trip",
+        "n_homes": 4,
+        "seed": 7,
+        "location": "london",
+        "start": "2024-07-01",
+        "end": "2024-07-03",
+        "pv": {
+            "capacity_kw": {
+                "type": "weighted_discrete",
+                "values": [{"value": 3.0, "weight": 1}, {"value": 5.0, "weight": 2}],
+            }
+        },
+        "battery": {
+            "capacity_kwh": {
+                "type": "shuffled_pool",
+                "entries": [{"value": 0, "count": 2}, {"value": 5.0, "count": 2}],
+            }
+        },
+        "load": {
+            "annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800, "min": 2000, "max": 6000}
+        },
+        "tariff": {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1},
+        "seg": {"rate_pence_per_kwh": 5.5},
+        "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]},
+    }
 
-    def test_export_contains_yaml_content(self, client: FlaskClient) -> None:
-        """YAML export contains fleet_distribution key."""
-        resp = client.post(
-            "/api/fleet/export-yaml",
-            json={"n_homes": 5, "name": "Test Fleet"},
-        )
-        body = resp.get_data(as_text=True)
-        assert "fleet_distribution" in body
-        assert "n_homes" in body
+    def test_export_loads_back_through_load_fleet_config_as_the_fleet_simulate_runs(
+        self, client: FlaskClient, mock_job_manager: MagicMock, tmp_path: Path
+    ) -> None:
+        """The exported file, read as `finance run` reads it, is the fleet POST /api/simulate/fleet-from-distribution runs for the same form: its homes, name and dates.
 
-    def test_export_content_disposition(self, client: FlaskClient) -> None:
-        """YAML export has Content-Disposition attachment header."""
-        resp = client.post(
-            "/api/fleet/export-yaml",
-            json={"n_homes": 5},
+        load_fleet_config does not read seg: yet (task 185), so the SEG rate is threaded onto
+        its homes as cli/finance.py threads it, as tests/unit/test_scenario_writer.py does.
+        """
+        export = client.post("/api/fleet/export-yaml", json=self._ROUND_TRIP_BODY)
+        assert export.status_code == 200, export.get_data(as_text=True)
+        assert "text/yaml" in export.content_type
+        assert export.headers["Content-Disposition"] == "attachment; filename=fleet-config.yaml"
+        text = export.get_data(as_text=True)
+        path = tmp_path / "fleet.yaml"
+        path.write_text(text, encoding="utf-8")
+
+        fleet = load_fleet_config(path)
+        document = yaml.safe_load(text)
+        seg_tariff = SEGTariff(name="", rate_pence_per_kwh=parse_seg_rate(document["seg"]))
+        loaded = [dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet.homes]
+
+        simulate = client.post("/api/simulate/fleet-from-distribution", json=self._ROUND_TRIP_BODY)
+        assert simulate.status_code == 201, simulate.get_data(as_text=True)
+        submitted = mock_job_manager.submit_fleet_job.call_args.kwargs
+        homes = submitted["configs"]
+        batteries = [home.battery_config for home in homes if home.battery_config is not None]
+        assert 0 < len(batteries) < len(homes)
+        assert all(
+            battery.dispatch_strategy == DispatchStrategyConfig("tou_optimized", peak_hours=[(16, 21)])
+            for battery in batteries
         )
-        assert "attachment" in resp.headers.get("Content-Disposition", "")
-        assert "fleet-config.yaml" in resp.headers.get("Content-Disposition", "")
+        assert all(
+            home.tariff_config == TariffConfig.economy_7(off_peak_rate=0.1, peak_rate=0.3)
+            and home.seg_tariff == SEGTariff(name="", rate_pence_per_kwh=5.5)
+            for home in homes
+        )
+
+        assert loaded == homes
+        assert fleet.name == submitted["name"]
+        timezone = homes[0].location.timezone
+        period = document["period"]
+        assert (
+            pd.Timestamp(period["start_date"], tz=timezone),
+            pd.Timestamp(period["end_date"], tz=timezone),
+        ) == (submitted["start_date"], submitted["end_date"])
+
+    def test_export_names_a_nameless_fleet_as_simulate_runs_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A form without a name is exported under the name its simulation runs as."""
+        body = {key: value for key, value in self._ROUND_TRIP_BODY.items() if key != "name"}
+
+        export = client.post("/api/fleet/export-yaml", json=body)
+        simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
+
+        assert (export.status_code, simulate.status_code) == (200, 201)
+        assert (
+            yaml.safe_load(export.get_data(as_text=True))["name"]
+            == mock_job_manager.submit_fleet_job.call_args.kwargs["name"]
+        )
+
+    @pytest.mark.parametrize(
+        "patch",
+        [
+            pytest.param({"tariff": {"type": "flat_rate"}}, id="tariff-the-loaders-refuse"),
+            pytest.param({"dispatch_strategy": ""}, id="empty-string-dispatch"),
+        ],
+    )
+    def test_export_refuses_what_simulate_refuses_with_the_same_answer(
+        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict
+    ) -> None:
+        """A form the simulate endpoint refuses gets the same 400 and error from the export, so no YAML is written for a fleet that cannot run; no job is queued.
+
+        The empty-string dispatch is task 393's presence rule: only null reads as absent.
+        """
+        body = {**self._ROUND_TRIP_BODY, **patch}
+
+        export = client.post("/api/fleet/export-yaml", json=body)
+        simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
+
+        assert export.status_code == 400
+        assert (export.status_code, export.get_json()) == (simulate.status_code, simulate.get_json())
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
 
 # ===================================================================

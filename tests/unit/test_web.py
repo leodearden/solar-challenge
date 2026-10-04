@@ -1175,19 +1175,6 @@ class TestFleetApiEndpoints:
         )
         assert response.status_code == 400
 
-    def test_export_fleet_yaml(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/export-yaml returns YAML content."""
-        response = client.post(
-            "/api/fleet/export-yaml",
-            json={
-                "n_homes": 100,
-                "pv": {"capacity_kw": {"type": "uniform", "min": 3, "max": 6}},
-            },
-        )
-        assert response.status_code == 200
-        assert "text/yaml" in response.content_type
-        assert b"n_homes" in response.data
-
     def test_import_fleet_yaml(self, client: FlaskClient) -> None:
         """Test POST /api/fleet/import-yaml parses YAML correctly."""
         yaml_content = """
