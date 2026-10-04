@@ -133,14 +133,16 @@ re-baseline the figures for those configs when they re-pin.
 `LoadConfig` refuses a `household_occupants` that is not a whole number or is a
 bool (Python's or numpy's), and holds `3.0` as the int `3`; the tag accepts e.g.
 `2.5`. All three refuse non-finite (`inf`/`NaN`) capacities, power limits,
-consumption, ageing inputs, system age and degradation rate; the tag accepts
-e.g. `capacity_kwh=float("inf")`. Consumers fix such inputs when they re-pin.
+consumption, ageing inputs and system age; the tag accepts e.g.
+`capacity_kwh=float("inf")`. Consumers fix such inputs when they re-pin.
 
-**Unreleased on main** (task 318): `SimulationResults.to_dataframe()`, reached
-through `FleetResults.per_home_results`, gains a trailing `grid_charge_cost_gbp`
-column for tariffed runs, so the CSV that `home run` writes and the web CSV
-export of home runs carry one more column. Consumers that read the frame by
-position rather than by name re-check it when they re-pin.
+**Unreleased on main** (task 318): `SimulationResults`, reached through
+`FleetResults.per_home_results`, gains the classmethod
+`from_dataframe(frame, *, strategy_name)`, the inverse of `to_dataframe()`.
+`to_dataframe()` also gains a trailing `grid_charge_cost_gbp` column for
+tariffed runs, so the CSV that `home run` writes and the web CSV export of home
+runs carry one more column. Consumers that read the frame by position rather
+than by name re-check it when they re-pin.
 
 **Unreleased on main** (task 460): `simulate_fleet`, `simulate_fleet_iter` and
 `simulate_multi_sweep_iter`, and so `solve_cost_recovery_rate`'s default
