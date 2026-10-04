@@ -382,6 +382,8 @@ MALFORMED_BATTERY_SETTINGS = [
     ),
     pytest.param("efficiency_pct", 150, id="efficiency_pct-above-100"),
     pytest.param("max_charge_kw", "abc", id="max_charge_kw-not-a-number"),
+    pytest.param("max_charge_kw", -1, id="max_charge_kw-negative"),
+    pytest.param("max_discharge_kw", float("nan"), id="max_discharge_kw-nan"),
 ]
 
 
