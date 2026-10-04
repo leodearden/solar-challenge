@@ -103,8 +103,8 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     - import_cost_gbp(ON) < import_cost_gbp(OFF)
     - annualised delta ∈ [£100, £330]  (PRD §9.1 Seam 3 / §11 PASS gate)
     """
-    from solar_challenge.config import FinanceConfig, load_config, load_fleet_config
-    from solar_challenge.finance import householder_bill
+    from solar_challenge.config import load_config, load_fleet_config
+    from solar_challenge.finance import FinanceConfig, householder_bill
     from solar_challenge.home import calculate_summary, simulate_home
 
     fleet = load_fleet_config(SCENARIO)
@@ -185,8 +185,7 @@ def test_finance_report_renders_flex_value_block() -> None:
 
     Additive: default None → output bit-identical (no flex block).
     """
-    from solar_challenge.config import FinanceConfig
-    from solar_challenge.finance import bill_distribution
+    from solar_challenge.finance import FinanceConfig, bill_distribution
     from solar_challenge.flex import resolve_flex_band
     from solar_challenge.home import SummaryStatistics
     from solar_challenge.output import generate_finance_report

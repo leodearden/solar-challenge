@@ -268,11 +268,8 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     from 0.0, or that has the parser supply its own value for an omitted key,
     would be caught here.
     """
-    from solar_challenge.config import (
-        FinanceConfig,
-        load_config,
-        parse_finance_config,
-    )
+    from solar_challenge.config import load_config, parse_finance_config
+    from solar_challenge.finance import FinanceConfig
 
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes

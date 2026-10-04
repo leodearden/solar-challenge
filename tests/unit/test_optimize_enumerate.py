@@ -6,7 +6,8 @@ import itertools
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import FinanceConfig, GridChargeConfig, ScenarioConfig, SimulationPeriod
+from solar_challenge.config import GridChargeConfig, ScenarioConfig, SimulationPeriod
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.optimize import ConfigPoint, enumerate_configs

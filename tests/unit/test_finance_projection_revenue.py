@@ -26,7 +26,8 @@ class TestProjectMultiYearRevenue:
         seg_tariff_pence: float | None = 5.0,
     ) -> tuple:
         """Build scenario + finance for revenue tests."""
-        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+        from solar_challenge.finance import FinanceConfig
 
         homes = [make_home_config() for _ in range(n_homes)]
         finance = FinanceConfig(
@@ -378,7 +379,7 @@ class TestSegExportIncomeGbp:
         self,
         self_consumption_override: "float | None" = None,
     ) -> "FinanceConfig":  # type: ignore[name-defined]
-        from solar_challenge.config import FinanceConfig
+        from solar_challenge.finance import FinanceConfig
 
         return FinanceConfig(
             standing_charge_pence_per_day=28.0,

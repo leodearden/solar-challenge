@@ -10,12 +10,12 @@ import pytest
 
 from solar_challenge.config import (
     ConfigurationError,
-    FinanceConfig,
     ScenarioConfig,
     SimulationPeriod,
     load_scenarios,
     parse_finance_config,
 )
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig

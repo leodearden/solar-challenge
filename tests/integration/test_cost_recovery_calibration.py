@@ -181,7 +181,7 @@ def _make_finance_cr6(
     Default values match [FIN] (capex=£775k, grant=£250k, retail=23p, floor=£27).
     Interior/flex tests pass explicit overrides (pv_cost=2000, grant=0, retail=30, floor=50).
     """
-    from solar_challenge.config import FinanceConfig
+    from solar_challenge.finance import FinanceConfig
 
     return FinanceConfig(
         standing_charge_pence_per_day=60.0,

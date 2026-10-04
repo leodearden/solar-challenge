@@ -40,7 +40,8 @@ def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignor
 
 def _make_adaptive_scenario(asset_life: int = 10) -> tuple:
     """Build a scenario+finance pair for adaptive refinement tests."""
-    from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+    from solar_challenge.config import ScenarioConfig, SimulationPeriod
+    from solar_challenge.finance import FinanceConfig
 
     homes = [make_home_config()]
     finance = FinanceConfig(

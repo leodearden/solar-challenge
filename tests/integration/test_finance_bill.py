@@ -16,7 +16,7 @@ from typing import Optional
 
 import pytest
 
-from solar_challenge.config import FinanceConfig
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import SummaryStatistics
 from tests._factories import make_bill_breakdown, make_bill_distribution
 

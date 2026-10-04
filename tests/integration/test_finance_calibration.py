@@ -109,7 +109,7 @@ def _make_finance_fin(
     self_consumption_override: float = _FIN_SCF,
 ) -> "FinanceConfig":  # type: ignore[name-defined]
     """Build the [FIN]-aligned FinanceConfig with named-cell defaults."""
-    from solar_challenge.config import FinanceConfig
+    from solar_challenge.finance import FinanceConfig
     return FinanceConfig(
         standing_charge_pence_per_day=60.0,
         pv_cost_per_kwp_gbp=1000.0,
