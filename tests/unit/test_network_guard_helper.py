@@ -11,6 +11,7 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -26,7 +27,17 @@ _OFF_THIS_MACHINE = ("192.0.2.1", 9)
 
 def _fetch_in_a_child_process(url: str) -> subprocess.CompletedProcess[str]:
     """Fetch *url* with urllib in a child Python process, with this process's environment; it prints the body, or exits non-zero."""
-    program = f"import urllib.request; print(urllib.request.urlopen({url!r}, timeout=30).read().decode())"
+    return _run_in_a_child_process(
+        f"import urllib.request; print(urllib.request.urlopen({url!r}, timeout=30).read().decode())"
+    )
+
+
+def _fetch_with_requests_in_a_child_process(url: str) -> subprocess.CompletedProcess[str]:
+    """Fetch *url* as _fetch_in_a_child_process does, but with requests, which, unlike urllib, matches NO_PROXY's address blocks."""
+    return _run_in_a_child_process(f"import requests; print(requests.get({url!r}, timeout=30).text)")
+
+
+def _run_in_a_child_process(program: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=120)
 
 
@@ -52,10 +63,10 @@ class _AnswersOk(BaseHTTPRequestHandler):
         pass
 
 
-@pytest.fixture
-def loopback_server_port() -> Iterator[int]:
-    """Serve HTTP on 127.0.0.1, answering every GET with 200 "ok", and yield its port."""
-    with socketserver.TCPServer(("127.0.0.1", 0), _AnswersOk) as server:
+@contextmanager
+def _serving_ok_on(address: str) -> Iterator[int]:
+    """Serve HTTP on *address*, answering every GET with 200 "ok", and yield its port."""
+    with socketserver.TCPServer((address, 0), _AnswersOk) as server:
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
         try:
@@ -63,6 +74,13 @@ def loopback_server_port() -> Iterator[int]:
         finally:
             server.shutdown()
             thread.join()
+
+
+@pytest.fixture
+def loopback_server_port() -> Iterator[int]:
+    """Serve HTTP on 127.0.0.1, answering every GET with 200 "ok", and yield its port."""
+    with _serving_ok_on("127.0.0.1") as port:
+        yield port
 
 
 class TestRefusingNetwork:
@@ -150,6 +168,17 @@ class TestRefusingNetwork:
     def test_a_child_processs_request_to_this_machine_goes_through(self, host: str, loopback_server_port: int) -> None:
         with refusing_network() as refused:
             child = _fetch_in_a_child_process(f"http://{host}:{loopback_server_port}/")
+
+        assert (child.returncode, child.stdout) == (0, "ok\n"), child.stderr
+        assert refused == []
+
+    @pytest.mark.parametrize(("host", "served_on"), [("0.0.0.0", "127.0.0.1"), ("127.0.0.2", "127.0.0.2")])
+    def test_a_child_processs_request_to_another_address_of_this_machine_goes_through(
+        self, host: str, served_on: str
+    ) -> None:
+        """A connection to 0.0.0.0 reaches 127.0.0.1."""
+        with _serving_ok_on(served_on) as port, refusing_network() as refused:
+            child = _fetch_with_requests_in_a_child_process(f"http://{host}:{port}/")
 
         assert (child.returncode, child.stdout) == (0, "ok\n"), child.stderr
         assert refused == []

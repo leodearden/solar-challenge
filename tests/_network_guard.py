@@ -39,11 +39,14 @@ from urllib.parse import urlsplit
 
 import pytest
 
-_NAMES_OF_THIS_MACHINE = frozenset({"", "localhost"})
+_NAMES_OF_THIS_MACHINE = ("localhost",)
+# urllib matches NO_PROXY's entries by name alone, so 127.0.0.1 stands besides its block.
+_ADDRESSES_OF_THIS_MACHINE = ("127.0.0.1", "127.0.0.0/8", "::1", "0.0.0.0", "::")
+_ADDRESS_BLOCKS_OF_THIS_MACHINE = tuple(map(ipaddress.ip_network, _ADDRESSES_OF_THIS_MACHINE))
 _INTERNET_FAMILIES = frozenset({socket.AF_INET, socket.AF_INET6})
 _PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 _NO_PROXY_VARIABLES = ("NO_PROXY", "no_proxy")
-_HOSTS_A_CHILD_REACHES_DIRECTLY = "localhost,127.0.0.1,::1"
+_HOSTS_A_CHILD_REACHES_DIRECTLY = ",".join(_NAMES_OF_THIS_MACHINE + _ADDRESSES_OF_THIS_MACHINE)
 _PROXY_HOST = "127.0.0.1"
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -180,7 +183,8 @@ def _leaves_this_machine(sock: socket.socket, address: Any) -> bool:
 
 
 def _is_this_machine(host: object) -> bool:
-    if host is None:
+    """Whether a socket call's *host* is this machine: none at all, one of its names, or one of its addresses."""
+    if not host:
         return True
     name = host.decode() if isinstance(host, bytes) else str(host)
     if name.lower() in _NAMES_OF_THIS_MACHINE:
@@ -189,4 +193,4 @@ def _is_this_machine(host: object) -> bool:
         address = ipaddress.ip_address(name)
     except ValueError:
         return False
-    return address.is_loopback or address.is_unspecified
+    return any(address in block for block in _ADDRESS_BLOCKS_OF_THIS_MACHINE)
