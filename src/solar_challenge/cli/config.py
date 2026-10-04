@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Configuration management commands."""
 
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
 import typer
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 
 from solar_challenge.cli.utils import (
     console,
@@ -138,6 +140,18 @@ output:
 """
 
 
+def _summary_rows(data: Mapping[str, Any], prefix: str = "") -> Iterator[tuple[str, str]]:
+    """Yield (dotted key, value text) for each leaf of data, in order; a list's text is its item count."""
+    for key, value in data.items():
+        full_key = f"{prefix}{key}"
+        if isinstance(value, dict):
+            yield from _summary_rows(value, f"{full_key}.")
+        elif isinstance(value, list):
+            yield full_key, f"[{len(value)} items]"
+        else:
+            yield full_key, str(value)
+
+
 @app.command()
 @handle_errors
 def show(
@@ -170,7 +184,7 @@ def show(
     else:
         syntax = Syntax(content, "text", theme="monokai", line_numbers=True)
 
-    console.print(f"\n[bold]Configuration:[/bold] {config_file}\n")
+    console.print(Text.assemble("\n", ("Configuration:", "bold"), " ", str(config_file), "\n"))
     console.print(syntax)
 
     # Show summary
@@ -179,17 +193,8 @@ def show(
     table.add_column("Key", style="cyan")
     table.add_column("Value")
 
-    def _add_nested(data: dict[str, Any], prefix: str = "") -> None:
-        for key, value in data.items():
-            full_key = f"{prefix}{key}"
-            if isinstance(value, dict):
-                _add_nested(value, f"{full_key}.")
-            elif isinstance(value, list):
-                table.add_row(full_key, f"[{len(value)} items]")
-            else:
-                table.add_row(full_key, str(value))
-
-    _add_nested(config_data)
+    for key, value in _summary_rows(config_data):
+        table.add_row(Text(key), Text(value))
     console.print(table)
 
 
