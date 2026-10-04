@@ -3,7 +3,7 @@
 
 The guard decides a test's outcome at its teardown, so each scenario runs in a
 separate pytest session under a copy of tests/conftest.py, in a directory of its
-own and with no HTTP proxy configured, as in tests/unit/test_web_jobs_drain_scope.py.
+own, as in tests/unit/test_web_jobs_drain_scope.py.
 """
 
 import numpy as np
@@ -13,18 +13,10 @@ from solar_challenge.location import Location
 from solar_challenge.weather import DEFAULT_CACHE_DIR, WeatherCache, get_tmy_data
 from tests._synthetic_weather import synthetic_june_weather
 
-_PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
-
 
 @pytest.fixture
-def suite(pytester_under_root_conftest: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
-    """A pytest session of its own, under a copy of tests/conftest.py and with no HTTP proxy configured.
-
-    Through a proxy, requests would look up only the proxy's loopback host, so the
-    guard would never see the PVGIS destination.
-    """
-    for name in _PROXY_VARIABLES:
-        monkeypatch.delenv(name, raising=False)
+def suite(pytester_under_root_conftest: pytest.Pytester) -> pytest.Pytester:
+    """A pytest session of its own, under a copy of tests/conftest.py, whose guard refuses and names each scenario test's network access, its child processes' included."""
     return pytester_under_root_conftest
 
 
@@ -74,6 +66,39 @@ def test_a_fast_test_whose_job_reaches_the_network_fails_once_the_job_has_run(su
 
     result.assert_outcomes(passed=1, errors=1)
     result.stdout.fnmatch_lines(["*test_submits_a_home_job_and_ends reached the network*"])
+
+
+def test_a_fast_test_whose_child_process_reaches_the_network_fails_even_if_the_child_carries_on(
+    suite: pytest.Pytester,
+) -> None:
+    """The child swallows its fetch's error and exits 0, so only the guard can catch it."""
+    suite.makepyfile(
+        fetches_and_carries_on="""
+        import urllib.request
+
+        try:
+            urllib.request.urlopen("https://example.invalid/", timeout=30)
+        except OSError:
+            pass
+        """
+    )
+    scenario = suite.makepyfile(
+        """
+        import subprocess
+        import sys
+
+
+        def test_runs_a_child_that_fetches_and_carries_on():
+            subprocess.run([sys.executable, "fetches_and_carries_on.py"], check=True)
+        """
+    )
+
+    result = suite.runpytest_subprocess(scenario)
+
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        ["*test_runs_a_child_that_fetches_and_carries_on reached the network (example.invalid:443)*"]
+    )
 
 
 def test_a_module_fixture_that_fetches_a_tmy_fails_the_fast_test_that_sets_it_up_and_leaves_no_weather_cache_behind(

@@ -5,6 +5,18 @@
 through, so it refuses a fetch from any thread. Loopback, unspecified and
 Unix-domain destinations still go through.
 
+A child process is reached through the standard proxy variables, which uv, curl,
+and Python's requests and urllib honour. While ``refusing_network`` is open, they
+name a proxy on this machine, which forwards nothing: it records each request's
+destination as "host:port", like the socket refusals, and refuses it.
+NO_PROXY names only this machine, so a child's loopback traffic stays direct.
+
+The first ``refusing_network`` starts the proxy, which then serves until the
+process ends, and the innermost one open records what the proxy is sent. So a
+client that read the proxy variables in an earlier one, as urllib's process-wide
+urlopen opener does, is still named, but a request sent while none is open is
+refused without being named.
+
 Usage::
 
     from tests._network_guard import refusing_network
@@ -14,24 +26,40 @@ Usage::
     assert refused == []
 """
 
+import functools
 import ipaddress
 import socket
-from collections.abc import Iterator
+import socketserver
+import sys
+import threading
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
-_NAMES_OF_THIS_MACHINE = frozenset({"", "localhost"})
+_NAMES_OF_THIS_MACHINE = ("localhost",)
+# urllib matches NO_PROXY's entries by name alone, so 127.0.0.1 stands besides its block.
+_ADDRESSES_OF_THIS_MACHINE = ("127.0.0.1", "127.0.0.0/8", "::1", "0.0.0.0", "::")
+_ADDRESS_BLOCKS_OF_THIS_MACHINE = tuple(map(ipaddress.ip_network, _ADDRESSES_OF_THIS_MACHINE))
 _INTERNET_FAMILIES = frozenset({socket.AF_INET, socket.AF_INET6})
+_PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+_NO_PROXY_VARIABLES = ("NO_PROXY", "no_proxy")
+_HOSTS_A_CHILD_REACHES_DIRECTLY = ",".join(_NAMES_OF_THIS_MACHINE + _ADDRESSES_OF_THIS_MACHINE)
+_PROXY_HOST = "127.0.0.1"
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 @contextmanager
 def refusing_network() -> Iterator[list[str]]:
-    """While open, refuse every name lookup and connection, from any thread, whose host is not this machine.
+    """While open, refuse every name lookup and connection, from any thread, whose host is not this machine, and every HTTP(S) request a child process sends through the standard proxy variables.
 
-    Yields the refused destinations as "host:port", in order. Each refusal raises
-    ConnectionRefusedError, an OSError, so an HTTP client reports a failed connection.
+    Yields the refused destinations as "host:port", in order. A refused lookup or
+    connection raises ConnectionRefusedError, an OSError, so an HTTP client reports
+    a failed connection; a request through the proxy is answered 403 Forbidden.
     """
     refused: list[str] = []
     real_getaddrinfo = socket.getaddrinfo
@@ -41,7 +69,7 @@ def refusing_network() -> Iterator[list[str]]:
     def refusal(host: object, port: object) -> ConnectionRefusedError:
         destination = f"{host}:{port}"
         refused.append(destination)
-        return ConnectionRefusedError(f"{destination} is off this machine, and this test runs offline")
+        return ConnectionRefusedError(_reason_for_refusing(destination))
 
     def getaddrinfo(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
         if not _is_this_machine(host):
@@ -58,11 +86,94 @@ def refusing_network() -> Iterator[list[str]]:
             raise refusal(address[0], address[1])
         return real_connect_ex(sock, address)
 
-    with pytest.MonkeyPatch.context() as patch:
+    with _refusing_proxy().recording_with(refused.append) as proxy, pytest.MonkeyPatch.context() as patch:
+        _send_child_processes_through(proxy, patch)
         patch.setattr(socket, "getaddrinfo", getaddrinfo)
         patch.setattr(socket.socket, "connect", connect)
         patch.setattr(socket.socket, "connect_ex", connect_ex)
         yield refused
+
+
+def _send_child_processes_through(proxy: str, patch: pytest.MonkeyPatch) -> None:
+    """Point the proxy variables a child process inherits at *proxy*, for every host but this machine, whatever they named before."""
+    for name in _PROXY_VARIABLES:
+        patch.setenv(name, proxy)
+    for name in _NO_PROXY_VARIABLES:
+        patch.setenv(name, _HOSTS_A_CHILD_REACHES_DIRECTLY)
+
+
+@functools.cache
+def _refusing_proxy() -> "_RefusingProxy":
+    """Start this process's _RefusingProxy, when the first window needs it, to serve until the process ends."""
+    proxy = _RefusingProxy()
+    threading.Thread(target=proxy.serve_forever, name="refusing-proxy", daemon=True).start()
+    return proxy
+
+
+class _RefusingProxy(socketserver.ThreadingTCPServer):
+    """An HTTP proxy on this machine that refuses every request, recording its destination with the recorder of the window open.
+
+    Not an http.server.HTTPServer, whose bind looks up this machine's name.
+    Its handlers run in daemon threads, so a client that never sends keeps no one waiting.
+    """
+
+    daemon_threads = True
+
+    def __init__(self) -> None:
+        self.record: Callable[[str], None] = _record_nothing
+        super().__init__((_PROXY_HOST, 0), _RefusingHandler)
+
+    @contextmanager
+    def recording_with(self, record: Callable[[str], None]) -> Iterator[str]:
+        """Record with *record* until the block ends, then with the recorder it replaced, and yield the proxy's URL."""
+        replaced, self.record = self.record, record
+        try:
+            yield f"http://{_PROXY_HOST}:{self.server_address[1]}"
+        finally:
+            self.record = replaced
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """Stay silent when a client hangs up before its refusal is written."""
+        if not isinstance(sys.exception(), ConnectionError):
+            super().handle_error(request, client_address)
+
+
+class _RefusingHandler(BaseHTTPRequestHandler):
+    server: _RefusingProxy
+
+    def __getattr__(self, name: str) -> Callable[[], None]:
+        """Answer the lookup of every method's do_<METHOD> with _refuse, so a request of any method is recorded and refused."""
+        if name.startswith("do_"):
+            return self._refuse
+        raise AttributeError(name)
+
+    def _refuse(self) -> None:
+        destination = self.path if self.command == "CONNECT" else _destination_of(self.path)
+        self.server.record(destination)
+        self.send_error(HTTPStatus.FORBIDDEN, _reason_for_refusing(destination))
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+
+def _destination_of(request_target: str) -> str:
+    """Return the "host:port" an absolute-form request target names, or the target itself if it names none."""
+    try:
+        url = urlsplit(request_target)
+        port = url.port or _DEFAULT_PORTS.get(url.scheme)
+    except ValueError:
+        return request_target
+    if url.hostname is None or port is None:
+        return request_target
+    return f"{url.hostname}:{port}"
+
+
+def _record_nothing(destination: str) -> None:
+    """Record nothing: no window is open."""
+
+
+def _reason_for_refusing(destination: str) -> str:
+    return f"{destination} is off this machine, and this test runs offline"
 
 
 def _leaves_this_machine(sock: socket.socket, address: Any) -> bool:
@@ -70,7 +181,8 @@ def _leaves_this_machine(sock: socket.socket, address: Any) -> bool:
 
 
 def _is_this_machine(host: object) -> bool:
-    if host is None:
+    """Whether a socket call's *host* is this machine: none at all, one of its names, or one of its addresses."""
+    if not host:
         return True
     name = host.decode() if isinstance(host, bytes) else str(host)
     if name.lower() in _NAMES_OF_THIS_MACHINE:
@@ -79,4 +191,4 @@ def _is_this_machine(host: object) -> bool:
         address = ipaddress.ip_address(name)
     except ValueError:
         return False
-    return address.is_loopback or address.is_unspecified
+    return any(address in block for block in _ADDRESS_BLOCKS_OF_THIS_MACHINE)

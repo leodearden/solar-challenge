@@ -4,7 +4,10 @@
 The orchestrator's offline lane runs this module after each merge to main. The
 .python-version pin needs no case here: every per-task and merge verify already
 runs on it. tests/conftest.py keeps this directory out of every default
-collection, so it runs only when its path is passed explicitly.
+collection, so it runs only when its path is passed explicitly. Its cases are
+marked slow, the exemption from tests/conftest.py's offline guard, which refuses
+a test's network access, its child processes' included: each case provisions
+its interpreter's environment from PyPI whenever uv.lock changes.
 
 Manual run::
 
@@ -26,6 +29,8 @@ import pytest
 from tests._interpreters import off_pin_minor_versions
 from tests._orchestrator_config import load_orchestrator_config
 from tests._uv_env import isolated_uv_env
+
+pytestmark = pytest.mark.slow
 
 # Parametrization happens at collection time, before any fixture exists.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

@@ -64,15 +64,10 @@ SCENARIOS = """
 
 def test_each_e2e_tests_live_server_jobs_finish_before_the_next_test_starts(
     pytester_importing_test_helpers: pytest.Pytester,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The root conftest's offline guard sends the scenario session's HTTP(S) to its refusing proxy, so a job that fetched its TMY would fail, and the guard would fail this test, naming the host."""
     pytester_importing_test_helpers.makeconftest(E2E_CONFTEST.read_text(encoding="utf-8"))
     scenarios = pytester_importing_test_helpers.makepyfile(SCENARIOS)
-    # A job that fetched its TMY goes through this dead proxy and fails, so the pin cannot pass by reaching PVGIS.
-    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
-        monkeypatch.setenv(name, "http://127.0.0.1:9")
-    for name in ("NO_PROXY", "no_proxy"):
-        monkeypatch.delenv(name, raising=False)
 
     result = pytester_importing_test_helpers.runpytest_subprocess(scenarios)
 
