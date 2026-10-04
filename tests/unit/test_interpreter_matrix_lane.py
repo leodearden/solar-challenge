@@ -7,18 +7,30 @@ orchestrator offline lane's interpreter-matrix job (tests/interpreter_matrix).
 """
 
 import os
+import shlex
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
 
-from tests._collect_only import requires_uv
+from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
 from tests._interpreters import off_pin_minor_versions, python_version_pin
 from tests._lane_collection import collect_lane_job
 from tests._orchestrator_config import git_config, lane_job_enabled, sole_offline_lane_job
 
 _MATRIX_JOB = "interpreter-matrix"
+
+
+def _off_pin_interpreters(project_root: Path) -> list[str]:
+    """Return the minors the interpreter matrix must cover, as its node ids name them (e.g. "3.13"), sorted."""
+    return sorted(f"{major}.{minor}" for major, minor in off_pin_minor_versions(project_root))
+
+
+def _interpreters_named_by(node_ids: Iterable[str]) -> list[str]:
+    """Return the interpreter each interpreter-matrix node id ends in (e.g. "3.13" for "...[3.13]"), sorted."""
+    return sorted(node_id.rpartition("[")[2].removesuffix("]") for node_id in node_ids)
 
 
 def test_offline_lane_is_enabled_with_an_interpreter_matrix_job(project_root: Path) -> None:
@@ -60,8 +72,8 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(
     """
     collection = collect_lane_job(project_root, _MATRIX_JOB, env=uv_probe_environment)
 
-    expected = sorted(f"{major}.{minor}" for major, minor in off_pin_minor_versions(project_root))
-    collected = sorted(node_id.rpartition("[")[2].removesuffix("]") for node_id in collection.node_ids)
+    expected = _off_pin_interpreters(project_root)
+    collected = _interpreters_named_by(collection.node_ids)
     assert collected == expected, (
         f"the {_MATRIX_JOB!r} lane job collected {collection.node_ids}; expected exactly one case per minor "
         f"requires-python admits other than the .python-version pin {python_version_pin(project_root)}, "
@@ -105,4 +117,31 @@ def test_default_collection_never_reaches_the_interpreter_matrix(project_root: P
         f"a default collection with addopts cleared reached the interpreter matrix: {reached}; "
         "every verify, and every serial or confirm rerun of it, would then run the whole matrix "
         "of verify suites, one per admitted interpreter"
+    )
+
+
+def test_interpreter_matrix_cases_are_slow_so_they_provision_outside_the_offline_guard(project_root: Path) -> None:
+    """Each case's `uv run` provisions its interpreter's environment from PyPI whenever uv.lock changes.
+
+    The explicit path overrides tests/conftest.py's collect_ignore, as the lane's command does.
+    """
+    command = shlex.join([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "tests/interpreter_matrix"])
+
+    marked_slow = run_collect_only(command, project_root, "-m", "slow")
+    not_marked_slow = run_collect_only(command, project_root, "-m", "not slow")
+
+    expected = _off_pin_interpreters(project_root)
+    slow_cases = _interpreters_named_by(collected_node_ids(marked_slow.stdout))
+    fast_cases = collected_node_ids(not_marked_slow.stdout)
+    why = (
+        "a case not marked slow runs under tests/conftest.py's offline guard, where its child uv cannot "
+        "download what a uv.lock change needs, so the lane would go red after every dependency change"
+    )
+    assert marked_slow.returncode == pytest.ExitCode.OK and slow_cases == expected, (
+        f"`-m slow` collected the interpreter-matrix cases {slow_cases}, not one per off-pin admitted minor "
+        f"{expected}; {why}\n{describe_outcome(marked_slow)}"
+    )
+    assert not_marked_slow.returncode == pytest.ExitCode.NO_TESTS_COLLECTED and not fast_cases, (
+        f"`-m 'not slow'` collected the interpreter-matrix cases {fast_cases}; {why}\n"
+        f"{describe_outcome(not_marked_slow)}"
     )
