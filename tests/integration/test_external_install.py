@@ -367,8 +367,14 @@ def test_built_wheel_declares_the_license_each_vendored_package_records(
 
 _COMPILED_CSS_DIR = "src/solar_challenge/web/static/dist"
 _COMPILED_TAILWIND_COPYRIGHT_NOTICES = {
-    "tailwindcss": "Copyright (c) Tailwind Labs, Inc.",
-    "tailwindcss's preflight.css": "Copyright (c) Nicolas Gallagher",
+    "tailwindcss": ("Copyright (c) Tailwind Labs, Inc.",),
+    "tailwindcss's preflight.css": (
+        "Copyright (c) Nicolas Gallagher",
+        "Copyright (c) Jonathan Neal",
+        "Copyright (c) Sindre Sorhus",
+        "Copyright (c) Adam Wathan",
+        "Copyright (c) Jonathan Reinink",
+    ),
 }
 
 
@@ -385,16 +391,16 @@ def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compile
     """
     shipped = _shipped_license_texts(built_wheel)
     beside_css = [text for entry, text in shipped.items() if entry.startswith(f"{_COMPILED_CSS_DIR}/")]
-    unlicensed = [
-        work
-        for work, notice in _COMPILED_TAILWIND_COPYRIGHT_NOTICES.items()
-        if not any(notice in text for text in beside_css)
-    ]
+    absent = {
+        work: [notice for notice in notices if not any(notice in text for text in beside_css)]
+        for work, notices in _COMPILED_TAILWIND_COPYRIGHT_NOTICES.items()
+    }
+    unlicensed = {work: notices for work, notices in absent.items() if notices}
 
-    assert unlicensed == [], (
+    assert unlicensed == {}, (
         f"The built wheel ships, beside the compiled CSS in {_COMPILED_CSS_DIR}, no license text "
-        f"carrying the copyright notice of the Tailwind works {unlicensed}; the license texts it ships "
-        f"are {list(shipped)}. Copy the tailwindcss package's LICENSE to "
+        f"carrying these copyright notices of the Tailwind works: {unlicensed}; the license texts it "
+        f"ships are {list(shipped)}. Copy the tailwindcss package's LICENSE to "
         f"{_COMPILED_CSS_DIR}/LICENSE-tailwindcss.txt and its src/css/LICENSE to "
         f"{_COMPILED_CSS_DIR}/LICENSE-tailwindcss-preflight.txt, verbatim, from the version that "
         "compiled style.css (its banner names it; node_modules/tailwindcss holds it once the web "
