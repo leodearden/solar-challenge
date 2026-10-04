@@ -293,7 +293,6 @@ class TestParseHomeConfigHeatPumpBlock:
 
 
 # Each nested block's key, and the HomeConfig field its parsed value fills.
-# VALID_HOME_PAYLOAD has a battery, so parse_home_config reads dispatch_strategy.
 NESTED_BLOCK_FIELDS: dict[str, Callable[[HomeConfig], object]] = {
     "heat_pump": attrgetter("heat_pump_config"),
     "seg": attrgetter("seg_tariff"),
@@ -303,7 +302,12 @@ NESTED_BLOCK_FIELDS: dict[str, Callable[[HomeConfig], object]] = {
 
 
 class TestParseHomeConfigNestedBlockPresence:
-    """One presence rule for the four nested blocks: null means none; any other value must be a mapping its grammar reads."""
+    """One presence rule for the four nested blocks: null means none; any other value must be a mapping its grammar reads.
+
+    The rule governs a block whenever parse_home_config reads it. It reads dispatch_strategy only
+    when battery_kwh is positive, as in VALID_HOME_PAYLOAD; without a battery, even a malformed
+    dispatch_strategy is ignored.
+    """
 
     @pytest.mark.parametrize(
         ("key", "parsed_block"),

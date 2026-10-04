@@ -1259,7 +1259,7 @@ class TestFleetFromDistribution:
     def test_empty_or_falsy_dispatch_strategy_gets_the_answer_simulate_home_gives(
         self, client: FlaskClient, mock_job_manager: MagicMock, dispatch_strategy: object
     ) -> None:
-        """An empty or falsy dispatch_strategy gets the same 400 here as at /api/simulate/home, and neither queues a job."""
+        """An empty or falsy dispatch_strategy gets the same 400 here as at /api/simulate/home for a home with a battery, and neither queues a job."""
         home = client.post(
             "/api/simulate/home",
             json={**VALID_HOME_PAYLOAD, "dispatch_strategy": dispatch_strategy},

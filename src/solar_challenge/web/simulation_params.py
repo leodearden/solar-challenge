@@ -151,9 +151,10 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         ValueError: If *data* is not a JSON object (the error names the type
             received), if it has a top-level key outside the recognised set
             (the error names each such key), if a nested block it reads
-            (heat_pump, seg, tariff, dispatch_strategy) is neither null, which
-            reads as absent, nor a mapping (the error names the block and the
-            type received), or if required fields are missing or invalid.
+            (heat_pump, seg and tariff always; dispatch_strategy only when
+            battery_kwh is positive) is neither null, which reads as absent,
+            nor a mapping (the error names the block and the type received),
+            or if required fields are missing or invalid.
     """
     data = require_json_object(data, "Home config")
     _refuse_unrecognised_keys(data)
