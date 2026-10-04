@@ -2,7 +2,7 @@
 """Guards the invariant that charts.py's COLOUR_PALETTE is the one home of the chart
 colours, so a palette edit reaches every copy of a chart colour.
 
-The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Three
+The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Four
 checks enforce the invariant:
 
 * No dashboard source writes out a palette colour: not tailwind.config.js, not a
@@ -16,15 +16,21 @@ checks enforce the invariant:
   rgb() or rgba(), so a translucent fill or a reused hue that charts.py writes out by hand
   fails. A colour that no palette entry has, such as the transparent backgrounds, is not
   flagged. Plotly's default template, which no builder chooses, is not read.
+* That check reads a figure from every chart builder: each of its cases names the builder
+  it draws with, and a public function of charts.py that no case names fails, so a new
+  builder cannot go unread. A name charts.py imports, such as make_subplots, is not a
+  builder.
 * Every palette colour is written #rrggbb, the form charts.py derives translucent colours
   from. charts.py refuses any other form only when it draws a chart that needs one; this
   check refuses it for the whole palette.
 """
 
 import dataclasses
+import inspect
 import json
 import re
 from collections.abc import Callable, Iterator
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -152,35 +158,57 @@ _SUMMARY = {
 }
 _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
 
-_FIGURES: dict[str, Callable[[], str | None]] = {
-    "power_flow_timeline": lambda: charts.power_flow_timeline(_year()),
-    "battery_soc_chart": lambda: charts.battery_soc_chart(_year(), battery_capacity_kwh=10.0),
-    "sankey_diagram": lambda: charts.sankey_diagram(_SUMMARY),
-    "daily_energy_balance": lambda: charts.daily_energy_balance(_year()),
-    "monthly_summary": lambda: charts.monthly_summary(_year()),
-    "financial_breakdown": lambda: charts.financial_breakdown(_year()),
-    "seasonal_comparison": lambda: charts.seasonal_comparison(_year()),
-    "heat_pump_load_profile": lambda: charts.heat_pump_analysis(_year_with_heat_pump())["cop_chart"],
-    "heat_pump_share": lambda: charts.heat_pump_analysis(_year_with_heat_pump())["load_share_chart"],
-    "overlaid_power_flows": lambda: charts.overlaid_power_flows([_year()] * 5, _FIVE_RUNS),
-    "comparison_bar_chart": lambda: charts.comparison_bar_chart([_SUMMARY] * 5, _FIVE_RUNS),
-    "comparison_radar": lambda: charts.comparison_radar([_SUMMARY] * 5, _FIVE_RUNS),
-    "fleet_aggregate_timeline": lambda: charts.fleet_aggregate_timeline(_year()),
-    "fleet_grid_impact": lambda: charts.fleet_grid_impact(_year()),
-    "fleet_heatmap": lambda: charts.fleet_heatmap([_SUMMARY] * 3),
-    "fleet_box_plots": lambda: charts.fleet_box_plots([_SUMMARY] * 3),
-    "fleet_distribution_histograms": lambda: charts.fleet_distribution_histograms([_SUMMARY] * 3),
-    "sweep_parameter_chart": lambda: charts.sweep_parameter_chart(
-        [2.0, 4.0, 6.0], [50.0, 70.0, 65.0], "PV Capacity (kW)", "Self-Consumption (%)"
+
+@dataclasses.dataclass(frozen=True)
+class _FigureCase:
+    """A figure the palette-edit check reads: *draw* draws it with *builder*, which it is passed."""
+
+    builder: Callable[..., Any]
+    draw: Callable[[Callable[..., Any]], str | None]
+
+
+_FIGURES: dict[str, _FigureCase] = {
+    "power_flow_timeline": _FigureCase(charts.power_flow_timeline, lambda build: build(_year())),
+    "battery_soc_chart": _FigureCase(
+        charts.battery_soc_chart, lambda build: build(_year(), battery_capacity_kwh=10.0)
+    ),
+    "sankey_diagram": _FigureCase(charts.sankey_diagram, lambda build: build(_SUMMARY)),
+    "daily_energy_balance": _FigureCase(charts.daily_energy_balance, lambda build: build(_year())),
+    "monthly_summary": _FigureCase(charts.monthly_summary, lambda build: build(_year())),
+    "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: build(_year())),
+    "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: build(_year())),
+    "heat_pump_load_profile": _FigureCase(
+        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())["cop_chart"]
+    ),
+    "heat_pump_share": _FigureCase(
+        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())["load_share_chart"]
+    ),
+    "overlaid_power_flows": _FigureCase(
+        charts.overlaid_power_flows, lambda build: build([_year()] * 5, _FIVE_RUNS)
+    ),
+    "comparison_bar_chart": _FigureCase(
+        charts.comparison_bar_chart, lambda build: build([_SUMMARY] * 5, _FIVE_RUNS)
+    ),
+    "comparison_radar": _FigureCase(charts.comparison_radar, lambda build: build([_SUMMARY] * 5, _FIVE_RUNS)),
+    "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: build(_year())),
+    "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: build(_year())),
+    "fleet_heatmap": _FigureCase(charts.fleet_heatmap, lambda build: build([_SUMMARY] * 3)),
+    "fleet_box_plots": _FigureCase(charts.fleet_box_plots, lambda build: build([_SUMMARY] * 3)),
+    "fleet_distribution_histograms": _FigureCase(
+        charts.fleet_distribution_histograms, lambda build: build([_SUMMARY] * 3)
+    ),
+    "sweep_parameter_chart": _FigureCase(
+        charts.sweep_parameter_chart,
+        lambda build: build([2.0, 4.0, 6.0], [50.0, 70.0, 65.0], "PV Capacity (kW)", "Self-Consumption (%)"),
     ),
 }
 
 
-@pytest.mark.parametrize("draw", _FIGURES.values(), ids=_FIGURES.keys())
+@pytest.mark.parametrize("case", _FIGURES.values(), ids=_FIGURES.keys())
 def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
-    draw: Callable[[], str | None], shipped_rgbs: frozenset[Rgb]
+    case: _FigureCase, shipped_rgbs: frozenset[Rgb]
 ) -> None:
-    figure = draw()
+    figure = case.draw(case.builder)
     assert figure not in (None, "{}"), "the chart drew no figure, so this check would pass vacuously"
 
     stale = sorted(colour for colour, rgb in _drawn_colours(figure).items() if rgb in shipped_rgbs)
@@ -189,6 +217,29 @@ def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
         f"With every COLOUR_PALETTE entry recoloured, the chart still draws {', '.join(stale)}, "
         "so a palette edit does not reach it. Name the colour's role in COLOUR_PALETTE, or derive "
         "a translucent form from its palette entry."
+    )
+
+
+def _public_chart_builders() -> frozenset[Callable[..., Any]]:
+    """Each public function charts.py defines; a name it imports, such as make_subplots, is not one."""
+    return frozenset(
+        routine
+        for name, routine in inspect.getmembers(charts, inspect.isroutine)
+        if not name.startswith("_") and getattr(routine, "__module__", None) == charts.__name__
+    )
+
+
+def test_the_palette_edit_check_covers_every_public_chart_builder() -> None:
+    builders = _public_chart_builders()
+    assert builders, "charts.py defines no public function, so this guard would pass vacuously"
+
+    exercised = {case.builder for case in _FIGURES.values()}
+    unexercised = sorted(builder.__name__ for builder in builders - exercised)
+
+    assert unexercised == [], (
+        "No _FIGURES case draws a figure with these public charts.py functions: "
+        f"{', '.join(unexercised)}. The palette-edit check never reads the colours they draw. "
+        "Add each to _FIGURES with inputs that make it draw a figure."
     )
 
 
