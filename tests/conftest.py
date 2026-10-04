@@ -109,9 +109,10 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
 
     Every fixture the test sets up or tears down, whatever its scope, runs in its
     window. There get_tmy_data reads the test's own empty weather cache, and every
-    name lookup or connection off this machine, from any thread, is refused. A
-    cache another fixture installs lasts only until the window closes, or until
-    the weather_cache fixture reinstalls the test's own.
+    name lookup or connection off this machine, from any thread, is refused, as is
+    every HTTP(S) request the test's child processes send through the standard
+    proxy variables. A cache another fixture installs lasts only until the window
+    closes, or until the weather_cache fixture reinstalls the test's own.
     """
     if any(item.get_closest_marker(mark) for mark in _MARKS_OF_TESTS_ALLOWED_ONLINE):
         return (yield)
