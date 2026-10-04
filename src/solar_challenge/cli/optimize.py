@@ -8,6 +8,7 @@ from typing import Annotated, Optional
 
 import pandas as pd
 import typer
+from rich.text import Text
 
 from solar_challenge.cli.utils import console, handle_errors, print_info
 from solar_challenge.config import (
@@ -328,4 +329,4 @@ def configs(
 
     # ---- Render report ------------------------------------------------------
     report = generate_config_ranking_report(ranked, panel)
-    console.print(report)
+    console.print(Text(report))
