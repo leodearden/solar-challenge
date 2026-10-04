@@ -20,7 +20,7 @@ import yaml
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.ev import EVConfig
-from solar_challenge.finance import FinanceConfig as FinanceConfig
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HeatPumpConfig
