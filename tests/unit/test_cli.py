@@ -1093,10 +1093,7 @@ class TestReportsPrintNamesVerbatim:
     def clear_june_in_tmp_path(
         self, weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path.
-
-        Short relative paths keep Rich, which wraps at 80 columns, from folding a path mid-word.
-        """
+        """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
         weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
         monkeypatch.chdir(tmp_path)
 
