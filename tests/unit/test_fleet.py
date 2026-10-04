@@ -212,6 +212,16 @@ class TestFleetResults:
 
         pd.testing.assert_frame_equal(fleet.to_aggregate_dataframe(), sum(home_frames[1:], home_frames[0]))
 
+    def test_aggregate_frame_columns_are_the_fleet_csv_header(self, sample_results):
+        """The five columns, in order, of the fleet CSV that the CLI and the web history export write from this frame."""
+        assert list(sample_results.to_aggregate_dataframe().columns) == [
+            "generation_kw",
+            "demand_kw",
+            "self_consumption_kw",
+            "grid_import_kw",
+            "grid_export_kw",
+        ]
+
 
 class TestFleetSummary:
     """Test FLEET-006: Fleet summary statistics."""
