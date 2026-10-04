@@ -17,19 +17,14 @@ import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
-from solar_challenge.config import (
-    ConfigurationError,
-    parse_dispatch_strategy_config,
-    parse_tariff_config,
-)
+from solar_challenge.config import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.database import get_db
 from solar_challenge.web.fleet_scenario import (
     fleet_form_from_scenario,
-    fleet_form_location,
-    fleet_form_name,
+    parse_fleet_form,
     scenario_from_fleet_form,
 )
 from solar_challenge.web.shared import (
@@ -39,7 +34,7 @@ from solar_challenge.web.shared import (
     request_json_object,
     require_json_object,
 )
-from solar_challenge.web.simulation_params import parse_date_range, parse_home_config, parse_seg_tariff
+from solar_challenge.web.simulation_params import parse_home_config
 from solar_challenge.web.storage import stored_fleet_home_configs, stored_home_config
 
 logger = logging.getLogger(__name__)
@@ -421,57 +416,32 @@ def preview_distribution() -> tuple[Response, int]:
 def simulate_fleet_from_distribution() -> tuple[Response, int]:
     """Submit a fleet simulation using distribution configuration.
 
-    Expects a JSON body describing distribution parameters for PV, battery,
-    and load components.
+    Expects the JSON body the fleet page posts, a fleet form, read by
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
 
     Returns:
-        JSON with ``job_id`` and ``run_id``, HTTP 201 on success.
+        JSON with ``job_id`` and ``run_id``, HTTP 201 on success; or the ``error``,
+        HTTP 400, for a form parse_fleet_form refuses.
     """
     data = request_json_object()
 
     job_manager = get_job_manager()
 
-    from solar_challenge.web.fleet_config import (  # noqa: PLC0415
-        apply_fleet_overlay,
-        form_to_fleet_distribution_config,
-    )
-    from solar_challenge.config import (  # noqa: PLC0415
-        parse_fleet_distribution_config,
-        generate_homes_from_distribution,
-    )
-
     try:
-        cfg_dict = form_to_fleet_distribution_config(data)
-        fleet_cfg = parse_fleet_distribution_config(cfg_dict)
-        loc = fleet_form_location(data)
-        configs = generate_homes_from_distribution(fleet_cfg, loc)
-        # Apply fleet-wide overlay (tariff / dispatch / SEG) — mirrors single-home contract.
-        tariff_config = parse_tariff_config(data.get("tariff"))
-        dispatch_strategy = parse_dispatch_strategy_config(data.get("dispatch_strategy"))
-        seg_tariff = parse_seg_tariff(data.get("seg"))
-        configs = apply_fleet_overlay(
-            configs,
-            tariff_config=tariff_config,
-            dispatch_strategy=dispatch_strategy,
-            seg_tariff=seg_tariff,
-        )
-        start_s, end_s = parse_date_range(data)
-        start_date = pd.Timestamp(start_s, tz=loc.timezone)
-        end_date = pd.Timestamp(end_s, tz=loc.timezone)
+        fleet = parse_fleet_form(data)
     except (ValueError, TypeError, ConfigurationError) as exc:
         return jsonify({"error": str(exc)}), 400
 
-    fleet_name = fleet_form_name(data)
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
 
     job_id, run_id = job_manager.submit_fleet_job(
-        configs=configs,
-        start_date=start_date,
-        end_date=end_date,
+        configs=list(fleet.homes),
+        start_date=fleet.start_date,
+        end_date=fleet.end_date,
         db_path=db_path,
         data_dir=data_dir,
-        name=fleet_name,
+        name=fleet.name,
     )
 
     return jsonify({"job_id": job_id, "run_id": run_id}), 201
@@ -484,7 +454,8 @@ def export_fleet_yaml() -> Response | tuple[Response, int]:
 
     Returns:
         The scenario's YAML file as a download, HTTP 200; or the ``error``, HTTP 400, for a
-        form the loaders or the simulate endpoint refuse, with the message simulate gives.
+        form the simulate endpoint refuses, with its message: both read the form with
+        :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
     """
     data = request_json_object()
     try:
