@@ -101,7 +101,7 @@ def _send_child_processes_through(proxy: str, patch: pytest.MonkeyPatch) -> None
 def _refusing_proxy(record: Callable[[str], None]) -> Iterator[str]:
     """Serve a _RefusingProxy that records with *record* until the block ends, and yield its URL.
 
-    It serves one request at a time, not serve_forever, whose shutdown() waits out a poll interval.
+    It loops on handle_request rather than serve_forever, whose shutdown() waits out a poll interval.
     """
     server = _RefusingProxy(record)
     port = server.server_address[1]
