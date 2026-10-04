@@ -68,9 +68,10 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
             "button",
             has_text=section_name,
         ).first
-        expect(accordion_btn).to_be_visible(), (
-            f"Accordion section '{section_name}' should be visible"
-        )
+        expect(
+            accordion_btn,
+            f"Accordion section '{section_name}' should be visible",
+        ).to_be_visible()
 
 
 # ── YAML Preview pane ────────────────────────────────────────────────
