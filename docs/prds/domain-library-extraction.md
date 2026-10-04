@@ -17,10 +17,10 @@
   branch, checked 2026-10-04), and it pins release `solar-challenge-v0.5.0`. `config.py` keeps a
   plain `from solar_challenge.finance import FinanceConfig` for its own use, which `mypy --strict`
   does not treat as an export, so the name still resolves at runtime but type-checks only from
-  `solar_challenge` or `solar_challenge.finance`. H5 now asserts only that `FinanceConfig` is
-  defined in `solar_challenge.finance` and that `config` and `finance` import in either order
-  (`tests/unit/test_finance_config_relocation.py`). `__all__` and the §3.1 freeze policy are
-  unchanged. Read the back-compat re-export in §2, §3.3, §4, §10·T2 and §13 as superseded.
+  `solar_challenge` or `solar_challenge.finance`. H5 (§9) is amended to match, and
+  `tests/unit/test_finance_config_relocation.py` checks it as amended. `__all__` and the §3.1
+  freeze policy are unchanged. Read the back-compat re-export in §2, §3.3, §4, §10·T2 and §13 as
+  superseded.
 - **Owner seam (G4):** **this PRD OWNS the `solar_challenge` public-API seam.** It owns (a) the **frozen
   top-level public surface** (`solar_challenge.__all__` + a lazy, typed re-export `__init__`), (b) the
   **buildable, `py.typed` wheel**, (c) the **documented dependency mechanism** an external repo uses to
@@ -331,7 +331,7 @@ guards.
 | H2 | **Surface freeze enforced** | installed package | `solar_challenge.__all__ == FROZEN_SET` (committed constant); each name resolves to the expected kind; **fails if a name is added/removed without updating the frozen constant** |
 | H3 | **`import solar_challenge` is `pvlib`-free** | clean interpreter | immediately after `import solar_challenge`, `"pvlib" not in sys.modules`; after touching `solar_challenge.PVConfig`, `"pvlib" in sys.modules` (lazy proven both ways) |
 | H4 | **Collision resolved** | installed package | `solar_challenge.DispatchTariffPeriod is solar_challenge.dispatch.TariffPeriod`; `solar_challenge.TariffPeriod is solar_challenge.tariff.TariffPeriod`; the two are distinct |
-| H5 | **`FinanceConfig` relocation is back-compat + acyclic** *(amended 2026-10-04, task 242: the `config` path is retired; see header)* | both import orders | `from solar_challenge.finance import FinanceConfig` **and** `from solar_challenge.config import FinanceConfig` resolve to the **same** class object; `python -c "import solar_challenge.config"` and `… import solar_challenge.finance"` both succeed (no circular import); full sim suite + `mypy --strict` green |
+| H5 | **`FinanceConfig` relocation is acyclic** *(amended 2026-10-04, task 242: the `config` path is retired; see header)* | both import orders | `FinanceConfig` is **defined** in `solar_challenge.finance` (`FinanceConfig.__module__ == "solar_challenge.finance"`); `python -c "import solar_challenge.config"` and `… import solar_challenge.finance"` both succeed (no circular import); full sim suite + `mypy --strict` green |
 | H6 | **`py.typed` shipped + downstream sees types** | built wheel; isolated install | wheel contains `solar_challenge/py.typed`; a downstream `reveal_type(solar_challenge.householder_bill)` under `mypy --strict` is the real signature, **not** `Any` |
 | H7 | **No behavioural change** | the existing suite | `uv run --extra dev --extra web pytest -m 'not slow and not e2e' --ignore=tests/e2e` green; `uv run --extra dev --extra web mypy src/solar_challenge` clean — **throughout every task** |
 | H8 | **Cross-repo live proof** (close-out, I execute) | platform repo wired to the tag + `uv lock` | in a **fresh `solar-challenge-platform` worktree**, `uv run --extra dev python -c "import solar_challenge as s; s.householder_bill; s.BatteryConfig; …"` resolves; platform smoke test green; platform `mypy --strict` resolves the typed dep |
@@ -353,7 +353,7 @@ can be frozen/installed/documented); **T1** is independent.
 #### T2 — relocate `FinanceConfig` into `finance.py` (back-compat, behaviour-preserving)
 - **Modules:** `finance.py`, `config.py` (+ `tests/unit/test_finance.py`/`test_config.py` for the import-compat + no-cycle assertions).
 - **Work:** move the `FinanceConfig` definition from `config.py:485` to `finance.py`; add `from solar_challenge.finance import FinanceConfig` re-export in `config.py`; keep `_parse_finance_config` working unchanged.
-- **Signal (G2/H5):** both `solar_challenge.finance.FinanceConfig` and `solar_challenge.config.FinanceConfig` are the **same** class; importing `config` then `finance` and vice-versa both succeed (no circular import); **full sim suite + `mypy --strict` green** (the behaviour-preservation proof).
+- **Signal (G2/H5):** both `solar_challenge.finance.FinanceConfig` and `solar_challenge.config.FinanceConfig` are the **same** class **[Superseded 2026-10-04, task 242: the `config` path is retired; see header.]**; importing `config` then `finance` and vice-versa both succeed (no circular import); **full sim suite + `mypy --strict` green** (the behaviour-preservation proof).
 - **Prereqs:** none. Unlocks T3.
 
 #### T3 — frozen public surface + lazy/typed `__init__`
