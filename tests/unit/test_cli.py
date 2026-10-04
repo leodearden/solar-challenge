@@ -1083,3 +1083,44 @@ home:
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert captured["home_config"].location == edinburgh
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestReportsPrintNamesVerbatim:
+    """Tests that the report commands print the names a config gives exactly as written."""
+
+    @pytest.fixture
+    def clear_june_in_tmp_path(
+        self, weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path.
+
+        Short relative paths keep Rich, which wraps at 80 columns, from folding a path mid-word.
+        """
+        weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+        monkeypatch.chdir(tmp_path)
+
+    def test_home_run_prints_the_homes_name_verbatim(self) -> None:
+        """A home name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the summary table and the report as written."""
+        Path("home.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "home": {
+                        "name": _TEXT_RICH_WOULD_PARSE,
+                        "pv": {"capacity_kw": 4.0},
+                        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                    }
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app,
+            ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21", "--report"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        printed = " ".join(result.stdout.split())
+        assert f"Simulation Results: {_TEXT_RICH_WOULD_PARSE}" in printed
+        assert f"# Simulation Report: {_TEXT_RICH_WOULD_PARSE}" in printed
