@@ -1374,35 +1374,37 @@ class TestFleetFromDistribution:
 # ===================================================================
 
 
+#: A fleet page form with every value away from the form converter's defaults and every overlay set.
+_FLEET_FORM_BODY: dict = {
+    "name": "Export Round Trip",
+    "n_homes": 4,
+    "seed": 7,
+    "location": "london",
+    "start": "2024-07-01",
+    "end": "2024-07-03",
+    "pv": {
+        "capacity_kw": {
+            "type": "weighted_discrete",
+            "values": [{"value": 3.0, "weight": 1}, {"value": 5.0, "weight": 2}],
+        }
+    },
+    "battery": {
+        "capacity_kwh": {
+            "type": "shuffled_pool",
+            "entries": [{"value": 0, "count": 2}, {"value": 5.0, "count": 2}],
+        }
+    },
+    "load": {
+        "annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800, "min": 2000, "max": 6000}
+    },
+    "tariff": {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1},
+    "seg": {"rate_pence_per_kwh": 5.5},
+    "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]},
+}
+
+
 class TestExportFleetYAML:
     """POST /api/fleet/export-yaml writes the fleet scenario the fleet page's form describes."""
-
-    _ROUND_TRIP_BODY: dict = {
-        "name": "Export Round Trip",
-        "n_homes": 4,
-        "seed": 7,
-        "location": "london",
-        "start": "2024-07-01",
-        "end": "2024-07-03",
-        "pv": {
-            "capacity_kw": {
-                "type": "weighted_discrete",
-                "values": [{"value": 3.0, "weight": 1}, {"value": 5.0, "weight": 2}],
-            }
-        },
-        "battery": {
-            "capacity_kwh": {
-                "type": "shuffled_pool",
-                "entries": [{"value": 0, "count": 2}, {"value": 5.0, "count": 2}],
-            }
-        },
-        "load": {
-            "annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800, "min": 2000, "max": 6000}
-        },
-        "tariff": {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1},
-        "seg": {"rate_pence_per_kwh": 5.5},
-        "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]},
-    }
 
     def test_export_loads_back_through_load_fleet_config_as_the_fleet_simulate_runs(
         self, client: FlaskClient, mock_job_manager: MagicMock, tmp_path: Path
@@ -1412,7 +1414,7 @@ class TestExportFleetYAML:
         load_fleet_config does not read seg: yet (task 185), so the SEG rate is threaded onto
         its homes as cli/finance.py threads it, as tests/unit/test_scenario_writer.py does.
         """
-        export = client.post("/api/fleet/export-yaml", json=self._ROUND_TRIP_BODY)
+        export = client.post("/api/fleet/export-yaml", json=_FLEET_FORM_BODY)
         assert export.status_code == 200, export.get_data(as_text=True)
         assert "text/yaml" in export.content_type
         assert export.headers["Content-Disposition"] == "attachment; filename=fleet-config.yaml"
@@ -1425,7 +1427,7 @@ class TestExportFleetYAML:
         seg_tariff = SEGTariff(name="", rate_pence_per_kwh=parse_seg_rate(document["seg"]))
         loaded = [dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet.homes]
 
-        simulate = client.post("/api/simulate/fleet-from-distribution", json=self._ROUND_TRIP_BODY)
+        simulate = client.post("/api/simulate/fleet-from-distribution", json=_FLEET_FORM_BODY)
         assert simulate.status_code == 201, simulate.get_data(as_text=True)
         submitted = mock_job_manager.submit_fleet_job.call_args.kwargs
         homes = submitted["configs"]
@@ -1454,7 +1456,7 @@ class TestExportFleetYAML:
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
         """A form without a name is exported under the name its simulation runs as."""
-        body = {key: value for key, value in self._ROUND_TRIP_BODY.items() if key != "name"}
+        body = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "name"}
 
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
@@ -1479,7 +1481,7 @@ class TestExportFleetYAML:
 
         The empty-string dispatch is task 393's presence rule: only null reads as absent.
         """
-        body = {**self._ROUND_TRIP_BODY, **patch}
+        body = {**_FLEET_FORM_BODY, **patch}
 
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
@@ -1495,58 +1497,132 @@ class TestExportFleetYAML:
 
 
 class TestImportFleetYAML:
-    """Tests for POST /api/fleet/import-yaml."""
+    """POST /api/fleet/import-yaml answers the fleet form a fleet scenario's YAML describes, and the settings of it the form does not load."""
 
-    def test_valid_yaml_returns_200(self, client: FlaskClient) -> None:
-        """Valid YAML import returns 200 with parsed config."""
-        yaml_str = "fleet_distribution:\n  n_homes: 10\n  seed: 99\nname: Imported\n"
-        resp = client.post(
-            "/api/fleet/import-yaml",
-            data=yaml_str,
-            content_type="text/yaml",
-        )
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["n_homes"] == 10
-        assert data["seed"] == 99
+    def test_an_exported_fleet_imports_back_as_its_form(self, client: FlaskClient) -> None:
+        """The page's export imports in full, and the form the import answers exports the same scenario."""
+        body = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "location"}
+        exported = client.post("/api/fleet/export-yaml", json=body)
+        assert exported.status_code == 200, exported.get_data(as_text=True)
+        text = exported.get_data(as_text=True)
 
-    def test_bare_config_yaml_returns_200(self, client: FlaskClient) -> None:
-        """Bare fleet distribution YAML (no wrapper key) returns 200."""
-        yaml_str = "n_homes: 25\nseed: 7\n"
-        resp = client.post(
-            "/api/fleet/import-yaml",
-            data=yaml_str,
-            content_type="text/yaml",
-        )
-        assert resp.status_code == 200
-        assert resp.get_json()["n_homes"] == 25
+        imported = client.post("/api/fleet/import-yaml", data=text, content_type="text/yaml")
 
-    def test_empty_body_returns_400(self, client: FlaskClient) -> None:
-        """Empty request body returns 400."""
-        resp = client.post(
-            "/api/fleet/import-yaml",
-            data="",
-            content_type="text/yaml",
+        assert imported.status_code == 200, imported.get_data(as_text=True)
+        answer = imported.get_json()
+        assert answer["not_loaded"] == []
+        re_exported = client.post("/api/fleet/export-yaml", json=answer["form"])
+        assert re_exported.status_code == 200, re_exported.get_data(as_text=True)
+        assert yaml.safe_load(re_exported.get_data(as_text=True)) == yaml.safe_load(text)
+
+    def test_a_scenario_file_imports_naming_what_was_not_loaded(self, client: FlaskClient) -> None:
+        """A scenario file loads what the form holds and names the settings the form has no control for."""
+        text = (
+            "fleet_distribution:\n"
+            "  n_homes: 25\n"
+            "  random_order: bristol_legacy\n"
+            "  pv:\n"
+            "    capacity_kw: {type: uniform, min: 3.0, max: 6.0}\n"
+            "  load:\n"
+            "    annual_consumption_kwh: {type: uniform, min: 2500, max: 4500}\n"
         )
+
+        resp = client.post("/api/fleet/import-yaml", data=text, content_type="text/yaml")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        answer = resp.get_json()
+        assert answer["form"]["n_homes"] == 25
+        assert answer["not_loaded"] == ["fleet_distribution.random_order"]
+
+    @pytest.mark.parametrize(
+        ("text", "reason"),
+        [
+            pytest.param("", "Empty request body", id="empty-body"),
+            pytest.param("[[[not valid yaml", "Invalid YAML", id="malformed-yaml"),
+            pytest.param(
+                "home:\n  pv:\n    capacity_kw: 4.0\n", "fleet_distribution", id="home-scenario"
+            ),
+            pytest.param(
+                "n_homes: 25\nseed: 7\n", "fleet_distribution", id="bare-fleet-distribution"
+            ),
+        ],
+    )
+    def test_a_body_that_is_no_fleet_scenario_is_refused(
+        self, client: FlaskClient, text: str, reason: str
+    ) -> None:
+        """An empty body, malformed YAML, and a scenario without a fleet_distribution block get a 400 saying why.
+
+        The loaders read a fleet only from a fleet_distribution: or homes: file, so a bare
+        fleet_distribution block is not one.
+        """
+        resp = client.post("/api/fleet/import-yaml", data=text, content_type="text/yaml")
+
         assert resp.status_code == 400
+        assert reason in resp.get_json()["error"]
 
-    def test_invalid_yaml_returns_400(self, client: FlaskClient) -> None:
-        """Malformed YAML returns 400."""
-        resp = client.post(
-            "/api/fleet/import-yaml",
-            data="[[[not valid yaml",
-            content_type="text/yaml",
-        )
-        assert resp.status_code == 400
 
-    def test_yaml_missing_required_keys_returns_400(self, client: FlaskClient) -> None:
-        """YAML without fleet_distribution or n_homes returns 400."""
-        resp = client.post(
-            "/api/fleet/import-yaml",
-            data="something_else: 42\n",
-            content_type="text/yaml",
-        )
+# ===================================================================
+# GET /api/fleet/presets/<name>
+# ===================================================================
+
+#: The built-in scenarios the fleet page's Load Preset offers: the scenarios/ directory's files.
+_BUILTIN_SCENARIO_STEMS = sorted(
+    path.stem
+    for path in (Path(__file__).resolve().parents[2] / "scenarios").iterdir()
+    if path.suffix in (".yaml", ".yml") and path.is_file()
+)
+
+
+class TestFleetPresetEndpoint:
+    """GET /api/fleet/presets/<name> answers for a built-in scenario file what the import answers for its YAML."""
+
+    def test_a_fleet_preset_answers_its_form_and_what_was_not_loaded(
+        self, client: FlaskClient
+    ) -> None:
+        """bristol-phase1 loads its PV pool and SEG rate, and names its random order, which the form has no control for."""
+        resp = client.get("/api/fleet/presets/bristol-phase1")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        answer = resp.get_json()
+        assert answer["form"]["pv"]["capacity_kw"] == {
+            "type": "shuffled_pool",
+            "entries": [
+                {"value": 3.0, "count": 20},
+                {"value": 4.0, "count": 40},
+                {"value": 5.0, "count": 30},
+                {"value": 6.0, "count": 10},
+            ],
+        }
+        assert answer["form"]["seg"] == {"rate_pence_per_kwh": 4.1}
+        assert "fleet_distribution.random_order" in answer["not_loaded"]
+
+    def test_an_unknown_preset_is_not_found(self, client: FlaskClient) -> None:
+        """A name no built-in scenario file has is a 404 naming it."""
+        resp = client.get("/api/fleet/presets/no-such-preset")
+
+        assert resp.status_code == 404
+        assert resp.get_json() == {"error": "Preset 'no-such-preset' not found"}
+
+    def test_a_home_scenario_preset_is_refused_naming_fleet_distribution(
+        self, client: FlaskClient
+    ) -> None:
+        """bristol-arbitrage is a home: scenario, which the fleet page cannot load."""
+        resp = client.get("/api/fleet/presets/bristol-arbitrage")
+
         assert resp.status_code == 400
+        assert "fleet_distribution" in resp.get_json()["error"]
+
+    @pytest.mark.parametrize("name", _BUILTIN_SCENARIO_STEMS)
+    def test_every_builtin_scenario_loads_or_is_refused_with_a_reason(
+        self, client: FlaskClient, name: str
+    ) -> None:
+        """Every preset the fleet page offers loads as a form, or is refused with an error the page shows; none fails the server."""
+        answer_keys = {200: {"form", "not_loaded"}, 400: {"error"}}
+
+        resp = client.get(f"/api/fleet/presets/{name}")
+
+        assert resp.status_code in answer_keys, resp.get_data(as_text=True)
+        assert set(resp.get_json()) == answer_keys[resp.status_code]
 
 
 # ===================================================================

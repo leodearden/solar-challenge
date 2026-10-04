@@ -1205,35 +1205,6 @@ class TestFleetApiEndpoints:
         )
         assert response.status_code == 400
 
-    def test_import_fleet_yaml(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/import-yaml parses YAML correctly."""
-        yaml_content = """
-fleet_distribution:
-  n_homes: 50
-  pv:
-    capacity_kw:
-      type: normal
-      mean: 4.0
-      std: 1.0
-"""
-        response = client.post(
-            "/api/fleet/import-yaml",
-            data=yaml_content,
-            content_type="text/yaml",
-        )
-        assert response.status_code == 200
-        data = response.get_json()
-        assert data["n_homes"] == 50
-
-    def test_import_fleet_yaml_invalid(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/import-yaml with invalid YAML returns 400."""
-        response = client.post(
-            "/api/fleet/import-yaml",
-            data="just: some: random: yaml",
-            content_type="text/yaml",
-        )
-        assert response.status_code == 400
-
 
 # ---------------------------------------------------------------------------
 # Error page tests
