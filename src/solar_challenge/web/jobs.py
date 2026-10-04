@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.home import simulate_home as _default_simulate_home
 from solar_challenge.load import LoadConfig
@@ -658,8 +659,6 @@ class JobManager:
             name: Optional name for the fleet simulation run.
             created_at: Original creation timestamp from job submission.
         """
-        from solar_challenge.fleet import FleetResults, calculate_fleet_summary
-
         start_ref = time.monotonic()
 
         def work(conn: sqlite3.Connection, progress: Callable[[float, str, str], None]) -> None:
