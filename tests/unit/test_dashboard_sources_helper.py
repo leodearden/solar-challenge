@@ -92,6 +92,11 @@ def test_tailwind_content_globs_read_the_quoted_globs_of_the_content_array_in_so
             id="commented-out entry",
         ),
         pytest.param(
+            "content: ['./pages/**/*.html', /* './legacy/**/*.html', */ './assets/js/**/*.js']",
+            0,
+            id="one-line commented-out entry",
+        ),
+        pytest.param(
             "content: ['./pages/**/*.html'],\n/* content: ['./legacy/**/*.html'], */",
             2,
             id="two content arrays",
