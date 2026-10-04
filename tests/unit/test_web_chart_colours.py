@@ -37,6 +37,7 @@ import pytest
 
 pytest.importorskip("jinja2")
 pytest.importorskip("plotly")
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE
@@ -48,7 +49,7 @@ from tests._dashboard_sources import (
     hand_written_stylesheet_source,
     tailwind_config_source,
 )
-from tests._finance_builders import make_sim_results
+from tests._finance_builders import make_fleet_results, make_sim_results
 
 _CHART_COLOURS = frozenset(colour.lower() for colour in COLOUR_PALETTE.values())
 
@@ -144,6 +145,10 @@ def _year_with_heat_pump() -> SimulationResults:
     return dataclasses.replace(year, heat_pump_load=pd.Series(0.3, index=year.demand.index))
 
 
+def _fleet_year() -> FleetResults:
+    return make_fleet_results(n_homes=2)
+
+
 _SUMMARY = {
     "total_generation_kwh": 100.0,
     "total_demand_kwh": 80.0,
@@ -190,8 +195,8 @@ _FIGURES: dict[str, _FigureCase] = {
         charts.comparison_bar_chart, lambda build: build([_SUMMARY] * 5, _FIVE_RUNS)
     ),
     "comparison_radar": _FigureCase(charts.comparison_radar, lambda build: build([_SUMMARY] * 5, _FIVE_RUNS)),
-    "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: build(_year())),
-    "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: build(_year())),
+    "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: build(_fleet_year())),
+    "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: build(_fleet_year())),
     "fleet_heatmap": _FigureCase(charts.fleet_heatmap, lambda build: build([_SUMMARY] * 3)),
     "fleet_box_plots": _FigureCase(charts.fleet_box_plots, lambda build: build([_SUMMARY] * 3)),
     "fleet_distribution_histograms": _FigureCase(

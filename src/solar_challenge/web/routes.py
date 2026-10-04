@@ -265,30 +265,9 @@ def fleet_results(run_id: str) -> Any:
         for s in per_home_summaries
     ]
 
-    # Build aggregate SimulationResults for timeline/grid charts
-    # by summing per-home time series
-    aggregate = fleet_results_data.per_home_results[0]
-    if len(fleet_results_data.per_home_results) > 1:
-        from solar_challenge.home import SimulationResults as SR  # noqa: PLC0415
-
-        aggregate = SR(
-            generation=fleet_results_data.total_generation,
-            demand=fleet_results_data.total_demand,
-            self_consumption=fleet_results_data.total_self_consumption,
-            battery_charge=fleet_results_data.get_aggregate_series("battery_charge"),
-            battery_discharge=fleet_results_data.get_aggregate_series("battery_discharge"),
-            battery_soc=fleet_results_data.get_aggregate_series("battery_soc"),
-            grid_import=fleet_results_data.total_grid_import,
-            grid_export=fleet_results_data.total_grid_export,
-            import_cost=fleet_results_data.get_aggregate_series("import_cost"),
-            export_revenue=fleet_results_data.get_aggregate_series("export_revenue"),
-            tariff_rate=fleet_results_data.per_home_results[0].tariff_rate,
-            strategy_name="fleet_aggregate",
-        )
-
     charts: dict[str, Any] = {
-        "aggregate_timeline": fleet_aggregate_timeline(aggregate),
-        "grid_impact": fleet_grid_impact(aggregate),
+        "aggregate_timeline": fleet_aggregate_timeline(fleet_results_data),
+        "grid_impact": fleet_grid_impact(fleet_results_data),
         "heatmap": fleet_heatmap(home_summaries),
         "box_plots": fleet_box_plots(home_summaries),
         "distribution_histograms": fleet_distribution_histograms(home_summaries),
