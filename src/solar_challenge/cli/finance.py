@@ -9,9 +9,8 @@ from typing import Annotated, Optional
 
 import pandas as pd
 import typer
-from rich.text import Text
 
-from solar_challenge.cli.utils import console, handle_errors, print_info
+from solar_challenge.cli.utils import handle_errors, print_info, print_report
 from solar_challenge.config import (
     ConfigurationError,
     ScenarioConfig,
@@ -294,4 +293,4 @@ def run(
             grid_services_at_events=_grid_services_at_events,
         )
 
-    console.print(Text(report))
+    print_report(report)

@@ -269,3 +269,8 @@ def print_error(message: str) -> None:
 def print_info(message: str) -> None:
     """Print message in blue, exactly as it is."""
     _print_verbatim(console, (message, "blue"))
+
+
+def print_report(report: str) -> None:
+    """Print report on stdout exactly as it is, each line whole however wide the console: never read as Rich markup or emoji codes, wrapped or cropped."""
+    console.print(Text(report), soft_wrap=True)

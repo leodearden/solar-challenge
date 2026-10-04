@@ -27,6 +27,7 @@ from solar_challenge.cli.utils import (
     parse_location,
     print_error,
     print_info,
+    print_report,
     print_success,
     print_warning,
 )
@@ -40,6 +41,8 @@ from tests._synthetic_weather import synthetic_june_weather
 runner = CliRunner()
 
 _TEXT_RICH_WOULD_PARSE = "columns [ghi, dni] missing, no tag [/b] open, the :sun: set, in C:\\data\\"
+
+_TEXT_WIDER_THAN_ANY_CONSOLE = " ".join(["Bristol"] * 60)
 
 
 class TestMainCLI:
@@ -760,6 +763,23 @@ class TestPrintHelpers:
         assert target.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
 
 
+class TestPrintReport:
+    """Tests that print_report prints a report on stdout exactly as it is."""
+
+    def test_a_report_is_printed_on_stdout_exactly_as_it_is(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Every line prints whole, however much wider than the console: a spaced table row is not wrapped and a separator is not folded mid-word. Text Rich would read as markup or an emoji code prints verbatim, and print_report adds only the final newline."""
+        report = (
+            f"# {_TEXT_RICH_WOULD_PARSE}\n"
+            "\n"
+            f"| {_TEXT_WIDER_THAN_ANY_CONSOLE} |\n"
+            f"|{'-' * len(_TEXT_WIDER_THAN_ANY_CONSOLE)}|\n"
+        )
+
+        print_report(report)
+
+        assert capsys.readouterr().out == report + "\n"
+
+
 class TestCLIOutputFormats:
     """Tests for CLI output generation."""
 
@@ -1085,37 +1105,73 @@ home:
         assert captured["home_config"].location == edinburgh
 
 
+@pytest.fixture
+def clear_june_in_tmp_path(
+    weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
+    weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+    monkeypatch.chdir(tmp_path)
+
+
+def _run_home_report(home_name: str) -> Result:
+    """Run `home run --report` for 21 June on home.yaml, written in the working directory: a home named home_name with 4 kW of PV and a deterministic 3400 kWh a year of load."""
+    Path("home.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "home": {
+                    "name": home_name,
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                }
+            }
+        )
+    )
+
+    return runner.invoke(
+        app,
+        ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21", "--report"],
+        catch_exceptions=False,
+    )
+
+
+def _write_scenario(scenario_name: str) -> None:
+    """Write scenario.yaml in the working directory: a scenario named scenario_name whose one home has 4 kW of PV, a 5 kWh battery and a deterministic 3400 kWh a year of load, with a finance block charging 28p a day."""
+    Path("scenario.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": scenario_name,
+                "homes": [
+                    {
+                        "pv": {"capacity_kw": 4.0},
+                        "battery": {"capacity_kwh": 5.0},
+                        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                    }
+                ],
+                "finance": {"standing_charge_pence_per_day": 28.0},
+            }
+        )
+    )
+
+
+def _run_finance(scenario_name: str) -> Result:
+    """Run `finance run` for 21 June on the scenario _write_scenario writes, named scenario_name."""
+    _write_scenario(scenario_name)
+
+    return runner.invoke(
+        app,
+        ["finance", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+        catch_exceptions=False,
+    )
+
+
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
 class TestReportsPrintNamesVerbatim:
     """Tests that the report commands print the names a config gives exactly as written."""
 
-    @pytest.fixture
-    def clear_june_in_tmp_path(
-        self, weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
-        weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
-        monkeypatch.chdir(tmp_path)
-
     def test_home_run_prints_the_homes_name_verbatim(self) -> None:
         """A home name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the summary table and the report as written."""
-        Path("home.yaml").write_text(
-            yaml.safe_dump(
-                {
-                    "home": {
-                        "name": _TEXT_RICH_WOULD_PARSE,
-                        "pv": {"capacity_kw": 4.0},
-                        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                    }
-                }
-            )
-        )
-
-        result = runner.invoke(
-            app,
-            ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21", "--report"],
-            catch_exceptions=False,
-        )
+        result = _run_home_report(_TEXT_RICH_WOULD_PARSE)
 
         assert result.exit_code == 0
         printed = " ".join(result.stdout.split())
@@ -1124,27 +1180,45 @@ class TestReportsPrintNamesVerbatim:
 
     def test_finance_run_prints_the_scenarios_name_verbatim(self) -> None:
         """A scenario name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the report as written."""
-        Path("scenario.yaml").write_text(
-            yaml.safe_dump(
-                {
-                    "name": _TEXT_RICH_WOULD_PARSE,
-                    "homes": [
-                        {
-                            "pv": {"capacity_kw": 4.0},
-                            "battery": {"capacity_kwh": 5.0},
-                            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                        }
-                    ],
-                    "finance": {"standing_charge_pence_per_day": 28.0},
-                }
-            )
-        )
+        result = _run_finance(_TEXT_RICH_WOULD_PARSE)
+
+        assert result.exit_code == 0
+        assert f"# Finance Report: {_TEXT_RICH_WOULD_PARSE}" in " ".join(result.stdout.split())
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestReportsPrintEachLineWhole:
+    """Tests that the report commands print each line of their markdown report whole, however much wider than the console."""
+
+    def test_home_run_prints_a_report_title_wider_than_the_console_on_one_line(self) -> None:
+        """A home name wider than any console titles the report on one printed line, not wrapped across several."""
+        result = _run_home_report(_TEXT_WIDER_THAN_ANY_CONSOLE)
+
+        assert result.exit_code == 0
+        assert f"# Simulation Report: {_TEXT_WIDER_THAN_ANY_CONSOLE}" in result.stdout.splitlines()
+
+    def test_finance_run_prints_a_report_title_wider_than_the_console_on_one_line(self) -> None:
+        """A scenario name wider than any console titles the report on one printed line, not wrapped across several."""
+        result = _run_finance(_TEXT_WIDER_THAN_ANY_CONSOLE)
+
+        assert result.exit_code == 0
+        assert f"# Finance Report: {_TEXT_WIDER_THAN_ANY_CONSOLE}" in result.stdout.splitlines()
+
+    def test_optimize_configs_prints_each_table_row_on_one_line(self) -> None:
+        """Each markdown table row closes on the line it opens on, the Cost-Recovery Rank rows included, though they are about twice as wide as the 80 columns Rich gives a console with no terminal."""
+        _write_scenario("Bristol")
 
         result = runner.invoke(
             app,
-            ["finance", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            [
+                "optimize", "configs", "scenario.yaml",
+                "--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "",
+                "--start", "2024-06-21", "--end", "2024-06-21",
+            ],
             catch_exceptions=False,
         )
 
         assert result.exit_code == 0
-        assert f"# Finance Report: {_TEXT_RICH_WOULD_PARSE}" in " ".join(result.stdout.split())
+        table_rows = [line for line in result.stdout.splitlines() if line.startswith("|")]
+        assert [row for row in table_rows if not row.endswith("|")] == []
+        assert max(map(len, table_rows), default=0) > 80
