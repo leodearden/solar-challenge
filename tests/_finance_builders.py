@@ -20,6 +20,10 @@ Usage::
 A simulate that answers each aged fleet it is asked for pairs its results with
 those homes: ``simulate=lambda fc, s, e: make_fleet_results(homes=fc.homes, ...)``.
 
+A fleet of homes whose results differ is
+``make_fleet_results_of([make_sim_results(...), make_sim_results(...)])``, each
+result on a default home unless ``homes=`` is given.
+
 """
 from __future__ import annotations
 
@@ -151,6 +155,25 @@ def make_sim_results(
     )
 
 
+def make_fleet_results_of(
+    per_home_results: Sequence[SimulationResults],
+    *,
+    homes: Sequence[HomeConfig] | None = None,
+) -> FleetResults:
+    """A fleet of *per_home_results*, each paired in order with a home of *homes*.
+
+    Each home is a default make_home_config home unless *homes* is given.
+    """
+    if homes is None:
+        homes = [make_home_config() for _ in per_home_results]
+    elif len(homes) != len(per_home_results):
+        raise ValueError(
+            "make_fleet_results_of pairs one home with each result: "
+            f"got {len(per_home_results)} results and {len(homes)} homes"
+        )
+    return FleetResults(per_home_results=list(per_home_results), home_configs=list(homes))
+
+
 def make_fleet_results(
     *,
     n_homes: int | None = None,
@@ -167,22 +190,23 @@ def make_fleet_results(
     The fleet is *homes*, such as the aged ``fleet_config.homes`` an injected
     simulate receives, or else *n_homes* default homes, one by default.
     """
-    if homes is None:
-        homes = [make_home_config() for _ in range(1 if n_homes is None else n_homes)]
-    elif n_homes is not None:
+    if homes is not None and n_homes is not None:
         raise TypeError("make_fleet_results takes homes or n_homes, not both")
-    per_home = [
-        make_sim_results(
-            self_kwh=self_kwh,
-            export_kwh=export_kwh,
-            import_kwh=import_kwh,
-            discharge_kwh=discharge_kwh,
-            export_revenue_gbp=export_revenue_gbp,
-            days=days,
-        )
-        for _ in homes
-    ]
-    return FleetResults(
-        per_home_results=per_home,
-        home_configs=list(homes),
+    if homes is None:
+        n_results = 1 if n_homes is None else n_homes
+    else:
+        n_results = len(homes)
+    return make_fleet_results_of(
+        [
+            make_sim_results(
+                self_kwh=self_kwh,
+                export_kwh=export_kwh,
+                import_kwh=import_kwh,
+                discharge_kwh=discharge_kwh,
+                export_revenue_gbp=export_revenue_gbp,
+                days=days,
+            )
+            for _ in range(n_results)
+        ],
+        homes=homes,
     )
