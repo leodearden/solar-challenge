@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Guards the invariant that charts.py's COLOUR_PALETTE is the one home of the chart
-colours, so a palette edit reaches every copy of a chart colour.
+"""Guards two invariants of charts.py's COLOUR_PALETTE: it is the one home of the chart
+colours, so a palette edit reaches every copy of a chart colour, and it holds only colours
+a chart draws, so it reads as the list of them.
 
-The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Four
-checks enforce the invariant:
+The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Five
+checks enforce the invariants:
 
 * No dashboard source writes out a palette colour: not tailwind.config.js, not a
   template, not the hand-written stylesheet and not a script. A colour counts as written
@@ -16,9 +17,13 @@ checks enforce the invariant:
   rgb() or rgba(), so a translucent fill or a reused hue that charts.py writes out by hand
   fails. A colour that no palette entry has, such as the transparent backgrounds, is not
   flagged. Plotly's default template, which no builder chooses, is not read.
-* That check reads a figure from every chart builder: each of its cases names the builder
-  it draws with, and a public function of charts.py that no case names fails, so a new
-  builder cannot go unread. A name charts.py imports, such as make_subplots, is not a
+* Every palette role is drawn by some chart: with each role recoloured with a colour no
+  other role has, the figures of all the _FIGURES cases together must draw every role's
+  colour, so a role no chart reads fails. Only those figures are read, so a role a builder
+  draws only for inputs no case gives is reported too.
+* Both of those checks read a figure from every chart builder: each of its cases names the
+  builder it draws with, and a public function of charts.py that no case names fails, so a
+  new builder cannot go unread. A name charts.py imports, such as make_subplots, is not a
   builder.
 * Every palette colour is written #rrggbb, the form charts.py derives translucent colours
   from. charts.py refuses any other form only when it draws a chart that needs one; this
@@ -122,18 +127,32 @@ def _drawn_colours(figure_json: str) -> dict[str, Rgb]:
     return dict(literal for text in _strings(figure) for literal in _colour_literals(text))
 
 
-@pytest.fixture
-def shipped_rgbs(monkeypatch: pytest.MonkeyPatch) -> frozenset[Rgb]:
-    """The red, green and blue of each shipped palette colour.
+@dataclasses.dataclass(frozen=True)
+class _Recolouring:
+    """The red, green and blue of each shipped palette colour, and of each role's substitute."""
 
-    For the test, each palette entry is recoloured with a colour that no shipped entry has.
+    shipped: frozenset[Rgb]
+    substitutes: dict[str, Rgb]
+
+
+@pytest.fixture
+def recolouring(monkeypatch: pytest.MonkeyPatch) -> _Recolouring:
+    """Recolours every palette role with a colour of its own, for the test.
+
+    The role at 1-based index i becomes #0000ii, so each role's substitute is shared by no
+    other role and equals no shipped colour. A figure that draws a substitute therefore
+    names the one role it reads, even where several shipped roles share one hue.
     """
     shipped = frozenset(rgb for colour in COLOUR_PALETTE.values() for _, rgb in _colour_literals(colour))
     for index, role in enumerate(list(COLOUR_PALETTE), start=1):
         monkeypatch.setitem(COLOUR_PALETTE, role, f"#0000{index:02x}")
-    recoloured = {rgb for colour in COLOUR_PALETTE.values() for _, rgb in _colour_literals(colour)}
-    assert not shipped & recoloured, "a substitute colour equals a shipped one, so the check is blind to it"
-    return shipped
+    substitutes = {
+        role: rgb for role, colour in COLOUR_PALETTE.items() for _, rgb in _colour_literals(colour)
+    }
+    assert shipped.isdisjoint(substitutes.values()), (
+        "a substitute colour equals a shipped one, so the check is blind to it"
+    )
+    return _Recolouring(shipped=shipped, substitutes=substitutes)
 
 
 def _year() -> SimulationResults:
@@ -166,10 +185,18 @@ _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
 
 @dataclasses.dataclass(frozen=True)
 class _FigureCase:
-    """A figure the palette-edit check reads: *draw* draws it with *builder*, which it is passed."""
+    """A figure the palette checks read: *draw* draws it with *builder*, which it is passed."""
 
     builder: Callable[..., Any]
     draw: Callable[[Callable[..., Any]], str | None]
+
+    def figure(self) -> str:
+        """The figure's JSON, drawn now, with the palette as it stands."""
+        figure = self.draw(self.builder)
+        assert figure is not None and figure != "{}", (
+            f"{self.builder.__name__} drew no figure, so a check reading the figure would pass vacuously"
+        )
+        return figure
 
 
 _FIGURES: dict[str, _FigureCase] = {
@@ -211,17 +238,30 @@ _FIGURES: dict[str, _FigureCase] = {
 
 @pytest.mark.parametrize("case", _FIGURES.values(), ids=_FIGURES.keys())
 def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
-    case: _FigureCase, shipped_rgbs: frozenset[Rgb]
+    case: _FigureCase, recolouring: _Recolouring
 ) -> None:
-    figure = case.draw(case.builder)
-    assert figure not in (None, "{}"), "the chart drew no figure, so this check would pass vacuously"
-
-    stale = sorted(colour for colour, rgb in _drawn_colours(figure).items() if rgb in shipped_rgbs)
+    stale = sorted(
+        colour for colour, rgb in _drawn_colours(case.figure()).items() if rgb in recolouring.shipped
+    )
 
     assert stale == [], (
         f"With every COLOUR_PALETTE entry recoloured, the chart still draws {', '.join(stale)}, "
         "so a palette edit does not reach it. Name the colour's role in COLOUR_PALETTE, or derive "
         "a translucent form from its palette entry."
+    )
+
+
+def test_every_palette_role_is_drawn_by_some_chart(recolouring: _Recolouring) -> None:
+    assert COLOUR_PALETTE, "COLOUR_PALETTE defines no colour, so this guard would pass vacuously"
+
+    drawn = {rgb for case in _FIGURES.values() for rgb in _drawn_colours(case.figure()).values()}
+    undrawn = sorted(role for role, substitute in recolouring.substitutes.items() if substitute not in drawn)
+
+    assert undrawn == [], (
+        f"No chart draws these COLOUR_PALETTE roles: {', '.join(undrawn)}. The palette reads as "
+        "the list of the colours the charts draw, and the palette-edit check never reads a role "
+        "no chart draws. Delete the role, or draw it in a chart builder. If a builder draws it "
+        "only for some inputs, give _FIGURES a case with those inputs."
     )
 
 
