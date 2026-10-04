@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Configuration management commands."""
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
@@ -140,7 +140,7 @@ output:
 """
 
 
-def _summary_rows(data: Mapping[str, Any], prefix: str = "") -> Iterator[tuple[str, str]]:
+def _summary_rows(data: dict[str, Any], prefix: str = "") -> Iterator[tuple[str, str]]:
     """Yield (dotted key, value text) for each leaf of data, in order; a list's text is its item count."""
     for key, value in data.items():
         full_key = f"{prefix}{key}"
