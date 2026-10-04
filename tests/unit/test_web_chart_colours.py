@@ -34,7 +34,8 @@ import dataclasses
 import inspect
 import json
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any
 
 import pandas as pd
@@ -132,7 +133,7 @@ class _Recolouring:
     """The red, green and blue of each shipped palette colour, and of each role's substitute."""
 
     shipped: frozenset[Rgb]
-    substitutes: dict[str, Rgb]
+    substitutes: Mapping[str, Rgb]
 
 
 @pytest.fixture
@@ -152,7 +153,7 @@ def recolouring(monkeypatch: pytest.MonkeyPatch) -> _Recolouring:
     assert shipped.isdisjoint(substitutes.values()), (
         "a substitute colour equals a shipped one, so the check is blind to it"
     )
-    return _Recolouring(shipped=shipped, substitutes=substitutes)
+    return _Recolouring(shipped=shipped, substitutes=MappingProxyType(substitutes))
 
 
 def _year() -> SimulationResults:
@@ -274,7 +275,7 @@ def _public_chart_builders() -> frozenset[Callable[..., Any]]:
     )
 
 
-def test_the_palette_edit_check_covers_every_public_chart_builder() -> None:
+def test_every_public_chart_builder_has_a_figure_case() -> None:
     builders = _public_chart_builders()
     assert builders, "charts.py defines no public function, so this guard would pass vacuously"
 
@@ -283,7 +284,7 @@ def test_the_palette_edit_check_covers_every_public_chart_builder() -> None:
 
     assert unexercised == [], (
         "No _FIGURES case draws a figure with these public charts.py functions: "
-        f"{', '.join(unexercised)}. The palette-edit check never reads the colours they draw. "
+        f"{', '.join(unexercised)}. Neither palette check reads the colours they draw. "
         "Add each to _FIGURES with inputs that make it draw a figure."
     )
 
