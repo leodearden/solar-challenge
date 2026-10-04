@@ -224,18 +224,6 @@ def fleet_results(run_id: str) -> Any:
         fleet_heatmap,
     )
 
-    summary_dict: dict[str, Any] = {
-        "n_homes": fleet_summary.n_homes,
-        "total_generation_kwh": round(fleet_summary.total_generation_kwh, 2),
-        "total_demand_kwh": round(fleet_summary.total_demand_kwh, 2),
-        "total_self_consumption_kwh": round(fleet_summary.total_self_consumption_kwh, 2),
-        "total_grid_import_kwh": round(fleet_summary.total_grid_import_kwh, 2),
-        "total_grid_export_kwh": round(fleet_summary.total_grid_export_kwh, 2),
-        "fleet_self_consumption_ratio": round(fleet_summary.fleet_self_consumption_ratio, 4),
-        "fleet_grid_dependency_ratio": round(fleet_summary.fleet_grid_dependency_ratio, 4),
-        "simulation_days": fleet_summary.simulation_days,
-    }
-
     home_summaries = [
         {
             "total_generation_kwh": s.total_generation_kwh,
@@ -260,9 +248,8 @@ def fleet_results(run_id: str) -> Any:
 
     return render_template(
         "results/fleet.html",
-        summary=summary_dict,
+        summary=fleet_summary,
         charts=charts,
-        n_homes=fleet_summary.n_homes,
         run_id=run_id,
         run_name=storage.run_name(run_id) or "Fleet Simulation",
         page="results",
