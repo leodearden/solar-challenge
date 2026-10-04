@@ -1135,8 +1135,8 @@ def _run_home_report(home_name: str) -> Result:
     )
 
 
-def _run_finance(scenario_name: str) -> Result:
-    """Run `finance run` for 21 June on scenario.yaml, written in the working directory: a scenario named scenario_name whose one home has 4 kW of PV, a 5 kWh battery and a deterministic 3400 kWh a year of load."""
+def _write_scenario(scenario_name: str) -> None:
+    """Write scenario.yaml in the working directory: a scenario named scenario_name whose one home has 4 kW of PV, a 5 kWh battery and a deterministic 3400 kWh a year of load, with a finance block charging 28p a day."""
     Path("scenario.yaml").write_text(
         yaml.safe_dump(
             {
@@ -1152,6 +1152,11 @@ def _run_finance(scenario_name: str) -> Result:
             }
         )
     )
+
+
+def _run_finance(scenario_name: str) -> Result:
+    """Run `finance run` for 21 June on the scenario _write_scenario writes, named scenario_name."""
+    _write_scenario(scenario_name)
 
     return runner.invoke(
         app,
@@ -1201,19 +1206,7 @@ class TestReportsPrintEachLineWhole:
 
     def test_optimize_configs_prints_each_table_row_on_one_line(self) -> None:
         """Each markdown table row closes on the line it opens on, the Cost-Recovery Rank rows included, though they are about twice as wide as the 80 columns Rich gives a console with no terminal."""
-        Path("scenario.yaml").write_text(
-            yaml.safe_dump(
-                {
-                    "homes": [
-                        {
-                            "pv": {"capacity_kw": 4.0},
-                            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                        }
-                    ],
-                    "finance": {"standing_charge_pence_per_day": 28.0},
-                }
-            )
-        )
+        _write_scenario("Bristol")
 
         result = runner.invoke(
             app,
