@@ -2,11 +2,16 @@
 """Centralized chart module for the Solar Challenge web dashboard.
 
 All functions return Plotly JSON strings via fig.to_json().
-Charts use a consistent colour palette and shared layout defaults.
+Charts share layout defaults. Every series colour is a COLOUR_PALETTE entry, or a translucent
+form of one made by _with_alpha, so a palette edit reaches it; a chart that writes a palette
+colour out by hand fails tests/unit/test_web_chart_colours.py. Neutral chrome (backgrounds,
+annotation text, outlines) and the heatmap's named colour scale mark no series and have no
+palette role.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
@@ -15,17 +20,32 @@ from plotly.subplots import make_subplots
 
 from solar_challenge.home import SimulationResults
 
+_AMBER = "#f5a623"
+_RED = "#d0021b"
+_GREEN = "#7ed321"
+_BLUE = "#4a90e2"
+_PURPLE = "#9013fe"
+
 COLOUR_PALETTE = {
-    "pv_generation": "#f5a623",
-    "demand": "#d0021b",
-    "self_consumption": "#7ed321",
+    "pv_generation": _AMBER,
+    "demand": _RED,
+    "self_consumption": _GREEN,
     "grid_import": "#9b9b9b",
-    "grid_export": "#4a90e2",
+    "grid_export": _BLUE,
     "battery_charge": "#50e3c2",
     "battery_discharge": "#f8a427",
-    "heat_pump": "#9013fe",
-    "cost": "#d0021b",
-    "revenue": "#7ed321",
+    "heat_pump": _PURPLE,
+    "cost": _RED,
+    "revenue": _GREEN,
+    "soc_low_threshold": _RED,
+    "soc_high_threshold": _GREEN,
+    "net_savings": _BLUE,
+    "winter": _BLUE,
+    "summer": _AMBER,
+    "comparison_run_1": _AMBER,
+    "comparison_run_2": _BLUE,
+    "comparison_run_3": _GREEN,
+    "comparison_run_4": _PURPLE,
 }
 
 _SHARED_LAYOUT = dict(
@@ -35,6 +55,20 @@ _SHARED_LAYOUT = dict(
     margin=dict(l=50, r=20, t=40, b=60),
     legend=dict(orientation="h", y=-0.15),
 )
+
+_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _with_alpha(colour: str, alpha: float) -> str:
+    """*colour* as an rgba() string at opacity *alpha*.
+
+    Raises:
+        ValueError: If *colour* is not written #rrggbb; the message names it.
+    """
+    if not _HEX_COLOUR.fullmatch(colour):
+        raise ValueError(f"a translucent chart colour derives from a #rrggbb colour, not {colour!r}")
+    red, green, blue = bytes.fromhex(colour[1:])
+    return f"rgba({red},{green},{blue},{alpha})"
 
 
 def _adaptive_downsample(df: pd.DataFrame, max_points: int = 2000) -> pd.DataFrame:
@@ -136,9 +170,6 @@ def power_flow_timeline(results: SimulationResults) -> str:
                 mode="lines",
                 stackgroup="one",
                 line=dict(width=0.5, color=colour),
-                fillcolor=colour.replace(")", ",0.3)").replace("#", "rgba(")
-                if colour.startswith("rgba")
-                else None,
             )
         )
 
@@ -179,7 +210,7 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
         mode="lines",
         fill="tozeroy",
         line=dict(color=COLOUR_PALETTE["battery_charge"], width=1.5),
-        fillcolor="rgba(80,227,194,0.15)",
+        fillcolor=_with_alpha(COLOUR_PALETTE["battery_charge"], 0.15),
     )
 
     fig = go.Figure(data=[trace])
@@ -191,14 +222,14 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
     fig.add_hline(
         y=low_threshold,
         line_dash="dash",
-        line_color="#d0021b",
+        line_color=COLOUR_PALETTE["soc_low_threshold"],
         annotation_text="10%",
         annotation_position="bottom right",
     )
     fig.add_hline(
         y=high_threshold,
         line_dash="dash",
-        line_color="#7ed321",
+        line_color=COLOUR_PALETTE["soc_high_threshold"],
         annotation_text="90%",
         annotation_position="top right",
     )
@@ -246,6 +277,7 @@ def sankey_diagram(summary: dict[str, Any]) -> str:
     targets: list[int] = []
     values: list[float] = []
     link_colours: list[str] = []
+    link_opacity = 0.4
 
     # PV -> Self-consumption (direct to demand)
     pv_direct = max(0, total_self - total_discharge)
@@ -253,35 +285,35 @@ def sankey_diagram(summary: dict[str, Any]) -> str:
         sources.append(0)
         targets.append(3)
         values.append(round(pv_direct, 2))
-        link_colours.append("rgba(126,211,33,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["self_consumption"], link_opacity))
 
     # PV -> Battery
     if total_charge > 0.01:
         sources.append(0)
         targets.append(2)
         values.append(round(total_charge, 2))
-        link_colours.append("rgba(80,227,194,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["battery_charge"], link_opacity))
 
     # PV -> Export
     if total_export > 0.01:
         sources.append(0)
         targets.append(4)
         values.append(round(total_export, 2))
-        link_colours.append("rgba(74,144,226,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["grid_export"], link_opacity))
 
     # Grid -> Demand
     if total_import > 0.01:
         sources.append(1)
         targets.append(3)
         values.append(round(total_import, 2))
-        link_colours.append("rgba(155,155,155,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["grid_import"], link_opacity))
 
     # Battery -> Demand
     if total_discharge > 0.01:
         sources.append(2)
         targets.append(3)
         values.append(round(total_discharge, 2))
-        link_colours.append("rgba(80,227,194,0.4)")
+        link_colours.append(_with_alpha(COLOUR_PALETTE["battery_charge"], link_opacity))
 
     if not values:
         return "{}"
@@ -458,7 +490,7 @@ def financial_breakdown(results: SimulationResults) -> str:
             x=dates,
             y=cumulative_savings.tolist(),
             mode="lines",
-            line=dict(color="#4a90e2", width=2),
+            line=dict(color=COLOUR_PALETTE["net_savings"], width=2),
         ),
         secondary_y=True,
     )
@@ -523,8 +555,8 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
     ]
 
     fig = go.Figure(data=[
-        go.Bar(name="Winter (Dec-Feb)", x=categories, y=winter_vals, marker_color="#4a90e2"),
-        go.Bar(name="Summer (Jun-Aug)", x=categories, y=summer_vals, marker_color="#f5a623"),
+        go.Bar(name="Winter (Dec-Feb)", x=categories, y=winter_vals, marker_color=COLOUR_PALETTE["winter"]),
+        go.Bar(name="Summer (Jun-Aug)", x=categories, y=summer_vals, marker_color=COLOUR_PALETTE["summer"]),
     ])
 
     fig.update_layout(
@@ -580,7 +612,7 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
         mode="lines",
         fill="tozeroy",
         line=dict(color=COLOUR_PALETTE["heat_pump"], width=1),
-        fillcolor="rgba(144,19,254,0.15)",
+        fillcolor=_with_alpha(COLOUR_PALETTE["heat_pump"], 0.15),
     )])
     load_fig.update_layout(
         **_SHARED_LAYOUT,
@@ -600,8 +632,12 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
 # Comparison charts (for run comparison page)
 # ---------------------------------------------------------------------------
 
-# Extended palette for comparison overlays — up to 4 runs
-_COMPARISON_COLOURS = ["#f5a623", "#4a90e2", "#7ed321", "#9013fe"]
+_COMPARISON_RUN_ROLES = ("comparison_run_1", "comparison_run_2", "comparison_run_3", "comparison_run_4")
+
+
+def _comparison_run_colour(run_index: int) -> str:
+    """The palette colour of the compared run at *run_index*; a fifth run starts the cycle again."""
+    return COLOUR_PALETTE[_COMPARISON_RUN_ROLES[run_index % len(_COMPARISON_RUN_ROLES)]]
 
 
 def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str]) -> str:
@@ -620,7 +656,7 @@ def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str
     """
     traces: list[Any] = []
     for i, (results, label) in enumerate(zip(results_list, labels)):
-        colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
+        colour = _comparison_run_colour(i)
 
         gen = _adaptive_downsample_series(results.generation)
         dem = _adaptive_downsample_series(results.demand)
@@ -680,7 +716,7 @@ def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> 
 
     traces: list[Any] = []
     for i, (summary, label) in enumerate(zip(summaries, labels)):
-        colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
+        colour = _comparison_run_colour(i)
         values = [round(summary.get(k, 0), 2) for k in keys]
         traces.append(go.Bar(
             name=label,
@@ -723,7 +759,7 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
 
     traces: list[Any] = []
     for i, (summary, label) in enumerate(zip(summaries, labels)):
-        colour = _COMPARISON_COLOURS[i % len(_COMPARISON_COLOURS)]
+        colour = _comparison_run_colour(i)
 
         sc_ratio = summary.get("self_consumption_ratio", 0) * 100
         grid_dep = summary.get("grid_dependency_ratio", 0) * 100
@@ -741,21 +777,12 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
             round(battery_util, 1),
         ]
 
-        # Convert hex colour to rgba for semi-transparent fill
-        if colour.startswith("#") and len(colour) == 7:
-            r = int(colour[1:3], 16)
-            g = int(colour[3:5], 16)
-            b = int(colour[5:7], 16)
-            fill_colour = f"rgba({r},{g},{b},0.1)"
-        else:
-            fill_colour = colour
-
         traces.append(go.Scatterpolar(
             name=label,
             r=r_values + [r_values[0]],  # close the polygon
             theta=theta + [theta[0]],
             fill="toself",
-            fillcolor=fill_colour,
+            fillcolor=_with_alpha(colour, 0.1),
             line=dict(color=colour, width=2),
         ))
 
@@ -817,9 +844,6 @@ def fleet_aggregate_timeline(aggregate_results: SimulationResults) -> str:
                 mode="lines",
                 stackgroup="one",
                 line=dict(width=0.5, color=colour),
-                fillcolor=colour.replace(")", ",0.3)").replace("#", "rgba(")
-                if colour.startswith("rgba")
-                else None,
             )
         )
 
@@ -867,7 +891,7 @@ def fleet_grid_impact(aggregate_results: SimulationResults) -> str:
             mode="lines",
             fill="tozeroy",
             line=dict(width=0.5, color=COLOUR_PALETTE["grid_import"]),
-            fillcolor="rgba(155,155,155,0.3)",
+            fillcolor=_with_alpha(COLOUR_PALETTE["grid_import"], 0.3),
         ),
         go.Scatter(
             name="Grid Export",
@@ -876,7 +900,7 @@ def fleet_grid_impact(aggregate_results: SimulationResults) -> str:
             mode="lines",
             fill="tozeroy",
             line=dict(width=0.5, color=COLOUR_PALETTE["grid_export"]),
-            fillcolor="rgba(74,144,226,0.3)",
+            fillcolor=_with_alpha(COLOUR_PALETTE["grid_export"], 0.3),
         ),
     ]
 
