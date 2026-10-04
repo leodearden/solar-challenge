@@ -176,12 +176,12 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
 
     Args:
         summary: SummaryStatistics or FleetSummary object
-        title: Table title
+        title: Table title, printed exactly as it is, never read as Rich markup or emoji codes
 
     Returns:
         Rich Table object
     """
-    table = Table(title=title)
+    table = Table(title=Text(title, style="table.title"))
     table.add_column("Metric", style="cyan")
     table.add_column("Value", justify="right", style="green")
 

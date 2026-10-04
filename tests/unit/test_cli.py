@@ -273,11 +273,25 @@ class TestConfigCLI:
         assert result.exit_code == 0
         assert " ".join(result.stdout.split()) == f"Template written to {output}"
 
-    def test_config_template_invalid_type(self) -> None:
-        """Test config template with invalid type."""
+    def test_config_template_invalid_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An unknown template type exits 1, naming the type in red on stdout; recorded, because a test run is no colour terminal."""
+        monkeypatch.setattr(console, "record", True)
+
         result = runner.invoke(app, ["config", "template", "invalid"])
+        recorded = console.export_text(styles=True)
+
         assert result.exit_code == 1
         assert "Unknown template type" in result.stdout
+        assert Style.parse("red").render("Unknown template type: invalid") in recorded
+
+    def test_an_unknown_template_type_is_reported_verbatim(self) -> None:
+        """A type Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, is reported as the user typed it."""
+        result = runner.invoke(app, ["config", "template", _TEXT_RICH_WOULD_PARSE], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert " ".join(result.stdout.split()) == (
+            f"Unknown template type: {_TEXT_RICH_WOULD_PARSE} Available: home, fleet, scenario"
+        )
 
     def test_config_locations(self) -> None:
         """Test config locations shows Bristol."""
@@ -309,12 +323,45 @@ home:
         result = runner.invoke(app, ["config", "show", "/nonexistent/file.yaml"])
         assert result.exit_code != 0
 
+    def test_config_show_prints_its_path_verbatim(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A config path Rich would read as markup ([draft]) or an emoji code (:sun:) is shown as the user typed it, after a bold label."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(console, "record", True)
+        config_file = "[draft] :sun:.yaml"
+        Path(config_file).write_text("home:\n  pv:\n    capacity_kw: 4.0\n")
+
+        result = runner.invoke(app, ["config", "show", config_file], catch_exceptions=False)
+        recorded = console.export_text(styles=True)
+
+        assert result.exit_code == 0
+        assert f"Configuration: {config_file}" in " ".join(result.stdout.split())
+        assert Style.parse("bold").render("Configuration:") + f" {config_file}" in recorded
+
+    def test_config_show_prints_each_parsed_key_and_value_verbatim(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Keys and values Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that end in a backslash, are summarised as written; a list as its item count."""
+        monkeypatch.chdir(tmp_path)
+        Path("config.yaml").write_text(
+            yaml.safe_dump({"home": {"name": _TEXT_RICH_WOULD_PARSE, "[ghi, dni]": "[/b]", "panels": [1, 2, 3]}})
+        )
+
+        result = runner.invoke(app, ["config", "show", "config.yaml"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        rows = _table_text(result.stdout)
+        assert f"home.name {_TEXT_RICH_WOULD_PARSE}" in rows
+        assert "home.[ghi, dni] [/b]" in rows
+        assert "home.panels [3 items]" in rows
+
 
 def _table_text(output: str) -> str:
-    """A Rich table's rows folded onto one line, each row reading "<TYPE> <message>".
+    """A Rich table's rows folded onto one line, each row reading as its cells joined by single spaces.
 
-    CliRunner renders Rich tables at 80 columns, and a long Message cell wraps onto
-    continuation lines whose Type cell is blank. Folding the column rule "│" and all
+    CliRunner renders Rich tables at 80 columns, and a long last cell wraps onto
+    continuation lines whose other cells are blank. Folding the column rule "│" and all
     whitespace to single spaces rejoins each row.
     """
     return " ".join(output.replace("│", " ").split())
@@ -867,6 +914,37 @@ class TestCreateSummaryTableFinancials:
         assert "Number of Homes" in output, "n_homes should render"
 
 
+class TestCreateSummaryTableTitle:
+    """Tests that create_summary_table prints its title exactly as given, in Rich's table-title style."""
+
+    def _summary(self) -> types.SimpleNamespace:
+        """A summary carrying only the five energy totals create_summary_table always reads."""
+        return types.SimpleNamespace(
+            total_generation_kwh=10.0,
+            total_demand_kwh=8.0,
+            total_self_consumption_kwh=6.0,
+            total_grid_import_kwh=2.0,
+            total_grid_export_kwh=4.0,
+        )
+
+    def test_a_title_is_printed_verbatim(self) -> None:
+        """A title Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the caller gave it.
+
+        The title wraps over several centred lines at the table's width; folding whitespace rejoins it.
+        """
+        buffer = io.StringIO()
+
+        Console(file=buffer, width=80).print(create_summary_table(self._summary(), title=_TEXT_RICH_WOULD_PARSE))
+
+        assert _TEXT_RICH_WOULD_PARSE in " ".join(buffer.getvalue().split())
+
+    def test_a_title_is_printed_in_the_table_title_style(self) -> None:
+        """The title is italic, as Rich styles a table's title; centring pads it inside the same span, so the segment's style is compared."""
+        segments = Console(width=80).render(create_summary_table(self._summary(), title="Results"))
+
+        assert any("Results" in s.text and s.style is not None and s.style.italic for s in segments)
+
+
 @pytest.mark.usefixtures("clear_june_tmy")
 class TestHomeRunFullConfigParity:
     """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
@@ -1005,3 +1083,68 @@ home:
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert captured["home_config"].location == edinburgh
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestReportsPrintNamesVerbatim:
+    """Tests that the report commands print the names a config gives exactly as written."""
+
+    @pytest.fixture
+    def clear_june_in_tmp_path(
+        self, weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
+        weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+        monkeypatch.chdir(tmp_path)
+
+    def test_home_run_prints_the_homes_name_verbatim(self) -> None:
+        """A home name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the summary table and the report as written."""
+        Path("home.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "home": {
+                        "name": _TEXT_RICH_WOULD_PARSE,
+                        "pv": {"capacity_kw": 4.0},
+                        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                    }
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app,
+            ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21", "--report"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        printed = " ".join(result.stdout.split())
+        assert f"Simulation Results: {_TEXT_RICH_WOULD_PARSE}" in printed
+        assert f"# Simulation Report: {_TEXT_RICH_WOULD_PARSE}" in printed
+
+    def test_finance_run_prints_the_scenarios_name_verbatim(self) -> None:
+        """A scenario name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the report as written."""
+        Path("scenario.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": _TEXT_RICH_WOULD_PARSE,
+                    "homes": [
+                        {
+                            "pv": {"capacity_kw": 4.0},
+                            "battery": {"capacity_kwh": 5.0},
+                            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                        }
+                    ],
+                    "finance": {"standing_charge_pence_per_day": 28.0},
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app,
+            ["finance", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert f"# Finance Report: {_TEXT_RICH_WOULD_PARSE}" in " ".join(result.stdout.split())

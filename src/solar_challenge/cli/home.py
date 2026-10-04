@@ -7,6 +7,7 @@ from typing import Annotated, Optional
 
 import pandas as pd
 import typer
+from rich.text import Text
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.utils import (
@@ -181,7 +182,7 @@ def run(
         report_text = generate_summary_report(
             results, home_config.name, seg_tariff_pence_per_kwh=seg_rate
         )
-        console.print(report_text)
+        console.print(Text(report_text))
 
 
 @app.command()
