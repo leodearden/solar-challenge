@@ -119,22 +119,32 @@ def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> 
     return kw
 
 
+def _read_efficiency(value: Any) -> float | None:
+    """Read a home body's round-trip efficiency percentage as the fraction BatteryConfig takes.
+
+    Null is unset; a percentage outside (0, 100] is refused in the units sent.
+    """
+    if value is None:
+        return None
+    efficiency_pct = float(value)
+    if not (0 < efficiency_pct <= 100):
+        raise ValueError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
+    return efficiency_pct / 100
+
+
 def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryConfig | None:
     """Read the battery a home body describes: none unless ``capacity_kwh`` is positive.
 
     Each setting is read whatever ``capacity_kwh`` is, so a value a battery refuses is
     refused without one too; a null setting is unset, leaving BatteryConfig's default.
     """
-    power_limits = {
-        "max_charge_kw": _read_power_limit(params["max_charge_kw"], "charge"),
-        "max_discharge_kw": _read_power_limit(params["max_discharge_kw"], "discharge"),
-    }
-    settings: dict[str, Any] = {key: kw for key, kw in power_limits.items() if kw is not None}
-    if params["efficiency_pct"] is not None:
-        efficiency_pct = float(params["efficiency_pct"])
-        if not (0 < efficiency_pct <= 100):
-            raise ValueError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
-        settings["efficiency"] = efficiency_pct / 100
+    settings: dict[str, Any] = {}
+    if (max_charge_kw := _read_power_limit(params["max_charge_kw"], "charge")) is not None:
+        settings["max_charge_kw"] = max_charge_kw
+    if (max_discharge_kw := _read_power_limit(params["max_discharge_kw"], "discharge")) is not None:
+        settings["max_discharge_kw"] = max_discharge_kw
+    if (efficiency := _read_efficiency(params["efficiency_pct"])) is not None:
+        settings["efficiency"] = efficiency
     try:
         settings["dispatch_strategy"] = parse_dispatch_strategy_config(params["dispatch_strategy"])
     except ConfigurationError as exc:
