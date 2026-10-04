@@ -709,8 +709,6 @@ def recover_stale_jobs(db_path: str | Path) -> int:
     Returns:
         Number of jobs recovered.
     """
-    from pathlib import Path
-
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
