@@ -1042,6 +1042,68 @@ class TestFleetConfigHelpers:
 
         assert config["pv"]["capacity_kw"]["counts"] == [0, MAX_FLEET_HOMES]
 
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param(
+                {"type": "normal", "mean": 4.0, "std": 1.0, "min": 2.0, "max": 8.0}, id="normal"
+            ),
+            pytest.param({"type": "uniform", "min": 3.0, "max": 6.0}, id="uniform"),
+            pytest.param(
+                {
+                    "type": "weighted_discrete",
+                    "values": [{"value": 3.0, "weight": 2.0}, {"value": 5.0, "weight": 1.0}],
+                },
+                id="weighted-discrete",
+            ),
+            pytest.param(
+                {
+                    "type": "shuffled_pool",
+                    "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": 1}],
+                },
+                id="shuffled-pool",
+            ),
+        ],
+    )
+    def test_distribution_form_spec_is_the_inverse_of_the_forms_conversion(self, spec: dict) -> None:
+        """A distribution the fleet page's editor sends converts to config.py's grammar and reads back as itself."""
+        from solar_challenge.web.fleet_config import (
+            distribution_form_spec,
+            form_to_fleet_distribution_config,
+        )
+
+        config = form_to_fleet_distribution_config(
+            {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+        )
+
+        assert (
+            distribution_form_spec(config["pv"]["capacity_kw"], "fleet_distribution.pv.capacity_kw")
+            == spec
+        )
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param(5.5, id="fixed-number"),
+            pytest.param(
+                {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 2.0},
+                id="proportional-to",
+            ),
+            pytest.param({"type": "normal", "mean": 5.0, "std": 2.0}, id="normal-without-clamps"),
+            pytest.param(
+                {"type": "normal", "mean": 5.0, "std": 2.0, "min": 0.0}, id="normal-without-max"
+            ),
+        ],
+    )
+    def test_distribution_form_spec_refuses_a_distribution_the_editor_cannot_hold(
+        self, spec: object
+    ) -> None:
+        """A fixed value, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
+        from solar_challenge.web.fleet_config import distribution_form_spec
+
+        with pytest.raises(ValueError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
+            distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
+
     def test_yaml_to_fleet_distribution(self) -> None:
         """Test parsing YAML string to fleet distribution config."""
         from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
