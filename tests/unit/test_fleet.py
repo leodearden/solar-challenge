@@ -1,5 +1,6 @@
 """Tests for fleet simulation."""
 
+import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
@@ -102,6 +103,28 @@ class TestFleetConfigCreation:
             )
 
 
+def _home_whose_series_all_differ(offset: float) -> SimulationResults:
+    """An hour of results whose every series varies and holds values no other series holds, each shifted by offset."""
+    index = pd.date_range("2024-06-21 10:00", periods=60, freq="1min")
+
+    def series(position: int) -> pd.Series:
+        return pd.Series(np.arange(60.0) + 100.0 * position + offset, index=index)
+
+    return SimulationResults(
+        generation=series(0),
+        demand=series(1),
+        self_consumption=series(2),
+        battery_charge=series(3),
+        battery_discharge=series(4),
+        battery_soc=series(5),
+        grid_import=series(6),
+        grid_export=series(7),
+        import_cost=series(8),
+        export_revenue=series(9),
+        tariff_rate=series(10),
+    )
+
+
 class TestFleetResults:
     """Test FLEET-004/005: Fleet results functionality."""
 
@@ -170,14 +193,24 @@ class TestFleetResults:
         # 2.0 + 3.0 = 5.0 kW constant
         assert (total == 5.0).all()
 
-    def test_to_aggregate_dataframe(self, sample_results):
-        """Converts aggregate results to DataFrame."""
-        df = sample_results.to_aggregate_dataframe()
+    @pytest.mark.parametrize("n_homes", [1, 3], ids=["one-home", "three-homes"])
+    def test_aggregate_frame_is_the_homes_frames_summed_over_five_of_their_columns(self, n_homes):
+        """The aggregate frame is the homes' to_dataframe frames summed, over their generation, demand, self-consumption, grid import and grid export columns, in that order."""
+        homes = [_home_whose_series_all_differ(offset=0.5 * k) for k in range(n_homes)]
+        fleet = FleetResults(
+            per_home_results=homes,
+            home_configs=[HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())] * n_homes,
+        )
+        columns = [
+            homes[0].generation.name,
+            homes[0].demand.name,
+            homes[0].self_consumption.name,
+            homes[0].grid_import.name,
+            homes[0].grid_export.name,
+        ]
+        home_frames = [home.to_dataframe()[columns] for home in homes]
 
-        assert isinstance(df, pd.DataFrame)
-        assert "generation_kw" in df.columns
-        assert "demand_kw" in df.columns
-        assert len(df) == 1440
+        pd.testing.assert_frame_equal(fleet.to_aggregate_dataframe(), sum(home_frames[1:], home_frames[0]))
 
 
 class TestFleetSummary:
