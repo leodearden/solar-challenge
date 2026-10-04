@@ -13,6 +13,8 @@ These tests prove that an EXTERNAL consumer can:
     License-Expression AGPL-3.0-or-later AND MIT.
   - Confirm the wheel ships, under .dist-info/licenses, the text of the root
     LICENSE and of each package vendored under solar_challenge/web/static/vendor.
+  - Confirm that License-Expression names the license each package vendored
+    under solar_challenge/web/static/vendor records in its upstream.toml.
 
 The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here.
@@ -33,6 +35,7 @@ import email
 import os
 import shutil
 import subprocess
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -255,7 +258,8 @@ def test_built_wheel_declares_the_agpl_and_mit_license_expression(built_wheel: P
         f"License {metadata.get_all('License')}, so it does not name its licenses by the PEP 639 "
         "SPDX expression AGPL-3.0-or-later AND MIT. Declare [project] "
         'license = "AGPL-3.0-or-later AND MIT" in pyproject.toml: an SPDX expression string, '
-        "not a TOML table."
+        "not a TOML table. Once the wheel bundles code under a further license, name that license "
+        "in this test's expected expression too."
     )
 
 
@@ -274,6 +278,19 @@ def test_built_wheel_ships_the_project_license_text(built_wheel: Path) -> None:
     )
 
 
+def _vendored_packages(source: Path) -> list[Path]:
+    """Return the directory of each package vendored under web/static/vendor/ in the project at *source*,
+    failing the calling test if there is none.
+    """
+    vendor = source / "src" / "solar_challenge" / "web" / "static" / "vendor"
+    packages = sorted(path for path in vendor.glob("*") if path.is_dir())
+    assert packages, (
+        "found no package directory under src/solar_challenge/web/static/vendor in the copy of the "
+        "working tree, so this test would pass vacuously"
+    )
+    return packages
+
+
 @pytest.mark.build
 def test_built_wheel_ships_the_license_text_of_every_vendored_package(
     wheel_source: Path, built_wheel: Path
@@ -282,13 +299,7 @@ def test_built_wheel_ships_the_license_text_of_every_vendored_package(
     its directory. The wheel declares that file, so its text also lands in .dist-info/licenses/,
     where license tools read it.
     """
-    vendor = wheel_source / "src" / "solar_challenge" / "web" / "static" / "vendor"
-    packages = sorted(path.relative_to(wheel_source).as_posix() for path in vendor.glob("*") if path.is_dir())
-    assert packages, (
-        "found no package directory under src/solar_challenge/web/static/vendor in the copy of the "
-        "working tree, so this test would pass vacuously"
-    )
-
+    packages = [package.relative_to(wheel_source).as_posix() for package in _vendored_packages(wheel_source)]
     shipped = _shipped_license_files(built_wheel)
     unlicensed = [
         package for package in packages if not any(entry.startswith(f"{package}/") for entry in shipped)
@@ -297,9 +308,46 @@ def test_built_wheel_ships_the_license_text_of_every_vendored_package(
     assert unlicensed == [], (
         f"The built wheel ships no license text for the vendored packages {unlicensed}; the license "
         f"texts it ships are {shipped}. Keep each package's upstream license file in the package's "
-        "own directory, match it with a [project] license-files pattern in pyproject.toml, such as "
-        '"src/solar_challenge/web/static/vendor/*/LICENSE*", and join the package\'s license into '
-        "[project] license with AND, unless it is already named there."
+        "own directory and match it with a [project] license-files pattern in pyproject.toml, such as "
+        '"src/solar_challenge/web/static/vendor/*/LICENSE*".'
+    )
+
+
+_UPSTREAM_RECORD = "upstream.toml"
+
+
+def _recorded_license(package: Path) -> str | None:
+    """Return the license that the upstream.toml in the *package* directory records, or None if it records none."""
+    record = package / _UPSTREAM_RECORD
+    if not record.is_file():
+        return None
+    license_id = tomllib.loads(record.read_text(encoding="utf-8")).get("license")
+    return license_id if isinstance(license_id, str) else None
+
+
+@pytest.mark.build
+def test_built_wheel_declares_the_license_each_vendored_package_records(
+    wheel_source: Path, built_wheel: Path
+) -> None:
+    """Each package vendored under web/static/vendor/<package>/ records the SPDX id of its upstream
+    license as `license` in its upstream.toml. The wheel bundles the package, so its
+    License-Expression must join that license with AND.
+    """
+    with zipfile.ZipFile(built_wheel) as wheel:
+        expressions = _wheel_metadata(wheel).get_all("License-Expression", [])
+    joined = {term for expression in expressions for term in expression.split(" AND ")}
+    recorded = {
+        package.relative_to(wheel_source).as_posix(): _recorded_license(package)
+        for package in _vendored_packages(wheel_source)
+    }
+    unnamed = {package: license_id for package, license_id in recorded.items() if license_id not in joined}
+
+    assert unnamed == {}, (
+        f"The built wheel's License-Expression {expressions} does not name the licenses these vendored "
+        f"packages record (None: the package records none): {unnamed}. Record each vendored package's "
+        f'upstream license by its SPDX id, as license = "<id>" in the package directory\'s '
+        f"{_UPSTREAM_RECORD}, and join every recorded license into [project] license in "
+        "pyproject.toml with AND."
     )
 
 
