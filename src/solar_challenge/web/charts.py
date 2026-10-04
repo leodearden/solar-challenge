@@ -19,6 +19,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults
 from solar_challenge.output import aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
 
@@ -799,25 +800,24 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def fleet_aggregate_timeline(aggregate_results: SimulationResults) -> str:
-    """Stacked area chart of fleet aggregate totals over time.
+def fleet_aggregate_timeline(fleet: FleetResults) -> str:
+    """Stacked area chart of the fleet's power flows over time, each summed across its homes.
 
-    Similar to power_flow_timeline but intended for aggregate fleet data.
     Shows total generation, demand, self-consumption, grid import, and
     grid export.
 
     Args:
-        aggregate_results: Aggregated SimulationResults for the fleet.
+        fleet: The fleet whose totals are drawn.
 
     Returns:
         Plotly figure JSON string.
     """
     df = pd.DataFrame({
-        "PV Generation": aggregate_results.generation,
-        "Demand": aggregate_results.demand,
-        "Self-Consumption": aggregate_results.self_consumption,
-        "Grid Import": aggregate_results.grid_import,
-        "Grid Export": aggregate_results.grid_export,
+        "PV Generation": fleet.total_generation,
+        "Demand": fleet.total_demand,
+        "Self-Consumption": fleet.total_self_consumption,
+        "Grid Import": fleet.total_grid_import,
+        "Grid Export": fleet.total_grid_export,
     })
     df = _adaptive_downsample(df)
 
@@ -857,19 +857,19 @@ def fleet_aggregate_timeline(aggregate_results: SimulationResults) -> str:
     return str(fig.to_json())
 
 
-def fleet_grid_impact(aggregate_results: SimulationResults) -> str:
-    """Area chart showing net grid impact (import positive, export negative).
+def fleet_grid_impact(fleet: FleetResults) -> str:
+    """Area chart of the fleet's net grid impact: its total grid import less its total grid export.
 
-    Calculates net = grid_import - grid_export at each timestep and
-    fills above zero (import region) and below zero (export region).
+    At each timestep the net fills above zero (import region) or below
+    zero (export region).
 
     Args:
-        aggregate_results: Aggregated SimulationResults for the fleet.
+        fleet: The fleet whose totals are drawn.
 
     Returns:
         Plotly figure JSON string.
     """
-    net = aggregate_results.grid_import - aggregate_results.grid_export
+    net = fleet.total_grid_import - fleet.total_grid_export
     net = _adaptive_downsample_series(net)
     dates = [d.isoformat() for d in net.index]
     values = net.round(4).tolist()
