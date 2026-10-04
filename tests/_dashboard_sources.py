@@ -23,6 +23,7 @@ Usage::
     stylesheets = list(served_stylesheet_sources())
 """
 
+import re
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -39,6 +40,10 @@ BASE_TEMPLATE_KEY = "templates/base.html"
 _BASE_TEMPLATE = _WEB_DIR / BASE_TEMPLATE_KEY
 HAND_WRITTEN_STYLESHEET_KEY = "static/style.css"
 TAILWIND_CONFIG_KEY = "tailwind.config.js"
+_QUOTED_STRING = r"""(?:'[^']*'|"[^"]*")"""
+_CONTENT_ARRAY = re.compile(
+    rf"\bcontent\s*:\s*\[\s*((?:{_QUOTED_STRING}\s*(?:,\s*{_QUOTED_STRING}\s*)*(?:,\s*)?)?)\]"
+)
 
 
 def dashboard_template_sources() -> dict[str, str]:
@@ -85,6 +90,22 @@ def hand_written_stylesheet_source() -> str:
 def tailwind_config_source() -> str:
     """Source of tailwind.config.js, the home of the dashboard's theme."""
     return (_WEB_DIR / TAILWIND_CONFIG_KEY).read_text(encoding="utf-8")
+
+
+def tailwind_content_globs(config_source: str) -> list[str]:
+    """Globs of the one ``content`` array in the Tailwind config *config_source*, in source order.
+
+    Reads only ``content: ['glob', "glob"]``, a bare key whose array lists nothing but quoted
+    strings, and fails on any other form rather than guess."""
+    arrays = _CONTENT_ARRAY.findall(config_source)
+    assert len(arrays) == 1, (
+        f"read {len(arrays)} content arrays of quoted globs from {TAILWIND_CONFIG_KEY}, where "
+        "tests/_dashboard_sources.py needs exactly one: it reads the dashboard's templates and "
+        "scripts through these globs, so it must not guess which files Tailwind scans. Write "
+        "content as one array of quoted globs, with no comment, object, spread or files: form "
+        "inside, or extend tailwind_content_globs to read the new form"
+    )
+    return [quoted[1:-1] for quoted in re.findall(_QUOTED_STRING, arrays[0])]
 
 
 def _sources(paths: Iterable[Path]) -> dict[str, str]:
