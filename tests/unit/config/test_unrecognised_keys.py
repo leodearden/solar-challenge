@@ -739,6 +739,11 @@ class TestFleetDistributionBlockKeys:
                 "max_charge_kw": {"type": "shuffled_pool", "values": [2.5, 3.0], "counts": [1, 1]},
                 "max_discharge_kw": 3.0,
                 "grid_charging": {"target_soc_fraction": 0.8},
+                "dispatch_strategy": {
+                    "strategy_type": "tou_optimized",
+                    "peak_hours": [[16, 19]],
+                    "import_limit_kw": 3.5,
+                },
             },
             "load": {"annual_consumption_kwh": 3400.0, "household_occupants": 2, "use_stochastic": False},
             "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 6.0, "annual_heat_demand_kwh": 9000.0},
@@ -774,6 +779,9 @@ class TestFleetDistributionBlockKeys:
                 max_charge_kw=ShuffledPoolDistribution(values=(2.5, 3.0), counts=(1, 1)),
                 max_discharge_kw=3.0,
                 grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+                dispatch_strategy=DispatchStrategyConfig(
+                    strategy_type="tou_optimized", peak_hours=[(16, 19)], import_limit_kw=3.5
+                ),
             ),
             heat_pump=HeatPumpDistributionConfig(
                 heat_pump_type="GSHP", thermal_capacity_kw=6.0, annual_heat_demand_kwh=9000.0
