@@ -118,6 +118,17 @@ and the next release folds both lists into its notes. A change to an exported
 signature must also edit `FROZEN_SURFACE` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 460): `simulate_fleet`, `simulate_fleet_iter` and
+`simulate_multi_sweep_iter`, and so `solve_cost_recovery_rate`'s default
+`simulate`, fetch each distinct home location's TMY once, in the calling
+process, and pass it to their worker processes. So a `WeatherCache` installed
+with `set_weather_cache` now serves a parallel fleet under every
+multiprocessing start method. On the 0.5.0 tag, a worker started by
+`forkserver` (Linux's default from Python 3.14) or `spawn` (macOS's default)
+ignored that cache, read the working directory's `.cache/weather` and fetched
+PVGIS on a miss: offline the run failed with `WeatherDataError`, and online it
+simulated from PVGIS's live TMY instead of the injected one.
+
 **Unreleased on main** (task 326): `TOUOptimizedStrategy` no longer accepts
 `off_peak_hours`, and passing it raises `TypeError`; the 0.5.0 tag accepts it,
 checks its hour ranges and otherwise ignores it. Consumers drop the argument
@@ -183,6 +194,10 @@ import solar_challenge
 # Inject a pre-built cache instead of hitting the network
 solar_challenge.set_weather_cache(my_test_cache)
 ```
+
+The fleet simulators in `solar_challenge.fleet` read weather through the installed
+cache in the calling process and hand it to their worker processes, so an injected
+cache serves a parallel fleet whatever the multiprocessing start method.
 
 A cache directory written before that scaling is ignored, because its entries' keys
 changed. Rebuild a pre-built cache with `my_test_cache.put(df, "tmy", location)`, which
