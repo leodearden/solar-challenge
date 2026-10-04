@@ -307,6 +307,47 @@ class TestFleetResultsRoute:
             for label, card in expected_cards.items()
         } == expected_cards
 
+    def test_fleet_results_stat_cards_round_each_saved_total_and_ratio_once(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each stat card rounds the saved fleet summary's value once, to the card's own precision.
+
+        Each of the two homes self-consumes 5 kWh, exports 4.523 kWh and imports 2.8745 kWh
+        in its one day. Each card below sits where rounding its value to 2 dp first (a ratio
+        to 4 dp) would move the card's last digit: the fleet's 9.046 kWh export would show 9.1.
+        """
+        run_id = _save_fleet_run(
+            app,
+            make_fleet_results(n_homes=2, self_kwh=5.0, export_kwh=4.523, import_kwh=2.8745, days=1),
+        )
+        response = client.get(f"/results/fleet/{run_id}")
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        expected_cards = {
+            "Total Generation": ["19.0", "kWh"],
+            "Total Demand": ["15.7", "kWh"],
+            "Grid Import": ["5.7", "kWh"],
+            "Grid Export": ["9.0", "kWh"],
+            "Fleet Self-Consumption": ["53", "%"],
+            "Fleet Grid Dependency": ["37", "%"],
+        }
+        assert {
+            label: texts_after(page, label, len(card))
+            for label, card in expected_cards.items()
+        } == expected_cards
+
+    def test_fleet_results_page_header_reads_the_saved_fleets_home_count_and_days(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """The header under the title reads the saved fleet's number of homes and simulated days."""
+        run_id = _save_fleet_run(app, make_fleet_results(n_homes=3, days=2))
+
+        response = client.get(f"/results/fleet/{run_id}")
+
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        assert f"3 homes — 2-day simulation — Run ID: {run_id[:8]}…" in texts(page)
+
     def test_fleet_results_page_is_titled_with_the_name_its_run_was_saved_under(
         self, app: Flask, client: FlaskClient
     ) -> None:

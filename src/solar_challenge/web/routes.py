@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -130,26 +131,10 @@ def home_results(run_id: str) -> Any:
         seasonal_comparison,
     )
 
-    summary_dict: dict[str, Any] = {
-        "total_generation_kwh": round(summary.total_generation_kwh, 2),
-        "total_demand_kwh": round(summary.total_demand_kwh, 2),
-        "total_self_consumption_kwh": round(summary.total_self_consumption_kwh, 2),
-        "total_grid_import_kwh": round(summary.total_grid_import_kwh, 2),
-        "total_grid_export_kwh": round(summary.total_grid_export_kwh, 2),
-        "total_battery_charge_kwh": round(summary.total_battery_charge_kwh, 2),
-        "total_battery_discharge_kwh": round(summary.total_battery_discharge_kwh, 2),
-        "peak_generation_kw": round(summary.peak_generation_kw, 2),
-        "peak_demand_kw": round(summary.peak_demand_kw, 2),
-        "self_consumption_ratio": round(summary.self_consumption_ratio, 4),
-        "grid_dependency_ratio": round(summary.grid_dependency_ratio, 4),
-        "export_ratio": round(summary.export_ratio, 4),
-        "simulation_days": summary.simulation_days,
-    }
-
     has_battery = config.battery_config is not None
 
     charts: dict[str, Any] = {
-        "sankey": sankey_diagram(summary_dict),
+        "sankey": sankey_diagram(asdict(summary)),
         "daily_balance": daily_energy_balance(sim_results),
         "power_flow": power_flow_timeline(sim_results),
         "battery_soc": (
@@ -165,7 +150,7 @@ def home_results(run_id: str) -> Any:
 
     return render_template(
         "results/home.html",
-        summary=summary_dict,
+        summary=summary,
         charts=charts,
         has_battery=has_battery,
         run_id=run_id,
@@ -239,18 +224,6 @@ def fleet_results(run_id: str) -> Any:
         fleet_heatmap,
     )
 
-    summary_dict: dict[str, Any] = {
-        "n_homes": fleet_summary.n_homes,
-        "total_generation_kwh": round(fleet_summary.total_generation_kwh, 2),
-        "total_demand_kwh": round(fleet_summary.total_demand_kwh, 2),
-        "total_self_consumption_kwh": round(fleet_summary.total_self_consumption_kwh, 2),
-        "total_grid_import_kwh": round(fleet_summary.total_grid_import_kwh, 2),
-        "total_grid_export_kwh": round(fleet_summary.total_grid_export_kwh, 2),
-        "fleet_self_consumption_ratio": round(fleet_summary.fleet_self_consumption_ratio, 4),
-        "fleet_grid_dependency_ratio": round(fleet_summary.fleet_grid_dependency_ratio, 4),
-        "simulation_days": fleet_summary.simulation_days,
-    }
-
     home_summaries = [
         {
             "total_generation_kwh": s.total_generation_kwh,
@@ -275,9 +248,8 @@ def fleet_results(run_id: str) -> Any:
 
     return render_template(
         "results/fleet.html",
-        summary=summary_dict,
+        summary=fleet_summary,
         charts=charts,
-        n_homes=fleet_summary.n_homes,
         run_id=run_id,
         run_name=storage.run_name(run_id) or "Fleet Simulation",
         page="results",

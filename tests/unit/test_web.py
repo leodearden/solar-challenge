@@ -18,6 +18,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.storage import RunStorage
+from tests._finance_builders import make_sim_results
 from tests._html_page import (
     doctype,
     element_count,
@@ -479,6 +480,37 @@ class TestHomeResultsRoute:
             ("Total Demand", summary.total_demand_kwh),
         ):
             assert texts_after(page, label, 2) == [f"{total_kwh:.1f}", "kWh"], label
+
+    def test_home_results_stat_cards_round_each_saved_total_and_ratio_once(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each stat card rounds its saved value once, to the card's own precision.
+
+        The run self-consumes 10 kWh, exports 9.046 kWh and imports 5.749 kWh in its one day.
+        Each card below sits where rounding its value to 2 dp first (a ratio to 4 dp) would
+        move the card's last digit: 9.046 kWh would show 9.1.
+        """
+        run_id = _save_home_run(
+            app,
+            "North Roof",
+            make_sim_results(self_kwh=10.0, export_kwh=9.046, import_kwh=5.749, days=1),
+        )
+        response = client.get(f"/results/home/{run_id}")
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        expected_cards = {
+            "Total Generation": ["19.0", "kWh"],
+            "Total Demand": ["15.7", "kWh"],
+            "Grid Import": ["5.7", "kWh"],
+            "Grid Export": ["9.0", "kWh"],
+            "Self-Consumption Ratio": ["53", "%"],
+            "Grid Dependency": ["37", "%"],
+            "Export Ratio": ["47", "%"],
+        }
+        assert {
+            label: texts_after(page, label, len(card))
+            for label, card in expected_cards.items()
+        } == expected_cards
 
     def test_home_results_page_title_follows_a_run_history_rename(
         self, app: Flask, client: FlaskClient
