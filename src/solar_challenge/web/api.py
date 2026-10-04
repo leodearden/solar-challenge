@@ -26,7 +26,11 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.database import get_db
-from solar_challenge.web.fleet_scenario import fleet_form_location, fleet_form_name
+from solar_challenge.web.fleet_scenario import (
+    fleet_form_location,
+    fleet_form_name,
+    scenario_from_fleet_form,
+)
 from solar_challenge.web.shared import (
     NotAJsonObject,
     get_job_manager,
@@ -472,21 +476,22 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     return jsonify({"job_id": job_id, "run_id": run_id}), 201
 
 @api_bp.route("/fleet/export-yaml", methods=["POST"])
-def export_fleet_yaml() -> Response:
-    """Export fleet configuration as YAML.
+def export_fleet_yaml() -> Response | tuple[Response, int]:
+    """Export the fleet page's form as the fleet scenario load_fleet_config reads back.
 
-    Expects a JSON body with fleet distribution parameters.
+    Expects the JSON body the fleet page posts to /api/simulate/fleet-from-distribution.
 
     Returns:
-        YAML file download response.
+        The scenario's YAML file as a download, HTTP 200; or the ``error``, HTTP 400, for a
+        form the loaders or the simulate endpoint refuse, with the message simulate gives.
     """
     data = request_json_object()
-
-    from solar_challenge.web.fleet_config import fleet_distribution_to_yaml  # noqa: PLC0415
-
-    yaml_str = fleet_distribution_to_yaml(data)
+    try:
+        document = scenario_from_fleet_form(data)
+    except (ValueError, TypeError, ConfigurationError) as exc:
+        return jsonify({"error": str(exc)}), 400
     return Response(
-        yaml_str,
+        scenario_yaml(document),
         mimetype="text/yaml",
         headers={"Content-Disposition": "attachment; filename=fleet-config.yaml"},
     )

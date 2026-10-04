@@ -2,7 +2,7 @@
 """Helper module for fleet configuration in the web dashboard.
 
 Provides utilities for sampling distributions, converting form data to
-fleet distribution configs, YAML import/export, and fleet-wide overlay
+fleet distribution configs, YAML import, and fleet-wide overlay
 application for tariff/dispatch/SEG settings.
 """
 
@@ -345,34 +345,6 @@ def _pool_counts(entries: list[dict[str, Any]]) -> list[int]:
     if total > MAX_FLEET_HOMES:
         raise ValueError(f"entries counts must total at most {MAX_FLEET_HOMES}, got {total}")
     return counts
-
-
-def fleet_distribution_to_yaml(config: dict[str, Any]) -> str:
-    """Convert a fleet distribution config dict to a YAML string.
-
-    Args:
-        config: Fleet distribution config dict (as returned by
-            :func:`form_to_fleet_distribution_config` or parsed from UI).
-
-    Returns:
-        YAML-formatted string.
-    """
-    # Build a clean scenario structure
-    scenario: dict[str, Any] = {
-        "name": config.get("name", "Fleet Configuration"),
-        "fleet_distribution": {
-            "n_homes": config.get("n_homes", 100),
-            "seed": config.get("seed", 42),
-        },
-    }
-
-    fleet = scenario["fleet_distribution"]
-
-    for component in ("pv", "battery", "load"):
-        if component in config:
-            fleet[component] = config[component]
-
-    return yaml.dump(scenario, default_flow_style=False, sort_keys=False)  # type: ignore[no-any-return]
 
 
 def yaml_to_fleet_distribution(yaml_str: str) -> dict[str, Any]:

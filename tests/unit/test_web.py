@@ -1042,19 +1042,6 @@ class TestFleetConfigHelpers:
 
         assert config["pv"]["capacity_kw"]["counts"] == [0, MAX_FLEET_HOMES]
 
-    def test_fleet_distribution_to_yaml(self) -> None:
-        """Test converting fleet config to YAML string."""
-        from solar_challenge.web.fleet_config import fleet_distribution_to_yaml
-
-        config = {
-            "n_homes": 100,
-            "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
-            "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2000, "max": 5000}},
-        }
-        yaml_str = fleet_distribution_to_yaml(config)
-        assert "n_homes: 100" in yaml_str
-        assert isinstance(yaml_str, str)
-
     def test_yaml_to_fleet_distribution(self) -> None:
         """Test parsing YAML string to fleet distribution config."""
         from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
@@ -1084,25 +1071,6 @@ fleet_distribution:
 
         with pytest.raises(ValueError):
             yaml_to_fleet_distribution("not: a: valid: fleet: config")
-
-    def test_yaml_roundtrip(self) -> None:
-        """Test that export/import YAML round-trips correctly."""
-        from solar_challenge.web.fleet_config import (
-            fleet_distribution_to_yaml,
-            yaml_to_fleet_distribution,
-        )
-
-        original = {
-            "n_homes": 50,
-            "seed": 42,
-            "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
-            "load": {"annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800}},
-        }
-        yaml_str = fleet_distribution_to_yaml(original)
-        restored = yaml_to_fleet_distribution(yaml_str)
-        assert restored["n_homes"] == 50
-        assert restored["pv"]["capacity_kw"]["type"] == "uniform"
-        assert restored["load"]["annual_consumption_kwh"]["type"] == "normal"
 
 
 class TestFleetApiEndpoints:
