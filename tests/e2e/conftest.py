@@ -5,7 +5,8 @@ configures Playwright's base_url so tests can use relative paths.
 
 Includes data-seeding fixtures, which save completed runs through the
 live server's own RunStorage, for tests that need pre-existing
-simulation runs (results pages, history interactions, compare page).
+simulation runs (dashboard, results pages, history interactions,
+compare page).
 Also stubs the Run History page's runs-list API for tests that need it
 empty or unanswered, and collects the errors a page reports.
 
@@ -205,6 +206,21 @@ def seeded_fleet_run(_e2e_storage: RunStorage) -> tuple[str, str]:
         name=run_name,
     )
     return run_id, run_name
+
+
+@pytest.fixture
+def newest_home_run(_e2e_storage: RunStorage) -> tuple[str, str]:
+    """Save a completed 1-day home run as the test starts, so the run heads the dashboard's Recent Runs. Returns (run_id, run_name).
+
+    The dashboard lists only the 10 newest runs, and the session's other tests save runs of their own.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    return _save_seeded_home_run(
+        _e2e_storage,
+        f"seed-newest-{suffix}",
+        f"Newest Home {suffix}",
+        make_sim_results(self_kwh=60.0, export_kwh=40.0, import_kwh=20.0, days=1),
+    )
 
 
 # ---------------------------------------------------------------------------
