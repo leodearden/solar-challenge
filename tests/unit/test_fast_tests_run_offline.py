@@ -76,6 +76,39 @@ def test_a_fast_test_whose_job_reaches_the_network_fails_once_the_job_has_run(su
     result.stdout.fnmatch_lines(["*test_submits_a_home_job_and_ends reached the network*"])
 
 
+def test_a_fast_test_whose_child_process_reaches_the_network_fails_even_if_the_child_carries_on(
+    suite: pytest.Pytester,
+) -> None:
+    """The child swallows its fetch's error and exits 0, so only the guard can catch it."""
+    suite.makepyfile(
+        fetches_and_carries_on="""
+        import urllib.request
+
+        try:
+            urllib.request.urlopen("https://example.invalid/", timeout=30)
+        except OSError:
+            pass
+        """
+    )
+    scenario = suite.makepyfile(
+        """
+        import subprocess
+        import sys
+
+
+        def test_runs_a_child_that_fetches_and_carries_on():
+            subprocess.run([sys.executable, "fetches_and_carries_on.py"], check=True)
+        """
+    )
+
+    result = suite.runpytest_subprocess(scenario)
+
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        ["*test_runs_a_child_that_fetches_and_carries_on reached the network (example.invalid:443)*"]
+    )
+
+
 def test_a_module_fixture_that_fetches_a_tmy_fails_the_fast_test_that_sets_it_up_and_leaves_no_weather_cache_behind(
     suite: pytest.Pytester,
 ) -> None:
