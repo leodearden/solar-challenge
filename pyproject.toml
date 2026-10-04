@@ -9,6 +9,7 @@ description = "Energy flow simulator for domestic PV and battery systems"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 license = "AGPL-3.0-or-later AND MIT"
+license-files = ["LICENSE", "src/solar_challenge/web/static/vendor/*/LICENSE*"]
 authors = [
     {name = "Leo Dawn"}
 ]
