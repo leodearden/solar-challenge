@@ -19,7 +19,11 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
-from solar_challenge.web.shared import require_json_object, resolve_location
+from solar_challenge.web.shared import (
+    refuse_unrecognised_keys,
+    require_json_object,
+    resolve_location,
+)
 
 # Each parser's recognised top-level keys, and the value each reads as when absent.
 _DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
@@ -27,6 +31,9 @@ _DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
     "start": "",
     "end": "",
 })
+
+#: The keys of a request body parse_date_range reads.
+DATE_RANGE_KEYS: frozenset[str] = frozenset(_DATE_RANGE_DEFAULTS)
 
 _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
     "pv_kw": 4.0,
@@ -48,6 +55,9 @@ _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
     "tariff": None,
     "seg": None,
 })
+
+#: The top-level keys of a home config: those parse_home_config and parse_date_range read.
+_HOME_CONFIG_KEYS: frozenset[str] = frozenset(_HOME_CONFIG_DEFAULTS) | DATE_RANGE_KEYS
 
 
 def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
@@ -128,16 +138,6 @@ def _parse_heat_pump_block(data: object) -> HeatPumpConfig | None:
     )
 
 
-def _refuse_unrecognised_keys(data: Mapping[str, Any]) -> None:
-    recognised = _HOME_CONFIG_DEFAULTS.keys() | _DATE_RANGE_DEFAULTS.keys()
-    unrecognised = sorted(data.keys() - recognised)
-    if unrecognised:
-        raise ValueError(
-            f"Unrecognised home config keys: {', '.join(map(repr, unrecognised))}; "
-            f"recognised keys: {', '.join(sorted(recognised))}"
-        )
-
-
 def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
     """Parse JSON request body into HomeConfig and date range.
 
@@ -157,7 +157,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             or if required fields are missing or invalid.
     """
     data = require_json_object(data, "Home config")
-    _refuse_unrecognised_keys(data)
+    refuse_unrecognised_keys(data, _HOME_CONFIG_KEYS, "home config")
     params = {**_HOME_CONFIG_DEFAULTS, **data}
     pv_kw = float(params["pv_kw"])
     azimuth = float(params["azimuth"])

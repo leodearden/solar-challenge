@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from typing import Any
 
 from flask import current_app, request
@@ -46,6 +47,21 @@ def request_json_object() -> dict[str, Any]:
             JSON null, reads as NoneType.
     """
     return require_json_object(request.get_json(silent=True), "Request body")
+
+
+def refuse_unrecognised_keys(body: Mapping[str, Any], recognised: Collection[str], what: str) -> None:
+    """Refuse *body*, a request's *what*, when it has a top-level key outside *recognised*.
+
+    Raises:
+        ValueError: Naming *what* and each unrecognised key, sorted, and listing the
+            *recognised* keys, sorted.
+    """
+    unrecognised = sorted(body.keys() - recognised)
+    if unrecognised:
+        raise ValueError(
+            f"Unrecognised {what} keys: {', '.join(map(repr, unrecognised))}; "
+            f"recognised keys: {', '.join(sorted(recognised))}"
+        )
 
 
 LOCATION_PRESETS: dict[str, Location] = {
