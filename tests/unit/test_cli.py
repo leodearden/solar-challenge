@@ -358,10 +358,10 @@ home:
 
 
 def _table_text(output: str) -> str:
-    """A Rich table's rows folded onto one line, each row reading "<TYPE> <message>".
+    """A Rich table's rows folded onto one line, each row reading as its cells joined by single spaces.
 
-    CliRunner renders Rich tables at 80 columns, and a long Message cell wraps onto
-    continuation lines whose Type cell is blank. Folding the column rule "│" and all
+    CliRunner renders Rich tables at 80 columns, and a long last cell wraps onto
+    continuation lines whose other cells are blank. Folding the column rule "│" and all
     whitespace to single spaces rejoins each row.
     """
     return " ".join(output.replace("│", " ").split())
