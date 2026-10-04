@@ -309,6 +309,39 @@ home:
         result = runner.invoke(app, ["config", "show", "/nonexistent/file.yaml"])
         assert result.exit_code != 0
 
+    def test_config_show_prints_its_path_verbatim(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A config path Rich would read as markup ([draft]) or an emoji code (:sun:) is shown as the user typed it, after a bold label."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(console, "record", True)
+        config_file = "[draft] :sun:.yaml"
+        Path(config_file).write_text("home:\n  pv:\n    capacity_kw: 4.0\n")
+
+        result = runner.invoke(app, ["config", "show", config_file], catch_exceptions=False)
+        recorded = console.export_text(styles=True)
+
+        assert result.exit_code == 0
+        assert f"Configuration: {config_file}" in " ".join(result.stdout.split())
+        assert Style.parse("bold").render("Configuration:") + f" {config_file}" in recorded
+
+    def test_config_show_prints_each_parsed_key_and_value_verbatim(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Keys and values Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that end in a backslash, are summarised as written; a list as its item count."""
+        monkeypatch.chdir(tmp_path)
+        Path("config.yaml").write_text(
+            yaml.safe_dump({"home": {"name": _TEXT_RICH_WOULD_PARSE, "[ghi, dni]": "[/b]", "panels": [1, 2, 3]}})
+        )
+
+        result = runner.invoke(app, ["config", "show", "config.yaml"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        rows = _table_text(result.stdout)
+        assert f"home.name {_TEXT_RICH_WOULD_PARSE}" in rows
+        assert "home.[ghi, dni] [/b]" in rows
+        assert "home.panels [3 items]" in rows
+
 
 def _table_text(output: str) -> str:
     """A Rich table's rows folded onto one line, each row reading "<TYPE> <message>".
