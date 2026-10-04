@@ -1,4 +1,8 @@
 document.addEventListener('alpine:init', () => {
+    // The fleet form's period and seed until it is changed, and when a loaded scenario sets none.
+    const DEFAULT_PERIOD_DAYS = 30;
+    const DEFAULT_SEED = 42;
+
     // The scope of one distribution_editor call (templates/simulate/partials/distribution-editor.html). dist calls getDist on
     // every read because applyConfig replaces the form's distributions (pinned by test_fleet_import_yaml_shows_each_distribution_in_its_card).
     Alpine.data('distributionEditor', (getDist, newRowValue) => ({
@@ -21,15 +25,17 @@ document.addEventListener('alpine:init', () => {
 
     Alpine.data('fleetSimulator', () => ({
         n_homes: 100,
+        seed: DEFAULT_SEED,
         submitting: false,
         jobId: null,
         runId: null,
         errorMsg: '',
+        importNotice: '',
         simName: '',
 
         /* ---- Period state ---- */
         periodMode: 'preset',
-        periodDays: 30,
+        periodDays: DEFAULT_PERIOD_DAYS,
         startDate: '2024-06-01',
         endDate: '2024-06-30',
 
@@ -133,7 +139,7 @@ document.addEventListener('alpine:init', () => {
             const payload = {
                 name: this.simName || 'Fleet Simulation',
                 n_homes: parseInt(this.n_homes),
-                seed: 42,
+                seed: this.seed,
                 pv: { capacity_kw: this._buildDistPayload(this.pvDist) },
                 load: { annual_consumption_kwh: this._buildDistPayload(this.loadDist) }
             };
@@ -305,6 +311,7 @@ document.addEventListener('alpine:init', () => {
 
         /* ---- YAML Export ---- */
         async exportYaml() {
+            this.errorMsg = '';
             try {
                 const resp = await fetch('/api/fleet/export-yaml', {
                     method: 'POST',
@@ -312,7 +319,8 @@ document.addEventListener('alpine:init', () => {
                     body: JSON.stringify(this.buildPayload())
                 });
                 if (!resp.ok) {
-                    this.errorMsg = 'Export failed';
+                    const data = await resp.json();
+                    this.errorMsg = data.error || 'Export failed';
                     return;
                 }
                 const blob = await resp.blob();
@@ -332,84 +340,104 @@ document.addEventListener('alpine:init', () => {
             const file = event.target.files[0];
             if (!file) return;
             const text = await file.text();
-            try {
-                const resp = await fetch('/api/fleet/import-yaml', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/yaml' },
-                    body: text
-                });
-                const data = await resp.json();
-                if (resp.ok) {
-                    this.applyConfig(data);
-                } else {
-                    this.errorMsg = data.error || 'Import failed';
-                }
-            } catch (e) {
-                this.errorMsg = 'Import error: ' + e.message;
-            }
+            await this._loadFleetForm('/api/fleet/import-yaml', {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/yaml' },
+                body: text
+            });
             /* Reset file input */
             event.target.value = '';
         },
 
-        /* ---- Apply imported config to form state ---- */
-        applyConfig(cfg) {
-            this.n_homes = cfg.n_homes || 100;
-            if (cfg.pv && cfg.pv.capacity_kw) {
-                this.pvDist = this._distFromConfig(cfg.pv.capacity_kw, this.pvDist);
-            }
-            if (cfg.battery && cfg.battery.capacity_kwh) {
-                this.batteryEnabled = true;
-                this.batteryDist = this._distFromConfig(cfg.battery.capacity_kwh, this.batteryDist);
-            } else {
-                this.batteryEnabled = false;
-            }
-            if (cfg.load && cfg.load.annual_consumption_kwh) {
-                this.loadDist = this._distFromConfig(cfg.load.annual_consumption_kwh, this.loadDist);
-            }
-        },
-
-        _distFromConfig(spec, defaults) {
-            if (typeof spec !== 'object' || !spec.type) return defaults;
-            const d = { ...defaults, type: spec.type };
-            if (spec.type === 'normal') {
-                d.mean = spec.mean || 0;
-                d.std = spec.std || 1;
-                d.min = spec.min || 0;
-                d.max = spec.max || 10;
-            } else if (spec.type === 'uniform') {
-                d.min = spec.min || 0;
-                d.max = spec.max || 10;
-            } else if (spec.type === 'weighted_discrete') {
-                if (spec.values && spec.weights) {
-                    d.values = spec.values.map((v, i) => ({
-                        value: v, weight: spec.weights[i] || 1
-                    }));
-                }
-            } else if (spec.type === 'shuffled_pool') {
-                if (spec.values && spec.counts) {
-                    d.entries = spec.values.map((v, i) => ({
-                        value: v, count: spec.counts[i] || 1
-                    }));
-                }
-            }
-            return d;
-        },
-
         /* ---- Preset loading ---- */
-        async loadPreset(name) {
-            if (!name) return;
+        loadPreset(name) {
+            return this._loadFleetForm('/api/fleet/presets/' + encodeURIComponent(name));
+        },
+
+        /* ---- Apply the {form, not_loaded} answer of an import or preset ---- */
+        async _loadFleetForm(url, options) {
+            this.errorMsg = '';
+            this.importNotice = '';
             try {
-                const resp = await fetch('/api/fleet/import-yaml', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/yaml' },
-                    body: name
-                });
-                if (resp.ok) {
-                    const data = await resp.json();
-                    this.applyConfig(data);
+                const resp = await fetch(url, options);
+                const data = await resp.json();
+                if (!resp.ok) {
+                    this.errorMsg = data.error || 'Load failed';
+                    return;
+                }
+                this.applyConfig(data.form);
+                if (data.not_loaded.length > 0) {
+                    this.importNotice = 'Not loaded: the fleet form has no control for '
+                        + data.not_loaded.join(', ') + '.';
                 }
             } catch (e) {
-                this.errorMsg = 'Preset load error: ' + e.message;
+                this.errorMsg = 'Load error: ' + e.message;
+            }
+        },
+
+        /* ---- Apply a fleet form, the body buildPayload posts, to form state ---- */
+        applyConfig(form) {
+            this.simName = form.name ?? '';
+            this.n_homes = form.n_homes;
+            this.seed = form.seed ?? DEFAULT_SEED;
+            this.pvDist = this._distFromConfig(form.pv.capacity_kw, this.pvDist);
+            this.batteryEnabled = Boolean(form.battery);
+            if (form.battery) {
+                this.batteryDist = this._distFromConfig(form.battery.capacity_kwh, this.batteryDist);
+            }
+            this.loadDist = this._distFromConfig(form.load.annual_consumption_kwh, this.loadDist);
+            this._applyPeriod(form.start, form.end);
+            this._applyTariff(form.tariff);
+            this._applySeg(form.seg);
+            this._applyDispatch(form.dispatch_strategy);
+        },
+
+        /* The inverse of _buildDistPayload: the spec's fields over the card's current distribution. */
+        _distFromConfig(spec, current) {
+            return { ...current, ...spec };
+        },
+
+        /* A scenario without a period fixes no dates, so the form runs its default period. */
+        _applyPeriod(start, end) {
+            if (start) {
+                this.periodMode = 'custom';
+                this.startDate = start;
+                this.endDate = end;
+            } else {
+                this.periodMode = 'preset';
+                this.periodDays = DEFAULT_PERIOD_DAYS;
+            }
+        },
+
+        _applyTariff(tariff) {
+            this.tariffEnabled = Boolean(tariff);
+            if (!tariff) return;
+            this.tariffType = tariff.type;
+            if (tariff.type === 'flat_rate') {
+                this.tariffRatePerKwh = tariff.rate_per_kwh;
+            } else {
+                this.tariffPeakRate = tariff.peak_rate;
+                this.tariffOffPeakRate = tariff.off_peak_rate;
+            }
+        },
+
+        _applySeg(seg) {
+            this.segEnabled = Boolean(seg);
+            if (!seg) return;
+            if (seg.preset) {
+                this.segPreset = seg.preset;
+            } else {
+                this.segPreset = 'custom';
+                this.segRatePencePerKwh = seg.rate_pence_per_kwh;
+            }
+        },
+
+        _applyDispatch(dispatch) {
+            this.dispatchStrategyType = dispatch ? dispatch.strategy_type : 'self_consumption';
+            if (this.dispatchStrategyType === 'tou_optimized') {
+                [this.dispatchPeakStart, this.dispatchPeakEnd] = dispatch.peak_hours[0];
+            } else if (this.dispatchStrategyType === 'peak_shaving') {
+                this.dispatchImportLimitKw = dispatch.import_limit_kw;
             }
         }
     }));

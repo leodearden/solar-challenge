@@ -17,24 +17,24 @@ import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
-from solar_challenge.config import (
-    ConfigurationError,
-    parse_dispatch_strategy_config,
-    parse_tariff_config,
-)
+from solar_challenge.config import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.database import get_db
+from solar_challenge.web.fleet_scenario import (
+    fleet_form_from_scenario,
+    parse_fleet_form,
+    scenario_from_fleet_form,
+)
 from solar_challenge.web.shared import (
     NotAJsonObject,
     get_job_manager,
     get_storage,
     request_json_object,
     require_json_object,
-    resolve_location,
 )
-from solar_challenge.web.simulation_params import parse_date_range, parse_home_config, parse_seg_tariff
+from solar_challenge.web.simulation_params import parse_home_config
 from solar_challenge.web.storage import stored_fleet_home_configs, stored_home_config
 
 logger = logging.getLogger(__name__)
@@ -416,77 +416,54 @@ def preview_distribution() -> tuple[Response, int]:
 def simulate_fleet_from_distribution() -> tuple[Response, int]:
     """Submit a fleet simulation using distribution configuration.
 
-    Expects a JSON body describing distribution parameters for PV, battery,
-    and load components.
+    Expects the JSON body the fleet page posts, a fleet form, read by
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
 
     Returns:
-        JSON with ``job_id`` and ``run_id``, HTTP 201 on success.
+        JSON with ``job_id`` and ``run_id``, HTTP 201 on success; or the ``error``,
+        HTTP 400, for a form parse_fleet_form refuses.
     """
     data = request_json_object()
 
     job_manager = get_job_manager()
 
-    from solar_challenge.web.fleet_config import (  # noqa: PLC0415
-        apply_fleet_overlay,
-        form_to_fleet_distribution_config,
-    )
-    from solar_challenge.config import (  # noqa: PLC0415
-        parse_fleet_distribution_config,
-        generate_homes_from_distribution,
-    )
-
     try:
-        cfg_dict = form_to_fleet_distribution_config(data)
-        fleet_cfg = parse_fleet_distribution_config(cfg_dict)
-        loc = resolve_location(data.get("location", "bristol"))
-        configs = generate_homes_from_distribution(fleet_cfg, loc)
-        # Apply fleet-wide overlay (tariff / dispatch / SEG) — mirrors single-home contract.
-        tariff_config = parse_tariff_config(data.get("tariff"))
-        dispatch_strategy = parse_dispatch_strategy_config(data.get("dispatch_strategy"))
-        seg_tariff = parse_seg_tariff(data.get("seg"))
-        configs = apply_fleet_overlay(
-            configs,
-            tariff_config=tariff_config,
-            dispatch_strategy=dispatch_strategy,
-            seg_tariff=seg_tariff,
-        )
-        start_s, end_s = parse_date_range(data)
-        start_date = pd.Timestamp(start_s, tz=loc.timezone)
-        end_date = pd.Timestamp(end_s, tz=loc.timezone)
+        fleet = parse_fleet_form(data)
     except (ValueError, TypeError, ConfigurationError) as exc:
         return jsonify({"error": str(exc)}), 400
 
-    fleet_name = data.get("name", "Fleet Distribution Simulation")
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
 
     job_id, run_id = job_manager.submit_fleet_job(
-        configs=configs,
-        start_date=start_date,
-        end_date=end_date,
+        configs=list(fleet.homes),
+        start_date=fleet.start_date,
+        end_date=fleet.end_date,
         db_path=db_path,
         data_dir=data_dir,
-        name=fleet_name,
+        name=fleet.name,
     )
 
     return jsonify({"job_id": job_id, "run_id": run_id}), 201
 
 @api_bp.route("/fleet/export-yaml", methods=["POST"])
-def export_fleet_yaml() -> Response:
-    """Export fleet configuration as YAML.
+def export_fleet_yaml() -> Response | tuple[Response, int]:
+    """Export the fleet page's form as the fleet scenario load_fleet_config reads back.
 
-    Expects a JSON body with fleet distribution parameters.
+    Expects the JSON body the fleet page posts to /api/simulate/fleet-from-distribution.
 
     Returns:
-        YAML file download response.
+        The scenario's YAML file as a download, HTTP 200; or the ``error``, HTTP 400, for a
+        form the simulate endpoint refuses, with its message: both read the form with
+        :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
     """
     data = request_json_object()
-
-    from solar_challenge.web.fleet_config import fleet_distribution_to_yaml  # noqa: PLC0415
-
-    yaml_str = fleet_distribution_to_yaml(data)
+    try:
+        document = scenario_from_fleet_form(data)
+    except (ValueError, TypeError, ConfigurationError) as exc:
+        return jsonify({"error": str(exc)}), 400
     return Response(
-        yaml_str,
+        scenario_yaml(document),
         mimetype="text/yaml",
         headers={"Content-Disposition": "attachment; filename=fleet-config.yaml"},
     )
@@ -494,25 +471,53 @@ def export_fleet_yaml() -> Response:
 
 @api_bp.route("/fleet/import-yaml", methods=["POST"])
 def import_fleet_yaml() -> tuple[Response, int]:
-    """Import fleet configuration from YAML.
+    """Import a fleet scenario's YAML as the fleet page's form.
 
-    Accepts raw YAML text in the request body (Content-Type: text/yaml)
-    or a JSON-encoded YAML string.
+    Accepts the raw YAML text as the request body (Content-Type: text/yaml).
 
     Returns:
-        JSON with parsed fleet distribution config, HTTP 200 on success.
+        The answer of :func:`_imported_fleet_form_answer`; or the ``error``, HTTP 400,
+        for an empty body.
     """
-    from solar_challenge.web.fleet_config import yaml_to_fleet_distribution  # noqa: PLC0415
-
-    # Try to get raw body text
-    yaml_str = request.get_data(as_text=True)
-    if not yaml_str:
+    yaml_text = request.get_data(as_text=True)
+    if not yaml_text:
         return jsonify({"error": "Empty request body"}), 400
+    return _imported_fleet_form_answer(yaml_text)
+
+
+@api_bp.route("/fleet/presets/<name>", methods=["GET"])
+def fleet_preset(name: str) -> tuple[Response, int]:
+    """Load the built-in scenario file *name* as the fleet page's form.
+
+    Returns:
+        The answer of :func:`_imported_fleet_form_answer` for the file's YAML; or the
+        ``error``, HTTP 404, when no built-in scenario file is named *name*.
+    """
+    path = _builtin_scenario_path(name)
+    if path is None:
+        return jsonify({"error": f"Preset '{name}' not found"}), 404
+    return _imported_fleet_form_answer(path.read_text(encoding="utf-8"))
+
+
+def _imported_fleet_form_answer(yaml_text: str) -> tuple[Response, int]:
+    """The fleet page's answer for the fleet scenario *yaml_text* holds.
+
+    Returns:
+        JSON ``{"form", "not_loaded"}``, HTTP 200: the form is the body the fleet page
+        posts, and not_loaded the paths of the scenario's settings it has no control for
+        (see :func:`~solar_challenge.web.fleet_scenario.fleet_form_from_scenario`).  Or the
+        ``error``, HTTP 400, for YAML that does not parse, or a scenario the fleet page
+        cannot load.
+    """
     try:
-        config = yaml_to_fleet_distribution(yaml_str)
-    except ValueError as exc:
+        document = _yaml.safe_load(yaml_text)
+    except _yaml.YAMLError as exc:
+        return jsonify({"error": f"Invalid YAML: {exc}"}), 400
+    try:
+        imported = fleet_form_from_scenario(document)
+    except (ValueError, TypeError, ConfigurationError) as exc:
         return jsonify({"error": str(exc)}), 400
-    return jsonify(config), 200
+    return jsonify({"form": dict(imported.form), "not_loaded": list(imported.not_loaded)}), 200
 
 # ---------------------------------------------------------------------------
 # Parameter sweep endpoint
@@ -977,6 +982,15 @@ def _scenarios_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "scenarios"
 
 
+def _builtin_scenario_path(name: str) -> Path | None:
+    """The built-in scenario file *name*, its .yaml file before its .yml one; None when there is neither."""
+    for suffix in (".yaml", ".yml"):
+        path = _scenarios_dir() / f"{name}{suffix}"
+        if path.is_file():
+            return path
+    return None
+
+
 @api_bp.route("/scenarios/preview-yaml", methods=["POST"])
 def scenarios_preview_yaml() -> tuple[Response, int]:
     """The YAML text of the fleet scenario a builder form describes.
@@ -1112,19 +1126,17 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
         JSON preset object, or 404 if not found.
     """
     # Try built-in scenarios directory
-    scenarios_dir = _scenarios_dir()
-    for suffix in (".yaml", ".yml"):
-        path = scenarios_dir / f"{name}{suffix}"
-        if path.is_file():
-            try:
-                content = _yaml.safe_load(path.read_text())
-                return jsonify({
-                    "name": name,
-                    "source": "builtin",
-                    "config": content,
-                }), 200
-            except Exception as exc:  # noqa: BLE001
-                return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
+    path = _builtin_scenario_path(name)
+    if path is not None:
+        try:
+            content = _yaml.safe_load(path.read_text())
+            return jsonify({
+                "name": name,
+                "source": "builtin",
+                "config": content,
+            }), 200
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
     # Try database
     db_path = current_app.config["DATABASE"]
     try:

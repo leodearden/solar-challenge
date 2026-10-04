@@ -2,11 +2,14 @@
 """Tests for load_fleet_config, on inline fleet files and on the fleet scenarios shipped in scenarios/."""
 
 import json
+import re
+import warnings
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
-from solar_challenge.config import ConfigurationError, load_fleet_config
+from solar_challenge.config import ConfigurationError, DispatchStrategyConfig, load_fleet_config
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.pv import calculate_degradation_factor
 
@@ -519,3 +522,87 @@ fleet_distribution:
         # Strategy is still threaded despite the warning.
         for home in fleet.homes:
             assert home.dispatch_strategy == "tou_optimized"
+
+
+class TestLoadFleetConfigBatteryDispatchStrategy:
+    """fleet_distribution.battery.dispatch_strategy is the dispatch strategy of every generated battery."""
+
+    @staticmethod
+    def _load_fleet(tmp_path: Path, dispatch_strategy: Optional[str]) -> FleetConfig:
+        """Load 4 homes whose battery pool gives exactly two of them a 5 kWh battery, whatever the seed.
+
+        *dispatch_strategy* is the battery block's dispatch_strategy in YAML flow style, or None for no key.
+        """
+        dispatch_line = f"\n    dispatch_strategy: {dispatch_strategy}" if dispatch_strategy else ""
+        path = tmp_path / "fleet.yaml"
+        path.write_text(f"""
+name: Battery Dispatch Strategy Test
+fleet_distribution:
+  n_homes: 4
+  seed: 7
+  pv:
+    capacity_kw: 4.0
+  battery:
+    capacity_kwh:
+      type: shuffled_pool
+      values: [null, 5.0]
+      counts: [2, 2]{dispatch_line}
+  load:
+    annual_consumption_kwh: 3400
+""")
+        return load_fleet_config(path)
+
+    def test_a_fleet_battery_dispatch_strategy_reaches_every_home_with_a_battery(
+        self, tmp_path: Path
+    ) -> None:
+        fleet = self._load_fleet(tmp_path, "{strategy_type: tou_optimized, peak_hours: [[16, 21]]}")
+
+        batteries = [home.battery_config for home in fleet.homes]
+        with_battery = [battery for battery in batteries if battery is not None]
+        assert len(with_battery) == 2, "premise: the pool gives two homes a battery"
+        assert batteries.count(None) == 2, "premise: the pool leaves two homes without a battery"
+        for battery in with_battery:
+            assert battery.dispatch_strategy == DispatchStrategyConfig(
+                "tou_optimized", peak_hours=[(16, 21)]
+            )
+
+    def test_a_fleet_battery_tou_dispatch_strategy_needs_no_tariff_so_loads_without_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """A battery's own tou_optimized dispatches by its peak_hours, needing no tariff, so it loads without the no-tariff warning.
+
+        That warning is for fleet_distribution.dispatch_strategy's tou_optimized, which
+        dispatches by the scenario's tariff and falls back to self-consumption without one.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._load_fleet(tmp_path, "{strategy_type: tou_optimized, peak_hours: [[16, 21]]}")
+
+        assert [str(warning.message) for warning in caught if "tariff" in str(warning.message)] == []
+
+    def test_a_fleet_battery_block_without_dispatch_strategy_gives_its_batteries_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Pins the default the new key leaves alone; it passes before the key exists too."""
+        fleet = self._load_fleet(tmp_path, None)
+
+        with_battery = [home.battery_config for home in fleet.homes if home.battery_config is not None]
+        assert len(with_battery) == 2, "premise: the pool gives two homes a battery"
+        assert all(battery.dispatch_strategy is None for battery in with_battery)
+
+    @pytest.mark.parametrize(
+        ("dispatch_strategy", "reason"),
+        [
+            pytest.param(
+                "{strategy_type: peak_shaving, import_limit: 3.0}",
+                re.escape("fleet_distribution.battery.dispatch_strategy"),
+                id="an-unrecognised-key-named-by-its-block-path",
+            ),
+            pytest.param("{strategy_type: turbo}", "turbo", id="an-unknown-strategy-type"),
+        ],
+    )
+    def test_a_fleet_battery_dispatch_strategy_the_grammar_refuses_is_refused(
+        self, tmp_path: Path, dispatch_strategy: str, reason: str
+    ) -> None:
+        with pytest.raises(ConfigurationError, match=reason):
+            self._load_fleet(tmp_path, dispatch_strategy)

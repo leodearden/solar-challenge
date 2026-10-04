@@ -397,8 +397,15 @@
 
     <!-- Error display -->
     <template x-if="errorMsg">
-        <div class="mb-6 px-4 py-3 rounded-lg text-sm font-medium border-l-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-500">
+        <div role="alert" class="mb-6 px-4 py-3 rounded-lg text-sm font-medium border-l-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-500">
             <span x-text="errorMsg"></span>
+        </div>
+    </template>
+
+    <!-- The settings of an imported or preset scenario the form has no control for -->
+    <template x-if="importNotice">
+        <div role="status" class="mb-6 px-4 py-3 rounded-lg text-sm font-medium border-l-4 bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-400 border-sky-500">
+            <span x-text="importNotice"></span>
         </div>
     </template>
 

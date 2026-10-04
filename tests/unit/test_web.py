@@ -1042,67 +1042,67 @@ class TestFleetConfigHelpers:
 
         assert config["pv"]["capacity_kw"]["counts"] == [0, MAX_FLEET_HOMES]
 
-    def test_fleet_distribution_to_yaml(self) -> None:
-        """Test converting fleet config to YAML string."""
-        from solar_challenge.web.fleet_config import fleet_distribution_to_yaml
-
-        config = {
-            "n_homes": 100,
-            "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
-            "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2000, "max": 5000}},
-        }
-        yaml_str = fleet_distribution_to_yaml(config)
-        assert "n_homes: 100" in yaml_str
-        assert isinstance(yaml_str, str)
-
-    def test_yaml_to_fleet_distribution(self) -> None:
-        """Test parsing YAML string to fleet distribution config."""
-        from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
-
-        yaml_str = """
-fleet_distribution:
-  n_homes: 100
-  pv:
-    capacity_kw:
-      type: normal
-      mean: 4.0
-      std: 1.0
-  load:
-    annual_consumption_kwh:
-      type: uniform
-      min: 2000
-      max: 5000
-"""
-        config = yaml_to_fleet_distribution(yaml_str)
-        assert config["n_homes"] == 100
-        assert "pv" in config
-        assert "load" in config
-
-    def test_yaml_to_fleet_distribution_invalid_raises(self) -> None:
-        """Test that invalid YAML raises ValueError."""
-        from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
-
-        with pytest.raises(ValueError):
-            yaml_to_fleet_distribution("not: a: valid: fleet: config")
-
-    def test_yaml_roundtrip(self) -> None:
-        """Test that export/import YAML round-trips correctly."""
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param(
+                {"type": "normal", "mean": 4.0, "std": 1.0, "min": 2.0, "max": 8.0}, id="normal"
+            ),
+            pytest.param({"type": "uniform", "min": 3.0, "max": 6.0}, id="uniform"),
+            pytest.param(
+                {
+                    "type": "weighted_discrete",
+                    "values": [{"value": 3.0, "weight": 2.0}, {"value": 5.0, "weight": 1.0}],
+                },
+                id="weighted-discrete",
+            ),
+            pytest.param(
+                {
+                    "type": "shuffled_pool",
+                    "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": 1}],
+                },
+                id="shuffled-pool",
+            ),
+        ],
+    )
+    def test_distribution_form_spec_is_the_inverse_of_the_forms_conversion(self, spec: dict) -> None:
+        """A distribution the fleet page's editor sends converts to config.py's grammar and reads back as itself."""
         from solar_challenge.web.fleet_config import (
-            fleet_distribution_to_yaml,
-            yaml_to_fleet_distribution,
+            distribution_form_spec,
+            form_to_fleet_distribution_config,
         )
 
-        original = {
-            "n_homes": 50,
-            "seed": 42,
-            "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
-            "load": {"annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800}},
-        }
-        yaml_str = fleet_distribution_to_yaml(original)
-        restored = yaml_to_fleet_distribution(yaml_str)
-        assert restored["n_homes"] == 50
-        assert restored["pv"]["capacity_kw"]["type"] == "uniform"
-        assert restored["load"]["annual_consumption_kwh"]["type"] == "normal"
+        config = form_to_fleet_distribution_config(
+            {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+        )
+
+        assert (
+            distribution_form_spec(config["pv"]["capacity_kw"], "fleet_distribution.pv.capacity_kw")
+            == spec
+        )
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param(5.5, id="fixed-number"),
+            pytest.param(
+                {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 2.0},
+                id="proportional-to",
+            ),
+            pytest.param({"type": "normal", "mean": 5.0, "std": 2.0}, id="normal-without-clamps"),
+            pytest.param(
+                {"type": "normal", "mean": 5.0, "std": 2.0, "min": 0.0}, id="normal-without-max"
+            ),
+        ],
+    )
+    def test_distribution_form_spec_refuses_a_distribution_the_editor_cannot_hold(
+        self, spec: object
+    ) -> None:
+        """A fixed value, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
+        from solar_challenge.web.fleet_config import distribution_form_spec
+
+        with pytest.raises(ValueError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
+            distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
 
 
 class TestFleetApiEndpoints:
@@ -1172,48 +1172,6 @@ class TestFleetApiEndpoints:
         response = client.post(
             "/api/simulate/fleet-from-distribution",
             content_type="application/json",
-        )
-        assert response.status_code == 400
-
-    def test_export_fleet_yaml(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/export-yaml returns YAML content."""
-        response = client.post(
-            "/api/fleet/export-yaml",
-            json={
-                "n_homes": 100,
-                "pv": {"capacity_kw": {"type": "uniform", "min": 3, "max": 6}},
-            },
-        )
-        assert response.status_code == 200
-        assert "text/yaml" in response.content_type
-        assert b"n_homes" in response.data
-
-    def test_import_fleet_yaml(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/import-yaml parses YAML correctly."""
-        yaml_content = """
-fleet_distribution:
-  n_homes: 50
-  pv:
-    capacity_kw:
-      type: normal
-      mean: 4.0
-      std: 1.0
-"""
-        response = client.post(
-            "/api/fleet/import-yaml",
-            data=yaml_content,
-            content_type="text/yaml",
-        )
-        assert response.status_code == 200
-        data = response.get_json()
-        assert data["n_homes"] == 50
-
-    def test_import_fleet_yaml_invalid(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/import-yaml with invalid YAML returns 400."""
-        response = client.post(
-            "/api/fleet/import-yaml",
-            data="just: some: random: yaml",
-            content_type="text/yaml",
         )
         assert response.status_code == 400
 

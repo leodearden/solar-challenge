@@ -2,17 +2,18 @@
 """Helper module for fleet configuration in the web dashboard.
 
 Provides utilities for sampling distributions, converting form data to
-fleet distribution configs, YAML import/export, and fleet-wide overlay
-application for tariff/dispatch/SEG settings.
+fleet distribution configs and their distributions back to the form's,
+and fleet-wide overlay application for tariff/dispatch/SEG settings.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import math
 import random
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
-import yaml
 
 from solar_challenge.home import HomeConfig
 
@@ -329,6 +330,70 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+#: The distribution types the fleet page's distribution editor holds.
+_EDITOR_DISTRIBUTION_TYPES: tuple[str, ...] = (
+    "normal", "uniform", "weighted_discrete", "shuffled_pool",
+)
+
+
+def distribution_form_spec(spec: object, path: str) -> dict[str, Any]:
+    """The fleet form's distribution for the config.py grammar *spec* at *path*: the inverse of :func:`_build_distribution_dict`.
+
+    *spec* is one the grammar accepts.  The form's distribution is the editor's: a normal
+    with both clamps, a uniform, or weighted_discrete or shuffled_pool rows, its numbers
+    read as _build_distribution_dict reads them.
+
+    Raises:
+        ValueError: For a *spec* the editor cannot hold, naming *path*: a fixed value, a type
+            the editor has no form for, a normal without both clamps, or a value that is not
+            a finite number.
+    """
+    if not isinstance(spec, Mapping) or spec.get("type") not in _EDITOR_DISTRIBUTION_TYPES:
+        raise ValueError(
+            f"{path} must be one of the fleet page's distributions "
+            f"({', '.join(_EDITOR_DISTRIBUTION_TYPES)}), got {spec!r}"
+        )
+    dist_type = spec["type"]
+    if dist_type == "normal":
+        return {"type": dist_type, **_form_numbers(spec, path, ("mean", "std", "min", "max"))}
+    if dist_type == "uniform":
+        return {"type": dist_type, **_form_numbers(spec, path, ("min", "max"))}
+    values = _form_number_list(spec["values"], f"{path}.values")
+    if dist_type == "weighted_discrete":
+        weights = _form_number_list(spec["weights"], f"{path}.weights")
+        return {
+            "type": dist_type,
+            "values": [{"value": value, "weight": weight} for value, weight in zip(values, weights)],
+        }
+    counts = _form_number_list(spec["counts"], f"{path}.counts")
+    return {
+        "type": dist_type,
+        "entries": [{"value": value, "count": int(count)} for value, count in zip(values, counts)],
+    }
+
+
+def _form_numbers(spec: Mapping[str, Any], path: str, keys: Iterable[str]) -> dict[str, float]:
+    """The *keys* of the *path* distribution *spec*, each read by :func:`_form_number`."""
+    return {key: _form_number(spec.get(key), f"{path}.{key}") for key in keys}
+
+
+def _form_number_list(numbers: Iterable[Any], path: str) -> list[float]:
+    """Each of *numbers*, the *path* list, read by :func:`_form_number`."""
+    return [_form_number(number, f"{path}[{index}]") for index, number in enumerate(numbers)]
+
+
+def _form_number(value: object, path: str) -> float:
+    """*value*, a finite number, as the float a form field holds.
+
+    Raises:
+        ValueError: For any other value, a missing one read as None; the error names *path*
+            and the value.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{path} must be a finite number, got {value!r}")
+    return float(value)
+
+
 def _pool_counts(entries: list[dict[str, Any]]) -> list[int]:
     """Return the count of each shuffled_pool row in *entries*, an absent count reading as 1.
 
@@ -345,80 +410,3 @@ def _pool_counts(entries: list[dict[str, Any]]) -> list[int]:
     if total > MAX_FLEET_HOMES:
         raise ValueError(f"entries counts must total at most {MAX_FLEET_HOMES}, got {total}")
     return counts
-
-
-def fleet_distribution_to_yaml(config: dict[str, Any]) -> str:
-    """Convert a fleet distribution config dict to a YAML string.
-
-    Args:
-        config: Fleet distribution config dict (as returned by
-            :func:`form_to_fleet_distribution_config` or parsed from UI).
-
-    Returns:
-        YAML-formatted string.
-    """
-    # Build a clean scenario structure
-    scenario: dict[str, Any] = {
-        "name": config.get("name", "Fleet Configuration"),
-        "fleet_distribution": {
-            "n_homes": config.get("n_homes", 100),
-            "seed": config.get("seed", 42),
-        },
-    }
-
-    fleet = scenario["fleet_distribution"]
-
-    for component in ("pv", "battery", "load"):
-        if component in config:
-            fleet[component] = config[component]
-
-    return yaml.dump(scenario, default_flow_style=False, sort_keys=False)  # type: ignore[no-any-return]
-
-
-def yaml_to_fleet_distribution(yaml_str: str) -> dict[str, Any]:
-    """Parse a YAML string to a fleet distribution config dict.
-
-    Supports both full scenario YAML files (with a ``fleet_distribution``
-    key) and bare fleet distribution dicts.
-
-    Args:
-        yaml_str: YAML-formatted string.
-
-    Returns:
-        Fleet distribution config dict.
-
-    Raises:
-        ValueError: If the YAML is invalid or missing required fields.
-    """
-    try:
-        data = yaml.safe_load(yaml_str)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Invalid YAML: {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise ValueError("YAML must contain a mapping at the top level")
-
-    # Support both full scenario files and bare fleet_distribution dicts
-    if "fleet_distribution" in data:
-        fleet_data = data["fleet_distribution"]
-    elif "n_homes" in data:
-        fleet_data = data
-    else:
-        raise ValueError(
-            "YAML must contain either a 'fleet_distribution' key or an 'n_homes' key"
-        )
-
-    if not isinstance(fleet_data, dict):
-        raise ValueError("Fleet distribution data must be a mapping")
-
-    result: dict[str, Any] = {
-        "n_homes": fleet_data.get("n_homes", 100),
-        "seed": fleet_data.get("seed", 42),
-        "name": data.get("name", "Imported Configuration"),
-    }
-
-    for component in ("pv", "battery", "load"):
-        if component in fleet_data:
-            result[component] = fleet_data[component]
-
-    return result
