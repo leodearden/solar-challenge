@@ -40,6 +40,16 @@ uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slo
 # verify never runs them
 uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider
 
+# Tailwind rebuild: after editing tailwind.config.js, static/src/input.css, a
+# template or a script, rebuild static/dist/style.css and commit it; in a sandbox
+# that cannot write ~/.npm, give npm ci `--cache /tmp/<dir>`
+cd src/solar_challenge/web && npm ci && npm run build:css
+
+# Stylesheet build check: what the offline lane's css-build job runs after every
+# merge; it rebuilds the stylesheet with npm, so it needs npm and network access,
+# and the per-task verify never runs it
+uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider
+
 # CLI entry point
 solar-challenge --help
 ```
@@ -96,7 +106,7 @@ Typer-based; subcommand groups are registered in `cli/main.py` (run `solar-chall
 - **mypy strict mode** enabled; pvlib/pandas/numpy/yaml have `ignore_missing_imports`
 - **Reproducible simulations** via per-home seeding (seed parameter in configs)
 - **Scenario files** in `scenarios/` (YAML) — e.g., `bristol-phase1.yaml` defines a 100-home fleet
-- **Offline fast tests** — `tests/conftest.py` runs every test not marked `slow` or `e2e` offline, with every fixture it sets up or tears down, whatever its scope: a lookup or connection off the machine fails the test, naming the destination. So does an HTTP(S) request from a child process the test starts: the guard points the child's proxy variables at a refusing proxy on this machine and leaves only this machine in `NO_PROXY`, and uv, curl, and Python's requests and urllib honour those variables. `get_tmy_data` reads the test's own empty `weather_cache` fixture; seed it with `weather_cache.put(synthetic_june_weather(day), "tmy", location)`, or pass `weather_data`. Mark a test `slow` only if it needs a live service: PVGIS, or PyPI, from which each interpreter-matrix case provisions its interpreter's environment. Run a uv command that resolves from the package index with `UV_OFFLINE=1`, reading the index from uv's cache, as `tests/unit/test_stale_uv_lock.py` and `tests/integration/test_external_install.py` do. When that cache is cold, newly cleaned or behind a dependency change, run `uv lock --dry-run --refresh` once with network access for the stale-lock probes; for the external install, or for a uv probe that needs a wheel the cache lacks (e.g. a dependency new to the `e2e` extra), run the failing uv command once with network access.
+- **Offline fast tests** — `tests/conftest.py` runs every test not marked `slow` or `e2e` offline, with every fixture it sets up or tears down, whatever its scope: a lookup or connection off the machine fails the test, naming the destination. So does an HTTP(S) request from a child process the test starts: the guard points the child's proxy variables at a refusing proxy on this machine and leaves only this machine in `NO_PROXY`, and uv, curl, and Python's requests and urllib honour those variables. `get_tmy_data` reads the test's own empty `weather_cache` fixture; seed it with `weather_cache.put(synthetic_june_weather(day), "tmy", location)`, or pass `weather_data`. Mark a test `slow` only if it needs a live service: PVGIS; PyPI, from which each interpreter-matrix case provisions its interpreter's environment; or the npm registry, from which the css-build check installs Tailwind. Run a uv command that resolves from the package index with `UV_OFFLINE=1`, reading the index from uv's cache, as `tests/unit/test_stale_uv_lock.py` and `tests/integration/test_external_install.py` do. When that cache is cold, newly cleaned or behind a dependency change, run `uv lock --dry-run --refresh` once with network access for the stale-lock probes; for the external install, or for a uv probe that needs a wheel the cache lacks (e.g. a dependency new to the `e2e` extra), run the failing uv command once with network access.
 
 ## Optional Dependencies
 
@@ -152,3 +162,15 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   `bristol_tmy` and the cause is a connection error, a timeout or an HTTP 5xx,
   PVGIS is still out of reach: retry later before changing code. Any other
   failure means PVGIS's response, or pvlib's mapping of it, has changed.
+- The lane's `css-build` job rebuilds the web package's `static/dist/style.css`
+  from the committed sources and `package-lock.json` in a scratch copy, and
+  fails when the committed file differs. Tailwind scans the raw text of
+  templates and `static/js`, so an edit there can change the build too. A fix
+  task it files names
+  `tests/css_build/test_dist_style_css.py::test_dist_style_css_matches_a_fresh_build_of_its_sources`,
+  or `css-build::nonzero-exit` when the red run printed no failing node-id (it
+  hit the job's `timeout`, or pytest could not start). The fix is the Tailwind
+  rebuild in Commands, then a commit of the stylesheet. Reproduce with
+  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. To change
+  the Tailwind version, run `npm install tailwindcss@<version>`, which rewrites
+  `package-lock.json`, then rebuild.

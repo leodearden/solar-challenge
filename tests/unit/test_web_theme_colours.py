@@ -58,7 +58,7 @@ def test_no_template_writes_a_theme_colour() -> None:
         "These templates write out colours that tailwind.config.js defines, so a theme "
         f"edit does not reach them:{_listing(written)}\n"
         "Name the colour through a Tailwind utility instead, such as bg-primary-500, then "
-        "rebuild with `cd src/solar_challenge/web && npm install && npm run build:css` and "
+        "rebuild with `cd src/solar_challenge/web && npm ci && npm run build:css` and "
         "commit static/dist/style.css. Delete a commented-out copy."
     )
 
@@ -74,7 +74,7 @@ def test_the_hand_written_stylesheet_writes_no_theme_colour() -> None:
         f"{HAND_WRITTEN_STYLESHEET_KEY} is served as-is, never compiled, so it cannot name a "
         "theme colour. Colour the element with a Tailwind utility instead (on a pseudo-element, "
         "an arbitrary variant such as [&::-webkit-slider-thumb]:bg-primary-500), then rebuild "
-        "with `cd src/solar_challenge/web && npm install && npm run build:css` and commit "
+        "with `cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
         "static/dist/style.css. Delete the declaration, including both the :root and the "
         "html.dark copy of a variable."
     )

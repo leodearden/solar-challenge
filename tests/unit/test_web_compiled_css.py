@@ -43,6 +43,6 @@ def test_every_class_the_dashboard_applies_is_named_by_a_served_stylesheet() -> 
         "These classes have no rule in any stylesheet base.html links, so they do nothing "
         f"in the browser:{listing}\n"
         "For Tailwind utilities, rebuild with "
-        "`cd src/solar_challenge/web && npm install && npm run build:css`, then commit "
+        "`cd src/solar_challenge/web && npm ci && npm run build:css`, then commit "
         "static/dist/style.css. For a hand-written class, define it in static/style.css."
     )
