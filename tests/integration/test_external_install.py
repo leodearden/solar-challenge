@@ -13,6 +13,9 @@ These tests prove that an EXTERNAL consumer can:
     License-Expression AGPL-3.0-or-later AND MIT.
   - Confirm the wheel ships, under .dist-info/licenses, the text of the root
     LICENSE and of each package vendored under solar_challenge/web/static/vendor.
+  - Confirm the wheel ships, under .dist-info/licenses, the license texts of the
+    Tailwind code compiled into solar_challenge/web/static/dist/style.css, kept
+    beside that stylesheet.
   - Confirm that License-Expression names the license each package vendored
     under solar_challenge/web/static/vendor records in its upstream.toml.
 
@@ -227,8 +230,8 @@ def _wheel_metadata(wheel: zipfile.ZipFile) -> email.message.Message:
     return email.message_from_bytes(wheel.read(_metadata_member(wheel)))
 
 
-def _shipped_license_files(built_wheel: Path) -> list[str]:
-    """Return the License-File entries of *built_wheel*'s METADATA whose text the wheel carries.
+def _shipped_license_texts(built_wheel: Path) -> dict[str, str]:
+    """Return the text of each license file *built_wheel* carries, keyed by its METADATA License-File entry.
 
     PEP 639 keeps each license file at <dist>.dist-info/licenses/<entry>, where the entry is the
     file's path relative to the project root.
@@ -237,7 +240,16 @@ def _shipped_license_files(built_wheel: Path) -> list[str]:
         licenses_dir = _metadata_member(wheel).removesuffix("METADATA") + "licenses/"
         members = set(wheel.namelist())
         declared = _wheel_metadata(wheel).get_all("License-File", [])
-    return [entry for entry in declared if licenses_dir + entry in members]
+        return {
+            entry: wheel.read(licenses_dir + entry).decode("utf-8")
+            for entry in declared
+            if licenses_dir + entry in members
+        }
+
+
+def _shipped_license_files(built_wheel: Path) -> list[str]:
+    """Return the License-File entries of *built_wheel*'s METADATA whose text the wheel carries."""
+    return list(_shipped_license_texts(built_wheel))
 
 
 @pytest.mark.build
@@ -348,6 +360,44 @@ def test_built_wheel_declares_the_license_each_vendored_package_records(
         f'upstream license by its SPDX id, as license = "<id>" in the package directory\'s '
         f"{_UPSTREAM_RECORD}, and join every recorded license into [project] license in "
         "pyproject.toml with AND."
+    )
+
+
+_COMPILED_CSS_DIR = "src/solar_challenge/web/static/dist"
+_COMPILED_TAILWIND_COPYRIGHT_NOTICES = {
+    "tailwindcss": "Copyright (c) Tailwind Labs, Inc.",
+    "tailwindcss's preflight.css": "Copyright (c) Nicolas Gallagher",
+}
+
+
+@pytest.mark.build
+def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compiled_css(built_wheel: Path) -> None:
+    """The Tailwind CLI compiles two MIT-licensed works into web/static/dist/style.css. One is the
+    CSS tailwindcss's engine emits (the --tw-* defaults and the utilities), under tailwindcss's
+    LICENSE. The other, after the /*! tailwindcss ... */ banner, is a copy of its preflight.css,
+    under the separate LICENSE beside preflight.css in the tailwindcss package's src/css/.
+
+    The banner names their license but carries neither their copyright notices nor the permission
+    notice that MIT requires to accompany a copy. Both license texts, kept verbatim beside the
+    compiled CSS, carry them. The wheel declares them, so they also land in .dist-info/licenses/.
+    """
+    shipped = _shipped_license_texts(built_wheel)
+    beside_css = [text for entry, text in shipped.items() if entry.startswith(f"{_COMPILED_CSS_DIR}/")]
+    unlicensed = [
+        work
+        for work, notice in _COMPILED_TAILWIND_COPYRIGHT_NOTICES.items()
+        if not any(notice in text for text in beside_css)
+    ]
+
+    assert unlicensed == [], (
+        f"The built wheel ships, beside the compiled CSS in {_COMPILED_CSS_DIR}, no license text "
+        f"carrying the copyright notice of the Tailwind works {unlicensed}; the license texts it ships "
+        f"are {list(shipped)}. Copy the tailwindcss package's LICENSE to "
+        f"{_COMPILED_CSS_DIR}/LICENSE-tailwindcss.txt and its src/css/LICENSE to "
+        f"{_COMPILED_CSS_DIR}/LICENSE-tailwindcss-preflight.txt, verbatim, from the version that "
+        "compiled style.css (its banner names it; node_modules/tailwindcss holds it once the web "
+        "package's npm dependencies are installed in src/solar_challenge/web). Match them with the "
+        f'[project] license-files pattern "{_COMPILED_CSS_DIR}/LICENSE*" in pyproject.toml.'
     )
 
 
