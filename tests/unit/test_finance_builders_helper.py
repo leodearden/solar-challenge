@@ -112,12 +112,16 @@ def test_fleet_results_of_pair_each_given_result_in_order_with_a_default_home() 
     ] == pytest.approx([18.0, 6.0])
 
 
-def test_fleet_results_of_pair_the_given_results_with_the_given_homes() -> None:
+def test_fleet_results_of_pair_the_given_results_in_order_with_the_given_homes() -> None:
     homes = [make_home_config(), make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0))]
+    per_home_results = [make_sim_results(self_kwh=18.0, days=1), make_sim_results(self_kwh=6.0, days=1)]
 
-    fleet = make_fleet_results_of([make_sim_results(days=1), make_sim_results(days=1)], homes=homes)
+    fleet = make_fleet_results_of(per_home_results, homes=homes)
 
     assert fleet.home_configs == homes
+    assert [
+        calculate_summary(results).total_self_consumption_kwh for results in fleet.per_home_results
+    ] == pytest.approx([18.0, 6.0])
 
 
 def test_fleet_results_of_refuse_a_home_count_unlike_the_result_count() -> None:
