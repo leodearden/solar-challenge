@@ -16,7 +16,7 @@ from tests._synthetic_weather import synthetic_june_weather
 
 @pytest.fixture
 def suite(pytester_under_root_conftest: pytest.Pytester) -> pytest.Pytester:
-    """A pytest session of its own, under a copy of tests/conftest.py, whose guard gives each scenario test a refusing proxy of its own."""
+    """A pytest session of its own, under a copy of tests/conftest.py, whose guard refuses and names each scenario test's network access, its child processes' included."""
     return pytester_under_root_conftest
 
 
