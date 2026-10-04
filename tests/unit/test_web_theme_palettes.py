@@ -25,11 +25,9 @@ import re
 import pytest
 
 pytest.importorskip("jinja2")
-from tests._css_classes import applied_classes_in_script, applied_classes_in_template
 from tests._dashboard_sources import (
     TAILWIND_CONFIG_KEY,
-    dashboard_script_sources,
-    dashboard_template_sources,
+    dashboard_applied_classes_by_source,
     tailwind_config_source,
 )
 
@@ -69,10 +67,7 @@ def test_every_theme_palette_is_applied_by_the_dashboard() -> None:
     assert palettes, (
         f"read no colour palette from {TAILWIND_CONFIG_KEY}, so this guard would pass vacuously"
     )
-    applied = set().union(
-        *map(applied_classes_in_template, dashboard_template_sources().values()),
-        *map(applied_classes_in_script, dashboard_script_sources().values()),
-    )
+    applied = set().union(*dashboard_applied_classes_by_source().values())
     unapplied = sorted(p for p in palettes if not any(_applies(c, p) for c in applied))
 
     assert unapplied == [], (

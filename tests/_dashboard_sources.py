@@ -7,7 +7,9 @@ Each template, script and stylesheet is keyed by its POSIX path relative to the
 package directory, such as ``templates/base.html``, ``static/js/chart-renderer.js``
 or ``static/style.css``. tailwind.config.js is keyed the same way, as
 ``tailwind.config.js``. The template and script globs mirror the ``content`` globs
-in tailwind.config.js.
+in tailwind.config.js, which select the files Tailwind scans for the classes the
+dashboard applies; dashboard_applied_classes_by_source reads those classes from the
+same files, under the same keys.
 
 Usage::
 
@@ -25,7 +27,11 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import solar_challenge.web
-from tests._css_classes import linked_stylesheets
+from tests._css_classes import (
+    applied_classes_in_script,
+    applied_classes_in_template,
+    linked_stylesheets,
+)
 
 _WEB_DIR = Path(solar_challenge.web.__file__).parent
 _STATIC_DIR = _WEB_DIR / "static"
@@ -43,6 +49,19 @@ def dashboard_template_sources() -> dict[str, str]:
 def dashboard_script_sources() -> dict[str, str]:
     """Source of every standalone script under static/js/, in path order."""
     return _sources(sorted((_STATIC_DIR / "js").rglob("*.js")))
+
+
+def dashboard_applied_classes_by_source() -> dict[str, set[str]]:
+    """Classes each template and script applies, as tests/_css_classes.py reads them, under its key."""
+    templates = {
+        path: applied_classes_in_template(source)
+        for path, source in dashboard_template_sources().items()
+    }
+    scripts = {
+        path: applied_classes_in_script(source)
+        for path, source in dashboard_script_sources().items()
+    }
+    return templates | scripts
 
 
 def served_stylesheet_sources() -> dict[str, str]:

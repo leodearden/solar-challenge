@@ -10,15 +10,10 @@ therefore silently has no effect in the browser (task 170 found nine).
 import pytest
 
 pytest.importorskip("jinja2")
-from tests._css_classes import (
-    applied_classes_in_script,
-    applied_classes_in_template,
-    selector_classes,
-)
+from tests._css_classes import selector_classes
 from tests._dashboard_sources import (
     BASE_TEMPLATE_KEY,
-    dashboard_script_sources,
-    dashboard_template_sources,
+    dashboard_applied_classes_by_source,
     served_stylesheet_sources,
 )
 
@@ -32,22 +27,8 @@ def _served_classes() -> set[str]:
     }
 
 
-def _applied_classes_by_source() -> dict[str, set[str]]:
-    """Classes each dashboard template and script applies, keyed by its path relative to the web package."""
-    return {
-        **{
-            path: applied_classes_in_template(source)
-            for path, source in dashboard_template_sources().items()
-        },
-        **{
-            path: applied_classes_in_script(source)
-            for path, source in dashboard_script_sources().items()
-        },
-    }
-
-
 def test_every_class_the_dashboard_applies_is_named_by_a_served_stylesheet() -> None:
-    applied = _applied_classes_by_source()
+    applied = dashboard_applied_classes_by_source()
     served = _served_classes()
 
     assert applied.get(BASE_TEMPLATE_KEY), (
