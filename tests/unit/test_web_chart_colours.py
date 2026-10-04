@@ -11,10 +11,11 @@ checks enforce the invariant:
   comments included, so an eight-digit #rrggbbaa copy counts through its prefix. Not
   read: the compiled dist/style.css, which derives from the templates and the theme, and
   rgb() or rgba() forms in those sources.
-* Every colour a chart builder draws follows a palette edit: with each palette entry
-  recoloured, no builder's figure still draws a shipped palette colour as #rrggbb, rgb()
-  or rgba(), so a translucent fill or a reused hue that charts.py writes out by hand
-  fails. Plotly's default template, which no builder chooses, is not read.
+* Every palette colour a chart builder draws follows a palette edit: with each palette
+  entry recoloured, no builder's figure still draws a shipped palette colour as #rrggbb,
+  rgb() or rgba(), so a translucent fill or a reused hue that charts.py writes out by hand
+  fails. A colour that no palette entry has, such as the transparent backgrounds, is not
+  flagged. Plotly's default template, which no builder chooses, is not read.
 * Every palette colour is written #rrggbb, the form charts.py derives translucent colours
   from. charts.py refuses any other form only when it draws a chart that needs one; this
   check refuses it for the whole palette.
@@ -176,7 +177,7 @@ _FIGURES: dict[str, Callable[[], str | None]] = {
 
 
 @pytest.mark.parametrize("draw", _FIGURES.values(), ids=_FIGURES.keys())
-def test_a_palette_edit_reaches_every_colour_a_chart_draws(
+def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
     draw: Callable[[], str | None], shipped_rgbs: frozenset[Rgb]
 ) -> None:
     figure = draw()

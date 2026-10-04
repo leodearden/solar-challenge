@@ -2,9 +2,11 @@
 """Centralized chart module for the Solar Challenge web dashboard.
 
 All functions return Plotly JSON strings via fig.to_json().
-Charts share layout defaults and take every colour from COLOUR_PALETTE: a chart colour is a
-palette entry or a translucent form of one, made by _with_alpha, so a palette edit reaches it.
-tests/unit/test_web_chart_colours.py guards this.
+Charts share layout defaults. Every series colour is a COLOUR_PALETTE entry, or a translucent
+form of one made by _with_alpha, so a palette edit reaches it; a chart that writes a palette
+colour out by hand fails tests/unit/test_web_chart_colours.py. Neutral chrome (backgrounds,
+annotation text, outlines) and the heatmap's named colour scale mark no series and have no
+palette role.
 """
 
 from __future__ import annotations
