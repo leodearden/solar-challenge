@@ -13,7 +13,12 @@ import dataclasses
 
 import pytest
 
-from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config, make_scenario_and_finance
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_home_config,
+    make_scenario_and_finance,
+)
 
 
 class TestProjectMultiYearRevenue:
