@@ -7,6 +7,7 @@ from operator import attrgetter
 import pytest
 pytest.importorskip("flask")
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
@@ -249,7 +250,7 @@ class TestParseHomeConfigCapabilities:
         assert home_config.battery_config.dispatch_strategy.strategy_type == "self_consumption"
 
     def test_dispatch_strategy_ignored_without_battery(self) -> None:
-        """dispatch_strategy is silently ignored when no battery is enabled."""
+        """A valid dispatch_strategy makes no battery when there is none."""
         payload = {
             **VALID_HOME_PAYLOAD,
             "battery_kwh": 0,
@@ -304,9 +305,7 @@ NESTED_BLOCK_FIELDS: dict[str, Callable[[HomeConfig], object]] = {
 class TestParseHomeConfigNestedBlockPresence:
     """One presence rule for the four nested blocks: null means none; any other value must be a mapping its grammar reads.
 
-    The rule governs a block whenever parse_home_config reads it. It reads dispatch_strategy only
-    when battery_kwh is positive, as in VALID_HOME_PAYLOAD; without a battery, even a malformed
-    dispatch_strategy is ignored.
+    The rule governs all four blocks whatever battery_kwh is.
     """
 
     @pytest.mark.parametrize(
@@ -373,6 +372,54 @@ class TestParseHomeConfigBatteryEfficiency:
         """An out-of-range percentage is reported as sent (150), not as BatteryConfig's 1.5."""
         with pytest.raises(ValueError, match="got 150"):
             parse_home_config({**VALID_HOME_PAYLOAD, "battery_kwh": 5.0, "efficiency_pct": 150})
+
+
+# One value each battery-setting reader refuses; each grammar's full refusal matrix is tested where that grammar lives.
+MALFORMED_BATTERY_SETTINGS = [
+    pytest.param("dispatch_strategy", "", id="dispatch_strategy-empty-string"),
+    pytest.param(
+        "dispatch_strategy", {"strategy_type": "bogus"}, id="dispatch_strategy-unknown-type"
+    ),
+    pytest.param("efficiency_pct", 150, id="efficiency_pct-above-100"),
+    pytest.param("max_charge_kw", "abc", id="max_charge_kw-not-a-number"),
+]
+
+
+class TestParseHomeConfigBatterySettings:
+    """max_charge_kw, max_discharge_kw, efficiency_pct and dispatch_strategy are read whatever battery_kwh is, and applied only to a battery."""
+
+    @pytest.mark.parametrize(("key", "value"), MALFORMED_BATTERY_SETTINGS)
+    def test_setting_a_battery_refuses_is_refused_without_one(
+        self, key: str, value: object
+    ) -> None:
+        """A battery setting refused with a battery is refused, with the same message, without one."""
+        with pytest.raises(ValueError) as with_battery:
+            parse_home_config({**VALID_HOME_PAYLOAD, key: value})
+        with pytest.raises(ValueError) as without_battery:
+            parse_home_config({**VALID_HOME_PAYLOAD, "battery_kwh": 0, key: value})
+        assert str(without_battery.value) == str(with_battery.value)
+
+    def test_settings_without_a_battery_make_no_battery(self) -> None:
+        """Valid battery settings sent without a battery are accepted, and make no battery."""
+        home_config, _start, _end, _name = parse_home_config(
+            {**FORM_PAYLOAD_BATTERY_ON, "battery_kwh": 0}
+        )
+        assert home_config.battery_config is None
+
+    def test_null_settings_leave_the_battery_defaults(self) -> None:
+        """A null battery setting, like an absent one, is unset, leaving BatteryConfig's default."""
+        home_config, _start, _end, _name = parse_home_config(
+            {
+                **VALID_HOME_PAYLOAD,
+                "max_charge_kw": None,
+                "max_discharge_kw": None,
+                "efficiency_pct": None,
+                "dispatch_strategy": None,
+            }
+        )
+        assert home_config.battery_config == BatteryConfig(
+            capacity_kwh=VALID_HOME_PAYLOAD["battery_kwh"]
+        )
 
 
 class TestParseHomeConfigPVAge:
