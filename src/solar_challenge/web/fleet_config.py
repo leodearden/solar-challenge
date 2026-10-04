@@ -3,8 +3,7 @@
 
 Provides utilities for sampling distributions, converting form data to
 fleet distribution configs and their distributions back to the form's,
-YAML import, and fleet-wide overlay application for tariff/dispatch/SEG
-settings.
+and fleet-wide overlay application for tariff/dispatch/SEG settings.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ import random
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
-import yaml
 
 from solar_challenge.home import HomeConfig
 
@@ -412,52 +410,3 @@ def _pool_counts(entries: list[dict[str, Any]]) -> list[int]:
     if total > MAX_FLEET_HOMES:
         raise ValueError(f"entries counts must total at most {MAX_FLEET_HOMES}, got {total}")
     return counts
-
-
-def yaml_to_fleet_distribution(yaml_str: str) -> dict[str, Any]:
-    """Parse a YAML string to a fleet distribution config dict.
-
-    Supports both full scenario YAML files (with a ``fleet_distribution``
-    key) and bare fleet distribution dicts.
-
-    Args:
-        yaml_str: YAML-formatted string.
-
-    Returns:
-        Fleet distribution config dict.
-
-    Raises:
-        ValueError: If the YAML is invalid or missing required fields.
-    """
-    try:
-        data = yaml.safe_load(yaml_str)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Invalid YAML: {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise ValueError("YAML must contain a mapping at the top level")
-
-    # Support both full scenario files and bare fleet_distribution dicts
-    if "fleet_distribution" in data:
-        fleet_data = data["fleet_distribution"]
-    elif "n_homes" in data:
-        fleet_data = data
-    else:
-        raise ValueError(
-            "YAML must contain either a 'fleet_distribution' key or an 'n_homes' key"
-        )
-
-    if not isinstance(fleet_data, dict):
-        raise ValueError("Fleet distribution data must be a mapping")
-
-    result: dict[str, Any] = {
-        "n_homes": fleet_data.get("n_homes", 100),
-        "seed": fleet_data.get("seed", 42),
-        "name": data.get("name", "Imported Configuration"),
-    }
-
-    for component in ("pv", "battery", "load"):
-        if component in fleet_data:
-            result[component] = fleet_data[component]
-
-    return result

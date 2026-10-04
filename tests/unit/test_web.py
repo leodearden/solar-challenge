@@ -1104,36 +1104,6 @@ class TestFleetConfigHelpers:
         with pytest.raises(ValueError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
 
-    def test_yaml_to_fleet_distribution(self) -> None:
-        """Test parsing YAML string to fleet distribution config."""
-        from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
-
-        yaml_str = """
-fleet_distribution:
-  n_homes: 100
-  pv:
-    capacity_kw:
-      type: normal
-      mean: 4.0
-      std: 1.0
-  load:
-    annual_consumption_kwh:
-      type: uniform
-      min: 2000
-      max: 5000
-"""
-        config = yaml_to_fleet_distribution(yaml_str)
-        assert config["n_homes"] == 100
-        assert "pv" in config
-        assert "load" in config
-
-    def test_yaml_to_fleet_distribution_invalid_raises(self) -> None:
-        """Test that invalid YAML raises ValueError."""
-        from solar_challenge.web.fleet_config import yaml_to_fleet_distribution
-
-        with pytest.raises(ValueError):
-            yaml_to_fleet_distribution("not: a: valid: fleet: config")
-
 
 class TestFleetApiEndpoints:
     """Tests for fleet-related API endpoints."""
