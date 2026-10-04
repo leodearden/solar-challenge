@@ -9,8 +9,12 @@ These tests prove that an EXTERNAL consumer can:
   - Confirm the wheel ships solar_challenge/py.typed (PEP 561).
   - Confirm the wheel ships every file under solar_challenge/web/templates and
     solar_challenge/web/static, which the dashboard renders and serves.
-  - Confirm the wheel's METADATA names the license by the PEP 639
-    License-Expression AGPL-3.0-or-later.
+  - Confirm the wheel's METADATA names its licenses by the PEP 639
+    License-Expression AGPL-3.0-or-later AND MIT.
+  - Confirm the wheel ships, under .dist-info/licenses, the text of the root
+    LICENSE and of each package vendored under solar_challenge/web/static/vendor.
+  - Confirm that License-Expression names the license each package vendored
+    under solar_challenge/web/static/vendor records in its upstream.toml.
 
 The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here.
@@ -31,6 +35,7 @@ import email
 import os
 import shutil
 import subprocess
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -207,27 +212,142 @@ def test_built_wheel_ships_every_file_of_the_dashboard_folder(
 
 
 # ---------------------------------------------------------------------------
-# License: the wheel names its license by a PEP 639 SPDX expression
+# License: the wheel names its licenses by a PEP 639 SPDX expression and ships their texts
 # ---------------------------------------------------------------------------
 
 
+def _metadata_member(wheel: zipfile.ZipFile) -> str:
+    """Return the name of the one .dist-info/METADATA member of the open *wheel*."""
+    [metadata_member] = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
+    return metadata_member
+
+
+def _wheel_metadata(wheel: zipfile.ZipFile) -> email.message.Message:
+    """Return the core metadata of the open *wheel*, parsed from its METADATA member's email-header format."""
+    return email.message_from_bytes(wheel.read(_metadata_member(wheel)))
+
+
+def _shipped_license_files(built_wheel: Path) -> list[str]:
+    """Return the License-File entries of *built_wheel*'s METADATA whose text the wheel carries.
+
+    PEP 639 keeps each license file at <dist>.dist-info/licenses/<entry>, where the entry is the
+    file's path relative to the project root.
+    """
+    with zipfile.ZipFile(built_wheel) as wheel:
+        licenses_dir = _metadata_member(wheel).removesuffix("METADATA") + "licenses/"
+        members = set(wheel.namelist())
+        declared = _wheel_metadata(wheel).get_all("License-File", [])
+    return [entry for entry in declared if licenses_dir + entry in members]
+
+
 @pytest.mark.build
-def test_built_wheel_declares_the_agpl_license_expression(built_wheel: Path) -> None:
+def test_built_wheel_declares_the_agpl_and_mit_license_expression(built_wheel: Path) -> None:
     """Installers, PyPI and license scanners read a wheel's license from its METADATA, where
     PEP 639 makes License-Expression the field that names it.
+
+    The project's own code is AGPL-3.0-or-later. The third-party code the dashboard bundles is
+    MIT-licensed: the scripts vendored under web/static/vendor/, and Tailwind's preflight compiled
+    into static/dist/style.css. AND says both apply.
     """
-    with zipfile.ZipFile(built_wheel) as zf:
-        [metadata_member] = [
-            name for name in zf.namelist() if name.endswith(".dist-info/METADATA")
-        ]
-        metadata = email.message_from_bytes(zf.read(metadata_member))
+    with zipfile.ZipFile(built_wheel) as wheel:
+        metadata = _wheel_metadata(wheel)
 
     expressions = metadata.get_all("License-Expression")
-    assert expressions == ["AGPL-3.0-or-later"], (
+    assert expressions == ["AGPL-3.0-or-later AND MIT"], (
         f"The built wheel's METADATA carries License-Expression {expressions} and the legacy "
-        f"License {metadata.get_all('License')}, so it does not name its license by the PEP 639 "
-        'SPDX expression AGPL-3.0-or-later. Declare [project] license = "AGPL-3.0-or-later" in '
-        "pyproject.toml: an SPDX expression string, not a TOML table."
+        f"License {metadata.get_all('License')}, so it does not name its licenses by the PEP 639 "
+        "SPDX expression AGPL-3.0-or-later AND MIT. Declare [project] "
+        'license = "AGPL-3.0-or-later AND MIT" in pyproject.toml: an SPDX expression string, '
+        "not a TOML table. Once the wheel bundles code under a further license, name that license "
+        "in this test's expected expression too."
+    )
+
+
+@pytest.mark.build
+def test_built_wheel_ships_the_project_license_text(built_wheel: Path) -> None:
+    """Under PEP 639, a wheel carries the text of each license file it declares under
+    .dist-info/licenses/ and names it in METADATA as License-File. setuptools' default patterns
+    pick up the root LICENSE only while pyproject.toml names no license-files.
+    """
+    shipped = _shipped_license_files(built_wheel)
+
+    assert "LICENSE" in shipped, (
+        f"The built wheel ships the license texts {shipped}, without the root LICENSE, which holds "
+        "the project's AGPL-3.0-or-later text. List \"LICENSE\" in [project] license-files in "
+        "pyproject.toml: naming any license-files pattern switches off setuptools' default patterns."
+    )
+
+
+def _vendored_packages(source: Path) -> list[Path]:
+    """Return the directory of each package vendored under web/static/vendor/ in the project at *source*,
+    failing the calling test if there is none.
+    """
+    vendor = source / "src" / "solar_challenge" / "web" / "static" / "vendor"
+    packages = sorted(path for path in vendor.glob("*") if path.is_dir())
+    assert packages, (
+        "found no package directory under src/solar_challenge/web/static/vendor in the copy of the "
+        "working tree, so this test would pass vacuously"
+    )
+    return packages
+
+
+@pytest.mark.build
+def test_built_wheel_ships_the_license_text_of_every_vendored_package(
+    wheel_source: Path, built_wheel: Path
+) -> None:
+    """Each package vendored under web/static/vendor/<package>/ keeps its upstream license file in
+    its directory. The wheel declares that file, so its text also lands in .dist-info/licenses/,
+    where license tools read it.
+    """
+    packages = [package.relative_to(wheel_source).as_posix() for package in _vendored_packages(wheel_source)]
+    shipped = _shipped_license_files(built_wheel)
+    unlicensed = [
+        package for package in packages if not any(entry.startswith(f"{package}/") for entry in shipped)
+    ]
+
+    assert unlicensed == [], (
+        f"The built wheel ships no license text for the vendored packages {unlicensed}; the license "
+        f"texts it ships are {shipped}. Keep each package's upstream license file in the package's "
+        "own directory and match it with a [project] license-files pattern in pyproject.toml, such as "
+        '"src/solar_challenge/web/static/vendor/*/LICENSE*".'
+    )
+
+
+_UPSTREAM_RECORD = "upstream.toml"
+
+
+def _recorded_license(package: Path) -> str | None:
+    """Return the license that the upstream.toml in the *package* directory records, or None if it records none."""
+    record = package / _UPSTREAM_RECORD
+    if not record.is_file():
+        return None
+    license_id = tomllib.loads(record.read_text(encoding="utf-8")).get("license")
+    return license_id if isinstance(license_id, str) else None
+
+
+@pytest.mark.build
+def test_built_wheel_declares_the_license_each_vendored_package_records(
+    wheel_source: Path, built_wheel: Path
+) -> None:
+    """Each package vendored under web/static/vendor/<package>/ records the SPDX id of its upstream
+    license as `license` in its upstream.toml. The wheel bundles the package, so its
+    License-Expression must join that license with AND.
+    """
+    with zipfile.ZipFile(built_wheel) as wheel:
+        expressions = _wheel_metadata(wheel).get_all("License-Expression", [])
+    joined = {term for expression in expressions for term in expression.split(" AND ")}
+    recorded = {
+        package.relative_to(wheel_source).as_posix(): _recorded_license(package)
+        for package in _vendored_packages(wheel_source)
+    }
+    unnamed = {package: license_id for package, license_id in recorded.items() if license_id not in joined}
+
+    assert unnamed == {}, (
+        f"The built wheel's License-Expression {expressions} does not name the licenses these vendored "
+        f"packages record (None: the package records none): {unnamed}. Record each vendored package's "
+        f'upstream license by its SPDX id, as license = "<id>" in the package directory\'s '
+        f"{_UPSTREAM_RECORD}, and join every recorded license into [project] license in "
+        "pyproject.toml with AND."
     )
 
 

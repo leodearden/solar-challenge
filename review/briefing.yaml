@@ -95,11 +95,19 @@ conventions:
       sanctioned untyped imports are stub-less third-party libs (pvlib/pandas/numpy/yaml/flask/
       plotly/richardsonpy/scipy/anthropic). Eroding this leaks Any into a consumer's type checks.
 
-  - rule: "License is AGPL-3.0-or-later (pyproject is authoritative). New dependencies must be AGPL-compatible."
+  - rule: >
+      The project's own code is AGPL-3.0-or-later (pyproject is authoritative). pyproject's license
+      expression also names MIT for the third-party code the wheel bundles: the scripts vendored
+      under src/solar_challenge/web/static/vendor/, whose license texts ship beside them and under
+      license-files, and Tailwind's compiled CSS. New dependencies and vendored code must be
+      AGPL-compatible.
     why: >
       Copyleft obligations apply to the whole work, so a proprietary or GPL-incompatible
-      dependency is a licensing bug. (The old README-says-MIT discrepancy is RESOLVED — README
-      now states AGPL. The LICENSE/pyproject/README are uniform.)
+      dependency is a licensing bug. The AND in pyproject's license expression is not a
+      discrepancy: PEP 639 and PyPA's licensing guide have a package that includes code under
+      another license name both (task 354). (The old README-says-MIT discrepancy is RESOLVED —
+      README now states AGPL, and points at pyproject's license expression for the bundled
+      third-party code.)
 
   - rule: >
       The public API surface is a FROZEN CONTRACT. `solar_challenge.__all__` (currently 69 names)
