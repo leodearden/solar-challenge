@@ -3,6 +3,7 @@
 
 import json
 import re
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -564,6 +565,20 @@ fleet_distribution:
             assert battery.dispatch_strategy == DispatchStrategyConfig(
                 "tou_optimized", peak_hours=[(16, 21)]
             )
+
+    def test_a_fleet_battery_tou_dispatch_strategy_needs_no_tariff_so_loads_without_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """A battery's own tou_optimized dispatches by its peak_hours, needing no tariff, so it loads without the no-tariff warning.
+
+        That warning is for fleet_distribution.dispatch_strategy's tou_optimized, which
+        dispatches by the scenario's tariff and falls back to self-consumption without one.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._load_fleet(tmp_path, "{strategy_type: tou_optimized, peak_hours: [[16, 21]]}")
+
+        assert [str(warning.message) for warning in caught if "tariff" in str(warning.message)] == []
 
     def test_a_fleet_battery_block_without_dispatch_strategy_gives_its_batteries_none(
         self, tmp_path: Path

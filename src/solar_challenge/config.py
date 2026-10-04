@@ -280,7 +280,11 @@ class BatteryDistributionConfig:
         max_charge_kw: Distribution for max charge rate (default: 2.5)
         max_discharge_kw: Distribution for max discharge rate (default: 2.5)
         grid_charging: Grid-charging configuration of every home with a battery (optional)
-        dispatch_strategy: Dispatch strategy of every home with a battery (optional)
+        dispatch_strategy: Dispatch strategy of every home with a battery (optional), set
+            on its BatteryConfig.  Its tou_optimized dispatches by its own peak_hours, so it
+            needs no tariff.  It is not FleetDistributionConfig.dispatch_strategy, the
+            HomeConfig.dispatch_strategy string whose tou_optimized dispatches by the
+            scenario's tariff; a battery given a strategy here dispatches with it instead.
     """
 
     capacity_kwh: DistributionSpec
@@ -413,7 +417,8 @@ class FleetDistributionConfig:
             - "bristol_legacy": Sample all normal distributions first, then shuffle pools
               (matches exact behavior of create_bristol_phase1_scenario)
         dispatch_strategy: Dispatch strategy of every home ("greedy" or "tou_optimized");
-            None means greedy
+            None means greedy.  A battery given BatteryDistributionConfig.dispatch_strategy
+            dispatches with that instead.
     """
 
     n_homes: int
