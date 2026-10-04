@@ -14,11 +14,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from solar_challenge.home import SimulationResults
+from solar_challenge.output import aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
 
 _AMBER = "#f5a623"
 _RED = "#d0021b"
@@ -351,8 +353,6 @@ def daily_energy_balance(results: SimulationResults) -> str:
     Returns:
         Plotly figure JSON string.
     """
-    from solar_challenge.output import aggregate_daily  # noqa: PLC0415
-
     daily = aggregate_daily(results)
     dates = [d.strftime("%Y-%m-%d") for d in daily.index]
 
@@ -401,8 +401,6 @@ def monthly_summary(results: SimulationResults) -> str | None:
     sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
     if sim_days < 90:
         return None
-
-    from solar_challenge.output import aggregate_monthly  # noqa: PLC0415
 
     monthly = aggregate_monthly(results)
     months = [d.strftime("%Y-%m") for d in monthly.index]
@@ -537,8 +535,6 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
     sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
     if sim_days < 180:
         return None
-
-    from solar_challenge.output import calculate_seasonal_metrics  # noqa: PLC0415
 
     metrics = calculate_seasonal_metrics(results.demand, results.generation)
 
@@ -1119,8 +1115,6 @@ def sweep_parameter_chart(
 
     # Simple linear trend line
     if len(param_values) >= 2:
-        import numpy as np  # noqa: PLC0415
-
         x_arr = np.array(param_values, dtype=float)
         y_arr = np.array(metric_values, dtype=float)
         coeffs = np.polyfit(x_arr, y_arr, 1)
