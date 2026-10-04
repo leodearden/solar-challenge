@@ -98,16 +98,20 @@ conventions:
   - rule: >
       The project's own code is AGPL-3.0-or-later (pyproject is authoritative). pyproject's license
       expression also names MIT for the third-party code the wheel bundles: the scripts vendored
-      under src/solar_challenge/web/static/vendor/, whose license texts ship beside them and under
-      license-files, and Tailwind's compiled CSS. New dependencies and vendored code must be
-      AGPL-compatible.
+      under src/solar_challenge/web/static/vendor/ and the Tailwind CSS compiled into
+      src/solar_challenge/web/static/dist/style.css. Each ships its license text beside it and
+      under license-files. For the compiled CSS that means two verbatim texts:
+      LICENSE-tailwindcss.txt (tailwindcss's LICENSE) and LICENSE-tailwindcss-preflight.txt (the
+      separate src/css/LICENSE of its preflight.css), which a Tailwind upgrade refreshes from the
+      new tailwindcss package. New dependencies and vendored code must be AGPL-compatible.
     why: >
       Copyleft obligations apply to the whole work, so a proprietary or GPL-incompatible
       dependency is a licensing bug. The AND in pyproject's license expression is not a
       discrepancy: PEP 639 and PyPA's licensing guide have a package that includes code under
-      another license name both (task 354). (The old README-says-MIT discrepancy is RESOLVED —
-      README now states AGPL, and points at pyproject's license expression for the bundled
-      third-party code.)
+      another license name both (task 354). MIT requires its copyright and permission notices in
+      all copies or substantial portions, and the compiled CSS's one-line banner carries neither
+      (task 380). (The old README-says-MIT discrepancy is RESOLVED — README now states AGPL, and
+      points at pyproject's license expression for the bundled third-party code.)
 
   - rule: >
       The public API surface is a FROZEN CONTRACT. `solar_challenge.__all__` (currently 69 names)

@@ -104,7 +104,7 @@ This project follows test-driven development (TDD).
 
 This project is licensed under the **GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)**. See [LICENSE](LICENSE) for the full text.
 
-The web dashboard also bundles third-party code that keeps its own license, and the `license` expression in `pyproject.toml` names that license alongside AGPL-3.0-or-later. That code is the JavaScript vendored under `src/solar_challenge/web/static/vendor/`, each package with its license text beside it, and the Tailwind CSS compiled into `src/solar_challenge/web/static/dist/style.css`.
+The web dashboard also bundles third-party code that keeps its own license, and the `license` expression in `pyproject.toml` names that license alongside AGPL-3.0-or-later. That code is the JavaScript vendored under `src/solar_challenge/web/static/vendor/`, each package with its license text beside it, and the Tailwind CSS compiled into `src/solar_challenge/web/static/dist/style.css`, with the license texts of Tailwind and of its preflight base styles beside it.
 
 ## Contributing
 
