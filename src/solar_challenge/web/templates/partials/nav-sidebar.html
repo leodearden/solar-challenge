@@ -74,13 +74,11 @@
 {% for item in items %}
     {% if item.children is not defined %}
         {# ── Simple top-level link (e.g. Dashboard) ── #}
+        {% set is_current_page = item.page == page %}
         <a
             href="{{ item.url }}"
-            class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors"
-            :class="{
-                'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400': '{{ page }}' === '{{ item.page }}',
-                'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700': '{{ page }}' !== '{{ item.page }}'
-            }"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if is_current_page %}bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700{% endif %}"
+            {% if is_current_page %}aria-current="page"{% endif %}
         >
             {{ nav_icon(item.icon, is_mobile) }}
             {% if is_mobile %}
