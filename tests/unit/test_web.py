@@ -172,6 +172,12 @@ class TestDashboardRoute:
         labels = ("Simulate", "Scenarios", "History")
         assert counts_of(texts(page), labels) == dict.fromkeys(labels, 2)
 
+    def test_dashboard_marks_the_dashboard_link_current_in_both_sidebars(self, client: FlaskClient) -> None:
+        """GET / marks the Dashboard link, and no other link, as the current page in each of its two sidebars, desktop and mobile."""
+        response = client.get("/")
+        page = response.get_data(as_text=True)
+        assert _current_page_links(page) == ["/", "/"]
+
     def test_dashboard_contains_quick_start_cards(self, client: FlaskClient) -> None:
         """GET / renders one heading per quick-start card: Run Single Home, Run Fleet Simulation and Build Scenario."""
         response = client.get("/")
