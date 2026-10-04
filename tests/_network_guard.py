@@ -144,12 +144,16 @@ class _RefusingProxy(socketserver.ThreadingTCPServer):
 class _RefusingHandler(BaseHTTPRequestHandler):
     server: _RefusingProxy
 
+    def __getattr__(self, name: str) -> Callable[[], None]:
+        """Answer the lookup of every method's do_<METHOD> with _refuse, so a request of any method is recorded and refused."""
+        if name.startswith("do_"):
+            return self._refuse
+        raise AttributeError(name)
+
     def _refuse(self) -> None:
         destination = self.path if self.command == "CONNECT" else _destination_of(self.path)
         self.server.record(destination)
         self.send_error(HTTPStatus.FORBIDDEN, _reason_for_refusing(destination))
-
-    do_CONNECT = do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _refuse
 
     def log_message(self, format: str, *args: Any) -> None:
         pass

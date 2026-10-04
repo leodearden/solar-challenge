@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_network_guard.py, which refuses every name lookup and connection off this machine."""
 
+import http.client
 import os
 import socket
 import socketserver
@@ -13,6 +14,7 @@ from collections.abc import Iterator
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -26,6 +28,17 @@ def _fetch_in_a_child_process(url: str) -> subprocess.CompletedProcess[str]:
     """Fetch *url* with urllib in a child Python process, with this process's environment; it prints the body, or exits non-zero."""
     program = f"import urllib.request; print(urllib.request.urlopen({url!r}, timeout=30).read().decode())"
     return subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=120)
+
+
+def _send_to_the_proxy(method: str, request_target: str) -> int:
+    """Send a *method* request for *request_target* to the proxy HTTP_PROXY names, as a client that honours it does, and return the answer's status."""
+    proxy = urlsplit(os.environ["HTTP_PROXY"])
+    connection = http.client.HTTPConnection(str(proxy.hostname), proxy.port, timeout=30)
+    try:
+        connection.request(method, request_target)
+        return connection.getresponse().status
+    finally:
+        connection.close()
 
 
 class _AnswersOk(BaseHTTPRequestHandler):
@@ -148,6 +161,26 @@ class TestRefusingNetwork:
                 urllib.request.build_opener().open("https://example.invalid/", timeout=30)
 
         assert refused == ["example.invalid:443"]
+
+    @pytest.mark.parametrize("method", ["PROPFIND", "TRACE"])
+    def test_a_request_of_any_method_through_the_proxy_is_refused_and_recorded(self, method: str) -> None:
+        with refusing_network() as refused:
+            status = _send_to_the_proxy(method, "http://example.invalid/")
+
+        assert (status, refused) == (HTTPStatus.FORBIDDEN, ["example.invalid:80"])
+
+    @pytest.mark.parametrize(
+        "request_target",
+        ["/path", "http://example.invalid:no-port/", "ftp://example.invalid/"],
+        ids=["origin-form", "port-not-a-number", "scheme-without-a-default-port"],
+    )
+    def test_a_request_through_the_proxy_whose_target_names_no_host_and_port_is_refused_and_recorded_as_sent(
+        self, request_target: str
+    ) -> None:
+        with refusing_network() as refused:
+            status = _send_to_the_proxy("GET", request_target)
+
+        assert (status, refused) == (HTTPStatus.FORBIDDEN, [request_target])
 
     def test_leaving_restores_the_environment_it_replaced(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HTTP_PROXY", "http://the-callers-proxy.invalid:3128")
