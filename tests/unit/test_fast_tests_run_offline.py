@@ -3,7 +3,7 @@
 
 The guard decides a test's outcome at its teardown, so each scenario runs in a
 separate pytest session under a copy of tests/conftest.py, in a directory of its
-own and with no HTTP proxy configured, as in tests/unit/test_web_jobs_drain_scope.py.
+own, as in tests/unit/test_web_jobs_drain_scope.py.
 """
 
 import numpy as np
@@ -13,18 +13,10 @@ from solar_challenge.location import Location
 from solar_challenge.weather import DEFAULT_CACHE_DIR, WeatherCache, get_tmy_data
 from tests._synthetic_weather import synthetic_june_weather
 
-_PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
-
 
 @pytest.fixture
-def suite(pytester_under_root_conftest: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
-    """A pytest session of its own, under a copy of tests/conftest.py and with no HTTP proxy configured.
-
-    Through a proxy, requests would look up only the proxy's loopback host, so the
-    guard would never see the PVGIS destination.
-    """
-    for name in _PROXY_VARIABLES:
-        monkeypatch.delenv(name, raising=False)
+def suite(pytester_under_root_conftest: pytest.Pytester) -> pytest.Pytester:
+    """A pytest session of its own, under a copy of tests/conftest.py, whose guard gives each scenario test a refusing proxy of its own."""
     return pytester_under_root_conftest
 
 
