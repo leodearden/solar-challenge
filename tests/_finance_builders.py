@@ -190,12 +190,12 @@ def make_fleet_results(
     The fleet is *homes*, such as the aged ``fleet_config.homes`` an injected
     simulate receives, or else *n_homes* default homes, one by default.
     """
-    if homes is not None and n_homes is not None:
-        raise TypeError("make_fleet_results takes homes or n_homes, not both")
     if homes is None:
         n_results = 1 if n_homes is None else n_homes
-    else:
+    elif n_homes is None:
         n_results = len(homes)
+    else:
+        raise TypeError("make_fleet_results takes homes or n_homes, not both")
     return make_fleet_results_of(
         [
             make_sim_results(
