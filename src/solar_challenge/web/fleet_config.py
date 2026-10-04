@@ -142,6 +142,10 @@ def sample_distribution(
     raise ValueError(f"Unknown distribution type: {dist_type}")
 
 
+#: The top-level keys of a fleet form that form_to_fleet_distribution_config reads.
+FLEET_DISTRIBUTION_FORM_KEYS: frozenset[str] = frozenset({"n_homes", "seed", "pv", "battery", "load"})
+
+
 def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, Any]:
     """Convert web form data to a fleet distribution config dict.
 
@@ -150,7 +154,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     :func:`solar_challenge.config.generate_homes_from_distribution`.
 
     Args:
-        form_data: Form data dict from the web UI.
+        form_data: A fleet form, of which only the FLEET_DISTRIBUTION_FORM_KEYS are read.
 
     Returns:
         Fleet distribution config dict.
