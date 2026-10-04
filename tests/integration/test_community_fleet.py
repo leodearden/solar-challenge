@@ -137,9 +137,9 @@ def _build_injected_fleet(
 def _fleet_run_in_process(scenario: Path, *options: str) -> Result:
     """Invoke `fleet run` on *scenario* with *options*, simulating in this process.
 
-    A worker process sees neither this process's weather cache nor its offline
-    guard: one started with forkserver, Python 3.14's default, reads the working
-    directory's cache and can fetch PVGIS unguarded.
+    That keeps the whole run under the offline guard's socket patch, which a worker
+    process does not inherit, as it gets only the guard's proxy variables, and it
+    spares each run a worker pool's start-up.
     """
     return CliRunner().invoke(app, ["fleet", "run", str(scenario), "--sequential", *options])
 
@@ -149,7 +149,6 @@ def clear_june_tmy(weather_cache: WeatherCache) -> None:
     """Serve a clear 21 June as Bristol's TMY, the location of every fleet these tests run.
 
     get_tmy_data reads it from the test's weather cache, so no PVGIS call is made.
-    Only this process holds that cache: run `fleet run` through _fleet_run_in_process.
     """
     weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
 
