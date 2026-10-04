@@ -11,6 +11,8 @@ These tests prove that an EXTERNAL consumer can:
     solar_challenge/web/static, which the dashboard renders and serves.
   - Confirm the wheel's METADATA names its licenses by the PEP 639
     License-Expression AGPL-3.0-or-later AND MIT.
+  - Confirm the wheel ships, under .dist-info/licenses, the text of the root
+    LICENSE and of each package vendored under solar_challenge/web/static/vendor.
 
 The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here.
@@ -207,7 +209,7 @@ def test_built_wheel_ships_every_file_of_the_dashboard_folder(
 
 
 # ---------------------------------------------------------------------------
-# License: the wheel names its licenses by a PEP 639 SPDX expression
+# License: the wheel names its licenses by a PEP 639 SPDX expression and ships their texts
 # ---------------------------------------------------------------------------
 
 
@@ -220,6 +222,19 @@ def _metadata_member(wheel: zipfile.ZipFile) -> str:
 def _wheel_metadata(wheel: zipfile.ZipFile) -> email.message.Message:
     """Return the core metadata of the open *wheel*, parsed from its METADATA member's email-header format."""
     return email.message_from_bytes(wheel.read(_metadata_member(wheel)))
+
+
+def _shipped_license_files(built_wheel: Path) -> list[str]:
+    """Return the License-File entries of *built_wheel*'s METADATA whose text the wheel carries.
+
+    PEP 639 keeps each license file at <dist>.dist-info/licenses/<entry>, where the entry is the
+    file's path relative to the project root.
+    """
+    with zipfile.ZipFile(built_wheel) as wheel:
+        licenses_dir = _metadata_member(wheel).removesuffix("METADATA") + "licenses/"
+        members = set(wheel.namelist())
+        declared = _wheel_metadata(wheel).get_all("License-File", [])
+    return [entry for entry in declared if licenses_dir + entry in members]
 
 
 @pytest.mark.build
@@ -241,6 +256,50 @@ def test_built_wheel_declares_the_agpl_and_mit_license_expression(built_wheel: P
         "SPDX expression AGPL-3.0-or-later AND MIT. Declare [project] "
         'license = "AGPL-3.0-or-later AND MIT" in pyproject.toml: an SPDX expression string, '
         "not a TOML table."
+    )
+
+
+@pytest.mark.build
+def test_built_wheel_ships_the_project_license_text(built_wheel: Path) -> None:
+    """Under PEP 639, a wheel carries the text of each license file it declares under
+    .dist-info/licenses/ and names it in METADATA as License-File. setuptools' default patterns
+    pick up the root LICENSE only while pyproject.toml names no license-files.
+    """
+    shipped = _shipped_license_files(built_wheel)
+
+    assert "LICENSE" in shipped, (
+        f"The built wheel ships the license texts {shipped}, without the root LICENSE, which holds "
+        "the project's AGPL-3.0-or-later text. List \"LICENSE\" in [project] license-files in "
+        "pyproject.toml: naming any license-files pattern switches off setuptools' default patterns."
+    )
+
+
+@pytest.mark.build
+def test_built_wheel_ships_the_license_text_of_every_vendored_package(
+    wheel_source: Path, built_wheel: Path
+) -> None:
+    """Each package vendored under web/static/vendor/<package>/ keeps its upstream license file in
+    its directory. The wheel declares that file, so its text also lands in .dist-info/licenses/,
+    where license tools read it.
+    """
+    vendor = wheel_source / "src" / "solar_challenge" / "web" / "static" / "vendor"
+    packages = sorted(path.relative_to(wheel_source).as_posix() for path in vendor.glob("*") if path.is_dir())
+    assert packages, (
+        "found no package directory under src/solar_challenge/web/static/vendor in the copy of the "
+        "working tree, so this test would pass vacuously"
+    )
+
+    shipped = _shipped_license_files(built_wheel)
+    unlicensed = [
+        package for package in packages if not any(entry.startswith(f"{package}/") for entry in shipped)
+    ]
+
+    assert unlicensed == [], (
+        f"The built wheel ships no license text for the vendored packages {unlicensed}; the license "
+        f"texts it ships are {shipped}. Keep each package's upstream license file in the package's "
+        "own directory, match it with a [project] license-files pattern in pyproject.toml, such as "
+        '"src/solar_challenge/web/static/vendor/*/LICENSE*", and join the package\'s license into '
+        "[project] license with AND, unless it is already named there."
     )
 
 

@@ -26,6 +26,12 @@ from tests._pyproject import declared_floor, load_pyproject
             "build fails",
             id="spdx-license-expression",
         ),
+        pytest.param(
+            Version("77.0.0"),
+            "accepts license-files in the [project] table (PEP 639). An older setuptools rejects "
+            "pyproject.toml, since `project` must not contain license-files, so the build fails",
+            id="project-license-files",
+        ),
     ],
 )
 def test_build_system_floor_excludes_setuptools_lacking(
