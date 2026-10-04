@@ -78,7 +78,8 @@ def test_no_pvgis_contract_test_passes_on_a_cached_tmy_while_pvgis_is_out_of_rea
     """
     bristol = Location.bristol()
     WeatherCache(cache_dir=pytester.path / DEFAULT_CACHE_DIR).put(_clear_sky_tmy(bristol), "tmy", bristol)
-    # Every PVGIS fetch then fails at the dead proxy, as long as requests honours these variables.
+    # Deliberately replaces the offline guard's recording proxy: the inner session's PVGIS fetches are expected,
+    # and the guard would record them against this test. Every fetch fails at the dead proxy instead.
     for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
         monkeypatch.setenv(name, _DEAD_PROXY)
     for name in ("NO_PROXY", "no_proxy"):
