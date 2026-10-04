@@ -838,3 +838,43 @@ class TestParallelFleetWeather:
                     check_exact=True,
                     obj=f"{home.name}'s results with parallel={parallel}",
                 )
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_multi_sweep_gives_each_home_the_results_simulate_home_gives_it_here(
+        self, worker_start_method: str
+    ) -> None:
+        """simulate_multi_sweep_iter, sequential or parallel, gives each home of a Bristol sweep and a Bath sweep exactly what simulate_home gives it in this process."""
+        sweeps = [
+            (
+                2.0,
+                FleetConfig.create_uniform(
+                    n_homes=2,
+                    pv_config=PVConfig(capacity_kw=2.0),
+                    load_config=self._LOAD,
+                    location=Location.bristol(),
+                ),
+            ),
+            (
+                4.0,
+                FleetConfig.create_uniform(
+                    n_homes=2,
+                    pv_config=PVConfig(capacity_kw=4.0),
+                    load_config=self._LOAD,
+                    location=self._BATH,
+                ),
+            ),
+        ]
+
+        for parallel in (False, True):
+            collected = collect_multi_sweep_results(
+                sweeps,
+                simulate_multi_sweep_iter(sweeps, self._DAY, self._DAY, parallel=parallel, max_workers=2),
+            )
+            for (pv_kw, fleet), (_, fleet_results) in zip(sweeps, collected.iter_results(), strict=True):
+                for home, in_sweep in zip(fleet.homes, fleet_results.per_home_results, strict=True):
+                    pd.testing.assert_frame_equal(
+                        in_sweep.to_dataframe(),
+                        simulate_home(home, self._DAY, self._DAY).to_dataframe(),
+                        check_exact=True,
+                        obj=f"{home.name} of the {pv_kw} kW sweep with parallel={parallel}",
+                    )
