@@ -318,7 +318,7 @@ class TestProjectHonoursScenarioLevelSeg:
         import re
 
         from solar_challenge.config import ScenarioConfig, SimulationPeriod
-        from solar_challenge.finance import FinanceConfig, project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.finance import FinanceConfig, project_multi_year
         from solar_challenge.seg import SEGTariff
 
         homes_inconsistent = [
