@@ -4,6 +4,14 @@ document.addEventListener('alpine:init', () => {
         return value === undefined || value === null ? '' : value;
     }
 
+    // The fleet components the form distributes: the prefix of their form fields, the field holding a fixed value,
+    // and their spec's key in the scenario grammar, at fleet_distribution.<prefix>.<grammarKey>
+    const COMPONENTS = [
+        { prefix: 'pv', fixedField: 'pv_capacity_kw', grammarKey: 'capacity_kw' },
+        { prefix: 'battery', fixedField: 'battery_capacity_kwh', grammarKey: 'capacity_kwh' },
+        { prefix: 'load', fixedField: 'annual_consumption_kwh', grammarKey: 'annual_consumption_kwh' },
+    ];
+
     // Whether `value` is a YAML mapping, as a scenario document and each of its blocks is
     function isMapping(value) {
         return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -29,10 +37,10 @@ document.addEventListener('alpine:init', () => {
             n_homes: inputValue(fleet.n_homes),
             import_rate: tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '',
             seg_rate_pence_per_kwh: inputValue((scenario.seg || {}).rate_pence_per_kwh),
-            ...componentFields(fleet, 'pv', 'pv_capacity_kw', 'capacity_kw'),
-            ...componentFields(fleet, 'battery', 'battery_capacity_kwh', 'capacity_kwh'),
-            ...componentFields(fleet, 'load', 'annual_consumption_kwh', 'annual_consumption_kwh'),
         };
+        for (const component of COMPONENTS) {
+            Object.assign(fields, componentFields(fleet, component));
+        }
         if (scenario.location) {
             fields.location_preset = 'custom';
             fields.latitude = inputValue(scenario.location.latitude);
@@ -42,11 +50,11 @@ document.addEventListener('alpine:init', () => {
         return fields;
     }
 
-    // One component's form fields, read from its spec at fleet[prefix][key]: a fixed number, or a distribution.
+    // One component's form fields, read from its spec in `fleet`: a fixed number, or a distribution.
     // Throws, naming the spec, for one the form cannot hold.
-    function componentFields(fleet, prefix, fixedField, key) {
-        const spec = (fleet[prefix] || {})[key];
-        const path = 'fleet_distribution.' + prefix + '.' + key;
+    function componentFields(fleet, { prefix, fixedField, grammarKey }) {
+        const spec = (fleet[prefix] || {})[grammarKey];
+        const path = 'fleet_distribution.' + prefix + '.' + grammarKey;
         if (spec === undefined || spec === null || typeof spec === 'number') {
             return { [prefix + '_distribution_type']: '', [fixedField]: inputValue(spec) };
         }
@@ -77,6 +85,28 @@ document.addEventListener('alpine:init', () => {
             throw new Error(path + ' needs values and ' + listKey + ' lists of the same length');
         }
         return values.map((value, i) => ({ value, [rowKey]: column[i] }));
+    }
+
+    // The fields of the form the builder sends that give one component: its fixed value, or its distribution's type and
+    // the fields that type reads (all four parameters for normal and uniform alike)
+    function componentFormData(form, { prefix, fixedField }) {
+        const typeField = prefix + '_distribution_type';
+        const type = form[typeField];
+        if (!type) {
+            return { [fixedField]: form[fixedField] };
+        }
+        const data = { [typeField]: type };
+        for (const suffix of distributionFieldSuffixes(type)) {
+            data[prefix + '_' + suffix] = form[prefix + '_' + suffix];
+        }
+        return data;
+    }
+
+    // The form fields, after a component's prefix, that hold a distribution of `type`
+    function distributionFieldSuffixes(type) {
+        if (type === 'weighted_discrete') return ['wd_values'];
+        if (type === 'shuffled_pool') return ['sp_entries'];
+        return ['mean', 'std', 'min', 'max'];
     }
 
     Alpine.data('scenarioBuilder', () => ({
@@ -295,50 +325,8 @@ document.addEventListener('alpine:init', () => {
                 data.longitude = this.longitude;
                 data.altitude = this.altitude;
             }
-            if (this.pv_distribution_type === 'weighted_discrete') {
-                data.pv_distribution_type = 'weighted_discrete';
-                data.pv_wd_values = this.pv_wd_values;
-            } else if (this.pv_distribution_type === 'shuffled_pool') {
-                data.pv_distribution_type = 'shuffled_pool';
-                data.pv_sp_entries = this.pv_sp_entries;
-            } else if (this.pv_distribution_type) {
-                data.pv_distribution_type = this.pv_distribution_type;
-                data.pv_mean = this.pv_mean;
-                data.pv_std = this.pv_std;
-                data.pv_min = this.pv_min;
-                data.pv_max = this.pv_max;
-            } else {
-                data.pv_capacity_kw = this.pv_capacity_kw;
-            }
-            if (this.battery_distribution_type === 'weighted_discrete') {
-                data.battery_distribution_type = 'weighted_discrete';
-                data.battery_wd_values = this.battery_wd_values;
-            } else if (this.battery_distribution_type === 'shuffled_pool') {
-                data.battery_distribution_type = 'shuffled_pool';
-                data.battery_sp_entries = this.battery_sp_entries;
-            } else if (this.battery_distribution_type) {
-                data.battery_distribution_type = this.battery_distribution_type;
-                data.battery_mean = this.battery_mean;
-                data.battery_std = this.battery_std;
-                data.battery_min = this.battery_min;
-                data.battery_max = this.battery_max;
-            } else {
-                data.battery_capacity_kwh = this.battery_capacity_kwh;
-            }
-            if (this.load_distribution_type === 'weighted_discrete') {
-                data.load_distribution_type = 'weighted_discrete';
-                data.load_wd_values = this.load_wd_values;
-            } else if (this.load_distribution_type === 'shuffled_pool') {
-                data.load_distribution_type = 'shuffled_pool';
-                data.load_sp_entries = this.load_sp_entries;
-            } else if (this.load_distribution_type) {
-                data.load_distribution_type = this.load_distribution_type;
-                data.load_mean = this.load_mean;
-                data.load_std = this.load_std;
-                data.load_min = this.load_min;
-                data.load_max = this.load_max;
-            } else {
-                data.annual_consumption_kwh = this.annual_consumption_kwh;
+            for (const component of COMPONENTS) {
+                Object.assign(data, componentFormData(this, component));
             }
             return data;
         },
