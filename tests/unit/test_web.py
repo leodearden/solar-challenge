@@ -456,16 +456,19 @@ class TestChartFunctions:
 class TestHomeResultsRoute:
     """Tests for the GET /results/home/<run_id> route."""
 
-    def test_home_results_unknown_run_redirects(self, client: FlaskClient) -> None:
-        """Test accessing results for a non-existent run redirects."""
-        response = client.get("/results/home/nonexistent-id")
-        assert response.status_code in (302, 404)
+    @pytest.mark.parametrize(
+        "run_id",
+        [
+            pytest.param("nonexistent-id", id="an-id-no-run-has"),
+            pytest.param("bad.id", id="an-id-the-store-refuses"),
+        ],
+    )
+    def test_home_results_unknown_run_redirects(self, client: FlaskClient, run_id: str) -> None:
+        """The page of an id no run has redirects to the dashboard, which flashes Run not found.
 
-    def test_home_results_of_a_run_id_the_store_refuses_redirects_as_an_unknown_run(
-        self, client: FlaskClient
-    ) -> None:
-        """'bad.id' is outside [A-Za-z0-9_-], so no run can be saved under it: the page redirects to the dashboard, which flashes Run not found., as for an unknown run."""
-        response = client.get("/results/home/bad.id", follow_redirects=True)
+        'bad.id' is outside [A-Za-z0-9_-], so the store refuses it, and no run can have it.
+        """
+        response = client.get(f"/results/home/{run_id}", follow_redirects=True)
 
         assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
         assert "Run not found." in texts(response.get_data(as_text=True))
