@@ -54,6 +54,16 @@ def test_builder_no_js_errors(
 # ── Accordion sections ───────────────────────────────────────────────
 
 
+_ACCORDION_SECTIONS: dict[str, tuple[str, str]] = {
+    "General": ("textbox", "Description"),
+    "Period": ("textbox", "Start Date"),
+    "Location": ("combobox", "Location Preset"),
+    "Fleet Distribution": ("spinbutton", "Number of Homes"),
+    "Tariff": ("spinbutton", "Import Rate (GBP/kWh)"),
+}
+"""The accordion's sections in page order, each by its header's name, with the role and name of one control its panel holds."""
+
+
 def test_accordion_sections_exist(page: Page, live_server: str) -> None:
     """The accordion should have General, Period, Location, Fleet Distribution,
     and Tariff sections.
@@ -61,9 +71,7 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
     page.goto(live_server + "/scenarios/builder")
     page.wait_for_load_state("networkidle")
 
-    expected_sections = ["General", "Period", "Location", "Fleet Distribution", "Tariff"]
-
-    for section_name in expected_sections:
+    for section_name in _ACCORDION_SECTIONS:
         accordion_btn = page.locator(
             "button",
             has_text=section_name,
@@ -72,6 +80,24 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
             accordion_btn,
             f"Accordion section '{section_name}' should be visible",
         ).to_be_visible()
+
+
+def _expect_expanded_headers(page: Page, open_section: str | None) -> None:
+    """Expect the header of *open_section* to be exposed as expanded and every other section's header as collapsed; with None, every header as collapsed."""
+    for section in _ACCORDION_SECTIONS:
+        expect(page.get_by_role("button", name=section, exact=True, expanded=section == open_section)).to_be_visible()
+
+
+def test_only_the_open_sections_header_is_exposed_as_expanded(page: Page, live_server: str) -> None:
+    """General's header alone is exposed as expanded when the page loads; opening Period moves that to Period's header, and closing Period leaves every header collapsed."""
+    page.goto(live_server + "/scenarios/builder")
+    _expect_expanded_headers(page, "General")
+
+    _open_section(page, "Period")
+    _expect_expanded_headers(page, "Period")
+
+    page.get_by_role("button", name="Period", exact=True).click()
+    _expect_expanded_headers(page, None)
 
 
 # ── YAML Preview pane ────────────────────────────────────────────────
