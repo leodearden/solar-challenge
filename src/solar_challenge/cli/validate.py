@@ -16,6 +16,7 @@ from solar_challenge.cli.utils import (
     handle_errors,
     print_error,
     print_success,
+    verbatim_table_title,
 )
 from solar_challenge.config import (
     ConfigurationError,
@@ -309,9 +310,9 @@ def _print_config_findings(
 ) -> None:
     """Print the findings for the file as a table: its errors, then its warnings, or OK when there are none.
 
-    Each message is printed exactly as it is, never read as Rich markup or emoji codes.
+    The file's name and each message are printed exactly as they are, never read as Rich markup or emoji codes.
     """
-    table = Table(title=f"Config Validation: {config_file.name}")
+    table = Table(title=verbatim_table_title(f"Config Validation: {config_file.name}"))
     table.add_column("Type", style="cyan")
     table.add_column("Message")
 

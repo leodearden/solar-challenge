@@ -14,6 +14,7 @@ import typer
 import yaml
 from rich.console import Console
 from rich.style import Style
+from rich.text import Text
 from typer.testing import CliRunner, Result
 
 import solar_challenge.cli.home as _cli_home_module
@@ -461,13 +462,15 @@ home:
             assert result.exit_code == 0
             assert "WARNING" in result.stdout or "seems high" in result.stdout
 
-    def _validate_config(self, tmp_path: Path, document: str) -> Result:
-        """Write *document* as the config file and run `validate config` on it.
+    def _validate_config(
+        self, tmp_path: Path, document: str, file_name: str = "config.yaml"
+    ) -> Result:
+        """Write *document* to *file_name* in *tmp_path* and run `validate config` on it.
 
         catch_exceptions=False makes an exception that escapes the command fail the test,
         instead of passing as exit code 1.
         """
-        config_file = tmp_path / "config.yaml"
+        config_file = tmp_path / file_name
         config_file.write_text(document)
         return runner.invoke(
             app, ["validate", "config", str(config_file)], catch_exceptions=False
@@ -572,6 +575,22 @@ home:
 
         assert result.exit_code == 0, result.output
         assert "ERROR" not in result.stdout
+
+    def test_the_title_names_the_file_verbatim_in_the_table_title_style(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file name Rich would read as markup ([draft]) or an emoji code (:sun:) titles the table as the user typed it, in Rich's table-title italics."""
+        monkeypatch.setattr(console, "record", True)
+
+        result = self._validate_config(
+            tmp_path, "home:\n  pv:\n    capacity_kw: 4.0\n", file_name="[draft] :sun:.yaml"
+        )
+        recorded = Text.from_ansi(console.export_text(styles=True))
+
+        assert result.exit_code == 0
+        assert "Config Validation: [draft] :sun:.yaml" in " ".join(result.stdout.split())
+        title_start = recorded.plain.index("Config Validation:")
+        assert recorded.get_style_at_offset(console, title_start).italic
 
     def test_an_errors_text_is_shown_verbatim(self, tmp_path: Path) -> None:
         result = self._validate_config(tmp_path, "home:\n  load: {'[bold]x': 1}\n")
