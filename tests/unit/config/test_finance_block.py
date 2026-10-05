@@ -508,7 +508,7 @@ class TestFinanceConfigParsing:
                 {"standing_charge_pence_per_day": 60.0, "grid_services_model": None}
             )
 
-    @pytest.mark.parametrize(("first", "second"), itertools.pairwise(_NUMERIC_FIELDS))
+    @pytest.mark.parametrize(("first", "second"), list(itertools.pairwise(_NUMERIC_FIELDS)))
     def test_first_declared_of_two_non_numeric_values_is_reported(
         self, first: str, second: str
     ) -> None:
