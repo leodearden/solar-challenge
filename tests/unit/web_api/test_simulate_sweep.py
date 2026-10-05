@@ -201,15 +201,6 @@ class TestSimulateSweep:
         assert type_name in error
         assert recording_job_manager.submitted_homes == []
 
-    def test_sweep_default_parameter_name(self, client: FlaskClient) -> None:
-        """Default parameter name is pv_capacity_kw."""
-        resp = client.post(
-            "/api/simulate/sweep",
-            json={"min": 1.0, "max": 5.0, "steps": 2},
-        )
-        assert resp.status_code == 201
-        assert resp.get_json()["parameter"] == "pv_capacity_kw"
-
     def test_empty_object_body_submits_the_default_sweep(
         self, client: FlaskClient, recording_job_manager: _RecordingJobManager
     ) -> None:

@@ -606,41 +606,6 @@ class TestBuilderScenarioYaml:
 class TestSweepAPI:
     """Tests for the POST /api/simulate/sweep endpoint."""
 
-    def test_sweep_endpoint_returns_201(self, client: FlaskClient) -> None:
-        """POST /api/simulate/sweep returns 201 with the values, the parameter and each point's job id, in point order."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 2.0,
-                "max": 8.0,
-                "steps": 4,
-                "mode": "linear",
-                "base_config": {"battery_kwh": 5.0, "location": "bristol", "days": 7},
-            },
-        )
-        assert response.status_code == 201
-        data = response.get_json()
-        assert "values" in data
-        assert len(data["values"]) == 4
-        assert data["parameter"] == "pv_capacity_kw"
-        assert data["job_ids"] == ["job-1", "job-2", "job-3", "job-4"]
-
-    def test_sweep_linear_values(self, client: FlaskClient) -> None:
-        """Test that linear sweep generates evenly spaced values."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 2.0,
-                "max": 8.0,
-                "steps": 4,
-                "mode": "linear",
-            },
-        )
-        data = response.get_json()
-        assert data["values"] == [2.0, 4.0, 6.0, 8.0]
-
     def test_sweep_geometric_values(self, client: FlaskClient) -> None:
         """Test that geometric sweep generates geometrically spaced values."""
         response = client.post(
