@@ -252,6 +252,30 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
     }
 
 
+_FIXED_VALUES = ("6.5", "9.5", "4200")
+"""A fixed value to type into each of the _CARDS, in order; each differs from its card's default and lies within the card's min and max."""
+
+
+@pytest.mark.parametrize(
+    ("card", "value"),
+    [pytest.param(card, value, id=card.prefix) for card, value in zip(_CARDS, _FIXED_VALUES, strict=True)],
+)
+def test_a_card_at_fixed_value_shows_one_spinbutton_named_fixed_value_that_sets_its_fixed_field(
+    page: Page, live_server: str, card: _Card, value: str
+) -> None:
+    """At Fixed Value, as every card opens, the card's group shows one spinbutton, named Fixed Value, which sets the card's fixed field of the form the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Fleet Distribution")
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
+    fixed_value = card_group.get_by_role("spinbutton", name="Fixed Value", exact=True)
+
+    expect(fixed_value).to_have_count(1)
+    expect(card_group.get_by_role("spinbutton")).to_have_count(1)
+    fixed_value.fill(value)
+
+    assert _form_sent_on_validate(page)[card.fixed_field] == value
+
+
 def _rendered_width(control: Locator) -> float:
     """The width in pixels that *control* is laid out at."""
     box = control.bounding_box()
