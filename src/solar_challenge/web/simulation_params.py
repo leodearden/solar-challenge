@@ -211,13 +211,13 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             (the error names each such key), if a nested block (heat_pump,
             seg, tariff or dispatch_strategy) is neither null, which reads as
             absent, nor a mapping (the error names the block and the type
-            received), if a number field is not a finite number float() reads
-            or occupants is one int() cannot read (the error names the field,
-            as heat_pump.<key> for a heat-pump number, and the value sent), or
-            if required fields are missing or invalid. The battery settings
-            (max_charge_kw, max_discharge_kw, efficiency_pct and
-            dispatch_strategy) are read, and refused, whatever battery_kwh is;
-            a null setting reads as unset.
+            received), if a float field is a boolean or not a finite number
+            float() reads, or occupants is one int() cannot read (the error
+            names the field, as heat_pump.<key> for a heat-pump number, and
+            the value sent), or if required fields are missing or invalid. The
+            battery settings (max_charge_kw, max_discharge_kw, efficiency_pct
+            and dispatch_strategy) are read, and refused, whatever battery_kwh
+            is; a null setting reads as unset.
     """
     data = require_json_object(data, "Home config")
     _refuse_unrecognised_keys(data)
