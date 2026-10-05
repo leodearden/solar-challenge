@@ -21,6 +21,20 @@
   `tests/unit/test_finance_config_relocation.py` checks it as amended. `__all__` and the §3.1
   freeze policy are unchanged. Read the back-compat re-export in §2, §3.3, §4, §10·T2 and §13 as
   superseded.
+- **Amendment (2026-10-05, task 402):** H1's boundary test (T5) installs the built wheel against
+  `uv.lock`, no longer through `uv run --no-project --isolated --with <wheel>`: the runtime
+  dependencies `uv.lock` pins are synced offline into a fresh virtual environment, then the wheel is
+  installed into it. This resolves open question 5, which asked for the most offline-robust isolation
+  method. Offline, resolving the wheel's declared ranges could read only the index data some earlier
+  online resolution had left in uv's cache, so what it installed varied with that cache, and it failed
+  once the cache was cleaned; the locked install reads only wheels the verify's own locked sync caches.
+  `solar_challenge` still comes only from the wheel, loaded from site-packages, but `uv.lock`, not a
+  fresh resolution, now picks its dependencies' versions. So H1 tests the wheel against the versions
+  the suite runs against, not newer releases inside its declared ranges; task 471 decides whether an
+  online `slow` test should cover those. H1 (§9) is amended to match, and
+  `tests/integration/test_external_install.py` is the live mechanism. Read
+  `uv run --no-project --isolated --with` and "project-free", where they describe H1's environment
+  (§3.5, §6, §10·T5, §13), as superseded.
 - **Owner seam (G4):** **this PRD OWNS the `solar_challenge` public-API seam.** It owns (a) the **frozen
   top-level public surface** (`solar_challenge.__all__` + a lazy, typed re-export `__init__`), (b) the
   **buildable, `py.typed` wheel**, (c) the **documented dependency mechanism** an external repo uses to
@@ -327,7 +341,7 @@ guards.
 
 | # | Scenario | Preconditions | Postconditions (asserted) |
 |---|---|---|---|
-| H1 | **Every public symbol callable from a fresh external install** (G2 leaf) | wheel built; isolated project-free env (`uv run --no-project --isolated --with <wheel>`) | `import solar_challenge`; for **every** name in `__all__`: `getattr` resolves and is callable/constructible (classes instantiate with valid minimal args or are types; functions are callable) |
+| H1 | **Every public symbol callable from a fresh external install** (G2 leaf) *(amended 2026-10-05, task 402: installed against `uv.lock`; see header)* | wheel built; a fresh virtual environment holding only that wheel and the runtime dependencies `uv.lock` pins, installed offline | `import solar_challenge`; for **every** name in `__all__`: `getattr` resolves and is callable/constructible (classes instantiate with valid minimal args or are types; functions are callable) |
 | H2 | **Surface freeze enforced** | installed package | `solar_challenge.__all__ == FROZEN_SET` (committed constant); each name resolves to the expected kind; **fails if a name is added/removed without updating the frozen constant** |
 | H3 | **`import solar_challenge` is `pvlib`-free** | clean interpreter | immediately after `import solar_challenge`, `"pvlib" not in sys.modules`; after touching `solar_challenge.PVConfig`, `"pvlib" in sys.modules` (lazy proven both ways) |
 | H4 | **Collision resolved** | installed package | `solar_challenge.DispatchTariffPeriod is solar_challenge.dispatch.TariffPeriod`; `solar_challenge.TariffPeriod is solar_challenge.tariff.TariffPeriod`; the two are distinct |
@@ -370,7 +384,7 @@ can be frozen/installed/documented); **T1** is independent.
 
 #### T5 — external-consumer boundary test (the G2 leaf)
 - **Modules:** `tests/integration/test_external_install.py` (marked appropriately; resolves deps from the uv cache).
-- **Work:** build the wheel; install into an **isolated, project-free** env (`uv run --no-project --isolated --with <built-wheel> …`); import **every** name in `__all__`; assert each callable/constructible.
+- **Work:** build the wheel; install into an **isolated, project-free** env (`uv run --no-project --isolated --with <built-wheel> …`) **[Superseded 2026-10-05, task 402: installed against `uv.lock`; see header.]**; import **every** name in `__all__`; assert each callable/constructible.
 - **Signal (G2/H1/H6):** an external (project-free) install imports + can call every public symbol; the wheel is typed. **This is the user-observable "an external project can install + import + call" proof, in-repo.**
 - **Prereqs:** T1 (typed wheel), T3 (surface).
 
@@ -419,6 +433,7 @@ can be frozen/installed/documented); **T1** is independent.
    change) vs add a `DeprecationWarning`. Default silent. **Resolved 2026-10-04, task 242: retired; see header.**
 5. **Boundary-test isolation method.** `uv run --no-project --isolated --with <wheel>` vs explicit
    `uv venv` + `uv pip install`; pick the most offline-robust against the uv cache at T5.
+   **Resolved 2026-10-05, task 402: install against `uv.lock`; see header.**
 6. **Release-tag automation at close-out.** Manual `git tag` vs a small script; mechanics only, the
    deliverable (a pinned platform dep that resolves in a fresh worktree) is fixed.
 

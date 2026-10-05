@@ -69,6 +69,12 @@ the signal row's identity assertion, as historical (decompose-time 2026-06-20).
 
 ## T5 — external-consumer boundary test (the G2 leaf) — leaf · prereqs T1, T3
 
+Amended 2026-10-05 (task 402): H1's install now runs against `uv.lock` (see
+the PRD's header amendment), and the PRD's H1 row (§9) states the environment
+that now holds. Read the first row's
+`uv run --no-project --isolated --with <wheel>` evidence, and "project-free" in
+the rows below, as historical (decompose-time 2026-06-20).
+
 | Capability asserted by signal | Evidence binding | Status |
 |---|---|---|
 | The package builds + installs as a wheel into an isolated, project-free env | grep:`pyproject.toml` build-system; `uv build --wheel` succeeded 2026-06-20; `uv run --no-project --isolated --with <wheel>` supported (uv 0.11.6) | ✅ |
