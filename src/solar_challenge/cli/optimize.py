@@ -4,7 +4,7 @@
 
 import dataclasses
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Callable, Optional
 
 import pandas as pd
 import typer
@@ -19,6 +19,7 @@ from solar_challenge.config import (
     parse_finance_config,
     parse_seg_rate,
 )
+from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.optimize import (
     enumerate_configs,
     run_sweep,
@@ -56,6 +57,18 @@ _SENSITIVITY_ALIAS_MAP: dict[str, tuple[str, tuple[float, ...]]] = {
 }
 
 
+@dataclasses.dataclass(frozen=True)
+class SweepSimulator:
+    """The fleet simulator `optimize configs` runs every simulation of its sweep with.
+
+    The command reads it from Click's context object, so a caller supplies another
+    with ``CliRunner().invoke(app, argv, obj=SweepSimulator(simulate=...))``;
+    without one it is the real :func:`~solar_challenge.fleet.simulate_fleet`.
+    """
+
+    simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults] = simulate_fleet
+
+
 def _parse_float_list(raw: str, flag: str) -> list[float]:
     """Parse a comma-separated string of floats.
 
@@ -83,6 +96,7 @@ def _parse_float_list(raw: str, flag: str) -> list[float]:
 @app.command()
 @handle_errors
 def configs(
+    ctx: typer.Context,
     scenario: Annotated[
         Path,
         typer.Argument(
@@ -281,7 +295,8 @@ def configs(
 
     # ---- Run sweep ----------------------------------------------------------
     print_info("Solving cost-recovery rates…")
-    ranked = run_sweep(all_configs, retained_cash_floor_gbp=retained_floor)
+    simulate = ctx.ensure_object(SweepSimulator).simulate
+    ranked = run_sweep(all_configs, retained_cash_floor_gbp=retained_floor, simulate=simulate)
 
     # Report sweep summary so the user knows what to expect in the report.
     n_feasible = len(ranked.results)
@@ -314,6 +329,7 @@ def configs(
                 all_configs,
                 axes_map,
                 retained_cash_floor_gbp=retained_floor,
+                simulate=simulate,
             )
         except ValueError as exc:
             # Gracefully skip panel if no feasible baseline (rather than crashing)
