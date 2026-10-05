@@ -902,6 +902,27 @@ class TestRunIdValidation:
         with pytest.raises(ValueError, match="Invalid run_id"):
             storage.delete_run(run_id)
 
+    def test_a_save_under_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error(
+        self, storage, temp_dir, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """A save under an id whose run directory links outside the runs directory raises ValueError, and writes nothing through the link."""
+        outside = temp_dir / "outside"
+        outside.mkdir()
+        runs_dir = storage.data_dir / "runs"
+        runs_dir.mkdir()
+        (runs_dir / "linked").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage.save_home_run(
+                run_id="linked",
+                config=sample_home_config,
+                results=sample_simulation_results,
+                summary=sample_summary,
+            )
+
+        assert list(outside.iterdir()) == []
+        assert storage.list_runs() == []
+
     @pytest.mark.parametrize("run_id", ACCEPTED_RUN_IDS)
     def test_a_home_run_saved_under_an_accepted_id_loads_back_from_the_directory_the_id_names(
         self, storage, sample_home_config, sample_simulation_results, sample_summary, run_id
