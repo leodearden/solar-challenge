@@ -779,7 +779,7 @@ class TestPrintHelpers:
         ("print_message", "target", "colour"),
         [
             pytest.param(print_success, status_console, "green", id="print_success"),
-            pytest.param(print_warning, status_console, "yellow", id="print_warning"),
+            pytest.param(print_warning, error_console, "yellow", id="print_warning"),
             pytest.param(print_info, status_console, "blue", id="print_info"),
             pytest.param(print_error, error_console, "red", id="print_error"),
         ],
@@ -787,7 +787,7 @@ class TestPrintHelpers:
     def test_a_message_is_printed_in_its_colour_on_its_console(
         self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], target: Console, colour: str
     ) -> None:
-        """Success prints green, warning yellow and info blue on the status console, and error red on the error console, all on stderr; recorded, because a test run is no colour terminal."""
+        """Success prints green and info blue on the status console, and warning yellow and error red on the error console, all on stderr; recorded, because a test run is no colour terminal."""
         monkeypatch.setattr(target, "record", True)
 
         print_message("saved")
@@ -1364,7 +1364,7 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
 
 
 class TestQuietOption:
-    """Tests that --quiet silences a command's status messages and progress on stderr, and leaves its product and its errors."""
+    """Tests that --quiet silences a command's status messages and progress on stderr, and leaves its product, its warnings and its errors."""
 
     @pytest.fixture(autouse=True)
     def _restore_status_quiet(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1402,6 +1402,23 @@ class TestQuietOption:
         assert " ".join(result.stderr.split()) == (
             "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
         )
+
+    @pytest.mark.usefixtures("clear_june_in_tmp_path")
+    def test_quiet_leaves_a_warning_on_stderr(self) -> None:
+        """A fleet run asked for a community report its scenario has no community: block for still warns that it ignored the request, and that warning is all stderr carries."""
+        _write_scenario("Bristol")
+
+        result = runner.invoke(
+            app,
+            [
+                "--quiet", "fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21",
+                "--community-report", "community.md",
+            ],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert " ".join(result.stderr.split()) == "--community-report ignored: config has no community: block"
 
     @pytest.mark.usefixtures("clear_june_in_tmp_path")
     def test_quiet_leaves_the_product_on_stdout(self) -> None:

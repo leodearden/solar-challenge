@@ -54,7 +54,7 @@ def main(
         bool,
         typer.Option(
             "--quiet", "-q",
-            help="Suppress status messages and progress; results and errors still print",
+            help="Suppress status messages and progress; results, warnings and errors still print",
         ),
     ] = False,
 ) -> None:

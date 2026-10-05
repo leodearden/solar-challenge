@@ -3,14 +3,14 @@
 
 A command prints its product (a results table, a template or a report) on
 stdout, through console and print_report, and nothing else there. Status
-messages and progress print on stderr through status_console, and errors
-through error_console, so redirecting stdout captures the product alone.
-Print the product after any progress display stops: while one runs on a
-terminal, Rich routes sys.stdout writes through it to stderr.
+messages and progress print on stderr through status_console, and warnings
+and errors through error_console, so redirecting stdout captures the product
+alone. Print the product after any progress display stops: while one runs on
+a terminal, Rich routes sys.stdout writes through it to stderr.
 
 --quiet calls set_status_quiet, which silences status_console: status
-messages go unprinted and progress displays stay off, while products and
-errors print as ever.
+messages go unprinted and progress displays stay off, while products,
+warnings and errors print as ever.
 """
 
 import sys
@@ -246,7 +246,7 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
 
 
 def set_status_quiet(quiet: bool) -> None:
-    """Silence status messages and progress on stderr while quiet is True, and print them again once it is False; products and errors print either way."""
+    """Silence status messages and progress on stderr while quiet is True, and print them again once it is False; products, warnings and errors print either way."""
     status_console.quiet = quiet
 
 
@@ -285,7 +285,7 @@ def print_success(message: str) -> None:
 
 def print_warning(message: str) -> None:
     """Print message in yellow on stderr, exactly as it is."""
-    _print_verbatim(status_console, (message, "yellow"))
+    _print_verbatim(error_console, (message, "yellow"))
 
 
 def print_error(message: str) -> None:
