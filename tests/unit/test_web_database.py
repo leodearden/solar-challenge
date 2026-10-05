@@ -839,6 +839,7 @@ REFUSED_RUN_IDS = [
     pytest.param("", id="empty"),
     pytest.param("run.id", id="dot"),
     pytest.param("run id", id="space"),
+    pytest.param("abc\n", id="trailing-newline"),
 ]
 
 ACCEPTED_RUN_IDS = [
