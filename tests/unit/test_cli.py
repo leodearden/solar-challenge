@@ -1228,14 +1228,19 @@ def _run_optimize_configs() -> Result:
 class TestReportsPrintNamesVerbatim:
     """Tests that the report commands print the names a config gives exactly as written."""
 
-    def test_home_run_prints_the_homes_name_verbatim(self) -> None:
-        """A home name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the summary table and the report as written."""
-        result = _run_home_named(_TEXT_RICH_WOULD_PARSE, "--report")
+    @pytest.mark.parametrize(
+        ("options", "title"),
+        [
+            pytest.param((), "Simulation Results:", id="summary-table"),
+            pytest.param(("--report",), "# Simulation Report:", id="report"),
+        ],
+    )
+    def test_home_run_prints_the_homes_name_verbatim(self, options: tuple[str, ...], title: str) -> None:
+        """A home name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the summary table, or with --report the report, as written."""
+        result = _run_home_named(_TEXT_RICH_WOULD_PARSE, *options)
 
         assert result.exit_code == 0
-        printed = " ".join(result.stdout.split())
-        assert f"Simulation Results: {_TEXT_RICH_WOULD_PARSE}" in printed
-        assert f"# Simulation Report: {_TEXT_RICH_WOULD_PARSE}" in printed
+        assert f"{title} {_TEXT_RICH_WOULD_PARSE}" in " ".join(result.stdout.split())
 
     def test_finance_run_prints_the_scenarios_name_verbatim(self) -> None:
         """A scenario name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the report as written."""
@@ -1286,6 +1291,14 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
         status = " ".join(result.stderr.split())
         assert "Simulating 1 days from 2024-06-21 to 2024-06-21" in status
         assert "Running simulation..." in status
+
+    def test_home_run_report_prints_the_report_in_place_of_the_summary_table(self) -> None:
+        """The report opens stdout, and the summary table is printed on neither stream, since the report carries every one of its figures."""
+        result = _run_home_named("Bristol", "--report")
+
+        assert result.exit_code == 0
+        assert result.stdout.startswith("# Simulation Report: Bristol\n")
+        assert "Simulation Results" not in result.output
 
     def test_finance_run_prints_its_report_alone_on_stdout(self) -> None:
         """The finance report opens stdout. The status lines print on stderr."""
