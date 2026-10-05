@@ -1,6 +1,69 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
 
+{% macro _parameter_input(prefix, parameter, caption, step) %}
+<div>
+    <label for="builder_{{ prefix }}_{{ parameter }}" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">{{ caption }}</label>
+    <input id="builder_{{ prefix }}_{{ parameter }}" type="number" step="{{ step }}" x-model="{{ prefix }}_{{ parameter }}" @input="updatePreview()"
+        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+</div>
+{% endmacro %}
+
+{% macro _row_list(rows, column, column_caption, add_label, step, new_row_value) %}
+<template x-for="(item, idx) in {{ rows }}" :key="idx">
+    <div class="flex gap-2 items-center">
+        <input type="number" step="{{ step }}" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
+            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+        <input type="number" step="1" x-model.number="item.{{ column }}" @input="updatePreview()" placeholder="{{ column_caption }}"
+            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+        <button type="button" @click="removeRow({{ rows }}, idx)" x-show="canRemoveRow({{ rows }})"
+            class="text-red-400 hover:text-red-600 text-sm">X</button>
+    </div>
+</template>
+<button type="button" @click="addRow({{ rows }}, { value: {{ new_row_value }}, {{ column }}: 10 })"
+    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ add_label }}</button>
+{% endmacro %}
+
+{# One fleet component's distribution card, bound to scenarioBuilder's <prefix>_* fields and to its fixed_field #}
+{% macro distribution_card(prefix, heading, fixed_field, fixed_min, fixed_max, step, new_row_value) %}
+<div class="border-t border-slate-200 dark:border-slate-700 pt-4">
+    <fieldset class="min-w-0">
+        <legend><h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">{{ heading }}</h4></legend>
+        <div class="space-y-3">
+            <div>
+                <label for="builder_{{ prefix }}_distribution_type" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Distribution Type</label>
+                <select id="builder_{{ prefix }}_distribution_type" x-model="{{ prefix }}_distribution_type" @change="updatePreview()"
+                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                    <option value="">Fixed Value</option>
+                    <option value="normal">Normal Distribution</option>
+                    <option value="uniform">Uniform Distribution</option>
+                    <option value="weighted_discrete">Weighted Discrete</option>
+                    <option value="shuffled_pool">Shuffled Pool</option>
+                </select>
+            </div>
+            <div x-show="!{{ prefix }}_distribution_type">
+                <input type="number" step="{{ step }}" min="{{ fixed_min }}" max="{{ fixed_max }}" x-model="{{ fixed_field }}" @input="updatePreview()"
+                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+            </div>
+            <div x-show="{{ prefix }}_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
+                {{ _parameter_input(prefix, 'mean', 'Mean', step) }}
+                {{ _parameter_input(prefix, 'std', 'Std Dev', step) }}
+            </div>
+            <div x-show="{{ prefix }}_distribution_type === 'normal' || {{ prefix }}_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
+                {{ _parameter_input(prefix, 'min', 'Min', step) }}
+                {{ _parameter_input(prefix, 'max', 'Max', step) }}
+            </div>
+            <div x-show="{{ prefix }}_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
+                {{ _row_list(prefix ~ '_wd_values', 'weight', 'Weight', '+ Add value', step, new_row_value) }}
+            </div>
+            <div x-show="{{ prefix }}_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
+                {{ _row_list(prefix ~ '_sp_entries', 'count', 'Count', '+ Add entry', step, new_row_value) }}
+            </div>
+        </div>
+    </fieldset>
+</div>
+{% endmacro %}
+
 {% block title %}Scenario Builder{% endblock %}
 
 {% block head %}
@@ -144,233 +207,10 @@
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                 </div>
 
-                <!-- PV Configuration -->
-                <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
-                    <fieldset class="min-w-0">
-                        <legend><h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">PV Capacity (kW)</h4></legend>
-                        <div class="space-y-3">
-                            <div>
-                                <label for="builder_pv_distribution_type" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Distribution Type</label>
-                                <select id="builder_pv_distribution_type" x-model="pv_distribution_type" @change="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                                    <option value="">Fixed Value</option>
-                                    <option value="normal">Normal Distribution</option>
-                                    <option value="uniform">Uniform Distribution</option>
-                                    <option value="weighted_discrete">Weighted Discrete</option>
-                                    <option value="shuffled_pool">Shuffled Pool</option>
-                                </select>
-                            </div>
-                            <div x-show="!pv_distribution_type">
-                                <input type="number" step="0.1" min="0.5" max="20" x-model="pv_capacity_kw" @input="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                            </div>
-                            <div x-show="pv_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_pv_mean" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Mean</label>
-                                    <input id="builder_pv_mean" type="number" step="0.1" x-model="pv_mean" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_pv_std" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Std Dev</label>
-                                    <input id="builder_pv_std" type="number" step="0.1" x-model="pv_std" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="pv_distribution_type === 'normal' || pv_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_pv_min" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
-                                    <input id="builder_pv_min" type="number" step="0.1" x-model="pv_min" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_pv_max" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Max</label>
-                                    <input id="builder_pv_max" type="number" step="0.1" x-model="pv_max" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="pv_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in pv_wd_values" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.weight" @input="updatePreview()" placeholder="Weight"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="pv_wd_values.splice(idx, 1); updatePreview()" x-show="pv_wd_values.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="pv_wd_values.push({value: 4.0, weight: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add value</button>
-                            </div>
-                            <div x-show="pv_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in pv_sp_entries" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.count" @input="updatePreview()" placeholder="Count"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="pv_sp_entries.splice(idx, 1); updatePreview()" x-show="pv_sp_entries.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="pv_sp_entries.push({value: 4.0, count: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add entry</button>
-                            </div>
-                        </div>
-                    </fieldset>
-                </div>
-
-                <!-- Battery Configuration -->
-                <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
-                    <fieldset class="min-w-0">
-                        <legend><h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Battery Capacity (kWh)</h4></legend>
-                        <div class="space-y-3">
-                            <div>
-                                <label for="builder_battery_distribution_type" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Distribution Type</label>
-                                <select id="builder_battery_distribution_type" x-model="battery_distribution_type" @change="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                                    <option value="">Fixed Value</option>
-                                    <option value="normal">Normal Distribution</option>
-                                    <option value="uniform">Uniform Distribution</option>
-                                    <option value="weighted_discrete">Weighted Discrete</option>
-                                    <option value="shuffled_pool">Shuffled Pool</option>
-                                </select>
-                            </div>
-                            <div x-show="!battery_distribution_type">
-                                <input type="number" step="0.1" min="0" max="100" x-model="battery_capacity_kwh" @input="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                            </div>
-                            <div x-show="battery_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_battery_mean" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Mean</label>
-                                    <input id="builder_battery_mean" type="number" step="0.1" x-model="battery_mean" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_battery_std" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Std Dev</label>
-                                    <input id="builder_battery_std" type="number" step="0.1" x-model="battery_std" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="battery_distribution_type === 'normal' || battery_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_battery_min" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
-                                    <input id="builder_battery_min" type="number" step="0.1" x-model="battery_min" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_battery_max" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Max</label>
-                                    <input id="builder_battery_max" type="number" step="0.1" x-model="battery_max" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="battery_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in battery_wd_values" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.weight" @input="updatePreview()" placeholder="Weight"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="battery_wd_values.splice(idx, 1); updatePreview()" x-show="battery_wd_values.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="battery_wd_values.push({value: 5.0, weight: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add value</button>
-                            </div>
-                            <div x-show="battery_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in battery_sp_entries" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.count" @input="updatePreview()" placeholder="Count"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="battery_sp_entries.splice(idx, 1); updatePreview()" x-show="battery_sp_entries.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="battery_sp_entries.push({value: 5.0, count: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add entry</button>
-                            </div>
-                        </div>
-                    </fieldset>
-                </div>
-
-                <!-- Load Configuration -->
-                <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
-                    <fieldset class="min-w-0">
-                        <legend><h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Annual Consumption (kWh)</h4></legend>
-                        <div class="space-y-3">
-                            <div>
-                                <label for="builder_load_distribution_type" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Distribution Type</label>
-                                <select id="builder_load_distribution_type" x-model="load_distribution_type" @change="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                                    <option value="">Fixed Value</option>
-                                    <option value="normal">Normal Distribution</option>
-                                    <option value="uniform">Uniform Distribution</option>
-                                    <option value="weighted_discrete">Weighted Discrete</option>
-                                    <option value="shuffled_pool">Shuffled Pool</option>
-                                </select>
-                            </div>
-                            <div x-show="!load_distribution_type">
-                                <input type="number" step="100" min="500" max="20000" x-model="annual_consumption_kwh" @input="updatePreview()"
-                                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
-                            </div>
-                            <div x-show="load_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_load_mean" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Mean</label>
-                                    <input id="builder_load_mean" type="number" step="100" x-model="load_mean" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_load_std" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Std Dev</label>
-                                    <input id="builder_load_std" type="number" step="100" x-model="load_std" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="load_distribution_type === 'normal' || load_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label for="builder_load_min" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
-                                    <input id="builder_load_min" type="number" step="100" x-model="load_min" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                                <div>
-                                    <label for="builder_load_max" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Max</label>
-                                    <input id="builder_load_max" type="number" step="100" x-model="load_max" @input="updatePreview()"
-                                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                </div>
-                            </div>
-                            <div x-show="load_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in load_wd_values" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="100" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.weight" @input="updatePreview()" placeholder="Weight"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="load_wd_values.splice(idx, 1); updatePreview()" x-show="load_wd_values.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="load_wd_values.push({value: 3500, weight: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add value</button>
-                            </div>
-                            <div x-show="load_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
-                                <template x-for="(item, idx) in load_sp_entries" :key="idx">
-                                    <div class="flex gap-2 items-center">
-                                        <input type="number" step="100" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-                                            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <input type="number" step="1" x-model.number="item.count" @input="updatePreview()" placeholder="Count"
-                                            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                        <button type="button" @click="load_sp_entries.splice(idx, 1); updatePreview()" x-show="load_sp_entries.length > 1"
-                                            class="text-red-400 hover:text-red-600 text-sm">X</button>
-                                    </div>
-                                </template>
-                                <button type="button" @click="load_sp_entries.push({value: 3500, count: 10}); updatePreview()"
-                                    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add entry</button>
-                            </div>
-                        </div>
-                    </fieldset>
-                </div>
+                {# One card per entry of COMPONENTS in static/js/scenario-builder.js, passing the entry's prefix and fixedField #}
+                {{ distribution_card('pv', 'PV Capacity (kW)', fixed_field='pv_capacity_kw', fixed_min='0.5', fixed_max='20', step='0.1', new_row_value='4.0') }}
+                {{ distribution_card('battery', 'Battery Capacity (kWh)', fixed_field='battery_capacity_kwh', fixed_min='0', fixed_max='100', step='0.1', new_row_value='5.0') }}
+                {{ distribution_card('load', 'Annual Consumption (kWh)', fixed_field='annual_consumption_kwh', fixed_min='500', fixed_max='20000', step='100', new_row_value='3500') }}
             </div>
         </div>
 
