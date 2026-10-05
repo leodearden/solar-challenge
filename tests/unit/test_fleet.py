@@ -242,6 +242,21 @@ class TestFleetResults:
                 home_configs=[sample_results.home_configs[0]] * n_configs,
             )
 
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(lambda fleet: fleet.total_generation, id="total_generation"),
+            pytest.param(FleetResults.to_aggregate_dataframe, id="to_aggregate_dataframe"),
+            pytest.param(calculate_fleet_summary, id="calculate_fleet_summary"),
+        ],
+    )
+    def test_a_fleet_emptied_after_construction_is_refused_where_it_is_read(self, sample_results, read):
+        """A fleet whose per_home_results is emptied after construction is refused, naming the invariant, wherever its totals or summary are read."""
+        sample_results.per_home_results.clear()
+
+        with pytest.raises(ValueError, match="at least one home"):
+            read(sample_results)
+
 
 class TestFleetSummary:
     """Test FLEET-006: Fleet summary statistics."""
