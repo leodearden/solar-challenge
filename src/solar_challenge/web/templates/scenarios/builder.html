@@ -236,10 +236,11 @@
                 </div>
             </div>
 
-            <label class="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors cursor-pointer">
+            <button type="button" @click="$refs.yamlFileInput.click()"
+                class="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
                 Upload YAML
-                <input type="file" accept=".yaml,.yml" @change="uploadYaml($event)" class="hidden">
-            </label>
+            </button>
+            <input type="file" accept=".yaml,.yml" x-ref="yamlFileInput" @change="uploadYaml($event)" class="hidden">
 
             <button @click="downloadYaml()"
                 class="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
