@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 import yaml
@@ -200,11 +200,21 @@ def test_custom_location_controls_named_by_their_captions_set_the_location_the_b
     }
 
 
-_DISTRIBUTION_CARDS = (
-    pytest.param("PV Capacity (kW)", "pv", id="pv"),
-    pytest.param("Battery Capacity (kWh)", "battery", id="battery"),
-    pytest.param("Annual Consumption (kWh)", "load", id="load"),
+class _Card(NamedTuple):
+    """A distribution card: its heading, the prefix of its form fields, and the field holding its fixed value."""
+
+    heading: str
+    prefix: str
+    fixed_field: str
+
+
+_CARDS = (
+    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw"),
+    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh"),
+    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh"),
 )
+
+_DISTRIBUTION_CARDS = tuple(pytest.param(card.heading, card.prefix, id=card.prefix) for card in _CARDS)
 """(card heading, the prefix of its form fields)."""
 
 
@@ -268,6 +278,63 @@ def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_t
     expect(card_group.get_by_role("button", name="+ Add value", exact=True)).to_be_visible()
 
     assert _rendered_width(distribution_type) == pytest.approx(width_before, abs=0.5)
+
+
+# ── Distribution cards: the fields and rows each card sends ──────────
+
+
+def _choose_in_every_card(page: Page, distribution_type: str) -> None:
+    """Open Fleet Distribution and choose *distribution_type* in every card's Distribution Type combobox."""
+    _open_section(page, "Fleet Distribution")
+    for card in _CARDS:
+        page.get_by_role("group", name=card.heading, exact=True).get_by_role(
+            "combobox", name="Distribution Type", exact=True
+        ).select_option(label=distribution_type)
+
+
+def _card_fields(sent: dict[str, Any], card: _Card) -> set[str]:
+    """The fields of the form *sent* that give *card*: those named with its prefix, and its fixed field."""
+    return {field for field in sent if field.startswith(card.prefix + "_") or field == card.fixed_field}
+
+
+def test_a_card_at_fixed_value_sends_only_its_fixed_value(page: Page, live_server: str) -> None:
+    """Every card opens at Fixed Value, and the form the builder previews on opening gives each card's fixed value alone."""
+    with page.expect_response("**/api/scenarios/preview-yaml") as opened:
+        page.goto(live_server + "/scenarios/builder")
+
+    sent = opened.value.request.post_data_json
+
+    assert {card.prefix: _card_fields(sent, card) for card in _CARDS} == {
+        card.prefix: {card.fixed_field} for card in _CARDS
+    }
+
+
+@pytest.mark.parametrize(
+    ("distribution_type", "type_value", "parameters"),
+    [
+        pytest.param("Normal Distribution", "normal", ("mean", "std", "min", "max"), id="normal"),
+        pytest.param("Uniform Distribution", "uniform", ("mean", "std", "min", "max"), id="uniform"),
+        pytest.param("Weighted Discrete", "weighted_discrete", ("wd_values",), id="weighted_discrete"),
+        pytest.param("Shuffled Pool", "shuffled_pool", ("sp_entries",), id="shuffled_pool"),
+    ],
+)
+def test_a_card_set_to_a_distribution_sends_its_type_and_the_fields_that_type_reads(
+    page: Page, live_server: str, distribution_type: str, type_value: str, parameters: tuple[str, ...]
+) -> None:
+    """With *distribution_type* chosen in every card, the form the builder sends gives each card that type and its *parameters*, and not its fixed value.
+
+    Uniform sends all four parameters as normal does; builder_form.py reads only min and max of it.
+    """
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, distribution_type)
+
+    sent = _form_sent_on_validate(page)
+
+    assert {card.prefix: _card_fields(sent, card) for card in _CARDS} == {
+        card.prefix: {f"{card.prefix}_distribution_type", *(f"{card.prefix}_{name}" for name in parameters)}
+        for card in _CARDS
+    }
+    assert {sent[f"{card.prefix}_distribution_type"] for card in _CARDS} == {type_value}
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────
