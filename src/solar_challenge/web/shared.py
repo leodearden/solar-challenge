@@ -52,6 +52,9 @@ def request_json_object() -> dict[str, Any]:
 def refuse_unrecognised_keys(body: Mapping[str, Any], recognised: Collection[str], what: str) -> None:
     """Refuse *body*, a request's *what*, when it has a top-level key outside *recognised*.
 
+    *what* is the label require_json_object takes for the same body; the refusal names it
+    lower-cased.
+
     Raises:
         ValueError: Naming *what* and each unrecognised key, sorted, and listing the
             *recognised* keys, sorted.
@@ -59,7 +62,7 @@ def refuse_unrecognised_keys(body: Mapping[str, Any], recognised: Collection[str
     unrecognised = sorted(body.keys() - recognised)
     if unrecognised:
         raise ValueError(
-            f"Unrecognised {what} keys: {', '.join(map(repr, unrecognised))}; "
+            f"Unrecognised {what.lower()} keys: {', '.join(map(repr, unrecognised))}; "
             f"recognised keys: {', '.join(sorted(recognised))}"
         )
 

@@ -96,7 +96,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
             an unknown location preset or distribution type, or a malformed distribution row.
     """
     form = require_json_object(form, _BUILDER_FORM)
-    refuse_unrecognised_keys(form, _RECOGNISED_KEYS, "builder form")
+    refuse_unrecognised_keys(form, _RECOGNISED_KEYS, _BUILDER_FORM)
     fields = _present_fields(form)
 
     document: dict[str, Any] = {

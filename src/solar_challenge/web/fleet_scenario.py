@@ -90,7 +90,7 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
             date range, or for a date that does not parse.
         ConfigurationError: For a block the loaders refuse, or homes they cannot generate.
     """
-    refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "fleet form")
+    refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "Fleet form")
     distribution = form_to_fleet_distribution_config(dict(form))
     fleet = parse_fleet_distribution_config(distribution)
     location = _fleet_form_location(form)

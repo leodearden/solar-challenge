@@ -25,6 +25,8 @@ from solar_challenge.web.shared import (
     resolve_location,
 )
 
+_HOME_CONFIG = "Home config"
+
 # Each parser's recognised top-level keys, and the value each reads as when absent.
 _DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
     "days": None,
@@ -156,8 +158,8 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             nor a mapping (the error names the block and the type received),
             or if required fields are missing or invalid.
     """
-    data = require_json_object(data, "Home config")
-    refuse_unrecognised_keys(data, _HOME_CONFIG_KEYS, "home config")
+    data = require_json_object(data, _HOME_CONFIG)
+    refuse_unrecognised_keys(data, _HOME_CONFIG_KEYS, _HOME_CONFIG)
     params = {**_HOME_CONFIG_DEFAULTS, **data}
     pv_kw = float(params["pv_kw"])
     azimuth = float(params["azimuth"])
