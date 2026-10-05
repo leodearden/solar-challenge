@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Utility functions for the CLI."""
+"""Utility functions for the CLI.
+
+A command prints its product (a results table, a template or a report) on
+stdout, through console and print_report, and nothing else there. Status
+messages and progress print on stderr through status_console, and errors
+through error_console, so redirecting stdout captures the product alone.
+Print the product after any progress display stops: while one runs on a
+terminal, Rich routes sys.stdout writes through it to stderr.
+"""
 
 import sys
 from functools import wraps
@@ -26,6 +34,7 @@ from solar_challenge.location import Location
 from solar_challenge.weather import WeatherDataError
 
 console = Console()
+status_console = Console(stderr=True)
 error_console = Console(stderr=True)
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -232,17 +241,17 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
 
 
 def create_progress() -> Progress:
-    """Create a Rich progress bar for simulations."""
+    """Create a Rich progress bar for simulations, printed on stderr."""
     return Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         TimeElapsedColumn(),
-        console=console,
+        console=status_console,
     )
 
 
 def create_fleet_progress() -> Progress:
-    """Progress bar with ETA for fleet simulations."""
+    """Progress bar with ETA for fleet simulations, printed on stderr."""
     return Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -252,18 +261,18 @@ def create_fleet_progress() -> Progress:
         TimeElapsedColumn(),
         TextColumn("ETA"),
         TimeRemainingColumn(),
-        console=console,
+        console=status_console,
     )
 
 
 def print_success(message: str) -> None:
-    """Print message in green, exactly as it is."""
-    _print_verbatim(console, (message, "green"))
+    """Print message in green on stderr, exactly as it is."""
+    _print_verbatim(status_console, (message, "green"))
 
 
 def print_warning(message: str) -> None:
-    """Print message in yellow, exactly as it is."""
-    _print_verbatim(console, (message, "yellow"))
+    """Print message in yellow on stderr, exactly as it is."""
+    _print_verbatim(status_console, (message, "yellow"))
 
 
 def print_error(message: str) -> None:
@@ -272,8 +281,8 @@ def print_error(message: str) -> None:
 
 
 def print_info(message: str) -> None:
-    """Print message in blue, exactly as it is."""
-    _print_verbatim(console, (message, "blue"))
+    """Print message in blue on stderr, exactly as it is."""
+    _print_verbatim(status_console, (message, "blue"))
 
 
 def print_report(report: str) -> None:

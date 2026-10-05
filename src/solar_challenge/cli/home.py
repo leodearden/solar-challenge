@@ -95,7 +95,7 @@ def run(
         bool,
         typer.Option(
             "--report", "-r",
-            help="Print markdown summary report",
+            help="Print the markdown summary report in place of the summary table",
         ),
     ] = False,
     pv_kw: Annotated[
@@ -158,31 +158,28 @@ def run(
         results = simulate_home(home_config, start_date, end_date)
         progress.update(task, completed=True)
 
-    # Calculate summary for the default table.  When seg_tariff is already set on
-    # HomeConfig, the engine prices every export timestep at the SEG rate, so
-    # total_export_revenue_gbp is the authoritative figure.  Omitting
-    # seg_tariff_pence_per_kwh here prevents a duplicate "SEG Revenue" row in the
-    # table that would equal "Grid Export Revenue" and mislead users into thinking
-    # the revenue is counted twice.  The --report path below still passes seg_rate to
-    # generate_summary_report so the detailed "## SEG Revenue" section appears there.
-    summary = calculate_summary(results)
-
-    # Display summary table
-    table = create_summary_table(summary, title=f"Simulation Results: {home_config.name}")
-    console.print(table)
+    if report:
+        print_report(
+            generate_summary_report(results, home_config.name, seg_tariff_pence_per_kwh=seg_rate)
+        )
+    else:
+        # Calculate summary for the default table.  When seg_tariff is already set on
+        # HomeConfig, the engine prices every export timestep at the SEG rate, so
+        # total_export_revenue_gbp is the authoritative figure.  Omitting
+        # seg_tariff_pence_per_kwh here prevents a duplicate "SEG Revenue" row in the
+        # table that would equal "Grid Export Revenue" and mislead users into thinking
+        # the revenue is counted twice.  The --report branch above does pass seg_rate
+        # to generate_summary_report, so the report has its detailed "## SEG Revenue"
+        # section.
+        summary = calculate_summary(results)
+        console.print(
+            create_summary_table(summary, title=f"Simulation Results: {home_config.name}")
+        )
 
     # Export CSV if requested
     if output is not None:
         export_to_csv(results, output)
         print_success(f"Results saved to {output}")
-
-    # Print report if requested
-    if report:
-        console.print()
-        report_text = generate_summary_report(
-            results, home_config.name, seg_tariff_pence_per_kwh=seg_rate
-        )
-        print_report(report_text)
 
 
 @app.command()
