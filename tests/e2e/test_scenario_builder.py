@@ -745,9 +745,10 @@ def test_tabbing_to_upload_yaml_and_pressing_key_opens_a_file_chooser_whose_scen
     path.write_text(_LOCATION_WITHOUT_ALTITUDE_YAML, encoding="utf-8")
     page.get_by_role("button", name="Load Preset", exact=True).focus()
 
-    page.keyboard.press("Tab")
-    expect(page.get_by_role("button", name="Upload YAML", exact=True)).to_be_focused()
+    # Playwright intercepts a chooser only once the server has handled the listener's registration, which a key press sent straight after it can outrun; the Tab and focus check leave round trips between the two
     with page.expect_file_chooser() as chooser:
+        page.keyboard.press("Tab")
+        expect(page.get_by_role("button", name="Upload YAML", exact=True)).to_be_focused()
         page.keyboard.press(key)
     with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
         chooser.value.set_files(path)
