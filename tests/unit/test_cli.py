@@ -78,6 +78,14 @@ class TestMainCLI:
         assert result.exit_code in (0, 2)
         assert "Usage" in result.stdout or "Solar Challenge" in result.stdout
 
+    def test_verbose_is_refused_as_an_unknown_option(self) -> None:
+        """--verbose never changed any output, so the CLI has no such option. It refuses it with a usage error, exit 2, and runs no command: config locations would otherwise print its table on stdout."""
+        result = runner.invoke(app, ["--verbose", "config", "locations"])
+
+        assert result.exit_code == 2
+        assert result.stdout == ""
+        assert "No such option: --verbose" in " ".join(result.stderr.split())
+
 
 class TestHomeCLI:
     """Tests for home subcommands."""
