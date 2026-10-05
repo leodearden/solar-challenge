@@ -4,7 +4,7 @@
 import functools
 import math
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -285,7 +285,7 @@ _MICROINVERTER_MAX_W = 1500.0
 
 
 @dataclass(frozen=True)
-class _CecInverter:
+class CecInverter:
     """The catalogue numbers that decide whether a CEC inverter suits an array."""
 
     name: str
@@ -310,7 +310,7 @@ class _CecInverter:
 
 
 @functools.cache
-def _usable_cec_inverters() -> tuple[_CecInverter, ...]:
+def usable_cec_inverters() -> tuple[CecInverter, ...]:
     """CEC inverters with a positive finite rating, start-up power, nominal voltage and MPPT window.
 
     Read once per process. A positive start-up power (Pso) keeps pvlib's
@@ -322,7 +322,7 @@ def _usable_cec_inverters() -> tuple[_CecInverter, ...]:
     )
     usable = numbers[((numbers > 0) & (numbers < float("inf"))).all(axis=1)]
     return tuple(
-        _CecInverter(name, paco_w, vdco_v, mppt_low_v, mppt_high_v)
+        CecInverter(name, paco_w, vdco_v, mppt_low_v, mppt_high_v)
         for name, paco_w, vdco_v, mppt_low_v, mppt_high_v in zip(
             usable.index,
             usable["Paco"],
@@ -334,15 +334,15 @@ def _usable_cec_inverters() -> tuple[_CecInverter, ...]:
 
 
 @functools.cache
-def _cec_inverters() -> tuple[_CecInverter, ...]:
-    """The usable CEC inverters a PV array can be wired to: every one but the battery inverter/chargers."""
+def candidate_cec_inverters() -> tuple[CecInverter, ...]:
+    """The usable CEC inverters a PV array can be wired to, which create_pv_system and create_model_chain pick from: every one but the battery inverter/chargers."""
     return tuple(
-        inverter for inverter in _usable_cec_inverters() if not inverter.is_battery_inverter
+        inverter for inverter in usable_cec_inverters() if not inverter.is_battery_inverter
     )
 
 
 def _wiring_within_window(
-    module_count: int, module_vmp_v: float, inverter: _CecInverter
+    module_count: int, module_vmp_v: float, inverter: CecInverter
 ) -> Optional[_Wiring]:
     """The fewest near-equal series strings whose STC voltage (modules × V_mp_ref) lies inside the inverter's MPPT window.
 
@@ -372,10 +372,10 @@ def _wiring_within_window(
 
 
 def _inverters_with_wiring(
-    module_count: int, module_vmp_v: float
-) -> Iterator[tuple[_CecInverter, _Wiring]]:
-    """Each CEC inverter whose MPPT window takes the strings, with that wiring."""
-    for inverter in _cec_inverters():
+    module_count: int, module_vmp_v: float, candidates: Iterable[CecInverter]
+) -> Iterator[tuple[CecInverter, _Wiring]]:
+    """Each candidate whose MPPT window takes the strings, with that wiring."""
+    for inverter in candidates:
         wiring = _wiring_within_window(module_count, module_vmp_v, inverter)
         if wiring is not None:
             yield inverter, wiring
@@ -385,7 +385,7 @@ def _ranking_key(
     target_w: float,
     module_count: int,
     module_vmp_v: float,
-    inverter: _CecInverter,
+    inverter: CecInverter,
     wiring: _Wiring,
 ) -> tuple[float, int, float, str]:
     """Nearest rating, then the simplest wiring, then the nominal voltage nearest the strings', then the name.
@@ -403,18 +403,21 @@ def _ranking_key(
 
 
 def _voltage_matched_cec_inverter(
-    ac_capacity_kw: float, module_count: int, module_vmp_v: float
+    ac_capacity_kw: float,
+    module_count: int,
+    module_vmp_v: float,
+    candidates: Iterable[CecInverter],
 ) -> tuple[dict[str, float], _Wiring]:
-    """The CEC inverter rated nearest the AC capacity whose MPPT window takes the strings, and that wiring."""
+    """The candidate rated nearest the AC capacity whose MPPT window takes the strings, as its CEC library parameters, and that wiring."""
     target_w = ac_capacity_kw * 1000
-    candidates = list(_inverters_with_wiring(module_count, module_vmp_v))
-    if not candidates:
+    admitted = list(_inverters_with_wiring(module_count, module_vmp_v, candidates))
+    if not admitted:
         raise ValueError(
-            f"No CEC inverter's MPPT window admits a series string of {module_count} "
+            f"No candidate CEC inverter's MPPT window admits a series string of {module_count} "
             f"modules at V_mp_ref={module_vmp_v} V"
         )
     best, wiring = min(
-        candidates,
+        admitted,
         key=lambda pair: _ranking_key(target_w, module_count, module_vmp_v, *pair),
     )
     return dict(_sam_library("CECInverter")[best.name]), wiring
@@ -442,16 +445,19 @@ def _module_parameters(config: PVConfig) -> dict[str, float]:
 
 
 def _inverter_and_wiring(
-    config: PVConfig, module_params: dict[str, float], module_count: int
+    config: PVConfig,
+    module_params: dict[str, float],
+    module_count: int,
+    candidates: Iterable[CecInverter],
 ) -> tuple[dict[str, float], _Wiring]:
     """The inverter parameters and how to wire the modules to them.
 
     Custom inverter parameters take one string of every module, as does the
     PVWatts inverter that a module with PVWatts parameters gets, because
     pvlib's PVWatts models ignore voltage. PVWatts parameters are the keys
-    pvlib infers its PVWatts DC model from. A module with a V_mp_ref gets a CEC
-    inverter voltage-matched to its strings. Any other module needs custom
-    inverter parameters.
+    pvlib infers its PVWatts DC model from. A module with a V_mp_ref gets the
+    CEC inverter among candidates voltage-matched to its strings. Any other
+    module needs custom inverter parameters.
     """
     one_string = (_StringGroup(module_count, 1),)
     if config.custom_inverter_params is not None:
@@ -465,7 +471,7 @@ def _inverter_and_wiring(
             "strings; supply PVConfig.custom_inverter_params"
         )
     inverter_params, wiring = _voltage_matched_cec_inverter(
-        config.effective_inverter_capacity_kw, module_count, module_params["V_mp_ref"]
+        config.effective_inverter_capacity_kw, module_count, module_params["V_mp_ref"], candidates
     )
     if config.inverter_efficiency != 0.96:
         inverter_params["Pdco"] = inverter_params["Paco"] / config.inverter_efficiency
@@ -502,15 +508,26 @@ def _module_count(config: PVConfig, module_params: dict[str, float]) -> int:
     return max(1, round(config.capacity_kw * 1000 / _module_rating_w(module_params)))
 
 
+def _pv_system(config: PVConfig, candidates: Iterable[CecInverter]) -> PVSystem:
+    """The PVSystem for config, any CEC inverter it takes voltage-matched from candidates."""
+    module_params = _module_parameters(config)
+    module_count = _module_count(config, module_params)
+    inverter_params, wiring = _inverter_and_wiring(config, module_params, module_count, candidates)
+    return PVSystem(
+        arrays=_arrays(config, module_params, wiring),
+        inverter_parameters=inverter_params,
+    )
+
+
 def create_pv_system(config: PVConfig) -> PVSystem:
     """Create a pvlib PVSystem from configuration.
 
     Creates a PVSystem using CEC module and inverter databases for realistic
     modelling parameters, or custom parameters if provided. The CEC inverter is
     voltage-matched to the strings; see _ranking_key and _wiring_within_window
-    for how it is chosen from _cec_inverters and how the modules are wired to
-    it. A module with PVWatts parameters (pdc0 and gamma_pdc, e.g. one from
-    create_simple_module_params) gets pvlib's PVWatts inverter at the
+    for how it is chosen from candidate_cec_inverters and how the modules are
+    wired to it. A module with PVWatts parameters (pdc0 and gamma_pdc, e.g. one
+    from create_simple_module_params) gets pvlib's PVWatts inverter at the
     configured AC capacity and efficiency instead.
 
     Args:
@@ -532,13 +549,7 @@ def create_pv_system(config: PVConfig) -> PVSystem:
         >>> system.arrays[0].mount.surface_tilt
         35.0
     """
-    module_params = _module_parameters(config)
-    module_count = _module_count(config, module_params)
-    inverter_params, wiring = _inverter_and_wiring(config, module_params, module_count)
-    return PVSystem(
-        arrays=_arrays(config, module_params, wiring),
-        inverter_parameters=inverter_params,
-    )
+    return _pv_system(config, candidate_cec_inverters())
 
 
 def wired_dc_capacity_kw(config: PVConfig) -> float:
@@ -574,25 +585,33 @@ def _require_compatible_dc_and_ac_models(model_chain: ModelChain) -> None:
         )
 
 
-def create_model_chain(
+def create_model_chain_picking_from(
     config: PVConfig,
     location: "Location",
+    candidates: Iterable[CecInverter],
 ) -> ModelChain:
-    """Create a pvlib ModelChain for AC power simulation.
+    """Create a pvlib ModelChain like create_model_chain, but voltage-match the CEC inverter from candidates instead of candidate_cec_inverters().
+
+    A candidate's numbers decide only whether and how it is picked: the system
+    takes the picked inverter's own parameters from pvlib's CEC library by
+    name, so every candidate must name a row there. Custom inverter parameters
+    and PVWatts modules ignore the candidates, as in create_model_chain.
 
     Args:
         config: PV system configuration
         location: Geographic location for solar position calculations
+        candidates: The CEC inverters to pick from
 
     Returns:
         ModelChain ready to run simulations with weather data
 
     Raises:
-        ValueError: If pvlib infers an inverter model that can not read its DC
-            model's output, e.g. custom Sandia inverter parameters with PVWatts
-            module parameters.
+        ValueError: If no candidate's MPPT window admits the strings, or if
+            pvlib infers an inverter model that can not read its DC model's
+            output, e.g. custom Sandia inverter parameters with PVWatts module
+            parameters.
     """
-    pv_system = create_pv_system(config)
+    pv_system = _pv_system(config, candidates)
 
     # Convert our Location to pvlib Location
     pvlib_location = PVLibLocation(
@@ -613,6 +632,27 @@ def create_model_chain(
     _require_compatible_dc_and_ac_models(model_chain)
 
     return model_chain
+
+
+def create_model_chain(
+    config: PVConfig,
+    location: "Location",
+) -> ModelChain:
+    """Create a pvlib ModelChain for AC power simulation.
+
+    Args:
+        config: PV system configuration
+        location: Geographic location for solar position calculations
+
+    Returns:
+        ModelChain ready to run simulations with weather data
+
+    Raises:
+        ValueError: If pvlib infers an inverter model that can not read its DC
+            model's output, e.g. custom Sandia inverter parameters with PVWatts
+            module parameters.
+    """
+    return create_model_chain_picking_from(config, location, candidate_cec_inverters())
 
 
 def simulate_pv_output(

@@ -23,21 +23,26 @@ import itertools
 import math
 import sys
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
-from unittest import mock
 
 import numpy as np
 import pandas as pd
 import pvlib
 from pvlib.modelchain import ModelChain
 
-from solar_challenge import pv
 from solar_challenge.location import Location
-from solar_challenge.pv import PVConfig, create_model_chain, create_pv_system
+from solar_challenge.pv import (
+    CecInverter,
+    PVConfig,
+    candidate_cec_inverters,
+    create_model_chain,
+    create_model_chain_picking_from,
+    create_pv_system,
+    usable_cec_inverters,
+)
 from solar_challenge.weather import (
     DEFAULT_CACHE_DIR,
     WeatherCache,
@@ -77,6 +82,24 @@ class Sizing:
     floor_factor: float = 1.0
     keeps_battery_inverters: bool = False
 
+    def candidates(self) -> tuple[CecInverter, ...]:
+        """pv.py's candidate inverters, or every usable CEC row if it keeps the battery inverter/chargers, with every Mppt_high divided by ceiling_factor and every Mppt_low by floor_factor.
+
+        Dividing an edge is the same check as multiplying the string voltage; the
+        ranking is untouched.
+        """
+        catalogue = (
+            usable_cec_inverters() if self.keeps_battery_inverters else candidate_cec_inverters()
+        )
+        return tuple(
+            dataclasses.replace(
+                inverter,
+                mppt_low_v=inverter.mppt_low_v / self.floor_factor,
+                mppt_high_v=inverter.mppt_high_v / self.ceiling_factor,
+            )
+            for inverter in catalogue
+        )
+
 
 STC = Sizing("STC")
 BATTERY_INVERTERS_KEPT = Sizing(
@@ -100,28 +123,6 @@ def sizings(module: Mapping[str, Any]) -> tuple[Sizing, ...]:
         for t in HOT_DESIGN_CELL_TEMPERATURES_C
     )
     return (STC, *cold, *margins, *hot, BATTERY_INVERTERS_KEPT)
-
-
-@contextmanager
-def picking_by(sizing: Sizing) -> Iterator[None]:
-    """pv.py's own inverter pick and wiring, with every catalogue ceiling divided by the sizing's ceiling_factor and every floor by its floor_factor.
-
-    Dividing an edge is the same check as multiplying the string voltage; the
-    ranking is untouched.
-    """
-    catalogue = (
-        pv._usable_cec_inverters() if sizing.keeps_battery_inverters else pv._cec_inverters()
-    )
-    moved = tuple(
-        dataclasses.replace(
-            inverter,
-            mppt_low_v=inverter.mppt_low_v / sizing.floor_factor,
-            mppt_high_v=inverter.mppt_high_v / sizing.ceiling_factor,
-        )
-        for inverter in catalogue
-    )
-    with mock.patch.object(pv, "_cec_inverters", return_value=moved):
-        yield
 
 
 @dataclass(frozen=True)
@@ -305,32 +306,30 @@ def census(
     years: dict[Pick, Year] = {}
     rows = []
     for sizing in sizings(module):
-        with picking_by(sizing):
-            for inverter_kw, dc_kw in itertools.product(
-                INVERTER_CAPACITIES_KW, dc_capacities_kw
-            ):
-                config = PVConfig(capacity_kw=dc_kw, inverter_capacity_kw=inverter_kw)
-                chain = create_model_chain(config, location)
-                pick = _pick(chain)
-                if pick not in years:
-                    years[pick] = measure_year(chain, weather)
-                year = years[pick]
-                rows.append(
-                    {
-                        "sizing": sizing.label,
-                        "inverter_kw": _column_label(inverter_kw),
-                        "dc_kw": dc_kw,
-                        "inverter": pick.inverter,
-                        "wiring": pick.wiring_label,
-                        "modules": pick.modules,
-                        "longest_string_stc_v": pick.longest_string * module["V_mp_ref"],
-                        "mppt_low_v": chain.system.inverter_parameters["Mppt_low"],
-                        "mppt_high_v": chain.system.inverter_parameters["Mppt_high"],
-                        "ac_kwh": year.ac_kwh,
-                        **_prefixed(CEILING, year.above_ceiling),
-                        **_prefixed(FLOOR, year.below_floor),
-                    }
-                )
+        candidates = sizing.candidates()
+        for inverter_kw, dc_kw in itertools.product(INVERTER_CAPACITIES_KW, dc_capacities_kw):
+            config = PVConfig(capacity_kw=dc_kw, inverter_capacity_kw=inverter_kw)
+            chain = create_model_chain_picking_from(config, location, candidates)
+            pick = _pick(chain)
+            if pick not in years:
+                years[pick] = measure_year(chain, weather)
+            year = years[pick]
+            rows.append(
+                {
+                    "sizing": sizing.label,
+                    "inverter_kw": _column_label(inverter_kw),
+                    "dc_kw": dc_kw,
+                    "inverter": pick.inverter,
+                    "wiring": pick.wiring_label,
+                    "modules": pick.modules,
+                    "longest_string_stc_v": pick.longest_string * module["V_mp_ref"],
+                    "mppt_low_v": chain.system.inverter_parameters["Mppt_low"],
+                    "mppt_high_v": chain.system.inverter_parameters["Mppt_high"],
+                    "ac_kwh": year.ac_kwh,
+                    **_prefixed(CEILING, year.above_ceiling),
+                    **_prefixed(FLOOR, year.below_floor),
+                }
+            )
         print(f"{sizing.label}: {len(years)} distinct picks measured", file=sys.stderr)
     return pd.DataFrame(rows)
 
@@ -553,8 +552,8 @@ def catalogue_ceilings() -> pd.Series:
 
 def battery_inverters() -> tuple[pd.DataFrame, pd.Series]:
     """The usable CEC rows pv.py leaves out as battery inverter/chargers, and the gaps between them and the rows it keeps."""
-    kept = pd.DataFrame(map(dataclasses.asdict, pv._cec_inverters()))
-    left_out = set(pv._usable_cec_inverters()) - set(pv._cec_inverters())
+    kept = pd.DataFrame(map(dataclasses.asdict, candidate_cec_inverters()))
+    left_out = set(usable_cec_inverters()) - set(candidate_cec_inverters())
     dropped = pd.DataFrame(map(dataclasses.asdict, left_out)).sort_values(
         ["vdco_v", "paco_w", "name"], ignore_index=True
     )
