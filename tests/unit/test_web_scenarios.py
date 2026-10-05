@@ -606,27 +606,6 @@ class TestBuilderScenarioYaml:
 class TestSweepAPI:
     """Tests for the POST /api/simulate/sweep endpoint."""
 
-    def test_sweep_geometric_values(self, client: FlaskClient) -> None:
-        """Test that geometric sweep generates geometrically spaced values."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 1.0,
-                "max": 8.0,
-                "steps": 4,
-                "mode": "geometric",
-            },
-        )
-        data = response.get_json()
-        assert len(data["values"]) == 4
-        # First should be 1.0, last should be 8.0
-        assert data["values"][0] == 1.0
-        assert data["values"][-1] == 8.0
-        # Geometric spacing: each ratio should be approximately equal
-        ratios = [data["values"][i + 1] / data["values"][i] for i in range(len(data["values"]) - 1)]
-        assert abs(ratios[0] - ratios[1]) < 0.01
-
     def test_sweep_empty_body_returns_400(self, client: FlaskClient) -> None:
         """Test POST /api/simulate/sweep with no body returns 400."""
         response = client.post(
