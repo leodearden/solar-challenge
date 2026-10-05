@@ -44,6 +44,7 @@ from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
 
+from tests._run_storage_layout import stored_run_dir
 from tests._web_app import build_test_app
 
 
@@ -671,7 +672,7 @@ class TestPersistedJson:
             summary=summary,
         )
 
-        run_dir = storage.data_dir / "runs" / "json-home-001"
+        run_dir = stored_run_dir(storage, "json-home-001")
         [run] = storage.list_runs()
         assert _read_json(run_dir / "config.json") == _json_field_tree(config)
         assert json.loads(run["config_json"]) == _json_field_tree(config)
@@ -698,7 +699,7 @@ class TestPersistedJson:
             per_home_summaries=home_summaries,
         )
 
-        run_dir = storage.data_dir / "runs" / "json-fleet-001"
+        run_dir = stored_run_dir(storage, "json-fleet-001")
         [run] = storage.list_runs()
         expected_config = {
             "homes": [_json_field_tree(config) for config in home_configs],
@@ -752,7 +753,7 @@ class TestStoredParquetColumns:
             index=index,
         )
         stored_frame.to_parquet(
-            storage.data_dir / "runs" / "columns-home-001" / "data.parquet", engine="pyarrow"
+            stored_run_dir(storage, "columns-home-001") / "data.parquet", engine="pyarrow"
         )
 
         _, loaded_results, _ = storage.load_home_run("columns-home-001")
@@ -780,7 +781,7 @@ class TestRunSavedWithRetiredOptionalField:
             results=_make_simulation_results(),
             summary=_make_summary(),
         )
-        config_path = storage.data_dir / "runs" / "retired-null-001" / "config.json"
+        config_path = stored_run_dir(storage, "retired-null-001") / "config.json"
         stored = _read_json(config_path)
         stored["pv_config"]["retired_optional_field"] = None
         config_path.write_text(json.dumps(stored, indent=2))
@@ -808,7 +809,7 @@ class TestCorruptedParquet:
         )
 
         # Overwrite the parquet file with garbage bytes
-        run_dir = storage.data_dir / "runs" / "corrupt-001"
+        run_dir = stored_run_dir(storage, "corrupt-001")
         parquet_path = run_dir / "data.parquet"
         parquet_path.write_bytes(b"THIS IS NOT A VALID PARQUET FILE")
 
@@ -834,7 +835,7 @@ class TestMissingRunDirectory:
         )
 
         # Delete the run directory
-        run_dir = storage.data_dir / "runs" / "missing-dir-001"
+        run_dir = stored_run_dir(storage, "missing-dir-001")
         shutil.rmtree(run_dir)
 
         # The DB record still exists, but the filesystem is gone
@@ -863,7 +864,7 @@ class TestDeleteRun:
         )
 
         # Verify it exists
-        run_dir = storage.data_dir / "runs" / "delete-me-001"
+        run_dir = stored_run_dir(storage, "delete-me-001")
         assert run_dir.exists()
         runs = storage.list_runs()
         assert len(runs) == 1
@@ -898,7 +899,7 @@ class TestDeleteRun:
             per_home_summaries=home_summaries,
         )
 
-        run_dir = storage.data_dir / "runs" / "delete-fleet-001"
+        run_dir = stored_run_dir(storage, "delete-fleet-001")
         assert run_dir.exists()
         assert (run_dir / "homes").exists()
 

@@ -17,6 +17,8 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.storage import RunStorage
 
+from tests._run_storage_layout import stored_run_dir
+
 
 @pytest.fixture
 def temp_dir():
@@ -303,7 +305,7 @@ class TestHomeRunRoundTrip:
             summary=sample_summary,
         )
 
-        run_dir = storage.data_dir / "runs" / run_id
+        run_dir = stored_run_dir(storage, run_id)
         assert run_dir.exists()
         assert (run_dir / "config.json").exists()
         assert (run_dir / "summary.json").exists()
@@ -482,7 +484,7 @@ class TestFleetRunRoundTrip:
             per_home_summaries=per_home_summaries,
         )
 
-        run_dir = storage.data_dir / "runs" / run_id
+        run_dir = stored_run_dir(storage, run_id)
         homes_dir = run_dir / "homes"
         assert homes_dir.exists()
         assert (homes_dir / "home_0.parquet").exists()
@@ -693,7 +695,7 @@ class TestDeleteRun:
             summary=sample_summary,
         )
 
-        run_dir = storage.data_dir / "runs" / run_id
+        run_dir = stored_run_dir(storage, run_id)
         assert run_dir.exists()
 
         # Delete it
@@ -714,7 +716,7 @@ class TestDeleteRun:
             per_home_summaries=per_home_summaries,
         )
 
-        run_dir = storage.data_dir / "runs" / run_id
+        run_dir = stored_run_dir(storage, run_id)
         homes_dir = run_dir / "homes"
         assert run_dir.exists()
         assert homes_dir.exists()
@@ -908,9 +910,9 @@ class TestRunIdValidation:
         """A save under an id whose run directory links outside the runs directory raises ValueError, and writes nothing through the link."""
         outside = temp_dir / "outside"
         outside.mkdir()
-        runs_dir = storage.data_dir / "runs"
-        runs_dir.mkdir()
-        (runs_dir / "linked").symlink_to(outside, target_is_directory=True)
+        link = stored_run_dir(storage, "linked")
+        link.parent.mkdir()
+        link.symlink_to(outside, target_is_directory=True)
 
         with pytest.raises(ValueError, match="Invalid run_id"):
             storage.save_home_run(
@@ -938,4 +940,4 @@ class TestRunIdValidation:
         loaded_config, _, loaded_summary = storage.load_home_run(run_id)
 
         assert (loaded_config, loaded_summary) == (sample_home_config, sample_summary)
-        assert [run_dir.name for run_dir in (storage.data_dir / "runs").iterdir()] == [run_id]
+        assert stored_run_dir(storage, run_id).is_dir()
