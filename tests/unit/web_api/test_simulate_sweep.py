@@ -91,23 +91,19 @@ class TestSimulateSweep:
         assert data["job_ids"] == ["job-1", "job-2", "job-3", "job-4"]
 
     def test_valid_geometric_sweep_returns_201(self, client: FlaskClient) -> None:
-        """Geometric sweep with valid params returns 201 with job_ids."""
+        """A geometric sweep's values grow by a constant ratio from min to max."""
         resp = client.post(
             "/api/simulate/sweep",
             json={
-                "parameter": "battery_capacity_kwh",
+                "parameter": "pv_capacity_kw",
                 "min": 1.0,
-                "max": 16.0,
-                "steps": 3,
+                "max": 8.0,
+                "steps": 4,
                 "mode": "geometric",
             },
         )
         assert resp.status_code == 201
-        data = resp.get_json()
-        assert len(data["values"]) == 3
-        assert "job_ids" in data
-        assert data["values"][0] == pytest.approx(1.0, abs=0.01)
-        assert data["values"][-1] == pytest.approx(16.0, abs=0.01)
+        assert resp.get_json()["values"] == [1.0, 2.0, 4.0, 8.0]
 
     def test_no_json_returns_400(self, client: FlaskClient) -> None:
         """POST with no JSON body returns 400."""
