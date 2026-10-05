@@ -1169,19 +1169,24 @@ class TestFleetApiEndpoints:
 
     @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
     @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
-    def test_simulate_fleet_from_distribution_refuses_a_falsy_block_other_than_null_naming_it(
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            pytest.param("/api/simulate/fleet-from-distribution", id="simulate"),
+            pytest.param("/api/fleet/export-yaml", id="export-yaml"),
+        ],
+    )
+    def test_fleet_form_endpoints_refuse_a_falsy_block_other_than_null_naming_it(
         self,
         client: FlaskClient,
         mock_job_manager: MagicMock,
+        endpoint: str,
         key: str,
         value: object,
         type_name: str,
     ) -> None:
-        """Every block of the fleet form, the pv/battery/load distributions and the tariff/dispatch_strategy/seg overlays alike, refuses a falsy value other than null as a value that is not a mapping, naming the block and the type sent; no fleet is queued."""
-        response = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**VALID_DISTRIBUTION_FORM, key: value},
-        )
+        """Every block of the fleet form, the pv/battery/load distributions and the tariff/dispatch_strategy/seg overlays alike, refuses a falsy value other than null as a value that is not a mapping, naming the block and the type sent, at the simulate endpoint and the export alike; no fleet is queued."""
+        response = client.post(endpoint, json={**VALID_DISTRIBUTION_FORM, key: value})
 
         assert response.status_code == 400
         assert response.get_json() == {"error": f"{key} must be a mapping, got {type_name}"}
