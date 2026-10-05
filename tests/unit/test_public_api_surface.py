@@ -10,6 +10,10 @@ Concerns:
   H2 signature     — FROZEN_SURFACE pins each public name's surface form: a class's or
                      routine's signature, an Enum's members, a constant's type
                      (test_every_exported_signature_matches_frozen_surface)
+  H2 members       — FROZEN_MEMBERS pins each exported class's public members: its
+                     methods, properties and class constants
+                     (test_every_exported_class_member_matches_frozen_members,
+                      test_exported_classes_inherit_only_from_exported_classes)
   H2 kind          — EXPECTED_KIND pins the introspected kind of each name
                      (test_expected_kind_keys_match_frozen_set,
                       test_every_name_resolves_to_expected_kind)
@@ -24,13 +28,15 @@ Relationship to T3 (tests/unit/test_init_lazy_surface.py):
   is deliberate — this file must stand alone as the complete executable contract.
 """
 
+import abc
+import enum
 import inspect
 import subprocess
 import sys
 from collections.abc import Mapping
 
 import solar_challenge
-from tests._surface_forms import surface_form
+from tests._surface_forms import member_forms, surface_form
 
 
 # ---------------------------------------------------------------------------
@@ -161,20 +167,25 @@ def test_all_equals_frozen_set() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _surface_drift_message(drifted: Mapping[str, str]) -> str:
-    """Name each symbol of *drifted*, a map of name to current form, with its frozen and current forms."""
+def _drift_message(
+    table: str, frozen: Mapping[str, str], drifted: Mapping[str, str]
+) -> str:
+    """Name each path of *drifted*, a map of path to current form, with its frozen and current forms.
+
+    *frozen* holds the forms of the table named *table*, keyed by the same paths.
+    """
     symbols = "".join(
-        f"\n  solar_challenge.{name}"
-        f"\n    frozen:  {FROZEN_SURFACE.get(name, '(absent from FROZEN_SURFACE)')}"
+        f"\n  solar_challenge.{path}"
+        f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
         f"\n    current: {current}"
-        for name, current in drifted.items()
+        for path, current in drifted.items()
     )
     return (
-        f"Exported surface forms differ from FROZEN_SURFACE:{symbols}\n"
-        "Changing an exported signature is a breaking change to the frozen public API "
-        "(review/briefing.yaml). It needs an 'Unreleased on main' release note in the "
-        "'Tag / release convention' section of docs/domain-library-consumption.md, "
-        "landed in the same commit as the FROZEN_SURFACE edit."
+        f"Exported surface forms differ from {table}:{symbols}\n"
+        "Every change to the frozen public API (review/briefing.yaml), an addition "
+        "included, needs an 'Unreleased on main' release note in the 'Tag / release "
+        "convention' section of docs/domain-library-consumption.md, landed in the same "
+        f"commit as the {table} edit."
     )
 
 
@@ -194,7 +205,174 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
         for name, form in current_forms.items()
         if form != FROZEN_SURFACE.get(name)
     }
-    assert not drifted, _surface_drift_message(drifted)
+    assert not drifted, _drift_message("FROZEN_SURFACE", FROZEN_SURFACE, drifted)
+
+
+# ---------------------------------------------------------------------------
+# H2 members: each exported class's public members, with their frozen forms
+#
+# Keys are exported class names, then member names, in __all__ order and
+# class-body order.  Each value is the member's form as member_forms spells it
+# (tests/_surface_forms.py).  A class with no public member has no entry.
+# Each value stays on one line, so the current form a failure prints pastes in
+# verbatim.
+# ---------------------------------------------------------------------------
+FROZEN_MEMBERS: dict[str, dict[str, str]] = {
+    # --- signature-closure types ---
+    "ScenarioConfig": {
+        "is_fleet": "property (self) -> bool",
+        "get_location": "(self) -> Location",
+    },
+    "FleetConfig": {
+        "create_uniform": "classmethod (cls, n_homes: int, pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '') -> FleetConfig",
+        "create_heterogeneous": "classmethod (cls, pv_capacities_kw: list[float], battery_capacities_kwh: list[float | None], annual_consumptions_kwh: list[float], location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '') -> FleetConfig",
+    },
+    "FleetResults": {
+        "get_aggregate_series": "(self, series_name: str) -> Series",
+        "total_generation": "property (self) -> Series",
+        "total_demand": "property (self) -> Series",
+        "total_grid_import": "property (self) -> Series",
+        "total_grid_export": "property (self) -> Series",
+        "total_self_consumption": "property (self) -> Series",
+        "to_aggregate_dataframe": "(self) -> DataFrame",
+    },
+    # --- dispatch (dispatch.py) ---
+    "DispatchStrategy": {
+        "name": "property (self) -> str",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+    },
+    "SelfConsumptionStrategy": {
+        "name": "property (self) -> str",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+    },
+    "TOUOptimizedStrategy": {
+        "name": "property (self) -> str",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+    },
+    "PeakShavingStrategy": {
+        "name": "property (self) -> str",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+    },
+    # --- battery (battery.py) ---
+    "Battery": {
+        "soh": "property (self) -> float",
+        "effective_capacity_kwh": "property (self) -> float",
+        "soc_kwh": "property (self) -> float",
+        "soc_fraction": "property (self) -> float",
+        "min_soc_kwh": "property (self) -> float",
+        "max_soc_kwh": "property (self) -> float",
+        "usable_capacity_kwh": "property (self) -> float",
+        "available_charge_capacity_kwh": "property (self) -> float",
+        "available_discharge_capacity_kwh": "property (self) -> float",
+        "charge": "(self, power_kw: float, duration_minutes: float) -> float",
+        "discharge": "(self, power_kw: float, duration_minutes: float) -> float",
+    },
+    "BatteryConfig": {
+        "default_5kwh": "classmethod (cls) -> BatteryConfig",
+    },
+    # --- tariff (tariff.py) ---
+    "TariffConfig": {
+        "get_rate": "(self, timestamp: Timestamp) -> float",
+        "flat_rate": "classmethod (cls, rate_per_kwh: float, name: str = '') -> TariffConfig",
+        "economy_7": "classmethod (cls, off_peak_rate: float = 0.09, peak_rate: float = 0.25, off_peak_start: str = '00:30', off_peak_end: str = '07:30') -> TariffConfig",
+        "economy_10": "classmethod (cls, off_peak_rate: float = 0.08, peak_rate: float = 0.27, night_start: str = '00:00', night_end: str = '05:00', afternoon_start: str = '13:00', afternoon_end: str = '16:00', evening_start: str = '20:00', evening_end: str = '22:00') -> TariffConfig",
+    },
+    "TariffPeriod": {
+        "get_start_time": "(self) -> time",
+        "get_end_time": "(self) -> time",
+        "matches_time": "(self, timestamp: Timestamp) -> bool",
+    },
+    # --- gridservices (gridservices.py) ---
+    "GridServicesRateBands": {
+        "resolve": "(self, band: str) -> GridServicesRateBand",
+    },
+    "EventWindow": {
+        "mask": "(self, index: DatetimeIndex) -> Series",
+    },
+    # --- pv (pv.py) ---
+    "PVConfig": {
+        "effective_inverter_capacity_kw": "property (self) -> float",
+        "default_4kw": "classmethod (cls) -> PVConfig",
+    },
+    # --- weather (weather.py) ---
+    "WeatherCache": {
+        "get": "(self, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> DataFrame | None",
+        "put": "(self, data: DataFrame, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> None",
+        "clear": "(self) -> int",
+        "invalidate": "(self, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> bool",
+    },
+    # --- load (load.py) ---
+    "LoadConfig": {
+        "get_annual_consumption": "(self) -> float",
+    },
+    # --- location (location.py) ---
+    "Location": {
+        "BRISTOL_LAT": "float",
+        "BRISTOL_LON": "float",
+        "BRISTOL_ALT": "float",
+        "bristol": "classmethod (cls) -> Location",
+    },
+}
+
+
+def _exported_classes() -> dict[str, type]:
+    """The class-valued names of solar_challenge.__all__, in __all__ order."""
+    exported = {name: getattr(solar_challenge, name) for name in solar_challenge.__all__}
+    return {name: obj for name, obj in exported.items() if inspect.isclass(obj)}
+
+
+def _forms_by_member_path(
+    forms_by_class: Mapping[str, Mapping[str, str]],
+) -> dict[str, str]:
+    """Flatten *forms_by_class* to {"Class.member": form}, a path built for display and comparison, never split."""
+    return {
+        f"{class_name}.{member}": form
+        for class_name, forms in forms_by_class.items()
+        for member, form in forms.items()
+    }
+
+
+def test_every_exported_class_member_matches_frozen_members() -> None:
+    """H2 member-lock: every exported class's public members have the forms FROZEN_MEMBERS pins.
+
+    Fails once, naming each added, changed or removed member with its frozen and current
+    forms.  An added member's current form is printed ready to paste; a removed member's
+    current form reads (removed).
+    """
+    frozen = _forms_by_member_path(FROZEN_MEMBERS)
+    current = _forms_by_member_path(
+        {name: member_forms(cls) for name, cls in _exported_classes().items()}
+    )
+    drifted = {
+        path: current.get(path, "(removed)")
+        for path in sorted(frozen.keys() | current.keys())
+        if current.get(path) != frozen.get(path)
+    }
+    assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
+
+
+_STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum)
+
+
+def test_exported_classes_inherit_only_from_exported_classes() -> None:
+    """H2 member-lock guard: an exported class's bases are exported classes or _STDLIB_BASES.
+
+    FROZEN_MEMBERS pins a member under the exported class whose own body defines it.
+    """
+    classes = _exported_classes()
+    exported = set(classes.values())
+    foreign_bases = [
+        f"{name} <- {base.__module__}.{base.__qualname__}"
+        for name, cls in classes.items()
+        for base in cls.__mro__[1:]
+        if base not in exported and base not in _STDLIB_BASES
+    ]
+    assert not foreign_bases, (
+        f"Exported classes inherit from classes outside __all__: {foreign_bases}. "
+        "member_forms reads each class's own body, so a public member defined on such a "
+        "base escapes FROZEN_MEMBERS. Export the base, move its public members into the "
+        "exported class, or widen the member lock."
+    )
 
 
 # ---------------------------------------------------------------------------
