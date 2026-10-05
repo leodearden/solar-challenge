@@ -952,6 +952,19 @@ class TestPickingFromGivenCandidates:
 
         assert chain.system.inverter_parameters["Mppt_high"] == other.mppt_high_v
 
+    def test_a_candidate_must_name_a_row_of_pvlibs_cec_inverter_library(
+        self, other: CecInverter
+    ) -> None:
+        """The system takes the picked inverter's parameters from that row."""
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                "A CEC inverter must name a row in pvlib's CECInverter library, "
+                "got 'Not a CEC inverter'"
+            ),
+        ):
+            dataclasses.replace(other, name="Not a CEC inverter")
+
 
 class TestPVWattsModule:
     """A module without a voltage model runs on pvlib's PVWatts DC and inverter models."""

@@ -284,15 +284,26 @@ _BATTERY_BUS_MAX_V = 60.0
 _MICROINVERTER_MAX_W = 1500.0
 
 
+def _require_cec_library_row(name: str) -> None:
+    """Refuse a name with no row in pvlib's CEC inverter library, from which a system takes its picked inverter's parameters."""
+    if name not in _shared_sam_library("CECInverter").columns:
+        raise ValueError(
+            f"A CEC inverter must name a row in pvlib's CECInverter library, got {name!r}"
+        )
+
+
 @dataclass(frozen=True)
 class CecInverter:
-    """The catalogue numbers that decide whether a CEC inverter suits an array."""
+    """The catalogue numbers that decide whether a CEC inverter suits an array, under the name of its row in pvlib's CEC library."""
 
     name: str
     paco_w: float
     vdco_v: float
     mppt_low_v: float
     mppt_high_v: float
+
+    def __post_init__(self) -> None:
+        _require_cec_library_row(self.name)
 
     def admits(self, string_voltage_v: float) -> bool:
         return self.mppt_low_v <= string_voltage_v <= self.mppt_high_v
@@ -420,6 +431,7 @@ def _voltage_matched_cec_inverter(
         admitted,
         key=lambda pair: _ranking_key(target_w, module_count, module_vmp_v, *pair),
     )
+    _require_cec_library_row(best.name)
     return dict(_sam_library("CECInverter")[best.name]), wiring
 
 
@@ -594,8 +606,9 @@ def create_model_chain_picking_from(
 
     A candidate's numbers decide only whether and how it is picked: the system
     takes the picked inverter's own parameters from pvlib's CEC library by
-    name, so every candidate must name a row there. Custom inverter parameters
-    and PVWatts modules ignore the candidates, as in create_model_chain.
+    name, which is why a CecInverter must name a row there. Custom inverter
+    parameters and PVWatts modules ignore the candidates, as in
+    create_model_chain.
 
     Args:
         config: PV system configuration
