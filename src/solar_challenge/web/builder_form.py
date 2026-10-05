@@ -22,6 +22,7 @@ from solar_challenge.config import (
 )
 from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.number_fields import as_finite_float, as_whole_number
 from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
 
 _BUILDER_FORM = "Builder form"
@@ -142,14 +143,14 @@ def _present_fields(form: Mapping[str, Any]) -> dict[str, Any]:
 def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
     """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and a fixed PV size of 0.5-20 kW.
 
-    A value that does not read as a number is left to scenario_from_builder_form to report.
+    A value its number reader refuses is left to scenario_from_builder_form to report.
     """
     errors: list[str] = []
     if "name" not in fields:
         errors.append("Scenario name is required.")
-    if not _home_count_allowed(_readable(fields, "n_homes", _as_count)):
+    if not _home_count_allowed(_readable(fields, "n_homes", as_whole_number)):
         errors.append(f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}.")
-    pv_capacity_kw = _readable(fields, "pv_capacity_kw", _as_float)
+    pv_capacity_kw = _readable(fields, "pv_capacity_kw", as_finite_float)
     if pv_capacity_kw is not None and not 0.5 <= pv_capacity_kw <= 20.0:
         errors.append("PV capacity must be between 0.5 and 20 kW.")
     return errors
@@ -232,7 +233,7 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
 
     Raises:
         ValueError: for any other preset, naming it, or for a custom coordinate that is
-            not a number.
+            not a finite number.
     """
     preset = fields["location_preset"]
     if preset == "custom":
@@ -249,7 +250,7 @@ def _fleet_distribution_block(fields: Mapping[str, Any]) -> dict[str, Any]:
     """The fleet_distribution: block: the number of homes, then each component's block."""
     block: dict[str, Any] = {}
     if "n_homes" in fields:
-        block["n_homes"] = _as_count(fields["n_homes"], "n_homes")
+        block["n_homes"] = as_whole_number(fields["n_homes"], "n_homes")
     for component in _COMPONENTS:
         block[component.block] = _component_block(fields, component)
     return block
@@ -281,9 +282,13 @@ def _distribution_spec(fields: Mapping[str, Any], form_keys: Mapping[str, str]) 
     elif distribution_type == "uniform":
         parameters = _present_numbers(fields, {key: form_keys[key] for key in ("min", "max")})
     elif distribution_type == "weighted_discrete":
-        parameters = _row_lists(fields, form_keys["wd_values"], "weight", "weights", _as_float)
+        parameters = _row_lists(
+            fields, form_keys["wd_values"], "weight", "weights", as_finite_float
+        )
     elif distribution_type == "shuffled_pool":
-        parameters = _row_lists(fields, form_keys["sp_entries"], "count", "counts", _as_count)
+        parameters = _row_lists(
+            fields, form_keys["sp_entries"], "count", "counts", as_whole_number
+        )
     else:
         raise ValueError(
             f"{type_field} must be one of normal, uniform, weighted_discrete or "
@@ -294,13 +299,13 @@ def _distribution_spec(fields: Mapping[str, Any], form_keys: Mapping[str, str]) 
 
 def _optional_number(fields: Mapping[str, Any], form_key: str) -> Optional[float]:
     """The form's *form_key* as a number; None when the form leaves it out."""
-    return _as_float(fields[form_key], form_key) if form_key in fields else None
+    return as_finite_float(fields[form_key], form_key) if form_key in fields else None
 
 
 def _present_numbers(fields: Mapping[str, Any], form_keys: Mapping[str, str]) -> dict[str, float]:
     """Each grammar key of *form_keys* whose form field the form gives, with that field as a number."""
     return {
-        grammar_key: _as_float(fields[form_key], form_key)
+        grammar_key: as_finite_float(fields[form_key], form_key)
         for grammar_key, form_key in form_keys.items()
         if form_key in fields
     }
@@ -320,7 +325,7 @@ def _row_lists(
 
     Raises:
         ValueError: naming *rows_field*, and the row's index, when the rows are not a list
-            of such objects or hold something other than numbers.
+            of such objects or hold something other than finite numbers.
     """
     if rows_field not in fields:
         return {}
@@ -334,30 +339,6 @@ def _row_lists(
             raise ValueError(
                 f"{rows_field}[{index}] must be an object with 'value' and {column!r}, got {row!r}"
             )
-        values.append(_as_float(row["value"], f"{rows_field}[{index}].value"))
+        values.append(as_finite_float(row["value"], f"{rows_field}[{index}].value"))
         column_values.append(as_number(row[column], f"{rows_field}[{index}].{column}"))
     return {"values": values, grammar_key: column_values}
-
-
-def _as_float(value: Any, field: str) -> float:
-    """*value*, the form's *field*, as a number.
-
-    Raises:
-        ValueError: naming *field*, when *value* is not a number.
-    """
-    try:
-        return float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(f"{field} must be a number, got {value!r}") from exc
-
-
-def _as_count(value: Any, field: str) -> int:
-    """*value*, the form's *field*, as a whole number.
-
-    Raises:
-        ValueError: naming *field*, when *value* is not a whole number.
-    """
-    number = _as_float(value, field)
-    if not number.is_integer():
-        raise ValueError(f"{field} must be a whole number, got {value!r}")
-    return int(number)
