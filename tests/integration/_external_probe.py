@@ -4,9 +4,11 @@
 
 Run INSIDE an isolated uv environment that contains ONLY the solar_challenge
 wheel and its declared runtime dependencies (stdlib + wheel deps; no dev
-extras).  Invoked by tests/integration/test_external_install.py via::
+extras).  Invoked with the interpreter of the environment that
+tests/integration/test_external_install.py's consumer_environment fixture
+builds::
 
-    uv run --no-project --isolated --with <wheel> python _external_probe.py
+    <environment>/bin/python _external_probe.py
 
 NOT collected by pytest (underscore prefix; matches tests/integration/_helpers.py
 convention; pytest's python_files=["test_*.py"] never touches it).
