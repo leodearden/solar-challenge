@@ -131,15 +131,29 @@ class FleetConfig:
 
 @dataclass
 class FleetResults:
-    """Results from a fleet simulation.
+    """Results from a fleet simulation of at least one home, each home's SimulationResults paired with its HomeConfig.
 
     Attributes:
         per_home_results: List of SimulationResults for each home
-        home_configs: List of HomeConfig for each home (for reference)
+        home_configs: The HomeConfig of each home, in per_home_results' order
     """
 
     per_home_results: list[SimulationResults]
     home_configs: list[HomeConfig]
+
+    def __post_init__(self) -> None:
+        """Enforce _require_paired_homes at construction."""
+        self._require_paired_homes()
+
+    def _require_paired_homes(self) -> None:
+        """Raise ValueError unless the fleet has at least one home and one HomeConfig per home's results."""
+        if not self.per_home_results:
+            raise ValueError("FleetResults must have at least one home: per_home_results is empty")
+        if len(self.home_configs) != len(self.per_home_results):
+            raise ValueError(
+                "FleetResults pairs one HomeConfig with each home's results: "
+                f"got {len(self.per_home_results)} per_home_results and {len(self.home_configs)} home_configs"
+            )
 
     def __len__(self) -> int:
         """Return number of homes in fleet."""
