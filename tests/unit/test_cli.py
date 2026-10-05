@@ -13,6 +13,7 @@ import pytest
 import typer
 import yaml
 from rich.console import Console
+from rich.progress import Progress
 from rich.style import Style
 from rich.text import Text
 from typer.testing import CliRunner, Result
@@ -22,6 +23,8 @@ import solar_challenge.home as _home_module
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
     console,
+    create_fleet_progress,
+    create_progress,
     create_summary_table,
     error_console,
     handle_errors,
@@ -268,14 +271,15 @@ class TestConfigCLI:
     def test_config_template_reports_its_output_path_verbatim(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An output path Rich would read as markup ([draft]) or an emoji code (:sun:) is reported as the user typed it."""
+        """An output path Rich would read as markup ([draft]) or an emoji code (:sun:) is reported as the user typed it, on stderr. The template went to the file, so stdout stays empty."""
         monkeypatch.chdir(tmp_path)
         output = "[draft] :sun:.yaml"
 
         result = runner.invoke(app, ["config", "template", "home", "--output", output], catch_exceptions=False)
 
         assert result.exit_code == 0
-        assert " ".join(result.stdout.split()) == f"Template written to {output}"
+        assert result.stdout == ""
+        assert " ".join(result.stderr.split()) == f"Template written to {output}"
 
     def test_config_template_invalid_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An unknown template type exits 1, naming the type in red on stdout; recorded, because a test run is no colour terminal."""
@@ -698,7 +702,7 @@ class TestErrorHandling:
             assert result.exit_code != 0
 
     def test_a_pvgis_failure_is_reported_in_one_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A command whose weather PVGIS cannot supply exits 1 with one error line naming why, and raises nothing."""
+        """A command whose weather PVGIS cannot supply exits 1 and prints nothing on stdout. Its stderr ends, after the status line and spinner frame, with one error line naming why. It raises nothing."""
         monkeypatch.setattr(
             "solar_challenge.weather.get_pvgis_tmy", Mock(side_effect=ConnectionError("PVGIS is unreachable"))
         )
@@ -708,7 +712,8 @@ class TestErrorHandling:
         )
 
         assert result.exit_code == 1
-        assert " ".join(result.stderr.split()) == (
+        assert result.stdout == ""
+        assert " ".join(result.stderr.split()).endswith(
             "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
         )
 
@@ -746,21 +751,18 @@ class TestPrintHelpers:
             pytest.param(print_success, id="print_success"),
             pytest.param(print_warning, id="print_warning"),
             pytest.param(print_info, id="print_info"),
+            pytest.param(print_error, id="print_error"),
         ],
     )
-    def test_a_message_is_printed_verbatim_on_stdout(
+    def test_a_message_is_printed_verbatim_on_stderr(
         self, capsys: pytest.CaptureFixture[str], print_message: Callable[[str], None]
     ) -> None:
-        """Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the caller gave it."""
+        """Nothing reaches stdout, which carries only a command's product. Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints on stderr as the caller gave it."""
         print_message(_TEXT_RICH_WOULD_PARSE)
 
-        assert " ".join(capsys.readouterr().out.split()) == _TEXT_RICH_WOULD_PARSE
-
-    def test_an_error_message_is_printed_verbatim_on_stderr(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints as the caller gave it."""
-        print_error(_TEXT_RICH_WOULD_PARSE)
-
-        assert " ".join(capsys.readouterr().err.split()) == _TEXT_RICH_WOULD_PARSE
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert " ".join(captured.err.split()) == _TEXT_RICH_WOULD_PARSE
 
     @pytest.mark.parametrize(
         ("print_message", "target", "colour"),
@@ -780,6 +782,28 @@ class TestPrintHelpers:
         print_message("saved")
 
         assert target.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
+
+
+class TestProgress:
+    """Tests for the progress displays a command shows while it simulates."""
+
+    @pytest.mark.parametrize(
+        "create",
+        [
+            pytest.param(create_progress, id="create_progress"),
+            pytest.param(create_fleet_progress, id="create_fleet_progress"),
+        ],
+    )
+    def test_progress_is_printed_on_stderr(
+        self, capsys: pytest.CaptureFixture[str], create: Callable[[], Progress]
+    ) -> None:
+        """Progress prints on stderr, so stdout carries only a command's product."""
+        with create() as progress:
+            progress.add_task("Simulating 2 homes...", total=2)
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Simulating 2 homes..." in captured.err
 
 
 class TestPrintReport:
@@ -1133,8 +1157,8 @@ def clear_june_in_tmp_path(
     monkeypatch.chdir(tmp_path)
 
 
-def _run_home_report(home_name: str) -> Result:
-    """Run `home run --report` for 21 June on home.yaml, written in the working directory: a home named home_name with 4 kW of PV and a deterministic 3400 kWh a year of load."""
+def _run_home_named(home_name: str, *options: str) -> Result:
+    """Run `home run` with options for 21 June on home.yaml, written in the working directory: a home named home_name with 4 kW of PV and a deterministic 3400 kWh a year of load."""
     Path("home.yaml").write_text(
         yaml.safe_dump(
             {
@@ -1149,7 +1173,7 @@ def _run_home_report(home_name: str) -> Result:
 
     return runner.invoke(
         app,
-        ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21", "--report"],
+        ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21", *options],
         catch_exceptions=False,
     )
 
@@ -1184,13 +1208,28 @@ def _run_finance(scenario_name: str) -> Result:
     )
 
 
+def _run_optimize_configs() -> Result:
+    """Run `optimize configs` for 21 June on the scenario _write_scenario writes, named Bristol: a sweep of the one config with 4 kW of PV, no battery and a 5 kW inverter, and no sensitivity panel."""
+    _write_scenario("Bristol")
+
+    return runner.invoke(
+        app,
+        [
+            "optimize", "configs", "scenario.yaml",
+            "--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "",
+            "--start", "2024-06-21", "--end", "2024-06-21",
+        ],
+        catch_exceptions=False,
+    )
+
+
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
 class TestReportsPrintNamesVerbatim:
     """Tests that the report commands print the names a config gives exactly as written."""
 
     def test_home_run_prints_the_homes_name_verbatim(self) -> None:
         """A home name Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, titles the summary table and the report as written."""
-        result = _run_home_report(_TEXT_RICH_WOULD_PARSE)
+        result = _run_home_named(_TEXT_RICH_WOULD_PARSE, "--report")
 
         assert result.exit_code == 0
         printed = " ".join(result.stdout.split())
@@ -1211,7 +1250,7 @@ class TestReportsPrintEachLineWhole:
 
     def test_home_run_prints_a_report_title_wider_than_the_console_on_one_line(self) -> None:
         """A home name wider than any console titles the report on one printed line, not wrapped across several."""
-        result = _run_home_report(_TEXT_WIDER_THAN_ANY_CONSOLE)
+        result = _run_home_named(_TEXT_WIDER_THAN_ANY_CONSOLE, "--report")
 
         assert result.exit_code == 0
         assert f"# Simulation Report: {_TEXT_WIDER_THAN_ANY_CONSOLE}" in result.stdout.splitlines()
@@ -1225,19 +1264,40 @@ class TestReportsPrintEachLineWhole:
 
     def test_optimize_configs_prints_each_table_row_on_one_line(self) -> None:
         """Each markdown table row closes on the line it opens on, the Cost-Recovery Rank rows included, though they are about twice as wide as the 80 columns Rich gives a console with no terminal."""
-        _write_scenario("Bristol")
-
-        result = runner.invoke(
-            app,
-            [
-                "optimize", "configs", "scenario.yaml",
-                "--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "",
-                "--start", "2024-06-21", "--end", "2024-06-21",
-            ],
-            catch_exceptions=False,
-        )
+        result = _run_optimize_configs()
 
         assert result.exit_code == 0
         table_rows = [line for line in result.stdout.splitlines() if line.startswith("|")]
         assert [row for row in table_rows if not row.endswith("|")] == []
         assert max(map(len, table_rows), default=0) > 80
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestCommandsPrintOnlyTheirProductOnStdout:
+    """Tests that a command prints its product alone on stdout, and its status lines and progress on stderr, so redirecting stdout to a file captures the product alone."""
+
+    def test_home_run_prints_its_summary_table_alone_on_stdout(self) -> None:
+        """The summary table, whose title Rich centres above it, opens stdout. The status line and the spinner print on stderr."""
+        result = _run_home_named("Bristol")
+
+        assert result.exit_code == 0
+        assert result.stdout.splitlines()[0].strip() == "Simulation Results: Bristol"
+        status = " ".join(result.stderr.split())
+        assert "Simulating 1 days from 2024-06-21 to 2024-06-21" in status
+        assert "Running simulation..." in status
+
+    def test_finance_run_prints_its_report_alone_on_stdout(self) -> None:
+        """The finance report opens stdout. The status lines print on stderr."""
+        result = _run_finance("Bristol")
+
+        assert result.exit_code == 0
+        assert result.stdout.startswith("# Finance Report: Bristol\n")
+        assert "Simulating fleet of 1 homes for 1 days…" in " ".join(result.stderr.split())
+
+    def test_optimize_configs_prints_its_report_alone_on_stdout(self) -> None:
+        """The ranking report opens stdout. The status lines print on stderr."""
+        result = _run_optimize_configs()
+
+        assert result.exit_code == 0
+        assert result.stdout.startswith("## Cost-Recovery Rank\n")
+        assert "Sweep complete: 1 feasible config(s), 0 infeasible config(s)." in " ".join(result.stderr.split())
