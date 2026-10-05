@@ -118,6 +118,16 @@ and the next release folds both lists into its notes. A change to an exported
 signature must also edit `FROZEN_SURFACE` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 200): `TariffConfig` gains two read-only members,
+`peak_rate`, its highest period rate, and `mean_period_rate`, the mean of its
+period rates with each period counted once whatever its length, both in £/kWh;
+the 0.5.0 tag has neither. Consumers need no change when they re-pin.
+
+**Unreleased on main** (task 323): `BatteryConfig` gains the read-only property
+`nominal_usable_capacity_kwh`, its usable capacity between the SOC limits before
+SOH de-rating, in kWh; the 0.5.0 tag lacks it. Consumers need no change when
+they re-pin.
+
 **Unreleased on main** (task 466): `FleetResults` refuses input the 0.5.0 tag
 accepts, and raises `ValueError`: an empty `per_home_results`, or a
 `home_configs` that does not hold one `HomeConfig` for each entry of

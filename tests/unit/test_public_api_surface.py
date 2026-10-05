@@ -268,10 +268,13 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "discharge": "(self, power_kw: float, duration_minutes: float) -> float",
     },
     "BatteryConfig": {
+        "nominal_usable_capacity_kwh": "property (self) -> float",
         "default_5kwh": "classmethod (cls) -> BatteryConfig",
     },
     # --- tariff (tariff.py) ---
     "TariffConfig": {
+        "peak_rate": "cached_property (self) -> float",
+        "mean_period_rate": "cached_property (self) -> float",
         "get_rate": "(self, timestamp: Timestamp) -> float",
         "flat_rate": "classmethod (cls, rate_per_kwh: float, name: str = '') -> TariffConfig",
         "economy_7": "classmethod (cls, off_peak_rate: float = 0.09, peak_rate: float = 0.25, off_peak_start: str = '00:30', off_peak_end: str = '07:30') -> TariffConfig",
