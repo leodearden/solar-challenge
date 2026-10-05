@@ -118,6 +118,17 @@ and the next release folds both lists into its notes. A change to an exported
 signature must also edit `FROZEN_SURFACE` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 466): `FleetResults` refuses input the 0.5.0 tag
+accepts, and raises `ValueError`: an empty `per_home_results`, or a
+`home_configs` that does not hold one `HomeConfig` for each entry of
+`per_home_results`. The tag accepts both, and a fleet of no homes fails only
+later, with a bare `IndexError` from `get_aggregate_series`, the `total_*`
+properties and `to_aggregate_dataframe`. Those now raise the same `ValueError`
+for a fleet whose lists were emptied or unpaired after construction. Consumers
+that build a `FleetResults`, in a `simulate` they pass to
+`solve_cost_recovery_rate` or in test fixtures, give it at least one home, and
+one `HomeConfig` per home's results, when they re-pin.
+
 **Unreleased on main** (task 240): `create_pv_system` and `simulate_pv_output`
 no longer treat a battery inverter/charger as a candidate inverter, so they pick
 a different inverter for 23 of the 992 census configs; the 0.5.0 tag may pick a
