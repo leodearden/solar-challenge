@@ -46,3 +46,16 @@ def as_finite_float(value: Any, field: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"{field} must be a finite number, got {value!r}")
     return number
+
+
+def as_whole_number(value: Any, field: str) -> int:
+    """Return *value* read by :func:`as_finite_float` as the int it equals, refusing one with a fractional part.
+
+    Raises:
+        ValueError: If :func:`as_finite_float` refuses *value*, or it has a fractional part;
+            the whole-number error names *field* and the value sent.
+    """
+    number = as_finite_float(value, field)
+    if not number.is_integer():
+        raise ValueError(f"{field} must be a whole number, got {value!r}")
+    return int(number)
