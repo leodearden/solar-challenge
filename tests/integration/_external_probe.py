@@ -20,12 +20,15 @@ Exit codes:
 from __future__ import annotations
 
 import inspect
+import platform
 import sys
 
 
 # ---------------------------------------------------------------------------
-# 1. Import the installed package
+# 1. Name the interpreter, which the interpreter matrix varies, then import
+#    the installed package
 # ---------------------------------------------------------------------------
+print(f"consumer interpreter: {platform.python_implementation()} {platform.python_version()}")
 import solar_challenge as s
 
 # ---------------------------------------------------------------------------

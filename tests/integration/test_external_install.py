@@ -494,6 +494,7 @@ def test_isolated_install_resolves_and_calls_every_symbol(consumer_environment: 
 
     Runs tests/integration/_external_probe.py with the interpreter of
     consumer_environment.  The probe:
+      - Prints that interpreter's version, which the interpreter matrix varies.
       - Asserts the package loaded from site-packages (not the worktree src/).
       - Iterates solar_challenge.__all__ and getattr-resolves each name.
       - Classifies: classes/routines → resolution is the assertion (callable() is
