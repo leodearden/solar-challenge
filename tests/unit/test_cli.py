@@ -1,6 +1,7 @@
 """Tests for the CLI module."""
 
 import io
+import sys
 import tempfile
 import types
 from collections.abc import Callable
@@ -806,6 +807,26 @@ class TestProgress:
         captured = capsys.readouterr()
         assert captured.out == ""
         assert "Simulating 2 homes..." in captured.err
+
+    @pytest.mark.parametrize(
+        "create",
+        [
+            pytest.param(create_progress, id="create_progress"),
+            pytest.param(create_fleet_progress, id="create_fleet_progress"),
+        ],
+    )
+    def test_a_display_on_the_quiet_status_console_leaves_other_stderr_output_alone_on_a_terminal(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, create: Callable[[], Progress]
+    ) -> None:
+        """What a simulation writes on stderr while a display runs prints though the status console is quiet. On a terminal a running display captures everything else written to stdout and stderr and prints it on its own console, so a display on the quiet console would discard a warning such as load.py's richardsonpy fallback, which prints when off a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal: Console.is_terminal reads it at call time, in rich 15.0.0 as uv.lock pins."""
+        monkeypatch.setenv("TTY_COMPATIBLE", "1")
+        monkeypatch.setattr(status_console, "quiet", True)
+
+        with create() as progress:
+            progress.add_task("Simulating 2 homes...", total=2)
+            print("richardsonpy fell back to the Elexon profile", file=sys.stderr)
+
+        assert capsys.readouterr().err == "richardsonpy fell back to the Elexon profile\n"
 
 
 class TestPrintReport:
