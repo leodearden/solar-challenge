@@ -9,8 +9,11 @@ what it printed. From the repository root:
 It reads the Bristol PVGIS TMY through the weather cache, fetching it only when
 the cache lacks it. Every configuration gets its inverter and wiring from
 pv.py's own selection, once per sizing, and each distinct pick runs one
-year-long model chain: about twelve minutes in all. The CSV holds one row per
-sizing and configuration. It is not part of the test suite.
+year-long model chain: about twelve minutes in all. --dc-kw measures a few DC
+capacities for a quick partial run, e.g. `--dc-kw 3 4 5`. The CSV holds one row
+per sizing and configuration. tests/unit/test_measurement_scripts.py runs it
+offline on a one-day TMY at one capacity; the full run is not part of the test
+suite.
 """
 
 import argparse
@@ -293,7 +296,10 @@ def measure_year(chain: ModelChain, weather: pd.DataFrame) -> Year:
 
 
 def census(
-    location: Location, weather: pd.DataFrame, module: Mapping[str, Any]
+    location: Location,
+    weather: pd.DataFrame,
+    module: Mapping[str, Any],
+    dc_capacities_kw: Sequence[float],
 ) -> pd.DataFrame:
     """One row per sizing, inverter capacity and DC capacity; each distinct pick runs one year."""
     years: dict[Pick, Year] = {}
@@ -301,7 +307,7 @@ def census(
     for sizing in sizings(module):
         with picking_by(sizing):
             for inverter_kw, dc_kw in itertools.product(
-                INVERTER_CAPACITIES_KW, DC_CAPACITIES_KW
+                INVERTER_CAPACITIES_KW, dc_capacities_kw
             ):
                 config = PVConfig(capacity_kw=dc_kw, inverter_capacity_kw=inverter_kw)
                 chain = create_model_chain(config, location)
@@ -586,6 +592,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--csv", type=Path, help="write one row per sizing and configuration here"
     )
+    parser.add_argument(
+        "--dc-kw",
+        dest="dc_kw",
+        nargs="+",
+        type=float,
+        metavar="KW",
+        default=DC_CAPACITIES_KW,
+        help="the DC capacities to measure, in kW (default: 0.3 to 25 in 0.1 kW steps)",
+    )
     return parser
 
 
@@ -616,7 +631,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     _show("Battery inverter/chargers left out", left_out)
     _show("Their gaps", gaps)
 
-    rows = census(location, weather, module)
+    rows = census(location, weather, module, args.dc_kw)
     if args.csv is not None:
         rows.to_csv(args.csv, index=False)
     stc = rows[rows["sizing"] == STC.label]
