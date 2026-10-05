@@ -191,7 +191,7 @@ class RunStorage:
             ValueError: If run_id contains invalid characters or resolves
                 outside the runs directory
         """
-        if not re.match(r"^[a-zA-Z0-9_-]+$", run_id):
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", run_id):
             raise ValueError(
                 f"Invalid run_id: {run_id!r}. "
                 "Only alphanumeric characters, hyphens, and underscores are allowed."
