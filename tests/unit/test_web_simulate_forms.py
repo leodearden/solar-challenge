@@ -31,7 +31,11 @@ def client(app: Flask) -> FlaskClient:
 
 
 def _options_per_seg_preset_key(page: str) -> dict[str, int]:
-    """How many options of *page* offer each SEG preset by its key, the value the server resolves a preset from."""
+    """How many options of *page* offer each SEG preset by its key, the value the server resolves a preset from.
+
+    Fails when SEG_PRESETS is empty: the empty result would equal the empty expectation, whatever the page offers.
+    """
+    assert SEG_PRESETS, "SEG_PRESETS is empty, so there is no preset option to look for"
     return {key: element_count(page, "option", {"value": key}) for key in SEG_PRESETS}
 
 
