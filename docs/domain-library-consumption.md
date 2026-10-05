@@ -5,10 +5,8 @@ This document is the consumer-facing recipe for depending on the
 `solar-challenge-platform`) as a **git dependency pinned to a release tag**.
 
 The authoritative public surface is `solar_challenge.__all__` (defined in
-`src/solar_challenge/__init__.py`). It is frozen by
-`tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
-public name and that name's signature, while
-`tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
+`src/solar_challenge/__init__.py`).
+[Frozen public surface](#frozen-public-surface) names the tests that freeze it.
 
 ---
 
@@ -115,7 +113,8 @@ is listed here as an **Unreleased on main** line, added by the commit that makes
 the change. A change to what a finance-model name returns is listed instead in
 the header of [cost-recovery-finance-model.md](cost-recovery-finance-model.md),
 and the next release folds both lists into its notes. A change to an exported
-signature must also edit `FROZEN_SURFACE` in
+signature, or to an exported class's public members, must also edit
+`FROZEN_SURFACE` or `FROZEN_MEMBERS` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
 **Unreleased on main** (task 200): `TariffConfig` gains two read-only members,
@@ -257,7 +256,9 @@ changed. Rebuild a pre-built cache with `my_test_cache.put(df, "tmy", location)`
 The authoritative public surface is `solar_challenge.__all__`, defined in
 `src/solar_challenge/__init__.py`.  It is frozen by
 `tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
-public name and that name's signature, and enforced at import time via the
-module's `__getattr__` guard; `tests/unit/test_init_lazy_surface.py` checks the
-lazy loader's structure.  Consumers should reference `__all__` directly rather
-than relying on any copy maintained in this document.
+public name and that name's signature, and whose `FROZEN_MEMBERS` pins every
+exported class's public methods, properties and class constants.  It is also
+enforced at import time via the module's `__getattr__` guard, and
+`tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
+Consumers should reference `__all__` directly rather than relying on any copy
+maintained in this document.

@@ -114,16 +114,30 @@ conventions:
       points at pyproject's license expression for the bundled third-party code.)
 
   - rule: >
-      The public API surface is a FROZEN CONTRACT. `solar_challenge.__all__` (currently 69 names)
-      and the signatures of the exported callables are consumed by a separate, pinned repo.
-      Adding, removing, renaming, or changing the signature of a public symbol is a BREAKING
-      CHANGE that requires a deliberate version/tag bump — never a silent edit.
+      The public API surface is a FROZEN CONTRACT. `solar_challenge.__all__` (currently 69 names),
+      the signatures of the exported callables, and the public members of the exported classes
+      (the methods, classmethods, properties and class constants each class body defines) are
+      consumed by a separate, pinned repo. Adding, removing, renaming, or changing the signature
+      of a public symbol or member is a BREAKING CHANGE that requires a deliberate version/tag
+      bump — never a silent edit.
     why: >
       This package was extracted as a domain library; `solar-challenge-platform` depends on it
-      via a git tag and builds against the frozen surface. The surface-lock tests are intentional
-      gates, not redundant ceremony: the frozen-__all__ freeze test, the ast-parsed TYPE_CHECKING-
-      block ↔ __all__ consistency check, and the isolated external-wheel install test (imports
-      every __all__ name in a fresh interpreter). `__init__.py` is deliberately LAZY (PEP-562
+      via a git tag and builds against the frozen surface. Members are in the contract (task 404)
+      because consumers rely on them: a consumer's own dispatch strategy implements
+      DispatchStrategy.decide_action and name, and the consumption guide's own recipe calls
+      WeatherCache.put. The surface-lock tests are intentional gates, not redundant ceremony: the
+      frozen-__all__ freeze test; the two tables of tests/unit/test_public_api_surface.py,
+      FROZEN_SURFACE (each name's signature) and FROZEN_MEMBERS (each exported class's public
+      members); the ast-parsed TYPE_CHECKING-block ↔ __all__ consistency check; and the isolated
+      external-wheel install test (imports every __all__ name in a fresh interpreter). Both tables
+      are spelled alike on every admitted Python minor, and each fails until its table edit lands,
+      naming every drifted symbol and asking for the change's 'Unreleased on main' line in the
+      same commit. The member lock reads class bodies, so no test pins the public attributes a
+      plain class assigns only in __init__: Battery's config and its SOC and efficiency
+      attributes, and WeatherCache.cache_dir (task 426 decides them). Neither table pins a class
+      outside __all__, even one the exported surface names: HomeConfig, SimulationResults,
+      SimulationPeriod, OutputConfig, DispatchStrategyConfig and GridChargeConfig (task 505
+      decides them). `__init__.py` is deliberately LAZY (PEP-562
       __getattr__ + _SYMBOL_MODULE map) so `import solar_challenge` stays pvlib-free; the
       import-time _SYMBOL_MODULE/__all__ sync check uses raise RuntimeError (not assert) on
       purpose so it survives -O/-OO. The DispatchTariffPeriod alias (dispatch.TariffPeriod enum,
