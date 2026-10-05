@@ -444,7 +444,8 @@ class TestOverrideOwnUseCappedAtDemand:
         return _make_scenario_fin_cr6(), finance
 
     @pytest.fixture(scope="class")
-    def fleets(self) -> "tuple[FleetResults, FleetResults]":  # type: ignore[name-defined]
+    @classmethod
+    def fleets(cls) -> "tuple[FleetResults, FleetResults]":  # type: ignore[name-defined]
         """The anchor fleets with 5,775 and 5,000 kWh of generation per home."""
         high_gen, low_gen = (
             _make_fleet_results_fin_cr6(self_kwh=2000.0, export_kwh=export_kwh, import_kwh=1400.0)
@@ -453,13 +454,14 @@ class TestOverrideOwnUseCappedAtDemand:
         return high_gen, low_gen
 
     @pytest.fixture(scope="class")
+    @classmethod
     def solutions(
-        self, fleets: "tuple[FleetResults, FleetResults]"  # type: ignore[name-defined]
+        cls, fleets: "tuple[FleetResults, FleetResults]"  # type: ignore[name-defined]
     ) -> "tuple[CostRecoverySolution, CostRecoverySolution]":  # type: ignore[name-defined]
         """(5,775 kWh, 5,000 kWh generation) solves; each must warn that the cap binds."""
         from solar_challenge.finance import solve_cost_recovery_rate
 
-        scenario, finance = self._scenario_and_finance()
+        scenario, finance = cls._scenario_and_finance()
 
         def solve(fleet: "FleetResults") -> "CostRecoverySolution":  # type: ignore[name-defined]
             with pytest.warns(UserWarning, match="capped at demand"):
