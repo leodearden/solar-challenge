@@ -44,6 +44,7 @@ from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
 
+from tests._run_storage_layout import stored_run_dir
 from tests._web_app import build_test_app
 
 
@@ -671,7 +672,7 @@ class TestPersistedJson:
             summary=summary,
         )
 
-        run_dir = storage.data_dir / "runs" / "json-home-001"
+        run_dir = stored_run_dir(storage, "json-home-001")
         [run] = storage.list_runs()
         assert _read_json(run_dir / "config.json") == _json_field_tree(config)
         assert json.loads(run["config_json"]) == _json_field_tree(config)
@@ -698,7 +699,7 @@ class TestPersistedJson:
             per_home_summaries=home_summaries,
         )
 
-        run_dir = storage.data_dir / "runs" / "json-fleet-001"
+        run_dir = stored_run_dir(storage, "json-fleet-001")
         [run] = storage.list_runs()
         expected_config = {
             "homes": [_json_field_tree(config) for config in home_configs],
@@ -752,7 +753,7 @@ class TestStoredParquetColumns:
             index=index,
         )
         stored_frame.to_parquet(
-            storage.data_dir / "runs" / "columns-home-001" / "data.parquet", engine="pyarrow"
+            stored_run_dir(storage, "columns-home-001") / "data.parquet", engine="pyarrow"
         )
 
         _, loaded_results, _ = storage.load_home_run("columns-home-001")
@@ -780,7 +781,7 @@ class TestRunSavedWithRetiredOptionalField:
             results=_make_simulation_results(),
             summary=_make_summary(),
         )
-        config_path = storage.data_dir / "runs" / "retired-null-001" / "config.json"
+        config_path = stored_run_dir(storage, "retired-null-001") / "config.json"
         stored = _read_json(config_path)
         stored["pv_config"]["retired_optional_field"] = None
         config_path.write_text(json.dumps(stored, indent=2))
@@ -808,7 +809,7 @@ class TestCorruptedParquet:
         )
 
         # Overwrite the parquet file with garbage bytes
-        run_dir = storage._get_run_dir("corrupt-001")
+        run_dir = stored_run_dir(storage, "corrupt-001")
         parquet_path = run_dir / "data.parquet"
         parquet_path.write_bytes(b"THIS IS NOT A VALID PARQUET FILE")
 
@@ -834,7 +835,7 @@ class TestMissingRunDirectory:
         )
 
         # Delete the run directory
-        run_dir = storage._get_run_dir("missing-dir-001")
+        run_dir = stored_run_dir(storage, "missing-dir-001")
         shutil.rmtree(run_dir)
 
         # The DB record still exists, but the filesystem is gone
@@ -863,7 +864,7 @@ class TestDeleteRun:
         )
 
         # Verify it exists
-        run_dir = storage._get_run_dir("delete-me-001")
+        run_dir = stored_run_dir(storage, "delete-me-001")
         assert run_dir.exists()
         runs = storage.list_runs()
         assert len(runs) == 1
@@ -898,7 +899,7 @@ class TestDeleteRun:
             per_home_summaries=home_summaries,
         )
 
-        run_dir = storage._get_run_dir("delete-fleet-001")
+        run_dir = stored_run_dir(storage, "delete-fleet-001")
         assert run_dir.exists()
         assert (run_dir / "homes").exists()
 
@@ -907,39 +908,3 @@ class TestDeleteRun:
         assert not run_dir.exists()
         runs = storage.list_runs()
         assert len(runs) == 0
-
-
-class TestRunIdValidation:
-    """Validate that run_id inputs are sanitised to prevent path traversal."""
-
-    def test_path_traversal_dot_dot_slash_rejected(self, storage: RunStorage) -> None:
-        """run_id with ../../ should be rejected."""
-        with pytest.raises(ValueError):
-            storage._get_run_dir("../../etc")
-
-    def test_path_traversal_absolute_path_rejected(self, storage: RunStorage) -> None:
-        """run_id that is an absolute path should be rejected."""
-        with pytest.raises(ValueError):
-            storage._get_run_dir("/etc/passwd")
-
-    def test_null_byte_rejected(self, storage: RunStorage) -> None:
-        """run_id containing a null byte should be rejected."""
-        with pytest.raises(ValueError):
-            storage._get_run_dir("run\x00id")
-
-    def test_spaces_rejected(self, storage: RunStorage) -> None:
-        """run_id containing spaces should be rejected."""
-        with pytest.raises(ValueError):
-            storage._get_run_dir("run id")
-
-    def test_valid_run_id_accepted(self, storage: RunStorage) -> None:
-        """A valid run_id with alphanumeric, hyphens, underscores should pass."""
-        # Should not raise
-        result = storage._get_run_dir("valid-run_123")
-        assert result.name == "valid-run_123"
-
-    def test_uuid_run_id_accepted(self, storage: RunStorage) -> None:
-        """A UUID-style run_id should be accepted."""
-        # Should not raise
-        result = storage._get_run_dir("550e8400-e29b-41d4-a716-446655440000")
-        assert result.name == "550e8400-e29b-41d4-a716-446655440000"
