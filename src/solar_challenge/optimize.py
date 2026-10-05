@@ -37,7 +37,7 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.fleet import FleetConfig
+from solar_challenge.fleet import FleetConfig, simulate_fleet
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.seg import SEGTariff
 
@@ -1066,9 +1066,7 @@ def run_sweep(
         )
 
     if simulate is None:
-        from solar_challenge.fleet import simulate_fleet as _real_simulate
-
-        simulate = _real_simulate
+        simulate = simulate_fleet
 
     # Evaluate all configs
     all_results: List[ConfigResult] = [

@@ -946,7 +946,7 @@ class TestOptimizeCLIHelp:
 
 
 # ---------------------------------------------------------------------------
-# §G — RED tests for fast patched-simulate E2E (step-9)
+# §G — RED tests for fast injected-simulate E2E (step-9)
 # ---------------------------------------------------------------------------
 
 
@@ -961,42 +961,41 @@ def optimize_fleet_results() -> "FleetResults":  # type: ignore[name-defined]
 
 
 class TestOptimizeCLIE2EFast:
-    """Fast patched end-to-end tests for `optimize configs` wiring (G2/W-H6 signal).
+    """Fast injected-simulator end-to-end tests for `optimize configs` wiring (G2/W-H6 signal).
 
-    Patches solar_challenge.fleet.simulate_fleet so the whole sweep runs
-    offline without PVGIS.  run_sweep, _age0_baseline_outlay, and
-    solve_cost_recovery_rate all resolve the simulator lazily via
-    ``from solar_challenge.fleet import simulate_fleet`` — a single patch
-    on that symbol makes the entire pipeline deterministic.
+    Each test that runs a sweep passes a constant fleet simulator as the Click
+    context object (``obj=SweepSimulator(...)``), so the whole sweep,
+    sensitivity panel included, runs offline without PVGIS.
     """
 
     @staticmethod
-    def _run_standard_sweep(
+    def _invoke_configs(
         tmp_path: "Path",
         fleet_results: "FleetResults",  # type: ignore[name-defined]
-    ) -> "object":
-        """Invoke `optimize configs` with the standard smoke-test argv; return CliRunner result.
+        options: "list[str]",
+    ) -> "tuple[object, list[object]]":
+        """Run `optimize configs` on a fresh scenario with *options*, answering every fleet simulation with *fleet_results*.
 
-        All assertions that use the same CLI invocation share this helper to
-        avoid re-running the patched fleet simulator once per assertion.
+        Returns the CliRunner result and the fleet configs the injected simulator
+        was asked to simulate.
         """
-        from unittest.mock import patch
         from typer.testing import CliRunner
         from solar_challenge.cli.main import app
+        from solar_challenge.cli.optimize import SweepSimulator
+
+        simulated_fleets: "list[object]" = []
+
+        def simulate(fleet_config, start, end):
+            simulated_fleets.append(fleet_config)
+            return fleet_results
 
         scenario_file = _write_optimize_scenario(tmp_path)
-        with patch("solar_challenge.fleet.simulate_fleet", return_value=fleet_results):
-            runner = CliRunner()
-            return runner.invoke(
-                app,
-                [
-                    "optimize", "configs", str(scenario_file),
-                    "--pv", "4",
-                    "--battery", "0,5",
-                    "--inverter", "5",
-                    "--sensitivity", "grid_services",
-                ],
-            )
+        result = CliRunner().invoke(
+            app,
+            ["optimize", "configs", str(scenario_file), *options],
+            obj=SweepSimulator(simulate=simulate),
+        )
+        return result, simulated_fleets
 
     def test_optimize_configs_standard_sweep_output(
         self,
@@ -1006,14 +1005,29 @@ class TestOptimizeCLIE2EFast:
         """Standard sweep must exit 0 and produce all expected report tokens.
 
         Invokes `optimize configs` once and asserts the union of wiring signals
-        (exit code, both table headings using exact strings, sensitivity heading,
-        recommendation marker, and rate token) to avoid re-running the patched
-        CLI once per assertion.
+        (exit code, the sweep's use of the injected simulator, both table headings
+        using exact strings, sensitivity heading, recommendation marker, and rate
+        token) to avoid re-running the CLI and its injected simulator once per
+        assertion.
         """
-        result = self._run_standard_sweep(tmp_path, optimize_fleet_results)
+        result, simulated_fleets = self._invoke_configs(
+            tmp_path,
+            optimize_fleet_results,
+            [
+                "--pv", "4",
+                "--battery", "0,5",
+                "--inverter", "5",
+                "--sensitivity", "grid_services",
+            ],
+        )
 
         assert result.exit_code == 0, (
             f"Expected exit 0 from 'optimize configs'; got {result.exit_code}.\n"
+            f"Output:\n{result.output}"
+        )
+        assert simulated_fleets, (
+            "Expected 'optimize configs' to run its sweep with the simulator passed as "
+            "obj=SweepSimulator(...); it asked that simulator for no fleet simulation.\n"
             f"Output:\n{result.output}"
         )
         assert "cost-recovery rank" in result.output.lower(), (
@@ -1046,25 +1060,16 @@ class TestOptimizeCLIE2EFast:
         Robustness: the comma-list parser must handle a single non-comma value
         without raising an error.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
-        scenario_file = _write_optimize_scenario(tmp_path)
-        fr = optimize_fleet_results
-
-        with patch("solar_challenge.fleet.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                [
-                    "optimize", "configs", str(scenario_file),
-                    "--pv", "4",         # single value, no comma
-                    "--battery", "0",    # single battery
-                    "--inverter", "5",   # single inverter
-                    "--sensitivity", "",  # skip sensitivity
-                ],
-            )
+        result, _ = self._invoke_configs(
+            tmp_path,
+            optimize_fleet_results,
+            [
+                "--pv", "4",         # single value, no comma
+                "--battery", "0",    # single battery
+                "--inverter", "5",   # single inverter
+                "--sensitivity", "",  # skip sensitivity
+            ],
+        )
 
         assert result.exit_code == 0, (
             f"Expected exit 0 for single-value --pv 4; got {result.exit_code}.\n"
