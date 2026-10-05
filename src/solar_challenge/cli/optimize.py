@@ -59,12 +59,7 @@ _SENSITIVITY_ALIAS_MAP: dict[str, tuple[str, tuple[float, ...]]] = {
 
 @dataclasses.dataclass(frozen=True)
 class SweepSimulator:
-    """The fleet simulator `optimize configs` runs every simulation of its sweep with.
-
-    The command reads it from Click's context object, so a caller supplies another
-    with ``CliRunner().invoke(app, argv, obj=SweepSimulator(simulate=...))``;
-    without one it is the real :func:`~solar_challenge.fleet.simulate_fleet`.
-    """
+    """Fleet simulator for `optimize configs`, read from Click's context object."""
 
     simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults] = simulate_fleet
 
