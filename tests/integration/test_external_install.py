@@ -21,43 +21,53 @@ These tests prove that an EXTERNAL consumer can:
 
 The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here.
-The consumer-side proof runs inside an isolated uv env via _external_probe.py,
-which is NOT collected by pytest (underscore-prefixed, matches _helpers.py).
-Both uv commands run offline, reading everything they need from uv's cache.
+The consumer-side proof runs _external_probe.py, which is NOT collected by pytest
+(underscore-prefixed, matches _helpers.py), with the interpreter of the virtual
+environment the module-scoped consumer_environment fixture builds. That
+environment holds only the wheel and the runtime dependencies uv.lock pins.
+Every uv command runs offline: the build reads its build backend from uv's
+cache, and the install reads the wheels uv.lock pins from it.
 
 Marked ``build`` (NOT ``slow``) to stay independently selectable
 (``pytest -m build``).  Note: the project's default ``addopts`` does not
 deselect ``build``, so a plain ``pytest`` run will execute these heavy tests
-(timeouts: 300 s build + 600 s isolated install).  Tests skip automatically
-when ``git`` or ``uv`` is absent from PATH, or when the tree is not a git checkout.
+(timeouts: 300 s for the build, 600 s for each install command and for the
+probe).  Tests skip automatically when ``git`` or ``uv`` is absent from PATH,
+or when the tree is not a git checkout.
 """
 
 from __future__ import annotations
 
 import email
+import json
 import os
+import shlex
 import shutil
 import subprocess
 import tomllib
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from packaging.utils import canonicalize_name
+
+from tests._uv_env import isolated_uv_env
 
 # Module-scoped fixtures cannot request the function-scoped project_root fixture.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _EXTERNAL_PROBE = PROJECT_ROOT / "tests" / "integration" / "_external_probe.py"
 
 
-def _offline_uv_environment(**overrides: str) -> dict[str, str]:
-    """Return the environment of every uv command this module runs: this process's, with uv offline, then *overrides*.
+def _offline_uv_environment(base: Mapping[str, str], **overrides: str) -> dict[str, str]:
+    """Return the environment of every uv command this module runs: *base*, with uv offline, then *overrides*.
 
     Offline, uv reads the package index, the build backend and the wheels from its
     cache alone. The offline guard (tests/conftest.py) refuses the network access of
-    a test not marked slow, its child processes' included, and built_wheel's build
-    runs in the window of the module's first test.
+    a test not marked slow, its child processes' included, and the commands of the
+    module-scoped fixtures run in the window of the first test that requests them.
     """
-    return {**os.environ, "UV_OFFLINE": "1", **overrides}
+    return {**base, "UV_OFFLINE": "1", **overrides}
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +127,7 @@ def _build_wheel(source: Path, out_dir: Path, **env_overrides: str) -> subproces
         capture_output=True,
         text=True,
         timeout=300,
-        env=_offline_uv_environment(**env_overrides),
+        env=_offline_uv_environment(os.environ, **env_overrides),
     )
 
 
@@ -411,27 +421,80 @@ def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compile
 
 # ---------------------------------------------------------------------------
 # H1: every public symbol resolves and is callable/present in an isolated install
+# holding only the wheel and the runtime dependencies uv.lock pins
 # ---------------------------------------------------------------------------
 
 
-def _run_isolated_install(wheel: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
-    """Run _external_probe.py in a project-free uv environment holding *wheel*, its environment overridden by *env_overrides*."""
+def _run_uv_on(environment: Path, args: list[str], cwd: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
+    """Run uv with *args* offline in *cwd* on the virtual environment *environment*, without the caller's
+    virtualenv or uv lock mode, the command's environment overridden by *env_overrides*.
+
+    `uv pip` ignores UV_PROJECT_ENVIRONMENT, so a pip command names *environment* with --python itself.
+    """
     return subprocess.run(
-        ["uv", "run", "--no-project", "--isolated", "--with", str(wheel), "python", str(_EXTERNAL_PROBE)],
-        cwd=str(PROJECT_ROOT),
+        ["uv", *args],
+        cwd=str(cwd),
         capture_output=True,
         text=True,
         timeout=600,
-        env=_offline_uv_environment(**env_overrides),
+        env=_offline_uv_environment(isolated_uv_env(environment), **env_overrides),
     )
 
 
-@pytest.mark.build
-def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> None:
-    """Install the wheel in a project-free env and resolve every __all__ symbol (H1).
+def _install_against_uv_lock(
+    wheel: Path, source: Path, environment: Path, **env_overrides: str
+) -> subprocess.CompletedProcess[str]:
+    """Create the virtual environment *environment* holding the runtime dependencies that the uv.lock in
+    *source* pins, then install *wheel* into it.
 
-    Runs tests/integration/_external_probe.py inside a ``uv run --no-project
-    --isolated --with <wheel>`` environment.  The probe:
+    The locked sync installs no extras, no dependency groups and not the project. It takes the lock's
+    recorded wheels from uv's cache and reads no package index, yet takes no --no-index: without an
+    index, uv re-resolves the lock and finds it unsatisfiable. The wheel install reads no index, so
+    what the sync installed must already meet the wheel's declared requirements.
+
+    Both uv commands run in *source*, their environment overridden by *env_overrides*. Return the result
+    of the first that fails, else of the install.
+    """
+    synced = _run_uv_on(
+        environment, ["sync", "--locked", "--no-install-project", "--no-default-groups"], source, **env_overrides
+    )
+    if synced.returncode != 0:
+        return synced
+    return _run_uv_on(
+        environment,
+        ["pip", "install", "--no-index", "--python", str(environment), str(wheel)],
+        source,
+        **env_overrides,
+    )
+
+
+@pytest.fixture(scope="module")
+def consumer_environment(wheel_source: Path, built_wheel: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Return a fresh virtual environment, outside the checkout, into which the built wheel is installed once."""
+    environment = tmp_path_factory.mktemp("consumer_environment") / "venv"
+
+    result = _install_against_uv_lock(built_wheel, wheel_source, environment)
+    assert result.returncode == 0, (
+        f"`{shlex.join(result.args)}` failed (returncode={result.returncode}).\n"
+        "If uv says the network is disabled, its cache lacks a wheel uv.lock pins for this interpreter: run "
+        "`uv sync --locked --no-install-project` once in the checkout, with network access and "
+        "UV_PROJECT_ENVIRONMENT set to a temporary directory, so the checkout's .venv keeps its extras.\n"
+        "If uv says a package was not found in the provided package locations, the wheel requires a package "
+        "the locked sync did not install: compare the wheel's Requires-Dist with [project] dependencies in "
+        "pyproject.toml.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    return environment
+
+
+@pytest.mark.build
+def test_isolated_install_resolves_and_calls_every_symbol(consumer_environment: Path) -> None:
+    """In a project-free env holding the installed wheel, resolve every __all__ symbol (H1).
+
+    Runs tests/integration/_external_probe.py with the interpreter of
+    consumer_environment.  The probe:
+      - Prints that interpreter's version, which the interpreter matrix varies.
       - Asserts the package loaded from site-packages (not the worktree src/).
       - Iterates solar_challenge.__all__ and getattr-resolves each name.
       - Classifies: classes/routines → resolution is the assertion (callable() is
@@ -442,34 +505,109 @@ def test_isolated_install_resolves_and_calls_every_symbol(built_wheel: Path) -> 
     The test asserts returncode==0 AND the sentinel is in stdout.
     stdout+stderr are embedded in the failure message for debuggability.
 
-    Design: ``--no-project --isolated`` gives a project-free ephemeral env
-    (ignores the worktree's pyproject and venv); ``--with <wheel>`` installs
-    the built wheel, and uv resolves and installs its declared deps offline,
-    from its cache alone.
+    Design: consumer_environment holds only the built wheel and the runtime
+    dependencies uv.lock pins, installed offline from the wheels the verify's own
+    locked sync has cached.  So H1 proves the packaging: the wheel ships every
+    module, imports only its declared runtime dependencies, and loads from
+    site-packages.  It proves this against the versions the suite runs against,
+    not against newer releases inside the declared ranges.  The probe runs with
+    that environment's ``bin/python``.
     """
-    result = _run_isolated_install(built_wheel)
+    result = subprocess.run(
+        [str(consumer_environment / "bin" / "python"), str(_EXTERNAL_PROBE)],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
 
     assert result.returncode == 0 and "EXTERNAL-INSTALL-OK" in result.stdout, (
         f"External-consumer boundary test FAILED.\n"
         f"returncode: {result.returncode}\n"
-        "If uv says packages were unavailable because the network was disabled, its cache lacks what "
-        f"this resolution reads: run `uv run --no-project --isolated --with {built_wheel} python "
-        "tests/integration/_external_probe.py` once in the checkout, with network access. Any wheel "
-        "built from this tree serves.\n"
+        "A RESOLVE ERROR naming a ModuleNotFoundError means the wheel imports a package outside its runtime "
+        "dependencies (declare it in [project] dependencies in pyproject.toml and run `uv lock`), or that "
+        "the wheel does not ship a solar_challenge module it imports.\n"
         f"--- stdout ---\n{result.stdout}\n"
         f"--- stderr ---\n{result.stderr}"
     )
 
 
+def _installed_distributions(environment: Path) -> dict[str, str]:
+    """Return the version of each distribution installed in the virtual environment *environment*, keyed by its normalised name."""
+    result = _run_uv_on(environment, ["pip", "list", "--python", str(environment), "--format", "json"], environment)
+    assert result.returncode == 0, f"uv pip list failed (returncode={result.returncode}):\n{result.stderr}"
+    return {entry["name"]: entry["version"] for entry in json.loads(result.stdout)}
+
+
+def _locked_runtime_versions(source: Path, environment: Path) -> dict[str, set[str]]:
+    """Return the versions that the uv.lock in *source* pins for each runtime dependency of its project, on any
+    platform, keyed by its normalised name.
+
+    uv exports them as a PEP 751 lock without the project, extras or dependency groups. The export runs on
+    the virtual environment *environment* and leaves it as it is.
+    """
+    result = _run_uv_on(
+        environment,
+        ["export", "--locked", "--no-emit-project", "--no-default-groups", "--format", "pylock.toml"],
+        source,
+    )
+    assert result.returncode == 0, f"uv export failed (returncode={result.returncode}):\n{result.stderr}"
+    versions: dict[str, set[str]] = {}
+    for package in tomllib.loads(result.stdout)["packages"]:
+        if "version" in package:
+            versions.setdefault(package["name"], set()).add(package["version"])
+    return versions
+
+
+def _wheel_distribution(built_wheel: Path) -> tuple[str, str]:
+    """Return the normalised name and the version of the distribution *built_wheel* installs."""
+    with zipfile.ZipFile(built_wheel) as wheel:
+        metadata = _wheel_metadata(wheel)
+    return canonicalize_name(metadata["Name"]), metadata["Version"]
+
+
+@pytest.mark.build
+def test_the_isolated_install_holds_only_the_wheel_and_the_runtime_dependencies_uv_lock_pins(
+    consumer_environment: Path, wheel_source: Path, built_wheel: Path
+) -> None:
+    """H1 tests the wheel against what uv.lock pins for its runtime dependencies, which the whole suite runs against.
+
+    Offline, a resolution of the wheel's declared ranges takes whichever newer versions earlier online
+    runs left in uv's cache. What H1 tested would then vary with the cache's history, and a cache without
+    those versions fails it. And the probe catches an undeclared import only as a ModuleNotFoundError,
+    which a package installed by an extra would prevent.
+    """
+    project, project_version = _wheel_distribution(built_wheel)
+    installed = _installed_distributions(consumer_environment)
+    assert project in installed, (
+        f"consumer_environment does not list the built wheel's {project}, so this test would pass vacuously. "
+        f"It lists: {installed}"
+    )
+
+    pinned = {**_locked_runtime_versions(wheel_source, consumer_environment), project: {project_version}}
+    unpinned = {name: version for name, version in installed.items() if version not in pinned.get(name, set())}
+
+    assert unpinned == {}, (
+        f"consumer_environment holds these distributions, each neither the built wheel nor a runtime dependency "
+        f"at a version uv.lock pins: {unpinned}. H1 must install uv.lock's runtime dependencies alone: no extras, "
+        "and no resolution of the wheel's declared ranges."
+    )
+
+
 # ---------------------------------------------------------------------------
-# Offline: each uv command reads the package index, the build backend and the
-# wheels from uv's cache alone, so an empty cache fails it
+# Offline: the build reads its build backend, and the install the wheels uv.lock
+# pins, from uv's cache alone, so an empty cache fails each
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.build
+@pytest.mark.usefixtures("built_wheel")
 def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_source: Path, tmp_path: Path) -> None:
-    """uv build exits 2 offline and when refused alike; the offline guard tells them apart, failing this test if the build reached the network."""
+    """The build that built_wheel runs with uv's cache, failing unless it succeeds, fails with an empty cache.
+
+    So the empty cache alone accounts for the failure. uv build exits 2 offline and when refused alike; the
+    offline guard tells them apart, failing this test if the build reached the network.
+    """
     result = _build_wheel(wheel_source, tmp_path / "wheel", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
 
     assert result.returncode != 0, (
@@ -479,11 +617,21 @@ def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_sour
 
 
 @pytest.mark.build
-def test_the_isolated_install_resolves_from_uv_s_cache_alone(built_wheel: Path, tmp_path: Path) -> None:
-    """With an empty cache, the isolated install fails; the offline guard, not uv's exit code, catches a fetch, failing this test if the install reached the network."""
-    result = _run_isolated_install(built_wheel, UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
+@pytest.mark.usefixtures("consumer_environment")
+def test_the_isolated_install_takes_uv_lock_s_wheels_only_from_uv_s_cache(
+    wheel_source: Path, built_wheel: Path, tmp_path: Path
+) -> None:
+    """The install that consumer_environment runs with uv's cache, failing unless it succeeds, fails with an empty cache.
+
+    So the empty cache alone accounts for the failure: offline, the locked sync finds none of uv.lock's
+    wheels. The offline guard, not uv's exit code, catches a fetch, failing this test if the install
+    reached the network.
+    """
+    result = _install_against_uv_lock(
+        built_wheel, wheel_source, tmp_path / "venv", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache")
+    )
 
     assert result.returncode != 0, (
-        "the isolated install succeeded with an empty cache, so it found the wheel's dependencies outside uv's cache\n"
+        "the isolated install succeeded with an empty cache, so it found uv.lock's wheels outside uv's cache\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )

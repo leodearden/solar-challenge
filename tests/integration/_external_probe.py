@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """External-consumer proof program (H1 boundary test).
 
-Run INSIDE an isolated uv environment that contains ONLY the solar_challenge
-wheel and its declared runtime dependencies (stdlib + wheel deps; no dev
-extras).  Invoked by tests/integration/test_external_install.py via::
+Run INSIDE an isolated virtual environment that contains ONLY the
+solar_challenge wheel and the runtime dependencies uv.lock pins (no extras).
+Invoked with the interpreter of the environment that
+tests/integration/test_external_install.py's consumer_environment fixture
+builds::
 
-    uv run --no-project --isolated --with <wheel> python _external_probe.py
+    <environment>/bin/python _external_probe.py
 
 NOT collected by pytest (underscore prefix; matches tests/integration/_helpers.py
 convention; pytest's python_files=["test_*.py"] never touches it).
@@ -18,12 +20,15 @@ Exit codes:
 from __future__ import annotations
 
 import inspect
+import platform
 import sys
 
 
 # ---------------------------------------------------------------------------
-# 1. Import the installed package
+# 1. Name the interpreter, which the interpreter matrix varies, then import
+#    the installed package
 # ---------------------------------------------------------------------------
+print(f"consumer interpreter: {platform.python_implementation()} {platform.python_version()}")
 import solar_challenge as s
 
 # ---------------------------------------------------------------------------
