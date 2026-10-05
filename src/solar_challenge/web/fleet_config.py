@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 
 from solar_challenge.home import HomeConfig
+from solar_challenge.web.number_fields import as_int, as_int_within
 
 if TYPE_CHECKING:
     from solar_challenge.config import DispatchStrategyConfig
@@ -94,11 +95,12 @@ def sample_distribution(
             not a dict (see :func:`_require_dict`), a
             weighted_discrete/shuffled_pool row list is malformed (see
             :func:`_dict_list`), n_samples is one int() cannot read or outside
-            1 to MAX_FLEET_HOMES (see :func:`_as_int_within`), or a shuffled_pool
+            1 to MAX_FLEET_HOMES (see
+            :func:`~solar_challenge.web.number_fields.as_int_within`), or a shuffled_pool
             count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
             the counts total more than that (see :func:`_pool_counts`).
     """
-    n_samples = _as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
+    n_samples = as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
     spec = _build_distribution_dict({**params, "type": dist_type})
 
@@ -158,16 +160,17 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     Raises:
         ValueError: If required fields are missing or invalid, n_homes is one
             int() cannot read or outside 1 to MAX_FLEET_HOMES (see
-            :func:`_as_int_within`), seed is one int() cannot read (see
-            :func:`_as_int`), a pv/battery/load block is not a dict (see
+            :func:`~solar_challenge.web.number_fields.as_int_within`), seed is one
+            int() cannot read (see :func:`~solar_challenge.web.number_fields.as_int`),
+            a pv/battery/load block is not a dict (see
             :func:`_component_block`), a weighted_discrete/shuffled_pool
             row list is malformed (see :func:`_dict_list`), or a shuffled_pool
             count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
             the counts total more than that (see :func:`_pool_counts`).
     """
     config: dict[str, Any] = {
-        "n_homes": _as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
-        "seed": _as_int(form_data.get("seed", 42), "seed"),
+        "n_homes": as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
+        "seed": as_int(form_data.get("seed", 42), "seed"),
     }
 
     # Process PV distribution
@@ -221,32 +224,6 @@ def _dict_list(spec: dict[str, Any], key: str) -> list[dict[str, Any]]:
     if not isinstance(rows, list):
         raise ValueError(f"{key} must be a list, got {type(rows).__name__}")
     return [_require_dict(row, f"{key}[{index}]") for index, row in enumerate(rows)]
-
-
-def _as_int(value: Any, field: str) -> int:
-    """Return *value* read as int() reads it.
-
-    Raises:
-        ValueError: If int() cannot read *value* (not a number or numeric string, NaN,
-            or infinite); the error names *field* and the value sent.
-    """
-    try:
-        return int(value)
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ValueError(f"{field} must be an integer, got {value!r}") from exc
-
-
-def _as_int_within(value: Any, field: str, low: int, high: int) -> int:
-    """Return *value* read by :func:`_as_int`, refusing one outside *low* to *high* inclusive.
-
-    Raises:
-        ValueError: If :func:`_as_int` refuses *value*, or it is outside *low* to *high*;
-            the range error names *field*, the range and the value sent.
-    """
-    number = _as_int(value, field)
-    if not low <= number <= high:
-        raise ValueError(f"{field} must be between {low} and {high}, got {value!r}")
-    return number
 
 
 def _parse_component_distribution(
@@ -399,11 +376,12 @@ def _pool_counts(entries: list[dict[str, Any]]) -> list[int]:
 
     Raises:
         ValueError: If a count is one int() cannot read or outside 0 to MAX_FLEET_HOMES
-            (see :func:`_as_int_within`), or the counts total more than MAX_FLEET_HOMES,
-            more values than a dashboard fleet has homes to take; that error names the total.
+            (see :func:`~solar_challenge.web.number_fields.as_int_within`), or the counts
+            total more than MAX_FLEET_HOMES, more values than a dashboard fleet has homes
+            to take; that error names the total.
     """
     counts = [
-        _as_int_within(entry.get("count", 1), f"entries[{index}].count", 0, MAX_FLEET_HOMES)
+        as_int_within(entry.get("count", 1), f"entries[{index}].count", 0, MAX_FLEET_HOMES)
         for index, entry in enumerate(entries)
     ]
     total = sum(counts)

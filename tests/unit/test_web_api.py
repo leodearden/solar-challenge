@@ -1119,12 +1119,15 @@ class TestFleetFromDistribution:
                 f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
                 id="n_homes-one-above-the-fleet-limit",
             ),
+            pytest.param(
+                {"days": float("inf")}, "days must be an integer, got inf", id="days-infinity"
+            ),
         ],
     )
-    def test_n_homes_or_seed_it_cannot_use_returns_400_naming_it(
+    def test_n_homes_seed_or_days_it_cannot_use_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, message: str
     ) -> None:
-        """An n_homes or seed that int() cannot read, or a fleet above the dashboard's fleet limit, is a 400 naming the field and the value sent; no fleet is queued."""
+        """An n_homes, seed or days that int() cannot read, or a fleet above the dashboard's fleet limit, is a 400 naming the field and the value sent; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, **patch},
@@ -1487,6 +1490,7 @@ class TestExportFleetYAML:
         [
             pytest.param({"tariff": {"type": "flat_rate"}}, id="tariff-the-loaders-refuse"),
             pytest.param({"dispatch_strategy": ""}, id="empty-string-dispatch"),
+            pytest.param({"days": float("inf")}, id="days-infinity"),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(
@@ -1898,6 +1902,56 @@ class TestParseHomeConfigErrorPaths:
         resp = client.post(url, json=body)
         assert resp.status_code == 400
         assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("url", "body", "message"),
+        [
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "days": float("inf")},
+                "days must be an integer, got inf",
+                id="home-days-infinity",
+            ),
+            pytest.param(
+                "/api/simulate/fleet",
+                {"homes": [{**VALID_HOME_PAYLOAD, "days": float("inf")}]},
+                "days must be an integer, got inf",
+                id="fleet-days-infinity",
+            ),
+            pytest.param(
+                "/api/simulate/sweep",
+                {"min": 1, "max": 5, "steps": 2, "base_config": {"days": float("inf")}},
+                "days must be an integer, got inf",
+                id="sweep-days-infinity",
+            ),
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "pv_kw": 10**400},
+                f"pv_kw must be a finite number, got {10**400!r}",
+                id="home-pv_kw-too-large-for-a-float",
+            ),
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "heat_pump": {"thermal_capacity_kw": 10**400}},
+                f"heat_pump.thermal_capacity_kw must be a finite number, got {10**400!r}",
+                id="home-heat_pump.thermal_capacity_kw-too-large-for-a-float",
+            ),
+        ],
+    )
+    def test_number_it_cannot_use_returns_400_naming_it_and_submits_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        url: str,
+        body: dict,
+        message: str,
+    ) -> None:
+        """A number field the home-config parser cannot use is a 400 naming the field and the value sent, never a 500; nothing is submitted."""
+        resp = client.post(url, json=body)
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
 
