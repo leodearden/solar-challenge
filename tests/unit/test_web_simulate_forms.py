@@ -1,34 +1,17 @@
-"""Tests for the API blueprint endpoints with mocked JobManager.
-
-Tests all endpoints in solar_challenge.web.api without running real
-simulations.  The JobManager is mocked so that submit/status/event
-calls return canned responses instantly.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Smoke tests that the simulate forms render their optional-settings controls: heat pump, tariff, dispatch,
+PV age and SEG on /simulate/home, and the fleet-wide tariff, dispatch and SEG on /simulate/fleet.
 """
 
-import dataclasses
-import json
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
+
 pytest.importorskip("flask")
-import pandas as pd
-import yaml
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.config import DispatchStrategyConfig, load_fleet_config, parse_seg_rate
-from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.api import api_bp
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from tests._web_app import build_test_app
-from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -38,46 +21,13 @@ def app(tmp_path: Path) -> Flask:
 
 
 @pytest.fixture
-def mock_job_manager(app: Flask) -> MagicMock:
-    """Replace the real JobManager on the app with a MagicMock.
-
-    The mock is pre-configured with sensible return values so that
-    tests can focus on request/response behaviour.
-    """
-    jm = MagicMock()
-    jm.submit_home_job.return_value = ("job-home-001", "run-home-001")
-    jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
-    jm.get_job_status.return_value = {
-        "job_id": "job-home-001",
-        "run_id": "run-home-001",
-        "status": "running",
-        "progress_pct": 42.0,
-        "current_step": "Simulating",
-        "message": "Running home simulation...",
-    }
-    jm.get_events.return_value = iter([
-        {
-            "event": "complete",
-            "data": {"status": "completed", "run_id": "run-home-001"},
-        }
-    ])
-    app.extensions["job_manager"] = jm
-    return jm
-
-
-@pytest.fixture
-def client(app: Flask, mock_job_manager: MagicMock) -> FlaskClient:
-    """Create a Flask test client with the mocked JobManager."""
+def client(app: Flask) -> FlaskClient:
+    """Create a Flask test client."""
     return app.test_client()
 
 
-# ===================================================================
-# UI render smoke test
-# ===================================================================
-
-
 class TestHomeFormRender:
-    """Smoke test: GET /simulate/home renders the new tabs and controls."""
+    """Smoke test: GET /simulate/home renders the heat pump, tariff, dispatch, PV-age and SEG controls."""
 
     def test_home_form_shows_heat_pump_tariff_and_dispatch(
         self, client: FlaskClient
@@ -110,11 +60,6 @@ class TestHomeFormRender:
         # All six UK supplier preset keys must appear as selectable option values
         for preset_key in ("Octopus", "British Gas", "EDF", "E.ON", "Scottish Power", "OVO"):
             assert preset_key in html, f"SEG preset '{preset_key}' missing from form HTML"
-
-
-# ===================================================================
-# GET /simulate/fleet — render smoke test
-# ===================================================================
 
 
 class TestFleetFormRender:
