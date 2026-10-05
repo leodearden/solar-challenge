@@ -598,7 +598,10 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         metavar="KW",
         default=DC_CAPACITIES_KW,
-        help="the DC capacities to measure, in kW (default: 0.3 to 25 in 0.1 kW steps)",
+        help=(
+            f"the DC capacities to measure, in kW (default: all {len(DC_CAPACITIES_KW)} of the "
+            f"full census, {min(DC_CAPACITIES_KW):g} to {max(DC_CAPACITIES_KW):g} kW)"
+        ),
     )
     return parser
 
