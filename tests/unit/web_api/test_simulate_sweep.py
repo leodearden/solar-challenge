@@ -105,13 +105,16 @@ class TestSimulateSweep:
         assert resp.status_code == 201
         assert resp.get_json()["values"] == [1.0, 2.0, 4.0, 8.0]
 
-    def test_no_json_returns_400(self, client: FlaskClient) -> None:
-        """POST with no JSON body returns 400."""
-        resp = client.post(
-            "/api/simulate/sweep",
-            data="not json",
-            content_type="text/plain",
-        )
+    @pytest.mark.parametrize(
+        ("data", "content_type"),
+        [
+            pytest.param("not json", "text/plain", id="text-body"),
+            pytest.param(None, "application/json", id="empty-json-body"),
+        ],
+    )
+    def test_no_json_returns_400(self, client: FlaskClient, data: str | None, content_type: str) -> None:
+        """A body that does not read as a JSON object, plain text or an empty JSON body, returns 400."""
+        resp = client.post("/api/simulate/sweep", data=data, content_type=content_type)
         assert resp.status_code == 400
 
     def test_steps_less_than_2_returns_400(self, client: FlaskClient) -> None:
