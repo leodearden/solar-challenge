@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_surface_forms.py, the spelling of a public name's surface form that every admitted Python minor shares.
+"""Unit tests for tests/_surface_forms.py, the spelling of a public name's surface form, and of an exported class's member forms, that every admitted Python minor shares.
 
 Each test pins one spelling rule, so an edit that lets one minor's own rendering through,
 or drops part of a signature, fails here instead of turning the frozen-surface lock red
@@ -13,12 +13,14 @@ asserted are defined at module level, where a qualified name carries no '<locals
 import collections.abc
 import datetime
 import enum
+import functools
 import pathlib
 from dataclasses import dataclass, field
 from typing import (
     Annotated,
     Any,
     Callable,
+    ClassVar,
     Dict,
     Iterable,
     List,
@@ -30,7 +32,7 @@ from typing import (
     Union,
 )
 
-from tests._surface_forms import surface_form
+from tests._surface_forms import member_forms, surface_form
 
 
 class Outer:
@@ -190,3 +192,88 @@ def test_a_constant_form_is_its_type_qualified_name() -> None:
     assert surface_form({"a": 1}) == "dict"
     assert surface_form((1, 2)) == "tuple"
     assert surface_form(Preset(rate=0.15)) == "Preset"
+
+
+def test_a_method_member_is_spelled_by_its_signature_self_included() -> None:
+    class Meter:
+        def read(self, at: Optional[int] = None) -> float: ...
+
+    assert member_forms(Meter) == {"read": "(self, at: int | None = None) -> float"}
+
+
+def test_a_classmethod_or_staticmethod_member_is_spelled_by_its_kind_then_its_function() -> None:
+    class Meter:
+        @classmethod
+        def default(cls) -> "Meter": ...
+
+        @staticmethod
+        def scale(kwh: float) -> float: ...
+
+    assert member_forms(Meter) == {
+        "default": "classmethod (cls) -> Meter",
+        "scale": "staticmethod (kwh: float) -> float",
+    }
+
+
+def test_a_property_or_cached_property_member_is_spelled_by_its_kind_then_its_getter() -> None:
+    class Meter:
+        @property
+        def reading(self) -> float: ...
+
+        @functools.cached_property
+        def peak(self) -> Optional[float]: ...
+
+    assert member_forms(Meter) == {
+        "reading": "property (self) -> float",
+        "peak": "cached_property (self) -> float | None",
+    }
+
+
+def test_a_class_constant_member_is_spelled_by_its_type() -> None:
+    class Meter:
+        UNITS = "kWh"
+        SCALE = 1.5
+
+    assert member_forms(Meter) == {"UNITS": "str", "SCALE": "float"}
+
+
+def test_private_and_dunder_names_are_not_members() -> None:
+    class Meter:
+        _cache: dict[str, float] = {}
+
+        def _read(self) -> float: ...
+
+        def __len__(self) -> int: ...
+
+    assert member_forms(Meter) == {}
+
+
+def test_a_dataclass_field_is_not_a_member_but_a_class_variable_is() -> None:
+    @dataclass(frozen=True)
+    class Site:
+        LAT: ClassVar[float] = 51.45
+        name: str = ""
+        tags: list[str] = field(default_factory=list)
+
+    assert member_forms(Site) == {"LAT": "float"}
+
+
+def test_an_enum_member_is_not_a_class_member_but_an_enum_method_is() -> None:
+    class Period(enum.Enum):
+        PEAK = "peak"
+        OFF_PEAK = "off_peak"
+
+        def label(self) -> str: ...
+
+    assert member_forms(Period) == {"label": "(self) -> str"}
+
+
+def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
+    class Base:
+        def read(self) -> float: ...
+
+    class Child(Base):
+        def reset(self) -> None: ...
+
+    assert member_forms(Base) == {"read": "(self) -> float"}
+    assert member_forms(Child) == {"reset": "(self) -> None"}
