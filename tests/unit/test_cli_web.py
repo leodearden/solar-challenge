@@ -49,6 +49,14 @@ finally:
     command_returned.set()
 """
 
+WEB_START = """
+import sys
+
+from solar_challenge.cli import app
+
+app(["web", "start", "--port", sys.argv[1]])
+"""
+
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -60,24 +68,24 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
-def _server_with_blocking_simulations(
-    tmp_path: Path, started_dir: Path, port: int
-) -> Iterator["subprocess.Popen[bytes]"]:
-    log_path = tmp_path / "server.log"
-    with log_path.open("wb") as log:
+def _server(tmp_path: Path, script: str, *args: str) -> Iterator["subprocess.Popen[bytes]"]:
+    """Run script with args in a child process working in tmp_path, also its HOME, that writes its stdout to stdout.log and its stderr to stderr.log there; kill it on exit."""
+    stdout_log, stderr_log = tmp_path / "stdout.log", tmp_path / "stderr.log"
+    with stdout_log.open("wb") as stdout, stderr_log.open("wb") as stderr:
         server = subprocess.Popen(
-            [sys.executable, "-c", SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), str(port)],
+            [sys.executable, "-c", script, *args],
             cwd=tmp_path,
             env={**os.environ, "HOME": str(tmp_path)},
-            stdout=log,
-            stderr=subprocess.STDOUT,
+            stdout=stdout,
+            stderr=stderr,
         )
         try:
             yield server
         finally:
             server.kill()
             server.wait()
-            print(log_path.read_text())
+            print(stdout_log.read_text())
+            print(stderr_log.read_text(), file=sys.stderr)
 
 
 def _wait_until(server: "subprocess.Popen[bytes]", condition: Callable[[], bool], what: str) -> None:
@@ -117,7 +125,7 @@ def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None
     def started() -> list[str]:
         return sorted(path.name for path in started_dir.iterdir())
 
-    with _server_with_blocking_simulations(tmp_path, started_dir, port) as server:
+    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), str(port)) as server:
         _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
         for pv_kw in (1.0, 2.0, 3.0):
             _submit_home_job(port, pv_kw)
@@ -127,3 +135,16 @@ def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None
         server.wait(timeout=60)
 
     assert started() == ["1.0", "2.0"]
+
+
+def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_path: Path) -> None:
+    """The hint follows the status line naming the dashboard's address on stderr, and is not printed on stdout, which carries Flask's own banner."""
+    port = _free_port()
+
+    with _server(tmp_path, WEB_START, str(port)) as server:
+        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+
+    status = (tmp_path / "stderr.log").read_text().splitlines()
+    start = status.index(f"Starting web dashboard at http://127.0.0.1:{port}")
+    assert status[start + 1 : start + 2] == ["  Press Ctrl+C to stop the server."]
+    assert "Press Ctrl+C to stop the server." not in (tmp_path / "stdout.log").read_text()
