@@ -14,6 +14,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.shared import NotAJsonObject
 from solar_challenge.web.simulation_params import (
+    MAX_WINDOW_DAYS,
     parse_date_range,
     parse_home_config,
     parse_seg_tariff,
@@ -102,15 +103,45 @@ class TestParseDateRange:
         assert start == "2024-01-01"
         assert end == "2024-12-31"
 
-    def test_days_zero_raises_value_error(self) -> None:
-        """days=0 is not a valid window; must raise ValueError."""
-        with pytest.raises(ValueError, match="positive"):
-            parse_date_range({"days": 0})
+    def test_days_max_window_days_is_the_longest_window(self) -> None:
+        """days=MAX_WINDOW_DAYS is the longest window: it ends on the day of pd.Timestamp.max."""
+        assert parse_date_range({"days": MAX_WINDOW_DAYS}) == ("2024-06-01", "2262-04-11")
 
-    def test_days_negative_raises_value_error(self) -> None:
-        """Negative days must raise ValueError."""
-        with pytest.raises(ValueError, match="positive"):
-            parse_date_range({"days": -7})
+    @pytest.mark.parametrize(
+        ("days", "message"),
+        [
+            pytest.param(float("inf"), "days must be an integer, got inf", id="infinity"),
+            pytest.param(
+                float("-inf"), "days must be an integer, got -inf", id="negative-infinity"
+            ),
+            pytest.param(float("nan"), "days must be an integer, got nan", id="nan"),
+            pytest.param("seven", "days must be an integer, got 'seven'", id="non-numeric-string"),
+            pytest.param(0, f"days must be between 1 and {MAX_WINDOW_DAYS}, got 0", id="zero"),
+            pytest.param(
+                -7, f"days must be between 1 and {MAX_WINDOW_DAYS}, got -7", id="negative"
+            ),
+            pytest.param(
+                MAX_WINDOW_DAYS + 1,
+                f"days must be between 1 and {MAX_WINDOW_DAYS}, got {MAX_WINDOW_DAYS + 1}",
+                id="one-past-the-longest-window",
+            ),
+            pytest.param(
+                200000,
+                f"days must be between 1 and {MAX_WINDOW_DAYS}, got 200000",
+                id="past-pandas-timedelta-range",
+            ),
+            pytest.param(
+                1e300, f"days must be between 1 and {MAX_WINDOW_DAYS}, got 1e+300", id="huge-float"
+            ),
+        ],
+    )
+    def test_days_it_cannot_use_is_refused_naming_days_and_the_value_sent(
+        self, days: object, message: str
+    ) -> None:
+        """A days that int() cannot read, or one outside 1 to MAX_WINDOW_DAYS, is refused with a ValueError naming days and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({"days": days})
+        assert str(exc_info.value) == message
 
 
 class TestParseHomeConfigKeys:
