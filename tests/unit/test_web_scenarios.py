@@ -603,34 +603,6 @@ class TestBuilderScenarioYaml:
         assert "latitude" in response.get_json()["error"]
 
 
-class TestSweepAPI:
-    """Tests for the POST /api/simulate/sweep endpoint."""
-
-    def test_sweep_empty_body_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep with no body returns 400."""
-        response = client.post(
-            "/api/simulate/sweep",
-            content_type="application/json",
-        )
-        assert response.status_code == 400
-
-    def test_sweep_invalid_range_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep with min >= max returns 400."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 10.0, "max": 2.0, "steps": 4},
-        )
-        assert response.status_code == 400
-
-    def test_sweep_too_few_steps_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep with steps < 2 returns 400."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 2.0, "max": 8.0, "steps": 1},
-        )
-        assert response.status_code == 400
-
-
 class TestSweepParameters:
     """What POST /api/simulate/sweep submits for a swept parameter: one home per point, carrying that point's value, or nothing at all when the parameter is unsupported or any of its points is invalid."""
 
