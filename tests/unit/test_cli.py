@@ -1300,6 +1300,22 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
         assert result.stdout.startswith("# Simulation Report: Bristol\n")
         assert "Simulation Results" not in result.output
 
+    def test_fleet_run_prints_its_results_table_alone_on_stdout(self) -> None:
+        """The fleet results table, whose title Rich centres above it, opens stdout. The status line and the progress bar print on stderr."""
+        _write_scenario("Bristol")
+
+        result = runner.invoke(
+            app,
+            ["fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert result.stdout.splitlines()[0].strip() == "Fleet Results: Bristol"
+        status = " ".join(result.stderr.split())
+        assert "Simulating fleet of 1 homes for 1 days" in status
+        assert "Simulating 1 homes..." in status
+
     def test_finance_run_prints_its_report_alone_on_stdout(self) -> None:
         """The finance report opens stdout. The status lines print on stderr."""
         result = _run_finance("Bristol")
