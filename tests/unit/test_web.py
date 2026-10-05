@@ -456,10 +456,22 @@ class TestChartFunctions:
 class TestHomeResultsRoute:
     """Tests for the GET /results/home/<run_id> route."""
 
-    def test_home_results_unknown_run_redirects(self, client: FlaskClient) -> None:
-        """Test accessing results for a non-existent run redirects."""
-        response = client.get("/results/home/nonexistent-id")
-        assert response.status_code in (302, 404)
+    @pytest.mark.parametrize(
+        "run_id",
+        [
+            pytest.param("nonexistent-id", id="an-id-no-run-has"),
+            pytest.param("bad.id", id="an-id-the-store-refuses"),
+        ],
+    )
+    def test_home_results_unknown_run_redirects(self, client: FlaskClient, run_id: str) -> None:
+        """The page of an id no run has redirects to the dashboard, which flashes Run not found.
+
+        'bad.id' is outside [A-Za-z0-9_-], so the store refuses it, and no run can have it.
+        """
+        response = client.get(f"/results/home/{run_id}", follow_redirects=True)
+
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
+        assert "Run not found." in texts(response.get_data(as_text=True))
 
     def test_home_results_after_simulation(self, app: Flask, client: FlaskClient) -> None:
         """A saved run's results page renders its Overview charts and energy totals.

@@ -880,3 +880,16 @@ class TestRunIdValidation:
         """Test that _get_run_dir calls _validate_run_id and rejects traversal."""
         with pytest.raises(ValueError, match="Invalid run_id"):
             storage._get_run_dir("../../etc")
+
+    @pytest.mark.parametrize(
+        "load", [RunStorage.load_home_run, RunStorage.load_fleet_run], ids=["home", "fleet"]
+    )
+    def test_a_load_of_an_id_the_store_refuses_raises_file_not_found_error(self, storage, load):
+        """A load of an id the store refuses raises FileNotFoundError, as a load of an id no run has does, and carries the refusal."""
+        with pytest.raises(FileNotFoundError, match="Invalid run_id"):
+            load(storage, "bad.id")
+
+    def test_a_delete_of_an_id_the_store_refuses_raises_value_error(self, storage):
+        """A delete of an id the store refuses raises ValueError: no run can be saved under the id, so the caller has a bug."""
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage.delete_run("bad.id")
