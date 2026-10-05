@@ -73,33 +73,16 @@ class TestFleetFormRender:
     def test_fleet_form_shows_tariff_dispatch_seg_section(
         self, client: FlaskClient
     ) -> None:
-        """GET /simulate/fleet returns 200 with the fleet-wide overlay section rendered.
+        """GET /simulate/fleet renders the fleet-wide tariff, dispatch and SEG controls.
 
-        Checks stable form-wiring markers:
-        - The tariff type selector is present (name="tariff_type").
-        - The dispatch strategy selector is present (name="dispatch_strategy_type").
-        - The SEG preset dropdown and custom rate input are present.
-        - All six UK supplier SEG preset keys appear as option text (parity with
-          test_home_form_shows_seg_section).
-
-        Heading-prose strings are intentionally NOT asserted — form-field name
-        attributes and preset-key option text are the meaningful contract checks
-        without pinning cosmetic copy.
+        One select each for the tariff type, the dispatch strategy and the SEG preset, one option per
+        SEG preset key, and the custom SEG rate number input.
         """
         resp = client.get("/simulate/fleet")
         assert resp.status_code == 200
-        html = resp.get_data(as_text=True)
-
-        # Tariff section — wiring contract
-        assert 'name="tariff_type"' in html, "tariff_type select missing"
-
-        # Dispatch strategy section — wiring contract
-        assert 'name="dispatch_strategy_type"' in html, "dispatch_strategy_type select missing"
-
-        # SEG section — wiring contract
-        assert 'name="seg_preset"' in html, "seg_preset select missing"
-        assert 'name="seg_rate_pence_per_kwh"' in html, "seg_rate_pence_per_kwh input missing"
-
-        # All six UK supplier preset keys (parity with test_home_form_shows_seg_section)
-        for preset_key in ("Octopus", "British Gas", "EDF", "E.ON", "Scottish Power", "OVO"):
-            assert preset_key in html, f"SEG preset '{preset_key}' missing from fleet form HTML"
+        page = resp.get_data(as_text=True)
+        assert element_count(page, "select", {"x-model": "tariffType"}) == 1
+        assert element_count(page, "select", {"x-model": "dispatchStrategyType"}) == 1
+        assert element_count(page, "select", {"x-model": "segPreset"}) == 1
+        assert _options_per_seg_preset_key(page) == dict.fromkeys(SEG_PRESETS, 1)
+        assert element_count(page, "input", {"type": "number", "x-model.number": "segRatePencePerKwh"}) == 1
