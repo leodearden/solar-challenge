@@ -390,18 +390,22 @@ def test_a_cards_last_row_has_no_remove_button(page: Page, live_server: str, row
     page.goto(live_server + "/scenarios/builder")
     _choose_in_every_card(page, row_list.distribution_type)
     sent_before = _form_sent_on_validate(page)
+    rows_before = {card.prefix: sent_before[f"{card.prefix}_{row_list.rows_field}"] for card in _CARDS}
+    assert all(len(rows) > 1 for rows in rows_before.values()), (
+        f"every card must open with more than one row, or the test removes none: {rows_before}"
+    )
 
     for card in _CARDS:
         card_group = page.get_by_role("group", name=card.heading, exact=True)
         remove_buttons = card_group.get_by_role("button", name=_REMOVE_ROW_BUTTON, exact=True)
-        for remaining in range(len(sent_before[f"{card.prefix}_{row_list.rows_field}"]) - 1, 0, -1):
+        for remaining in range(len(rows_before[card.prefix]) - 1, 0, -1):
             remove_buttons.first.click()
             expect(card_group.get_by_role("spinbutton")).to_have_count(2 * remaining)
         expect(remove_buttons).to_have_count(0)
 
     sent_after = _form_sent_on_validate(page)
     assert {card.prefix: sent_after[f"{card.prefix}_{row_list.rows_field}"] for card in _CARDS} == {
-        card.prefix: sent_before[f"{card.prefix}_{row_list.rows_field}"][-1:] for card in _CARDS
+        prefix: rows[-1:] for prefix, rows in rows_before.items()
     }
 
 
