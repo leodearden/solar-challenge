@@ -8,11 +8,13 @@ not a package, so each script is loaded from its file.
 """
 
 import importlib.util
+import statistics
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -24,7 +26,7 @@ from solar_challenge.pv import (
     simulate_pv_output,
     usable_cec_inverters,
 )
-from solar_challenge.weather import WeatherCache
+from solar_challenge.weather import CLIMATE_YEARS, IRRADIANCE_COLUMNS, WeatherCache
 from tests._synthetic_weather import synthetic_june_weather
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -165,3 +167,117 @@ class TestMeasureMpptWindow:
             )
             for candidate in candidate_cec_inverters()
         ]
+
+
+@pytest.fixture(scope="module")
+def tmy_irradiation() -> ModuleType:
+    """scripts/measure_tmy_irradiation.py."""
+    return _load_script("measure_tmy_irradiation")
+
+
+@pytest.fixture(scope="module")
+def synthetic_tmy() -> pd.DataFrame:
+    """A TMY shaped like PVGIS's as pvlib returns it: 1990's 8760 hours, indexed in UTC.
+
+    Each day is the clear June day, its irradiance ramped from 0.2 on 1 January
+    to 1.0 on 31 December.
+    """
+    utc_1990 = pd.date_range("1990-01-01", periods=8760, freq="h", tz="UTC")
+    return synthetic_june_weather(
+        "1990-01-01", irradiance_scale_per_day=np.linspace(0.2, 1.0, 365)
+    ).set_axis(utc_1990)
+
+
+@pytest.fixture(scope="module")
+def year_factors() -> dict[int, float]:
+    """Each climate year's irradiance over the synthetic TMY's, rising with the year, so the first year is the darkest."""
+    return {year: 0.9 + 0.01 * (year - CLIMATE_YEARS[0]) for year in CLIMATE_YEARS}
+
+
+@pytest.fixture(scope="module")
+def real_years(synthetic_tmy: pd.DataFrame, year_factors: dict[int, float]) -> pd.DataFrame:
+    """The climate years' hourly weather: for each year, the synthetic TMY's hours re-dated to that year, its ghi, dni and dhi times the year's factor.
+
+    Every month of a real year is then the TMY's month scaled exactly.
+    """
+    tmy_year = synthetic_tmy.index[0].year
+    return pd.concat(
+        synthetic_tmy.assign(
+            **{column: synthetic_tmy[column] * factor for column in IRRADIANCE_COLUMNS}
+        ).set_axis(synthetic_tmy.index + pd.DateOffset(years=year - tmy_year))
+        for year, factor in year_factors.items()
+    )
+
+
+@pytest.fixture(scope="module")
+def source_years() -> dict[int, int]:
+    """The real year each month of the synthetic TMY comes from: month m from the m-th climate year."""
+    return {month: CLIMATE_YEARS[month - 1] for month in range(1, 13)}
+
+
+@pytest.fixture(scope="module")
+def site(
+    tmy_irradiation: ModuleType,
+    synthetic_tmy: pd.DataFrame,
+    source_years: dict[int, int],
+    real_years: pd.DataFrame,
+) -> Any:
+    """measure_tmy_irradiation's measurement of the synthetic TMY against the synthetic real years, at Bristol."""
+    return tmy_irradiation.measure(
+        "Synthetic", Location.bristol(), synthetic_tmy, source_years, real_years
+    )
+
+
+class TestMeasureTmyIrradiation:
+    """measure_tmy_irradiation measures a TMY against the real years its months come from (docs/tmy-irradiation-scaling.md §3)."""
+
+    @_QUIET_DIODE_SOLVER
+    def test_the_tmys_factor_is_the_real_years_mean_ghi_over_its_own(
+        self, site: Any, year_factors: dict[int, float]
+    ) -> None:
+        """Every real year is the TMY scaled, so scaling by month and by year agree."""
+        mean_factor = statistics.fmean(year_factors.values())
+
+        assert site.factor == pytest.approx(mean_factor)
+        assert site.peak_by_tmy["annual"] == pytest.approx(site.peak_by_tmy["raw"] * mean_factor)
+        assert site.peak_by_tmy["monthly"] == pytest.approx(site.peak_by_tmy["raw"] * mean_factor)
+
+    @_QUIET_DIODE_SOLVER
+    def test_each_tmy_month_ranks_its_source_year_among_the_real_years(
+        self, site: Any, year_factors: dict[int, float]
+    ) -> None:
+        mean_factor = statistics.fmean(year_factors.values())
+
+        assert [month.month for month in site.months] == list(range(1, 13))
+        assert [month.source_year for month in site.months] == list(CLIMATE_YEARS[:12])
+        assert [month.rank for month in site.months] == list(range(1, 13))
+        assert [month.vs_mean for month in site.months] == pytest.approx(
+            [1 / mean_factor - 1] * 12
+        )
+
+    @_QUIET_DIODE_SOLVER
+    def test_its_ac_is_the_default_systems_from_the_pv_model(
+        self, site: Any, synthetic_tmy: pd.DataFrame, real_years: pd.DataFrame
+    ) -> None:
+        first_year = CLIMATE_YEARS[0]
+        first_year_weather = real_years[real_years.index.year == first_year]
+
+        assert list(site.year_ac.index) == list(CLIMATE_YEARS)
+        assert site.year_ac[first_year] == pytest.approx(
+            simulate_pv_output(PVConfig.default_4kw(), Location.bristol(), first_year_weather).sum()
+        )
+        assert site.ac_by_tmy["raw"] == pytest.approx(
+            simulate_pv_output(PVConfig.default_4kw(), Location.bristol(), synthetic_tmy).sum()
+        )
+
+    @_QUIET_DIODE_SOLVER
+    def test_a_measured_site_prints(
+        self, tmy_irradiation: ModuleType, site: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        tmy_irradiation.print_site(site)
+        site_lines = capsys.readouterr().out
+        tmy_irradiation.print_summary([site])
+        summary_lines = capsys.readouterr().out
+
+        assert site.name in site_lines
+        assert site.name in summary_lines
