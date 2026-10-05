@@ -7,6 +7,10 @@ messages and progress print on stderr through status_console, and errors
 through error_console, so redirecting stdout captures the product alone.
 Print the product after any progress display stops: while one runs on a
 terminal, Rich routes sys.stdout writes through it to stderr.
+
+--quiet calls set_status_quiet, which silences status_console: status
+messages go unprinted and progress displays stay off, while products and
+errors print as ever.
 """
 
 import sys
@@ -20,6 +24,7 @@ from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
     Progress,
+    ProgressColumn,
     SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
@@ -245,19 +250,23 @@ def set_status_quiet(quiet: bool) -> None:
     status_console.quiet = quiet
 
 
+def _status_progress(*columns: str | ProgressColumn) -> Progress:
+    """A progress display of columns on status_console, off while that console is quiet, so it never captures what else a command writes to stdout or stderr."""
+    return Progress(*columns, console=status_console, disable=status_console.quiet)
+
+
 def create_progress() -> Progress:
     """Create a Rich progress bar for simulations, printed on stderr."""
-    return Progress(
+    return _status_progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         TimeElapsedColumn(),
-        console=status_console,
     )
 
 
 def create_fleet_progress() -> Progress:
     """Progress bar with ETA for fleet simulations, printed on stderr."""
-    return Progress(
+    return _status_progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -266,7 +275,6 @@ def create_fleet_progress() -> Progress:
         TimeElapsedColumn(),
         TextColumn("ETA"),
         TimeRemainingColumn(),
-        console=status_console,
     )
 
 
