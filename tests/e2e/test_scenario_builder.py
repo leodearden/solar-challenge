@@ -201,17 +201,18 @@ def test_custom_location_controls_named_by_their_captions_set_the_location_the_b
 
 
 class _Card(NamedTuple):
-    """A distribution card: its heading, the prefix of its form fields, and the field holding its fixed value."""
+    """A distribution card: its heading, the prefix of its form fields, the field holding its fixed value, and the value its add buttons start a new row at."""
 
     heading: str
     prefix: str
     fixed_field: str
+    new_row_value: float
 
 
 _CARDS = (
-    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw"),
-    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh"),
-    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh"),
+    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw", 4.0),
+    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh", 5.0),
+    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh", 3500),
 )
 
 _DISTRIBUTION_CARDS = tuple(pytest.param(card.heading, card.prefix, id=card.prefix) for card in _CARDS)
@@ -335,6 +336,73 @@ def test_a_card_set_to_a_distribution_sends_its_type_and_the_fields_that_type_re
         for card in _CARDS
     }
     assert {sent[f"{card.prefix}_distribution_type"] for card in _CARDS} == {type_value}
+
+
+class _RowList(NamedTuple):
+    """A distribution the cards hold as rows: its Distribution Type option, the form field after a card's prefix that holds its rows, the number paired with each row's value, and the card's button that adds a row."""
+
+    distribution_type: str
+    rows_field: str
+    column: str
+    add_button: str
+
+
+_ROW_LISTS = (
+    pytest.param(_RowList("Weighted Discrete", "wd_values", "weight", "+ Add value"), id="weighted_discrete"),
+    pytest.param(_RowList("Shuffled Pool", "sp_entries", "count", "+ Add entry"), id="shuffled_pool"),
+)
+
+_REMOVE_ROW_BUTTON = "X"
+"""The name of each row's remove button."""
+
+_CARD_PARAMS = tuple(pytest.param(card, id=card.prefix) for card in _CARDS)
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+@pytest.mark.parametrize("card", _CARD_PARAMS)
+def test_a_cards_add_and_remove_buttons_change_only_its_rows(
+    page: Page, live_server: str, card: _Card, row_list: _RowList
+) -> None:
+    """With every card showing its rows, a card's add button appends a row holding the card's new-row value and 10, and its first remove button then removes its first row.
+
+    The card shows each change, and no other field of the form the builder sends changes.
+    """
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
+    rows_field = f"{card.prefix}_{row_list.rows_field}"
+    sent_before = _form_sent_on_validate(page)
+    rows = sent_before[rows_field]
+    new_row = {"value": card.new_row_value, row_list.column: 10}
+
+    card_group.get_by_role("button", name=row_list.add_button, exact=True).click()
+    expect(card_group.get_by_role("spinbutton")).to_have_count(2 * (len(rows) + 1))
+    assert _form_sent_on_validate(page) == {**sent_before, rows_field: [*rows, new_row]}
+
+    card_group.get_by_role("button", name=_REMOVE_ROW_BUTTON, exact=True).first.click()
+    expect(card_group.get_by_role("spinbutton")).to_have_count(2 * len(rows))
+    assert _form_sent_on_validate(page) == {**sent_before, rows_field: [*rows[1:], new_row]}
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+def test_a_cards_last_row_has_no_remove_button(page: Page, live_server: str, row_list: _RowList) -> None:
+    """Removing each card's first row until one is left leaves that row without a remove button, and the form the builder sends keeps it."""
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    sent_before = _form_sent_on_validate(page)
+
+    for card in _CARDS:
+        card_group = page.get_by_role("group", name=card.heading, exact=True)
+        remove_buttons = card_group.get_by_role("button", name=_REMOVE_ROW_BUTTON, exact=True)
+        for remaining in range(len(sent_before[f"{card.prefix}_{row_list.rows_field}"]) - 1, 0, -1):
+            remove_buttons.first.click()
+            expect(card_group.get_by_role("spinbutton")).to_have_count(2 * remaining)
+        expect(remove_buttons).to_have_count(0)
+
+    sent_after = _form_sent_on_validate(page)
+    assert {card.prefix: sent_after[f"{card.prefix}_{row_list.rows_field}"] for card in _CARDS} == {
+        card.prefix: sent_before[f"{card.prefix}_{row_list.rows_field}"][-1:] for card in _CARDS
+    }
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────
