@@ -15,7 +15,7 @@ from solar_challenge.web.charts import fleet_aggregate_timeline, fleet_grid_impa
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
 
-from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
 from tests._html_page import headings, texts, texts_after
 from tests._web_app import build_test_app
 
@@ -53,11 +53,6 @@ def _one_day_homes(n_homes: int) -> list[SimulationResults]:
     net_exporter = make_sim_results(self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
     net_importer = make_sim_results(self_kwh=6.0, export_kwh=2.0, import_kwh=40.0, days=1)
     return [net_exporter, net_importer][:n_homes]
-
-
-def _fleet_of(homes: list[SimulationResults]) -> FleetResults:
-    """A fleet of *homes*, each paired with a default home config."""
-    return FleetResults(per_home_results=list(homes), home_configs=[make_home_config() for _ in homes])
 
 
 class TestFleetChartFunctions:
@@ -152,7 +147,7 @@ class TestFleetChartFunctions:
 
         drawn = {
             trace["name"]: trace["y"]
-            for trace in json.loads(fleet_aggregate_timeline(_fleet_of(homes)))["data"]
+            for trace in json.loads(fleet_aggregate_timeline(make_fleet_results_of(homes)))["data"]
         }
 
         assert drawn == {
@@ -173,7 +168,7 @@ class TestFleetChartFunctions:
 
         drawn = {
             trace["name"]: trace["y"]
-            for trace in json.loads(fleet_grid_impact(_fleet_of(homes)))["data"]
+            for trace in json.loads(fleet_grid_impact(make_fleet_results_of(homes)))["data"]
         }
 
         assert drawn == {

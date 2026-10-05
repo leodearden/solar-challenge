@@ -13,7 +13,12 @@ import dataclasses
 
 import pytest
 
-from tests._finance_builders import make_fleet_results, make_home_config, make_scenario_and_finance
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_home_config,
+    make_scenario_and_finance,
+)
 
 
 class TestProjectMultiYearRevenue:
@@ -231,12 +236,7 @@ class TestGridChargeEnergyPaidOnce:
     N_HOMES = 2
 
     def _fleet(self) -> "FleetResults":  # type: ignore[name-defined]
-        from solar_challenge.fleet import FleetResults
-
-        return FleetResults(
-            per_home_results=[_make_grid_charging_sim_results() for _ in range(self.N_HOMES)],
-            home_configs=[make_home_config() for _ in range(self.N_HOMES)],
-        )
+        return make_fleet_results_of([_make_grid_charging_sim_results() for _ in range(self.N_HOMES)])
 
     @staticmethod
     def _without_grid_charge_cost_series(fleet: "FleetResults") -> "FleetResults":  # type: ignore[name-defined]
