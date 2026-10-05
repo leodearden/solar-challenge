@@ -100,6 +100,27 @@ def test_only_the_open_sections_header_is_exposed_as_expanded(page: Page, live_s
     _expect_expanded_headers(page, None)
 
 
+def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
+    """The sections of _ACCORDION_SECTIONS whose control lies, shown or hidden, in the element the header named *header* names in aria-controls."""
+    panel_id = page.get_by_role("button", name=header, exact=True).get_attribute("aria-controls")
+    assert panel_id, f"the {header} header names no element in aria-controls"
+    panel = page.locator(f"id={panel_id}")
+    return {
+        section
+        for section, (role, name) in _ACCORDION_SECTIONS.items()
+        if panel.get_by_role(role, name=name, exact=True, include_hidden=True).count() > 0
+    }
+
+
+def test_each_section_header_controls_the_panel_that_holds_that_sections_controls(page: Page, live_server: str) -> None:
+    """The element each accordion header names in aria-controls holds that section's control, shown or not, and no other section's."""
+    page.goto(live_server + "/scenarios/builder")
+
+    assert {header: _sections_whose_control_the_panel_holds(page, header) for header in _ACCORDION_SECTIONS} == {
+        header: {header} for header in _ACCORDION_SECTIONS
+    }
+
+
 # ── YAML Preview pane ────────────────────────────────────────────────
 
 
