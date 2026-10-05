@@ -25,11 +25,12 @@ _ACCEPTED_FORM: dict[str, object] = {
 }
 """A builder form builder_form_errors accepts. It needs its battery: without one the builder writes battery: {}, which load_fleet_config refuses."""
 
-# One number of each kind number_fields.as_finite_float refuses; its full matrix is tested there.
+# One value of each kind number_fields.as_finite_float refuses; its full matrix is tested there.
 _UNUSABLE_NUMBERS = [
     pytest.param(10**400, id="integer-too-large-for-a-float"),
     pytest.param(float("inf"), id="infinity"),
     pytest.param(float("nan"), id="nan"),
+    pytest.param(True, id="boolean"),
 ]
 
 
@@ -67,7 +68,7 @@ class TestScenarioFromBuilderForm:
     def test_a_number_field_that_is_not_a_finite_number_is_refused_naming_it(
         self, arm: dict[str, object], field: str, value: object
     ) -> None:
-        """A number field holding a number too large for a float, an infinity or NaN is refused naming the field.
+        """A number field holding a number too large for a float, an infinity, NaN or a boolean is refused naming the field.
 
         *arm* is the rest of the form that makes the builder read *field*.
         """
@@ -111,7 +112,7 @@ class TestScenarioFromBuilderForm:
         field: str,
         value: object,
     ) -> None:
-        """A row's value, weight or count holding a number too large for a float, an infinity or NaN is refused naming the row's field."""
+        """A row's value, weight or count holding a number too large for a float, an infinity, NaN or a boolean is refused naming the row's field."""
         with pytest.raises(ValueError) as exc_info:
             scenario_from_builder_form({**_ACCEPTED_FORM, **rows_holding(value)})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"

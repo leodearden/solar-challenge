@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Readers of a web request's number fields: each takes the value sent and the field's name, and refuses with a ValueError naming that field and the value sent, the error every web caller answers with HTTP 400.
 
-The integer readers differ on a fraction: as_int, and so as_int_within, truncates a float
-as int() does, reading 2.5 as 2, while as_whole_number refuses it. Read a count through
-as_whole_number.
+The integer readers differ on a fraction and on a boolean: as_int, and so as_int_within,
+reads them as int() does, truncating 2.5 to 2 and reading true as 1, while as_whole_number
+refuses both, as as_finite_float refuses a boolean. Read a count through as_whole_number.
 """
 
 import math
@@ -37,18 +37,19 @@ def as_int_within(value: Any, field: str, low: int, high: int) -> int:
 
 
 def as_finite_float(value: Any, field: str) -> float:
-    """Return *value* read as float() reads it, refusing one that is not a finite number.
+    """Return *value* read as float() reads it, refusing a boolean or one that is not a finite number.
 
     Raises:
-        ValueError: If float() cannot read *value* (not a number or numeric string), it is
-            an integer too large for a float, or it is infinite or NaN; the error names
+        ValueError: If *value* is a boolean (JSON true or false, which float() reads as 1.0
+            or 0.0), float() cannot read it (not a number or numeric string), it is an
+            integer too large for a float, or it is infinite or NaN; the error names
             *field* and the value sent.
     """
     try:
         number = float(value)
     except (ValueError, TypeError, OverflowError) as exc:
         raise ValueError(f"{field} must be a finite number, got {value!r}") from exc
-    if not math.isfinite(number):
+    if isinstance(value, bool) or not math.isfinite(number):
         raise ValueError(f"{field} must be a finite number, got {value!r}")
     return number
 
