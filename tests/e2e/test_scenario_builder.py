@@ -6,7 +6,7 @@ from typing import Any, NamedTuple
 
 import pytest
 import yaml
-from playwright.sync_api import Locator, Page, Response, expect
+from playwright.sync_api import FloatRect, Locator, Page, Response, ViewportSize, expect
 
 from solar_challenge.config import load_fleet_config
 from solar_challenge.home import HomeConfig
@@ -201,19 +201,22 @@ def test_custom_location_controls_named_by_their_captions_set_the_location_the_b
 
 
 class _Card(NamedTuple):
-    """A distribution card: its heading, the prefix of its form fields, the field holding its fixed value, and the value its add buttons start a new row at."""
+    """A distribution card: its heading, the prefix of its form fields, the field holding its fixed value, a fixed value for that field that differs from the card's default and lies within the card's min and max, and the value its add buttons start a new row at."""
 
     heading: str
     prefix: str
     fixed_field: str
+    non_default_fixed_value: str
     new_row_value: float
 
 
 _CARDS = (
-    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw", 4.0),
-    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh", 5.0),
-    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh", 3500),
+    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw", "6.5", 4.0),
+    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh", "9.5", 5.0),
+    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh", "4200", 3500),
 )
+
+_CARD_PARAMS = tuple(pytest.param(card, id=card.prefix) for card in _CARDS)
 
 _DISTRIBUTION_CARDS = tuple(pytest.param(card.heading, card.prefix, id=card.prefix) for card in _CARDS)
 """(card heading, the prefix of its form fields)."""
@@ -252,11 +255,32 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
     }
 
 
-def _rendered_width(control: Locator) -> float:
-    """The width in pixels that *control* is laid out at."""
+@pytest.mark.parametrize("card", _CARD_PARAMS)
+def test_a_card_at_fixed_value_shows_one_spinbutton_named_fixed_value_that_sets_its_fixed_field(
+    page: Page, live_server: str, card: _Card
+) -> None:
+    """At Fixed Value, as every card opens, the card's group shows one spinbutton, named Fixed Value, which sets the card's fixed field of the form the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Fleet Distribution")
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
+    fixed_value = card_group.get_by_role("spinbutton", name="Fixed Value", exact=True)
+
+    expect(fixed_value).to_have_count(1)
+    expect(card_group.get_by_role("spinbutton")).to_have_count(1)
+    fixed_value.fill(card.non_default_fixed_value)
+
+    assert _form_sent_on_validate(page)[card.fixed_field] == card.non_default_fixed_value
+
+
+def _layout_box(control: Locator) -> FloatRect:
+    """The box *control* is laid out in."""
     box = control.bounding_box()
     assert box is not None, "the control has no layout box"
-    return box["width"]
+    return box
+
+
+_PHONE_VIEWPORT: ViewportSize = {"width": 375, "height": 800}
+"""The viewport of a phone."""
 
 
 def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_type_combobox(
@@ -267,18 +291,18 @@ def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_t
     The rows Weighted Discrete shows are wider than the card, and a fieldset is as wide as
     its content unless it resets that, which would widen the combobox beyond the card's edge.
     """
-    page.set_viewport_size({"width": 375, "height": 800})
+    page.set_viewport_size(_PHONE_VIEWPORT)
     page.goto(live_server + "/scenarios/builder")
     _open_section(page, "Fleet Distribution")
     card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
     distribution_type = card_group.get_by_role("combobox", name="Distribution Type", exact=True)
     expect(distribution_type).to_be_visible()
-    width_before = _rendered_width(distribution_type)
+    width_before = _layout_box(distribution_type)["width"]
 
     distribution_type.select_option(label="Weighted Discrete")
     expect(card_group.get_by_role("button", name="+ Add value", exact=True)).to_be_visible()
 
-    assert _rendered_width(distribution_type) == pytest.approx(width_before, abs=0.5)
+    assert _layout_box(distribution_type)["width"] == pytest.approx(width_before, abs=0.5)
 
 
 # ── Distribution cards: the fields and rows each card sends ──────────
@@ -339,23 +363,24 @@ def test_a_card_set_to_a_distribution_sends_its_type_and_the_fields_that_type_re
 
 
 class _RowList(NamedTuple):
-    """A distribution the cards hold as rows: its Distribution Type option, the form field after a card's prefix that holds its rows, the number paired with each row's value, and the card's button that adds a row."""
+    """A distribution the cards hold as rows: its Distribution Type option, the form field after a card's prefix that holds its rows, the number paired with each row's value and that number's caption, and the card's button that adds a row."""
 
     distribution_type: str
     rows_field: str
     column: str
+    column_caption: str
     add_button: str
 
 
 _ROW_LISTS = (
-    pytest.param(_RowList("Weighted Discrete", "wd_values", "weight", "+ Add value"), id="weighted_discrete"),
-    pytest.param(_RowList("Shuffled Pool", "sp_entries", "count", "+ Add entry"), id="shuffled_pool"),
+    pytest.param(
+        _RowList("Weighted Discrete", "wd_values", "weight", "Weight", "+ Add value"), id="weighted_discrete"
+    ),
+    pytest.param(_RowList("Shuffled Pool", "sp_entries", "count", "Count", "+ Add entry"), id="shuffled_pool"),
 )
 
-_REMOVE_ROW_BUTTON = "X"
-"""The name of each row's remove button."""
-
-_CARD_PARAMS = tuple(pytest.param(card, id=card.prefix) for card in _CARDS)
+_REMOVE_ROW_BUTTONS = re.compile(r"^Remove Row \d+$")
+"""The names of a card's remove buttons: Remove Row and the number of the row it removes, counted from 1 within the card."""
 
 
 @pytest.mark.parametrize("row_list", _ROW_LISTS)
@@ -363,7 +388,7 @@ _CARD_PARAMS = tuple(pytest.param(card, id=card.prefix) for card in _CARDS)
 def test_a_cards_add_and_remove_buttons_change_only_its_rows(
     page: Page, live_server: str, card: _Card, row_list: _RowList
 ) -> None:
-    """With every card showing its rows, a card's add button appends a row holding the card's new-row value and 10, and its first remove button then removes its first row.
+    """With every card showing its rows, a card's add button appends a row holding the card's new-row value and 10, and its Remove Row 1 button then removes its first row.
 
     The card shows each change, and no other field of the form the builder sends changes.
     """
@@ -379,7 +404,7 @@ def test_a_cards_add_and_remove_buttons_change_only_its_rows(
     expect(card_group.get_by_role("spinbutton")).to_have_count(2 * (len(rows) + 1))
     assert _form_sent_on_validate(page) == {**sent_before, rows_field: [*rows, new_row]}
 
-    card_group.get_by_role("button", name=_REMOVE_ROW_BUTTON, exact=True).first.click()
+    card_group.get_by_role("button", name="Remove Row 1", exact=True).click()
     expect(card_group.get_by_role("spinbutton")).to_have_count(2 * len(rows))
     assert _form_sent_on_validate(page) == {**sent_before, rows_field: [*rows[1:], new_row]}
 
@@ -397,16 +422,133 @@ def test_a_cards_last_row_has_no_remove_button(page: Page, live_server: str, row
 
     for card in _CARDS:
         card_group = page.get_by_role("group", name=card.heading, exact=True)
-        remove_buttons = card_group.get_by_role("button", name=_REMOVE_ROW_BUTTON, exact=True)
         for remaining in range(len(rows_before[card.prefix]) - 1, 0, -1):
-            remove_buttons.first.click()
+            card_group.get_by_role("button", name="Remove Row 1", exact=True).click()
             expect(card_group.get_by_role("spinbutton")).to_have_count(2 * remaining)
-        expect(remove_buttons).to_have_count(0)
+        expect(card_group.get_by_role("button", name=_REMOVE_ROW_BUTTONS)).to_have_count(0)
 
     sent_after = _form_sent_on_validate(page)
     assert {card.prefix: sent_after[f"{card.prefix}_{row_list.rows_field}"] for card in _CARDS} == {
         prefix: rows[-1:] for prefix, rows in rows_before.items()
     }
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+@pytest.mark.parametrize("card", _CARD_PARAMS)
+def test_a_cards_rows_have_spinbuttons_named_for_their_row_that_set_that_row(
+    page: Page, live_server: str, card: _Card, row_list: _RowList
+) -> None:
+    """With every card showing its rows, row n of a card has two spinbuttons in its group, Value n and Weight n (or Count n), which set row n of the rows the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
+    rows_field = f"{card.prefix}_{row_list.rows_field}"
+    sent_before = _form_sent_on_validate(page)
+    typed = [{"value": 100 + n, row_list.column: n} for n in range(1, len(sent_before[rows_field]) + 1)]
+    expect(card_group.get_by_role("spinbutton")).to_have_count(2 * len(typed))
+
+    for n, row in enumerate(typed, start=1):
+        card_group.get_by_role("spinbutton", name=f"Value {n}", exact=True).fill(str(row["value"]))
+        card_group.get_by_role("spinbutton", name=f"{row_list.column_caption} {n}", exact=True).fill(
+            str(row[row_list.column])
+        )
+
+    assert _form_sent_on_validate(page) == {**sent_before, rows_field: typed}
+
+
+def _expect_remove_buttons_numbered(card_group: Locator, rows: int) -> None:
+    """Expect *card_group* to show *rows* remove buttons, named Remove Row 1 to Remove Row <rows> in order."""
+    remove_buttons = card_group.get_by_role("button", name=_REMOVE_ROW_BUTTONS)
+    expect(remove_buttons).to_have_count(rows)
+    for n in range(1, rows + 1):
+        expect(remove_buttons.nth(n - 1)).to_have_accessible_name(f"Remove Row {n}")
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+@pytest.mark.parametrize("card", _CARD_PARAMS)
+def test_a_cards_remove_row_n_button_removes_row_n_and_the_rows_after_it_are_renumbered(
+    page: Page, live_server: str, card: _Card, row_list: _RowList
+) -> None:
+    """With every card showing its rows, each of a card's rows has a remove button named for it; Remove Row 2 removes the second row alone, and the rows after it take the numbers before theirs."""
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
+    rows_field = f"{card.prefix}_{row_list.rows_field}"
+    sent_before = _form_sent_on_validate(page)
+    rows = sent_before[rows_field]
+    assert len(rows) > 2, f"the card must open with more than two rows, or Remove Row 2 renumbers none: {rows}"
+    _expect_remove_buttons_numbered(card_group, len(rows))
+
+    card_group.get_by_role("button", name="Remove Row 2", exact=True).click()
+
+    _expect_remove_buttons_numbered(card_group, len(rows) - 1)
+    assert _form_sent_on_validate(page) == {**sent_before, rows_field: [rows[0], *rows[2:]]}
+
+
+def _phone_card_groups_with_rows(page: Page, live_server: str, row_list: _RowList) -> dict[str, Locator]:
+    """Open the builder at phone width with *row_list*'s distribution chosen in every card, and return each card's group by its heading, once each shows its add button."""
+    page.set_viewport_size(_PHONE_VIEWPORT)
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    card_groups = {card.heading: page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS}
+    for card_group in card_groups.values():
+        expect(card_group.get_by_role("button", name=row_list.add_button, exact=True)).to_be_visible()
+    return card_groups
+
+
+def _controls_outside(card_group: Locator) -> list[str]:
+    """The comboboxes, spinbuttons and buttons *card_group* shows whose box leaves the group's by more than half a pixel, each as its role, its number among those of its role, and its left and right edges."""
+    group = _layout_box(card_group)
+    left, right = group["x"], group["x"] + group["width"]
+    outside = []
+    for role in ("combobox", "spinbutton", "button"):
+        for number, control in enumerate(card_group.get_by_role(role).all(), start=1):
+            box = _layout_box(control)
+            if box["x"] < left - 0.5 or box["x"] + box["width"] > right + 0.5:
+                outside.append(f"{role} {number} spans x={box['x']:.1f} to {box['x'] + box['width']:.1f}")
+    return outside
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+def test_on_a_phone_every_control_a_card_shows_with_its_rows_lies_within_the_card(
+    page: Page, live_server: str, row_list: _RowList
+) -> None:
+    """At 375 px wide, with every card showing its rows, each combobox, spinbutton and button a card's group shows lies within the group's box, to within half a pixel."""
+    card_groups = _phone_card_groups_with_rows(page, live_server, row_list)
+
+    assert {heading: _controls_outside(card_group) for heading, card_group in card_groups.items()} == {
+        heading: [] for heading in card_groups
+    }
+
+
+def _columns_out_of_line(card_group: Locator, captions: tuple[str, ...]) -> list[str]:
+    """The columns of *card_group*, each named by its caption, whose spinbutton in the second row starts more than half a pixel from the first row's, each as its caption and the two left edges."""
+    out_of_line = []
+    for caption in captions:
+        first, second = (
+            _layout_box(card_group.get_by_role("spinbutton", name=f"{caption} {row}", exact=True))["x"]
+            for row in (1, 2)
+        )
+        if abs(second - first) > 0.5:
+            out_of_line.append(f"{caption} 1 starts at x={first:.1f} and {caption} 2 at x={second:.1f}")
+    return out_of_line
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+def test_on_a_phone_a_cards_second_row_starts_each_column_where_its_first_row_does(
+    page: Page, live_server: str, row_list: _RowList
+) -> None:
+    """At 375 px wide, with every card showing its rows, a card's second row starts its Value column and its Weight (or Count) column where its first row does, to within half a pixel.
+
+    Only the first row shows the captions, above its spinbuttons, so the columns must stay
+    in line with the rows below it, which show none.
+    """
+    card_groups = _phone_card_groups_with_rows(page, live_server, row_list)
+
+    assert {
+        heading: _columns_out_of_line(card_group, ("Value", row_list.column_caption))
+        for heading, card_group in card_groups.items()
+    } == {heading: [] for heading in card_groups}
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────

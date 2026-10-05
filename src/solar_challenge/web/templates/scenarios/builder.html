@@ -9,15 +9,24 @@
 </div>
 {% endmacro %}
 
+{# _row_caption and _row_input read the Alpine loop variables item and idx, which only _row_list's x-for defines, so call them only inside it #}
+{% macro _row_caption(text) -%}{{ text }} <span class="sr-only" x-text="idx + 1"></span>{%- endmacro %}
+
+{% macro _row_input(caption, field, step, width_class) %}
+<label class="{{ width_class }}">
+    <span class="block text-xs text-slate-500 dark:text-slate-400 mb-1" :class="{ 'sr-only': idx > 0 }">{{ _row_caption(caption) }}</span>
+    <input type="number" step="{{ step }}" x-model.number="item.{{ field }}" @input="updatePreview()"
+        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+</label>
+{% endmacro %}
+
 {% macro _row_list(rows, column, column_caption, add_label, step, new_row_value) %}
 <template x-for="(item, idx) in {{ rows }}" :key="idx">
-    <div class="flex gap-2 items-center">
-        <input type="number" step="{{ step }}" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
-            class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-        <input type="number" step="1" x-model.number="item.{{ column }}" @input="updatePreview()" placeholder="{{ column_caption }}"
-            class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+    <div class="flex gap-2 items-end">
+        {{ _row_input('Value', 'value', step, width_class='flex-1 min-w-0') }}
+        {{ _row_input(column_caption, column, '1', width_class='w-24') }}
         <button type="button" @click="removeRow({{ rows }}, idx)" x-show="canRemoveRow({{ rows }})"
-            class="text-red-400 hover:text-red-600 text-sm">X</button>
+            class="p-2 text-red-400 hover:text-red-600 text-sm"><span class="sr-only">{{ _row_caption('Remove Row') }}</span><span aria-hidden="true">X</span></button>
     </div>
 </template>
 <button type="button" @click="addRow({{ rows }}, { value: {{ new_row_value }}, {{ column }}: 10 })"
@@ -42,7 +51,8 @@
                 </select>
             </div>
             <div x-show="!{{ prefix }}_distribution_type">
-                <input type="number" step="{{ step }}" min="{{ fixed_min }}" max="{{ fixed_max }}" x-model="{{ fixed_field }}" @input="updatePreview()"
+                <label for="builder_{{ fixed_field }}" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Fixed Value</label>
+                <input id="builder_{{ fixed_field }}" type="number" step="{{ step }}" min="{{ fixed_min }}" max="{{ fixed_max }}" x-model="{{ fixed_field }}" @input="updatePreview()"
                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
             </div>
             <div x-show="{{ prefix }}_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
