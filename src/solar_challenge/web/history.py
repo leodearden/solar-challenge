@@ -21,6 +21,7 @@ from flask import (
     url_for,
 )
 
+from solar_challenge.web.charts import comparison_bar_chart, comparison_radar
 from solar_challenge.web.shared import get_storage
 
 bp = Blueprint("history", __name__)
@@ -81,8 +82,6 @@ def compare_page() -> str | Response:
     # Build comparison charts
     charts: dict[str, str] = {}
     try:
-        from solar_challenge.web.charts import comparison_bar_chart, comparison_radar
-
         summaries = [r.get("summary", {}) for r in runs]
         labels = [r.get("name", f"Run {i+1}") for i, r in enumerate(runs)]
         charts["bar"] = comparison_bar_chart(summaries, labels)
