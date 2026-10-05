@@ -1,8 +1,6 @@
 """Tests for the scenario builder and parameter sweep web features."""
 
 import json
-from collections.abc import Callable
-from inspect import signature
 from pathlib import Path
 from typing import Any
 
@@ -34,55 +32,10 @@ def app(tmp_path: Path) -> Flask:
     return build_test_app(tmp_path)
 
 
-class _RecordingJobManager:
-    """Stands in for the app's JobManager: records each home config a request submits and simulates nothing."""
-
-    def __init__(self) -> None:
-        self.submitted_homes: list[object] = []
-
-    def submit_home_job(
-        self,
-        config: object,
-        start_date: object,
-        end_date: object,
-        db_path: str,
-        data_dir: str,
-        name: str | None = None,
-    ) -> tuple[str, str]:
-        """Record the home config and return a fresh (job_id, run_id) pair."""
-        self.submitted_homes.append(config)
-        n = len(self.submitted_homes)
-        return f"job-{n}", f"run-{n}"
-
-
 @pytest.fixture
-def recording_job_manager(app: Flask) -> _RecordingJobManager:
-    """Install a recording double as the app's job manager and return it."""
-    job_manager = _RecordingJobManager()
-    app.extensions["job_manager"] = job_manager
-    return job_manager
-
-
-@pytest.fixture
-def client(app: Flask, recording_job_manager: _RecordingJobManager) -> FlaskClient:
-    """Create a Flask test client whose requests submit jobs to the recording double, so none starts a real simulation."""
+def client(app: Flask) -> FlaskClient:
+    """Create a Flask test client."""
     return app.test_client()
-
-
-def _call_shape(method: Callable[..., object]) -> list[tuple[str, object, object]]:
-    """The parameter names, kinds and defaults that decide which calls a method accepts."""
-    return [(p.name, p.kind, p.default) for p in signature(method).parameters.values()]
-
-
-class TestRecordingJobManager:
-    """The recording double stays in step with the real JobManager it stands in for."""
-
-    def test_submit_home_job_takes_the_parameters_the_real_one_takes(self, app: Flask) -> None:
-        """A change to the real submit_home_job's parameters fails here, instead of passing silently behind the double."""
-        real_job_manager = app.extensions["job_manager"]
-        double = _RecordingJobManager()
-
-        assert _call_shape(double.submit_home_job) == _call_shape(real_job_manager.submit_home_job)
 
 
 class TestScenarioBuilderRoute:
