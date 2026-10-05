@@ -40,7 +40,7 @@ pytestmark = pytest.mark.slow
 # Module-scoped fixtures cannot request the function-scoped project_root fixture.
 _WEB_PACKAGE = Path(__file__).resolve().parents[2] / "src" / "solar_challenge" / "web"
 
-# Relative to the web package, in the checkout and in the scratch copy alike.
+# Relative to the web package, in the checkout and in its scratch copies alike.
 _DIST = Path("static", "dist")
 _DIST_STYLESHEET = _DIST / "style.css"
 _TAILWINDCSS_PACKAGE = Path("node_modules", "tailwindcss")
@@ -77,7 +77,7 @@ def _npm(args: list[str], cwd: Path, cache: Path) -> None:
         timeout=_NPM_TIMEOUT_SECS,
     )
     assert result.returncode == 0, (
-        f"`{command}` exited {result.returncode} in the scratch copy of the web package; "
+        f"`{command}` exited {result.returncode} in a scratch copy of the web package; "
         f"npm's stderr:\n{result.stderr}\nnpm's stdout:\n{result.stdout}"
     )
 
@@ -91,27 +91,36 @@ def _rule_diff(committed: str, rebuilt: str) -> str:
     return "\n".join(itertools.islice(diff, _DIFF_LINES))
 
 
+def _copy_web_package(destination: Path) -> Path:
+    """Copy the checkout's web package, without its node_modules, to destination/web and return the copy."""
+    # "web" is the root package name package-lock.json records, which npm takes from the directory.
+    web_package = destination / "web"
+    shutil.copytree(_WEB_PACKAGE, web_package, ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
+    return web_package
+
+
 @pytest.fixture(scope="module")
 def scratch_web_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Return a scratch copy of the web package in which `npm ci` installed what package-lock.json locks.
 
-    It is made once, for every test in this module.
+    It is made once and shared by every test in this module, so no test writes to it.
     """
     scratch = tmp_path_factory.mktemp("css-build")
-    # "web" is the root package name package-lock.json records, which npm takes from the directory.
-    web_package = scratch / "web"
-    shutil.copytree(_WEB_PACKAGE, web_package, ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
+    web_package = _copy_web_package(scratch)
     _npm(["ci", "--no-audit", "--no-fund"], web_package, scratch / "npm-cache")
     return web_package
 
 
 def test_dist_style_css_matches_a_fresh_build_of_its_sources(scratch_web_package: Path, tmp_path: Path) -> None:
     """static/dist/style.css is byte for byte what `npm run build:css` makes of its committed sources."""
-    rebuilt_stylesheet = scratch_web_package / _DIST_STYLESHEET
+    # The build writes into the package it runs in, so it gets its own copy; only the installed node_modules is shared.
+    web_package = _copy_web_package(tmp_path)
+    (web_package / "node_modules").symlink_to(scratch_web_package / "node_modules")
+    rebuilt_stylesheet = web_package / _DIST_STYLESHEET
     # A build that stops writing the stylesheet must not pass by comparing the committed copy with itself.
     rebuilt_stylesheet.unlink()
 
-    _npm(["run", "build:css"], scratch_web_package, tmp_path / "npm-cache")
+    _npm(["run", "build:css"], web_package, tmp_path / "npm-cache")
 
     assert rebuilt_stylesheet.is_file(), (
         "`npm run build:css` no longer writes static/dist/style.css, the stylesheet base.html links"
