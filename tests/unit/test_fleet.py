@@ -243,6 +243,15 @@ class TestFleetResults:
             )
 
     @pytest.mark.parametrize(
+        ("break_invariant", "refusal"),
+        [
+            pytest.param(lambda fleet: fleet.per_home_results.clear(), "at least one home", id="emptied"),
+            pytest.param(
+                lambda fleet: fleet.home_configs.pop(), "got 2 per_home_results and 1 home_configs", id="unpaired"
+            ),
+        ],
+    )
+    @pytest.mark.parametrize(
         "read",
         [
             pytest.param(lambda fleet: fleet.total_generation, id="total_generation"),
@@ -250,11 +259,13 @@ class TestFleetResults:
             pytest.param(calculate_fleet_summary, id="calculate_fleet_summary"),
         ],
     )
-    def test_a_fleet_emptied_after_construction_is_refused_where_it_is_read(self, sample_results, read):
-        """A fleet whose per_home_results is emptied after construction is refused, naming the invariant, wherever its totals or summary are read."""
-        sample_results.per_home_results.clear()
+    def test_a_fleet_emptied_or_unpaired_after_construction_is_refused_where_it_is_read(
+        self, sample_results, break_invariant, refusal, read
+    ):
+        """A fleet whose per_home_results is emptied, or whose home_configs is unpaired from it, after construction is refused, naming the invariant, wherever its totals or summary are read."""
+        break_invariant(sample_results)
 
-        with pytest.raises(ValueError, match="at least one home"):
+        with pytest.raises(ValueError, match=refusal):
             read(sample_results)
 
 
