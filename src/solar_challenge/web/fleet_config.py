@@ -151,8 +151,8 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     section in scenario YAML files and can be used with
     :func:`solar_challenge.config.generate_homes_from_distribution`.
 
-    A null pv/battery/load block reads as an absent one, which for the battery
-    means no battery.
+    Its pv/battery/load blocks follow the fleet form's presence rule (see
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`).
 
     Args:
         form_data: Form data dict from the web UI.
@@ -208,10 +208,6 @@ def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any] | No
 
 def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, Any]:
     """Return the *key* component block of *form_data*, reading an absent or null block as empty.
-
-    It serves the components every fleet has, pv and load: an absent or null block converts
-    as an empty one, whose missing distribution
-    :func:`~solar_challenge.config.parse_fleet_distribution_config` refuses.
 
     Raises:
         ValueError: If the block is neither null nor a dict (see :func:`_component_block`).
