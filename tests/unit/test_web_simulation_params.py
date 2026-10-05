@@ -464,6 +464,61 @@ class TestParseHomeConfigBatterySettings:
         )
 
 
+# One value per refusal branch of number_fields.as_finite_float; its full matrix is tested there.
+UNUSABLE_FLOATS = [
+    pytest.param(10**400, id="integer-too-large-for-a-float"),
+    pytest.param(float("nan"), id="nan"),
+]
+
+
+class TestParseHomeConfigNumberFields:
+    """Each number field parse_home_config reads is refused, naming the field and the value sent, when it is not a number the field can hold."""
+
+    @pytest.mark.parametrize("value", UNUSABLE_FLOATS)
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "pv_kw",
+            "azimuth",
+            "tilt",
+            "system_age_years",
+            "degradation_rate_per_year",
+            "battery_kwh",
+            "max_charge_kw",
+            "max_discharge_kw",
+            "efficiency_pct",
+            "consumption_kwh",
+        ],
+    )
+    def test_top_level_field_that_is_not_a_finite_number_is_refused_naming_it(
+        self, field: str, value: object
+    ) -> None:
+        """A top-level float field holding a number too large for a float, or NaN, is refused naming the field."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("value", UNUSABLE_FLOATS)
+    @pytest.mark.parametrize("key", ["thermal_capacity_kw", "annual_heat_demand_kwh"])
+    def test_heat_pump_field_that_is_not_a_finite_number_is_refused_naming_it_in_its_block(
+        self, key: str, value: object
+    ) -> None:
+        """A heat_pump number too large for a float, or NaN, is refused naming it as heat_pump.<key>."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": {key: value}})
+        assert str(exc_info.value) == f"heat_pump.{key} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize(
+        "value",
+        [pytest.param(float("inf"), id="infinity"), pytest.param(float("nan"), id="nan")],
+    )
+    def test_occupants_int_cannot_read_is_refused_naming_it(self, value: float) -> None:
+        """An occupants value int() cannot read is refused naming occupants and the value sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "occupants": value})
+        assert str(exc_info.value) == f"occupants must be an integer, got {value!r}"
+
+
 class TestParseHomeConfigPVAge:
     """PV-age boundary tests: form→PVConfig threading (§D contract)."""
 

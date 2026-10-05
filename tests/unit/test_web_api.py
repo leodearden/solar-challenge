@@ -1926,6 +1926,18 @@ class TestParseHomeConfigErrorPaths:
                 "days must be an integer, got inf",
                 id="sweep-days-infinity",
             ),
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "pv_kw": 10**400},
+                f"pv_kw must be a finite number, got {10**400!r}",
+                id="home-pv_kw-too-large-for-a-float",
+            ),
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "heat_pump": {"thermal_capacity_kw": 10**400}},
+                f"heat_pump.thermal_capacity_kw must be a finite number, got {10**400!r}",
+                id="home-heat_pump.thermal_capacity_kw-too-large-for-a-float",
+            ),
         ],
     )
     def test_number_it_cannot_use_returns_400_naming_it_and_submits_nothing(
