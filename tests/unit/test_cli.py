@@ -283,22 +283,22 @@ class TestConfigCLI:
         assert " ".join(result.stderr.split()) == f"Template written to {output}"
 
     def test_config_template_invalid_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """An unknown template type exits 1, naming the type in red on stdout; recorded, because a test run is no colour terminal."""
-        monkeypatch.setattr(console, "record", True)
+        """An unknown template type exits 1, naming the type in red on stderr and printing nothing on stdout; recorded, because a test run is no colour terminal."""
+        monkeypatch.setattr(error_console, "record", True)
 
         result = runner.invoke(app, ["config", "template", "invalid"])
-        recorded = console.export_text(styles=True)
+        recorded = error_console.export_text(styles=True)
 
         assert result.exit_code == 1
-        assert "Unknown template type" in result.stdout
+        assert result.stdout == ""
         assert Style.parse("red").render("Unknown template type: invalid") in recorded
 
     def test_an_unknown_template_type_is_reported_verbatim(self) -> None:
-        """A type Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, is reported as the user typed it."""
+        """A type Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, is reported on stderr as the user typed it."""
         result = runner.invoke(app, ["config", "template", _TEXT_RICH_WOULD_PARSE], catch_exceptions=False)
 
         assert result.exit_code == 1
-        assert " ".join(result.stdout.split()) == (
+        assert " ".join(result.stderr.split()) == (
             f"Unknown template type: {_TEXT_RICH_WOULD_PARSE} Available: home, fleet, scenario"
         )
 
