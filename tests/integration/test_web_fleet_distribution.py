@@ -87,8 +87,8 @@ _DIST_PAYLOAD = {
     # Exercises the parse + dataclasses.replace path through the real pipeline
     # without erroring.  Effect verification (every HomeConfig carries the
     # TariffConfig / SEGTariff, battery-gated dispatch) lives in the unit tests
-    # in tests/unit/test_web_api.py::TestApplyFleetOverlay and
-    # TestFleetFromDistribution.
+    # tests/unit/test_web_fleet_config.py::TestApplyFleetOverlay and
+    # tests/unit/web_api/test_fleet_distribution.py::TestFleetFromDistribution.
     "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
     "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]},
     "seg": {"rate_pence_per_kwh": 5.0},
