@@ -6,7 +6,7 @@ from typing import Any, NamedTuple
 
 import pytest
 import yaml
-from playwright.sync_api import Locator, Page, Response, expect
+from playwright.sync_api import FloatRect, Locator, Page, Response, ViewportSize, expect
 
 from solar_challenge.config import load_fleet_config
 from solar_challenge.home import HomeConfig
@@ -276,11 +276,15 @@ def test_a_card_at_fixed_value_shows_one_spinbutton_named_fixed_value_that_sets_
     assert _form_sent_on_validate(page)[card.fixed_field] == value
 
 
-def _rendered_width(control: Locator) -> float:
-    """The width in pixels that *control* is laid out at."""
+def _layout_box(control: Locator) -> FloatRect:
+    """The box *control* is laid out in."""
     box = control.bounding_box()
     assert box is not None, "the control has no layout box"
-    return box["width"]
+    return box
+
+
+_PHONE_VIEWPORT: ViewportSize = {"width": 375, "height": 800}
+"""The viewport of a phone."""
 
 
 def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_type_combobox(
@@ -291,18 +295,18 @@ def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_t
     The rows Weighted Discrete shows are wider than the card, and a fieldset is as wide as
     its content unless it resets that, which would widen the combobox beyond the card's edge.
     """
-    page.set_viewport_size({"width": 375, "height": 800})
+    page.set_viewport_size(_PHONE_VIEWPORT)
     page.goto(live_server + "/scenarios/builder")
     _open_section(page, "Fleet Distribution")
     card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
     distribution_type = card_group.get_by_role("combobox", name="Distribution Type", exact=True)
     expect(distribution_type).to_be_visible()
-    width_before = _rendered_width(distribution_type)
+    width_before = _layout_box(distribution_type)["width"]
 
     distribution_type.select_option(label="Weighted Discrete")
     expect(card_group.get_by_role("button", name="+ Add value", exact=True)).to_be_visible()
 
-    assert _rendered_width(distribution_type) == pytest.approx(width_before, abs=0.5)
+    assert _layout_box(distribution_type)["width"] == pytest.approx(width_before, abs=0.5)
 
 
 # ── Distribution cards: the fields and rows each card sends ──────────
@@ -431,6 +435,37 @@ def test_a_cards_last_row_has_no_remove_button(page: Page, live_server: str, row
     assert {card.prefix: sent_after[f"{card.prefix}_{row_list.rows_field}"] for card in _CARDS} == {
         prefix: rows[-1:] for prefix, rows in rows_before.items()
     }
+
+
+def _controls_outside(card_group: Locator) -> list[str]:
+    """The comboboxes, spinbuttons and buttons *card_group* shows whose box leaves the group's by more than half a pixel, each as its role, its number among those of its role, and its left and right edges."""
+    group = _layout_box(card_group)
+    left, right = group["x"], group["x"] + group["width"]
+    outside = []
+    for role in ("combobox", "spinbutton", "button"):
+        for number, control in enumerate(card_group.get_by_role(role).all(), start=1):
+            box = _layout_box(control)
+            if box["x"] < left - 0.5 or box["x"] + box["width"] > right + 0.5:
+                outside.append(f"{role} {number} spans x={box['x']:.1f} to {box['x'] + box['width']:.1f}")
+    return outside
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+def test_on_a_phone_every_control_a_card_shows_with_its_rows_lies_within_the_card(
+    page: Page, live_server: str, row_list: _RowList
+) -> None:
+    """At 375 px wide, with every card showing its rows, each combobox, spinbutton and button a card's group shows lies within the group's box, to within half a pixel."""
+    page.set_viewport_size(_PHONE_VIEWPORT)
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+
+    outside = {}
+    for card in _CARDS:
+        card_group = page.get_by_role("group", name=card.heading, exact=True)
+        expect(card_group.get_by_role("button", name=row_list.add_button, exact=True)).to_be_visible()
+        outside[card.heading] = _controls_outside(card_group)
+
+    assert outside == {card.heading: [] for card in _CARDS}
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────
