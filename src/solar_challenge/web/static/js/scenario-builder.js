@@ -180,6 +180,24 @@ document.addEventListener('alpine:init', () => {
             this.updatePreview();
         },
 
+        // Appends `row` to `rows`, one of the form's lists of distribution rows
+        addRow(rows, row) {
+            rows.push(row);
+            this.updatePreview();
+        },
+
+        // Whether `rows` has a row to spare: a distribution keeps at least one
+        canRemoveRow(rows) {
+            return rows.length > 1;
+        },
+
+        // Removes row `idx` of `rows`, unless it is the last
+        removeRow(rows, idx) {
+            if (!this.canRemoveRow(rows)) return;
+            rows.splice(idx, 1);
+            this.updatePreview();
+        },
+
         // Debounced YAML preview update
         updatePreview() {
             clearTimeout(this.debounceTimer);
