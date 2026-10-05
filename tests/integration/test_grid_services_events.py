@@ -422,8 +422,7 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
     GREEN on arrival: the single conditional in step-2/step-6 preserves the flat path
     char-for-char and ignores grid_services_events when model is "flat".
     """
-    from solar_challenge.config import FinanceConfig  # type: ignore[attr-defined]
-    from solar_challenge.finance import project_multi_year
+    from solar_challenge.finance import FinanceConfig, project_multi_year
     from solar_challenge.gridservices import GridServicesEventsConfig
 
     scenario, finance_base = _board_econ_scenario()
@@ -584,8 +583,7 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
     GREEN after step-2 adds the Optional[GridServicesAtEvents] param and renders
     the line inside the existing flex-value block.
     """
-    from solar_challenge.config import FinanceConfig
-    from solar_challenge.finance import bill_distribution
+    from solar_challenge.finance import FinanceConfig, bill_distribution
     from solar_challenge.flex import resolve_flex_band
     from solar_challenge.gridservices import (
         GridServicesEventsConfig,

@@ -99,7 +99,7 @@ def _make_finance(
     asset_life_years: int = 25,
 ) -> "FinanceConfig":  # type: ignore[name-defined]
     """Build a FinanceConfig for economics tests."""
-    from solar_challenge.config import FinanceConfig
+    from solar_challenge.finance import FinanceConfig
     return FinanceConfig(
         standing_charge_pence_per_day=60.0,
         pv_cost_per_kwp_gbp=pv_cost_per_kwp_gbp,

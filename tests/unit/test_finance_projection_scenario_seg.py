@@ -166,7 +166,8 @@ class TestProjectHonoursScenarioLevelSeg:
         - baseline_none: homes have seg_tariff=None, scenario rate=None
         - finance: shared FinanceConfig with default grant/loan params
         """
-        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+        from solar_challenge.finance import FinanceConfig
         from solar_challenge.seg import SEGTariff
 
         homes_no_seg = [make_home_config() for _ in range(self._N_HOMES)]
@@ -316,8 +317,8 @@ class TestProjectHonoursScenarioLevelSeg:
         """project_multi_year raises ValueError when per-home seg_tariff != scenario rate."""
         import re
 
-        from solar_challenge.config import FinanceConfig, ScenarioConfig, SimulationPeriod
-        from solar_challenge.finance import project_multi_year  # type: ignore[attr-defined]
+        from solar_challenge.config import ScenarioConfig, SimulationPeriod
+        from solar_challenge.finance import FinanceConfig, project_multi_year
         from solar_challenge.seg import SEGTariff
 
         homes_inconsistent = [

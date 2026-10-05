@@ -118,7 +118,7 @@ def _make_finance(
     grid_services_income: float = 0.0,
     asset_life_years: int = 25,
 ) -> "FinanceConfig":  # type: ignore[name-defined]
-    from solar_challenge.config import FinanceConfig
+    from solar_challenge.finance import FinanceConfig
 
     return FinanceConfig(
         standing_charge_pence_per_day=28.0,
