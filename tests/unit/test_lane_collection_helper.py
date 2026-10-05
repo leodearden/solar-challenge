@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_lane_collection.py, the lane contract tests' collect-only probes.
 
-There is one of an offline-lane job, and one of a default collection of tests/.
-Each runs a throwaway project's lane job or tests/ through this interpreter's
-pytest, with no uv and no mocks.
+There is one of an offline-lane job, one of a default collection of tests/, and
+one of a suite under a mark expression. Each runs a throwaway project's lane
+job, tests/ or suite through this interpreter's pytest, with no uv and no mocks.
 """
 
 import os
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests._lane_collection import collect_lane_job, default_collection_node_ids_under
+from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
 
@@ -244,3 +244,40 @@ def test_a_suite_that_is_not_a_directory_directly_under_tests_is_refused_naming_
         default_collection_node_ids_under(project_root, suite)
 
     assert repr(suite) in str(failure.value)
+
+
+def test_a_mark_selection_returns_only_the_suites_node_ids_its_expression_matches(tmp_path: Path) -> None:
+    """The test beside the suite is never collected: only the suite's path is given."""
+    project_root = _project_with_a_suite(tmp_path, ini="[pytest]\nmarkers =\n    slow: selected by its mark\n")
+    (project_root / _SUITE / "test_slow.py").write_text(
+        "import pytest\n\n\n@pytest.mark.slow\ndef test_case():\n    pass\n", encoding="utf-8"
+    )
+
+    assert suite_node_ids_matching(project_root, _SUITE, "slow") == (f"{_SUITE}/test_slow.py::test_case",)
+    assert suite_node_ids_matching(project_root, _SUITE, "not slow") == (_SUITE_NODE_ID,)
+
+
+def test_a_mark_selection_matching_none_of_the_suites_tests_returns_no_node_ids(tmp_path: Path) -> None:
+    """pytest exits NO_TESTS_COLLECTED, as for `-m 'not slow'` on a lane suite whose every test is slow."""
+    project_root = _project_with_a_suite(tmp_path)
+
+    assert suite_node_ids_matching(project_root, _SUITE, "slow") == ()
+
+
+def test_a_mark_selection_reaches_a_suite_the_tests_conftest_collect_ignore_names(tmp_path: Path) -> None:
+    """Its explicit path overrides collect_ignore, as an offline-lane job's command does."""
+    project_root = _project_with_a_suite(tmp_path, conftest='collect_ignore = ["suite"]\n')
+
+    assert suite_node_ids_matching(project_root, _SUITE, "not slow") == (_SUITE_NODE_ID,)
+
+
+def test_a_mark_selection_that_fails_to_collect_fails_describing_its_error(tmp_path: Path) -> None:
+    project_root = _project_with_a_suite(tmp_path)
+    (project_root / _SUITE / "test_broken.py").write_text(
+        f"raise ImportError({_IMPORT_ERROR_MESSAGE!r})\n", encoding="utf-8"
+    )
+
+    with pytest.raises(AssertionError) as failure:
+        suite_node_ids_matching(project_root, _SUITE, "not slow")
+
+    assert _IMPORT_ERROR_MESSAGE in str(failure.value)

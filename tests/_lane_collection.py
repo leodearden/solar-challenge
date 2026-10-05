@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-r"""Collect-only probes for the lane contract tests: of an offline-lane job, run as the lane runs it, and of a default collection of tests/.
+r"""Collect-only probes for the lane contract tests.
+
+They collect an offline-lane job as the lane runs it, a default collection of
+tests/, and a suite by its explicit path under a mark expression.
 
 Usage::
 
-    from tests._lane_collection import collect_lane_job, default_collection_node_ids_under
+    from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
 
     collection = collect_lane_job(project_root, "e2e", env=uv_probe_environment)
     assert collection.node_ids, f"{collection.command!r} collected no tests\n{collection.outcome}"
@@ -11,6 +14,9 @@ Usage::
 
     reached = default_collection_node_ids_under(project_root, "tests/interpreter_matrix")
     assert not reached, f"a default collection reached the interpreter matrix: {reached}"
+
+    fast = suite_node_ids_matching(project_root, "tests/css_build", "not slow")
+    assert not fast, f"css_build tests not marked slow: {fast}"
 """
 
 import shlex
@@ -80,3 +86,19 @@ def default_collection_node_ids_under(project_root: Path, suite: str) -> tuple[s
         f"collecting tests/ failed\n{describe_outcome(result)}"
     )
     return tuple(node_id for node_id in collected_node_ids(result.stdout) if _lies_under(node_id, suite))
+
+
+def suite_node_ids_matching(project_root: Path, suite: str, mark_expression: str) -> tuple[str, ...]:
+    """Return the node ids `-m` *mark_expression* selects when *suite* is collected by its explicit path, in order.
+
+    *suite* is relative to *project_root*, e.g. "tests/css_build". Its explicit
+    path overrides tests/conftest.py's collect_ignore, as an offline-lane job's
+    command does. It asserts that the collection ran; an expression that selects
+    none of the suite's tests is no failure.
+    """
+    command = shlex.join([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", suite])
+    result = run_collect_only(command, project_root, "-m", mark_expression)
+    assert result.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
+        f"collecting {suite} under `-m {mark_expression!r}` failed\n{describe_outcome(result)}"
+    )
+    return tuple(collected_node_ids(result.stdout))

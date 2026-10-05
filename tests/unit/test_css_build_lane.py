@@ -8,14 +8,12 @@ merge instead, so a stylesheet committed without a rebuild files a fix task
 rather than going unseen.
 """
 
-import shlex
-import sys
 from pathlib import Path
 
 import pytest
 
-from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
-from tests._lane_collection import collect_lane_job, default_collection_node_ids_under
+from tests._collect_only import requires_uv
+from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
 from tests._orchestrator_config import lane_job_enabled, sole_offline_lane_job
 
 _CSS_BUILD_JOB = "css-build"
@@ -70,16 +68,12 @@ def test_css_build_tests_are_slow_so_npm_reaches_the_registry_outside_the_offlin
     """Every css_build test is marked slow, since its npm ci installs Tailwind from registry.npmjs.org.
 
     test_css_build_job_collects_the_css_build_suite_and_nothing_else pins that
-    the suite has tests. The explicit path overrides tests/conftest.py's
-    collect_ignore, as the lane's command does.
+    the suite has tests.
     """
-    command = shlex.join([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", _CSS_BUILD_SUITE])
+    fast_tests = suite_node_ids_matching(project_root, _CSS_BUILD_SUITE, "not slow")
 
-    not_marked_slow = run_collect_only(command, project_root, "-m", "not slow")
-
-    fast_tests = collected_node_ids(not_marked_slow.stdout)
-    assert not_marked_slow.returncode == pytest.ExitCode.NO_TESTS_COLLECTED and not fast_tests, (
+    assert not fast_tests, (
         f"`-m 'not slow'` collected the css_build tests {fast_tests}; a css_build test not marked slow runs "
         "under tests/conftest.py's offline guard, whose proxy refuses npm's requests to registry.npmjs.org, "
-        f"so the lane would go red after every merge\n{describe_outcome(not_marked_slow)}"
+        "so the lane would go red after every merge"
     )
