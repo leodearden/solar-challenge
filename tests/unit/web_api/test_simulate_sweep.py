@@ -243,7 +243,7 @@ class TestSweepParameters:
         recording_job_manager: _RecordingJobManager,
         parameter: str,
         values: list[float],
-        swept_value_of: Callable[[object], float],
+        swept_value_of: Callable[[HomeConfig], float],
     ) -> None:
         """Each sweep point submits one home whose swept field holds that point's value."""
         response = client.post(
