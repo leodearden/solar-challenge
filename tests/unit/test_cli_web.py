@@ -145,6 +145,8 @@ def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_pa
         _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
 
     status = (tmp_path / "stderr.log").read_text().splitlines()
-    start = status.index(f"Starting web dashboard at http://127.0.0.1:{port}")
+    status_line = f"Starting web dashboard at http://127.0.0.1:{port}"
+    assert status_line in status
+    start = status.index(status_line)
     assert status[start + 1 : start + 2] == ["  Press Ctrl+C to stop the server."]
     assert "Press Ctrl+C to stop the server." not in (tmp_path / "stdout.log").read_text()
