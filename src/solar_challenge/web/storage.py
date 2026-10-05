@@ -633,11 +633,7 @@ class RunStorage:
 
         # Delete from database first
         with get_db(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM runs WHERE id = ?", (run_id,))
-            if cursor.rowcount == 0:
-                # Run not in database, but may have files
-                pass
+            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
         # Delete run directory and all files
         if run_dir.exists():
