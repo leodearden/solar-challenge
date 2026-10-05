@@ -303,7 +303,7 @@ class TestHomeRunRoundTrip:
             summary=sample_summary,
         )
 
-        run_dir = storage._get_run_dir(run_id)
+        run_dir = storage.data_dir / "runs" / run_id
         assert run_dir.exists()
         assert (run_dir / "config.json").exists()
         assert (run_dir / "summary.json").exists()
@@ -482,7 +482,7 @@ class TestFleetRunRoundTrip:
             per_home_summaries=per_home_summaries,
         )
 
-        run_dir = storage._get_run_dir(run_id)
+        run_dir = storage.data_dir / "runs" / run_id
         homes_dir = run_dir / "homes"
         assert homes_dir.exists()
         assert (homes_dir / "home_0.parquet").exists()
@@ -693,7 +693,7 @@ class TestDeleteRun:
             summary=sample_summary,
         )
 
-        run_dir = storage._get_run_dir(run_id)
+        run_dir = storage.data_dir / "runs" / run_id
         assert run_dir.exists()
 
         # Delete it
@@ -714,7 +714,7 @@ class TestDeleteRun:
             per_home_summaries=per_home_summaries,
         )
 
-        run_dir = storage._get_run_dir(run_id)
+        run_dir = storage.data_dir / "runs" / run_id
         homes_dir = run_dir / "homes"
         assert run_dir.exists()
         assert homes_dir.exists()

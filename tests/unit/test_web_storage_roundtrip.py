@@ -808,7 +808,7 @@ class TestCorruptedParquet:
         )
 
         # Overwrite the parquet file with garbage bytes
-        run_dir = storage._get_run_dir("corrupt-001")
+        run_dir = storage.data_dir / "runs" / "corrupt-001"
         parquet_path = run_dir / "data.parquet"
         parquet_path.write_bytes(b"THIS IS NOT A VALID PARQUET FILE")
 
@@ -834,7 +834,7 @@ class TestMissingRunDirectory:
         )
 
         # Delete the run directory
-        run_dir = storage._get_run_dir("missing-dir-001")
+        run_dir = storage.data_dir / "runs" / "missing-dir-001"
         shutil.rmtree(run_dir)
 
         # The DB record still exists, but the filesystem is gone
@@ -863,7 +863,7 @@ class TestDeleteRun:
         )
 
         # Verify it exists
-        run_dir = storage._get_run_dir("delete-me-001")
+        run_dir = storage.data_dir / "runs" / "delete-me-001"
         assert run_dir.exists()
         runs = storage.list_runs()
         assert len(runs) == 1
@@ -898,7 +898,7 @@ class TestDeleteRun:
             per_home_summaries=home_summaries,
         )
 
-        run_dir = storage._get_run_dir("delete-fleet-001")
+        run_dir = storage.data_dir / "runs" / "delete-fleet-001"
         assert run_dir.exists()
         assert (run_dir / "homes").exists()
 
