@@ -73,8 +73,7 @@
             </thead>
             <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
                 {% for run in runs %}
-                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer"
-                    onclick="window.location.href='{{ url_for('main.home_results', run_id=run.id) if run.type == 'home' else url_for('main.fleet_results', run_id=run.id) }}'">
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">
                         <a href="{{ url_for('main.home_results', run_id=run.id) if run.type == 'home' else url_for('main.fleet_results', run_id=run.id) }}"
                            class="text-amber-600 dark:text-amber-400 hover:underline">{{ run.name }}</a>
