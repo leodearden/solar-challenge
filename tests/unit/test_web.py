@@ -461,6 +461,15 @@ class TestHomeResultsRoute:
         response = client.get("/results/home/nonexistent-id")
         assert response.status_code in (302, 404)
 
+    def test_home_results_of_a_run_id_the_store_refuses_redirects_as_an_unknown_run(
+        self, client: FlaskClient
+    ) -> None:
+        """'bad.id' is outside [A-Za-z0-9_-], so no run can be saved under it: the page redirects to the dashboard, which flashes Run not found., as for an unknown run."""
+        response = client.get("/results/home/bad.id", follow_redirects=True)
+
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
+        assert "Run not found." in texts(response.get_data(as_text=True))
+
     def test_home_results_after_simulation(self, app: Flask, client: FlaskClient) -> None:
         """A saved run's results page renders its Overview charts and energy totals.
 
