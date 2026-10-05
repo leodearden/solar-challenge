@@ -172,7 +172,11 @@ class FleetResults:
         Returns:
             Sum of the series across all homes, named as each home's series is: its
             SimulationResults column, which to_aggregate_dataframe relies on
+
+        Raises:
+            ValueError: If the fleet no longer satisfies _require_paired_homes
         """
+        self._require_paired_homes()
         series_list = [getattr(r, series_name) for r in self.per_home_results]
         return sum(series_list[1:], series_list[0])
 
@@ -421,7 +425,12 @@ def calculate_fleet_summary(
 
     Returns:
         FleetSummary with totals and distribution statistics
+
+    Raises:
+        ValueError: If results no longer satisfies FleetResults._require_paired_homes
     """
+    results._require_paired_homes()
+
     # Calculate per-home summaries
     home_summaries: list[SummaryStatistics] = [
         calculate_summary(r, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
@@ -458,12 +467,10 @@ def calculate_fleet_summary(
             total_seg_revenue_gbp = sum(seg_revenues)
             per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
 
-    # Fleet financial aggregates (per-home fields are always-present floats).
-    # float() ensures the result is 0.0 (float), not 0 (int), when home_summaries is
-    # empty — Python's sum() of an empty generator returns int 0 by default.
-    total_import_cost = float(sum(s.total_import_cost_gbp for s in home_summaries))
-    total_export_revenue = float(sum(s.total_export_revenue_gbp for s in home_summaries))
-    total_net_cost = float(sum(s.net_cost_gbp for s in home_summaries))
+    # Fleet financial aggregates
+    total_import_cost = sum(s.total_import_cost_gbp for s in home_summaries)
+    total_export_revenue = sum(s.total_export_revenue_gbp for s in home_summaries)
+    total_net_cost = sum(s.net_cost_gbp for s in home_summaries)
 
     return FleetSummary(
         n_homes=len(results),
@@ -481,7 +488,7 @@ def calculate_fleet_summary(
         per_home_self_consumption_ratio_min=float(sc_series.min()),
         per_home_self_consumption_ratio_max=float(sc_series.max()),
         per_home_self_consumption_ratio_mean=float(sc_series.mean()),
-        simulation_days=home_summaries[0].simulation_days if home_summaries else 0,
+        simulation_days=home_summaries[0].simulation_days,
         total_seg_revenue_gbp=total_seg_revenue_gbp,
         per_home_seg_revenue_mean_gbp=per_home_seg_revenue_mean_gbp,
         total_net_cost_gbp=total_net_cost,
