@@ -37,6 +37,12 @@ from solar_challenge.web.fleet_config import (
 )
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
+from tests._fleet_form import (
+    FALSY_NON_NULL_VALUES,
+    FLEET_FORM_BLOCKS,
+    FLEET_FORM_COMPONENT_BLOCKS,
+    VALID_DISTRIBUTION_FORM,
+)
 from tests._html_page import (
     doctype,
     element_count,
@@ -588,29 +594,6 @@ class TestFleetConfigRoute:
             "(openGroup === 'simulate' || 'simulate-fleet'.startsWith('simulate')) && sidebarOpen"
         )
         assert element_count(page, "div", {"x-show": simulate_links_condition}) == 1
-
-
-VALID_DISTRIBUTION_FORM: dict = {
-    "n_homes": 2,
-    "seed": 1,
-    "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
-    "battery": {"capacity_kwh": {"type": "uniform", "min": 3.0, "max": 10.0}},
-    "load": {"annual_consumption_kwh": 3500.0},
-}
-
-#: The fleet form's component blocks: the pv, battery and load distributions.
-FLEET_FORM_COMPONENT_BLOCKS = ("pv", "battery", "load")
-
-#: Every block of the fleet form: its component blocks and the tariff, dispatch_strategy and seg overlays.
-FLEET_FORM_BLOCKS = (*FLEET_FORM_COMPONENT_BLOCKS, "tariff", "dispatch_strategy", "seg")
-
-#: Each falsy JSON value other than null, with the type name a "must be a mapping" refusal names.
-FALSY_NON_NULL_VALUES = [
-    pytest.param("", "str", id="empty-string"),
-    pytest.param(False, "bool", id="false"),
-    pytest.param(0, "int", id="zero"),
-    pytest.param([], "list", id="empty-array"),
-]
 
 
 class TestFleetConfigHelpers:
