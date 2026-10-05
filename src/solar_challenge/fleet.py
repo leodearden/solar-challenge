@@ -174,7 +174,8 @@ class FleetResults:
             SimulationResults column, which to_aggregate_dataframe relies on
 
         Raises:
-            ValueError: If the fleet no longer satisfies _require_paired_homes
+            ValueError: If the fleet has no homes, or home_configs does not hold one
+                HomeConfig per home's results
         """
         self._require_paired_homes()
         series_list = [getattr(r, series_name) for r in self.per_home_results]
@@ -427,7 +428,8 @@ def calculate_fleet_summary(
         FleetSummary with totals and distribution statistics
 
     Raises:
-        ValueError: If results no longer satisfies FleetResults._require_paired_homes
+        ValueError: If results has no homes, or its home_configs does not hold one
+            HomeConfig per home's results
     """
     results._require_paired_homes()
 
