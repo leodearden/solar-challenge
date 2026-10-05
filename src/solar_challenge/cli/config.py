@@ -12,6 +12,7 @@ from rich.text import Text
 
 from solar_challenge.cli.utils import (
     console,
+    error_console,
     handle_errors,
     print_success,
 )
@@ -230,7 +231,7 @@ def template(
 
     template_type_lower = template_type.lower()
     if template_type_lower not in templates:
-        console.print(
+        error_console.print(
             Text.assemble(
                 (f"Unknown template type: {template_type}", "red"),
                 "\n",
