@@ -52,8 +52,10 @@ A cache hit is returned as stored, never rescaled: a cache seeded with
 
 [`scripts/measure_tmy_irradiation.py`](../scripts/measure_tmy_irradiation.py) is the
 method: it prints every figure in §4. Its docstring gives the command. It needs network
-access to PVGIS, takes about two to three minutes, and is not part of the test suite. In
-outline:
+access to PVGIS and takes about two to three minutes.
+[`tests/unit/test_measurement_scripts.py`](../tests/unit/test_measurement_scripts.py)
+runs its `measure` offline on synthetic weather; the PVGIS fetches and the full run are
+not part of the test suite. In outline:
 
 - **Provenance.** Run on task 285's branch from main d8659e3 (2026-10-02), and again from
   main 89b9299 (2026-10-03) with identical output: CPython 3.12.3, pvlib 0.15.1, pandas
