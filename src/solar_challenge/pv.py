@@ -602,13 +602,12 @@ def create_model_chain_picking_from(
     location: "Location",
     candidates: Iterable[CecInverter],
 ) -> ModelChain:
-    """Create a pvlib ModelChain like create_model_chain, but voltage-match the CEC inverter from candidates instead of candidate_cec_inverters().
+    """Create a pvlib ModelChain for AC power simulation, with any CEC inverter voltage-matched from candidates.
 
     A candidate's numbers decide only whether and how it is picked: the system
     takes the picked inverter's own parameters from pvlib's CEC library by
     name, which is why a CecInverter must name a row there. Custom inverter
-    parameters and PVWatts modules ignore the candidates, as in
-    create_model_chain.
+    parameters and PVWatts modules ignore the candidates.
 
     Args:
         config: PV system configuration
@@ -619,10 +618,11 @@ def create_model_chain_picking_from(
         ModelChain ready to run simulations with weather data
 
     Raises:
-        ValueError: If no candidate's MPPT window admits the strings, or if
-            pvlib infers an inverter model that can not read its DC model's
-            output, e.g. custom Sandia inverter parameters with PVWatts module
-            parameters.
+        ValueError: If the module parameters have neither PVWatts parameters
+            nor a V_mp_ref and no custom inverter parameters are given, if no
+            candidate's MPPT window admits the strings, or if pvlib infers an
+            inverter model that can not read its DC model's output, e.g.
+            custom Sandia inverter parameters with PVWatts module parameters.
     """
     pv_system = _pv_system(config, candidates)
 
@@ -651,20 +651,7 @@ def create_model_chain(
     config: PVConfig,
     location: "Location",
 ) -> ModelChain:
-    """Create a pvlib ModelChain for AC power simulation.
-
-    Args:
-        config: PV system configuration
-        location: Geographic location for solar position calculations
-
-    Returns:
-        ModelChain ready to run simulations with weather data
-
-    Raises:
-        ValueError: If pvlib infers an inverter model that can not read its DC
-            model's output, e.g. custom Sandia inverter parameters with PVWatts
-            module parameters.
-    """
+    """Create a pvlib ModelChain for AC power simulation, with any CEC inverter picked from candidate_cec_inverters(); create_model_chain_picking_from documents the arguments, result and errors."""
     return create_model_chain_picking_from(config, location, candidate_cec_inverters())
 
 
