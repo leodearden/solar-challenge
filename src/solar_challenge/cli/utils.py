@@ -240,6 +240,11 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
     return table
 
 
+def set_status_quiet(quiet: bool) -> None:
+    """Silence status messages and progress on stderr while quiet is True, and print them again once it is False; products and errors print either way."""
+    status_console.quiet = quiet
+
+
 def create_progress() -> Progress:
     """Create a Rich progress bar for simulations, printed on stderr."""
     return Progress(
