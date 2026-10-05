@@ -74,13 +74,14 @@
 </div>
 {% endmacro %}
 
-{# One accordion section: its header button opens the panel, closing whichever section was open, and exposes that open state to assistive technology #}
+{# One accordion section: its header button opens the panel, closing whichever section was open, and exposes that open state and the panel it controls to assistive technology #}
 {# Every panel but the one scenarioBuilder's accordionOpen starts at is cloaked, so it stays out of view until Alpine starts #}
 {% macro accordion_section(key, title, cloaked=true, spacing_class='space-y-4') %}
 <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
     <button type="button"
         @click="accordionOpen = accordionOpen === '{{ key }}' ? '' : '{{ key }}'"
         :aria-expanded="accordionOpen === '{{ key }}'"
+        aria-controls="builder_section_{{ key }}"
         class="w-full flex items-center justify-between px-5 py-4 text-left font-semibold text-slate-800 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
     >
         <span>{{ title }}</span>
@@ -88,7 +89,7 @@
             <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
         </svg>
     </button>
-    <div x-show="accordionOpen === '{{ key }}'"{% if cloaked %} x-cloak{% endif %} x-collapse class="px-5 pb-5 {{ spacing_class }}">
+    <div id="builder_section_{{ key }}" x-show="accordionOpen === '{{ key }}'"{% if cloaked %} x-cloak{% endif %} x-collapse class="px-5 pb-5 {{ spacing_class }}">
         {{ caller() }}
     </div>
 </div>
