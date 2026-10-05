@@ -57,7 +57,7 @@ def mppt_window() -> ModuleType:
 @pytest.fixture(scope="module")
 def default_module() -> Mapping[str, Any]:
     """The default system's module parameters, the module measure_mppt_window.main measures with."""
-    return create_pv_system(PVConfig.default_4kw()).arrays[0].module_parameters
+    return dict(create_pv_system(PVConfig.default_4kw()).arrays[0].module_parameters)
 
 
 @pytest.fixture(scope="module")
@@ -184,7 +184,7 @@ def synthetic_tmy() -> pd.DataFrame:
     """
     utc_1990 = pd.date_range("1990-01-01", periods=8760, freq="h", tz="UTC")
     return synthetic_june_weather(
-        "1990-01-01", irradiance_scale_per_day=np.linspace(0.2, 1.0, 365)
+        "1990-01-01", irradiance_scale_per_day=np.linspace(0.2, 1.0, 365).tolist()
     ).set_axis(utc_1990)
 
 
@@ -271,13 +271,16 @@ class TestMeasureTmyIrradiation:
         )
 
     @_QUIET_DIODE_SOLVER
-    def test_a_measured_site_prints(
+    def test_a_measured_site_prints_its_name_and_factor(
         self, tmy_irradiation: ModuleType, site: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """Each prints the site's factor: print_site to five places, print_summary to the three of docs/tmy-irradiation-scaling.md §4's k column."""
         tmy_irradiation.print_site(site)
         site_lines = capsys.readouterr().out
         tmy_irradiation.print_summary([site])
         summary_lines = capsys.readouterr().out
 
         assert site.name in site_lines
+        assert f"factor k {site.factor:.5f}" in site_lines
         assert site.name in summary_lines
+        assert f"| {site.factor:.3f} |" in summary_lines
