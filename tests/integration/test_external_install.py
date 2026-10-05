@@ -50,6 +50,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from packaging.utils import canonicalize_name
 
 from tests._uv_env import isolated_uv_env
 
@@ -537,34 +538,58 @@ def _installed_distributions(environment: Path) -> dict[str, str]:
     return {entry["name"]: entry["version"] for entry in json.loads(result.stdout)}
 
 
-def _locked_versions(source: Path) -> dict[str, set[str]]:
-    """Return the versions that the uv.lock of the project at *source* pins for each package, keyed by its normalised name."""
-    lock = tomllib.loads((source / "uv.lock").read_text(encoding="utf-8"))
+def _locked_runtime_versions(source: Path, environment: Path) -> dict[str, set[str]]:
+    """Return the versions that the uv.lock in *source* pins for each runtime dependency of its project, on any
+    platform, keyed by its normalised name.
+
+    uv exports them as a PEP 751 lock without the project, extras or dependency groups. The export runs on
+    the virtual environment *environment* and leaves it as it is.
+    """
+    result = _run_uv_on(
+        environment,
+        ["export", "--locked", "--no-emit-project", "--no-default-groups", "--format", "pylock.toml"],
+        source,
+    )
+    assert result.returncode == 0, f"uv export failed (returncode={result.returncode}):\n{result.stderr}"
     versions: dict[str, set[str]] = {}
-    for package in lock["package"]:
+    for package in tomllib.loads(result.stdout)["packages"]:
         if "version" in package:
             versions.setdefault(package["name"], set()).add(package["version"])
     return versions
 
 
+def _wheel_distribution(built_wheel: Path) -> tuple[str, str]:
+    """Return the normalised name and the version of the distribution *built_wheel* installs."""
+    with zipfile.ZipFile(built_wheel) as wheel:
+        metadata = _wheel_metadata(wheel)
+    return canonicalize_name(metadata["Name"]), metadata["Version"]
+
+
 @pytest.mark.build
-def test_the_isolated_install_holds_only_versions_uv_lock_pins(consumer_environment: Path, wheel_source: Path) -> None:
-    """H1 tests the wheel against the versions uv.lock pins, which the whole suite runs against.
+def test_the_isolated_install_holds_only_the_wheel_and_the_runtime_dependencies_uv_lock_pins(
+    consumer_environment: Path, wheel_source: Path, built_wheel: Path
+) -> None:
+    """H1 tests the wheel against what uv.lock pins for its runtime dependencies, which the whole suite runs against.
 
     Offline, a resolution of the wheel's declared ranges takes whichever newer versions earlier online
     runs left in uv's cache. What H1 tested would then vary with the cache's history, and a cache without
-    those versions fails it.
+    those versions fails it. And the probe catches an undeclared import only as a ModuleNotFoundError,
+    which a package installed by an extra would prevent.
     """
-    locked = _locked_versions(wheel_source)
-    unlocked = {
-        name: version
-        for name, version in _installed_distributions(consumer_environment).items()
-        if version not in locked.get(name, set())
-    }
+    project, project_version = _wheel_distribution(built_wheel)
+    installed = _installed_distributions(consumer_environment)
+    assert project in installed, (
+        f"consumer_environment does not list the built wheel's {project}, so this test would pass vacuously. "
+        f"It lists: {installed}"
+    )
 
-    assert unlocked == {}, (
-        f"consumer_environment holds these distributions at versions uv.lock does not pin: {unlocked}. "
-        "H1 must install uv.lock's runtime dependencies, not resolve the wheel's declared ranges."
+    pinned = {**_locked_runtime_versions(wheel_source, consumer_environment), project: {project_version}}
+    unpinned = {name: version for name, version in installed.items() if version not in pinned.get(name, set())}
+
+    assert unpinned == {}, (
+        f"consumer_environment holds these distributions, each neither the built wheel nor a runtime dependency "
+        f"at a version uv.lock pins: {unpinned}. H1 must install uv.lock's runtime dependencies alone: no extras, "
+        "and no resolution of the wheel's declared ranges."
     )
 
 
