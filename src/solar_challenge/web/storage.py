@@ -619,13 +619,15 @@ class RunStorage:
     def delete_run(self, run_id: str) -> None:
         """Delete a simulation run from storage.
 
-        Removes the database row and all associated files.
+        Removes the database row and all associated files, whichever exist: a delete
+        of an id that has neither changes nothing.
 
         Args:
             run_id: Unique run identifier
 
         Raises:
-            FileNotFoundError: If run directory doesn't exist
+            ValueError: If the store refuses run_id. No run can be saved under a refused
+                id, so a delete under one is a caller bug.
         """
         run_dir = self._get_run_dir(run_id)
 
