@@ -3,11 +3,11 @@
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import BatteryConfig, require_valid_power_limit
 from solar_challenge.config import (
     ConfigurationError,
     parse_dispatch_strategy_config,
@@ -110,6 +110,50 @@ def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
+def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float | None:
+    """Read a home body's maximum ``direction`` power: null is unset; any other value must be one a battery accepts."""
+    if value is None:
+        return None
+    kw = float(value)
+    require_valid_power_limit(kw, direction)
+    return kw
+
+
+def _read_efficiency(value: Any) -> float | None:
+    """Read a home body's round-trip efficiency percentage as the fraction BatteryConfig takes.
+
+    Null is unset; a percentage outside (0, 100] is refused in the units sent.
+    """
+    if value is None:
+        return None
+    efficiency_pct = float(value)
+    if not (0 < efficiency_pct <= 100):
+        raise ValueError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
+    return efficiency_pct / 100
+
+
+def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryConfig | None:
+    """Read the battery a home body describes: none unless ``capacity_kwh`` is positive.
+
+    Each setting is read whatever ``capacity_kwh`` is, so a value a battery refuses is
+    refused without one too; a null setting is unset, leaving BatteryConfig's default.
+    """
+    settings: dict[str, Any] = {}
+    if (max_charge_kw := _read_power_limit(params["max_charge_kw"], "charge")) is not None:
+        settings["max_charge_kw"] = max_charge_kw
+    if (max_discharge_kw := _read_power_limit(params["max_discharge_kw"], "discharge")) is not None:
+        settings["max_discharge_kw"] = max_discharge_kw
+    if (efficiency := _read_efficiency(params["efficiency_pct"])) is not None:
+        settings["efficiency"] = efficiency
+    try:
+        settings["dispatch_strategy"] = parse_dispatch_strategy_config(params["dispatch_strategy"])
+    except ConfigurationError as exc:
+        raise ValueError(str(exc)) from exc
+    if capacity_kwh > 0:
+        return BatteryConfig(capacity_kwh=capacity_kwh, **settings)
+    return None
+
+
 def _parse_heat_pump_block(data: object) -> HeatPumpConfig | None:
     """Read a request body's ``heat_pump`` value with the web form's keys, defaulting those it omits.
 
@@ -150,11 +194,13 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     Raises:
         ValueError: If *data* is not a JSON object (the error names the type
             received), if it has a top-level key outside the recognised set
-            (the error names each such key), if a nested block it reads
-            (heat_pump, seg and tariff always; dispatch_strategy only when
-            battery_kwh is positive) is neither null, which reads as absent,
-            nor a mapping (the error names the block and the type received),
-            or if required fields are missing or invalid.
+            (the error names each such key), if a nested block (heat_pump,
+            seg, tariff or dispatch_strategy) is neither null, which reads as
+            absent, nor a mapping (the error names the block and the type
+            received), or if required fields are missing or invalid. The
+            battery settings (max_charge_kw, max_discharge_kw, efficiency_pct
+            and dispatch_strategy) are read, and refused, whatever battery_kwh
+            is; a null setting reads as unset.
     """
     data = require_json_object(data, "Home config")
     _refuse_unrecognised_keys(data)
@@ -169,9 +215,6 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     system_age_years = float(params["system_age_years"])
     degradation_rate_per_year = float(params["degradation_rate_per_year"])
     battery_kwh_val = float(params["battery_kwh"])
-    max_charge_kw_raw = params["max_charge_kw"]
-    max_discharge_kw_raw = params["max_discharge_kw"]
-    efficiency_pct_raw = params["efficiency_pct"]
     consumption_kwh_raw = params["consumption_kwh"]
     occupants = int(params["occupants"])
     stochastic = bool(params["stochastic"])
@@ -199,25 +242,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         degradation_rate_per_year=degradation_rate_per_year,
     )
 
-    battery_config: BatteryConfig | None = None
-    if battery_kwh_val > 0:
-        battery_kwargs: dict[str, Any] = {"capacity_kwh": battery_kwh_val}
-        if max_charge_kw_raw is not None:
-            battery_kwargs["max_charge_kw"] = float(max_charge_kw_raw)
-        if max_discharge_kw_raw is not None:
-            battery_kwargs["max_discharge_kw"] = float(max_discharge_kw_raw)
-        if efficiency_pct_raw is not None:
-            efficiency_pct = float(efficiency_pct_raw)
-            if not (0 < efficiency_pct <= 100):
-                raise ValueError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
-            battery_kwargs["efficiency"] = efficiency_pct / 100
-        try:
-            battery_kwargs["dispatch_strategy"] = parse_dispatch_strategy_config(
-                params["dispatch_strategy"]
-            )
-        except ConfigurationError as exc:
-            raise ValueError(str(exc)) from exc
-        battery_config = BatteryConfig(**battery_kwargs)
+    battery_config = _parse_battery(params, battery_kwh_val)
 
     annual_consumption: float | None = None
     if consumption_kwh_raw is not None:

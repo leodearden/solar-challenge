@@ -3,7 +3,7 @@
 
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 if TYPE_CHECKING:
     from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
@@ -35,6 +35,12 @@ def _validate_soc_and_efficiency(
         raise ValueError(f"Charge efficiency must be (0, 1], got {charge_eff}")
     if not 0 < discharge_eff <= 1:
         raise ValueError(f"Discharge efficiency must be (0, 1], got {discharge_eff}")
+
+
+def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge"]) -> None:
+    """Refuse a battery's maximum *direction* power *kw* unless it is positive and finite."""
+    if not 0 < kw < math.inf:
+        raise ValueError(f"Max {direction} power must be positive and finite, got {kw} kW")
 
 
 def compute_soh(
@@ -143,14 +149,8 @@ class BatteryConfig:
             raise ValueError(
                 f"Capacity must be positive and finite, got {self.capacity_kwh} kWh"
             )
-        if not 0 < self.max_charge_kw < math.inf:
-            raise ValueError(
-                f"Max charge power must be positive and finite, got {self.max_charge_kw} kW"
-            )
-        if not 0 < self.max_discharge_kw < math.inf:
-            raise ValueError(
-                f"Max discharge power must be positive and finite, got {self.max_discharge_kw} kW"
-            )
+        require_valid_power_limit(self.max_charge_kw, "charge")
+        require_valid_power_limit(self.max_discharge_kw, "discharge")
         if self.efficiency is not None:
             if not 0 < self.efficiency <= 1:
                 raise ValueError(
