@@ -219,6 +219,21 @@ class RunStorage:
         self._validate_run_id(run_id)
         return self.data_dir / "runs" / run_id
 
+    def _stored_run_dir(self, run_id: str) -> Path:
+        """The directory holding the files of the run stored under *run_id*.
+
+        Raises:
+            FileNotFoundError: No run is stored under *run_id*: the store refuses the id, so
+                no save can have written one (the refusal is the cause), or no directory holds it.
+        """
+        try:
+            run_dir = self._get_run_dir(run_id)
+        except ValueError as refusal:
+            raise FileNotFoundError(f"No run is stored under {run_id!r}: {refusal}") from refusal
+        if not run_dir.exists():
+            raise FileNotFoundError(f"Run directory not found: {run_dir}")
+        return run_dir
+
     def save_home_run(
         self,
         run_id: str,
@@ -326,12 +341,11 @@ class RunStorage:
             Tuple of (config, results, summary)
 
         Raises:
-            FileNotFoundError: If run directory or required files don't exist
-            ValueError: If run data is corrupted or incomplete
+            FileNotFoundError: If no run is stored under run_id (the store refuses the id,
+                or its directory is missing), or a required file is missing.
+            ValueError: If run data is corrupted or incomplete.
         """
-        run_dir = self._get_run_dir(run_id)
-        if not run_dir.exists():
-            raise FileNotFoundError(f"Run directory not found: {run_dir}")
+        run_dir = self._stored_run_dir(run_id)
 
         # Load config from JSON
         config_path = run_dir / "config.json"
