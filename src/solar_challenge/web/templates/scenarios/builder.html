@@ -9,6 +9,7 @@
 </div>
 {% endmacro %}
 
+{# _row_caption and _row_input read the Alpine loop variables item and idx, which only _row_list's x-for defines, so call them only inside it #}
 {% macro _row_caption(text) -%}{{ text }} <span class="sr-only" x-text="idx + 1"></span>{%- endmacro %}
 
 {% macro _row_input(caption, field, step, width_class) %}
