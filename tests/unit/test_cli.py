@@ -20,6 +20,7 @@ from typer.testing import CliRunner, Result
 
 import solar_challenge.cli.home as _cli_home_module
 import solar_challenge.home as _home_module
+from solar_challenge.cli.config import HOME_TEMPLATE
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
     console,
@@ -1331,3 +1332,71 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
         assert result.exit_code == 0
         assert result.stdout.startswith("## Cost-Recovery Rank\n")
         assert "Sweep complete: 1 feasible config(s), 0 infeasible config(s)." in " ".join(result.stderr.split())
+
+
+class TestQuietOption:
+    """Tests that --quiet silences a command's status messages and progress on stderr, and leaves its product and its errors."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_status_quiet(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CliRunner runs every invocation in this process, on the one status_console, so a --quiet invocation here must not silence a later test."""
+        monkeypatch.setattr(status_console, "quiet", status_console.quiet)
+
+    def test_quiet_config_template_writes_its_file_and_prints_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The template still goes to its file, but the status line that reports where is not printed, so neither stream carries anything."""
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(
+            app, ["--quiet", "config", "template", "home", "--output", "x.yaml"], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0
+        assert (result.stdout, result.stderr) == ("", "")
+        assert Path("x.yaml").read_text() == HOME_TEMPLATE
+
+    def test_quiet_leaves_an_error_on_stderr(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A command whose weather PVGIS cannot supply still exits 1 with its one error line, and that line is all stderr carries: the status line and spinner frame that would come first are not printed."""
+        monkeypatch.setattr(
+            "solar_challenge.weather.get_pvgis_tmy", Mock(side_effect=ConnectionError("PVGIS is unreachable"))
+        )
+
+        result = runner.invoke(
+            app,
+            ["--quiet", "home", "run", "--start", "2024-06-21", "--end", "2024-06-21"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert " ".join(result.stderr.split()) == (
+            "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
+        )
+
+    @pytest.mark.usefixtures("clear_june_in_tmp_path")
+    def test_quiet_leaves_the_product_on_stdout(self) -> None:
+        """The fleet results table still opens stdout, while the status line and the progress bar are not printed on stderr."""
+        _write_scenario("Bristol")
+
+        result = runner.invoke(
+            app,
+            ["--quiet", "fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert result.stdout.splitlines()[0].strip() == "Fleet Results: Bristol"
+        assert result.stderr == ""
+
+    def test_quiet_silences_only_its_own_invocation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An invocation without --quiet after one with it, in the same process, prints its status line again."""
+        monkeypatch.chdir(tmp_path)
+
+        quiet = runner.invoke(
+            app, ["--quiet", "config", "template", "home", "--output", "quiet.yaml"], catch_exceptions=False
+        )
+        loud = runner.invoke(app, ["config", "template", "home", "--output", "loud.yaml"], catch_exceptions=False)
+
+        assert quiet.stderr == ""
+        assert " ".join(loud.stderr.split()) == "Template written to loud.yaml"
