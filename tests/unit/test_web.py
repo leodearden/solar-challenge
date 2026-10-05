@@ -1211,6 +1211,23 @@ class TestFleetApiEndpoints:
         else:
             assert submissions == []
 
+    def test_simulate_fleet_from_distribution_answers_an_empty_battery_block_as_one_with_its_default_spelled_out(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """An empty battery block is a mapping its grammar reads, not an absent block: enabled by default, with no capacity distribution, it gets the 400 the block with enabled spelled out gets, and no fleet is queued."""
+        empty = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**VALID_DISTRIBUTION_FORM, "battery": {}},
+        )
+        enabled = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**VALID_DISTRIBUTION_FORM, "battery": {"enabled": True}},
+        )
+
+        assert empty.status_code == 400
+        assert (empty.status_code, empty.get_json()) == (enabled.status_code, enabled.get_json())
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Error page tests
