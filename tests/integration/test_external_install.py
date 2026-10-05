@@ -600,8 +600,13 @@ def test_the_isolated_install_holds_only_the_wheel_and_the_runtime_dependencies_
 
 
 @pytest.mark.build
+@pytest.mark.usefixtures("built_wheel")
 def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_source: Path, tmp_path: Path) -> None:
-    """uv build exits 2 offline and when refused alike; the offline guard tells them apart, failing this test if the build reached the network."""
+    """The build that built_wheel runs with uv's cache, failing unless it succeeds, fails with an empty cache.
+
+    So the empty cache alone accounts for the failure. uv build exits 2 offline and when refused alike; the
+    offline guard tells them apart, failing this test if the build reached the network.
+    """
     result = _build_wheel(wheel_source, tmp_path / "wheel", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
 
     assert result.returncode != 0, (
@@ -611,10 +616,16 @@ def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_sour
 
 
 @pytest.mark.build
+@pytest.mark.usefixtures("consumer_environment")
 def test_the_isolated_install_takes_uv_lock_s_wheels_only_from_uv_s_cache(
     wheel_source: Path, built_wheel: Path, tmp_path: Path
 ) -> None:
-    """With an empty cache, the locked sync fails offline; the offline guard, not uv's exit code, catches a fetch, failing this test if the install reached the network."""
+    """The install that consumer_environment runs with uv's cache, failing unless it succeeds, fails with an empty cache.
+
+    So the empty cache alone accounts for the failure: offline, the locked sync finds none of uv.lock's
+    wheels. The offline guard, not uv's exit code, catches a fetch, failing this test if the install
+    reached the network.
+    """
     result = _install_against_uv_lock(
         built_wheel, wheel_source, tmp_path / "venv", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache")
     )
