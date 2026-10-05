@@ -598,6 +598,20 @@ VALID_DISTRIBUTION_FORM: dict = {
     "load": {"annual_consumption_kwh": 3500.0},
 }
 
+#: The fleet form's component blocks: the pv, battery and load distributions.
+FLEET_FORM_COMPONENT_BLOCKS = ("pv", "battery", "load")
+
+#: Every block of the fleet form: its component blocks and the tariff, dispatch_strategy and seg overlays.
+FLEET_FORM_BLOCKS = (*FLEET_FORM_COMPONENT_BLOCKS, "tariff", "dispatch_strategy", "seg")
+
+#: Each falsy JSON value other than null, with the type name a "must be a mapping" refusal names.
+FALSY_NON_NULL_VALUES = [
+    pytest.param("", "str", id="empty-string"),
+    pytest.param(False, "bool", id="false"),
+    pytest.param(0, "int", id="zero"),
+    pytest.param([], "list", id="empty-array"),
+]
+
 
 class TestFleetConfigHelpers:
     """Tests for fleet_config.py helper functions."""
@@ -855,43 +869,33 @@ class TestFleetConfigHelpers:
         assert config["n_homes"] == MAX_FLEET_HOMES
 
     @pytest.mark.parametrize(
-        ("key", "value"),
+        ("value", "type_name"),
         [
-            pytest.param("pv", "x", id="pv-str"),
-            pytest.param("pv", [4.0], id="pv-list"),
-            pytest.param("battery", "x", id="battery-str"),
-            pytest.param("battery", True, id="battery-bool"),
-            pytest.param("load", "x", id="load-str"),
-            pytest.param("load", 3500, id="load-int"),
+            pytest.param("x", "str", id="str"),
+            pytest.param(True, "bool", id="true"),
+            pytest.param(3500, "int", id="int"),
+            pytest.param([4.0], "list", id="list"),
+            *FALSY_NON_NULL_VALUES,
         ],
     )
+    @pytest.mark.parametrize("key", FLEET_FORM_COMPONENT_BLOCKS)
     def test_form_to_fleet_distribution_config_refuses_a_non_mapping_component_block(
-        self, key: str, value: object
+        self, key: str, value: object, type_name: str
     ) -> None:
-        """A truthy pv/battery/load block that is not a mapping is refused, naming the block and the type sent."""
-        with pytest.raises(
-            ValueError, match=re.escape(f"{key} must be a mapping, got {type(value).__name__}")
-        ):
+        """A pv/battery/load block that is neither null nor a mapping, a falsy one included, is refused, naming the block and the type sent."""
+        with pytest.raises(ValueError, match=re.escape(f"{key} must be a mapping, got {type_name}")):
             form_to_fleet_distribution_config({**VALID_DISTRIBUTION_FORM, key: value})
 
     @pytest.mark.parametrize(
-        ("key", "value"),
-        [
-            pytest.param("pv", None, id="pv-null"),
-            pytest.param("pv", "", id="pv-empty-string"),
-            pytest.param("battery", None, id="battery-null"),
-            pytest.param("battery", False, id="battery-false"),
-            pytest.param("load", None, id="load-null"),
-            pytest.param("load", [], id="load-empty-list"),
-        ],
+        "key", [pytest.param(key, id=f"{key}-null") for key in FLEET_FORM_COMPONENT_BLOCKS]
     )
-    def test_form_to_fleet_distribution_config_reads_a_falsy_component_block_as_absent(
-        self, key: str, value: object
+    def test_form_to_fleet_distribution_config_reads_a_null_component_block_as_absent(
+        self, key: str
     ) -> None:
-        """A falsy pv/battery/load block converts exactly as if the block were left out."""
+        """A null pv/battery/load block converts exactly as if the block were left out."""
         without_block = {k: v for k, v in VALID_DISTRIBUTION_FORM.items() if k != key}
         assert form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, key: value}
+            {**VALID_DISTRIBUTION_FORM, key: None}
         ) == form_to_fleet_distribution_config(without_block)
 
     @pytest.mark.parametrize(
@@ -1162,6 +1166,50 @@ class TestFleetApiEndpoints:
             content_type="application/json",
         )
         assert response.status_code == 400
+
+    @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
+    @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
+    def test_simulate_fleet_from_distribution_refuses_a_falsy_block_other_than_null_naming_it(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        key: str,
+        value: object,
+        type_name: str,
+    ) -> None:
+        """Every block of the fleet form, the pv/battery/load distributions and the tariff/dispatch_strategy/seg overlays alike, refuses a falsy value other than null as a value that is not a mapping, naming the block and the type sent; no fleet is queued."""
+        response = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**VALID_DISTRIBUTION_FORM, key: value},
+        )
+
+        assert response.status_code == 400
+        assert response.get_json() == {"error": f"{key} must be a mapping, got {type_name}"}
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
+    def test_simulate_fleet_from_distribution_reads_a_null_block_as_absent(
+        self, client: FlaskClient, mock_job_manager: MagicMock, key: str
+    ) -> None:
+        """A null block, any of the six, gets the answer the form without it gets."""
+        without_block = {k: v for k, v in VALID_DISTRIBUTION_FORM.items() if k != key}
+
+        null_block = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**VALID_DISTRIBUTION_FORM, key: None},
+        )
+        absent_block = client.post("/api/simulate/fleet-from-distribution", json=without_block)
+
+        assert (null_block.status_code, null_block.get_json()) == (
+            absent_block.status_code,
+            absent_block.get_json(),
+        )
+        submissions = mock_job_manager.submit_fleet_job.call_args_list
+        if null_block.status_code == 201:
+            assert len(submissions) == 2
+            assert submissions[0] == submissions[1]
+        else:
+            assert submissions == []
 
 
 # ---------------------------------------------------------------------------
