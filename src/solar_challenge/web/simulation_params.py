@@ -115,16 +115,14 @@ def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
-def _read_power_limit(
-    value: Any, field: str, direction: Literal["charge", "discharge"]
-) -> float | None:
-    """Read a home body's maximum ``direction`` power, sent as *field*: null is unset.
+def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float | None:
+    """Read a home body's maximum ``direction`` power, its ``max_<direction>_kw``: null is unset.
 
-    Any other value must be a finite number, refused naming *field*, that a battery accepts.
+    Any other value must be a finite number, refused naming that field, that a battery accepts.
     """
     if value is None:
         return None
-    kw = as_finite_float(value, field)
+    kw = as_finite_float(value, f"max_{direction}_kw")
     require_valid_power_limit(kw, direction)
     return kw
 
@@ -150,9 +148,9 @@ def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryCon
     refused without one too; a null setting is unset, leaving BatteryConfig's default.
     """
     settings: dict[str, Any] = {}
-    if (max_charge_kw := _read_power_limit(params["max_charge_kw"], "max_charge_kw", "charge")) is not None:
+    if (max_charge_kw := _read_power_limit(params["max_charge_kw"], "charge")) is not None:
         settings["max_charge_kw"] = max_charge_kw
-    if (max_discharge_kw := _read_power_limit(params["max_discharge_kw"], "max_discharge_kw", "discharge")) is not None:
+    if (max_discharge_kw := _read_power_limit(params["max_discharge_kw"], "discharge")) is not None:
         settings["max_discharge_kw"] = max_discharge_kw
     if (efficiency := _read_efficiency(params["efficiency_pct"])) is not None:
         settings["efficiency"] = efficiency
