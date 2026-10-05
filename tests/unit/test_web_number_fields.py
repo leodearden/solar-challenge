@@ -3,7 +3,12 @@
 
 import pytest
 
-from solar_challenge.web.number_fields import as_finite_float, as_int, as_int_within
+from solar_challenge.web.number_fields import (
+    as_finite_float,
+    as_int,
+    as_int_within,
+    as_whole_number,
+)
 
 
 class TestAsFiniteFloat:
@@ -112,3 +117,48 @@ class TestAsIntWithin:
         with pytest.raises(ValueError) as exc_info:
             as_int_within(float("inf"), "n_homes", 1, 10)
         assert str(exc_info.value) == "n_homes must be an integer, got inf"
+
+
+class TestAsWholeNumber:
+    """as_whole_number reads a value as as_finite_float does, as the int it equals, and refuses one with a fractional part."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(7, 7, id="integer"),
+            pytest.param(7.0, 7, id="whole-float"),
+            pytest.param("7", 7, id="numeric-string"),
+            pytest.param("7.0", 7, id="whole-float-string"),
+            pytest.param(-3, -3, id="negative"),
+        ],
+    )
+    def test_a_whole_number_is_read_as_the_int_it_equals(
+        self, value: object, expected: int
+    ) -> None:
+        """A whole number, or a string float() reads as one, is returned as the int it equals, not as a float."""
+        number = as_whole_number(value, "n_homes")
+        assert number == expected
+        assert type(number) is int
+
+    @pytest.mark.parametrize(
+        "value", [pytest.param(2.5, id="float"), pytest.param("2.5", id="numeric-string")]
+    )
+    def test_a_number_with_a_fractional_part_is_refused_naming_the_field_and_the_value(
+        self, value: object
+    ) -> None:
+        """A number with a fractional part is refused, not truncated."""
+        with pytest.raises(ValueError) as exc_info:
+            as_whole_number(value, "n_homes")
+        assert str(exc_info.value) == f"n_homes must be a whole number, got {value!r}"
+
+    @pytest.mark.parametrize(
+        "value",
+        [pytest.param(float("inf"), id="infinity"), pytest.param("abc", id="non-numeric-string")],
+    )
+    def test_a_value_that_is_not_a_finite_number_gets_the_as_finite_float_refusal(
+        self, value: object
+    ) -> None:
+        """A value as_finite_float refuses is refused as it refuses it, before any whole-number check."""
+        with pytest.raises(ValueError) as exc_info:
+            as_whole_number(value, "n_homes")
+        assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
