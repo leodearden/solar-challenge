@@ -21,6 +21,7 @@ Manual run::
 
 import difflib
 import itertools
+import json
 import os
 import shlex
 import shutil
@@ -31,8 +32,19 @@ import pytest
 
 pytestmark = pytest.mark.slow
 
+# Module-scoped fixtures cannot request the function-scoped project_root fixture.
+_WEB_PACKAGE = Path(__file__).resolve().parents[2] / "src" / "solar_challenge" / "web"
+
 # Relative to the web package, in the checkout and in the scratch copy alike.
-_DIST_STYLESHEET = Path("static", "dist", "style.css")
+_DIST = Path("static", "dist")
+_DIST_STYLESHEET = _DIST / "style.css"
+_TAILWINDCSS_PACKAGE = Path("node_modules", "tailwindcss")
+
+# Each license text in static/dist, beside the stylesheet tailwindcss compiles, and the package file it copies verbatim.
+_TAILWINDCSS_LICENSE_COPIES: dict[str, Path] = {
+    "LICENSE-tailwindcss.txt": Path("LICENSE"),
+    "LICENSE-tailwindcss-preflight.txt": Path("src", "css", "LICENSE"),
+}
 
 # Only so a hung npm fails this test by name: both npm steps' timeouts together fit inside the css-build
 # lane job's `timeout` (dark-factory-orchestrator.yaml), whose kill would file css-build::nonzero-exit.
@@ -98,4 +110,26 @@ def test_dist_style_css_matches_a_fresh_build_of_its_sources(project_root: Path,
         "static/src/input.css, template or script change was committed without a rebuild. Rebuild "
         "with `cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
         f"static/dist/style.css. The rules that differ:\n{_rule_diff(committed.decode(), rebuilt.decode())}"
+    )
+
+
+@pytest.mark.parametrize("license_copy", list(_TAILWINDCSS_LICENSE_COPIES))
+def test_dist_license_text_matches_the_locked_tailwindcss_package(scratch_web_package: Path, license_copy: str) -> None:
+    """static/dist/<license_copy> is byte for byte the file it copies from the locked tailwindcss package."""
+    tailwindcss = scratch_web_package / _TAILWINDCSS_PACKAGE
+    version = json.loads((tailwindcss / "package.json").read_text(encoding="utf-8"))["version"]
+    licensed_file = _TAILWINDCSS_LICENSE_COPIES[license_copy]
+    upstream = tailwindcss / licensed_file
+    committed_copy = (_DIST / license_copy).as_posix()
+    installed_file = (_TAILWINDCSS_PACKAGE / licensed_file).as_posix()
+    assert upstream.is_file(), (
+        f"tailwindcss {version}, which package-lock.json locks, installs no {installed_file}, the file "
+        f"{committed_copy} copies: this version moved or dropped that license, so a plain copy cannot refresh "
+        "it. Find where this version keeps the license of the code it compiles into style.css, copy that file, "
+        "and update this module's _TAILWINDCSS_LICENSE_COPIES to name it."
+    )
+    assert (_WEB_PACKAGE / _DIST / license_copy).read_bytes() == upstream.read_bytes(), (
+        f"{committed_copy} is not byte for byte tailwindcss {version}'s {licensed_file.as_posix()}: a Tailwind "
+        "version change was committed without refreshing the license texts beside the stylesheet. Refresh it "
+        f"with `cd src/solar_challenge/web && npm ci && cp {installed_file} {committed_copy}` and commit the copy."
     )
