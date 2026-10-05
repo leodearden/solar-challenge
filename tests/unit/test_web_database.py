@@ -33,9 +33,11 @@ def db_path(temp_dir):
 
 @pytest.fixture
 def storage(db_path, temp_dir):
-    """Create a RunStorage instance for testing."""
+    """Create a RunStorage instance for testing, its run files in an empty directory beside its database."""
     init_db(db_path)
-    return RunStorage(db_path=db_path, data_dir=temp_dir)
+    data_dir = temp_dir / "data"
+    data_dir.mkdir()
+    return RunStorage(db_path=db_path, data_dir=data_dir)
 
 
 @pytest.fixture
@@ -826,33 +828,20 @@ class TestDatabasePragmas:
                 )
 
 
+REFUSED_RUN_IDS = [
+    pytest.param("../", id="parent-directory"),
+    pytest.param("../../etc", id="two-directories-up"),
+    pytest.param("/absolute/path", id="absolute-path"),
+    pytest.param("/etc/passwd", id="absolute-path-of-a-file"),
+    pytest.param("run\x00id", id="null-byte"),
+    pytest.param("", id="empty"),
+    pytest.param("run.id", id="dot"),
+    pytest.param("run id", id="space"),
+]
+
+
 class TestRunIdValidation:
-    """Tests for run_id validation to prevent path traversal attacks."""
-
-    def test_traversal_parent_directory(self, storage):
-        """Test that ../ in run_id raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("../")
-
-    def test_traversal_deep_parent(self, storage):
-        """Test that ../../etc in run_id raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("../../etc")
-
-    def test_absolute_path(self, storage):
-        """Test that absolute path in run_id raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("/absolute/path")
-
-    def test_null_byte(self, storage):
-        """Test that null byte in run_id raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("run\x00id")
-
-    def test_empty_string(self, storage):
-        """Test that empty string raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("")
+    """The run ids the store refuses and accepts, as its saves, loads and deletes see them."""
 
     def test_valid_id_with_hyphens(self, storage):
         """Test that valid run_id with hyphens passes validation."""
@@ -866,30 +855,53 @@ class TestRunIdValidation:
         """Test that simple alphanumeric run_id passes validation."""
         storage._validate_run_id("abc")  # Should not raise
 
-    def test_dot_in_run_id(self, storage):
-        """Test that dots in run_id raise ValueError."""
+    @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
+    def test_a_home_save_under_an_id_the_store_refuses_raises_value_error_and_writes_nothing(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary, run_id
+    ):
+        """A home save under an id the store refuses raises ValueError, and writes no file and no runs row."""
         with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("run.id")
+            storage.save_home_run(
+                run_id=run_id,
+                config=sample_home_config,
+                results=sample_simulation_results,
+                summary=sample_summary,
+            )
 
-    def test_space_in_run_id(self, storage):
-        """Test that spaces in run_id raise ValueError."""
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.list_runs() == []
+
+    @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
+    def test_a_fleet_save_under_an_id_the_store_refuses_raises_value_error_and_writes_nothing(
+        self, storage, sample_fleet_data, run_id
+    ):
+        """A fleet save under an id the store refuses raises ValueError, and writes no file and no runs row."""
+        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
+
         with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._validate_run_id("run id")
+            storage.save_fleet_run(
+                run_id=run_id,
+                fleet_results=fleet_results,
+                fleet_summary=fleet_summary,
+                per_home_summaries=per_home_summaries,
+            )
 
-    def test_get_run_dir_calls_validation(self, storage):
-        """Test that _get_run_dir calls _validate_run_id and rejects traversal."""
-        with pytest.raises(ValueError, match="Invalid run_id"):
-            storage._get_run_dir("../../etc")
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.list_runs() == []
 
+    @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
     @pytest.mark.parametrize(
         "load", [RunStorage.load_home_run, RunStorage.load_fleet_run], ids=["home", "fleet"]
     )
-    def test_a_load_of_an_id_the_store_refuses_raises_file_not_found_error(self, storage, load):
+    def test_a_load_of_an_id_the_store_refuses_raises_file_not_found_error(
+        self, storage, load, run_id
+    ):
         """A load of an id the store refuses raises FileNotFoundError, as a load of an id no run has does, and carries the refusal."""
         with pytest.raises(FileNotFoundError, match="Invalid run_id"):
-            load(storage, "bad.id")
+            load(storage, run_id)
 
-    def test_a_delete_of_an_id_the_store_refuses_raises_value_error(self, storage):
+    @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
+    def test_a_delete_of_an_id_the_store_refuses_raises_value_error(self, storage, run_id):
         """A delete of an id the store refuses raises ValueError: no run can be saved under the id, so the caller has a bug."""
         with pytest.raises(ValueError, match="Invalid run_id"):
-            storage.delete_run("bad.id")
+            storage.delete_run(run_id)
