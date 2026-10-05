@@ -6,12 +6,21 @@ from pathlib import Path
 
 import pytest
 pytest.importorskip("flask")
+import numpy as np
+import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import SimulationResults, calculate_summary
-from solar_challenge.web.charts import fleet_aggregate_timeline, fleet_grid_impact
+from solar_challenge.web.charts import (
+    financial_breakdown,
+    fleet_aggregate_timeline,
+    fleet_box_plots,
+    fleet_distribution_histograms,
+    fleet_grid_impact,
+    fleet_heatmap,
+)
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
 
@@ -60,8 +69,6 @@ class TestFleetChartFunctions:
 
     def test_fleet_heatmap_returns_json(self) -> None:
         """Test fleet_heatmap returns a valid non-empty JSON string."""
-        from solar_challenge.web.charts import fleet_heatmap
-
         summaries = [
             {
                 "total_generation_kwh": 100,
@@ -79,8 +86,6 @@ class TestFleetChartFunctions:
 
     def test_fleet_heatmap_limits_to_50_homes(self) -> None:
         """Test fleet_heatmap limits display to first 50 homes."""
-        from solar_challenge.web.charts import fleet_heatmap
-
         summaries = [
             {
                 "total_generation_kwh": 100 + i,
@@ -100,8 +105,6 @@ class TestFleetChartFunctions:
 
     def test_fleet_box_plots_returns_json(self) -> None:
         """Test fleet_box_plots returns a valid non-empty JSON string."""
-        from solar_challenge.web.charts import fleet_box_plots
-
         summaries = [
             {
                 "total_generation_kwh": 100 + i * 10,
@@ -121,8 +124,6 @@ class TestFleetChartFunctions:
 
     def test_fleet_distribution_histograms_returns_json(self) -> None:
         """Test fleet_distribution_histograms returns a valid non-empty JSON string."""
-        from solar_challenge.web.charts import fleet_distribution_histograms
-
         summaries = [
             {
                 "total_generation_kwh": 100 + i * 10,
@@ -182,11 +183,6 @@ class TestFinancialBreakdownPricing:
 
     def test_uses_engine_priced_series(self) -> None:
         """financial_breakdown must aggregate import_cost/export_revenue series directly."""
-        import numpy as np
-        import pandas as pd
-        from solar_challenge.home import SimulationResults
-        from solar_challenge.web.charts import financial_breakdown
-
         # ~2 days at 1-min resolution
         index = pd.date_range(
             "2024-06-01", periods=2 * 24 * 60, freq="min", tz="Europe/London"

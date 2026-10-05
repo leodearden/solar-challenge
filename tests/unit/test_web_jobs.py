@@ -20,8 +20,14 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache
-from solar_challenge.web.database import init_db
-from solar_challenge.web.jobs import HomeSimulator, JobManager, live_managers, shutdown_all_managers
+from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.jobs import (
+    HomeSimulator,
+    JobManager,
+    live_managers,
+    recover_stale_jobs,
+    shutdown_all_managers,
+)
 from solar_challenge.web.storage import RunStorage
 
 from tests._synthetic_weather import synthetic_june_weather
@@ -418,7 +424,6 @@ class TestJobManagerIntegration:
     def test_job_manager_exists_on_app(self, app: Flask) -> None:
         """Test that JobManager is registered as an app extension."""
         assert "job_manager" in app.extensions
-        from solar_challenge.web.jobs import JobManager
         assert isinstance(app.extensions["job_manager"], JobManager)
 
     def test_get_job_status_returns_none_for_unknown(self, app: Flask) -> None:
@@ -824,9 +829,6 @@ class TestRecoverStaleJobs:
 
     def test_recover_marks_running_jobs_as_failed(self, tmp_path: Path) -> None:
         """Test that running jobs are marked as failed on recovery."""
-        from solar_challenge.web.database import init_db, get_db
-        from solar_challenge.web.jobs import recover_stale_jobs
-
         db_path = str(tmp_path / "stale.db")
         init_db(db_path)
 
@@ -855,9 +857,6 @@ class TestRecoverStaleJobs:
 
     def test_recover_marks_queued_jobs_as_failed(self, tmp_path: Path) -> None:
         """Test that queued jobs are also recovered."""
-        from solar_challenge.web.database import init_db, get_db
-        from solar_challenge.web.jobs import recover_stale_jobs
-
         db_path = str(tmp_path / "stale2.db")
         init_db(db_path)
 
@@ -877,9 +876,6 @@ class TestRecoverStaleJobs:
 
     def test_recover_no_stale_jobs_returns_zero(self, tmp_path: Path) -> None:
         """Test that recovery returns 0 when no stale jobs exist."""
-        from solar_challenge.web.database import init_db
-        from solar_challenge.web.jobs import recover_stale_jobs
-
         db_path = str(tmp_path / "clean.db")
         init_db(db_path)
 

@@ -1,5 +1,6 @@
 """Tests for the Flask web dashboard module."""
 
+import json
 import re
 import uuid
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
+import numpy as np
 import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
@@ -15,8 +17,24 @@ from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+from solar_challenge.web.charts import (
+    _adaptive_downsample,
+    battery_soc_chart,
+    daily_energy_balance,
+    financial_breakdown,
+    heat_pump_analysis,
+    monthly_summary,
+    power_flow_timeline,
+    sankey_diagram,
+    seasonal_comparison,
+)
 from solar_challenge.web.database import get_db
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_config import (
+    MAX_FLEET_HOMES,
+    distribution_form_spec,
+    form_to_fleet_distribution_config,
+    sample_distribution,
+)
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
 from tests._html_page import (
@@ -296,8 +314,6 @@ def _make_sim_results(days: int = 3) -> SimulationResults:
     Returns:
         SimulationResults with simple but valid data.
     """
-    import numpy as np
-
     freq = "min"
     index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
 
@@ -355,89 +371,66 @@ class TestChartFunctions:
 
     def test_daily_energy_balance_returns_json(self) -> None:
         """Test daily_energy_balance returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import daily_energy_balance
-
         results = _make_sim_results(days=3)
         output = daily_energy_balance(results)
         assert isinstance(output, str)
         assert len(output) > 2  # more than just "{}"
-        parsed = _json.loads(output)
+        parsed = json.loads(output)
         assert "data" in parsed
 
     def test_sankey_returns_json(self) -> None:
         """Test sankey_diagram returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import sankey_diagram
-
         summary = _make_summary_dict()
         output = sankey_diagram(summary)
         assert isinstance(output, str)
         assert len(output) > 2
-        parsed = _json.loads(output)
+        parsed = json.loads(output)
         assert "data" in parsed
 
     def test_power_flow_timeline_returns_json(self) -> None:
         """Test power_flow_timeline returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import power_flow_timeline
-
         results = _make_sim_results(days=2)
         output = power_flow_timeline(results)
         assert isinstance(output, str)
-        parsed = _json.loads(output)
+        parsed = json.loads(output)
         assert "data" in parsed
 
     def test_battery_soc_chart_returns_json(self) -> None:
         """Test battery_soc_chart returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import battery_soc_chart
-
         results = _make_sim_results(days=2)
         output = battery_soc_chart(results, battery_capacity_kwh=10.0)
         assert isinstance(output, str)
-        parsed = _json.loads(output)
+        parsed = json.loads(output)
         assert "data" in parsed
 
     def test_financial_breakdown_returns_json(self) -> None:
         """Test financial_breakdown returns a non-empty JSON string."""
-        import json as _json
-        from solar_challenge.web.charts import financial_breakdown
-
         results = _make_sim_results(days=3)
         output = financial_breakdown(results)
         assert isinstance(output, str)
-        parsed = _json.loads(output)
+        parsed = json.loads(output)
         assert "data" in parsed
 
     def test_monthly_summary_returns_none_for_short_sim(self) -> None:
         """Test monthly_summary returns None when simulation < 90 days."""
-        from solar_challenge.web.charts import monthly_summary
-
         results = _make_sim_results(days=30)
         output = monthly_summary(results)
         assert output is None
 
     def test_seasonal_comparison_returns_none_for_short_sim(self) -> None:
         """Test seasonal_comparison returns None when simulation < 180 days."""
-        from solar_challenge.web.charts import seasonal_comparison
-
         results = _make_sim_results(days=60)
         output = seasonal_comparison(results)
         assert output is None
 
     def test_heat_pump_analysis_returns_none_without_hp(self) -> None:
         """Test heat_pump_analysis returns None when no heat pump data."""
-        from solar_challenge.web.charts import heat_pump_analysis
-
         results = _make_sim_results(days=2)
         output = heat_pump_analysis(results)
         assert output is None
 
     def test_adaptive_downsample_preserves_small_data(self) -> None:
         """Test _adaptive_downsample returns data unchanged when small."""
-        from solar_challenge.web.charts import _adaptive_downsample
-
         index = pd.date_range("2024-01-01", periods=100, freq="min")
         df = pd.DataFrame({"a": range(100)}, index=index)
         result = _adaptive_downsample(df, max_points=200)
@@ -445,8 +438,6 @@ class TestChartFunctions:
 
     def test_adaptive_downsample_reduces_large_data(self) -> None:
         """Test _adaptive_downsample reduces rows for large data."""
-        from solar_challenge.web.charts import _adaptive_downsample
-
         index = pd.date_range("2024-01-01", periods=10000, freq="min")
         df = pd.DataFrame({"a": range(10000)}, index=index)
         result = _adaptive_downsample(df, max_points=500)
@@ -613,8 +604,6 @@ class TestFleetConfigHelpers:
 
     def test_sample_distribution_normal(self) -> None:
         """Test normal distribution sampling produces correct count and bounds."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         samples = sample_distribution(
             "normal", {"mean": 4.0, "std": 1.0, "min": 1.0, "max": 8.0}
         )
@@ -623,8 +612,6 @@ class TestFleetConfigHelpers:
 
     def test_sample_distribution_normal_custom_count(self) -> None:
         """Test normal distribution with custom n_samples."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         samples = sample_distribution(
             "normal", {"mean": 4.0, "std": 1.0, "min": 1.0, "max": 8.0}, n_samples=50
         )
@@ -632,16 +619,12 @@ class TestFleetConfigHelpers:
 
     def test_sample_distribution_uniform(self) -> None:
         """Test uniform distribution sampling produces correct count and bounds."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         samples = sample_distribution("uniform", {"min": 2.0, "max": 6.0})
         assert len(samples) == 100
         assert all(2.0 <= s <= 6.0 for s in samples)
 
     def test_sample_distribution_weighted_discrete(self) -> None:
         """Test weighted discrete distribution sampling."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         samples = sample_distribution(
             "weighted_discrete",
             {"values": [{"value": 3.0, "weight": 50}, {"value": 5.0, "weight": 50}]},
@@ -651,8 +634,6 @@ class TestFleetConfigHelpers:
 
     def test_sample_distribution_shuffled_pool(self) -> None:
         """Test shuffled pool distribution sampling."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         samples = sample_distribution(
             "shuffled_pool",
             {"entries": [{"value": 3.0, "count": 30}, {"value": 5.0, "count": 70}]},
@@ -662,8 +643,6 @@ class TestFleetConfigHelpers:
 
     def test_sample_distribution_unknown_type_raises(self) -> None:
         """Test that unknown distribution type raises ValueError."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         with pytest.raises(ValueError, match="Unknown distribution type"):
             sample_distribution("bogus", {})
 
@@ -712,8 +691,6 @@ class TestFleetConfigHelpers:
         self, dist_type: str, params: object, message: str
     ) -> None:
         """Params that are not a mapping, a row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         with pytest.raises(ValueError, match=re.escape(message)):
             sample_distribution(dist_type, params)
 
@@ -733,8 +710,6 @@ class TestFleetConfigHelpers:
         self, n_samples: object
     ) -> None:
         """An n_samples that int() cannot read is refused, naming n_samples and the value sent."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         with pytest.raises(
             ValueError, match=re.escape(f"n_samples must be an integer, got {n_samples!r}")
         ):
@@ -754,8 +729,6 @@ class TestFleetConfigHelpers:
         self, n_samples: float
     ) -> None:
         """An n_samples below 1 or above the dashboard's fleet limit is refused, naming n_samples, the range and the value sent."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         with pytest.raises(
             ValueError,
             match=re.escape(
@@ -769,8 +742,6 @@ class TestFleetConfigHelpers:
         self, n_samples: int
     ) -> None:
         """A preview draws any number of samples from 1 to the dashboard's fleet limit."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         result = sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
 
         assert len(result) == n_samples
@@ -802,8 +773,6 @@ class TestFleetConfigHelpers:
         self, count: float, message: str
     ) -> None:
         """A preview refuses a shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, naming the row's count and the value sent; it refuses a count that takes the pool's total above that limit, naming the total."""
-        from solar_challenge.web.fleet_config import sample_distribution
-
         with pytest.raises(ValueError, match=re.escape(message)):
             sample_distribution(
                 "shuffled_pool",
@@ -812,8 +781,6 @@ class TestFleetConfigHelpers:
 
     def test_form_to_fleet_distribution_config(self) -> None:
         """Test converting form data to fleet distribution config."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
         form_data = {
             "n_homes": 50,
             "pv": {
@@ -876,15 +843,11 @@ class TestFleetConfigHelpers:
         self, key: str, value: object, message: str
     ) -> None:
         """An n_homes or seed that int() cannot read, or an n_homes outside 1 to the dashboard's fleet limit, is refused, naming the field and the value sent."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
         with pytest.raises(ValueError, match=re.escape(message)):
             form_to_fleet_distribution_config({**VALID_DISTRIBUTION_FORM, key: value})
 
     def test_form_to_fleet_distribution_config_accepts_a_fleet_of_max_fleet_homes(self) -> None:
         """A fleet form may ask for as many homes as a dashboard fleet holds."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
         config = form_to_fleet_distribution_config(
             {**VALID_DISTRIBUTION_FORM, "n_homes": MAX_FLEET_HOMES}
         )
@@ -906,8 +869,6 @@ class TestFleetConfigHelpers:
         self, key: str, value: object
     ) -> None:
         """A truthy pv/battery/load block that is not a mapping is refused, naming the block and the type sent."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
         with pytest.raises(
             ValueError, match=re.escape(f"{key} must be a mapping, got {type(value).__name__}")
         ):
@@ -928,8 +889,6 @@ class TestFleetConfigHelpers:
         self, key: str, value: object
     ) -> None:
         """A falsy pv/battery/load block converts exactly as if the block were left out."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
         without_block = {k: v for k, v in VALID_DISTRIBUTION_FORM.items() if k != key}
         assert form_to_fleet_distribution_config(
             {**VALID_DISTRIBUTION_FORM, key: value}
@@ -960,8 +919,6 @@ class TestFleetConfigHelpers:
         self, spec: dict, converted: dict
     ) -> None:
         """A weighted_discrete/shuffled_pool row list converts to parallel value and weight/count lists, a missing weight or count reading as 1."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
         config = form_to_fleet_distribution_config(
             {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
         )
@@ -1011,8 +968,6 @@ class TestFleetConfigHelpers:
         self, spec: dict, message: str
     ) -> None:
         """A weighted_discrete/shuffled_pool row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
         with pytest.raises(ValueError, match=re.escape(message)):
             form_to_fleet_distribution_config(
                 {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
@@ -1059,8 +1014,6 @@ class TestFleetConfigHelpers:
         self, count: object, message: str
     ) -> None:
         """A shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, is refused, naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
         spec = {
             "type": "shuffled_pool",
             "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}],
@@ -1074,8 +1027,6 @@ class TestFleetConfigHelpers:
         self,
     ) -> None:
         """A shuffled_pool row may assign its value to no home, or to as many homes as a dashboard fleet holds; the pool may total exactly that many values."""
-        from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-
         spec = {
             "type": "shuffled_pool",
             "entries": [{"value": 3.0, "count": 0}, {"value": 5.0, "count": MAX_FLEET_HOMES}],
@@ -1111,11 +1062,6 @@ class TestFleetConfigHelpers:
     )
     def test_distribution_form_spec_is_the_inverse_of_the_forms_conversion(self, spec: dict) -> None:
         """A distribution the fleet page's editor sends converts to config.py's grammar and reads back as itself."""
-        from solar_challenge.web.fleet_config import (
-            distribution_form_spec,
-            form_to_fleet_distribution_config,
-        )
-
         config = form_to_fleet_distribution_config(
             {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
         )
@@ -1143,8 +1089,6 @@ class TestFleetConfigHelpers:
         self, spec: object
     ) -> None:
         """A fixed value, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
-        from solar_challenge.web.fleet_config import distribution_form_spec
-
         with pytest.raises(ValueError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
 
@@ -1303,7 +1247,6 @@ class TestSimulateHomePageRendering:
         # JS-only patterns don't appear outside <script> blocks.
 
         # Remove all script blocks first, then check remaining HTML body
-        import re
         # Remove all script tag contents
         body_without_scripts = re.sub(
             r"<script[^>]*>.*?</script>",
