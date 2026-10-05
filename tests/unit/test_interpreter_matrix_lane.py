@@ -6,21 +6,18 @@ Every Python minor requires-python admits is re-verified recurrently: the
 orchestrator offline lane's interpreter-matrix job (tests/interpreter_matrix).
 """
 
-import os
-import shlex
-import subprocess
-import sys
 from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
 
-from tests._collect_only import collected_node_ids, describe_outcome, requires_uv, run_collect_only
+from tests._collect_only import requires_uv
 from tests._interpreters import off_pin_minor_versions, python_version_pin
-from tests._lane_collection import collect_lane_job
+from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
 from tests._orchestrator_config import git_config, lane_job_enabled, sole_offline_lane_job
 
 _MATRIX_JOB = "interpreter-matrix"
+_MATRIX_SUITE = "tests/interpreter_matrix"
 
 
 def _off_pin_interpreters(project_root: Path) -> list[str]:
@@ -82,37 +79,9 @@ def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(
 
 
 def test_default_collection_never_reaches_the_interpreter_matrix(project_root: Path) -> None:
-    """Collecting tests/ never reaches tests/interpreter_matrix, even with addopts cleared.
+    """Collecting tests/ never reaches tests/interpreter_matrix, even with addopts cleared."""
+    reached = default_collection_node_ids_under(project_root, _MATRIX_SUITE)
 
-    That covers plain `pytest`, the per-task verify, and dark-factory's serial
-    and confirm reruns, which append `-o addopts=`. PYTEST_ADDOPTS is dropped so
-    only the repo's own exclusion is measured; the sibling test directories are
-    ignored only to keep the collection fast.
-    """
-    siblings = [
-        path
-        for path in (project_root / "tests").iterdir()
-        if path.is_dir() and path.name != "interpreter_matrix"
-    ]
-    env = {name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"}
-
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "pytest", "--collect-only", "-q", "-o", "addopts=", "tests",
-            *(f"--ignore={sibling}" for sibling in siblings),
-        ],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-
-    assert result.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
-        f"collecting tests/ failed (exit {result.returncode})\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-    reached = [line for line in result.stdout.splitlines() if line.startswith("tests/interpreter_matrix/")]
     assert not reached, (
         f"a default collection with addopts cleared reached the interpreter matrix: {reached}; "
         "every verify, and every serial or confirm rerun of it, would then run the whole matrix "
@@ -121,27 +90,17 @@ def test_default_collection_never_reaches_the_interpreter_matrix(project_root: P
 
 
 def test_interpreter_matrix_cases_are_slow_so_they_provision_outside_the_offline_guard(project_root: Path) -> None:
-    """Each case's `uv run` provisions its interpreter's environment from PyPI whenever uv.lock changes.
-
-    The explicit path overrides tests/conftest.py's collect_ignore, as the lane's command does.
-    """
-    command = shlex.join([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "tests/interpreter_matrix"])
-
-    marked_slow = run_collect_only(command, project_root, "-m", "slow")
-    not_marked_slow = run_collect_only(command, project_root, "-m", "not slow")
+    """Each case's `uv run` provisions its interpreter's environment from PyPI whenever uv.lock changes."""
+    slow_cases = _interpreters_named_by(suite_node_ids_matching(project_root, _MATRIX_SUITE, "slow"))
+    fast_cases = suite_node_ids_matching(project_root, _MATRIX_SUITE, "not slow")
 
     expected = _off_pin_interpreters(project_root)
-    slow_cases = _interpreters_named_by(collected_node_ids(marked_slow.stdout))
-    fast_cases = collected_node_ids(not_marked_slow.stdout)
     why = (
         "a case not marked slow runs under tests/conftest.py's offline guard, where its child uv cannot "
         "download what a uv.lock change needs, so the lane would go red after every dependency change"
     )
-    assert marked_slow.returncode == pytest.ExitCode.OK and slow_cases == expected, (
+    assert slow_cases == expected, (
         f"`-m slow` collected the interpreter-matrix cases {slow_cases}, not one per off-pin admitted minor "
-        f"{expected}; {why}\n{describe_outcome(marked_slow)}"
+        f"{expected}; {why}"
     )
-    assert not_marked_slow.returncode == pytest.ExitCode.NO_TESTS_COLLECTED and not fast_cases, (
-        f"`-m 'not slow'` collected the interpreter-matrix cases {fast_cases}; {why}\n"
-        f"{describe_outcome(not_marked_slow)}"
-    )
+    assert not fast_cases, f"`-m 'not slow'` collected the interpreter-matrix cases {fast_cases}; {why}"
