@@ -16,6 +16,7 @@ from solar_challenge.scenario_writer import location_block
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
+    ParsedFleetForm,
     fleet_form_from_scenario,
     parse_fleet_form,
     scenario_from_fleet_form,
@@ -96,14 +97,38 @@ def _with_fleet_distribution(**blocks: Any) -> dict[str, Any]:
     }
 
 
+#: Each top-level key of a fleet form, with a value _FLEET_FORM does not give it.
+_ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY: dict[str, Any] = {
+    "name": "Another Fleet",
+    "n_homes": 2,
+    "seed": 8,
+    "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
+    "battery": {"capacity_kwh": {"type": "normal", "mean": 5.0, "std": 2.0, "min": 0.0, "max": 10.0}},
+    "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2000, "max": 5000}},
+    "days": 7,
+    "start": "2024-07-02",
+    "end": "2024-07-09",
+    "location": "london",
+    "tariff": {"type": "flat_rate", "rate_per_kwh": 0.28},
+    "dispatch_strategy": {"strategy_type": "self_consumption"},
+    "seg": {"rate_pence_per_kwh": 4.5},
+}
+
+
+def _run(fleet: ParsedFleetForm) -> tuple[Any, ...]:
+    """The run of the parsed *fleet*: the name, homes and dates the simulate endpoint submits."""
+    return (fleet.name, fleet.homes, fleet.start_date, fleet.end_date)
+
+
 class TestParseFleetForm:
-    """parse_fleet_form's top-level keys: the fleet form's, and its refusal of any other."""
+    """parse_fleet_form's top-level keys: the fleet form's, each read for both the run and its scenario, and its refusal of any other."""
 
     def test_a_key_the_fleet_form_does_not_have_is_refused_naming_it(self) -> None:
         """heat_pump is a home config block the fleet has no overlay for, and tarif is a misspelt tariff.
 
-        Both are refused by name rather than dropped from a fleet that would run without them,
-        and the error lists every key of a fleet form.
+        Both are refused by name rather than dropped from a fleet that would run without them.
+        The error lists the fleet form's keys: exactly the keys of
+        _ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY, each of which the run and its scenario read.
         """
         with pytest.raises(ValueError) as exc_info:
             parse_fleet_form(
@@ -114,9 +139,26 @@ class TestParseFleetForm:
                 }
             )
         assert str(exc_info.value) == (
-            "Unrecognised fleet form keys: 'heat_pump', 'tarif'; recognised keys: battery, days, "
-            "dispatch_strategy, end, load, location, n_homes, name, pv, seed, seg, start, tariff"
+            "Unrecognised fleet form keys: 'heat_pump', 'tarif'; "
+            f"recognised keys: {', '.join(sorted(_ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY))}"
         )
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            pytest.param(key, value, id=key)
+            for key, value in _ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY.items()
+        ],
+    )
+    def test_each_key_of_the_fleet_form_changes_both_the_run_and_its_scenario(
+        self, key: str, value: Any
+    ) -> None:
+        """Changing any key the fleet form has changes what the simulate endpoint runs and the scenario the export writes, so neither accepts a key it then drops."""
+        given = parse_fleet_form(_FLEET_FORM)
+        changed = parse_fleet_form({**_FLEET_FORM, key: value})
+
+        assert _run(changed) != _run(given)
+        assert changed.scenario != given.scenario
 
 
 class TestScenarioFromFleetForm:
