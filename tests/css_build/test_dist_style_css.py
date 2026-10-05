@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Check that the web package's static/dist/style.css is what its committed sources build to.
+"""Check that the web package's static/dist/ holds what its committed sources and locked npm packages make.
 
 Tailwind compiles static/dist/style.css from tailwind.config.js,
 static/src/input.css, and the templates and scripts it scans.
@@ -8,9 +8,14 @@ input edit committed without a rebuild passes it. This module rebuilds the
 stylesheet in a scratch copy of the web package, with the committed
 package-lock.json, and compares bytes.
 
+The two license texts beside the stylesheet are verbatim copies of
+tailwindcss's LICENSE and src/css/LICENSE. This module compares them byte for
+byte with those files of the version package-lock.json locks, so a Tailwind
+version change that leaves them stale fails. Both checks share one npm ci.
+
 The orchestrator's offline lane runs this module after each merge to main, as
 its css-build job. tests/conftest.py keeps this directory out of every default
-collection, so it runs only when its path is passed explicitly. Its test is
+collection, so it runs only when its path is passed explicitly. Its tests are
 marked slow, the exemption from tests/conftest.py's offline guard, because npm
 ci installs Tailwind from registry.npmjs.org.
 
@@ -46,7 +51,7 @@ _TAILWINDCSS_LICENSE_COPIES: dict[str, Path] = {
     "LICENSE-tailwindcss-preflight.txt": Path("src", "css", "LICENSE"),
 }
 
-# Only so a hung npm fails this test by name: both npm steps' timeouts together fit inside the css-build
+# Only so a hung npm fails the tests by name: both npm steps' timeouts together fit inside the css-build
 # lane job's `timeout` (dark-factory-orchestrator.yaml), whose kill would file css-build::nonzero-exit.
 _NPM_TIMEOUT_SECS = 120
 
@@ -59,8 +64,8 @@ def _npm(args: list[str], cwd: Path, cache: Path) -> None:
 
     npm_config_cache reaches both npm calls and the npx that build:css runs, so
     nothing writes ~/.npm, which a sandboxed agent cannot write. A missing npm
-    raises FileNotFoundError and fails the test: a skip would leave the lane
-    green with the stylesheet unchecked.
+    raises FileNotFoundError, which fails the tests: a skip would leave the lane
+    green with the stylesheet and its license texts unchecked.
     """
     command = shlex.join(["npm", *args])
     result = subprocess.run(
@@ -72,7 +77,7 @@ def _npm(args: list[str], cwd: Path, cache: Path) -> None:
         timeout=_NPM_TIMEOUT_SECS,
     )
     assert result.returncode == 0, (
-        f"`{command}` exited {result.returncode}, so static/dist/style.css could not be rebuilt; "
+        f"`{command}` exited {result.returncode} in the scratch copy of the web package; "
         f"npm's stderr:\n{result.stderr}\nnpm's stdout:\n{result.stdout}"
     )
 
@@ -86,24 +91,32 @@ def _rule_diff(committed: str, rebuilt: str) -> str:
     return "\n".join(itertools.islice(diff, _DIFF_LINES))
 
 
-def test_dist_style_css_matches_a_fresh_build_of_its_sources(project_root: Path, tmp_path: Path) -> None:
-    """static/dist/style.css is byte for byte what `npm run build:css` makes of its committed sources."""
-    web_dir = project_root / "src" / "solar_challenge" / "web"
+@pytest.fixture(scope="module")
+def scratch_web_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Return a scratch copy of the web package in which `npm ci` installed what package-lock.json locks.
+
+    It is made once, for every test in this module.
+    """
+    scratch = tmp_path_factory.mktemp("css-build")
     # "web" is the root package name package-lock.json records, which npm takes from the directory.
-    build_dir = tmp_path / "web"
-    shutil.copytree(web_dir, build_dir, ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
+    web_package = scratch / "web"
+    shutil.copytree(_WEB_PACKAGE, web_package, ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
+    _npm(["ci", "--no-audit", "--no-fund"], web_package, scratch / "npm-cache")
+    return web_package
+
+
+def test_dist_style_css_matches_a_fresh_build_of_its_sources(scratch_web_package: Path, tmp_path: Path) -> None:
+    """static/dist/style.css is byte for byte what `npm run build:css` makes of its committed sources."""
+    rebuilt_stylesheet = scratch_web_package / _DIST_STYLESHEET
     # A build that stops writing the stylesheet must not pass by comparing the committed copy with itself.
-    (build_dir / _DIST_STYLESHEET).unlink()
-    npm_cache = tmp_path / "npm-cache"
+    rebuilt_stylesheet.unlink()
 
-    _npm(["ci", "--no-audit", "--no-fund"], build_dir, npm_cache)
-    _npm(["run", "build:css"], build_dir, npm_cache)
+    _npm(["run", "build:css"], scratch_web_package, tmp_path / "npm-cache")
 
-    rebuilt_stylesheet = build_dir / _DIST_STYLESHEET
     assert rebuilt_stylesheet.is_file(), (
         "`npm run build:css` no longer writes static/dist/style.css, the stylesheet base.html links"
     )
-    committed = (web_dir / _DIST_STYLESHEET).read_bytes()
+    committed = (_WEB_PACKAGE / _DIST_STYLESHEET).read_bytes()
     rebuilt = rebuilt_stylesheet.read_bytes()
     assert rebuilt == committed, (
         "static/dist/style.css is not what its sources build to: a tailwind.config.js, "
