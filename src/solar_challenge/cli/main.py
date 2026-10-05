@@ -50,13 +50,6 @@ def main(
             is_eager=True,
         ),
     ] = None,
-    verbose: Annotated[
-        bool,
-        typer.Option(
-            "--verbose",
-            help="Enable verbose output",
-        ),
-    ] = False,
     quiet: Annotated[
         bool,
         typer.Option(
