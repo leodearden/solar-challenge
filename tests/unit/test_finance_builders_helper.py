@@ -7,6 +7,7 @@ import dataclasses
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
@@ -124,11 +125,20 @@ def test_fleet_results_of_pair_the_given_results_in_order_with_the_given_homes()
     ] == pytest.approx([18.0, 6.0])
 
 
-def test_fleet_results_of_refuse_a_home_count_unlike_the_result_count() -> None:
-    with pytest.raises(ValueError, match="got 2 results and 3 homes"):
-        make_fleet_results_of(
-            [make_sim_results(days=1), make_sim_results(days=1)], homes=[make_home_config()] * 3
-        )
+@pytest.mark.parametrize(
+    "n_homes",
+    [pytest.param(1, id="fewer-homes-than-results"), pytest.param(3, id="more-homes-than-results")],
+)
+def test_fleet_results_of_refuse_unpaired_homes_as_fleet_results_does(n_homes: int) -> None:
+    per_home_results = [make_sim_results(days=1), make_sim_results(days=1)]
+    homes = [make_home_config()] * n_homes
+
+    with pytest.raises(ValueError) as fleet_refusal:
+        FleetResults(per_home_results=per_home_results, home_configs=homes)
+    with pytest.raises(ValueError) as builder_refusal:
+        make_fleet_results_of(per_home_results, homes=homes)
+
+    assert str(builder_refusal.value) == str(fleet_refusal.value)
 
 
 def test_home_config_is_the_default_home_with_the_given_battery() -> None:
