@@ -34,6 +34,7 @@ from solar_challenge.cli.utils import (
     print_report,
     print_success,
     print_warning,
+    status_console,
 )
 from solar_challenge.config import ConfigurationError
 from solar_challenge.home import HomeConfig, SummaryStatistics
@@ -767,16 +768,16 @@ class TestPrintHelpers:
     @pytest.mark.parametrize(
         ("print_message", "target", "colour"),
         [
-            pytest.param(print_success, console, "green", id="print_success"),
-            pytest.param(print_warning, console, "yellow", id="print_warning"),
-            pytest.param(print_info, console, "blue", id="print_info"),
+            pytest.param(print_success, status_console, "green", id="print_success"),
+            pytest.param(print_warning, status_console, "yellow", id="print_warning"),
+            pytest.param(print_info, status_console, "blue", id="print_info"),
             pytest.param(print_error, error_console, "red", id="print_error"),
         ],
     )
     def test_a_message_is_printed_in_its_colour_on_its_console(
         self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], target: Console, colour: str
     ) -> None:
-        """Success prints green, warning yellow, info blue (all on stdout) and error red (on stderr); recorded, because a test run is no colour terminal."""
+        """Success prints green, warning yellow and info blue on the status console, and error red on the error console, all on stderr; recorded, because a test run is no colour terminal."""
         monkeypatch.setattr(target, "record", True)
 
         print_message("saved")
