@@ -849,6 +849,11 @@ ACCEPTED_RUN_IDS = [
     pytest.param("550e8400-e29b-41d4-a716-446655440000", id="uuid"),
 ]
 
+RUN_LOADERS = [
+    pytest.param(RunStorage.load_home_run, id="home"),
+    pytest.param(RunStorage.load_fleet_run, id="fleet"),
+]
+
 
 class TestRunIdValidation:
     """The run ids the store refuses and accepts, as its saves, loads and deletes see them."""
@@ -888,9 +893,7 @@ class TestRunIdValidation:
         assert storage.list_runs() == []
 
     @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
-    @pytest.mark.parametrize(
-        "load", [RunStorage.load_home_run, RunStorage.load_fleet_run], ids=["home", "fleet"]
-    )
+    @pytest.mark.parametrize("load", RUN_LOADERS)
     def test_a_load_of_an_id_the_store_refuses_raises_file_not_found_error(
         self, storage, load, run_id
     ):
@@ -904,19 +907,35 @@ class TestRunIdValidation:
         with pytest.raises(ValueError, match="Invalid run_id"):
             storage.delete_run(run_id)
 
-    def test_a_save_under_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error(
-        self, storage, temp_dir, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """A save under an id whose run directory links outside the runs directory raises ValueError, and writes nothing through the link."""
+    @pytest.fixture
+    def outside(self, temp_dir):
+        """An empty directory beside the store's data directory, beyond its runs directory."""
         outside = temp_dir / "outside"
         outside.mkdir()
-        link = stored_run_dir(storage, "linked")
-        link.parent.mkdir()
-        link.symlink_to(outside, target_is_directory=True)
+        return outside
 
+    @pytest.fixture
+    def linked_run_id(self, storage, outside):
+        """An id whose run directory links to *outside*, so that it resolves beyond the runs directory."""
+        run_id = "linked"
+        run_dir = stored_run_dir(storage, run_id)
+        run_dir.parent.mkdir()
+        run_dir.symlink_to(outside, target_is_directory=True)
+        return run_id
+
+    def test_a_home_save_under_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error_and_writes_nothing(
+        self,
+        storage,
+        outside,
+        linked_run_id,
+        sample_home_config,
+        sample_simulation_results,
+        sample_summary,
+    ):
+        """A home save under an id whose run directory links outside the runs directory raises ValueError, and writes nothing through the link and no runs row."""
         with pytest.raises(ValueError, match="Invalid run_id"):
             storage.save_home_run(
-                run_id="linked",
+                run_id=linked_run_id,
                 config=sample_home_config,
                 results=sample_simulation_results,
                 summary=sample_summary,
@@ -924,6 +943,43 @@ class TestRunIdValidation:
 
         assert list(outside.iterdir()) == []
         assert storage.list_runs() == []
+
+    def test_a_fleet_save_under_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error_and_writes_nothing(
+        self, storage, outside, linked_run_id, sample_fleet_data
+    ):
+        """A fleet save under an id whose run directory links outside the runs directory raises ValueError, and writes nothing through the link and no runs row."""
+        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
+
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage.save_fleet_run(
+                run_id=linked_run_id,
+                fleet_results=fleet_results,
+                fleet_summary=fleet_summary,
+                per_home_summaries=per_home_summaries,
+            )
+
+        assert list(outside.iterdir()) == []
+        assert storage.list_runs() == []
+
+    @pytest.mark.parametrize("load", RUN_LOADERS)
+    def test_a_load_of_an_id_whose_run_directory_links_outside_the_runs_directory_raises_file_not_found_error(
+        self, storage, linked_run_id, load
+    ):
+        """A load of an id whose run directory links outside the runs directory raises FileNotFoundError, and carries the refusal rather than a missing file's error."""
+        with pytest.raises(FileNotFoundError, match="Invalid run_id"):
+            load(storage, linked_run_id)
+
+    def test_a_delete_of_an_id_whose_run_directory_links_outside_the_runs_directory_raises_value_error_and_removes_nothing(
+        self, storage, outside, linked_run_id
+    ):
+        """A delete of an id whose run directory links outside the runs directory raises ValueError, and removes neither what the link leads to nor the link."""
+        (outside / "kept.txt").write_text("kept")
+
+        with pytest.raises(ValueError, match="Invalid run_id"):
+            storage.delete_run(linked_run_id)
+
+        assert (outside / "kept.txt").read_text() == "kept"
+        assert stored_run_dir(storage, linked_run_id).is_symlink()
 
     @pytest.mark.parametrize("run_id", ACCEPTED_RUN_IDS)
     def test_a_home_run_saved_under_an_accepted_id_loads_back_from_the_directory_the_id_names(
