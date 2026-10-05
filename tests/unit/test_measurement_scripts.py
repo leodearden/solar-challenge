@@ -17,7 +17,13 @@ import pandas as pd
 import pytest
 
 from solar_challenge.location import Location
-from solar_challenge.pv import PVConfig, create_pv_system, simulate_pv_output
+from solar_challenge.pv import (
+    PVConfig,
+    candidate_cec_inverters,
+    create_pv_system,
+    simulate_pv_output,
+    usable_cec_inverters,
+)
 from solar_challenge.weather import WeatherCache
 from tests._synthetic_weather import synthetic_june_weather
 
@@ -134,3 +140,28 @@ class TestMeasureMpptWindow:
                 f"{row.longest_string_stc_v:.1f} V at STC times {factor:.4f} is above the "
                 f"inverter's Mppt_high of {row.mppt_high_v:.1f} V"
             )
+
+    def test_the_stc_sizing_picks_from_pvs_own_candidates(self, mppt_window: ModuleType) -> None:
+        assert mppt_window.STC.candidates() == candidate_cec_inverters()
+
+    def test_keeping_battery_inverter_chargers_picks_from_every_usable_inverter(
+        self, mppt_window: ModuleType
+    ) -> None:
+        assert mppt_window.BATTERY_INVERTERS_KEPT.candidates() == usable_cec_inverters()
+
+    def test_a_sizing_divides_each_window_edge_by_its_factor(self, mppt_window: ModuleType) -> None:
+        sizing = mppt_window.Sizing("test", ceiling_factor=1.25, floor_factor=0.8)
+
+        assert [
+            (moved.name, moved.paco_w, moved.vdco_v, moved.mppt_low_v, moved.mppt_high_v)
+            for moved in sizing.candidates()
+        ] == [
+            (
+                candidate.name,
+                candidate.paco_w,
+                candidate.vdco_v,
+                candidate.mppt_low_v / 0.8,
+                candidate.mppt_high_v / 1.25,
+            )
+            for candidate in candidate_cec_inverters()
+        ]
