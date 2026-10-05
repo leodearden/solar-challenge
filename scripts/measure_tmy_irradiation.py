@@ -9,7 +9,9 @@ For each of seven UK sites it fetches PVGIS's TMY and the hourly series of its c
 years from the release get_tmy_data uses, so it needs network access to PVGIS; it takes
 about two to three minutes. It simulates PVConfig.default_4kw() over every real year and
 over three versions of the TMY: raw, scaled as get_tmy_data scales it, and scaled month
-by month, the rejected alternative. It is not part of the test suite.
+by month, the rejected alternative. tests/unit/test_measurement_scripts.py runs measure
+offline on synthetic weather; the PVGIS fetches and the full run are not part of the test
+suite.
 """
 
 from collections.abc import Mapping, Sequence
@@ -149,10 +151,14 @@ def tmy_months(tmy: pd.DataFrame, source_years: Mapping[int, int], year_month_gh
     return months
 
 
-def measure(name: str, location: Location) -> SiteMeasurement:
-    """Fetch one site's TMY and real years, and measure them."""
-    raw, source_years = fetch_tmy(location)
-    real_years = fetch_real_years(location)
+def measure(
+    name: str,
+    location: Location,
+    tmy: pd.DataFrame,
+    source_years: Mapping[int, int],
+    real_years: pd.DataFrame,
+) -> SiteMeasurement:
+    """Measure one site's TMY, whose month m comes from real year source_years[m], against the hourly weather of its real years."""
     ghi = real_years["ghi"]
     year_ghi = ghi.groupby(ghi.index.year).sum() / 1000.0
     year_month_ghi = (ghi.groupby([ghi.index.year, ghi.index.month]).sum() / 1000.0).unstack()
@@ -160,22 +166,22 @@ def measure(name: str, location: Location) -> SiteMeasurement:
         {year: annual_ac_kwh(location, real_years[real_years.index.year == year]) for year in CLIMATE_YEARS}
     )
     tmys = {
-        "raw": raw,
-        "annual": scale_tmy_to_annual_ghi(raw, float(year_ghi.mean())),
-        "monthly": scale_tmy_by_month(raw, year_month_ghi.mean()),
+        "raw": tmy,
+        "annual": scale_tmy_to_annual_ghi(tmy, float(year_ghi.mean())),
+        "monthly": scale_tmy_by_month(tmy, year_month_ghi.mean()),
     }
     record_peak = float(ghi.max())
     return SiteMeasurement(
         name=name,
         location=location,
-        tmy_ghi=float(raw["ghi"].sum()) / 1000.0,
+        tmy_ghi=float(tmy["ghi"].sum()) / 1000.0,
         year_ghi=year_ghi,
         year_ac=year_ac,
-        ac_by_tmy={label: annual_ac_kwh(location, tmy) for label, tmy in tmys.items()},
-        peak_by_tmy={label: float(tmy["ghi"].max()) for label, tmy in tmys.items()},
+        ac_by_tmy={label: annual_ac_kwh(location, version) for label, version in tmys.items()},
+        peak_by_tmy={label: float(version["ghi"].max()) for label, version in tmys.items()},
         record_peak=record_peak,
         scaled_hours_above_record=int((tmys["annual"]["ghi"] > record_peak).sum()),
-        months=tmy_months(raw, source_years, year_month_ghi),
+        months=tmy_months(tmy, source_years, year_month_ghi),
     )
 
 
@@ -228,7 +234,8 @@ def main() -> None:
     )
     sites = []
     for name, location in SITES.items():
-        site = measure(name, location)
+        tmy, source_years = fetch_tmy(location)
+        site = measure(name, location, tmy, source_years, fetch_real_years(location))
         print_site(site)
         sites.append(site)
     print_summary(sites)

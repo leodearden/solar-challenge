@@ -1,7 +1,7 @@
 # PV Inverter/String Matching: MPPT-Window Sizing
 
 **Task:** #203 (follow-up from #189); #240 (§7)
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_voltage_matched_cec_inverter`, `_ranking_key`, `_wiring_within_window`, `_CecInverter.admits`, `_cec_inverters`, `_CecInverter.is_battery_inverter`)
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_voltage_matched_cec_inverter`, `_ranking_key`, `_wiring_within_window`, `CecInverter.admits`, `candidate_cec_inverters`, `CecInverter.is_battery_inverter`, `create_model_chain_picking_from`)
 **PRD:** [docs/prds/discrete-install-config-sweep.md](prds/discrete-install-config-sweep.md) §2.1
 **Measurement:** [`scripts/measure_mppt_window.py`](../scripts/measure_mppt_window.py) (§3)
 
@@ -12,12 +12,12 @@
 A module with a `V_mp_ref` gets a CEC inverter voltage-matched to its strings:
 `_ranking_key` orders the candidate inverters, and `_wiring_within_window` wires the
 modules as the fewest near-equal series strings, each group of equal strings being one
-pvlib `Array`, i.e. one MPPT input. The candidates, `_cec_inverters`, are the usable CEC
-rows minus the battery inverter/chargers (§7). The sizing rule this note is about is
-`_CecInverter.admits`: every string's STC voltage, modules × `V_mp_ref`, must lie inside
-the inverter's `[Mppt_low, Mppt_high]`. Custom inverter parameters and PVWatts modules
-bypass the matching (`_inverter_and_wiring`). Those functions are the source of truth
-for the ranking and the wiring; this note does not restate them.
+pvlib `Array`, i.e. one MPPT input. The candidates, `candidate_cec_inverters`, are the
+usable CEC rows minus the battery inverter/chargers (§7). The sizing rule this note is
+about is `CecInverter.admits`: every string's STC voltage, modules × `V_mp_ref`, must lie
+inside the inverter's `[Mppt_low, Mppt_high]`. Custom inverter parameters and PVWatts
+modules bypass the matching (`_inverter_and_wiring`). Those functions are the source of
+truth for the ranking and the wiring; this note does not restate them.
 
 ## 2. Decision (task 203, 2026-10-01): Strings Stay Sized on STC V_mp_ref
 
@@ -35,8 +35,10 @@ than ten times the error it removes, with no gain in accuracy (§4).
 [`scripts/measure_mppt_window.py`](../scripts/measure_mppt_window.py) is the method. It
 prints the figures in §4–§7, and can write a CSV with one row per sizing and
 configuration; the figures for particular capacities, and §6's count against the band,
-are read from that. Its docstring gives the command. A run takes about twelve minutes,
-and the script is not part of the test suite. §7 measures the window's floor with it.
+are read from that. Its docstring gives the command. A run takes about twelve minutes.
+[`tests/unit/test_measurement_scripts.py`](../tests/unit/test_measurement_scripts.py)
+runs it offline on a one-day TMY at one capacity (`--dc-kw`); the full run is not part
+of the test suite. §7 measures the window's floor with it.
 In outline:
 
 - **Provenance.** Measured on main 9e9ab8f (2026-09-30), re-measured in full on
@@ -69,7 +71,8 @@ In outline:
   factor before that selection runs, which is the same check as multiplying the string
   voltage by it. A hot-floor sizing in §7 divides every `Mppt_low` by its factor in the
   same way. §7's "battery inverter/chargers kept" alternative picks from every usable
-  CEC row, as pv.py did before task 240.
+  CEC row, as pv.py did before task 240. Each sizing's candidates, moved or not, reach
+  pv.py's selection through `create_model_chain_picking_from`.
 - **(a) Extrapolation alone.** `pvlib.inverter.sandia_multi` gets each array's `v_mp`
   moved to the window's edge in its out-of-window hours, at unchanged `p_mp`. Its annual
   AC is compared with the model's.
@@ -211,7 +214,7 @@ inverter candidates, and the floor stays checked at STC, as the ceiling is (§2)
   - SMA's Sunny Island SI6048, Beacon Power's M4, M4 Plus, M5 and M5 Plus, GridPoint's
     Connect C36, Alpha Technologies' Solaris 3500 XP and Heart Transverter's HT2000.
 - The cut is a nominal DC voltage (`Vdco`) of at most 60 V at a rating (`Paco`) above
-  1.5 kW. `_CecInverter.is_battery_inverter` is its single source; this note
+  1.5 kW. `CecInverter.is_battery_inverter` is its single source; this note
   transcribes it.
 - It falls in clean gaps in pvlib 0.15.1's catalogue, so any cut inside them drops the
   same rows. Kept rows at `Vdco` ≤ 54.5 V reach at most 1400 W. The dropped rows start

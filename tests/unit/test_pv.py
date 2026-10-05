@@ -10,16 +10,20 @@ import pvlib
 import pytest
 from solar_challenge.location import Location
 from solar_challenge.pv import (
+    CecInverter,
     PVConfig,
     apply_degradation,
     calculate_degradation_factor,
+    candidate_cec_inverters,
     create_model_chain,
+    create_model_chain_picking_from,
     create_pv_system,
     create_pvwatts_inverter_params,
     create_simple_inverter_params,
     create_simple_module_params,
     interpolate_to_minute_resolution,
     simulate_pv_output,
+    usable_cec_inverters,
     wired_dc_capacity_kw,
 )
 
@@ -693,7 +697,7 @@ def _dc_per_array(chain: pvlib.modelchain.ModelChain) -> tuple[pd.DataFrame, ...
     return dc if isinstance(dc, tuple) else (dc,)
 
 
-def _usable_cec_inverters() -> pd.DataFrame:
+def _usable_cec_inverter_numbers() -> pd.DataFrame:
     """The CEC catalogue's inverters with a positive finite rating, start-up power, nominal voltage and MPPT window, as numbers."""
     catalogue = pvlib.pvsystem.retrieve_sam("CECInverter")
     numbers = catalogue.loc[["Paco", "Pso", "Vdco", "Mppt_low", "Mppt_high"]].T.apply(
@@ -783,7 +787,7 @@ class TestInverterMatchesStringVoltage:
         string_vmp = array.modules_per_string * array.module_parameters["V_mp_ref"]
         chosen = system.inverter_parameters
 
-        usable = _usable_cec_inverters()
+        usable = _usable_cec_inverter_numbers()
         equally_rated = usable[
             (usable["Paco"] == chosen["Paco"])
             & (usable["Mppt_low"] <= string_vmp)
@@ -893,6 +897,73 @@ class TestBatteryInverterChargersAreNotPicked:
             f"wired to a {rating_w:.0f} W inverter, above any module-level inverter's "
             f"{MODULE_LEVEL_INVERTER_MAX_W:.0f} W"
         )
+
+    def test_the_candidates_are_the_usable_inverters_less_the_battery_inverter_chargers(
+        self,
+    ) -> None:
+        """docs/pv-inverter-string-matching.md §1 and §7."""
+        candidates = set(candidate_cec_inverters())
+        usable = set(usable_cec_inverters())
+        left_out = usable - candidates
+
+        assert sorted(inverter.name for inverter in candidates - usable) == []
+        assert left_out, "every usable CEC inverter is a candidate, battery inverter/chargers too"
+        assert sorted(
+            inverter.name for inverter in left_out if not inverter.is_battery_inverter
+        ) == []
+        assert sorted(
+            inverter.name for inverter in candidates if inverter.is_battery_inverter
+        ) == []
+
+
+class TestPickingFromGivenCandidates:
+    """create_model_chain_picking_from voltage-matches the CEC inverter from the candidates it is given; scripts/measure_mppt_window.py moves their MPPT windows with it."""
+
+    @pytest.fixture
+    def other(self) -> CecInverter:
+        """The first candidate whose MPPT window takes the default array's string and whose rating is not that of the inverter create_pv_system picks."""
+        default = create_pv_system(PVConfig.default_4kw())
+        (array,) = default.arrays
+        string_v = array.modules_per_string * array.module_parameters["V_mp_ref"]
+        return next(
+            candidate
+            for candidate in candidate_cec_inverters()
+            if candidate.admits(string_v)
+            and candidate.paco_w != default.inverter_parameters["Paco"]
+        )
+
+    def test_picks_its_inverter_from_the_given_candidates(self, other: CecInverter) -> None:
+        chain = create_model_chain_picking_from(PVConfig.default_4kw(), Location.bristol(), [other])
+
+        picked = chain.system.inverter_parameters
+        assert (picked["Paco"], picked["Vdco"], picked["Mppt_low"], picked["Mppt_high"]) == (
+            other.paco_w,
+            other.vdco_v,
+            other.mppt_low_v,
+            other.mppt_high_v,
+        )
+
+    def test_the_system_takes_the_picked_inverters_catalogue_parameters_not_its_candidate_numbers(
+        self, other: CecInverter
+    ) -> None:
+        moved = dataclasses.replace(other, mppt_high_v=2 * other.mppt_high_v)
+
+        chain = create_model_chain_picking_from(PVConfig.default_4kw(), Location.bristol(), [moved])
+
+        assert chain.system.inverter_parameters["Mppt_high"] == other.mppt_high_v
+
+    def test_a_candidate_must_name_a_row_of_pvlibs_cec_inverter_library(
+        self, other: CecInverter
+    ) -> None:
+        """The system takes the picked inverter's parameters from that row."""
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                "A CEC inverter must name a row in pvlib's CECInverter library, "
+                "got 'Not a CEC inverter'"
+            ),
+        ):
+            dataclasses.replace(other, name="Not a CEC inverter")
 
 
 class TestPVWattsModule:
