@@ -23,8 +23,10 @@ The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here.
 The consumer-side proof runs _external_probe.py, which is NOT collected by pytest
 (underscore-prefixed, matches _helpers.py), with the interpreter of the virtual
-environment the module-scoped consumer_environment fixture builds.
-Every uv command runs offline, reading what it needs from uv's cache.
+environment the module-scoped consumer_environment fixture builds. That
+environment holds only the wheel and the runtime dependencies uv.lock pins.
+Every uv command runs offline: the build reads its build backend from uv's
+cache, and the install reads the wheels uv.lock pins from it.
 
 Marked ``build`` (NOT ``slow``) to stay independently selectable
 (``pytest -m build``).  Note: the project's default ``addopts`` does not
@@ -418,6 +420,7 @@ def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compile
 
 # ---------------------------------------------------------------------------
 # H1: every public symbol resolves and is callable/present in an isolated install
+# holding only the wheel and the runtime dependencies uv.lock pins
 # ---------------------------------------------------------------------------
 
 
@@ -437,20 +440,30 @@ def _run_uv_on(environment: Path, args: list[str], cwd: Path, **env_overrides: s
     )
 
 
-def _install_by_resolution(
+def _install_against_uv_lock(
     wheel: Path, source: Path, environment: Path, **env_overrides: str
 ) -> subprocess.CompletedProcess[str]:
-    """Create the virtual environment *environment* and install *wheel* into it, with the dependencies uv
-    resolves from the wheel's declared requirements.
+    """Create the virtual environment *environment* holding the runtime dependencies that the uv.lock in
+    *source* pins, then install *wheel* into it.
+
+    The locked sync installs no extras, no dependency groups and not the project. It takes the lock's
+    recorded wheels from uv's cache and reads no package index, yet takes no --no-index: without an
+    index, uv re-resolves the lock and finds it unsatisfiable. The wheel install reads no index, so
+    what the sync installed must already meet the wheel's declared requirements.
 
     Both uv commands run in *source*, their environment overridden by *env_overrides*. Return the result
     of the first that fails, else of the install.
     """
-    created = _run_uv_on(environment, ["venv", str(environment)], source, **env_overrides)
-    if created.returncode != 0:
-        return created
+    synced = _run_uv_on(
+        environment, ["sync", "--locked", "--no-install-project", "--no-default-groups"], source, **env_overrides
+    )
+    if synced.returncode != 0:
+        return synced
     return _run_uv_on(
-        environment, ["pip", "install", "--python", str(environment), str(wheel)], source, **env_overrides
+        environment,
+        ["pip", "install", "--no-index", "--python", str(environment), str(wheel)],
+        source,
+        **env_overrides,
     )
 
 
@@ -459,11 +472,15 @@ def consumer_environment(wheel_source: Path, built_wheel: Path, tmp_path_factory
     """Return a fresh virtual environment, outside the checkout, into which the built wheel is installed once."""
     environment = tmp_path_factory.mktemp("consumer_environment") / "venv"
 
-    result = _install_by_resolution(built_wheel, wheel_source, environment)
+    result = _install_against_uv_lock(built_wheel, wheel_source, environment)
     assert result.returncode == 0, (
-        f"`{shlex.join(result.args)}` failed (returncode={result.returncode}). If uv says packages were "
-        "unavailable because the network was disabled, its cache lacks what this resolution reads: run "
-        "that uv command once in the checkout, with network access. Any wheel built from this tree serves.\n"
+        f"`{shlex.join(result.args)}` failed (returncode={result.returncode}).\n"
+        "If uv says the network is disabled, its cache lacks a wheel uv.lock pins for this interpreter: run "
+        "`uv sync --locked --no-install-project` once in the checkout, with network access and "
+        "UV_PROJECT_ENVIRONMENT set to a temporary directory, so the checkout's .venv keeps its extras.\n"
+        "If uv says a package was not found in the provided package locations, the wheel requires a package "
+        "the locked sync did not install: compare the wheel's Requires-Dist with [project] dependencies in "
+        "pyproject.toml.\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
@@ -486,10 +503,13 @@ def test_isolated_install_resolves_and_calls_every_symbol(consumer_environment: 
     The test asserts returncode==0 AND the sentinel is in stdout.
     stdout+stderr are embedded in the failure message for debuggability.
 
-    Design: consumer_environment is a fresh virtual environment outside the
-    worktree, sharing nothing with its venv; uv installs the built wheel into it
-    and resolves and installs the wheel's declared deps offline, from its cache
-    alone.  The probe runs with that environment's ``bin/python``.
+    Design: consumer_environment holds only the built wheel and the runtime
+    dependencies uv.lock pins, installed offline from the wheels the verify's own
+    locked sync has cached.  So H1 proves the packaging: the wheel ships every
+    module, imports only its declared runtime dependencies, and loads from
+    site-packages.  It proves this against the versions the suite runs against,
+    not against newer releases inside the declared ranges.  The probe runs with
+    that environment's ``bin/python``.
     """
     result = subprocess.run(
         [str(consumer_environment / "bin" / "python"), str(_EXTERNAL_PROBE)],
@@ -502,6 +522,9 @@ def test_isolated_install_resolves_and_calls_every_symbol(consumer_environment: 
     assert result.returncode == 0 and "EXTERNAL-INSTALL-OK" in result.stdout, (
         f"External-consumer boundary test FAILED.\n"
         f"returncode: {result.returncode}\n"
+        "A RESOLVE ERROR naming a ModuleNotFoundError means the wheel imports a package outside its runtime "
+        "dependencies (declare it in [project] dependencies in pyproject.toml and run `uv lock`), or that "
+        "the wheel does not ship a solar_challenge module it imports.\n"
         f"--- stdout ---\n{result.stdout}\n"
         f"--- stderr ---\n{result.stderr}"
     )
@@ -546,8 +569,8 @@ def test_the_isolated_install_holds_only_versions_uv_lock_pins(consumer_environm
 
 
 # ---------------------------------------------------------------------------
-# Offline: each uv command reads the package index, the build backend and the
-# wheels from uv's cache alone, so an empty cache fails it
+# Offline: the build reads its build backend, and the install the wheels uv.lock
+# pins, from uv's cache alone, so an empty cache fails each
 # ---------------------------------------------------------------------------
 
 
@@ -563,15 +586,15 @@ def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_sour
 
 
 @pytest.mark.build
-def test_the_isolated_install_resolves_from_uv_s_cache_alone(
+def test_the_isolated_install_takes_uv_lock_s_wheels_only_from_uv_s_cache(
     wheel_source: Path, built_wheel: Path, tmp_path: Path
 ) -> None:
-    """With an empty cache, the isolated install fails; the offline guard, not uv's exit code, catches a fetch, failing this test if the install reached the network."""
-    result = _install_by_resolution(
+    """With an empty cache, the locked sync fails offline; the offline guard, not uv's exit code, catches a fetch, failing this test if the install reached the network."""
+    result = _install_against_uv_lock(
         built_wheel, wheel_source, tmp_path / "venv", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache")
     )
 
     assert result.returncode != 0, (
-        "the isolated install succeeded with an empty cache, so it found the wheel's dependencies outside uv's cache\n"
+        "the isolated install succeeded with an empty cache, so it found uv.lock's wheels outside uv's cache\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )

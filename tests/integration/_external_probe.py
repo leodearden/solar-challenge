@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """External-consumer proof program (H1 boundary test).
 
-Run INSIDE an isolated uv environment that contains ONLY the solar_challenge
-wheel and its declared runtime dependencies (stdlib + wheel deps; no dev
-extras).  Invoked with the interpreter of the environment that
+Run INSIDE an isolated virtual environment that contains ONLY the
+solar_challenge wheel and the runtime dependencies uv.lock pins (no extras).
+Invoked with the interpreter of the environment that
 tests/integration/test_external_install.py's consumer_environment fixture
 builds::
 
