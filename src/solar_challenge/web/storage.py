@@ -492,12 +492,11 @@ class RunStorage:
             Tuple of (fleet_results, fleet_summary, per_home_summaries)
 
         Raises:
-            FileNotFoundError: If run directory or required files don't exist
-            ValueError: If run data is corrupted or incomplete
+            FileNotFoundError: If no run is stored under run_id (the store refuses the id,
+                or its directory is missing), or a required file is missing.
+            ValueError: If run data is corrupted or incomplete.
         """
-        run_dir = self._get_run_dir(run_id)
-        if not run_dir.exists():
-            raise FileNotFoundError(f"Run directory not found: {run_dir}")
+        run_dir = self._stored_run_dir(run_id)
 
         homes_dir = run_dir / "homes"
         if not homes_dir.exists():
