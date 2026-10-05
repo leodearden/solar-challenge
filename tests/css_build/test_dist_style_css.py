@@ -34,8 +34,8 @@ pytestmark = pytest.mark.slow
 # Relative to the web package, in the checkout and in the scratch copy alike.
 _DIST_STYLESHEET = Path("static", "dist", "style.css")
 
-# About 30x the slowest measured npm step (npm ci from a cold cache, 4 s). It exists only so a hung
-# npm fails this test by name; two such timeouts stay inside the css-build job's 600 s timeout.
+# Only so a hung npm fails this test by name: both npm steps' timeouts together fit inside the css-build
+# lane job's `timeout` (dark-factory-orchestrator.yaml), whose kill would file css-build::nonzero-exit.
 _NPM_TIMEOUT_SECS = 120
 
 # The most lines of the rule diff a failure shows.
