@@ -19,7 +19,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
-from solar_challenge.web.number_fields import as_int_within
+from solar_challenge.web.number_fields import as_finite_float, as_int, as_int_within
 from solar_challenge.web.shared import require_json_object, resolve_location
 
 _DAYS_WINDOW_START = pd.Timestamp("2024-06-01")
@@ -115,11 +115,16 @@ def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
-def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float | None:
-    """Read a home body's maximum ``direction`` power: null is unset; any other value must be one a battery accepts."""
+def _read_power_limit(
+    value: Any, field: str, direction: Literal["charge", "discharge"]
+) -> float | None:
+    """Read a home body's maximum ``direction`` power, sent as *field*: null is unset.
+
+    Any other value must be a finite number, refused naming *field*, that a battery accepts.
+    """
     if value is None:
         return None
-    kw = float(value)
+    kw = as_finite_float(value, field)
     require_valid_power_limit(kw, direction)
     return kw
 
@@ -127,11 +132,12 @@ def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> 
 def _read_efficiency(value: Any) -> float | None:
     """Read a home body's round-trip efficiency percentage as the fraction BatteryConfig takes.
 
-    Null is unset; a percentage outside (0, 100] is refused in the units sent.
+    Null is unset; any other value must be a finite number, refused naming efficiency_pct,
+    and a percentage outside (0, 100] is refused in the units sent.
     """
     if value is None:
         return None
-    efficiency_pct = float(value)
+    efficiency_pct = as_finite_float(value, "efficiency_pct")
     if not (0 < efficiency_pct <= 100):
         raise ValueError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
     return efficiency_pct / 100
@@ -144,9 +150,9 @@ def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryCon
     refused without one too; a null setting is unset, leaving BatteryConfig's default.
     """
     settings: dict[str, Any] = {}
-    if (max_charge_kw := _read_power_limit(params["max_charge_kw"], "charge")) is not None:
+    if (max_charge_kw := _read_power_limit(params["max_charge_kw"], "max_charge_kw", "charge")) is not None:
         settings["max_charge_kw"] = max_charge_kw
-    if (max_discharge_kw := _read_power_limit(params["max_discharge_kw"], "discharge")) is not None:
+    if (max_discharge_kw := _read_power_limit(params["max_discharge_kw"], "max_discharge_kw", "discharge")) is not None:
         settings["max_discharge_kw"] = max_discharge_kw
     if (efficiency := _read_efficiency(params["efficiency_pct"])) is not None:
         settings["efficiency"] = efficiency
@@ -164,7 +170,8 @@ def _parse_heat_pump_block(data: object) -> HeatPumpConfig | None:
 
     The form sends ``type`` where config's YAML heat_pump block requires ``heat_pump_type``.
     ``None`` means no heat pump; any other value that is not a mapping raises
-    ``ValueError`` naming ``heat_pump`` and the type received.
+    ``ValueError`` naming ``heat_pump`` and the type received. Each number must be
+    finite, refused naming it as ``heat_pump.<key>``.
     """
     if data is None:
         return None
@@ -172,8 +179,12 @@ def _parse_heat_pump_block(data: object) -> HeatPumpConfig | None:
         raise ValueError(f"heat_pump must be a mapping, got {type(data).__name__}")
     return HeatPumpConfig(
         heat_pump_type=data.get("type", "ASHP"),
-        thermal_capacity_kw=float(data.get("thermal_capacity_kw", 8.0)),
-        annual_heat_demand_kwh=float(data.get("annual_heat_demand_kwh", 8000.0)),
+        thermal_capacity_kw=as_finite_float(
+            data.get("thermal_capacity_kw", 8.0), "heat_pump.thermal_capacity_kw"
+        ),
+        annual_heat_demand_kwh=as_finite_float(
+            data.get("annual_heat_demand_kwh", 8000.0), "heat_pump.annual_heat_demand_kwh"
+        ),
     )
 
 
@@ -202,26 +213,31 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             (the error names each such key), if a nested block (heat_pump,
             seg, tariff or dispatch_strategy) is neither null, which reads as
             absent, nor a mapping (the error names the block and the type
-            received), or if required fields are missing or invalid. The
-            battery settings (max_charge_kw, max_discharge_kw, efficiency_pct
-            and dispatch_strategy) are read, and refused, whatever battery_kwh
-            is; a null setting reads as unset.
+            received), if a number field is not a finite number float() reads
+            or occupants is one int() cannot read (the error names the field,
+            as heat_pump.<key> for a heat-pump number, and the value sent), or
+            if required fields are missing or invalid. The battery settings
+            (max_charge_kw, max_discharge_kw, efficiency_pct and
+            dispatch_strategy) are read, and refused, whatever battery_kwh is;
+            a null setting reads as unset.
     """
     data = require_json_object(data, "Home config")
     _refuse_unrecognised_keys(data)
     params = {**_HOME_CONFIG_DEFAULTS, **data}
-    pv_kw = float(params["pv_kw"])
-    azimuth = float(params["azimuth"])
-    tilt = float(params["tilt"])
+    pv_kw = as_finite_float(params["pv_kw"], "pv_kw")
+    azimuth = as_finite_float(params["azimuth"], "azimuth")
+    tilt = as_finite_float(params["tilt"], "tilt")
     # Range validation for system_age_years (>= 0) and degradation_rate_per_year
     # ([0, 1]) is delegated to PVConfig.__post_init__, which raises ValueError.
     # That ValueError propagates out of this function unchanged.
     # PVConfig is the single source of truth for these bounds.
-    system_age_years = float(params["system_age_years"])
-    degradation_rate_per_year = float(params["degradation_rate_per_year"])
-    battery_kwh_val = float(params["battery_kwh"])
+    system_age_years = as_finite_float(params["system_age_years"], "system_age_years")
+    degradation_rate_per_year = as_finite_float(
+        params["degradation_rate_per_year"], "degradation_rate_per_year"
+    )
+    battery_kwh_val = as_finite_float(params["battery_kwh"], "battery_kwh")
     consumption_kwh_raw = params["consumption_kwh"]
-    occupants = int(params["occupants"])
+    occupants = as_int(params["occupants"], "occupants")
     stochastic = bool(params["stochastic"])
     location_preset = str(params["location"])
     name = params["name"]
@@ -251,7 +267,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
 
     annual_consumption: float | None = None
     if consumption_kwh_raw is not None:
-        annual_consumption = float(consumption_kwh_raw)
+        annual_consumption = as_finite_float(consumption_kwh_raw, "consumption_kwh")
 
     load_config = LoadConfig(
         annual_consumption_kwh=annual_consumption,
