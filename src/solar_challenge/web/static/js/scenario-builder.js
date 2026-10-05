@@ -5,7 +5,8 @@ document.addEventListener('alpine:init', () => {
     }
 
     // The fleet components the form distributes: the prefix of their form fields, the field holding a fixed value,
-    // and their spec's key in the scenario grammar, at fleet_distribution.<prefix>.<grammarKey>
+    // and their spec's key in the scenario grammar, at fleet_distribution.<prefix>.<grammarKey>.
+    // templates/scenarios/builder.html calls distribution_card once for each, with its prefix and fixedField.
     const COMPONENTS = [
         { prefix: 'pv', fixedField: 'pv_capacity_kw', grammarKey: 'capacity_kw' },
         { prefix: 'battery', fixedField: 'battery_capacity_kwh', grammarKey: 'capacity_kwh' },
