@@ -973,18 +973,29 @@ class TestOptimizeCLIE2EFast:
         tmp_path: "Path",
         fleet_results: "FleetResults",  # type: ignore[name-defined]
         options: "list[str]",
-    ) -> "object":
-        """Run `optimize configs` on a fresh scenario with *options*, answering every fleet simulation with *fleet_results*."""
+    ) -> "tuple[object, list[object]]":
+        """Run `optimize configs` on a fresh scenario with *options*, answering every fleet simulation with *fleet_results*.
+
+        Returns the CliRunner result and the fleet configs the injected simulator
+        was asked to simulate.
+        """
         from typer.testing import CliRunner
         from solar_challenge.cli.main import app
         from solar_challenge.cli.optimize import SweepSimulator
 
+        simulated_fleets: "list[object]" = []
+
+        def simulate(fleet_config, start, end):
+            simulated_fleets.append(fleet_config)
+            return fleet_results
+
         scenario_file = _write_optimize_scenario(tmp_path)
-        return CliRunner().invoke(
+        result = CliRunner().invoke(
             app,
             ["optimize", "configs", str(scenario_file), *options],
-            obj=SweepSimulator(simulate=lambda fc, s, e: fleet_results),
+            obj=SweepSimulator(simulate=simulate),
         )
+        return result, simulated_fleets
 
     def test_optimize_configs_standard_sweep_output(
         self,
@@ -994,11 +1005,12 @@ class TestOptimizeCLIE2EFast:
         """Standard sweep must exit 0 and produce all expected report tokens.
 
         Invokes `optimize configs` once and asserts the union of wiring signals
-        (exit code, both table headings using exact strings, sensitivity heading,
-        recommendation marker, and rate token) to avoid re-running the CLI and
-        its injected simulator once per assertion.
+        (exit code, the sweep's use of the injected simulator, both table headings
+        using exact strings, sensitivity heading, recommendation marker, and rate
+        token) to avoid re-running the CLI and its injected simulator once per
+        assertion.
         """
-        result = self._invoke_configs(
+        result, simulated_fleets = self._invoke_configs(
             tmp_path,
             optimize_fleet_results,
             [
@@ -1011,6 +1023,11 @@ class TestOptimizeCLIE2EFast:
 
         assert result.exit_code == 0, (
             f"Expected exit 0 from 'optimize configs'; got {result.exit_code}.\n"
+            f"Output:\n{result.output}"
+        )
+        assert simulated_fleets, (
+            "Expected 'optimize configs' to run its sweep with the simulator passed as "
+            "obj=SweepSimulator(...); it asked that simulator for no fleet simulation.\n"
             f"Output:\n{result.output}"
         )
         assert "cost-recovery rank" in result.output.lower(), (
@@ -1043,7 +1060,7 @@ class TestOptimizeCLIE2EFast:
         Robustness: the comma-list parser must handle a single non-comma value
         without raising an error.
         """
-        result = self._invoke_configs(
+        result, _ = self._invoke_configs(
             tmp_path,
             optimize_fleet_results,
             [
