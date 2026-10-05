@@ -151,6 +151,9 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     section in scenario YAML files and can be used with
     :func:`solar_challenge.config.generate_homes_from_distribution`.
 
+    A null pv/battery/load block reads as an absent one, which for the battery
+    means no battery.
+
     Args:
         form_data: Form data dict from the web UI.
 
@@ -162,7 +165,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             int() cannot read or outside 1 to MAX_FLEET_HOMES (see
             :func:`~solar_challenge.web.number_fields.as_int_within`), seed is one
             int() cannot read (see :func:`~solar_challenge.web.number_fields.as_int`),
-            a pv/battery/load block is not a dict (see
+            a pv/battery/load block is neither null nor a dict (see
             :func:`_component_block`), a weighted_discrete/shuffled_pool
             row list is malformed (see :func:`_dict_list`), or a shuffled_pool
             count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
@@ -174,7 +177,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     }
 
     # Process PV distribution
-    pv_data = _component_block(form_data, "pv")
+    pv_data = _component_block_or_empty(form_data, "pv")
     config["pv"] = _parse_component_distribution(pv_data, "capacity_kw", default_field="capacity_kw")
 
     # Process Battery distribution
@@ -185,7 +188,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
         )
 
     # Process Load distribution
-    load_data = _component_block(form_data, "load")
+    load_data = _component_block_or_empty(form_data, "load")
     config["load"] = _parse_component_distribution(
         load_data, "annual_consumption_kwh", default_field="annual_consumption_kwh"
     )
@@ -193,13 +196,28 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     return config
 
 
-def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any]:
-    """Return the *key* component block of *form_data*, reading an absent or falsy block as empty.
+def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any] | None:
+    """Return the *key* component block of *form_data*: None when it is absent or null.
 
     Raises:
-        ValueError: If the block is truthy but not a dict (see :func:`_require_dict`).
+        ValueError: If the block is neither null nor a dict (see :func:`_require_dict`).
     """
-    return _require_dict(form_data.get(key) or {}, key)
+    block = form_data.get(key)
+    return None if block is None else _require_dict(block, key)
+
+
+def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return the *key* component block of *form_data*, reading an absent or null block as empty.
+
+    It serves the components every fleet has, pv and load: an absent or null block converts
+    as an empty one, whose missing distribution
+    :func:`~solar_challenge.config.parse_fleet_distribution_config` refuses.
+
+    Raises:
+        ValueError: If the block is neither null nor a dict (see :func:`_component_block`).
+    """
+    block = _component_block(form_data, key)
+    return {} if block is None else block
 
 
 def _require_dict(value: object, field: str) -> dict[str, Any]:
