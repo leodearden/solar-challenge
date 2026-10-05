@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Readers of a web request's number fields: each takes the value sent and the field's name, and refuses with a ValueError naming that field and the value sent, the error every web caller answers with HTTP 400."""
+"""Readers of a web request's number fields: each takes the value sent and the field's name, and refuses with a ValueError naming that field and the value sent, the error every web caller answers with HTTP 400.
+
+The integer readers differ on a fraction: as_int, and so as_int_within, truncates a float
+as int() does, reading 2.5 as 2, while as_whole_number refuses it. Read a count through
+as_whole_number.
+"""
 
 import math
 from typing import Any
@@ -46,3 +51,16 @@ def as_finite_float(value: Any, field: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"{field} must be a finite number, got {value!r}")
     return number
+
+
+def as_whole_number(value: Any, field: str) -> int:
+    """Return *value* read by :func:`as_finite_float` as the int it equals, refusing one with a fractional part.
+
+    Raises:
+        ValueError: If :func:`as_finite_float` refuses *value*, or it has a fractional part;
+            the whole-number error names *field* and the value sent.
+    """
+    number = as_finite_float(value, field)
+    if not number.is_integer():
+        raise ValueError(f"{field} must be a whole number, got {value!r}")
+    return int(number)
