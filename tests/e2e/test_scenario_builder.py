@@ -485,6 +485,17 @@ def test_a_cards_remove_row_n_button_removes_row_n_and_the_rows_after_it_are_ren
     assert _form_sent_on_validate(page) == {**sent_before, rows_field: [rows[0], *rows[2:]]}
 
 
+def _phone_card_groups_with_rows(page: Page, live_server: str, row_list: _RowList) -> dict[str, Locator]:
+    """Open the builder at phone width with *row_list*'s distribution chosen in every card, and return each card's group by its heading, once each shows its add button."""
+    page.set_viewport_size(_PHONE_VIEWPORT)
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, row_list.distribution_type)
+    card_groups = {card.heading: page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS}
+    for card_group in card_groups.values():
+        expect(card_group.get_by_role("button", name=row_list.add_button, exact=True)).to_be_visible()
+    return card_groups
+
+
 def _controls_outside(card_group: Locator) -> list[str]:
     """The comboboxes, spinbuttons and buttons *card_group* shows whose box leaves the group's by more than half a pixel, each as its role, its number among those of its role, and its left and right edges."""
     group = _layout_box(card_group)
@@ -503,17 +514,41 @@ def test_on_a_phone_every_control_a_card_shows_with_its_rows_lies_within_the_car
     page: Page, live_server: str, row_list: _RowList
 ) -> None:
     """At 375 px wide, with every card showing its rows, each combobox, spinbutton and button a card's group shows lies within the group's box, to within half a pixel."""
-    page.set_viewport_size(_PHONE_VIEWPORT)
-    page.goto(live_server + "/scenarios/builder")
-    _choose_in_every_card(page, row_list.distribution_type)
+    card_groups = _phone_card_groups_with_rows(page, live_server, row_list)
 
-    outside = {}
-    for card in _CARDS:
-        card_group = page.get_by_role("group", name=card.heading, exact=True)
-        expect(card_group.get_by_role("button", name=row_list.add_button, exact=True)).to_be_visible()
-        outside[card.heading] = _controls_outside(card_group)
+    assert {heading: _controls_outside(card_group) for heading, card_group in card_groups.items()} == {
+        heading: [] for heading in card_groups
+    }
 
-    assert outside == {card.heading: [] for card in _CARDS}
+
+def _columns_out_of_line(card_group: Locator, captions: tuple[str, ...]) -> list[str]:
+    """The columns of *card_group*, each named by its caption, whose spinbutton in the second row starts more than half a pixel from the first row's, each as its caption and the two left edges."""
+    out_of_line = []
+    for caption in captions:
+        first, second = (
+            _layout_box(card_group.get_by_role("spinbutton", name=f"{caption} {row}", exact=True))["x"]
+            for row in (1, 2)
+        )
+        if abs(second - first) > 0.5:
+            out_of_line.append(f"{caption} 1 starts at x={first:.1f} and {caption} 2 at x={second:.1f}")
+    return out_of_line
+
+
+@pytest.mark.parametrize("row_list", _ROW_LISTS)
+def test_on_a_phone_a_cards_second_row_starts_each_column_where_its_first_row_does(
+    page: Page, live_server: str, row_list: _RowList
+) -> None:
+    """At 375 px wide, with every card showing its rows, a card's second row starts its Value column and its Weight (or Count) column where its first row does, to within half a pixel.
+
+    Only the first row shows the captions, above its spinbuttons, so the columns must stay
+    in line with the rows below it, which show none.
+    """
+    card_groups = _phone_card_groups_with_rows(page, live_server, row_list)
+
+    assert {
+        heading: _columns_out_of_line(card_group, ("Value", row_list.column_caption))
+        for heading, card_group in card_groups.items()
+    } == {heading: [] for heading in card_groups}
 
 
 # ── Builder YAML: what the scenario loaders read ─────────────────────
