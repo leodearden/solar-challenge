@@ -894,10 +894,7 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
         else:
             # For fleet runs, export the aggregate (sum across all homes)
             fleet_results, _fleet_summary, _per_home = storage.load_fleet_run(run_id)
-            if fleet_results.per_home_results:
-                df = fleet_results.to_aggregate_dataframe()
-            else:
-                return jsonify({"error": "No data to export"}), 404
+            df = fleet_results.to_aggregate_dataframe()
     except FileNotFoundError:
         return jsonify({"error": "Run data files not found"}), 404
 

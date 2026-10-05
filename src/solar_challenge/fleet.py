@@ -131,15 +131,29 @@ class FleetConfig:
 
 @dataclass
 class FleetResults:
-    """Results from a fleet simulation.
+    """Results from a fleet simulation of at least one home, each home's SimulationResults paired with its HomeConfig.
 
     Attributes:
         per_home_results: List of SimulationResults for each home
-        home_configs: List of HomeConfig for each home (for reference)
+        home_configs: The HomeConfig of each home, in per_home_results' order
     """
 
     per_home_results: list[SimulationResults]
     home_configs: list[HomeConfig]
+
+    def __post_init__(self) -> None:
+        """Enforce _require_paired_homes at construction."""
+        self._require_paired_homes()
+
+    def _require_paired_homes(self) -> None:
+        """Raise ValueError unless the fleet has at least one home and one HomeConfig per home's results."""
+        if not self.per_home_results:
+            raise ValueError("FleetResults must have at least one home: per_home_results is empty")
+        if len(self.home_configs) != len(self.per_home_results):
+            raise ValueError(
+                "FleetResults pairs one HomeConfig with each home's results: "
+                f"got {len(self.per_home_results)} per_home_results and {len(self.home_configs)} home_configs"
+            )
 
     def __len__(self) -> int:
         """Return number of homes in fleet."""
@@ -158,7 +172,12 @@ class FleetResults:
         Returns:
             Sum of the series across all homes, named as each home's series is: its
             SimulationResults column, which to_aggregate_dataframe relies on
+
+        Raises:
+            ValueError: If the fleet has no homes, or home_configs does not hold one
+                HomeConfig per home's results
         """
+        self._require_paired_homes()
         series_list = [getattr(r, series_name) for r in self.per_home_results]
         return sum(series_list[1:], series_list[0])
 
@@ -407,7 +426,13 @@ def calculate_fleet_summary(
 
     Returns:
         FleetSummary with totals and distribution statistics
+
+    Raises:
+        ValueError: If results has no homes, or its home_configs does not hold one
+            HomeConfig per home's results
     """
+    results._require_paired_homes()
+
     # Calculate per-home summaries
     home_summaries: list[SummaryStatistics] = [
         calculate_summary(r, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
@@ -444,12 +469,10 @@ def calculate_fleet_summary(
             total_seg_revenue_gbp = sum(seg_revenues)
             per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
 
-    # Fleet financial aggregates (per-home fields are always-present floats).
-    # float() ensures the result is 0.0 (float), not 0 (int), when home_summaries is
-    # empty — Python's sum() of an empty generator returns int 0 by default.
-    total_import_cost = float(sum(s.total_import_cost_gbp for s in home_summaries))
-    total_export_revenue = float(sum(s.total_export_revenue_gbp for s in home_summaries))
-    total_net_cost = float(sum(s.net_cost_gbp for s in home_summaries))
+    # Fleet financial aggregates
+    total_import_cost = sum(s.total_import_cost_gbp for s in home_summaries)
+    total_export_revenue = sum(s.total_export_revenue_gbp for s in home_summaries)
+    total_net_cost = sum(s.net_cost_gbp for s in home_summaries)
 
     return FleetSummary(
         n_homes=len(results),
@@ -467,7 +490,7 @@ def calculate_fleet_summary(
         per_home_self_consumption_ratio_min=float(sc_series.min()),
         per_home_self_consumption_ratio_max=float(sc_series.max()),
         per_home_self_consumption_ratio_mean=float(sc_series.mean()),
-        simulation_days=home_summaries[0].simulation_days if home_summaries else 0,
+        simulation_days=home_summaries[0].simulation_days,
         total_seg_revenue_gbp=total_seg_revenue_gbp,
         per_home_seg_revenue_mean_gbp=per_home_seg_revenue_mean_gbp,
         total_net_cost_gbp=total_net_cost,
