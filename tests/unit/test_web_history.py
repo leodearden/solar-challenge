@@ -727,6 +727,19 @@ class TestComparisonRoute:
         ]
         assert texts_after(page, "Total Generation", 4) == ["100.0 kWh", "120.0 kWh", "+20.0 kWh", "+20.0%"]
 
+    def test_compare_answers_a_server_error_when_a_chart_cannot_be_drawn(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A comparison chart that cannot be drawn fails the request with the app's 500 page, as a results page's chart does, instead of the page being served without it."""
+        _insert_test_run(app, run_id="cmp-1", name="Compare A")
+        null_ratio = {"grid_dependency_ratio": None}
+        _insert_test_run(app, run_id="cmp-2", name="Compare B", summary=null_ratio)
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+
+        response = client.get("/history/compare?ids=cmp-1,cmp-2")
+
+        assert response.status_code == 500
+
     def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
         """Test GET /history/compare with all invalid IDs redirects to runs page."""
         response = client.get("/history/compare?ids=fake-1,fake-2")
