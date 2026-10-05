@@ -182,7 +182,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
 
     # Process Battery distribution
     battery_data = _component_block(form_data, "battery")
-    if battery_data and battery_data.get("enabled", True):
+    if battery_data is not None and battery_data.get("enabled", True):
         config["battery"] = _parse_component_distribution(
             battery_data, "capacity_kwh", default_field="capacity_kwh"
         )

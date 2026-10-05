@@ -66,6 +66,11 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     dispatch strategy in the battery block, where load_fleet_config gives it to every
     battery; a form without a battery gives it to none.
 
+    The form's six blocks, the pv, battery and load distributions and the tariff,
+    dispatch_strategy and seg overlays, share one presence rule: absent or null means none,
+    which pv and load refuse as a missing distribution, and any other value must be a
+    mapping its grammar reads.
+
     Each value is read once, as given, by the reader the loaders read it with, so the
     simulate endpoint and the export, which both read the form here, refuse it at the same
     value with the same message.
