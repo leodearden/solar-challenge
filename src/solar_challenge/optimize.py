@@ -29,14 +29,22 @@ from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, S
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.finance import FinanceConfig
-from solar_challenge.home import HomeConfig
+from solar_challenge.finance import (
+    FinanceConfig,
+    _resolve_homes,
+    bill_distribution,
+    project_economics,
+    project_multi_year,
+    solve_cost_recovery_rate,
+)
+from solar_challenge.fleet import FleetConfig
+from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.seg import SEGTariff
 
 if TYPE_CHECKING:
     import pandas as pd
     from solar_challenge.finance import CostRecoverySolution
-    from solar_challenge.fleet import FleetConfig, FleetResults
+    from solar_challenge.fleet import FleetResults
 
 
 # ---------------------------------------------------------------------------
@@ -869,8 +877,7 @@ def _age0_baseline_outlay(
 
     This is the 'second pure post-sim evaluation' from PRD §3.3 — the baseline
     outlay at the *configured* ``own_use_rate`` (15 p/kWh), independent of the
-    retained-cash floor.  The lazy imports mirror ``finance.py``'s discipline to
-    avoid pulling the full pvlib/fleet stack at ``optimize`` import time.
+    retained-cash floor.
 
     Args:
         scenario: Fleet scenario (must have at least one home).
@@ -880,11 +887,6 @@ def _age0_baseline_outlay(
     Returns:
         Representative home's total annual outlay (£).
     """
-    # Lazy imports to avoid import cycles and heavy pvlib stack at module level
-    from solar_challenge.finance import _resolve_homes, bill_distribution
-    from solar_challenge.fleet import FleetConfig
-    from solar_challenge.home import calculate_summary
-
     # Reuse finance._resolve_homes so homes-resolution semantics stay in one place
     homes: List[HomeConfig] = _resolve_homes(scenario)
 
@@ -962,12 +964,6 @@ def _evaluate_config(
     Returns:
         :class:`ConfigResult` with all fields populated.
     """
-    from solar_challenge.finance import (
-        project_economics,
-        project_multi_year,
-        solve_cost_recovery_rate,
-    )
-
     # Validate finance block (required for cost-recovery sweep)
     if scenario.finance is None:
         raise ValueError(
