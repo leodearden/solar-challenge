@@ -201,19 +201,22 @@ def test_custom_location_controls_named_by_their_captions_set_the_location_the_b
 
 
 class _Card(NamedTuple):
-    """A distribution card: its heading, the prefix of its form fields, the field holding its fixed value, and the value its add buttons start a new row at."""
+    """A distribution card: its heading, the prefix of its form fields, the field holding its fixed value, a fixed value for that field that differs from the card's default and lies within the card's min and max, and the value its add buttons start a new row at."""
 
     heading: str
     prefix: str
     fixed_field: str
+    non_default_fixed_value: str
     new_row_value: float
 
 
 _CARDS = (
-    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw", 4.0),
-    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh", 5.0),
-    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh", 3500),
+    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw", "6.5", 4.0),
+    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh", "9.5", 5.0),
+    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh", "4200", 3500),
 )
+
+_CARD_PARAMS = tuple(pytest.param(card, id=card.prefix) for card in _CARDS)
 
 _DISTRIBUTION_CARDS = tuple(pytest.param(card.heading, card.prefix, id=card.prefix) for card in _CARDS)
 """(card heading, the prefix of its form fields)."""
@@ -252,16 +255,9 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
     }
 
 
-_FIXED_VALUES = ("6.5", "9.5", "4200")
-"""A fixed value to type into each of the _CARDS, in order; each differs from its card's default and lies within the card's min and max."""
-
-
-@pytest.mark.parametrize(
-    ("card", "value"),
-    [pytest.param(card, value, id=card.prefix) for card, value in zip(_CARDS, _FIXED_VALUES, strict=True)],
-)
+@pytest.mark.parametrize("card", _CARD_PARAMS)
 def test_a_card_at_fixed_value_shows_one_spinbutton_named_fixed_value_that_sets_its_fixed_field(
-    page: Page, live_server: str, card: _Card, value: str
+    page: Page, live_server: str, card: _Card
 ) -> None:
     """At Fixed Value, as every card opens, the card's group shows one spinbutton, named Fixed Value, which sets the card's fixed field of the form the builder sends."""
     page.goto(live_server + "/scenarios/builder")
@@ -271,9 +267,9 @@ def test_a_card_at_fixed_value_shows_one_spinbutton_named_fixed_value_that_sets_
 
     expect(fixed_value).to_have_count(1)
     expect(card_group.get_by_role("spinbutton")).to_have_count(1)
-    fixed_value.fill(value)
+    fixed_value.fill(card.non_default_fixed_value)
 
-    assert _form_sent_on_validate(page)[card.fixed_field] == value
+    assert _form_sent_on_validate(page)[card.fixed_field] == card.non_default_fixed_value
 
 
 def _layout_box(control: Locator) -> FloatRect:
@@ -385,8 +381,6 @@ _ROW_LISTS = (
 
 _REMOVE_ROW_BUTTONS = re.compile(r"^Remove Row \d+$")
 """The names of a card's remove buttons: Remove Row and the number of the row it removes, counted from 1 within the card."""
-
-_CARD_PARAMS = tuple(pytest.param(card, id=card.prefix) for card in _CARDS)
 
 
 @pytest.mark.parametrize("row_list", _ROW_LISTS)
