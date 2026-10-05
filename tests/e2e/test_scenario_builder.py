@@ -734,6 +734,27 @@ def test_uploading_a_scenario_whose_location_omits_altitude_previews_that_scenar
     assert yaml.safe_load(preview.json()["yaml"]) == yaml.safe_load(_LOCATION_WITHOUT_ALTITUDE_YAML)
 
 
+@pytest.mark.parametrize("key", ["Enter", "Space"])
+def test_tabbing_to_upload_yaml_and_pressing_key_opens_a_file_chooser_whose_scenario_loads_into_the_form(
+    page: Page, live_server: str, tmp_path: Path, key: str
+) -> None:
+    """Tab moves focus from the Load Preset button to the Upload YAML button, and pressing *key* there opens a file chooser; the scenario chosen in it sets the form the builder previews."""
+    with page.expect_response("**/api/scenarios/preview-yaml"):
+        page.goto(live_server + "/scenarios/builder")
+    path = tmp_path / "scenario.yaml"
+    path.write_text(_LOCATION_WITHOUT_ALTITUDE_YAML, encoding="utf-8")
+    page.get_by_role("button", name="Load Preset", exact=True).focus()
+
+    page.keyboard.press("Tab")
+    expect(page.get_by_role("button", name="Upload YAML", exact=True)).to_be_focused()
+    with page.expect_file_chooser() as chooser:
+        page.keyboard.press(key)
+    with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
+        chooser.value.set_files(path)
+
+    assert after_upload.value.request.post_data_json["name"] == "Hand-written location"
+
+
 _RUN_EXPORT_YAML = scenario_yaml(
     fleet_scenario(
         [HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())],
