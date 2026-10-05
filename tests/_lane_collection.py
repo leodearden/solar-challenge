@@ -65,9 +65,13 @@ def default_collection_node_ids_under(project_root: Path, suite: str) -> tuple[s
     per-task verify, and dark-factory's serial and confirm reruns, which append
     `-o addopts=`. Only the repo's own exclusion is measured; the other
     directories under tests/ are ignored only to keep the collection fast. It
-    asserts that the collection ran.
+    asserts that *suite* is such a directory and that the collection ran.
     """
-    siblings = [path for path in (project_root / "tests").iterdir() if path.is_dir() and path != project_root / suite]
+    suite_directory = project_root / suite
+    assert PurePosixPath(suite).parent == PurePosixPath("tests") and suite_directory.is_dir(), (
+        f"{suite!r} is not a directory directly under tests/; probed, it would read as never reached"
+    )
+    siblings = [path for path in (project_root / "tests").iterdir() if path.is_dir() and path != suite_directory]
     command = shlex.join(
         [sys.executable, "-m", "pytest", "-o", "addopts=", "tests", *(f"--ignore={sibling}" for sibling in siblings)]
     )

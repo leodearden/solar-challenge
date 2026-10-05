@@ -228,3 +228,19 @@ def test_a_default_collection_that_fails_fails_describing_its_error(tmp_path: Pa
         default_collection_node_ids_under(project_root, _SUITE)
 
     assert _IMPORT_ERROR_MESSAGE in str(failure.value)
+
+
+@pytest.mark.parametrize("suite", [f"{_SUITE}/deeper", "tests/absent"], ids=["deeper", "absent"])
+def test_a_suite_that_is_not_a_directory_directly_under_tests_is_refused_naming_it(tmp_path: Path, suite: str) -> None:
+    """Probed, either would read as never reached.
+
+    A deeper suite is ignored with its parent directory, and an absent one holds no tests.
+    """
+    project_root = _project_with_a_suite(tmp_path)
+    (project_root / _SUITE / "deeper").mkdir()
+    (project_root / _SUITE / "deeper" / "test_deeper.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError) as failure:
+        default_collection_node_ids_under(project_root, suite)
+
+    assert repr(suite) in str(failure.value)
