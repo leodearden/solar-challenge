@@ -839,21 +839,17 @@ REFUSED_RUN_IDS = [
     pytest.param("run id", id="space"),
 ]
 
+ACCEPTED_RUN_IDS = [
+    pytest.param("abc", id="letters"),
+    pytest.param("test-run-001", id="hyphens"),
+    pytest.param("my_run_123", id="underscores"),
+    pytest.param("valid-run_123", id="hyphen-and-underscore"),
+    pytest.param("550e8400-e29b-41d4-a716-446655440000", id="uuid"),
+]
+
 
 class TestRunIdValidation:
     """The run ids the store refuses and accepts, as its saves, loads and deletes see them."""
-
-    def test_valid_id_with_hyphens(self, storage):
-        """Test that valid run_id with hyphens passes validation."""
-        storage._validate_run_id("test-run-001")  # Should not raise
-
-    def test_valid_id_with_underscores(self, storage):
-        """Test that valid run_id with underscores passes validation."""
-        storage._validate_run_id("my_run_123")  # Should not raise
-
-    def test_valid_simple_id(self, storage):
-        """Test that simple alphanumeric run_id passes validation."""
-        storage._validate_run_id("abc")  # Should not raise
 
     @pytest.mark.parametrize("run_id", REFUSED_RUN_IDS)
     def test_a_home_save_under_an_id_the_store_refuses_raises_value_error_and_writes_nothing(
@@ -905,3 +901,20 @@ class TestRunIdValidation:
         """A delete of an id the store refuses raises ValueError: no run can be saved under the id, so the caller has a bug."""
         with pytest.raises(ValueError, match="Invalid run_id"):
             storage.delete_run(run_id)
+
+    @pytest.mark.parametrize("run_id", ACCEPTED_RUN_IDS)
+    def test_a_home_run_saved_under_an_accepted_id_loads_back_from_the_directory_the_id_names(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary, run_id
+    ):
+        """A home run saved under an accepted id loads back equal, from the run directory the id names."""
+        storage.save_home_run(
+            run_id=run_id,
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+        )
+
+        loaded_config, _, loaded_summary = storage.load_home_run(run_id)
+
+        assert (loaded_config, loaded_summary) == (sample_home_config, sample_summary)
+        assert [run_dir.name for run_dir in (storage.data_dir / "runs").iterdir()] == [run_id]
