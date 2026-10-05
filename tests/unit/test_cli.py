@@ -826,7 +826,7 @@ class TestProgress:
     def test_a_display_on_the_quiet_status_console_leaves_other_stderr_output_alone_on_a_terminal(
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, create: Callable[[], Progress]
     ) -> None:
-        """What a simulation writes on stderr while a display runs prints though the status console is quiet. On a terminal a running display captures everything else written to stdout and stderr and prints it on its own console, so a display on the quiet console would discard a warning such as load.py's richardsonpy fallback, which prints when off a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal: Console.is_terminal reads it at call time, in rich 15.0.0 as uv.lock pins."""
+        """Text written on stderr while a display on the quiet status console runs still prints, even on a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal."""
         monkeypatch.setenv("TTY_COMPATIBLE", "1")
         monkeypatch.setattr(status_console, "quiet", True)
 
