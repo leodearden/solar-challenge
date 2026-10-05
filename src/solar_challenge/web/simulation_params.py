@@ -19,7 +19,13 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
+from solar_challenge.web.number_fields import as_int_within
 from solar_challenge.web.shared import require_json_object, resolve_location
+
+_DAYS_WINDOW_START = pd.Timestamp("2024-06-01")
+
+#: The most days a request may ask for: the longest window from _DAYS_WINDOW_START that ends by pd.Timestamp.max.
+MAX_WINDOW_DAYS: int = (pd.Timestamp.max - _DAYS_WINDOW_START).days + 1
 
 # Each parser's recognised top-level keys, and the value each reads as when absent.
 _DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
@@ -60,8 +66,9 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
        2024 is a leap year this window spans 366 days; ``365`` is intentionally
        a *named sentinel* (not a literal day count) so callers can request a
        full-year run without specifying explicit dates.
-    2. ``days`` key present (any *positive* integer ≠ 365) → *days*-day window
-       anchored at 2024-06-01.  ``days <= 0`` raises ``ValueError``.
+    2. ``days`` key present (an integer from 1 to :data:`MAX_WINDOW_DAYS` other
+       than 365, read as int() reads it) → *days*-day window anchored at
+       2024-06-01.
     3. Otherwise → use ``start`` / ``end`` keys with defaults
        ``"2024-01-01"`` / ``"2024-12-31"``.
 
@@ -72,7 +79,8 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
         Tuple of ``(start, end)`` as ``"YYYY-MM-DD"`` strings.
 
     Raises:
-        ValueError: If ``days`` is present but not a positive integer.
+        ValueError: If ``days`` is present but is one int() cannot read or is
+            outside 1 to MAX_WINDOW_DAYS; the error names days and the value sent.
     """
     params = {**_DATE_RANGE_DEFAULTS, **data}
     days_raw = params["days"]
@@ -80,14 +88,11 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     end_raw = params["end"]
 
     if days_raw is not None:
-        days = int(days_raw)
-        if days <= 0:
-            raise ValueError(f"days must be a positive integer, got {days}")
+        days = as_int_within(days_raw, "days", 1, MAX_WINDOW_DAYS)
         if days == 365:
             return "2024-01-01", "2024-12-31"
-        ref = pd.Timestamp("2024-06-01")
-        start = ref.strftime("%Y-%m-%d")
-        end = (ref + pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        start = _DAYS_WINDOW_START.strftime("%Y-%m-%d")
+        end = (_DAYS_WINDOW_START + pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
         return start, end
 
     start = str(start_raw) if start_raw else "2024-01-01"
