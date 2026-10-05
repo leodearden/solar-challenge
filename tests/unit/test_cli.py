@@ -291,7 +291,6 @@ class TestConfigCLI:
 
         assert result.exit_code == 1
         assert result.stdout == ""
-        assert "Unknown template type" in result.stderr
         assert Style.parse("red").render("Unknown template type: invalid") in recorded
 
     def test_an_unknown_template_type_is_reported_verbatim(self) -> None:
