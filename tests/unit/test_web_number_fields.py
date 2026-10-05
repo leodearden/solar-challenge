@@ -12,7 +12,7 @@ from solar_challenge.web.number_fields import (
 
 
 class TestAsFiniteFloat:
-    """as_finite_float reads a value as float() reads it, and refuses one that is not a finite number."""
+    """as_finite_float reads a value as float() reads it, and refuses a boolean or one that is not a finite number."""
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -43,12 +43,14 @@ class TestAsFiniteFloat:
             pytest.param(float("nan"), id="nan"),
             pytest.param("inf", id="infinity-string"),
             pytest.param(10**400, id="integer-too-large-for-a-float"),
+            pytest.param(True, id="true"),
+            pytest.param(False, id="false"),
         ],
     )
     def test_a_value_that_is_not_a_finite_number_is_refused_naming_the_field_and_the_value(
         self, value: object
     ) -> None:
-        """A value float() cannot read, one too large for a float, and ±inf or NaN are refused alike."""
+        """A boolean, a value float() cannot read, one too large for a float, and ±inf or NaN are refused alike."""
         with pytest.raises(ValueError) as exc_info:
             as_finite_float(value, "pv_kw")
         assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
@@ -153,7 +155,11 @@ class TestAsWholeNumber:
 
     @pytest.mark.parametrize(
         "value",
-        [pytest.param(float("inf"), id="infinity"), pytest.param("abc", id="non-numeric-string")],
+        [
+            pytest.param(float("inf"), id="infinity"),
+            pytest.param("abc", id="non-numeric-string"),
+            pytest.param(True, id="true"),
+        ],
     )
     def test_a_value_that_is_not_a_finite_number_gets_the_as_finite_float_refusal(
         self, value: object
