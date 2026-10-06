@@ -1363,6 +1363,108 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
         assert "Sweep complete: 1 feasible config(s), 0 infeasible config(s)." in " ".join(result.stderr.split())
 
 
+_ECONOMY_7_TARIFF = {
+    "type": "economy_7",
+    "off_peak_rate": 0.09,
+    "peak_rate": 0.25,
+    "off_peak_start": "00:30",
+    "off_peak_end": "07:30",
+}
+
+# Each way `fleet sweep` sweeps a fleet file's battery capacity: the file's capacity_kwh,
+# the options that sweep it, and the file its 5 kWh point is exported to.
+_SWEEP_PATHS = (
+    pytest.param(
+        {
+            "type": "proportional_to",
+            "source": "pv.capacity_kw",
+            "multiplier": {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"},
+        },
+        (),
+        "multiplier_1.2500.csv",
+        id="yaml-sweep",
+    ),
+    pytest.param(
+        "${CAP}",
+        ("--param", "CAP", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+        "CAP_5.0000.csv",
+        id="param-sweep",
+    ),
+)
+
+
+def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, object]) -> None:
+    """Write file_name in the working directory: a fleet file under the top-level tariff, of two tou_optimized homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that charges and discharges at 2.5 kW and grid-charges to 90%."""
+    Path(file_name).write_text(
+        yaml.safe_dump(
+            {
+                "tariff": tariff,
+                "fleet_distribution": {
+                    "n_homes": 2,
+                    "seed": 42,
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                    "dispatch_strategy": "tou_optimized",
+                    "battery": {
+                        "max_charge_kw": 2.5,
+                        "max_discharge_kw": 2.5,
+                        "grid_charging": {"target_soc_fraction": 0.9},
+                        "capacity_kwh": capacity_kwh,
+                    },
+                },
+            }
+        )
+    )
+
+
+def _run_fleet(*argv: str) -> Result:
+    """Run the `fleet` command argv for 21 June, simulating its homes one after another."""
+    return runner.invoke(
+        app,
+        ["fleet", *argv, "--start", "2024-06-21", "--end", "2024-06-21", "--sequential"],
+        catch_exceptions=False,
+    )
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestFleetSweepGivesEachPointTheFleetFilesBlocks:
+    """Tests that `fleet sweep`, on either sweep path, gives every point's homes the fleet file's top-level blocks as `fleet run` gives them."""
+
+    @pytest.mark.parametrize(("capacity_kwh", "options", "point_file"), _SWEEP_PATHS)
+    def test_a_sweep_point_simulates_the_fleet_fleet_run_simulates(
+        self, capacity_kwh: object, options: tuple[str, ...], point_file: str
+    ) -> None:
+        """The CSV `fleet sweep` exports for its 5 kWh point holds exactly the values of the CSV `fleet run` exports for the same fleet file with a 5 kWh battery.
+
+        The frames are compared, not the texts: pytest's diff of two long CSV texts that differ takes minutes to report.
+        """
+        _write_fleet_file("run.yaml", 5.0, _ECONOMY_7_TARIFF)
+        _write_fleet_file("sweep.yaml", capacity_kwh, _ECONOMY_7_TARIFF)
+
+        fleet_run = _run_fleet("run", "run.yaml", "--output", "run.csv")
+        fleet_sweep = _run_fleet("sweep", "sweep.yaml", "--output-dir", "sweep", *options)
+
+        assert fleet_run.exit_code == 0, fleet_run.output
+        assert fleet_sweep.exit_code == 0, fleet_sweep.output
+        pd.testing.assert_frame_equal(
+            pd.read_csv(Path("sweep", point_file)), pd.read_csv("run.csv"), check_exact=True
+        )
+
+    @pytest.mark.parametrize(("capacity_kwh", "options", "point_file"), _SWEEP_PATHS)
+    def test_a_sweep_of_a_file_whose_tariff_the_loader_refuses_is_refused(
+        self, capacity_kwh: object, options: tuple[str, ...], point_file: str
+    ) -> None:
+        """`fleet sweep` refuses a tariff: block `fleet run` refuses, with exit 1, before it simulates any point."""
+        _write_fleet_file("sweep.yaml", capacity_kwh, {"type": "economy_8"})
+
+        result = _run_fleet("sweep", "sweep.yaml", "--output-dir", "sweep", *options)
+
+        assert result.exit_code == 1
+        assert "Unknown tariff type 'economy_8'" in " ".join(result.stderr.split())
+        assert not Path("sweep", point_file).exists()
+        assert not Path("sweep", "sweep_summary.csv").exists()
+
+
 class TestQuietOption:
     """Tests that --quiet silences a command's status messages and progress on stderr, and leaves its product, its warnings and its errors."""
 
