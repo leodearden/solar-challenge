@@ -250,6 +250,22 @@ class TestFleetFromDistribution:
         assert message in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
+    def test_reversed_window_returns_400_naming_start_and_end_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A fleet window that ends before it starts is a 400 naming start and end; no fleet is queued."""
+        body = {key: value for key, value in self._VALID_BODY.items() if key != "days"}
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**body, "start": "2024-06-10", "end": "2024-06-01"},
+        )
+        assert resp.status_code == 400
+        assert (
+            resp.get_json()["error"]
+            == "end must not be before start, got start '2024-06-10' and end '2024-06-01'"
+        )
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
