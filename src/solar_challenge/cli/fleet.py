@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation commands."""
 
+import dataclasses
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
@@ -399,8 +400,8 @@ def sweep(
 
         for val in sweep_values:
             substituted = substitute_config_variables(raw_config, {param: val})
-            fleet_config = FleetConfig(
-                homes=parse_fleet_config(substituted).homes, name=f"{param}={val:.4f}"
+            fleet_config = dataclasses.replace(
+                parse_fleet_config(substituted), name=f"{param}={val:.4f}"
             )
             sweep_configs.append((val, fleet_config))
 
