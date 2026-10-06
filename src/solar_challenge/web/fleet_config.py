@@ -82,8 +82,8 @@ def sample_distribution(
         dist_type: Distribution type. One of ``'weighted_discrete'``,
             ``'normal'``, ``'uniform'``, ``'shuffled_pool'``.
         params: Distribution parameters (varies by type), read the way
-            :func:`_build_distribution_dict` reads a fleet form's spec; must be
-            a dict.
+            :func:`_build_distribution_dict` reads a fleet form's spec, as the
+            distribution named ``params``; must be a dict.
         n_samples: Number of samples to generate, read as int() reads it; from 1
             to :data:`MAX_FLEET_HOMES`.
 
@@ -94,15 +94,17 @@ def sample_distribution(
         ValueError: If dist_type is unknown or params are invalid, params are
             not a dict (see :func:`_require_dict`), a
             weighted_discrete/shuffled_pool row list is malformed (see
-            :func:`_dict_list`), n_samples is one int() cannot read or outside
+            :func:`_named_rows`), n_samples is one int() cannot read or outside
             1 to MAX_FLEET_HOMES (see
             :func:`~solar_challenge.web.number_fields.as_int_within`), or a shuffled_pool
             count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
-            the counts total more than that (see :func:`_pool_counts`).
+            the counts total more than that (see :func:`_pool_counts`); a row or
+            count refusal names its field under ``params``, such as
+            ``params.entries[0].count``.
     """
     n_samples = as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
-    spec = _build_distribution_dict({**params, "type": dist_type})
+    spec = _build_distribution_dict({**params, "type": dist_type}, "params")
 
     rng = random.Random(42)
 
@@ -167,9 +169,11 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             int() cannot read (see :func:`~solar_challenge.web.number_fields.as_int`),
             a pv/battery/load block is neither null nor a dict (see
             :func:`_component_block`), a weighted_discrete/shuffled_pool
-            row list is malformed (see :func:`_dict_list`), or a shuffled_pool
+            row list is malformed (see :func:`_named_rows`), or a shuffled_pool
             count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
-            the counts total more than that (see :func:`_pool_counts`).
+            the counts total more than that (see :func:`_pool_counts`); a row or
+            count refusal names its field under its distribution's, such as
+            ``pv.capacity_kw.entries[0].count``.
     """
     config: dict[str, Any] = {
         "n_homes": as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
@@ -178,20 +182,16 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
 
     # Process PV distribution
     pv_data = _component_block_or_empty(form_data, "pv")
-    config["pv"] = _parse_component_distribution(pv_data, "capacity_kw", default_field="capacity_kw")
+    config["pv"] = _parse_component_distribution(pv_data, "pv", "capacity_kw")
 
     # Process Battery distribution
     battery_data = _component_block(form_data, "battery")
     if battery_data is not None and battery_data.get("enabled", True):
-        config["battery"] = _parse_component_distribution(
-            battery_data, "capacity_kwh", default_field="capacity_kwh"
-        )
+        config["battery"] = _parse_component_distribution(battery_data, "battery", "capacity_kwh")
 
     # Process Load distribution
     load_data = _component_block_or_empty(form_data, "load")
-    config["load"] = _parse_component_distribution(
-        load_data, "annual_consumption_kwh", default_field="annual_consumption_kwh"
-    )
+    config["load"] = _parse_component_distribution(load_data, "load", "annual_consumption_kwh")
 
     return config
 
@@ -227,45 +227,61 @@ def _require_dict(value: object, field: str) -> dict[str, Any]:
     return value
 
 
-def _dict_list(spec: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    """Return the *key* row list of *spec*, reading an absent list as empty.
+def _named_rows(
+    spec: dict[str, Any], key: str, path: str
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return each row of the *key* row list of the *path* distribution *spec* with its field, reading an absent list as empty.
+
+    A row's field is ``path.key[index]``.
 
     Raises:
-        ValueError: If the value is not a list (the error names *key* and the type sent),
-            or a row is not a dict (see :func:`_require_dict`; the row is named ``key[index]``).
+        ValueError: If the value is not a list (the error names ``path.key`` and the type
+            sent), or a row is not a dict (see :func:`_require_dict`; the error names the
+            row's field).
     """
+    rows_field = f"{path}.{key}"
     rows = spec.get(key, [])
     if not isinstance(rows, list):
-        raise ValueError(f"{key} must be a list, got {type(rows).__name__}")
-    return [_require_dict(row, f"{key}[{index}]") for index, row in enumerate(rows)]
+        raise ValueError(f"{rows_field} must be a list, got {type(rows).__name__}")
+    named_rows: list[tuple[str, dict[str, Any]]] = []
+    for index, row in enumerate(rows):
+        field = f"{rows_field}[{index}]"
+        named_rows.append((field, _require_dict(row, field)))
+    return named_rows
 
 
 def _parse_component_distribution(
-    data: dict[str, Any], primary_field: str, default_field: str = ""
+    data: dict[str, Any], block: str, primary_field: str
 ) -> dict[str, Any]:
-    """Parse a component distribution section from form data.
+    """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
+
+    Its *primary_field* is the distribution *data* holds there, a mapping with a type or a
+    number; else *data* itself, when it has a type; else *data* whole.  Its other settings
+    are copied through.
 
     Args:
         data: Component form data dict.
+        block: The block's name in the form, ``pv``, ``battery`` or ``load``.
         primary_field: Name of the primary distribution field.
-        default_field: Unused (kept for API consistency).
 
     Returns:
         Component distribution config dict.
+
+    Raises:
+        ValueError: As :func:`_build_distribution_dict`, for the distribution at
+            ``block.primary_field``, or at ``block`` when *data* itself is the distribution.
     """
     result: dict[str, Any] = {}
-    dist_data = data.get(primary_field, data)
+    spec = data.get(primary_field)
 
-    if isinstance(dist_data, dict) and "type" in dist_data:
-        result[primary_field] = _build_distribution_dict(dist_data)
-    elif isinstance(dist_data, (int, float)):
-        result[primary_field] = float(dist_data)
+    if isinstance(spec, dict) and "type" in spec:
+        result[primary_field] = _build_distribution_dict(spec, f"{block}.{primary_field}")
+    elif isinstance(spec, (int, float)):
+        result[primary_field] = float(spec)
+    elif "type" in data:
+        result[primary_field] = _build_distribution_dict(data, block)
     else:
-        # Try to treat the whole data dict as the distribution
-        if "type" in data:
-            result[primary_field] = _build_distribution_dict(data)
-        else:
-            result[primary_field] = data
+        result[primary_field] = data
 
     # Copy through extra scalar fields (azimuth, tilt, etc.)
     for key, value in data.items():
@@ -278,20 +294,22 @@ def _parse_component_distribution(
     return result
 
 
-def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
+def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:
     """Build a standardised distribution dict from form input.
 
     Args:
         data: Dict with at least a ``type`` key.
+        path: The distribution's field, a dot path from the request body's root, such
+            as ``pv.capacity_kw`` or ``params``.
 
     Returns:
         Distribution specification dict.
 
     Raises:
         ValueError: If a weighted_discrete/shuffled_pool row list is malformed
-            (see :func:`_dict_list`), or a shuffled_pool count is one int() cannot
+            (see :func:`_named_rows`), or a shuffled_pool count is one int() cannot
             read or outside 0 to MAX_FLEET_HOMES, or the counts total more than
-            that (see :func:`_pool_counts`).
+            that (see :func:`_pool_counts`); each error names its field under *path*.
     """
     dist_type = data["type"]
     result: dict[str, Any] = {"type": dist_type}
@@ -309,14 +327,14 @@ def _build_distribution_dict(data: dict[str, Any]) -> dict[str, Any]:
         result["max"] = float(data.get("max", 1))
 
     elif dist_type == "weighted_discrete":
-        values_raw = _dict_list(data, "values")
-        result["values"] = [float(v.get("value", 0)) for v in values_raw]
-        result["weights"] = [float(v.get("weight", 1)) for v in values_raw]
+        rows = _named_rows(data, "values", path)
+        result["values"] = [float(row.get("value", 0)) for _, row in rows]
+        result["weights"] = [float(row.get("weight", 1)) for _, row in rows]
 
     elif dist_type == "shuffled_pool":
-        entries = _dict_list(data, "entries")
-        result["values"] = [float(e.get("value", 0)) for e in entries]
-        result["counts"] = _pool_counts(entries)
+        rows = _named_rows(data, "entries", path)
+        result["values"] = [float(row.get("value", 0)) for _, row in rows]
+        result["counts"] = _pool_counts(rows, f"{path}.entries")
 
     return result
 
@@ -385,20 +403,23 @@ def _form_number(value: object, path: str) -> float:
     return float(value)
 
 
-def _pool_counts(entries: list[dict[str, Any]]) -> list[int]:
-    """Return the count of each shuffled_pool row in *entries*, an absent count reading as 1.
+def _pool_counts(rows: list[tuple[str, dict[str, Any]]], entries_field: str) -> list[int]:
+    """Return the count of each shuffled_pool row in *rows*, the (field, row) pairs of the *entries_field* list, an absent count reading as 1.
 
     Raises:
         ValueError: If a count is one int() cannot read or outside 0 to MAX_FLEET_HOMES
-            (see :func:`~solar_challenge.web.number_fields.as_int_within`), or the counts
-            total more than MAX_FLEET_HOMES, more values than a dashboard fleet has homes
-            to take; that error names the total.
+            (see :func:`~solar_challenge.web.number_fields.as_int_within`; the count is
+            named under its row's field), or the counts total more than MAX_FLEET_HOMES,
+            more values than a dashboard fleet has homes to take; that error names
+            *entries_field* and the total.
     """
     counts = [
-        as_int_within(entry.get("count", 1), f"entries[{index}].count", 0, MAX_FLEET_HOMES)
-        for index, entry in enumerate(entries)
+        as_int_within(row.get("count", 1), f"{field}.count", 0, MAX_FLEET_HOMES)
+        for field, row in rows
     ]
     total = sum(counts)
     if total > MAX_FLEET_HOMES:
-        raise ValueError(f"entries counts must total at most {MAX_FLEET_HOMES}, got {total}")
+        raise ValueError(
+            f"{entries_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
+        )
     return counts
