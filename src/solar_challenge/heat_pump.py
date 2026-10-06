@@ -6,6 +6,8 @@ from typing import Literal, Optional
 
 import pandas as pd
 
+from solar_challenge.timebase import HOURS_PER_MINUTE
+
 
 # Valid heat pump types
 HeatPumpType = Literal["ASHP", "GSHP"]
@@ -228,7 +230,7 @@ def generate_heat_pump_load(
         >>> load = generate_heat_pump_load(config, year.loc['2023-01-15'], annual_temperature_c=year)
         >>> len(load)
         1440
-        >>> heat_delivered_kwh = float(load.sum()) / 60 * calculate_cop("ASHP", 10.0)
+        >>> heat_delivered_kwh = float(load.sum()) * HOURS_PER_MINUTE * calculate_cop("ASHP", 10.0)
         >>> round(heat_delivered_kwh, 2)  # one day's share of 8000 kWh: 8000 / 365
         21.92
     """
@@ -250,7 +252,7 @@ def generate_heat_pump_load(
     if annual_degree_minutes == 0:
         electrical_load_kw = pd.Series(0.0, index=temperature_c.index)
     else:
-        heat_kw_per_degree_minute = config.annual_heat_demand_kwh * 60.0 / annual_degree_minutes
+        heat_kw_per_degree_minute = config.annual_heat_demand_kwh / annual_degree_minutes / HOURS_PER_MINUTE
         thermal_demand_kw = (
             calculate_heating_degree_minutes(temperature_c) * heat_kw_per_degree_minute
         ).clip(upper=config.thermal_capacity_kw)

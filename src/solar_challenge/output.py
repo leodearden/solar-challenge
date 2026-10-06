@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import pandas as pd
 
-from solar_challenge.home import HOURS_PER_MINUTE, SimulationResults, calculate_summary
+from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.timebase import HOURS_PER_MINUTE
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults

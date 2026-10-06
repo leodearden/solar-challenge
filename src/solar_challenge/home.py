@@ -23,6 +23,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import HOURS_PER_MINUTE
 from solar_challenge.weather import align_tmy_to_index, get_tmy_data
 
 
@@ -66,9 +67,6 @@ class HomeConfig:
 
 _COLUMN = "column"
 _AMOUNT = "per_minute_amount"
-
-HOURS_PER_MINUTE = 1 / 60
-"""Each SimulationResults row is one minute, so a kW sample times this is that minute's kWh."""
 
 
 @dataclass(frozen=True)

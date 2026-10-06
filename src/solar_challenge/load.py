@@ -10,6 +10,8 @@ from typing import Any, Optional, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from solar_challenge.timebase import HOURS_PER_MINUTE
+
 if TYPE_CHECKING:
     from solar_challenge.ev import EVConfig
 
@@ -375,10 +377,9 @@ def _try_richardsonpy_profile(
             )
             for j in range(window_days)
         )
-        # calculate_annual_consumption integrates whatever Series is passed
-        # (profile.sum() / 60.0); here it measures the raw *window* energy in
-        # kWh — not a full-year figure — to compute the scale factor to the
-        # seasonal target.
+        # calculate_annual_consumption integrates whatever Series is passed;
+        # here it measures the raw *window* energy in kWh — not a full-year
+        # figure — to compute the scale factor to the seasonal target.
         raw_kwh = calculate_annual_consumption(profile)
         if raw_kwh > 0.0:
             profile = profile * (target_window_kwh / raw_kwh)
@@ -534,10 +535,9 @@ def calculate_annual_consumption(profile: pd.Series) -> float:
         profile: Power series in kW with 1-minute resolution
 
     Returns:
-        Total energy in kWh (profile.sum() / 60.0)
+        Total energy in kWh
     """
-    # Power (kW) * time (1 minute = 1/60 hour) = Energy (kWh)
-    return float(profile.sum() / 60.0)
+    return float(profile.sum() * HOURS_PER_MINUTE)
 
 
 def scale_profile_to_annual(
