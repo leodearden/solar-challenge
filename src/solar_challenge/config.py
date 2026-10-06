@@ -2299,14 +2299,17 @@ class _FleetFileSettings:
         )
 
 
-def _read_fleet_file_settings(
-    document: Mapping[str, Any], location: Location, distribution: FleetDistributionConfig
-) -> _FleetFileSettings:
-    """Read what *document* gives every home its *distribution* generates, at *location*.
+def _read_fleet_distribution_file(
+    document: Mapping[str, Any],
+) -> tuple[FleetDistributionConfig, _FleetFileSettings]:
+    """Read the fleet_distribution: block of *document*, with what the file gives every home it generates.
 
-    The one place that decides which top-level blocks those homes get. Warns when
-    *distribution* dispatches tou_optimized with no tariff to dispatch by.
+    The one place that decides which top-level blocks those homes get. It reads location:,
+    fleet_distribution: and tariff: in that order, and warns when the block dispatches
+    tou_optimized with no tariff to dispatch by.
     """
+    location = parse_location_block(document.get("location"))
+    distribution = parse_fleet_distribution_config(document["fleet_distribution"])
     tariff = parse_tariff_config(document.get("tariff"))
     if distribution.dispatch_strategy == "tou_optimized" and tariff is None:
         warnings.warn(
@@ -2315,9 +2318,9 @@ def _read_fleet_file_settings(
             "simulation time. Add a top-level 'tariff:' key to the fleet YAML to "
             "enable Economy-7 grid-charging.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
-    return _FleetFileSettings(location=location, tariff=tariff)
+    return distribution, _FleetFileSettings(location=location, tariff=tariff)
 
 
 def parse_fleet_config(document: Mapping[str, Any]) -> FleetConfig:
@@ -2336,13 +2339,11 @@ def parse_fleet_config(document: Mapping[str, Any]) -> FleetConfig:
     Raises:
         ConfigurationError: If configuration is invalid
     """
-    location = parse_location_block(document.get("location"))
-
     if "fleet_distribution" in document:
-        distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-        settings = _read_fleet_file_settings(document, location, distribution)
+        distribution, settings = _read_fleet_distribution_file(document)
         homes = settings.generate_homes(distribution)
     elif "homes" in document:
+        location = parse_location_block(document.get("location"))
         homes_data = document["homes"]
         if not homes_data:
             raise ConfigurationError("Fleet 'homes' list cannot be empty")
@@ -2390,11 +2391,9 @@ def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, 
         ConfigurationError: If the document has no fleet_distribution: block or no
             sweep, or if configuration is invalid
     """
-    location = parse_location_block(document.get("location"))
     if "fleet_distribution" not in document:
         raise ConfigurationError("A YAML-defined sweep requires a 'fleet_distribution' block")
-    distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-    settings = _read_fleet_file_settings(document, location, distribution)
+    distribution, settings = _read_fleet_distribution_file(document)
     return [
         (value, FleetConfig(homes=settings.generate_homes(point), name=f"multiplier={value:.4f}"))
         for value, point in expand_sweep_configs(distribution)

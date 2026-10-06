@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the fleet-file readers load_fleet_config and parse_sweep_fleet_configs, on inline fleet files and on the fleet scenarios shipped in scenarios/."""
+"""Tests for config.py's fleet-file readers, on inline fleet files and on the fleet scenarios shipped in scenarios/."""
 
 import json
 import re
 import warnings
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional
 
 import pytest
 import yaml
@@ -15,6 +15,7 @@ from solar_challenge.config import (
     DispatchStrategyConfig,
     GridChargeConfig,
     load_fleet_config,
+    parse_fleet_config,
     parse_sweep_fleet_configs,
 )
 from solar_challenge.fleet import FleetConfig
@@ -718,3 +719,51 @@ class TestParseSweepFleetConfigs:
         """Each refusal is a ConfigurationError, never a KeyError, so a caller reports it as a config error."""
         with pytest.raises(ConfigurationError, match=refusal):
             parse_sweep_fleet_configs(document)
+
+
+# Each document-level reader of a fleet_distribution file, with the battery capacity_kwh of
+# a file it reads: a fixed capacity, or a three-point sweep.
+_FLEET_DISTRIBUTION_READERS = (
+    pytest.param(parse_fleet_config, 5.0, id="parse_fleet_config"),
+    pytest.param(
+        parse_sweep_fleet_configs,
+        _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
+        id="parse_sweep_fleet_configs",
+    ),
+)
+
+
+class TestFleetDistributionFileReaders:
+    """parse_fleet_config and parse_sweep_fleet_configs read a fleet_distribution file's top-level blocks alike: location:, then fleet_distribution:, then tariff:."""
+
+    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
+    def test_a_file_refused_on_every_block_is_refused_on_its_location(
+        self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
+    ) -> None:
+        document = _fleet_file(capacity_kwh, location={"latitud": 51.45}, tariff={"type": "economy_8"})
+        document["fleet_distribution"]["n_homez"] = 2
+
+        with pytest.raises(ConfigurationError, match="Unrecognised keys in location: 'latitud'"):
+            read(document)
+
+    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
+    def test_a_file_refused_on_its_fleet_distribution_and_tariff_is_refused_on_its_fleet_distribution(
+        self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
+    ) -> None:
+        document = _fleet_file(capacity_kwh, tariff={"type": "economy_8"})
+        document["fleet_distribution"]["n_homez"] = 2
+
+        with pytest.raises(ConfigurationError, match="Unrecognised keys in fleet_distribution: 'n_homez'"):
+            read(document)
+
+    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
+    def test_the_tou_advisory_names_the_code_that_called_the_reader(
+        self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
+    ) -> None:
+        """The warning's file is the caller's, not config.py's."""
+        with pytest.warns(UserWarning, match="no tariff is configured") as caught:
+            read(_fleet_file(capacity_kwh))
+
+        assert [
+            warning.filename for warning in caught if "no tariff is configured" in str(warning.message)
+        ] == [__file__]
