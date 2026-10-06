@@ -7,14 +7,16 @@ back into the form, that Load Preset fills the form and names the preset's
 settings the form has no control for, that a preset without a period runs the
 page's default period, that the page shows why a preset cannot
 load or a fleet cannot export, that the simulation name reaches the submitted
-run, and that the period selector offers presets and a custom date range.
+run, that Run shows why the page refuses a form and submits nothing, and that
+the period selector offers presets and a custom date range.
 """
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
-from playwright.sync_api import Locator, Page, expect
+from playwright.sync_api import Locator, Page, Route, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -429,6 +431,67 @@ def test_fleet_simulation_name_is_submitted(page: Page, live_server: str) -> Non
         run_button.click()
 
     assert submission.value.post_data_json["name"] == "Bristol Fleet Trial"
+
+
+# -- Run refuses a form it cannot run --------------------------------------
+
+
+@pytest.fixture
+def fleet_submissions(page: Page) -> list[Any]:
+    """The body of each fleet run the page submits during the test, each aborted so no job reaches the live server's JobManager."""
+    submissions: list[Any] = []
+
+    def _record_and_abort(route: Route) -> None:
+        submissions.append(route.request.post_data_json)
+        route.abort()
+
+    page.route("**/api/simulate/fleet-from-distribution", _record_and_abort)
+    return submissions
+
+
+def test_fleet_run_of_an_imported_fleet_over_the_pages_size_limit_shows_the_refusal(
+    page: Page,
+    live_server: str,
+    tmp_path: Path,
+    fleet_submissions: list[Any],
+    page_errors: list[str],
+) -> None:
+    """Run of a fleet imported with more homes than the page runs, 1500 against its 1000, shows the refusal and submits nothing."""
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(IMPORTED_FLEET.replace("n_homes: 100", "n_homes: 1500"))
+    page.goto(live_server + "/simulate/fleet")
+
+    with page.expect_file_chooser() as chooser:
+        page.get_by_text("Import YAML", exact=True).click()
+    chooser.value.set_files(fleet_file)
+    expect(page.get_by_label("Number of Homes", exact=True)).to_have_value("1500")
+
+    page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    expect(page.get_by_role("alert")).to_have_text("Fleet size must be at most 1000")
+    assert fleet_submissions == []
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+
+def test_fleet_run_shows_every_reason_it_refuses_the_form(
+    page: Page, live_server: str, fleet_submissions: list[Any], page_errors: list[str]
+) -> None:
+    """Run of a form with two faults, a normal PV distribution with a zero Std Dev and a Min clamp above its Max, shows both reasons in one alert and submits nothing."""
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_role("combobox", name="PV Capacity Distribution Type", exact=True).select_option(
+        label="Normal (Gaussian)"
+    )
+    page.get_by_role("spinbutton", name="PV Capacity Std Dev", exact=True).fill("0")
+    page.get_by_role("spinbutton", name="PV Capacity Min (clamp)", exact=True).fill("8")
+    page.get_by_role("spinbutton", name="PV Capacity Max (clamp)", exact=True).fill("2")
+
+    page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    expect(page.get_by_role("alert")).to_have_text(
+        "PV std deviation must be positive; PV min must be less than max"
+    )
+    assert fleet_submissions == []
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
 
 # -- Period selector -------------------------------------------------------
