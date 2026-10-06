@@ -430,12 +430,9 @@ def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compile
 def test_built_wheel_ships_beside_the_compiled_css_exactly_the_license_texts_the_css_build_lane_checks(
     built_wheel: Path,
 ) -> None:
-    """The css-build lane compares with the locked tailwindcss package only the license copies
-    TAILWINDCSS_LICENSE_COPIES names, so a text beside the compiled CSS that it does not name would
-    ship unchecked. The failure message of
-    test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compiled_css derives its copy
-    instruction from the mapping, so it would omit that text too. A copy the mapping names that the
-    wheel does not ship sends the lane after a missing file.
+    """Every license text the wheel ships beside the compiled CSS is a copy TAILWINDCSS_LICENSE_COPIES
+    names, and every copy it names ships, so the css-build lane, which compares only the named copies
+    with the locked tailwindcss package, checks exactly the texts the wheel ships.
     """
     beside_css = sorted(
         entry.removeprefix(f"{_COMPILED_CSS_DIR}/")
