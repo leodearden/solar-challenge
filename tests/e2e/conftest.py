@@ -23,7 +23,7 @@ import functools
 import socket
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -301,7 +301,7 @@ def _record_requests_lost_to_network_changes(request: pytest.FixtureRequest) -> 
     """Record, as "METHOD URL", each request the test's browser context fails with net::ERR_NETWORK_CHANGED during this attempt.
 
     Each attempt's record starts empty before its context starts, so an attempt
-    whose context fails to start has lost nothing. A test without a context starts none.
+    whose context fails to start has lost nothing. It starts no context for a test that uses none.
     """
     lost: list[str] = []
     request.node.stash[_REQUESTS_LOST_TO_NETWORK_CHANGES] = lost
@@ -333,3 +333,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     condition=functools.partial(_lost_a_request_to_a_network_change, item),
                 )
             )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Add to the report of a failure a section that lists the requests this attempt lost to network changes, if any."""
+    report = yield
+    lost = item.stash.get(_REQUESTS_LOST_TO_NETWORK_CHANGES, [])
+    if report.failed and lost:
+        report.sections.append(
+            (
+                f"requests Chromium failed with {_NETWORK_CHANGED}",
+                "\n".join([*lost, "docs/e2e-network-change-reruns.md says how a host network change fails a request"]),
+            )
+        )
+    return report
