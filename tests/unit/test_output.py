@@ -14,6 +14,7 @@ from solar_challenge.output import (
     aggregate_monthly,
     calculate_export_ratio,
     calculate_grid_dependency_ratio,
+    calculate_seasonal_metrics,
     calculate_self_consumption_ratio,
     export_to_csv,
     generate_summary_report,
@@ -66,6 +67,34 @@ def _run_with_distinct_rising_series(
         tariff_rate=series(0.3),
         heat_pump_load=series(1.2) if with_optional_series else None,
         grid_charge_cost=series(0.0005) if with_optional_series else None,
+    )
+
+
+def _seasonal_run() -> SimulationResults:
+    """Two January days, one April day and half a July day, each span steady at its own levels."""
+    spans = [
+        pd.date_range(start, periods=rows, freq="1min", tz="Europe/London")
+        for start, rows in [("2024-01-01", 2 * 1440), ("2024-04-01", 1440), ("2024-07-01", 720)]
+    ]
+    index = spans[0].append(spans[1:])
+
+    def steady(*, january: float, april: float, july: float) -> pd.Series:
+        return pd.Series(np.repeat([january, april, july], [len(span) for span in spans]), index=index)
+
+    zeros = pd.Series(0.0, index=index)
+    return SimulationResults(
+        generation=steady(january=1.0, april=9.0, july=4.0),
+        demand=steady(january=5.0, april=10.0, july=1.0),
+        self_consumption=zeros,
+        battery_charge=zeros,
+        battery_discharge=zeros,
+        battery_soc=zeros,
+        grid_import=zeros,
+        grid_export=zeros,
+        import_cost=zeros,
+        export_revenue=zeros,
+        tariff_rate=zeros,
+        heat_pump_load=steady(january=2.0, april=9.0, july=0.25),
     )
 
 
@@ -137,6 +166,39 @@ class TestGenerateSummaryReport:
         assert "Grid Import Cost" in report
         assert "Grid Export Revenue" in report
         assert "Net Cost" in report
+
+
+class TestSeasonalBreakdowns:
+    """Winter (December to February) and summer (June to August) each count only their own rows."""
+
+    def test_report_tables_each_seasons_heat_pump_figures(self):
+        lines = generate_summary_report(_seasonal_run()).splitlines()
+
+        # Winter: 2 kW × 48 h = 96 kWh, 40% of 5 kW × 48 h, over 2 days.
+        # Summer: 0.25 kW × 12 h = 3 kWh, 25% of 1 kW × 12 h, over half a day.
+        assert "| Total Heat Pump Load | 96.0 kWh | 3.0 kWh | 32.0x |" in lines
+        assert "| Peak Heat Pump Load | 2.00 kW | 0.25 kW | 8.0x |" in lines
+        assert "| HP % of Demand | 40.0% | 25.0% | - |" in lines
+        assert "| Daily Average | 48.0 kWh/day | 6.0 kWh/day | 8.0x |" in lines
+
+    def test_seasonal_metrics_total_each_season_and_leave_out_the_rest(self):
+        run = _seasonal_run()
+
+        # Self-consumption is each minute's min(generation, demand): generation in winter, demand in summer.
+        assert calculate_seasonal_metrics(run.demand, run.generation) == pytest.approx(
+            {
+                "winter_generation_kwh": 48.0,
+                "winter_demand_kwh": 240.0,
+                "winter_self_consumption_kwh": 48.0,
+                "winter_self_consumption_ratio": 1.0,
+                "winter_grid_dependency_ratio": 0.8,
+                "summer_generation_kwh": 48.0,
+                "summer_demand_kwh": 12.0,
+                "summer_self_consumption_kwh": 12.0,
+                "summer_self_consumption_ratio": 0.25,
+                "summer_grid_dependency_ratio": 0.0,
+            }
+        )
 
 
 class TestRatioCalculations:

@@ -365,6 +365,40 @@ def _make_summary_dict() -> dict:
     }
 
 
+def _steady_run(
+    days: int,
+    *,
+    demand_kw: float = 0.0,
+    heat_pump_kw: float | None = None,
+    import_cost_gbp: float = 0.0,
+    export_revenue_gbp: float = 0.0,
+) -> SimulationResults:
+    """A run of ``days`` days at one row a minute, every series steady.
+
+    Demand, heat pump, import cost and export revenue are at the levels given,
+    every other series is zero, and there is no heat pump unless heat_pump_kw is given.
+    """
+    index = pd.date_range("2024-06-01", periods=days * 1440, freq="min", tz="Europe/London")
+
+    def steady(level: float) -> pd.Series:
+        return pd.Series(level, index=index)
+
+    return SimulationResults(
+        generation=steady(0.0),
+        demand=steady(demand_kw),
+        self_consumption=steady(0.0),
+        battery_charge=steady(0.0),
+        battery_discharge=steady(0.0),
+        battery_soc=steady(0.0),
+        grid_import=steady(0.0),
+        grid_export=steady(0.0),
+        import_cost=steady(import_cost_gbp),
+        export_revenue=steady(export_revenue_gbp),
+        tariff_rate=steady(0.0),
+        heat_pump_load=None if heat_pump_kw is None else steady(heat_pump_kw),
+    )
+
+
 class TestChartFunctions:
     """Tests for the centralized chart functions in charts.py."""
 
@@ -441,6 +475,33 @@ class TestChartFunctions:
         df = pd.DataFrame({"a": range(10000)}, index=index)
         result = _adaptive_downsample(df, max_points=500)
         assert len(result) < 10000
+
+
+class TestChartTotals:
+    """Each chart's totals are the run's per-minute amounts summed: kWh for power, £ as they are."""
+
+    def test_heat_pump_share_is_the_runs_heat_pump_and_other_kwh(self) -> None:
+        charts = heat_pump_analysis(_steady_run(1, heat_pump_kw=1.5, demand_kw=4.0))
+        assert charts is not None
+
+        pie = json.loads(charts["load_share_chart"])["data"][0]
+
+        # 1.5 kW × 24 h of heat pump, and 4 kW × 24 h of demand less that.
+        assert pie["labels"] == ["Heat Pump", "Other Demand"]
+        assert pie["values"] == [36.0, 60.0]
+
+    def test_financial_bars_are_each_days_pounds(self) -> None:
+        figure = json.loads(
+            financial_breakdown(_steady_run(2, import_cost_gbp=0.002, export_revenue_gbp=0.001))
+        )
+
+        traces = {trace["name"]: trace for trace in figure["data"]}
+
+        # £0.002 and £0.001 a minute, for 1440 minutes a day.
+        assert traces["Daily Cost"]["x"] == ["2024-06-01", "2024-06-02"]
+        assert traces["Daily Cost"]["y"] == [2.88, 2.88]
+        assert traces["Daily Revenue"]["y"] == [1.44, 1.44]
+        assert traces["Cumulative Net Savings"]["y"] == [-1.44, -2.88]
 
 
 class TestHomeResultsRoute:
