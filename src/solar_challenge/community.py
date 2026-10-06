@@ -26,7 +26,7 @@ from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig, calculate_bill
-from solar_challenge.timebase import step_hours
+from solar_challenge.timebase import HOURS_PER_MINUTE, step_hours
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
@@ -183,9 +183,7 @@ def _price_grid_flows(
     # hour-boundary aggregates at O(1) cost.
     dt_h = step_hours(import_kw.index)
     if len(import_kw) >= 3:
-        dt_last_h = (
-            (import_kw.index[-1] - import_kw.index[-2]).total_seconds() / 3600.0
-        )
+        dt_last_h = step_hours(import_kw.index[-2:])
         if abs(dt_h - dt_last_h) > 1e-9:
             raise ValueError(
                 f"_price_grid_flows requires a uniformly-spaced DatetimeIndex; "
@@ -261,7 +259,7 @@ def simulate_community(
     deficit: pd.Series = fleet_results.total_grid_import
     index: pd.DatetimeIndex = surplus.index
     dt_h = step_hours(index)
-    timestep_minutes = dt_h * 60
+    timestep_minutes = dt_h / HOURS_PER_MINUTE
 
     # Branch on the community battery config; using a local variable so mypy
     # narrows Optional[BatteryConfig] → BatteryConfig for the Battery(...) call.
