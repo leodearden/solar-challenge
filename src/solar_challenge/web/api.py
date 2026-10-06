@@ -551,9 +551,8 @@ def simulate_sweep() -> tuple[Response, int]:
     if mode == "geometric":
         if min_val <= 0:
             return jsonify({"error": "Min must be positive for geometric sweep"}), 400
-        log_min = math.log(min_val)
-        log_max = math.log(max_val)
-        values = [math.exp(log_min + (log_max - log_min) * i / (steps - 1)) for i in range(steps)]
+        ratio = max_val / min_val
+        values = [min_val * ratio ** (i / (steps - 1)) for i in range(steps)]
     else:
         values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
 
