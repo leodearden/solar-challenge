@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests._cli_fleet_simulator import invoke_finance_run
+
 
 # ---------------------------------------------------------------------------
 # §A — Helper factories (adapted from test_cost_recovery_cli.py)
@@ -149,28 +151,13 @@ class TestFinanceFlexCLIHelp:
         )
 
 
-def _invoke_finance_run(
-    args: "list[str]", fleet_results: "FleetResults"  # type: ignore[name-defined]
-) -> "Result":  # type: ignore[name-defined]
-    """Run `finance run` with *args*, answering every fleet simulation with *fleet_results*."""
-    from typer.testing import CliRunner
-    from solar_challenge.cli.main import app
-    from solar_challenge.cli.utils import CliFleetSimulator
-
-    return CliRunner().invoke(
-        app,
-        ["finance", "run", *args],
-        obj=CliFleetSimulator(simulate=lambda fleet_config, start, end: fleet_results),
-    )
-
-
 # ---------------------------------------------------------------------------
 # §D — Behaviour tests (step-3 RED drivers)
 # ---------------------------------------------------------------------------
 
 
 class TestFinanceFlexCLIBehaviour:
-    """CLI-level behaviour tests for --flex-band wiring (offline, fleet simulator injected through Click's context object)."""
+    """CLI-level behaviour tests for --flex-band wiring (offline, injected fleet simulator)."""
 
     def test_flex_band_central_renders_block(
         self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
@@ -182,7 +169,7 @@ class TestFinanceFlexCLIBehaviour:
         scenario_file = _write_scenario(tmp_path / "a")
         fr = flex_fleet_results
 
-        result = _invoke_finance_run(["--flex-band", "central", str(scenario_file)], fr)
+        result = invoke_finance_run(["--flex-band", "central", str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
@@ -209,7 +196,7 @@ class TestFinanceFlexCLIBehaviour:
         scenario_file = _write_scenario(tmp_path / "b", flex_band="low")
         fr = flex_fleet_results
 
-        result = _invoke_finance_run(["--flex-band", "high", str(scenario_file)], fr)
+        result = invoke_finance_run(["--flex-band", "high", str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
@@ -234,7 +221,7 @@ class TestFinanceFlexCLIBehaviour:
         scenario_file = _write_scenario(tmp_path / "c")
         fr = flex_fleet_results
 
-        result = _invoke_finance_run([str(scenario_file)], fr)
+        result = invoke_finance_run([str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
@@ -278,7 +265,7 @@ class TestFinanceFlexCLIBehaviour:
         scenario_file = _write_scenario(tmp_path / "e_bad", flex_band="bogus")
         fr = flex_fleet_results
 
-        result = _invoke_finance_run([str(scenario_file)], fr)
+        result = invoke_finance_run([str(scenario_file)], fr)
 
         assert result.exit_code != 0, (
             f"Expected non-zero exit for invalid scenario flex_band 'bogus', "
@@ -297,7 +284,7 @@ class TestFinanceFlexCLIBehaviour:
         scenario_file = _write_scenario(tmp_path / "e_case", flex_band="Central")
         fr = flex_fleet_results
 
-        result = _invoke_finance_run([str(scenario_file)], fr)
+        result = invoke_finance_run([str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Expected exit 0 for scenario flex_band='Central' (case-normalised), "
@@ -333,7 +320,7 @@ class TestFinanceFlexNamedScenario:
         scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
         fr = _make_fleet_results()
 
-        result = _invoke_finance_run([str(scenario_path)], fr)
+        result = invoke_finance_run([str(scenario_path)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"

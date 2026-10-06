@@ -979,9 +979,7 @@ class TestOptimizeCLIE2EFast:
         Returns the CliRunner result and the fleet configs the injected simulator
         was asked to simulate.
         """
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-        from solar_challenge.cli.utils import CliFleetSimulator
+        from tests._cli_fleet_simulator import invoke_cli
 
         simulated_fleets: "list[object]" = []
 
@@ -990,11 +988,7 @@ class TestOptimizeCLIE2EFast:
             return fleet_results
 
         scenario_file = _write_optimize_scenario(tmp_path)
-        result = CliRunner().invoke(
-            app,
-            ["optimize", "configs", str(scenario_file), *options],
-            obj=CliFleetSimulator(simulate=simulate),
-        )
+        result = invoke_cli(["optimize", "configs", str(scenario_file), *options], simulate)
         return result, simulated_fleets
 
     def test_optimize_configs_standard_sweep_output(

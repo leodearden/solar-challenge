@@ -971,7 +971,7 @@ class TestGenerateFinanceReportEconomics:
 
 
 class TestFinanceProjectCLI:
-    """Fast CLI tests for finance run --project (typer CliRunner; a test that simulates injects its fleet simulator through Click's context object)."""
+    """Fast CLI tests for finance run --project."""
 
     def test_help_shows_project_flag(self) -> None:
         """`finance run --help` must show --project flag."""
@@ -1015,11 +1015,9 @@ class TestFinanceProjectCLI:
     def test_project_renders_the_economics_block_from_the_injected_fleet_simulator(
         self, tmp_path: "Path"
     ) -> None:
-        """`finance run --project` renders the Project Economics block when every fleet simulation, each projected age's included, is answered by the simulator passed as Click's context object."""
+        """`finance run --project` must render the Project Economics block."""
         import yaml
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-        from solar_challenge.cli.utils import CliFleetSimulator
+        from tests._cli_fleet_simulator import invoke_finance_run
         from tests._finance_builders import make_fleet_results
 
         scenario = {
@@ -1042,11 +1040,7 @@ class TestFinanceProjectCLI:
         scenario_file.write_text(yaml.dump(scenario))
         fleet = make_fleet_results(n_homes=2, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
 
-        result = CliRunner().invoke(
-            app,
-            ["finance", "run", "--project", str(scenario_file)],
-            obj=CliFleetSimulator(simulate=lambda fleet_config, start, end: fleet),
-        )
+        result = invoke_finance_run(["--project", str(scenario_file)], fleet)
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         assert "Project Economics" in result.output, (

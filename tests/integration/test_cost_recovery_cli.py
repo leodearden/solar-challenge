@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests._cli_fleet_simulator import invoke_finance_run
 from tests._factories import make_bill_breakdown, make_bill_distribution
 
 
@@ -495,30 +496,13 @@ def interior_fleet_results() -> "FleetResults":  # type: ignore[name-defined]
 class TestFinanceCLICostRecoveryE2EFast:
     """Fast end-to-end tests for --cost-recovery flag wiring."""
 
-    @staticmethod
-    def _invoke_finance_run(
-        args: "list[str]", fleet_results: "FleetResults"  # type: ignore[name-defined]
-    ) -> "Result":  # type: ignore[name-defined]
-        """Run `finance run` with *args*, answering every fleet simulation with *fleet_results*."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-        from solar_challenge.cli.utils import CliFleetSimulator
-
-        return CliRunner().invoke(
-            app,
-            ["finance", "run", *args],
-            obj=CliFleetSimulator(simulate=lambda fleet_config, start, end: fleet_results),
-        )
-
     def test_cost_recovery_flag_renders_block(
         self, tmp_path: "Path", interior_fleet_results: "FleetResults"  # type: ignore[name-defined]
     ) -> None:
         """--cost-recovery must render the cost-recovery block in the output."""
         scenario_file = _write_interior_scenario(tmp_path)
 
-        result = self._invoke_finance_run(
-            ["--cost-recovery", str(scenario_file)], interior_fleet_results
-        )
+        result = invoke_finance_run(["--cost-recovery", str(scenario_file)], interior_fleet_results)
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         output = result.output.lower()
@@ -532,9 +516,7 @@ class TestFinanceCLICostRecoveryE2EFast:
         """--cost-recovery output must contain the solved own-use rate."""
         scenario_file = _write_interior_scenario(tmp_path)
 
-        result = self._invoke_finance_run(
-            ["--cost-recovery", str(scenario_file)], interior_fleet_results
-        )
+        result = invoke_finance_run(["--cost-recovery", str(scenario_file)], interior_fleet_results)
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         # The solved rate should appear as "X.XX p/kWh" (case-insensitive)
@@ -548,9 +530,7 @@ class TestFinanceCLICostRecoveryE2EFast:
         """--cost-recovery output must contain feasibility indicator for interior regime."""
         scenario_file = _write_interior_scenario(tmp_path)
 
-        result = self._invoke_finance_run(
-            ["--cost-recovery", str(scenario_file)], interior_fleet_results
-        )
+        result = invoke_finance_run(["--cost-recovery", str(scenario_file)], interior_fleet_results)
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         output = result.output.lower()
@@ -566,7 +546,7 @@ class TestFinanceCLICostRecoveryE2EFast:
         scenario_file = _write_interior_scenario(tmp_path)
 
         # Invoke WITHOUT --cost-recovery (default is --no-cost-recovery)
-        result = self._invoke_finance_run([str(scenario_file)], interior_fleet_results)
+        result = invoke_finance_run([str(scenario_file)], interior_fleet_results)
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         assert "cost-recovery analysis" not in result.output.lower(), (
