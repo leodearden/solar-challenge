@@ -342,13 +342,27 @@ class TestSweepWindow:
         assert response.status_code == 201
         assert recording_job_manager.submitted_windows == [_home_window(window)] * 2
 
-    def test_a_base_config_that_sends_no_window_key_runs_every_point_for_7_days(
-        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    @pytest.mark.parametrize(
+        "base_config_fields",
+        [
+            pytest.param({"base_config": {"battery_kwh": 5.0}}, id="base-config-without-window-key"),
+            pytest.param({"base_config": {}}, id="empty-base-config"),
+            pytest.param({}, id="no-base-config"),
+        ],
+    )
+    def test_a_request_that_sends_no_window_key_runs_every_point_for_7_days(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        base_config_fields: dict[str, Any],
     ) -> None:
-        """A base_config with none of days, start and end has every point run the sweep's default 7 days."""
+        """A request that sends none of days, start and end has every point run the sweep's default 7 days.
+
+        Its base_config may hold other keys, be empty, or be left out of the body altogether.
+        """
         response = client.post(
             "/api/simulate/sweep",
-            json={"min": 1.0, "max": 5.0, "steps": 2, "base_config": {"battery_kwh": 5.0}},
+            json={"min": 1.0, "max": 5.0, "steps": 2, **base_config_fields},
         )
 
         assert response.status_code == 201
