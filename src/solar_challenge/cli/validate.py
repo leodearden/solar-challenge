@@ -21,12 +21,11 @@ from solar_challenge.cli.utils import (
 from solar_challenge.config import (
     ConfigurationError,
     ScenarioConfig,
-    detect_sweep_spec,
+    detect_fleet_sweep_spec,
     load_config,
     load_home_config,
     load_scenarios,
     parse_fleet_config,
-    parse_fleet_distribution_config,
     parse_sweep_fleet_configs,
 )
 from solar_challenge.home import HomeConfig
@@ -182,15 +181,13 @@ def _fleet_homes(document: Mapping[str, Any]) -> _DefinedHomes:
 
     For a YAML-defined sweep, the homes `fleet sweep` builds at every sweep point.
     """
-    if "fleet_distribution" in document:
-        distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-        if detect_sweep_spec(distribution) is not None:
-            fleets = [fleet for _, fleet in parse_sweep_fleet_configs(document)]
-            return _DefinedHomes(
-                homes=[home for fleet in fleets for home in fleet.homes],
-                sweep_points=len(fleets),
-            )
-    return _DefinedHomes(homes=parse_fleet_config(document).homes)
+    if detect_fleet_sweep_spec(document) is None:
+        return _DefinedHomes(homes=parse_fleet_config(document).homes)
+    fleets = [fleet for _, fleet in parse_sweep_fleet_configs(document)]
+    return _DefinedHomes(
+        homes=[home for fleet in fleets for home in fleet.homes],
+        sweep_points=len(fleets),
+    )
 
 
 def _homes_defined_by(config_file: Path) -> _DefinedHomes:

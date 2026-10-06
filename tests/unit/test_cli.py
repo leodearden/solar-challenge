@@ -1479,6 +1479,44 @@ class TestFleetSweepGivesEachPointTheFleetFilesBlocks:
         assert not Path("sweep", "sweep_summary.csv").exists()
 
 
+class TestFleetSweepRefusesAFileItCannotSweep:
+    """Tests that `fleet sweep` refuses a fleet file with nothing it can sweep, with exit 1 and the reason."""
+
+    @pytest.mark.parametrize(
+        ("document", "options", "refusal"),
+        [
+            pytest.param(
+                "homes:\n  - pv: {capacity_kw: 4.0}\n",
+                (),
+                "Sweep requires fleet_distribution config",
+                id="homes-yaml-sweep",
+            ),
+            pytest.param(
+                "homes:\n  - pv: {capacity_kw: 4.0}\n",
+                ("--param", "CAP", "--min", "5", "--max", "10", "--steps", "2"),
+                "Sweep requires fleet_distribution config",
+                id="homes-param-sweep",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
+                (),
+                "No sweep spec found in config. Use --param for CLI sweep or add type: sweep to multiplier.",
+                id="fleet-distribution-without-a-sweep",
+            ),
+        ],
+    )
+    def test_a_file_it_cannot_sweep_is_refused(
+        self, tmp_path: Path, document: str, options: tuple[str, ...], refusal: str
+    ) -> None:
+        fleet_file = tmp_path / "fleet.yaml"
+        fleet_file.write_text(document)
+
+        result = _run_fleet("sweep", str(fleet_file), *options)
+
+        assert result.exit_code == 1
+        assert refusal in " ".join(result.stderr.split())
+
+
 class TestQuietOption:
     """Tests that --quiet silences a command's status messages and progress on stderr, and leaves its product, its warnings and its errors."""
 

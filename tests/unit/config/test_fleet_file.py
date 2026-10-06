@@ -14,6 +14,8 @@ from solar_challenge.config import (
     ConfigurationError,
     DispatchStrategyConfig,
     GridChargeConfig,
+    SweepSpec,
+    detect_fleet_sweep_spec,
     load_fleet_config,
     parse_fleet_config,
     parse_sweep_fleet_configs,
@@ -718,6 +720,31 @@ class TestParseSweepFleetConfigs:
     ) -> None:
         """Each refusal is a ConfigurationError, never a KeyError, so a caller reports it as a config error."""
         with pytest.raises(ConfigurationError, match=refusal):
+            parse_sweep_fleet_configs(document)
+
+    def test_detect_fleet_sweep_spec_finds_the_sweep_whose_points_it_builds(self) -> None:
+        document = _fleet_file(
+            _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
+            tariff=_ECONOMY_7,
+        )
+
+        sweep_spec = detect_fleet_sweep_spec(document)
+
+        assert sweep_spec == SweepSpec(min=0.5, max=2.0, steps=3)
+        assert [value for value, _ in parse_sweep_fleet_configs(document)] == sweep_spec.get_values()
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({"homes": [{"pv": {"capacity_kw": _PV_KW}}]}, id="no-fleet-distribution"),
+            pytest.param(_fleet_file(5.0, tariff=_ECONOMY_7), id="no-sweep"),
+        ],
+    )
+    def test_detect_fleet_sweep_spec_finds_none_in_a_file_it_refuses_to_sweep(
+        self, document: dict[str, Any]
+    ) -> None:
+        assert detect_fleet_sweep_spec(document) is None
+        with pytest.raises(ConfigurationError):
             parse_sweep_fleet_configs(document)
 
 

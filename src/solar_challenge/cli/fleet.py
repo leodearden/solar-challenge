@@ -23,12 +23,11 @@ from solar_challenge.community import simulate_community
 from solar_challenge.config import (
     ConfigurationError,
     SweepSpec,
-    detect_sweep_spec,
+    detect_fleet_sweep_spec,
     load_community_config,
     load_config,
     load_fleet_config,
     parse_fleet_config,
-    parse_fleet_distribution_config,
     parse_location_block,
     parse_sweep_fleet_configs,
     substitute_config_variables,
@@ -377,6 +376,9 @@ def sweep(
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    if "fleet_distribution" not in raw_config:
+        raise ConfigurationError("Sweep requires fleet_distribution config")
+
     # Build sweep configs upfront
     sweep_configs: list[tuple[float, FleetConfig]] = []
     param_name: str = "multiplier"  # Default for YAML sweep
@@ -397,10 +399,6 @@ def sweep(
 
         for val in sweep_values:
             substituted = substitute_config_variables(raw_config, {param: val})
-            if "fleet_distribution" not in substituted:
-                raise ConfigurationError(
-                    "Sweep requires fleet_distribution config"
-                )
             fleet_config = FleetConfig(
                 homes=parse_fleet_config(substituted).homes, name=f"{param}={val:.4f}"
             )
@@ -408,14 +406,7 @@ def sweep(
 
     else:
         # YAML-defined sweep
-        if "fleet_distribution" not in raw_config:
-            raise ConfigurationError(
-                "Sweep requires fleet_distribution config"
-            )
-        dist_config = parse_fleet_distribution_config(
-            raw_config["fleet_distribution"]
-        )
-        sweep_spec = detect_sweep_spec(dist_config)  # type: ignore[assignment]
+        sweep_spec = detect_fleet_sweep_spec(raw_config)  # type: ignore[assignment]
         if sweep_spec is None:
             raise ConfigurationError(
                 "No sweep spec found in config. "

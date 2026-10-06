@@ -2374,6 +2374,24 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     return parse_fleet_config(load_config(path))
 
 
+def detect_fleet_sweep_spec(document: Mapping[str, Any]) -> Optional[SweepSpec]:
+    """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds.
+
+    Args:
+        document: The fleet file's configuration dictionary
+
+    Returns:
+        The SweepSpec detect_sweep_spec finds in its fleet_distribution: block, None when
+        it has no such block or the block no sweep
+
+    Raises:
+        ConfigurationError: If its fleet_distribution: block is invalid
+    """
+    if "fleet_distribution" not in document:
+        return None
+    return detect_sweep_spec(parse_fleet_distribution_config(document["fleet_distribution"]))
+
+
 def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, FleetConfig]]:
     """The fleet each point of the document's YAML-defined sweep builds, with its sweep value.
 
