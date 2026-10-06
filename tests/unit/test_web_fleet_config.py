@@ -2,6 +2,7 @@
 """Tests for solar_challenge.web.fleet_config, called directly."""
 
 import re
+from collections.abc import Callable
 
 import pytest
 
@@ -26,6 +27,15 @@ from tests._fleet_form import (
     FLEET_FORM_COMPONENT_BLOCKS,
     valid_distribution_form,
 )
+
+# One value of each kind number_fields.as_finite_float refuses other than a boolean; its full matrix is tested there.
+_UNUSABLE_NON_BOOLEAN_NUMBERS = [
+    pytest.param(10**400, id="integer-too-large-for-a-float"),
+    pytest.param(float("inf"), id="infinity"),
+    pytest.param(float("nan"), id="nan"),
+]
+
+_UNUSABLE_NUMBERS = [*_UNUSABLE_NON_BOOLEAN_NUMBERS, pytest.param(True, id="boolean")]
 
 
 def _make_test_homes() -> tuple:
@@ -331,6 +341,62 @@ class TestFleetConfigHelpers:
         with pytest.raises(ValueError) as exc_info:
             sample_distribution(dist_type, params, 3)
         assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize(
+        ("dist_type", "params", "field"),
+        [
+            pytest.param(
+                "normal", lambda v: {"mean": v, "std": 1.0}, "params.mean", id="normal-mean"
+            ),
+            pytest.param(
+                "normal", lambda v: {"mean": 4.0, "std": v}, "params.std", id="normal-std"
+            ),
+            pytest.param(
+                "normal",
+                lambda v: {"mean": 4.0, "std": 1.0, "min": v},
+                "params.min",
+                id="normal-min",
+            ),
+            pytest.param(
+                "normal",
+                lambda v: {"mean": 4.0, "std": 1.0, "max": v},
+                "params.max",
+                id="normal-max",
+            ),
+            pytest.param(
+                "uniform", lambda v: {"min": v, "max": 6.0}, "params.min", id="uniform-min"
+            ),
+            pytest.param(
+                "uniform", lambda v: {"min": 2.0, "max": v}, "params.max", id="uniform-max"
+            ),
+            pytest.param(
+                "weighted_discrete",
+                lambda v: {"values": [{"value": v, "weight": 1}]},
+                "params.values[0].value",
+                id="weighted-discrete-value",
+            ),
+            pytest.param(
+                "weighted_discrete",
+                lambda v: {"values": [{"value": 3.0, "weight": v}]},
+                "params.values[0].weight",
+                id="weighted-discrete-weight",
+            ),
+            pytest.param(
+                "shuffled_pool",
+                lambda v: {"entries": [{"value": v, "count": 2}]},
+                "params.entries[0].value",
+                id="shuffled-pool-value",
+            ),
+        ],
+    )
+    def test_sample_distribution_refuses_a_params_number_that_is_not_finite_naming_it(
+        self, dist_type: str, params: Callable[[object], dict], field: str, value: object
+    ) -> None:
+        """A preview's params number that is not a finite number, a boolean included, is refused naming its field under params and the value sent."""
+        with pytest.raises(ValueError) as exc_info:
+            sample_distribution(dist_type, params(value), 3)
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
     def test_form_to_fleet_distribution_config(self) -> None:
         """Test converting form data to fleet distribution config."""
@@ -647,6 +713,113 @@ class TestFleetConfigHelpers:
         with pytest.raises(ValueError) as exc_info:
             form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
         assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize(
+        ("form_patch", "field"),
+        [
+            pytest.param(lambda v: {"pv": {"capacity_kw": v}}, "pv.capacity_kw", id="pv-fixed"),
+            pytest.param(
+                lambda v: {"battery": {"capacity_kwh": v}},
+                "battery.capacity_kwh",
+                id="battery-fixed",
+            ),
+            pytest.param(
+                lambda v: {"load": {"annual_consumption_kwh": v}},
+                "load.annual_consumption_kwh",
+                id="load-fixed",
+            ),
+            pytest.param(
+                lambda v: {"pv": {"capacity_kw": {"type": "normal", "mean": v, "std": 1.0}}},
+                "pv.capacity_kw.mean",
+                id="pv-normal-mean",
+            ),
+            pytest.param(
+                lambda v: {"pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": v}}},
+                "pv.capacity_kw.std",
+                id="pv-normal-std",
+            ),
+            pytest.param(
+                lambda v: {
+                    "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0, "min": v}}
+                },
+                "pv.capacity_kw.min",
+                id="pv-normal-min",
+            ),
+            pytest.param(
+                lambda v: {
+                    "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0, "max": v}}
+                },
+                "pv.capacity_kw.max",
+                id="pv-normal-max",
+            ),
+            pytest.param(
+                lambda v: {
+                    "battery": {"capacity_kwh": {"type": "uniform", "min": v, "max": 10.0}}
+                },
+                "battery.capacity_kwh.min",
+                id="battery-uniform-min",
+            ),
+            pytest.param(
+                lambda v: {
+                    "battery": {"capacity_kwh": {"type": "uniform", "min": 3.0, "max": v}}
+                },
+                "battery.capacity_kwh.max",
+                id="battery-uniform-max",
+            ),
+            pytest.param(
+                lambda v: {
+                    "load": {
+                        "annual_consumption_kwh": {
+                            "type": "weighted_discrete",
+                            "values": [{"value": 3500.0, "weight": 1}, {"value": v, "weight": 1}],
+                        }
+                    }
+                },
+                "load.annual_consumption_kwh.values[1].value",
+                id="load-weighted-discrete-value",
+            ),
+            pytest.param(
+                lambda v: {
+                    "load": {
+                        "annual_consumption_kwh": {
+                            "type": "weighted_discrete",
+                            "values": [
+                                {"value": 3500.0, "weight": 1},
+                                {"value": 4000.0, "weight": v},
+                            ],
+                        }
+                    }
+                },
+                "load.annual_consumption_kwh.values[1].weight",
+                id="load-weighted-discrete-weight",
+            ),
+            pytest.param(
+                lambda v: {
+                    "pv": {
+                        "capacity_kw": {
+                            "type": "shuffled_pool",
+                            "entries": [{"value": v, "count": 2}],
+                        }
+                    }
+                },
+                "pv.capacity_kw.entries[0].value",
+                id="pv-shuffled-pool-value",
+            ),
+            pytest.param(
+                lambda v: {"pv": {"type": "normal", "mean": v, "std": 1.0}},
+                "pv.mean",
+                id="pv-block-that-is-the-distribution-mean",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_distribution_number_that_is_not_finite_naming_it(
+        self, form_patch: Callable[[object], dict], field: str, value: object
+    ) -> None:
+        """A distribution's fixed value, parameter or row number that is not a finite number, a boolean included, is refused naming its field under its distribution's and the value sent."""
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config({**valid_distribution_form(), **form_patch(value)})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
     @pytest.mark.parametrize(
         "spec",

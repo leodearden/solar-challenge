@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the fleet distribution endpoints: POST /api/fleet/preview-distribution and POST /api/simulate/fleet-from-distribution."""
 
+from collections.abc import Callable
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,6 +31,14 @@ UNUSABLE_SHUFFLED_POOL_ENTRIES = [
         f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
         id="pool-total-one-above-the-fleet-limit",
     ),
+]
+
+# One value of each kind number_fields.as_finite_float refuses; its full matrix is tested there.
+_UNUSABLE_NUMBERS = [
+    pytest.param(10**400, id="integer-too-large-for-a-float"),
+    pytest.param(float("inf"), id="infinity"),
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(True, id="boolean"),
 ]
 
 
@@ -146,6 +155,40 @@ class TestPreviewDistribution:
         )
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
+
+    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize(
+        ("dist_type", "params", "field"),
+        [
+            pytest.param(
+                "normal", lambda v: {"mean": v, "std": 1.0}, "params.mean", id="normal-mean"
+            ),
+            pytest.param(
+                "uniform", lambda v: {"min": 2.0, "max": v}, "params.max", id="uniform-max"
+            ),
+            pytest.param(
+                "weighted_discrete",
+                lambda v: {"values": [{"value": 3.0, "weight": v}]},
+                "params.values[0].weight",
+                id="weighted-discrete-weight",
+            ),
+        ],
+    )
+    def test_params_number_that_is_not_finite_returns_400_naming_it(
+        self,
+        client: FlaskClient,
+        dist_type: str,
+        params: Callable[[object], dict],
+        field: str,
+        value: object,
+    ) -> None:
+        """A params number that is not a finite number, a boolean included, is a 400 naming its field under params and the value sent."""
+        resp = client.post(
+            "/api/fleet/preview-distribution",
+            json={"type": dist_type, "params": params(value), "n_samples": 3},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
 
 
 class TestFleetFromDistribution:
@@ -545,6 +588,51 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
         assert resp.get_json() == {"error": message}
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize(
+        ("patch", "field"),
+        [
+            pytest.param(
+                lambda v: {"battery": {"capacity_kwh": v}},
+                "battery.capacity_kwh",
+                id="battery-fixed",
+            ),
+            pytest.param(
+                lambda v: {"pv": {"capacity_kw": {"type": "normal", "mean": v, "std": 1.0}}},
+                "pv.capacity_kw.mean",
+                id="pv-normal-mean",
+            ),
+            pytest.param(
+                lambda v: {
+                    "load": {
+                        "annual_consumption_kwh": {
+                            "type": "weighted_discrete",
+                            "values": [{"value": 3500.0, "weight": v}],
+                        }
+                    }
+                },
+                "load.annual_consumption_kwh.values[0].weight",
+                id="load-weighted-discrete-weight",
+            ),
+        ],
+    )
+    def test_distribution_number_that_is_not_finite_returns_400_naming_it(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        patch: Callable[[object], dict],
+        field: str,
+        value: object,
+    ) -> None:
+        """A distribution number that is not a finite number, a boolean included, is a 400 naming its field and the value sent; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, **patch(value)},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
