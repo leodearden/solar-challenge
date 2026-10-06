@@ -25,6 +25,11 @@ from solar_challenge.web.charts import (
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 
 
+def _first_steps(results: SimulationResults, count: int) -> SimulationResults:
+    """*results* cut to its first *count* steps."""
+    return SimulationResults.from_dataframe(results.to_dataframe().head(count), strategy_name=results.strategy_name)
+
+
 def _with_rising_soc(results: SimulationResults) -> SimulationResults:
     """*results* with a battery SOC that rises at every step, so a window's mean differs from its first step."""
     steps = results.battery_soc.index
@@ -36,15 +41,16 @@ def _soc_trace(results: SimulationResults) -> dict[str, Any]:
     return json.loads(battery_soc_chart(results, battery_capacity_kwh=10.0))["data"][0]
 
 
-def test_a_chart_of_at_most_2000_steps_draws_every_step() -> None:
-    """Two days of hourly steps, 48 in all, are drawn as they are."""
-    two_days = _with_rising_soc(make_sim_results(days=2))
+@pytest.mark.parametrize("steps", [48, 2000])
+def test_a_chart_of_at_most_2000_steps_draws_every_step(steps: int) -> None:
+    """The first *steps* hourly steps of a year, two days' 48 or exactly 2000, are drawn as they are."""
+    run = _with_rising_soc(_first_steps(make_sim_results(days=365), steps))
 
-    trace = _soc_trace(two_days)
+    trace = _soc_trace(run)
 
     assert (trace["x"], trace["y"]) == (
-        [step.isoformat() for step in two_days.battery_soc.index],
-        two_days.battery_soc.round(4).tolist(),
+        [step.isoformat() for step in run.battery_soc.index],
+        run.battery_soc.round(4).tolist(),
     )
 
 
