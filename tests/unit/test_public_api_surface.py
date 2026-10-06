@@ -212,10 +212,10 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 # H2 members: each exported class's public members, with their frozen forms
 #
 # Keys are exported class names, then member names, in __all__ order and
-# class-body order.  Each value is the member's form as member_forms spells it
-# (tests/_surface_forms.py).  A class with no public member has no entry.
-# Each value stays on one line, so the current form a failure prints pastes in
-# verbatim.
+# class-body order, the order a failure lists drifted members in.  Each value is
+# the member's form as member_forms spells it (tests/_surface_forms.py).  A class
+# with no public member has no entry.  Each value stays on one line, so the
+# current form a failure prints pastes in verbatim.
 # ---------------------------------------------------------------------------
 FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     # --- signature-closure types ---
@@ -339,16 +339,18 @@ def test_every_exported_class_member_matches_frozen_members() -> None:
     """H2 member-lock: every exported class's public members have the forms FROZEN_MEMBERS pins.
 
     Fails once, naming each added, changed or removed member with its frozen and current
-    forms.  An added member's current form is printed ready to paste; a removed member's
-    current form reads (removed).
+    forms, in __all__ and class-body order, removed members last.  An added member's
+    current form is printed ready to paste; a removed member's current form reads
+    (removed).
     """
     frozen = _forms_by_member_path(FROZEN_MEMBERS)
     current = _forms_by_member_path(
         {name: member_forms(cls) for name, cls in _exported_classes().items()}
     )
+    removed = [path for path in frozen if path not in current]
     drifted = {
         path: current.get(path, "(removed)")
-        for path in sorted(frozen.keys() | current.keys())
+        for path in [*current, *removed]
         if current.get(path) != frozen.get(path)
     }
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
