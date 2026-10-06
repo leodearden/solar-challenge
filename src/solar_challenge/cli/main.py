@@ -61,20 +61,6 @@ def main(
     """Solar Challenge Energy Flow Simulator.
 
     A CLI tool for simulating domestic PV and battery systems in the UK.
-
-    Commands:
-      home      Single home simulation
-      fleet     Fleet (multiple homes) simulation
-      validate  Validate results or config files
-      config    Configuration management
-      web       Web dashboard server
-
-    Examples:
-      solar-challenge home quick 4 5 --days 7
-      solar-challenge home run config.yaml --report
-      solar-challenge fleet bristol-phase1 --days 30
-      solar-challenge config template home -o my-config.yaml
-      solar-challenge web start --port 8080
     """
     set_status_quiet(quiet)
 
