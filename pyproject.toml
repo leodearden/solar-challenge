@@ -70,6 +70,8 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short --ignore=tests/e2e"
+# Every pytest deprecation is an error; tests/unit/test_pytest_deprecations_are_errors.py says why.
+filterwarnings = ["error::pytest.PytestDeprecationWarning"]
 markers = [
     "e2e: end-to-end browser tests (require playwright)",
     "slow: tests that make real external API calls (e.g. PVGIS)",
