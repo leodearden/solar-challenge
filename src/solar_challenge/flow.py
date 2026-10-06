@@ -15,6 +15,7 @@ from solar_challenge.dispatch import (
     compute_grid_charge_power_kw,
 )
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import HOURS_PER_MINUTE
 
 
 def calculate_self_consumption(
@@ -216,7 +217,7 @@ def simulate_timestep(
     Returns:
         EnergyFlowResult with all energy flows in kWh
     """
-    duration_hours = timestep_minutes / 60
+    duration_hours = timestep_minutes * HOURS_PER_MINUTE
 
     # Convert power to energy for this timestep
     generation_kwh = generation_kw * duration_hours
@@ -337,7 +338,7 @@ def simulate_timestep_tou(
     Returns:
         EnergyFlowResult with all energy flows in kWh
     """
-    duration_hours = timestep_minutes / 60
+    duration_hours = timestep_minutes * HOURS_PER_MINUTE
 
     # Convert power to energy for this timestep
     generation_kwh = generation_kw * duration_hours

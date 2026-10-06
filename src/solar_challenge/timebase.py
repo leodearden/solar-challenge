@@ -4,7 +4,7 @@
 import pandas as pd
 
 HOURS_PER_MINUTE = 1 / 60
-"""Each row of a simulated series is one minute, so a kW sample times this is that minute's kWh."""
+"""Hours in one minute: minutes times this is hours, and, as each row of a simulated series is one minute, a kW sample times this is that minute's kWh."""
 
 
 def step_hours(index: pd.DatetimeIndex) -> float:

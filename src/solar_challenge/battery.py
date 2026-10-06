@@ -5,6 +5,8 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional
 
+from solar_challenge.timebase import HOURS_PER_MINUTE
+
 if TYPE_CHECKING:
     from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
 
@@ -356,7 +358,7 @@ class Battery:
         actual_power = min(power_kw, self.config.max_charge_kw)
 
         # Calculate energy input and stored (with efficiency)
-        duration_hours = duration_minutes / 60
+        duration_hours = duration_minutes * HOURS_PER_MINUTE
         energy_input_kwh = actual_power * duration_hours
         energy_stored_kwh = energy_input_kwh * self.charge_efficiency
 
@@ -387,7 +389,7 @@ class Battery:
         actual_power = min(power_kw, self.config.max_discharge_kw)
 
         # Calculate energy requested
-        duration_hours = duration_minutes / 60
+        duration_hours = duration_minutes * HOURS_PER_MINUTE
         energy_requested_kwh = actual_power * duration_hours
 
         # Calculate energy needed from battery (before efficiency)
