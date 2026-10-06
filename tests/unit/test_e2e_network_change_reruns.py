@@ -126,3 +126,26 @@ def test_an_e2e_failure_without_a_request_lost_to_a_network_change_does_not_run_
     outcomes = result.parseoutcomes()
     assert (outcomes.get("failed", 0), outcomes.get("passed", 0), outcomes.get("rerun", 0)) == (3, 0, 0), outcomes
     result.stdout.no_fnmatch_line("* RERUN*")
+
+
+def test_an_e2e_test_still_failing_after_its_rerun_lists_the_requests_lost_to_network_changes(
+    e2e_suite: pytest.Pytester,
+) -> None:
+    scenario = e2e_suite.makepyfile(
+        f"""
+        import pytest
+
+        ALPINE_CORE = {ALPINE_CORE!r}
+
+
+        def test_loses_alpine_to_a_network_change_on_every_attempt(context):
+            context.fail_request(ALPINE_CORE, "net::ERR_NETWORK_CHANGED")
+            pytest.fail("Alpine never started")
+        """
+    )
+
+    result = e2e_suite.runpytest_subprocess(scenario, "-v", "-p", "no:cacheprovider")
+
+    outcomes = result.parseoutcomes()
+    assert (outcomes.get("failed", 0), outcomes.get("rerun", 0), outcomes.get("passed", 0)) == (1, 1, 0), outcomes
+    result.stdout.fnmatch_lines([f"GET {ALPINE_CORE}"])
