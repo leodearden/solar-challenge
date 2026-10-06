@@ -122,7 +122,7 @@ class WeatherCache:
     def get(self, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
             end_date: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
-        """Retrieve cached data if available.
+        """Retrieve the frame put stored under the key: its values exactly, and its index in the timezone and frequency it was put in.
 
         Args:
             prefix: Data type prefix (e.g., 'tmy')
@@ -131,7 +131,7 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            Cached DataFrame or None if not found
+            The cached DataFrame, or None if not found
         """
         key = self._make_key(prefix, location, start_date, end_date)
         cache_file = self._cache_path(key)
@@ -144,8 +144,8 @@ class WeatherCache:
                 with open(meta_file) as f:
                     metadata = json.load(f)
                 tz = metadata.get("timezone")
-                if tz and df.index.tz is None:
-                    df.index = df.index.tz_localize(tz)
+                if tz:
+                    df.index = pd.to_datetime(df.index, utc=True).tz_convert(tz)
                 freq = metadata.get("freq")
                 if freq:
                     df = df.asfreq(freq)
@@ -288,7 +288,8 @@ def get_tmy_data(
         - dni: Direct normal irradiance (W/m²)
         - dhi: Diffuse horizontal irradiance (W/m²)
         - wind_speed: Wind speed at 10m (m/s)
-        Index is DatetimeIndex in UTC.
+        Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put, which accepts
+        any timezone, comes back in the timezone it was put in.
 
     Raises:
         WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
