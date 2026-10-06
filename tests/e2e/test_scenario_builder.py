@@ -13,7 +13,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
-from tests.e2e._scenario_builder_page import open_builder
+from tests.e2e._scenario_builder_page import open_builder, upload_scenario
 
 pytestmark = pytest.mark.e2e
 
@@ -620,11 +620,9 @@ def _preview_after_uploading(
 ) -> Response:
     """The preview the builder, freshly opened, requests once *yaml_text* is uploaded to it."""
     open_builder(page, live_server)
-    path = tmp_path / "scenario.yaml"
-    path.write_text(yaml_text, encoding="utf-8")
 
     with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
-        page.set_input_files('input[type="file"]', path)
+        upload_scenario(page, tmp_path / "scenario.yaml", yaml_text)
     return after_upload.value
 
 
@@ -782,10 +780,8 @@ def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
     weighted_discrete distribution without values has no rows to show.
     """
     form_before_upload = open_builder(page, live_server).request.post_data_json
-    path = tmp_path / "scenario.yaml"
-    path.write_text(yaml_text, encoding="utf-8")
 
-    page.set_input_files('input[type="file"]', path)
+    upload_scenario(page, tmp_path / "scenario.yaml", yaml_text)
 
     expect(page.locator("pre")).to_have_text(
         re.compile(rf"^# scenario\.yaml was not loaded: .*{re.escape(refusal)}")

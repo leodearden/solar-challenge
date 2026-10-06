@@ -9,7 +9,7 @@ import pytest
 import yaml
 from playwright.sync_api import Page, Route, expect
 
-from tests.e2e._scenario_builder_page import open_builder
+from tests.e2e._scenario_builder_page import open_builder, upload_scenario
 
 pytestmark = pytest.mark.e2e
 
@@ -48,15 +48,12 @@ def test_the_builder_reads_an_uploaded_yaml_with_every_other_origin_unreachable(
     page: Page, live_server: str, refused_offsite_requests: list[str], tmp_path: Path
 ) -> None:
     open_builder(page, live_server)
-    path = tmp_path / "scenario.yaml"
-    path.write_text(
-        yaml.safe_dump(
-            {"name": "Uploaded offline", "fleet_distribution": {"n_homes": 3}}
-        ),
-        encoding="utf-8",
-    )
 
-    page.set_input_files('input[type="file"]', path)
+    upload_scenario(
+        page,
+        tmp_path / "scenario.yaml",
+        yaml.safe_dump({"name": "Uploaded offline", "fleet_distribution": {"n_homes": 3}}),
+    )
 
     expect(
         page.get_by_role("textbox", name="Scenario Name", exact=True),
