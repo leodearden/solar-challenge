@@ -739,6 +739,8 @@ class TestComparisonRoute:
         response = client.get("/history/compare?ids=cmp-1,cmp-2")
 
         assert response.status_code == 500
+        page = response.get_data(as_text=True)
+        assert texts_after(page, "500", 1) == ["Internal Server Error"]
 
     def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
         """Test GET /history/compare with all invalid IDs redirects to runs page."""
