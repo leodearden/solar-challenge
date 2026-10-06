@@ -525,6 +525,11 @@ home:
                 id="fleet-sweep",
             ),
             pytest.param(
+                _SWEEP_FLEET + "tariff: {type: economy_8}\n",
+                "Unknown tariff type 'economy_8'",
+                id="fleet-sweep-tariff",
+            ),
+            pytest.param(
                 "scenarios:\n  - name: winter\n    home: {pv: {capacity_kw: 4.0}}\n",
                 "Scenario 'winter' must have a 'period' field",
                 id="scenarios",
@@ -663,19 +668,28 @@ home:
         assert f"WARNING {warning}" in _table_text(result.stdout)
         assert _table_text(result.stdout).count("WARNING") == 1
 
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  dispatch_strategy: tou_optimized\n",
+                id="fleet-distribution",
+            ),
+            pytest.param(_SWEEP_FLEET + "  dispatch_strategy: tou_optimized\n", id="fleet-sweep"),
+        ],
+    )
     def test_a_loader_advisory_is_a_warning_row_not_a_python_warning(
-        self, tmp_path: Path, recwarn: pytest.WarningsRecorder
+        self, tmp_path: Path, recwarn: pytest.WarningsRecorder, document: str
     ) -> None:
-        result = self._validate_config(
-            tmp_path,
-            "fleet_distribution:\n"
-            "  n_homes: 2\n"
-            "  pv: {capacity_kw: 4.0}\n"
-            "  dispatch_strategy: tou_optimized\n",
-        )
+        """The advisory is one row for the whole file, however many sweep points it builds."""
+        result = self._validate_config(tmp_path, document)
 
         assert result.exit_code == 0
         assert f"WARNING {_TOU_ADVISORY}" in _table_text(result.stdout)
+        assert _table_text(result.stdout).count(_TOU_ADVISORY) == 1
         assert "OK Configuration is valid" not in _table_text(result.stdout)
         assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
 
