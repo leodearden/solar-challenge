@@ -19,11 +19,14 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import (
     CommunityBillingConfig,
     CommunityConfig,
+    simulate_community,
 )
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
+from solar_challenge.output import compute_community_metrics
 from solar_challenge.pv import PVConfig
+from solar_challenge.tariff import FlatRateTariff
 
 
 # ---------------------------------------------------------------------------
@@ -962,3 +965,75 @@ class TestCommunityResultsSharingMode:
         p2p_result = simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
         restored = pickle.loads(pickle.dumps(p2p_result))
         assert restored.sharing_mode == "p2p"
+
+
+# ---------------------------------------------------------------------------
+# Task-408: TestCommunityRowLength
+# ---------------------------------------------------------------------------
+
+class TestCommunityRowLength:
+    """Each row lasts the gap between the fleet index's first two rows, or one minute when a single row gives none."""
+
+    @pytest.fixture
+    def single_row(self) -> pd.DatetimeIndex:
+        return pd.date_range("2024-06-21 12:00", periods=1, freq="min", tz="Europe/London")
+
+    @pytest.fixture
+    def billed_p2p(self) -> CommunityConfig:
+        billing = CommunityBillingConfig(tariff=FlatRateTariff(0.30), seg_rate_pence_per_kwh=4.0)
+        return CommunityConfig(sharing_mode="p2p", billing=billing)
+
+    def test_metrics_count_a_single_row_as_one_minute(self, single_row: pd.DatetimeIndex) -> None:
+        # The exporter sends out 2 kW and the importer draws 1.5 kW, so netting leaves 0.5 kW of export.
+        fleet = _make_fleet(single_row, [([3.0], [1.0]), ([0.0], [1.5])])
+
+        m = compute_community_metrics(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+
+        assert m.dt_h == pytest.approx(1 / 60)
+        assert m.unshared_import_kwh == pytest.approx(1.5 / 60)
+        assert m.unshared_export_kwh == pytest.approx(2.0 / 60)
+        assert m.community_import_kwh == pytest.approx(0.0)
+        assert m.community_export_kwh == pytest.approx(0.5 / 60)
+        assert m.total_demand_kwh == pytest.approx(2.5 / 60)
+
+    def test_billing_prices_a_single_row_as_one_minute(
+        self, single_row: pd.DatetimeIndex, billed_p2p: CommunityConfig
+    ) -> None:
+        fleet = _make_fleet(single_row, [([3.0], [1.0]), ([0.0], [1.5])])
+
+        cr = simulate_community(fleet, billed_p2p)
+
+        assert cr.baseline_net_cost_gbp == pytest.approx(1.5 / 60 * 0.30 - 2.0 / 60 * 0.04)
+        assert cr.community_net_cost_gbp == pytest.approx(-0.5 / 60 * 0.04)
+        assert cr.community_savings_gbp == pytest.approx(1.5 / 60 * (0.30 - 0.04))
+
+    def test_community_battery_dispatches_a_single_row_as_one_minute(
+        self, single_row: pd.DatetimeIndex
+    ) -> None:
+        # Lossless, so no charge loss is booked as export. Starting half full, the battery
+        # takes all of a 10 kW surplus for a minute; over an hour its 4 kWh of headroom
+        # would bind, leaving 4 kW of charge and 6 kW of export.
+        fleet = _make_fleet(single_row, [([11.0], [1.0])])
+        battery = BatteryConfig(
+            capacity_kwh=10.0,
+            max_charge_kw=30.0,
+            max_discharge_kw=30.0,
+            charge_efficiency=1.0,
+            discharge_efficiency=1.0,
+        )
+
+        cr = simulate_community(
+            fleet, CommunityConfig(sharing_mode="community_battery", community_battery=battery)
+        )
+
+        assert cr.battery_charge.iloc[0] == pytest.approx(10.0)
+        assert cr.grid_export.iloc[0] == pytest.approx(0.0)
+
+    def test_billing_refuses_an_unevenly_spaced_index(self, billed_p2p: CommunityConfig) -> None:
+        uneven = pd.DatetimeIndex(
+            ["2024-06-21 12:00", "2024-06-21 12:01", "2024-06-21 12:03"]
+        ).tz_localize("Europe/London")
+        fleet = _make_fleet(uneven, [([3.0] * 3, [1.0] * 3), ([0.0] * 3, [1.5] * 3)])
+
+        with pytest.raises(ValueError, match="uniformly-spaced"):
+            simulate_community(fleet, billed_p2p)
