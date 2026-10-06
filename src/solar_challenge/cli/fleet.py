@@ -24,13 +24,13 @@ from solar_challenge.config import (
     ConfigurationError,
     SweepSpec,
     detect_sweep_spec,
-    expand_sweep_configs,
-    generate_homes_from_distribution,
     load_community_config,
     load_config,
     load_fleet_config,
+    parse_fleet_config,
     parse_fleet_distribution_config,
     parse_location_block,
+    parse_sweep_fleet_configs,
     substitute_config_variables,
 )
 from solar_challenge.fleet import (
@@ -401,11 +401,9 @@ def sweep(
                 raise ConfigurationError(
                     "Sweep requires fleet_distribution config"
                 )
-            dist_config = parse_fleet_distribution_config(
-                substituted["fleet_distribution"]
+            fleet_config = FleetConfig(
+                homes=parse_fleet_config(substituted).homes, name=f"{param}={val:.4f}"
             )
-            homes = generate_homes_from_distribution(dist_config, location)
-            fleet_config = FleetConfig(homes=homes, name=f"{param}={val:.4f}")
             sweep_configs.append((val, fleet_config))
 
     else:
@@ -424,16 +422,11 @@ def sweep(
                 "Use --param for CLI sweep or add type: sweep to multiplier."
             )
 
-        sweep_values = sweep_spec.get_values()
         print_info(
             f"YAML sweep: multiplier from {sweep_spec.min} to {sweep_spec.max} "
             f"({sweep_spec.steps} steps, {sweep_spec.mode})"
         )
-
-        for val, expanded_config in expand_sweep_configs(dist_config):
-            homes = generate_homes_from_distribution(expanded_config, location)
-            fleet_config = FleetConfig(homes=homes, name=f"multiplier={val:.4f}")
-            sweep_configs.append((val, fleet_config))
+        sweep_configs = parse_sweep_fleet_configs(raw_config)
 
     # Calculate totals
     n_sweeps = len(sweep_configs)
