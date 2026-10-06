@@ -172,11 +172,13 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             :func:`_component_block`), a weighted_discrete/shuffled_pool
             row list is malformed (see :func:`_named_rows`), a shuffled_pool
             count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
-            the counts total more than that (see :func:`_pool_counts`), or a
+            the counts total more than that (see :func:`_pool_counts`), a
             distribution number is one
-            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses; a row,
+            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses, or a
+            block's other setting is one it refuses (see :func:`_other_setting`); a row,
             count or number refusal names its field under its distribution's, such as
-            ``pv.capacity_kw.entries[0].count`` or ``pv.capacity_kw.mean``.
+            ``pv.capacity_kw.entries[0].count`` or ``pv.capacity_kw.mean``, and another
+            setting's names ``<block>.<key>``, such as ``pv.tilt``.
     """
     config: dict[str, Any] = {
         "n_homes": as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
@@ -259,8 +261,9 @@ def _parse_component_distribution(
     """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
 
     Its *primary_field* is the distribution *data* holds there, a mapping with a type or a
-    number; else *data* itself, when it has a type; else *data* whole.  Its other settings
-    are copied through.
+    number; else *data* itself, when it has a type; else *data* whole.  Its other settings,
+    but for ``type``, ``enabled`` and mappings, are read by :func:`_other_setting`, each
+    named ``block.key``.
 
     Args:
         data: Component form data dict.
@@ -273,9 +276,10 @@ def _parse_component_distribution(
     Raises:
         ValueError: As :func:`_build_distribution_dict`, for the distribution at
             ``block.primary_field``, or at ``block`` when *data* itself is the distribution;
-            or if the number there is one
+            if the number there is one
             :func:`~solar_challenge.web.number_fields.as_finite_float` refuses, a boolean
-            included, named ``block.primary_field``.
+            included, named ``block.primary_field``; or if :func:`_other_setting` refuses
+            another setting.
     """
     result: dict[str, Any] = {}
     spec = data.get(primary_field)
@@ -289,15 +293,26 @@ def _parse_component_distribution(
     else:
         result[primary_field] = data
 
-    # Copy through extra scalar fields (azimuth, tilt, etc.)
     for key, value in data.items():
         if key not in (primary_field, "type", "enabled") and not isinstance(value, dict):
-            try:
-                result[key] = float(value)
-            except (ValueError, TypeError):
-                result[key] = value
+            result[key] = _other_setting(value, f"{block}.{key}")
 
     return result
+
+
+def _other_setting(value: object, field: str) -> object:
+    """Return *value*, a block setting other than its distribution, as it is passed to config.py's grammar.
+
+    Null (the grammar's default) and booleans (flags such as load.use_stochastic) pass as
+    given; any other value is read as a number, named *field*.
+
+    Raises:
+        ValueError: If :func:`~solar_challenge.web.number_fields.as_finite_float` refuses
+            *value*; the error names *field* and the value sent.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    return as_finite_float(value, field)
 
 
 def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:
