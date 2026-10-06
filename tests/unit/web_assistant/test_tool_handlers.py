@@ -814,6 +814,32 @@ class TestRunFleetSimulation:
             f"Expected n_homes=0 clamped to >= 1; got {len(configs)}"
         )
 
+    @pytest.mark.parametrize(
+        ("n_homes", "message"),
+        [
+            pytest.param(float("inf"), "n_homes must be a finite number, got inf", id="infinity"),
+            pytest.param(2.5, "n_homes must be a whole number, got 2.5", id="fraction"),
+            pytest.param("abc", "n_homes must be a finite number, got 'abc'", id="non-numeric-string"),
+            pytest.param(None, "n_homes must be a finite number, got None", id="null"),
+        ],
+    )
+    def test_an_n_homes_it_cannot_use_returns_an_error_naming_it_and_submits_nothing(
+        self, tmp_path: Path, n_homes: object, message: str
+    ) -> None:
+        """An n_homes that is not a whole number is refused naming n_homes and the value sent, never read as 1 or truncated; nothing is submitted."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        result = run_fleet_simulation(
+            {"n_homes": n_homes, "pv_kw": 4, "location": "bristol", "days": 7},
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
+
+        assert result == {"error": f"Invalid simulation parameters: {message}"}
+        jm.submit_fleet_job.assert_not_called()
+
     def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
         """Invalid pv_kw returns error dict; submit_fleet_job NOT called; no raise."""
         jm = self._make_jm()
