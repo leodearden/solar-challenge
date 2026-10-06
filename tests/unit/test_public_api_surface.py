@@ -238,8 +238,8 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": {
-        "name": "property (self) -> str",
-        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+        "name": "abstract property (self) -> str",
+        "decide_action": "abstract (self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "SelfConsumptionStrategy": {
         "name": "property (self) -> str",

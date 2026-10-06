@@ -10,6 +10,7 @@ does not import annotations from __future__. The classes whose qualified names a
 asserted are defined at module level, where a qualified name carries no '<locals>'.
 """
 
+import abc
 import collections.abc
 import datetime
 import enum
@@ -226,6 +227,59 @@ def test_a_property_or_cached_property_member_is_spelled_by_its_kind_then_its_ge
     assert member_forms(Meter) == {
         "reading": "property (self) -> float",
         "peak": "cached_property (self) -> float | None",
+    }
+
+
+def test_a_settable_or_deletable_property_member_says_so_in_its_kind() -> None:
+    class Meter:
+        @property
+        def reading(self) -> float: ...
+
+        @reading.setter
+        def reading(self, kwh: float) -> None: ...
+
+        @property
+        def tariff(self) -> str: ...
+
+        @tariff.deleter
+        def tariff(self) -> None: ...
+
+        @property
+        def label(self) -> str: ...
+
+        @label.setter
+        def label(self, text: str) -> None: ...
+
+        @label.deleter
+        def label(self) -> None: ...
+
+    assert member_forms(Meter) == {
+        "reading": "property[settable] (self) -> float",
+        "tariff": "property[deletable] (self) -> str",
+        "label": "property[settable, deletable] (self) -> str",
+    }
+
+
+def test_an_abstract_member_form_begins_with_abstract() -> None:
+    class Strategy(abc.ABC):
+        @abc.abstractmethod
+        def decide(self, demand_kw: float) -> str: ...
+
+        @property
+        @abc.abstractmethod
+        def name(self) -> str: ...
+
+        @classmethod
+        @abc.abstractmethod
+        def default(cls) -> "Strategy": ...
+
+        def describe(self) -> str: ...
+
+    assert member_forms(Strategy) == {
+        "decide": "abstract (self, demand_kw: float) -> str",
+        "name": "abstract property (self) -> str",
+        "default": "abstract classmethod (cls) -> Strategy",
+        "describe": "(self) -> str",
     }
 
 

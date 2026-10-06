@@ -21,8 +21,9 @@ their repr as well, P.args and P.kwargs, which keeps the two apart.
 A class's public members, the methods, properties and class constants its own body
 defines, have forms too. A method's form is its signature, self included. A
 classmethod, staticmethod, property or cached_property is spelled by its kind, then its
-function's signature, and a constant by its type. An inherited member belongs to the
-class that defines it.
+function's signature, and a constant by its type. A property that can be set or deleted
+says so in its kind, as property[settable, deletable] does, and an abstract member's
+form begins with abstract. An inherited member belongs to the class that defines it.
 
 Usage::
 
@@ -162,12 +163,28 @@ def _pinned_by_class_form(cls: type) -> set[str]:
 
 
 def _member_form(member: object) -> str:
+    form = _form_by_kind(member)
+    if getattr(member, "__isabstractmethod__", False):
+        return f"abstract {form}"
+    return form
+
+
+def _form_by_kind(member: object) -> str:
     match member:
         case classmethod() | staticmethod():
             return f"{type(member).__name__} {surface_form(member.__func__)}"
         case property():
-            return f"property {surface_form(member.fget)}"
+            return f"{_property_kind(member)} {surface_form(member.fget)}"
         case functools.cached_property():
             return f"cached_property {surface_form(member.func)}"
         case _:
             return surface_form(member)
+
+
+def _property_kind(member: property) -> str:
+    abilities = [
+        ability
+        for ability, accessor in (("settable", member.fset), ("deletable", member.fdel))
+        if accessor is not None
+    ]
+    return f"property[{', '.join(abilities)}]" if abilities else "property"
