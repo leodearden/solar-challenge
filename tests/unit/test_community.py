@@ -4,6 +4,7 @@ TDD test suite for:
   - CommunityConfig / CommunityBillingConfig (step-1 / step-2)
   - simulate_community p2p netting (step-3 / step-4)
   - validate_community_balance (step-5 / step-6)
+  - time-of-use import billing via simulate_community
   - _price_grid_flows (task-34 step-1 / step-2)
   - CommunityResults billing fields via simulate_community (task-34 step-3 / step-4)
 """
@@ -26,7 +27,7 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics
 from solar_challenge.pv import PVConfig
-from solar_challenge.tariff import FlatRateTariff
+from solar_challenge.tariff import FlatRateTariff, TariffConfig, calculate_bill
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +681,30 @@ class TestSimulateCommunityBattery:
         assert len(result.grid_import) == len(index5)
         assert len(result.battery_soc) == len(index5)
         pd.testing.assert_index_equal(result.grid_import.index, index5)
+
+
+# ---------------------------------------------------------------------------
+# Task-510: TestCommunityBillingTimeOfUse
+# ---------------------------------------------------------------------------
+
+class TestCommunityBillingTimeOfUse:
+    """simulate_community bills each row's import at the tariff's rate for that row's time of day."""
+
+    def test_import_only_fleet_pays_its_time_of_use_bill(self) -> None:
+        # Each row lasts the index's 2 h: 4 kWh in the 06:00 off-peak row, then 6 kWh in the 08:00 peak row.
+        index = pd.date_range("2024-06-21 06:00", periods=2, freq="2h", tz="Europe/London")
+        fleet = _make_fleet(index, [([0.0, 0.0], [2.0, 3.0])])
+        tariff = TariffConfig.economy_7(
+            off_peak_rate=0.09, peak_rate=0.25, off_peak_start="00:30", off_peak_end="07:30"
+        )
+        billing = CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=4.0)
+
+        cr = simulate_community(fleet, CommunityConfig(sharing_mode="p2p", billing=billing))
+
+        assert cr.baseline_net_cost_gbp == pytest.approx(4.0 * 0.09 + 6.0 * 0.25)
+        assert cr.baseline_net_cost_gbp == pytest.approx(
+            calculate_bill(fleet.total_grid_import * 2.0, tariff)
+        )
 
 
 # ---------------------------------------------------------------------------
