@@ -15,6 +15,8 @@ E2E_CONFTEST = Path(__file__).parents[1] / "e2e" / "conftest.py"
 
 ALPINE_CORE = "http://127.0.0.1:5000/static/vendor/alpinejs/alpinejs-3.14.8.min.js"
 
+PRESETS_API = "http://127.0.0.1:5000/api/presets"
+
 BROWSER_CONTEXT_STUB = '''
 
 # ---------------------------------------------------------------------------
@@ -128,19 +130,24 @@ def test_an_e2e_failure_without_a_request_lost_to_a_network_change_does_not_run_
     result.stdout.no_fnmatch_line("* RERUN*")
 
 
-def test_an_e2e_test_still_failing_after_its_rerun_lists_the_requests_lost_to_network_changes(
+def test_an_e2e_test_still_failing_after_its_rerun_lists_the_requests_its_last_attempt_lost_to_network_changes(
     e2e_suite: pytest.Pytester,
 ) -> None:
     scenario = e2e_suite.makepyfile(
         f"""
+        from collections import Counter
+
         import pytest
 
-        ALPINE_CORE = {ALPINE_CORE!r}
+        LOST_ON_ATTEMPT = {{1: {ALPINE_CORE!r}, 2: {PRESETS_API!r}}}
+
+        attempts = Counter()
 
 
-        def test_loses_alpine_to_a_network_change_on_every_attempt(context):
-            context.fail_request(ALPINE_CORE, "net::ERR_NETWORK_CHANGED")
-            pytest.fail("Alpine never started")
+        def test_loses_a_different_request_to_a_network_change_on_each_attempt(context):
+            attempts["lossy"] += 1
+            context.fail_request(LOST_ON_ATTEMPT[attempts["lossy"]], "net::ERR_NETWORK_CHANGED")
+            pytest.fail("the page never became ready")
         """
     )
 
@@ -148,4 +155,5 @@ def test_an_e2e_test_still_failing_after_its_rerun_lists_the_requests_lost_to_ne
 
     outcomes = result.parseoutcomes()
     assert (outcomes.get("failed", 0), outcomes.get("rerun", 0), outcomes.get("passed", 0)) == (1, 1, 0), outcomes
-    result.stdout.fnmatch_lines([f"GET {ALPINE_CORE}"])
+    result.stdout.fnmatch_lines([f"GET {PRESETS_API}"])
+    result.stdout.no_fnmatch_line(f"GET {ALPINE_CORE}")
