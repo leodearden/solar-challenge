@@ -152,6 +152,13 @@ class TestWeatherCache:
         assert result is not None
         pd.testing.assert_frame_equal(result, sample_weather_data)
 
+    def test_get_returns_a_scaled_tmy_bit_for_bit(self, cache, bristol, pvgis_tmy):
+        """get returns every value put stored exactly, so a TMY served from the cache is the TMY that was fetched."""
+        scaled = scale_tmy_to_annual_ghi(pvgis_tmy, 1069.5)
+        cache.put(scaled, "tmy", bristol)
+
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), scaled, check_exact=True)
+
     def test_different_locations_different_cache(self, cache, sample_weather_data):
         """Different locations use different cache entries."""
         loc1 = Location(latitude=51.45, longitude=-2.58)
@@ -304,14 +311,14 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         assert series_request["components"] is False
 
     def test_scaled_tmy_is_cached(self, weather_cache, pvgis_requests):
-        """Once fetched, the scaled TMY is served from the cache, with no further PVGIS request."""
+        """Once fetched, the scaled TMY is served from the cache exactly as fetched, with no further PVGIS request."""
         first = get_tmy_data(Location.bristol())
         pvgis_requests.tmy.side_effect = AssertionError("the TMY was requested again")
         pvgis_requests.hourly.side_effect = AssertionError("the series was requested again")
         second = get_tmy_data(Location.bristol())
 
         assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
-        assert second["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pd.testing.assert_frame_equal(second, first, check_exact=True)
 
     def test_a_tmy_cached_before_scaling_is_never_served(self, weather_cache, pvgis_tmy, pvgis_requests):
         """Bristol's unscaled TMY, as the cache stored it before task 285, is fetched afresh and scaled instead."""
