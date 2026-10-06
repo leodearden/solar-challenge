@@ -7,7 +7,9 @@ order and takes the real submit_home_job's parameters.
 
 from collections.abc import Callable
 from inspect import signature
+from typing import Any
 
+import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
@@ -15,25 +17,28 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.home import HomeConfig
+from solar_challenge.web.simulation_params import parse_home_config
 
 
 class _RecordingJobManager:
-    """Stands in for the app's JobManager: records each home config a request submits and simulates nothing."""
+    """Stands in for the app's JobManager: records each home config a request submits, and the window it runs, and simulates nothing."""
 
     def __init__(self) -> None:
         self.submitted_homes: list[HomeConfig] = []
+        self.submitted_windows: list[tuple[pd.Timestamp, pd.Timestamp]] = []
 
     def submit_home_job(
         self,
         config: HomeConfig,
-        start_date: object,
-        end_date: object,
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
         db_path: str,
         data_dir: str,
         name: str | None = None,
     ) -> tuple[str, str]:
-        """Record the home config and return a fresh (job_id, run_id) pair."""
+        """Record the home config and the window it runs, and return a fresh (job_id, run_id) pair."""
         self.submitted_homes.append(config)
+        self.submitted_windows.append((start_date, end_date))
         n = len(self.submitted_homes)
         return f"job-{n}", f"run-{n}"
 
@@ -300,4 +305,82 @@ class TestSweepParameters:
 
         assert response.status_code == 400
         assert "pv_capacity_kw=25.0" in response.get_json()["error"]
+        assert recording_job_manager.submitted_homes == []
+
+
+def _home_window(home_config: dict[str, Any]) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """The window parse_home_config reads from home_config, the one POST /api/simulate/home runs."""
+    _, start_date, end_date, _ = parse_home_config(home_config)
+    return start_date, end_date
+
+
+class TestSweepWindow:
+    """The window every point of a sweep runs: the one its base_config sends, or 7 days when it sends none."""
+
+    @pytest.mark.parametrize(
+        "window",
+        [
+            pytest.param({"start": "2024-01-01", "end": "2024-03-31"}, id="start-and-end"),
+            pytest.param({"start": "2024-02-01"}, id="start-only"),
+            pytest.param({"end": "2024-03-31"}, id="end-only"),
+            pytest.param({"days": 30}, id="days"),
+            pytest.param({"days": None}, id="days-null"),
+        ],
+    )
+    def test_every_point_runs_the_window_its_base_config_sends(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        window: dict[str, Any],
+    ) -> None:
+        """A base_config that sends any of days, start and end, even as null, has every point run the window parse_home_config reads from it."""
+        response = client.post(
+            "/api/simulate/sweep",
+            json={"min": 1.0, "max": 5.0, "steps": 2, "base_config": window},
+        )
+
+        assert response.status_code == 201
+        assert recording_job_manager.submitted_windows == [_home_window(window)] * 2
+
+    @pytest.mark.parametrize(
+        "base_config_fields",
+        [
+            pytest.param({"base_config": {"battery_kwh": 5.0}}, id="base-config-without-window-key"),
+            pytest.param({"base_config": {}}, id="empty-base-config"),
+            pytest.param({}, id="no-base-config"),
+        ],
+    )
+    def test_a_request_that_sends_no_window_key_runs_every_point_for_7_days(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        base_config_fields: dict[str, Any],
+    ) -> None:
+        """A request that sends none of days, start and end has every point run the sweep's default 7 days.
+
+        Its base_config may hold other keys, be empty, or be left out of the body altogether.
+        """
+        response = client.post(
+            "/api/simulate/sweep",
+            json={"min": 1.0, "max": 5.0, "steps": 2, **base_config_fields},
+        )
+
+        assert response.status_code == 201
+        assert recording_job_manager.submitted_windows == [_home_window({"days": 7})] * 2
+
+    def test_a_window_the_home_parser_refuses_gets_400_carrying_its_refusal_and_submits_nothing(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        """A base_config window parse_home_config refuses gets 400 carrying that refusal, and no sweep point is submitted."""
+        window = {"start": "not-a-date", "end": "2024-03-31"}
+        with pytest.raises(ValueError) as refusal:
+            parse_home_config(window)
+
+        response = client.post(
+            "/api/simulate/sweep",
+            json={"min": 1.0, "max": 5.0, "steps": 2, "base_config": window},
+        )
+
+        assert response.status_code == 400
+        assert str(refusal.value) in response.get_json()["error"]
         assert recording_job_manager.submitted_homes == []
