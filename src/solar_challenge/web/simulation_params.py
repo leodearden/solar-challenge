@@ -60,19 +60,29 @@ _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
 })
 
 
-def _read_date(value: Any, field: str, default: date) -> date:
-    """Read a request body's ``field`` as an ISO 8601 calendar date; a falsy value reads as ``default``.
+def read_iso_date(value: Any, field: str) -> date:
+    """Read *value*, the setting named *field*, as an ISO 8601 calendar date (``YYYY-MM-DD``).
 
     Raises:
-        ValueError: If the value is not a string date.fromisoformat reads; the
-            error names the field and the value sent.
+        ValueError: If *value* is not a string date.fromisoformat reads; the
+            error names *field* and the value.
     """
-    if not value:
-        return default
     try:
         return date.fromisoformat(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}") from exc
+
+
+def _read_date(value: Any, field: str, default: date) -> date:
+    """Read a request body's ``field`` as an ISO 8601 calendar date; a falsy value reads as ``default``.
+
+    Raises:
+        ValueError: From :func:`read_iso_date`, for a value that is not an ISO
+            8601 date, naming the field and the value sent.
+    """
+    if not value:
+        return default
+    return read_iso_date(value, field)
 
 
 def _days_window(days: int) -> tuple[date, date]:
