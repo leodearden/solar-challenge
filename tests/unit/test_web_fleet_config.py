@@ -24,7 +24,7 @@ from solar_challenge.web.fleet_config import (
 from tests._fleet_form import (
     FALSY_NON_NULL_VALUES,
     FLEET_FORM_COMPONENT_BLOCKS,
-    VALID_DISTRIBUTION_FORM,
+    valid_distribution_form,
 )
 
 
@@ -354,12 +354,12 @@ class TestFleetConfigHelpers:
     ) -> None:
         """An n_homes or seed that int() cannot read, or an n_homes outside 1 to the dashboard's fleet limit, is refused, naming the field and the value sent."""
         with pytest.raises(ValueError, match=re.escape(message)):
-            form_to_fleet_distribution_config({**VALID_DISTRIBUTION_FORM, key: value})
+            form_to_fleet_distribution_config({**valid_distribution_form(), key: value})
 
     def test_form_to_fleet_distribution_config_accepts_a_fleet_of_max_fleet_homes(self) -> None:
         """A fleet form may ask for as many homes as a dashboard fleet holds."""
         config = form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, "n_homes": MAX_FLEET_HOMES}
+            {**valid_distribution_form(), "n_homes": MAX_FLEET_HOMES}
         )
 
         assert config["n_homes"] == MAX_FLEET_HOMES
@@ -380,7 +380,7 @@ class TestFleetConfigHelpers:
     ) -> None:
         """A pv/battery/load block that is neither null nor a mapping, a falsy one included, is refused, naming the block and the type sent."""
         with pytest.raises(ValueError, match=re.escape(f"{key} must be a mapping, got {type_name}")):
-            form_to_fleet_distribution_config({**VALID_DISTRIBUTION_FORM, key: value})
+            form_to_fleet_distribution_config({**valid_distribution_form(), key: value})
 
     @pytest.mark.parametrize(
         "key", [pytest.param(key, id=f"{key}-null") for key in FLEET_FORM_COMPONENT_BLOCKS]
@@ -389,9 +389,9 @@ class TestFleetConfigHelpers:
         self, key: str
     ) -> None:
         """A null pv/battery/load block converts exactly as if the block were left out."""
-        without_block = {k: v for k, v in VALID_DISTRIBUTION_FORM.items() if k != key}
+        without_block = {k: v for k, v in valid_distribution_form().items() if k != key}
         assert form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, key: None}
+            {**valid_distribution_form(), key: None}
         ) == form_to_fleet_distribution_config(without_block)
 
     @pytest.mark.parametrize(
@@ -420,7 +420,7 @@ class TestFleetConfigHelpers:
     ) -> None:
         """A weighted_discrete/shuffled_pool row list converts to parallel value and weight/count lists, a missing weight or count reading as 1."""
         config = form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+            {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
         )
         assert config["pv"] == {"capacity_kw": converted}
 
@@ -470,7 +470,7 @@ class TestFleetConfigHelpers:
         """A weighted_discrete/shuffled_pool row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
         with pytest.raises(ValueError, match=re.escape(message)):
             form_to_fleet_distribution_config(
-                {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+                {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
             )
 
     @pytest.mark.parametrize(
@@ -520,7 +520,7 @@ class TestFleetConfigHelpers:
         }
         with pytest.raises(ValueError, match=re.escape(message)):
             form_to_fleet_distribution_config(
-                {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+                {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
             )
 
     def test_form_to_fleet_distribution_config_accepts_shuffled_pool_counts_from_0_to_max_fleet_homes(
@@ -532,7 +532,7 @@ class TestFleetConfigHelpers:
             "entries": [{"value": 3.0, "count": 0}, {"value": 5.0, "count": MAX_FLEET_HOMES}],
         }
         config = form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+            {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
         )
 
         assert config["pv"]["capacity_kw"]["counts"] == [0, MAX_FLEET_HOMES]
@@ -563,7 +563,7 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_is_the_inverse_of_the_forms_conversion(self, spec: dict) -> None:
         """A distribution the fleet page's editor sends converts to config.py's grammar and reads back as itself."""
         config = form_to_fleet_distribution_config(
-            {**VALID_DISTRIBUTION_FORM, "pv": {"capacity_kw": spec}}
+            {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
         )
 
         assert (

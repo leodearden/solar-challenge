@@ -34,7 +34,7 @@ from tests._finance_builders import make_sim_results
 from tests._fleet_form import (
     FALSY_NON_NULL_VALUES,
     FLEET_FORM_BLOCKS,
-    VALID_DISTRIBUTION_FORM,
+    valid_distribution_form,
 )
 from tests._html_page import (
     doctype,
@@ -678,7 +678,7 @@ class TestFleetApiEndpoints:
         type_name: str,
     ) -> None:
         """Every block of the fleet form, the pv/battery/load distributions and the tariff/dispatch_strategy/seg overlays alike, refuses a falsy value other than null as a value that is not a mapping, naming the block and the type sent, at the simulate endpoint and the export alike; no fleet is queued."""
-        response = client.post(endpoint, json={**VALID_DISTRIBUTION_FORM, key: value})
+        response = client.post(endpoint, json={**valid_distribution_form(), key: value})
 
         assert response.status_code == 400
         assert response.get_json() == {"error": f"{key} must be a mapping, got {type_name}"}
@@ -689,11 +689,11 @@ class TestFleetApiEndpoints:
         self, client: FlaskClient, mock_job_manager: MagicMock, key: str
     ) -> None:
         """A null block, any of the six, gets the answer the form without it gets."""
-        without_block = {k: v for k, v in VALID_DISTRIBUTION_FORM.items() if k != key}
+        without_block = {k: v for k, v in valid_distribution_form().items() if k != key}
 
         null_block = client.post(
             "/api/simulate/fleet-from-distribution",
-            json={**VALID_DISTRIBUTION_FORM, key: None},
+            json={**valid_distribution_form(), key: None},
         )
         absent_block = client.post("/api/simulate/fleet-from-distribution", json=without_block)
 
@@ -714,11 +714,11 @@ class TestFleetApiEndpoints:
         """An empty battery block is a mapping its grammar reads, not an absent block: enabled by default, with no capacity distribution, it gets the 400 the block with enabled spelled out gets, and no fleet is queued."""
         empty = client.post(
             "/api/simulate/fleet-from-distribution",
-            json={**VALID_DISTRIBUTION_FORM, "battery": {}},
+            json={**valid_distribution_form(), "battery": {}},
         )
         enabled = client.post(
             "/api/simulate/fleet-from-distribution",
-            json={**VALID_DISTRIBUTION_FORM, "battery": {"enabled": True}},
+            json={**valid_distribution_form(), "battery": {"enabled": True}},
         )
 
         assert empty.status_code == 400
