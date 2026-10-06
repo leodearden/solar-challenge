@@ -54,6 +54,16 @@ def test_builder_no_js_errors(
 # ── Accordion sections ───────────────────────────────────────────────
 
 
+_ACCORDION_SECTIONS: dict[str, tuple[str, str]] = {
+    "General": ("textbox", "Description"),
+    "Period": ("textbox", "Start Date"),
+    "Location": ("combobox", "Location Preset"),
+    "Fleet Distribution": ("spinbutton", "Number of Homes"),
+    "Tariff": ("spinbutton", "Import Rate (GBP/kWh)"),
+}
+"""The accordion's sections in page order, each by its header's name, with the role and name of one control its panel holds."""
+
+
 def test_accordion_sections_exist(page: Page, live_server: str) -> None:
     """The accordion should have General, Period, Location, Fleet Distribution,
     and Tariff sections.
@@ -61,17 +71,50 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
     page.goto(live_server + "/scenarios/builder")
     page.wait_for_load_state("networkidle")
 
-    expected_sections = ["General", "Period", "Location", "Fleet Distribution", "Tariff"]
-
-    for section_name in expected_sections:
-        accordion_btn = page.locator(
-            "button",
-            has_text=section_name,
-        ).first
+    for section_name in _ACCORDION_SECTIONS:
         expect(
-            accordion_btn,
+            page.get_by_role("button", name=section_name, exact=True),
             f"Accordion section '{section_name}' should be visible",
         ).to_be_visible()
+
+
+def _expect_expanded_headers(page: Page, open_section: str | None) -> None:
+    """Expect the header of *open_section* to be exposed as expanded and every other section's header as collapsed; with None, every header as collapsed."""
+    for section in _ACCORDION_SECTIONS:
+        expect(page.get_by_role("button", name=section, exact=True, expanded=section == open_section)).to_be_visible()
+
+
+def test_only_the_open_sections_header_is_exposed_as_expanded(page: Page, live_server: str) -> None:
+    """General's header alone is exposed as expanded when the page loads; opening Period moves that to Period's header, and closing Period leaves every header collapsed."""
+    page.goto(live_server + "/scenarios/builder")
+    _expect_expanded_headers(page, "General")
+
+    _open_section(page, "Period")
+    _expect_expanded_headers(page, "Period")
+
+    page.get_by_role("button", name="Period", exact=True).click()
+    _expect_expanded_headers(page, None)
+
+
+def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
+    """The sections of _ACCORDION_SECTIONS whose control lies, shown or hidden, in the element the header named *header* names in aria-controls."""
+    panel_id = page.get_by_role("button", name=header, exact=True).get_attribute("aria-controls")
+    assert panel_id, f"the {header} header names no element in aria-controls"
+    panel = page.locator(f"id={panel_id}")
+    return {
+        section
+        for section, (role, name) in _ACCORDION_SECTIONS.items()
+        if panel.get_by_role(role, name=name, exact=True, include_hidden=True).count() > 0
+    }
+
+
+def test_each_section_header_controls_the_panel_that_holds_that_sections_controls(page: Page, live_server: str) -> None:
+    """The element each accordion header names in aria-controls holds that section's control, shown or not, and no other section's."""
+    page.goto(live_server + "/scenarios/builder")
+
+    assert {header: _sections_whose_control_the_panel_holds(page, header) for header in _ACCORDION_SECTIONS} == {
+        header: {header} for header in _ACCORDION_SECTIONS
+    }
 
 
 # ── YAML Preview pane ────────────────────────────────────────────────
@@ -685,6 +728,28 @@ def test_uploading_a_scenario_whose_location_omits_altitude_previews_that_scenar
 
     assert preview.status == 200, preview.text()
     assert yaml.safe_load(preview.json()["yaml"]) == yaml.safe_load(_LOCATION_WITHOUT_ALTITUDE_YAML)
+
+
+@pytest.mark.parametrize("key", ["Enter", "Space"])
+def test_tabbing_to_upload_yaml_and_pressing_key_opens_a_file_chooser_whose_scenario_loads_into_the_form(
+    page: Page, live_server: str, tmp_path: Path, key: str
+) -> None:
+    """Tab moves focus from the Load Preset button to the Upload YAML button, and pressing *key* there opens a file chooser; the scenario chosen in it sets the form the builder previews."""
+    with page.expect_response("**/api/scenarios/preview-yaml"):
+        page.goto(live_server + "/scenarios/builder")
+    path = tmp_path / "scenario.yaml"
+    path.write_text(_LOCATION_WITHOUT_ALTITUDE_YAML, encoding="utf-8")
+    page.get_by_role("button", name="Load Preset", exact=True).focus()
+
+    # The Tab and the focus check stay inside the with: they let the chooser listener register before the key press
+    with page.expect_file_chooser() as chooser:
+        page.keyboard.press("Tab")
+        expect(page.get_by_role("button", name="Upload YAML", exact=True)).to_be_focused()
+        page.keyboard.press(key)
+    with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
+        chooser.value.set_files(path)
+
+    assert after_upload.value.request.post_data_json["name"] == "Hand-written location"
 
 
 _RUN_EXPORT_YAML = scenario_yaml(
