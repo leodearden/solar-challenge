@@ -1,17 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for load_fleet_config, on inline fleet files and on the fleet scenarios shipped in scenarios/."""
+"""Tests for the fleet-file readers load_fleet_config and parse_sweep_fleet_configs, on inline fleet files and on the fleet scenarios shipped in scenarios/."""
 
 import json
 import re
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
+import yaml
 
-from solar_challenge.config import ConfigurationError, DispatchStrategyConfig, load_fleet_config
+from solar_challenge.config import (
+    ConfigurationError,
+    DispatchStrategyConfig,
+    GridChargeConfig,
+    load_fleet_config,
+    parse_sweep_fleet_configs,
+)
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.pv import calculate_degradation_factor
+from solar_challenge.tariff import TariffConfig
 
 
 @pytest.fixture
@@ -606,3 +614,107 @@ fleet_distribution:
     ) -> None:
         with pytest.raises(ConfigurationError, match=reason):
             self._load_fleet(tmp_path, dispatch_strategy)
+
+
+_PV_KW = 4.0
+
+_ECONOMY_7 = {"type": "economy_7", "off_peak_rate": 0.09, "peak_rate": 0.25}
+
+
+def _proportional_to_pv(multiplier: object) -> dict[str, object]:
+    """A battery capacity_kwh spec: *multiplier* times the home's PV capacity."""
+    return {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": multiplier}
+
+
+def _fleet_file(capacity_kwh: object, **top_level_blocks: object) -> dict[str, Any]:
+    """A fleet file of two tou_optimized homes with _PV_KW of PV and a battery of *capacity_kwh* that grid-charges to 0.9, beside *top_level_blocks*."""
+    return {
+        "fleet_distribution": {
+            "n_homes": 2,
+            "seed": 7,
+            "pv": {"capacity_kw": _PV_KW},
+            "load": {"annual_consumption_kwh": 3400},
+            "dispatch_strategy": "tou_optimized",
+            "battery": {
+                "grid_charging": {"target_soc_fraction": 0.9},
+                "capacity_kwh": capacity_kwh,
+            },
+        },
+        **top_level_blocks,
+    }
+
+
+class TestParseSweepFleetConfigs:
+    """parse_sweep_fleet_configs builds each point of a fleet file's sweep as load_fleet_config builds that point's file."""
+
+    def test_every_sweep_points_homes_are_the_homes_load_fleet_config_builds_at_that_point(
+        self, tmp_path: Path
+    ) -> None:
+        """The file carries seg: so that the parity covers seg_tariff once load_fleet_config applies it."""
+        top_level_blocks = {"tariff": _ECONOMY_7, "seg": {"rate_pence_per_kwh": 4.1}}
+        sweep = {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"}
+
+        points = parse_sweep_fleet_configs(
+            _fleet_file(_proportional_to_pv(sweep), **top_level_blocks)
+        )
+
+        assert [value for value, _ in points] == [1.25, 2.5]
+        for _, fleet in points:
+            for home in fleet.homes:
+                assert home.tariff_config == TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
+                assert home.dispatch_strategy == "tou_optimized"
+                assert home.battery_config is not None
+                assert home.battery_config.grid_charging == GridChargeConfig(target_soc_fraction=0.9)
+        for value, fleet in points:
+            fixed_capacity_file = tmp_path / f"fleet-{value}.yaml"
+            fixed_capacity_file.write_text(
+                yaml.safe_dump(_fleet_file(_PV_KW * value, **top_level_blocks))
+            )
+            assert fleet.homes == load_fleet_config(fixed_capacity_file).homes
+
+    def test_a_tou_optimized_sweep_without_a_tariff_warns_once_for_the_whole_file(self) -> None:
+        sweep = {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            points = parse_sweep_fleet_configs(_fleet_file(_proportional_to_pv(sweep)))
+
+        assert len(points) == 3, "premise: the sweep has three points"
+        advisories = [
+            warning
+            for warning in caught
+            if issubclass(warning.category, UserWarning)
+            and "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff is configured"
+            in str(warning.message)
+        ]
+        assert len(advisories) == 1
+
+    @pytest.mark.parametrize(
+        ("document", "refusal"),
+        [
+            pytest.param(
+                _fleet_file(
+                    _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
+                    tariff={"type": "economy_8"},
+                ),
+                re.escape("Unknown tariff type 'economy_8'"),
+                id="a-tariff-the-loader-refuses",
+            ),
+            pytest.param(
+                {"homes": [{"pv": {"capacity_kw": _PV_KW}}]},
+                "fleet_distribution",
+                id="no-fleet-distribution",
+            ),
+            pytest.param(
+                _fleet_file(5.0, tariff=_ECONOMY_7),
+                "No sweep specification found",
+                id="no-sweep",
+            ),
+        ],
+    )
+    def test_a_file_it_cannot_sweep_is_refused(
+        self, document: dict[str, Any], refusal: str
+    ) -> None:
+        """Each refusal is a ConfigurationError, never a KeyError, so a caller reports it as a config error."""
+        with pytest.raises(ConfigurationError, match=refusal):
+            parse_sweep_fleet_configs(document)
