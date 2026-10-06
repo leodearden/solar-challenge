@@ -166,11 +166,6 @@ def make_fleet_results_of(
     """
     if homes is None:
         homes = [make_home_config() for _ in per_home_results]
-    elif len(homes) != len(per_home_results):
-        raise ValueError(
-            "make_fleet_results_of pairs one home with each result: "
-            f"got {len(per_home_results)} results and {len(homes)} homes"
-        )
     return FleetResults(per_home_results=list(per_home_results), home_configs=list(homes))
 
 
