@@ -31,6 +31,7 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.web import database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.number_fields import as_whole_number
 from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
@@ -657,7 +658,10 @@ def run_fleet_simulation(
     Builds a homogeneous N-home fleet by parsing the per-home param dict
     (minus ``n_homes``) once with ``parse_home_config`` and repeating the
     resulting frozen ``HomeConfig`` ``n_homes`` times.  ``n_homes``
-    is clamped to [1, 100] to protect the single-worker JobManager.
+    is 1 when absent and must otherwise be a whole number: anything else is
+    refused with an error naming ``n_homes`` and the value sent.  A whole
+    ``n_homes`` is clamped to [1, 100] to protect the single-worker
+    JobManager.
 
     Args:
         params:      Flat parameter dict including ``n_homes`` plus the per-home
@@ -673,11 +677,10 @@ def run_fleet_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    # Clamp n_homes to [1, 100]
     try:
-        n_homes: int = max(1, min(int(params.get("n_homes", 1)), 100))
-    except (ValueError, TypeError):
-        n_homes = 1
+        n_homes = max(1, min(as_whole_number(params.get("n_homes", 1), "n_homes"), 100))
+    except ValueError as exc:
+        return {"error": f"Invalid simulation parameters: {exc}"}
 
     # Build per-home dict by excluding the fleet-level n_homes key
     per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
