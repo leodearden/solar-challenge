@@ -8,10 +8,11 @@ input edit committed without a rebuild passes it. This module rebuilds the
 stylesheet in a scratch copy of the web package, with the committed
 package-lock.json, and compares bytes.
 
-The two license texts beside the stylesheet are verbatim copies of
-tailwindcss's LICENSE and src/css/LICENSE. This module compares them byte for
-byte with those files of the version package-lock.json locks, so a Tailwind
-version change that leaves them stale fails. Both checks share one npm ci.
+Each license text beside the stylesheet is a verbatim copy of the tailwindcss
+file tests/_tailwindcss_license_copies.py names. This module compares each copy
+byte for byte with that file of the version package-lock.json locks, so a
+Tailwind version change that leaves a copy stale fails. Both checks share one
+npm ci.
 
 The orchestrator's offline lane runs this module after each merge to main, as
 its css-build job. tests/conftest.py keeps this directory out of every default
@@ -35,6 +36,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
+
 pytestmark = pytest.mark.slow
 
 # Module-scoped fixtures cannot request the function-scoped project_root fixture.
@@ -44,12 +47,6 @@ _WEB_PACKAGE = Path(__file__).resolve().parents[2] / "src" / "solar_challenge" /
 _DIST = Path("static", "dist")
 _DIST_STYLESHEET = _DIST / "style.css"
 _TAILWINDCSS_PACKAGE = Path("node_modules", "tailwindcss")
-
-# Each license text in static/dist, beside the stylesheet tailwindcss compiles, and the package file it copies verbatim.
-_TAILWINDCSS_LICENSE_COPIES: dict[str, Path] = {
-    "LICENSE-tailwindcss.txt": Path("LICENSE"),
-    "LICENSE-tailwindcss-preflight.txt": Path("src", "css", "LICENSE"),
-}
 
 # Only so a hung npm fails the tests by name: both npm steps' timeouts together fit inside the css-build
 # lane job's `timeout` (dark-factory-orchestrator.yaml), whose kill would file css-build::nonzero-exit.
@@ -135,12 +132,12 @@ def test_dist_style_css_matches_a_fresh_build_of_its_sources(scratch_web_package
     )
 
 
-@pytest.mark.parametrize("license_copy", list(_TAILWINDCSS_LICENSE_COPIES))
+@pytest.mark.parametrize("license_copy", list(TAILWINDCSS_LICENSE_COPIES))
 def test_dist_license_text_matches_the_locked_tailwindcss_package(scratch_web_package: Path, license_copy: str) -> None:
     """static/dist/<license_copy> is byte for byte the file it copies from the locked tailwindcss package."""
     tailwindcss = scratch_web_package / _TAILWINDCSS_PACKAGE
     version = json.loads((tailwindcss / "package.json").read_text(encoding="utf-8"))["version"]
-    licensed_file = _TAILWINDCSS_LICENSE_COPIES[license_copy]
+    licensed_file = TAILWINDCSS_LICENSE_COPIES[license_copy]
     upstream = tailwindcss / licensed_file
     committed_copy = (_DIST / license_copy).as_posix()
     installed_file = (_TAILWINDCSS_PACKAGE / licensed_file).as_posix()
@@ -148,7 +145,7 @@ def test_dist_license_text_matches_the_locked_tailwindcss_package(scratch_web_pa
         f"tailwindcss {version}, which package-lock.json locks, installs no {installed_file}, the file "
         f"{committed_copy} copies: this version moved or dropped that license, so a plain copy cannot refresh "
         "it. Find where this version keeps the license of the code it compiles into style.css, copy that file, "
-        "and update this module's _TAILWINDCSS_LICENSE_COPIES to name it."
+        "and update TAILWINDCSS_LICENSE_COPIES in tests/_tailwindcss_license_copies.py to name it."
     )
     assert (_WEB_PACKAGE / _DIST / license_copy).read_bytes() == upstream.read_bytes(), (
         f"{committed_copy} is not byte for byte tailwindcss {version}'s {licensed_file.as_posix()}: a Tailwind "
