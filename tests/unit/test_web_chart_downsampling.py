@@ -55,11 +55,7 @@ def test_a_chart_of_at_most_2000_steps_draws_every_step(steps: int) -> None:
 
 
 def test_a_chart_of_more_than_2000_steps_draws_the_mean_of_each_evenly_spaced_window() -> None:
-    """A year of hourly steps, 8,760 across both DST changes, is drawn as the mean of each window.
-
-    The window is read from the figure, not restated, so a change to how wide the windows are
-    leaves this test green; drawing anything but their means does not.
-    """
+    """A year of hourly steps, 8,760 across both DST changes, is drawn as the mean of each window."""
     year = _with_rising_soc(make_sim_results(days=365))
 
     trace = _soc_trace(year)
