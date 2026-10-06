@@ -821,6 +821,48 @@ class TestFleetConfigHelpers:
             form_to_fleet_distribution_config({**valid_distribution_form(), **form_patch(value)})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
+    @pytest.mark.parametrize("value", _UNUSABLE_NON_BOOLEAN_NUMBERS)
+    @pytest.mark.parametrize(
+        ("block", "distribution", "key"),
+        [
+            pytest.param("pv", {"capacity_kw": 4.0}, "tilt", id="pv-tilt"),
+            pytest.param("battery", {"capacity_kwh": 5.0}, "max_charge_kw", id="battery-max-charge"),
+            pytest.param(
+                "load",
+                {"annual_consumption_kwh": 3500.0},
+                "household_occupants",
+                id="load-household-occupants",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_another_block_setting_that_is_not_finite_naming_it(
+        self, block: str, distribution: dict, key: str, value: object
+    ) -> None:
+        """A block setting other than its distribution that is not a finite number is refused naming <block>.<key> and the value sent."""
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config(
+                {**valid_distribution_form(), block: {**distribution, key: value}}
+            )
+        assert str(exc_info.value) == f"{block}.{key} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize(
+        ("block", "key", "value", "expected"),
+        [
+            pytest.param("load", "use_stochastic", False, False, id="load-use-stochastic-false"),
+            pytest.param("load", "use_stochastic", True, True, id="load-use-stochastic-true"),
+            pytest.param("pv", "tilt", None, None, id="pv-tilt-null"),
+            pytest.param("pv", "tilt", "30", 30.0, id="pv-tilt-numeric-string"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_passes_null_and_boolean_block_settings_on_as_given(
+        self, block: str, key: str, value: object, expected: object
+    ) -> None:
+        """A block setting that is null or a boolean passes on to config.py's grammar as given; any other is read as a number, a numeric string included."""
+        form = valid_distribution_form()
+        config = form_to_fleet_distribution_config({**form, block: {**form[block], key: value}})
+        got = config[block][key]
+        assert (type(got), got) == (type(expected), expected)
+
     @pytest.mark.parametrize(
         "spec",
         [

@@ -635,6 +635,36 @@ class TestFleetFromDistribution:
         assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
         mock_job_manager.submit_fleet_job.assert_not_called()
 
+    def test_block_setting_too_large_for_a_float_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A block setting too large for a float is a 400 naming it and the value sent, not a 500; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "pv": {**self._VALID_BODY["pv"], "tilt": 10**400}},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": f"pv.tilt must be a finite number, got {10**400!r}"}
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_boolean_block_setting_reaches_the_queued_homes_as_given(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A boolean block setting, load.use_stochastic, reaches every queued home as the boolean sent, not as a number."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "load": {"annual_consumption_kwh": 3500.0, "use_stochastic": False},
+            },
+        )
+        assert resp.status_code == 201, (
+            f"Expected 201, got {resp.status_code}: {resp.get_data(as_text=True)}"
+        )
+        call_kwargs = mock_job_manager.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert all(config.load_config.use_stochastic is False for config in configs)
+
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
     def test_malformed_fleet_seg_returns_400_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: MagicMock, seg: object
