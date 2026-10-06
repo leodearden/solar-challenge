@@ -2,6 +2,7 @@
 """Parse the web dashboard's flat simulation-parameter dicts into engine configuration."""
 
 from collections.abc import Mapping
+from datetime import date, timedelta
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -22,6 +23,8 @@ from solar_challenge.seg import SEGTariff
 from solar_challenge.web.number_fields import as_finite_float, as_int, as_int_within
 from solar_challenge.web.shared import require_json_object, resolve_location
 
+_FULL_YEAR_START = date(2024, 1, 1)
+_FULL_YEAR_END = date(2024, 12, 31)
 _DAYS_WINDOW_START = pd.Timestamp("2024-06-01")
 
 #: The most days a request may ask for: the longest window from _DAYS_WINDOW_START that ends by pd.Timestamp.max.
@@ -56,6 +59,21 @@ _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
 })
 
 
+def _read_date(value: Any, field: str, default: date) -> date:
+    """Read a request body's ``field`` as an ISO 8601 calendar date; a falsy value reads as ``default``.
+
+    Raises:
+        ValueError: If the value is not a string date.fromisoformat reads; the
+            error names the field and the value sent.
+    """
+    if not value:
+        return default
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}") from exc
+
+
 def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     """Extract a (start, end) date-string pair from a JSON request body.
 
@@ -69,8 +87,8 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     2. ``days`` key present (an integer from 1 to :data:`MAX_WINDOW_DAYS` other
        than 365, read as int() reads it) → *days*-day window anchored at
        2024-06-01.
-    3. Otherwise → use ``start`` / ``end`` keys with defaults
-       ``"2024-01-01"`` / ``"2024-12-31"``.
+    3. Otherwise → read ``start`` / ``end`` as ISO 8601 dates (``YYYY-MM-DD``);
+       a falsy one reads as ``"2024-01-01"`` / ``"2024-12-31"``.
 
     Args:
         data: Parsed JSON body from the request.
@@ -80,24 +98,23 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
 
     Raises:
         ValueError: If ``days`` is present but is one int() cannot read or is
-            outside 1 to MAX_WINDOW_DAYS; the error names days and the value sent.
+            outside 1 to MAX_WINDOW_DAYS, or if ``start`` or ``end`` is not an
+            ISO 8601 date; the error names the field and the value sent.
     """
     params = {**_DATE_RANGE_DEFAULTS, **data}
     days_raw = params["days"]
-    start_raw = params["start"]
-    end_raw = params["end"]
 
     if days_raw is not None:
         days = as_int_within(days_raw, "days", 1, MAX_WINDOW_DAYS)
         if days == 365:
-            return "2024-01-01", "2024-12-31"
+            return _FULL_YEAR_START.isoformat(), _FULL_YEAR_END.isoformat()
         start = _DAYS_WINDOW_START.strftime("%Y-%m-%d")
         end = (_DAYS_WINDOW_START + pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
         return start, end
 
-    start = str(start_raw) if start_raw else "2024-01-01"
-    end = str(end_raw) if end_raw else "2024-12-31"
-    return start, end
+    start = _read_date(params["start"], "start", _FULL_YEAR_START)
+    end = _read_date(params["end"], "end", _FULL_YEAR_END)
+    return start.isoformat(), end.isoformat()
 
 
 def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
