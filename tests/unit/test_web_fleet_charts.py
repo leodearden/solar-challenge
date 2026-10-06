@@ -20,6 +20,7 @@ from solar_challenge.web.charts import (
     fleet_distribution_histograms,
     fleet_grid_impact,
     fleet_heatmap,
+    power_flow_timeline,
 )
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
@@ -158,6 +159,19 @@ class TestFleetChartFunctions:
             "Grid Import": sum(home.grid_import for home in homes).round(4).tolist(),
             "Grid Export": sum(home.grid_export for home in homes).round(4).tolist(),
         }
+
+    def test_fleet_aggregate_timeline_of_a_one_home_fleet_is_that_homes_power_flow_timeline(
+        self,
+    ) -> None:
+        """A one-home fleet's totals are its home's flows, so its timeline is the home's power-flow timeline under the fleet's own title."""
+        home = make_sim_results(days=365)
+
+        home_figure = json.loads(power_flow_timeline(home))
+        fleet_figure = json.loads(fleet_aggregate_timeline(make_fleet_results_of([home])))
+
+        titles = (home_figure["layout"].pop("title"), fleet_figure["layout"].pop("title"))
+        assert titles == ({"text": "Power Flow Timeline"}, {"text": "Fleet Aggregate Power Flow"})
+        assert fleet_figure == home_figure
 
     @pytest.mark.parametrize("n_homes", [1, 2], ids=["one-home", "two-homes"])
     def test_fleet_grid_impact_draws_the_fleets_summed_import_less_its_summed_export(
