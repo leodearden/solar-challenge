@@ -159,6 +159,25 @@ class TestWeatherCache:
 
         pd.testing.assert_frame_equal(cache.get("tmy", bristol), scaled, check_exact=True)
 
+    @pytest.mark.parametrize(
+        ("start", "tz"),
+        [
+            pytest.param("2024-03-30", "UTC", id="UTC across the March clock change"),
+            pytest.param("2024-06-21", "Europe/London", id="Europe/London at one offset"),
+            pytest.param("2024-03-30", "Europe/London", id="Europe/London across the March clock change"),
+            pytest.param("2024-10-26", "Europe/London", id="Europe/London across the October clock change"),
+            pytest.param("2024-06-21", "UTC+01:00", id="a fixed UTC offset"),
+            pytest.param("2024-03-30", None, id="naive"),
+        ],
+    )
+    def test_get_returns_the_index_put_stored(self, cache, bristol, start, tz):
+        """get returns the frame on the index put stored: its instants, its timezone and its frequency."""
+        index = pd.date_range(start, periods=48, freq="h", tz=tz)
+        frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
+        cache.put(frame, "tmy", bristol)
+
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), frame, check_exact=True)
+
     def test_different_locations_different_cache(self, cache, sample_weather_data):
         """Different locations use different cache entries."""
         loc1 = Location(latitude=51.45, longitude=-2.58)
