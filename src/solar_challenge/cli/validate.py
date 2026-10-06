@@ -21,15 +21,12 @@ from solar_challenge.cli.utils import (
 from solar_challenge.config import (
     ConfigurationError,
     ScenarioConfig,
-    detect_sweep_spec,
-    expand_sweep_configs,
-    generate_homes_from_distribution,
+    detect_fleet_sweep_spec,
     load_config,
-    load_fleet_config,
     load_home_config,
     load_scenarios,
-    parse_fleet_distribution_config,
-    parse_location_block,
+    parse_fleet_config,
+    parse_sweep_fleet_configs,
 )
 from solar_challenge.home import HomeConfig
 from solar_challenge.pv import PVConfig
@@ -179,24 +176,18 @@ def _scenario_homes(scenario: ScenarioConfig) -> list[HomeConfig]:
     return [scenario.home] if scenario.home is not None else scenario.homes
 
 
-def _fleet_homes(config_file: Path, document: Mapping[str, Any]) -> _DefinedHomes:
+def _fleet_homes(document: Mapping[str, Any]) -> _DefinedHomes:
     """The homes `fleet run` builds from the file.
 
     For a YAML-defined sweep, the homes `fleet sweep` builds at every sweep point.
     """
-    if "fleet_distribution" in document:
-        distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-        if detect_sweep_spec(distribution) is not None:
-            location = parse_location_block(document.get("location"))
-            fleets = [
-                generate_homes_from_distribution(point, location)
-                for _, point in expand_sweep_configs(distribution)
-            ]
-            return _DefinedHomes(
-                homes=[home for fleet in fleets for home in fleet],
-                sweep_points=len(fleets),
-            )
-    return _DefinedHomes(homes=load_fleet_config(config_file).homes)
+    if detect_fleet_sweep_spec(document) is None:
+        return _DefinedHomes(homes=parse_fleet_config(document).homes)
+    fleets = [fleet for _, fleet in parse_sweep_fleet_configs(document)]
+    return _DefinedHomes(
+        homes=[home for fleet in fleets for home in fleet.homes],
+        sweep_points=len(fleets),
+    )
 
 
 def _homes_defined_by(config_file: Path) -> _DefinedHomes:
@@ -214,7 +205,7 @@ def _homes_defined_by(config_file: Path) -> _DefinedHomes:
             ]
         )
     if "fleet_distribution" in document or "homes" in document:
-        return _fleet_homes(config_file, document)
+        return _fleet_homes(document)
     return _DefinedHomes(homes=[load_home_config(config_file)])
 
 

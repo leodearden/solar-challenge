@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation commands."""
 
+import dataclasses
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
@@ -23,14 +24,13 @@ from solar_challenge.community import simulate_community
 from solar_challenge.config import (
     ConfigurationError,
     SweepSpec,
-    detect_sweep_spec,
-    expand_sweep_configs,
-    generate_homes_from_distribution,
+    detect_fleet_sweep_spec,
     load_community_config,
     load_config,
     load_fleet_config,
-    parse_fleet_distribution_config,
+    parse_fleet_config,
     parse_location_block,
+    parse_sweep_fleet_configs,
     substitute_config_variables,
 )
 from solar_challenge.fleet import (
@@ -377,6 +377,9 @@ def sweep(
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    if "fleet_distribution" not in raw_config:
+        raise ConfigurationError("Sweep requires fleet_distribution config")
+
     # Build sweep configs upfront
     sweep_configs: list[tuple[float, FleetConfig]] = []
     param_name: str = "multiplier"  # Default for YAML sweep
@@ -397,43 +400,25 @@ def sweep(
 
         for val in sweep_values:
             substituted = substitute_config_variables(raw_config, {param: val})
-            if "fleet_distribution" not in substituted:
-                raise ConfigurationError(
-                    "Sweep requires fleet_distribution config"
-                )
-            dist_config = parse_fleet_distribution_config(
-                substituted["fleet_distribution"]
+            fleet_config = dataclasses.replace(
+                parse_fleet_config(substituted), name=f"{param}={val:.4f}"
             )
-            homes = generate_homes_from_distribution(dist_config, location)
-            fleet_config = FleetConfig(homes=homes, name=f"{param}={val:.4f}")
             sweep_configs.append((val, fleet_config))
 
     else:
         # YAML-defined sweep
-        if "fleet_distribution" not in raw_config:
-            raise ConfigurationError(
-                "Sweep requires fleet_distribution config"
-            )
-        dist_config = parse_fleet_distribution_config(
-            raw_config["fleet_distribution"]
-        )
-        sweep_spec = detect_sweep_spec(dist_config)  # type: ignore[assignment]
+        sweep_spec = detect_fleet_sweep_spec(raw_config)  # type: ignore[assignment]
         if sweep_spec is None:
             raise ConfigurationError(
                 "No sweep spec found in config. "
                 "Use --param for CLI sweep or add type: sweep to multiplier."
             )
 
-        sweep_values = sweep_spec.get_values()
         print_info(
             f"YAML sweep: multiplier from {sweep_spec.min} to {sweep_spec.max} "
             f"({sweep_spec.steps} steps, {sweep_spec.mode})"
         )
-
-        for val, expanded_config in expand_sweep_configs(dist_config):
-            homes = generate_homes_from_distribution(expanded_config, location)
-            fleet_config = FleetConfig(homes=homes, name=f"multiplier={val:.4f}")
-            sweep_configs.append((val, fleet_config))
+        sweep_configs = parse_sweep_fleet_configs(raw_config)
 
     # Calculate totals
     n_sweeps = len(sweep_configs)

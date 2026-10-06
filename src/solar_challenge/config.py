@@ -2280,15 +2280,58 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
     return parse_home_block(flat_home, location, block_path="")
 
 
-def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
-    """Load a fleet configuration from file.
+@dataclass(frozen=True)
+class _FleetFileSettings:
+    """What a fleet file gives every home its fleet_distribution: block generates.
+
+    Attributes:
+        location: The file's location: block, Bristol when it has none
+        tariff: The file's top-level tariff: block, None when it has none
+    """
+
+    location: Location
+    tariff: Optional[TariffConfig]
+
+    def generate_homes(self, distribution: FleetDistributionConfig) -> list[HomeConfig]:
+        """The homes *distribution* generates, each given the file's settings."""
+        return generate_homes_from_distribution(
+            distribution, self.location, fleet_tariff=self.tariff
+        )
+
+
+def _read_fleet_distribution_file(
+    document: Mapping[str, Any],
+) -> tuple[FleetDistributionConfig, _FleetFileSettings]:
+    """Read the fleet_distribution: block of *document*, with what the file gives every home it generates.
+
+    The one place that decides which top-level blocks those homes get. It reads location:,
+    fleet_distribution: and tariff: in that order, and warns when the block dispatches
+    tou_optimized with no tariff to dispatch by.
+    """
+    location = parse_location_block(document.get("location"))
+    distribution = parse_fleet_distribution_config(document["fleet_distribution"])
+    tariff = parse_tariff_config(document.get("tariff"))
+    if distribution.dispatch_strategy == "tou_optimized" and tariff is None:
+        warnings.warn(
+            "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff "
+            "is configured; homes will fall back to self-consumption dispatch at "
+            "simulation time. Add a top-level 'tariff:' key to the fleet YAML to "
+            "enable Economy-7 grid-charging.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return distribution, _FleetFileSettings(location=location, tariff=tariff)
+
+
+def parse_fleet_config(document: Mapping[str, Any]) -> FleetConfig:
+    """Parse a fleet file's document, already loaded or variable-substituted.
 
     Supports two formats:
     - Explicit homes list: `homes: [...]`
     - Distribution-based generation: `fleet_distribution: {...}`
 
     Args:
-        path: Path to configuration file
+        document: The fleet file's configuration dictionary
 
     Returns:
         FleetConfig object
@@ -2296,29 +2339,12 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     Raises:
         ConfigurationError: If configuration is invalid
     """
-    config = load_config(path)
-
-    location = parse_location_block(config.get("location"))
-
-    # Check for fleet_distribution (new format)
-    if "fleet_distribution" in config:
-        dist_config = parse_fleet_distribution_config(config["fleet_distribution"])
-        # Thread the scenario-level tariff (Seam 1, §9.1).
-        # parse_tariff_config returns None when the key is absent → calibration-safe.
-        fleet_tariff = parse_tariff_config(config.get("tariff"))
-        if dist_config.dispatch_strategy == "tou_optimized" and fleet_tariff is None:
-            warnings.warn(
-                "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff "
-                "is configured; homes will fall back to self-consumption dispatch at "
-                "simulation time. Add a top-level 'tariff:' key to the fleet YAML to "
-                "enable Economy-7 grid-charging.",
-                UserWarning,
-                stacklevel=2,
-            )
-        homes = generate_homes_from_distribution(dist_config, location, fleet_tariff=fleet_tariff)
-    elif "homes" in config:
-        # Explicit homes list (original format)
-        homes_data = config["homes"]
+    if "fleet_distribution" in document:
+        distribution, settings = _read_fleet_distribution_file(document)
+        homes = settings.generate_homes(distribution)
+    elif "homes" in document:
+        location = parse_location_block(document.get("location"))
+        homes_data = document["homes"]
         if not homes_data:
             raise ConfigurationError("Fleet 'homes' list cannot be empty")
         homes = [
@@ -2330,7 +2356,66 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
             "Fleet configuration requires either 'homes' list or 'fleet_distribution'"
         )
 
-    return FleetConfig(homes=homes, name=config.get("name", ""))
+    return FleetConfig(homes=homes, name=document.get("name", ""))
+
+
+def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
+    """Load a fleet configuration from file, as parse_fleet_config parses its document.
+
+    Args:
+        path: Path to configuration file
+
+    Returns:
+        FleetConfig object
+
+    Raises:
+        ConfigurationError: If configuration is invalid
+    """
+    return parse_fleet_config(load_config(path))
+
+
+def detect_fleet_sweep_spec(document: Mapping[str, Any]) -> Optional[SweepSpec]:
+    """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds.
+
+    Args:
+        document: The fleet file's configuration dictionary
+
+    Returns:
+        The SweepSpec detect_sweep_spec finds in its fleet_distribution: block, None when
+        it has no such block or the block no sweep
+
+    Raises:
+        ConfigurationError: If its fleet_distribution: block is invalid
+    """
+    if "fleet_distribution" not in document:
+        return None
+    return detect_sweep_spec(parse_fleet_distribution_config(document["fleet_distribution"]))
+
+
+def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, FleetConfig]]:
+    """The fleet each point of the document's YAML-defined sweep builds, with its sweep value.
+
+    The sweep is the fleet_distribution: block's battery.capacity_kwh multiplier. Every
+    point's homes get the file's top-level blocks as parse_fleet_config gives them, read
+    once for the whole file.
+
+    Args:
+        document: The fleet file's configuration dictionary
+
+    Returns:
+        (sweep value, FleetConfig named after it) for each sweep point, in sweep order
+
+    Raises:
+        ConfigurationError: If the document has no fleet_distribution: block or no
+            sweep, or if configuration is invalid
+    """
+    if "fleet_distribution" not in document:
+        raise ConfigurationError("A YAML-defined sweep requires a 'fleet_distribution' block")
+    distribution, settings = _read_fleet_distribution_file(document)
+    return [
+        (value, FleetConfig(homes=settings.generate_homes(point), name=f"multiplier={value:.4f}"))
+        for value, point in expand_sweep_configs(distribution)
+    ]
 
 
 def run_parameter_sweep(
