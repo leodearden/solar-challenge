@@ -117,6 +117,23 @@ signature, or to an exported class's public members, must also edit
 `FROZEN_SURFACE` or `FROZEN_MEMBERS` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 464): `WeatherCache.get`, and so `get_tmy_data` on
+a cache hit, returns exactly the frame `WeatherCache.put` stored. Its floats
+come back bit for bit; on the 0.5.0 tag the CSV reader left some values 1 ulp
+off, so the run that filled a cache simulated from a TMY slightly different from
+every later run's. Its index comes back in the timezone it was put in; on the
+tag, a frame in a zone with daylight saving, such as `Europe/London`, came back
+at a fixed UTC offset (`UTC+01:00` for a June day), and one spanning a clock
+change raised `AttributeError`. Simulation reads a TMY by its UTC instants, so
+the zone alone changes no result. `get` restores the zone from its `str`, which
+`put` records, so `put` now raises `ValueError`, writing nothing, for a frame
+indexed in a zone whose `str` names none, such as a `dateutil` zone (UTC
+included) or `pytz.FixedOffset`; on the tag, `put` cached such a frame, and `get`
+returned it at a fixed UTC offset, or raised `AttributeError` for a `dateutil`
+zone across a clock change. Consumers that seed a cache with such a frame convert
+its index first, e.g. with `tz_convert("Europe/London")`; other consumers need no
+change when they re-pin. Any workaround for the fixed offset can go.
+
 **Unreleased on main** (task 200): `TariffConfig` gains two read-only members,
 `peak_rate`, its highest period rate, and `mean_period_rate`, the mean of its
 period rates with each period counted once whatever its length, both in £/kWh;

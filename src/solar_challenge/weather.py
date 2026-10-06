@@ -70,6 +70,17 @@ def _staged_beside(entry_file: Path) -> Iterator[Path]:
         raise
 
 
+def _require_timezone_name(name: str) -> None:
+    """Refuse a name pandas resolves to no timezone: put records a frame's timezone as its str, and get restores the timezone from it."""
+    try:
+        pd.DatetimeIndex([], tz="UTC").tz_convert(name)
+    except (LookupError, ValueError) as e:
+        raise ValueError(
+            "A cached frame's timezone must have a str that names it, such as 'Europe/London', 'UTC' or "
+            f"'UTC+01:00', for WeatherCache to restore it, got {name!r}"
+        ) from e
+
+
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
@@ -122,7 +133,7 @@ class WeatherCache:
     def get(self, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
             end_date: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
-        """Retrieve cached data if available.
+        """Retrieve the frame put stored under the key: its values exactly, and its index in the timezone and frequency it was put in.
 
         Args:
             prefix: Data type prefix (e.g., 'tmy')
@@ -131,21 +142,25 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            Cached DataFrame or None if not found
+            The cached DataFrame, or None if not found
+
+        Raises:
+            ValueError: If the entry records its timezone as a str that names none; put refuses such a timezone
         """
         key = self._make_key(prefix, location, start_date, end_date)
         cache_file = self._cache_path(key)
         meta_file = self._meta_path(key)
 
         if cache_file.exists():
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            df = pd.read_csv(cache_file, index_col=0, parse_dates=True, float_precision="round_trip")
             # Restore timezone from metadata if available
             if meta_file.exists():
                 with open(meta_file) as f:
                     metadata = json.load(f)
                 tz = metadata.get("timezone")
-                if tz and df.index.tz is None:
-                    df.index = df.index.tz_localize(tz)
+                if tz:
+                    _require_timezone_name(tz)
+                    df.index = pd.to_datetime(df.index, utc=True).tz_convert(tz)
                 freq = metadata.get("freq")
                 if freq:
                     df = df.asfreq(freq)
@@ -168,12 +183,18 @@ class WeatherCache:
             location: Location for the data
             start_date: Optional start of a date-ranged entry (part of the key)
             end_date: Optional end of a date-ranged entry (part of the key)
+
+        Raises:
+            ValueError: If data's index is in a timezone get could not restore from its str, such as a dateutil
+                zone; nothing is then written
         """
         key = self._make_key(prefix, location, start_date, end_date)
         cache_file = self._cache_path(key)
         meta_file = self._meta_path(key)
 
         tz_str = str(data.index.tz) if data.index.tz else None
+        if tz_str is not None:
+            _require_timezone_name(tz_str)
         freq_str = data.index.freqstr if hasattr(data.index, "freqstr") and data.index.freqstr else None
         metadata = {
             "prefix": prefix,
@@ -288,7 +309,8 @@ def get_tmy_data(
         - dni: Direct normal irradiance (W/m²)
         - dhi: Diffuse horizontal irradiance (W/m²)
         - wind_speed: Wind speed at 10m (m/s)
-        Index is DatetimeIndex in UTC.
+        Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put comes back in
+        the timezone it was put in.
 
     Raises:
         WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
