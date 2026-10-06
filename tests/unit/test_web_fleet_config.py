@@ -917,3 +917,37 @@ class TestFleetConfigHelpers:
         """A fixed value, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
         with pytest.raises(ValueError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
+
+    @pytest.mark.parametrize(
+        ("spec", "form_spec"),
+        [
+            pytest.param(
+                {"type": "normal", "mean": "4.5", "std": 1.0, "min": 2.0, "max": 8.0},
+                {"type": "normal", "mean": 4.5, "std": 1.0, "min": 2.0, "max": 8.0},
+                id="normal-numeric-string-mean",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": ["2", 1]},
+                {
+                    "type": "weighted_discrete",
+                    "values": [{"value": 3.0, "weight": 2.0}, {"value": 5.0, "weight": 1.0}],
+                },
+                id="weighted-discrete-numeric-string-weight",
+            ),
+        ],
+    )
+    def test_distribution_form_spec_reads_a_numeric_string_as_its_number(
+        self, spec: dict, form_spec: dict
+    ) -> None:
+        """A scenario's numeric string, which the loaders read as its number, reads into the fleet form as that number, as the form's conversion reads it."""
+        assert distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw") == form_spec
+
+    def test_distribution_form_spec_refuses_a_number_too_large_for_a_float_naming_it(self) -> None:
+        """A scenario's number too large for a float is refused naming its path and the value, not raised as an OverflowError."""
+        with pytest.raises(ValueError) as exc_info:
+            distribution_form_spec(
+                {"type": "uniform", "min": 10**400, "max": 8.0}, "fleet_distribution.pv.capacity_kw"
+            )
+        assert str(exc_info.value) == (
+            f"fleet_distribution.pv.capacity_kw.min must be a finite number, got {10**400!r}"
+        )
