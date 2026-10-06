@@ -10,7 +10,7 @@ from typing import Annotated, Optional
 import pandas as pd
 import typer
 
-from solar_challenge.cli.utils import handle_errors, print_info, print_report
+from solar_challenge.cli.utils import CliFleetSimulator, handle_errors, print_info, print_report
 from solar_challenge.config import (
     ConfigurationError,
     ScenarioConfig,
@@ -30,7 +30,7 @@ from solar_challenge.finance import (
     solve_cost_recovery_rate,
 )
 from solar_challenge.flex import FlexibilityValueBand, resolve_flex_band
-from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEGTariff
@@ -57,6 +57,7 @@ class FlexBand(str, enum.Enum):
 @app.command()
 @handle_errors
 def run(
+    ctx: typer.Context,
     scenario: Annotated[
         Path,
         typer.Argument(
@@ -178,7 +179,8 @@ def run(
     print_info(f"Simulating fleet of {n_homes} homes for {days} days…")
 
     # ---- Simulate fleet -----------------------------------------------------
-    fleet_results: FleetResults = simulate_fleet(fleet_config, start_date, end_date)
+    simulate = ctx.ensure_object(CliFleetSimulator).simulate
+    fleet_results: FleetResults = simulate(fleet_config, start_date, end_date)
 
     # ---- Capacity-at-events grid-services figure (ε / task-76) -------------
     # Computed once from the already-available fleet_results; None for flat model.
@@ -246,7 +248,7 @@ def run(
     if project:
         assert econ_scenario is not None
         print_info("Computing project-level economics (DSCR/IRR/payback)…")
-        curve = project_multi_year(econ_scenario, finance)
+        curve = project_multi_year(econ_scenario, finance, simulate=simulate)
         economics_result = project_economics(curve, econ_scenario, finance)
 
     # ---- Cost-recovery solve (optional) ------------------------------------
@@ -254,7 +256,7 @@ def run(
     if cost_recovery:
         assert econ_scenario is not None
         print_info("Solving cost-recovery own-use rate…")
-        cost_recovery_result = solve_cost_recovery_rate(econ_scenario, finance)
+        cost_recovery_result = solve_cost_recovery_rate(econ_scenario, finance, simulate=simulate)
 
     # ---- Render report ------------------------------------------------------
     if assumptions == AssumptionMode.physics:
