@@ -10,15 +10,23 @@ compare page).
 Also stubs the Run History page's runs-list API for tests that need it
 empty or unanswered, and collects the errors a page reports.
 
-It imports nothing from playwright: tests/unit/test_e2e_job_wait.py runs
-a copy of this module in the verify environment, which lacks the e2e extra.
+A test that fails after Chromium failed one of its requests with
+net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
+says why.
+
+It imports nothing from playwright: tests/unit/test_e2e_job_wait.py and
+tests/unit/test_e2e_network_change_reruns.py run copies of this module in
+the verify environment, which lacks the e2e extra.
 """
 
+import functools
 import socket
 import threading
 import uuid
 from collections.abc import Iterator
 from dataclasses import replace
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
@@ -277,3 +285,51 @@ def page_errors(page) -> list[str]:
     page.on("console", _collect_console_error)
     page.on("pageerror", lambda error: errors.append(str(error)))
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Requests lost to host network changes
+# ---------------------------------------------------------------------------
+
+_NETWORK_CHANGED = "net::ERR_NETWORK_CHANGED"
+_RERUNS_AFTER_A_NETWORK_CHANGE = 1
+_REQUESTS_LOST_TO_NETWORK_CHANGES = pytest.StashKey[list[str]]()
+
+
+@pytest.fixture(autouse=True)
+def _record_requests_lost_to_network_changes(request: pytest.FixtureRequest) -> None:
+    """Record, as "METHOD URL", each request the test's browser context fails with net::ERR_NETWORK_CHANGED during this attempt.
+
+    Each attempt's record starts empty before its context starts, so an attempt
+    whose context fails to start has lost nothing. A test without a context starts none.
+    """
+    lost: list[str] = []
+    request.node.stash[_REQUESTS_LOST_TO_NETWORK_CHANGES] = lost
+    if "context" not in request.fixturenames:
+        return
+
+    def _record_if_lost_to_a_network_change(failed_request: Any) -> None:
+        if failed_request.failure == _NETWORK_CHANGED:
+            lost.append(f"{failed_request.method} {failed_request.url}")
+
+    request.getfixturevalue("context").on("requestfailed", _record_if_lost_to_a_network_change)
+
+
+def _lost_a_request_to_a_network_change(item: pytest.Item) -> bool:
+    """Whether the test's browser context failed a request with net::ERR_NETWORK_CHANGED during its latest attempt."""
+    return bool(item.stash.get(_REQUESTS_LOST_TO_NETWORK_CHANGES, []))
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Run each test under this directory once more if it fails after its browser lost a request to a network change.
+
+    The hook is given every test in the session, so it leaves the tests outside this directory alone.
+    """
+    for item in items:
+        if item.path.is_relative_to(Path(__file__).parent):
+            item.add_marker(
+                pytest.mark.flaky(
+                    reruns=_RERUNS_AFTER_A_NETWORK_CHANGE,
+                    condition=functools.partial(_lost_a_request_to_a_network_change, item),
+                )
+            )
