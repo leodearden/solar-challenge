@@ -20,6 +20,9 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.web.simulation_params import parse_home_config
 
 
+_MOST_POINTS_A_SWEEP_MAY_HAVE = 50
+
+
 class _RecordingJobManager:
     """Stands in for the app's JobManager: records each home config a request submits, and the window it runs, and simulates nothing."""
 
@@ -122,14 +125,105 @@ class TestSimulateSweep:
         resp = client.post("/api/simulate/sweep", data=data, content_type=content_type)
         assert resp.status_code == 400
 
-    def test_steps_less_than_2_returns_400(self, client: FlaskClient) -> None:
-        """Steps < 2 returns 400."""
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        [
+            pytest.param(
+                {"min": 1, "max": 5, "steps": float("inf")},
+                "steps must be a finite number, got inf",
+                id="steps-infinity",
+            ),
+            pytest.param(
+                {"min": 10**400, "max": 5, "steps": 2},
+                f"min must be a finite number, got {10**400!r}",
+                id="min-too-large-for-a-float",
+            ),
+            pytest.param(
+                {"min": 1, "max": 10**400, "steps": 2},
+                f"max must be a finite number, got {10**400!r}",
+                id="max-too-large-for-a-float",
+            ),
+            pytest.param(
+                {"min": 1, "max": 5, "steps": 10**400},
+                f"steps must be a finite number, got {10**400!r}",
+                id="steps-too-large-for-a-float",
+            ),
+            pytest.param(
+                {"min": float("nan"), "max": 5, "steps": 2},
+                "min must be a finite number, got nan",
+                id="min-nan",
+            ),
+            pytest.param(
+                {"min": 1, "max": float("inf"), "steps": 2},
+                "max must be a finite number, got inf",
+                id="max-infinity",
+            ),
+            pytest.param(
+                {"min": True, "max": 5, "steps": 2},
+                "min must be a finite number, got True",
+                id="min-boolean",
+            ),
+            pytest.param(
+                {"min": "abc", "max": 10.0, "steps": 3},
+                "min must be a finite number, got 'abc'",
+                id="min-non-numeric-string",
+            ),
+            pytest.param(
+                {"min": 1, "max": 5, "steps": 2.5},
+                "steps must be a whole number, got 2.5",
+                id="steps-fraction",
+            ),
+            pytest.param(
+                {"min": 1, "max": 5, "steps": None},
+                "steps must be a finite number, got None",
+                id="steps-null",
+            ),
+        ],
+    )
+    def test_a_number_it_cannot_use_is_refused_naming_the_field_and_the_value_sent_and_submits_nothing(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        body: dict[str, object],
+        message: str,
+    ) -> None:
+        """A min, max or steps the sweep cannot use is a 400 naming the field and the value sent, never a 500, and no sweep point is submitted."""
+        resp = client.post("/api/simulate/sweep", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": message}
+        assert recording_job_manager.submitted_homes == []
+
+    def test_a_sweep_may_have_as_many_points_as_the_sweep_page_offers(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        """A sweep with as many points as the sweep page's Steps box offers submits one home per point."""
         resp = client.post(
             "/api/simulate/sweep",
-            json={"min": 1.0, "max": 10.0, "steps": 1},
+            json={"min": 1.0, "max": 10.0, "steps": _MOST_POINTS_A_SWEEP_MAY_HAVE},
+        )
+        assert resp.status_code == 201
+        assert len(recording_job_manager.submitted_homes) == _MOST_POINTS_A_SWEEP_MAY_HAVE
+
+    @pytest.mark.parametrize(
+        "steps",
+        [
+            pytest.param(1, id="too-few"),
+            pytest.param(_MOST_POINTS_A_SWEEP_MAY_HAVE + 1, id="more-than-the-page-offers"),
+        ],
+    )
+    def test_a_step_count_outside_2_to_the_most_points_is_refused_before_any_point_is_submitted(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager, steps: int
+    ) -> None:
+        """Fewer than 2 points, or more than the sweep page offers, is a 400 naming steps, the range and the value sent; no point is submitted."""
+        resp = client.post(
+            "/api/simulate/sweep",
+            json={"min": 1.0, "max": 10.0, "steps": steps},
         )
         assert resp.status_code == 400
-        assert "Steps" in resp.get_json()["error"]
+        assert resp.get_json() == {
+            "error": f"steps must be between 2 and {_MOST_POINTS_A_SWEEP_MAY_HAVE}, got {steps}"
+        }
+        assert recording_job_manager.submitted_homes == []
 
     def test_min_gte_max_returns_400(self, client: FlaskClient) -> None:
         """min >= max returns 400."""
@@ -164,15 +258,6 @@ class TestSimulateSweep:
             json={"min": 0.0, "max": 10.0, "steps": 3, "mode": "geometric"},
         )
         assert resp.status_code == 400
-
-    def test_invalid_numeric_param_returns_400(self, client: FlaskClient) -> None:
-        """Non-numeric min/max/steps returns 400."""
-        resp = client.post(
-            "/api/simulate/sweep",
-            json={"min": "abc", "max": 10.0, "steps": 3},
-        )
-        assert resp.status_code == 400
-        assert "Invalid numeric" in resp.get_json()["error"]
 
     @pytest.mark.parametrize(
         ("base_config", "type_name"),
