@@ -7,10 +7,12 @@ back into the form, that Load Preset fills the form and names the preset's
 settings the form has no control for, that a preset without a period runs the
 page's default period, that the page shows why a preset cannot
 load or a fleet cannot export, that the simulation name reaches the submitted
-run, that Run shows why the page refuses a form and submits nothing, and that
-the period selector offers presets and a custom date range.
+run, that Run shows why the page refuses a form, submits nothing and leaves the
+results link of an earlier run in place, and that the period selector offers
+presets and a custom date range.
 """
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -491,6 +493,50 @@ def test_fleet_run_shows_every_reason_it_refuses_the_form(
         "PV std deviation must be positive; PV min must be less than max"
     )
     assert fleet_submissions == []
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+
+COMPLETED_RUN_ID = "run-1"
+
+
+@pytest.fixture
+def fleet_runs_complete_at_once(page: Page) -> None:
+    """Answer each fleet run the page submits as a job that completes at once as COMPLETED_RUN_ID, so no job reaches the live server's JobManager."""
+    page.route(
+        "**/api/simulate/fleet-from-distribution",
+        lambda route: route.fulfill(
+            status=201, json={"job_id": "job-1", "run_id": COMPLETED_RUN_ID}
+        ),
+    )
+    completion = {"status": "completed", "run_id": COMPLETED_RUN_ID}
+    page.route(
+        "**/api/jobs/job-1/progress",
+        lambda route: route.fulfill(
+            content_type="text/event-stream",
+            body=f"event: complete\ndata: {json.dumps(completion)}\n\n",
+        ),
+    )
+
+
+@pytest.mark.usefixtures("fleet_runs_complete_at_once")
+def test_fleet_run_that_refuses_the_form_leaves_the_earlier_runs_results_link(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """Run of a form the page refuses, after a run that completed, shows the refusal and leaves that run's View Results link: a refusal is no submission to replace it."""
+    earlier_results = f"/results/fleet/{COMPLETED_RUN_ID}"
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_role("button", name="Run Fleet Simulation").click()
+    results_link = page.get_by_role("link", name="View Results", exact=True)
+    expect(results_link).to_have_attribute("href", earlier_results)
+
+    page.get_by_role("combobox", name="PV Capacity Distribution Type", exact=True).select_option(
+        label="Normal (Gaussian)"
+    )
+    page.get_by_role("spinbutton", name="PV Capacity Std Dev", exact=True).fill("0")
+    page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    expect(page.get_by_role("alert")).to_have_text("PV std deviation must be positive")
+    expect(results_link).to_have_attribute("href", earlier_results)
     assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
 
