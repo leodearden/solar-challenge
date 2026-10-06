@@ -138,7 +138,7 @@ class WeatherCache:
         meta_file = self._meta_path(key)
 
         if cache_file.exists():
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            df = pd.read_csv(cache_file, index_col=0, parse_dates=True, float_precision="round_trip")
             # Restore timezone from metadata if available
             if meta_file.exists():
                 with open(meta_file) as f:
