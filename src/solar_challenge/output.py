@@ -118,8 +118,8 @@ def generate_summary_report(
             summer_hp_ratio = summer_hp_kwh / summer_demand_kwh if summer_demand_kwh > 0 else 0.0
 
             # Calculate average daily values
-            winter_days = len(winter_hp_load) / (60 * 24) if len(winter_hp_load) > 0 else 1
-            summer_days = len(summer_hp_load) / (60 * 24) if len(summer_hp_load) > 0 else 1
+            winter_days = len(winter_hp_load) * HOURS_PER_MINUTE / 24 if len(winter_hp_load) > 0 else 1
+            summer_days = len(summer_hp_load) * HOURS_PER_MINUTE / 24 if len(summer_hp_load) > 0 else 1
             winter_daily_avg = winter_hp_kwh / winter_days if winter_days > 0 else 0.0
             summer_daily_avg = summer_hp_kwh / summer_days if summer_days > 0 else 0.0
 
