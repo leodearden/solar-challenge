@@ -11,6 +11,10 @@ a terminal, Rich routes sys.stdout writes through it to stderr.
 --quiet calls set_status_quiet, which silences status_console: status
 messages go unprinted and progress displays stay off, while products,
 warnings and errors print as ever.
+
+A command that simulates a fleet reads its simulator from Click's context
+object, ctx.ensure_object(CliFleetSimulator).simulate: fleet.simulate_fleet,
+unless whoever invokes the CLI passes another CliFleetSimulator as obj.
 """
 
 import dataclasses
