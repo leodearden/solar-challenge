@@ -26,7 +26,7 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics
 from solar_challenge.pv import PVConfig
-from solar_challenge.tariff import FlatRateTariff, TariffConfig, calculate_bill
+from solar_challenge.tariff import FlatRateTariff, TariffConfig
 
 
 # ---------------------------------------------------------------------------
@@ -700,10 +700,9 @@ class TestCommunityBillingTimeOfUse:
 
         cr = simulate_community(fleet, CommunityConfig(sharing_mode="p2p", billing=billing))
 
-        assert cr.baseline_net_cost_gbp == pytest.approx(4.0 * 0.09 + 6.0 * 0.25)
-        assert cr.baseline_net_cost_gbp == pytest.approx(
-            calculate_bill(fleet.total_grid_import * 2.0, tariff)
-        )
+        time_of_use_bill = 4.0 * 0.09 + 6.0 * 0.25
+        assert cr.baseline_net_cost_gbp == pytest.approx(time_of_use_bill)
+        assert cr.community_net_cost_gbp == pytest.approx(time_of_use_bill)
 
 
 # ---------------------------------------------------------------------------
