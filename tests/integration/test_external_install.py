@@ -396,12 +396,13 @@ _COMPILED_TAILWIND_COPYRIGHT_NOTICES = {
 def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compiled_css(built_wheel: Path) -> None:
     """The Tailwind CLI compiles two MIT-licensed works into web/static/dist/style.css. One is the
     CSS tailwindcss's engine emits (the --tw-* defaults and the utilities), under tailwindcss's
-    LICENSE. The other, after the /*! tailwindcss ... */ banner, is a copy of its preflight.css,
-    under the separate LICENSE beside preflight.css in the tailwindcss package's src/css/.
+    license. The other, after the /*! tailwindcss ... */ banner, is a copy of its preflight.css,
+    under a separate license of its own.
 
     The banner names their license but carries neither their copyright notices nor the permission
     notice that MIT requires to accompany a copy. Both license texts, kept verbatim beside the
-    compiled CSS, carry them. The wheel declares them, so they also land in .dist-info/licenses/.
+    compiled CSS, carry them; tests/_tailwindcss_license_copies.py names the tailwindcss file each
+    one copies. The wheel declares them, so they also land in .dist-info/licenses/.
     """
     shipped = _shipped_license_texts(built_wheel)
     beside_css = [text for entry, text in shipped.items() if entry.startswith(f"{_COMPILED_CSS_DIR}/")]
@@ -410,16 +411,18 @@ def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compile
         for work, notices in _COMPILED_TAILWIND_COPYRIGHT_NOTICES.items()
     }
     unlicensed = {work: notices for work, notices in absent.items() if notices}
+    copies = "; ".join(
+        f"{licensed_file} to {_COMPILED_CSS_DIR}/{license_copy}"
+        for license_copy, licensed_file in TAILWINDCSS_LICENSE_COPIES.items()
+    )
 
     assert unlicensed == {}, (
         f"The built wheel ships, beside the compiled CSS in {_COMPILED_CSS_DIR}, no license text "
         f"carrying these copyright notices of the Tailwind works: {unlicensed}; the license texts it "
-        f"ships are {list(shipped)}. Copy the tailwindcss package's LICENSE to "
-        f"{_COMPILED_CSS_DIR}/LICENSE-tailwindcss.txt and its src/css/LICENSE to "
-        f"{_COMPILED_CSS_DIR}/LICENSE-tailwindcss-preflight.txt, verbatim, from the version that "
+        f"ships are {list(shipped)}. Copy, verbatim, from the tailwindcss package of the version that "
         "compiled style.css (its banner names it; node_modules/tailwindcss holds it once the web "
-        "package's npm dependencies are installed in src/solar_challenge/web). Match them with the "
-        f'[project] license-files pattern "{_COMPILED_CSS_DIR}/LICENSE*" in pyproject.toml.'
+        f"package's npm dependencies are installed in src/solar_challenge/web): {copies}. Match them "
+        f'with the [project] license-files pattern "{_COMPILED_CSS_DIR}/LICENSE*" in pyproject.toml.'
     )
 
 
