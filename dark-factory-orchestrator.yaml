@@ -77,9 +77,10 @@ git:
   # - css-build: rebuilds static/dist/style.css in a scratch copy from the
   #   committed sources and package-lock.json (tests/css_build), and goes red
   #   when the committed file differs, e.g. after an unrebuilt
-  #   tailwind.config.js edit. It needs npm and registry.npmjs.org. `timeout`
-  #   caps a hung run at 600 s; a run measures 17-38 s, by host load: uv syncs
-  #   a fresh .venv, then 6-19 s of npm ci and the build.
+  #   tailwind.config.js edit, or when the Tailwind license texts beside it are
+  #   not the locked tailwindcss package's. It needs npm and registry.npmjs.org.
+  #   `timeout` caps a hung run at 600 s; a run measures 17-38 s, by host load:
+  #   uv syncs a fresh .venv, then 6-19 s of npm ci and the build.
   # The legacy numeric and infra seams are off: this repo has neither
   # scripts/run-offline-deep.sh nor reify's tests/infra/run_all.sh.
   # offline_lane_enabled and persistent_offline_deep_worktree take effect at

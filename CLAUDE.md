@@ -46,8 +46,9 @@ uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cachepr
 cd src/solar_challenge/web && npm ci && npm run build:css
 
 # Stylesheet build check: what the offline lane's css-build job runs after every
-# merge; it rebuilds the stylesheet with npm, so it needs npm and network access,
-# and the per-task verify never runs it
+# merge; it rebuilds the stylesheet with npm and compares the Tailwind license
+# texts beside it with the locked tailwindcss package's, so it needs npm and
+# network access, and the per-task verify never runs it
 uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider
 
 # CLI entry point
@@ -170,7 +171,15 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   `tests/css_build/test_dist_style_css.py::test_dist_style_css_matches_a_fresh_build_of_its_sources`,
   or `css-build::nonzero-exit` when the red run printed no failing node-id (it
   hit the job's `timeout`, or pytest could not start). The fix is the Tailwind
-  rebuild in Commands, then a commit of the stylesheet. Reproduce with
+  rebuild in Commands, then a commit of the stylesheet. The job also fails when
+  `static/dist/LICENSE-tailwindcss.txt` is not byte for byte the locked
+  tailwindcss package's `LICENSE`, or `LICENSE-tailwindcss-preflight.txt` its
+  `src/css/LICENSE`. A fix task for that names
+  `tests/css_build/test_dist_style_css.py::test_dist_license_text_matches_the_locked_tailwindcss_package[<file>]`,
+  `<file>` being the stale copy. The fix is the `cp` its failure message gives,
+  from `node_modules/tailwindcss` after `npm ci` in `src/solar_challenge/web`,
+  then a commit of the copy. Reproduce with
   `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. To change
   the Tailwind version, run `npm install tailwindcss@<version>`, which rewrites
-  `package-lock.json`, then rebuild.
+  `package-lock.json`, then rebuild and copy both license texts from the new
+  `node_modules/tailwindcss`.

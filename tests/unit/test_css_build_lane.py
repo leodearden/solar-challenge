@@ -2,10 +2,11 @@
 """css-build lane contract tests.
 
 tests/css_build checks that static/dist/style.css is what its committed sources
-build to. It needs npm and registry.npmjs.org, so the per-task verify never
-runs it. The orchestrator offline lane's css-build job runs it after every
-merge instead, so a stylesheet committed without a rebuild files a fix task
-rather than going unseen.
+build to, and that the Tailwind license texts beside it are the locked
+tailwindcss package's. It needs npm and registry.npmjs.org, so the per-task
+verify never runs it. The orchestrator offline lane's css-build job runs it
+after every merge instead, so a stylesheet committed without a rebuild files a
+fix task rather than going unseen.
 """
 
 from pathlib import Path
