@@ -615,14 +615,7 @@ def simulate_sweep() -> tuple[Response, int]:
     point_base_config = _with_sweep_default_window(base_config)
     point_homes: list[tuple[float, HomeConfig, pd.Timestamp, pd.Timestamp]] = []
     for val in rounded_values:
-        point_config = dict(point_base_config)
-        point_config[home_config_key] = val
-        # Ensure defaults for required fields
-        point_config.setdefault("pv_kw", 4.0)
-        point_config.setdefault("battery_kwh", 0)
-        point_config.setdefault("occupants", 3)
-        point_config.setdefault("location", "bristol")
-
+        point_config = {**point_base_config, home_config_key: val}
         try:
             home_config, start_date, end_date, _ = parse_home_config(point_config)
         except (ValueError, TypeError) as exc:
