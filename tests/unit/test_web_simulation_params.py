@@ -143,6 +143,25 @@ class TestParseDateRange:
             parse_date_range({"days": days})
         assert str(exc_info.value) == message
 
+    @pytest.mark.parametrize("field", ["start", "end"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("2024/06/01", id="slashes"),
+            pytest.param("2024-06-01T12:00", id="time-of-day"),
+            pytest.param("2024-02-30", id="no-such-day"),
+            pytest.param("NaT", id="pandas-not-a-time"),
+            pytest.param(20240601, id="number"),
+        ],
+    )
+    def test_date_it_cannot_read_is_refused_naming_the_field_and_the_value_sent(
+        self, field: str, value: object
+    ) -> None:
+        """A start or end that is not an ISO 8601 date is refused with a ValueError naming the field and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({field: value})
+        assert str(exc_info.value) == f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
+
 
 class TestParseHomeConfigKeys:
     """Which top-level keys parse_home_config accepts."""
