@@ -439,9 +439,10 @@ def monthly_summary(results: SimulationResults) -> str | None:
 def financial_breakdown(results: SimulationResults) -> str:
     """Dual-axis chart with daily cost bars and a cumulative savings line.
 
-    Daily cost and revenue are derived directly from the engine-priced series
-    ``results.import_cost`` and ``results.export_revenue``, which already
-    reflect the configured tariff and SEG rate set at simulation time.
+    Daily cost and revenue are :func:`~solar_challenge.output.aggregate_daily`'s
+    ``import_cost_gbp`` and ``export_revenue_gbp``: the day totals of the
+    engine-priced series ``results.import_cost`` and ``results.export_revenue``,
+    which already reflect the tariff and SEG rate set at simulation time.
 
     When the simulation was run without a tariff configured, both series are
     all-zero (home.py populates zeros when ``tariff_config`` is ``None``).
@@ -455,13 +456,12 @@ def financial_breakdown(results: SimulationResults) -> str:
     Returns:
         Plotly figure JSON string.
     """
-    # import_cost and export_revenue are per-minute GBP amounts
-    # (energy_kWh × rate), NOT power — resample without /60.
-    daily_cost = results.import_cost.resample("D").sum().round(2)
-    daily_revenue = results.export_revenue.resample("D").sum().round(2)
+    daily = aggregate_daily(results)
+    daily_cost = daily["import_cost_gbp"].round(2)
+    daily_revenue = daily["export_revenue_gbp"].round(2)
     daily_net = (daily_cost - daily_revenue).round(2)
     cumulative_savings = (-daily_net).cumsum().round(2)
-    dates = [d.strftime("%Y-%m-%d") for d in daily_cost.index]
+    dates = [d.strftime("%Y-%m-%d") for d in daily.index]
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -582,8 +582,9 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
         return None
 
     # --- Load share pie chart ---
-    hp_total = float(results.heat_pump_load.sum() / 60)  # kWh
-    total_demand = float(results.demand.sum() / 60)  # kWh
+    totals = results.total_amounts()
+    hp_total = totals["heat_pump_load_kwh"]
+    total_demand = totals["demand_kwh"]
     other_demand = max(0, total_demand - hp_total)
 
     pie_fig = go.Figure(data=[go.Pie(
