@@ -2,8 +2,8 @@
 """Fixtures for the Flask test app the /api endpoint test modules drive, with its JobManager mocked.
 
 mock_job_manager installs a MagicMock whose submit, status and event calls answer at once
-with canned values, so no test starts a real simulation. client requests it, so every
-test that sends a request runs against the mock.
+with canned values, so no test starts a real simulation. client requests it, so a test
+that sends a request runs against the mock unless its module defines its own client.
 
 Nothing here imports Flask, the optional web extra, when the module loads: without
 it, each test module's ``pytest.importorskip("flask")`` skips that module, whereas

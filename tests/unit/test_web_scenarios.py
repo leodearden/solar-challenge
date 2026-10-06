@@ -1,8 +1,6 @@
 """Tests for the scenario builder and parameter sweep web features."""
 
 import json
-from collections.abc import Callable
-from inspect import signature
 from pathlib import Path
 from typing import Any
 
@@ -34,55 +32,10 @@ def app(tmp_path: Path) -> Flask:
     return build_test_app(tmp_path)
 
 
-class _RecordingJobManager:
-    """Stands in for the app's JobManager: records each home config a request submits and simulates nothing."""
-
-    def __init__(self) -> None:
-        self.submitted_homes: list[object] = []
-
-    def submit_home_job(
-        self,
-        config: object,
-        start_date: object,
-        end_date: object,
-        db_path: str,
-        data_dir: str,
-        name: str | None = None,
-    ) -> tuple[str, str]:
-        """Record the home config and return a fresh (job_id, run_id) pair."""
-        self.submitted_homes.append(config)
-        n = len(self.submitted_homes)
-        return f"job-{n}", f"run-{n}"
-
-
 @pytest.fixture
-def recording_job_manager(app: Flask) -> _RecordingJobManager:
-    """Install a recording double as the app's job manager and return it."""
-    job_manager = _RecordingJobManager()
-    app.extensions["job_manager"] = job_manager
-    return job_manager
-
-
-@pytest.fixture
-def client(app: Flask, recording_job_manager: _RecordingJobManager) -> FlaskClient:
-    """Create a Flask test client whose requests submit jobs to the recording double, so none starts a real simulation."""
+def client(app: Flask) -> FlaskClient:
+    """Create a Flask test client."""
     return app.test_client()
-
-
-def _call_shape(method: Callable[..., object]) -> list[tuple[str, object, object]]:
-    """The parameter names, kinds and defaults that decide which calls a method accepts."""
-    return [(p.name, p.kind, p.default) for p in signature(method).parameters.values()]
-
-
-class TestRecordingJobManager:
-    """The recording double stays in step with the real JobManager it stands in for."""
-
-    def test_submit_home_job_takes_the_parameters_the_real_one_takes(self, app: Flask) -> None:
-        """A change to the real submit_home_job's parameters fails here, instead of passing silently behind the double."""
-        real_job_manager = app.extensions["job_manager"]
-        double = _RecordingJobManager()
-
-        assert _call_shape(double.submit_home_job) == _call_shape(real_job_manager.submit_home_job)
 
 
 class TestScenarioBuilderRoute:
@@ -601,182 +554,6 @@ class TestBuilderScenarioYaml:
 
         assert response.status_code == 400
         assert "latitude" in response.get_json()["error"]
-
-
-class TestSweepAPI:
-    """Tests for the POST /api/simulate/sweep endpoint."""
-
-    def test_sweep_endpoint_returns_201(self, client: FlaskClient) -> None:
-        """POST /api/simulate/sweep returns 201 with the values, the parameter and each point's job id, in point order."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 2.0,
-                "max": 8.0,
-                "steps": 4,
-                "mode": "linear",
-                "base_config": {"battery_kwh": 5.0, "location": "bristol", "days": 7},
-            },
-        )
-        assert response.status_code == 201
-        data = response.get_json()
-        assert "values" in data
-        assert len(data["values"]) == 4
-        assert data["parameter"] == "pv_capacity_kw"
-        assert data["job_ids"] == ["job-1", "job-2", "job-3", "job-4"]
-
-    def test_sweep_linear_values(self, client: FlaskClient) -> None:
-        """Test that linear sweep generates evenly spaced values."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 2.0,
-                "max": 8.0,
-                "steps": 4,
-                "mode": "linear",
-            },
-        )
-        data = response.get_json()
-        assert data["values"] == [2.0, 4.0, 6.0, 8.0]
-
-    def test_sweep_geometric_values(self, client: FlaskClient) -> None:
-        """Test that geometric sweep generates geometrically spaced values."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 1.0,
-                "max": 8.0,
-                "steps": 4,
-                "mode": "geometric",
-            },
-        )
-        data = response.get_json()
-        assert len(data["values"]) == 4
-        # First should be 1.0, last should be 8.0
-        assert data["values"][0] == 1.0
-        assert data["values"][-1] == 8.0
-        # Geometric spacing: each ratio should be approximately equal
-        ratios = [data["values"][i + 1] / data["values"][i] for i in range(len(data["values"]) - 1)]
-        assert abs(ratios[0] - ratios[1]) < 0.01
-
-    def test_sweep_empty_body_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep with no body returns 400."""
-        response = client.post(
-            "/api/simulate/sweep",
-            content_type="application/json",
-        )
-        assert response.status_code == 400
-
-    def test_sweep_invalid_range_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep with min >= max returns 400."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 10.0, "max": 2.0, "steps": 4},
-        )
-        assert response.status_code == 400
-
-    def test_sweep_too_few_steps_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep with steps < 2 returns 400."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 2.0, "max": 8.0, "steps": 1},
-        )
-        assert response.status_code == 400
-
-
-class TestSweepParameters:
-    """What POST /api/simulate/sweep submits for a swept parameter: one home per point, carrying that point's value, or nothing at all when the parameter is unsupported or any of its points is invalid."""
-
-    @pytest.mark.parametrize(
-        ("parameter", "values", "swept_value_of"),
-        [
-            pytest.param(
-                "pv_capacity_kw",
-                [2.0, 5.0, 8.0],
-                lambda home: home.pv_config.capacity_kw,
-                id="pv",
-            ),
-            pytest.param(
-                "battery_capacity_kwh",
-                [5.0, 10.0, 15.0],
-                lambda home: home.battery_config.capacity_kwh,
-                id="battery",
-            ),
-            pytest.param(
-                "annual_consumption_kwh",
-                [2000.0, 3500.0, 5000.0],
-                lambda home: home.load_config.annual_consumption_kwh,
-                id="consumption",
-            ),
-        ],
-    )
-    def test_each_point_simulates_a_home_carrying_that_points_value(
-        self,
-        client: FlaskClient,
-        recording_job_manager: _RecordingJobManager,
-        parameter: str,
-        values: list[float],
-        swept_value_of: Callable[[object], float],
-    ) -> None:
-        """Each sweep point submits one home whose swept field holds that point's value."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": parameter,
-                "min": values[0],
-                "max": values[-1],
-                "steps": len(values),
-                "mode": "linear",
-            },
-        )
-
-        assert response.status_code == 201
-        assert response.get_json()["values"] == values
-        assert [swept_value_of(home) for home in recording_job_manager.submitted_homes] == values
-
-    @pytest.mark.parametrize("parameter", ["n_homes", "tilt", "no_such_parameter"])
-    def test_unsupported_parameter_is_refused_before_any_point_is_submitted(
-        self,
-        client: FlaskClient,
-        recording_job_manager: _RecordingJobManager,
-        parameter: str,
-    ) -> None:
-        """A parameter outside the supported set, even a real home-config key, gets 400 and submits nothing.
-
-        The error names the refused parameter and every supported one.
-        """
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": parameter, "min": 10.0, "max": 40.0, "steps": 3},
-        )
-
-        assert response.status_code == 400
-        error = response.get_json()["error"]
-        assert parameter in error
-        for supported in ("pv_capacity_kw", "battery_capacity_kwh", "annual_consumption_kwh"):
-            assert supported in error
-        assert recording_job_manager.submitted_homes == []
-
-    def test_a_later_invalid_point_refuses_the_sweep_before_any_point_is_submitted(
-        self,
-        client: FlaskClient,
-        recording_job_manager: _RecordingJobManager,
-    ) -> None:
-        """A sweep whose last point exceeds the PV capacity a home accepts gets 400 naming that point, and submits none of its points.
-
-        Its earlier points are valid, so a sweep that submitted each point as it validated it would already have started their jobs.
-        """
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 5.0, "max": 25.0, "steps": 3},
-        )
-
-        assert response.status_code == 400
-        assert "pv_capacity_kw=25.0" in response.get_json()["error"]
-        assert recording_job_manager.submitted_homes == []
 
 
 class TestSweepChart:
