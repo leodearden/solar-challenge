@@ -667,8 +667,8 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
 def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> None:
     """finance run scenarios/bristol-phase1-flex.yaml emits the capacity-at-events line.
 
-    Patches simulate_fleet with an in-window synthetic FleetResults, invokes the
-    CLI against the board scenario, and asserts:
+    Invokes the CLI against the board scenario, answering every fleet simulation
+    with an in-window synthetic FleetResults, and asserts:
       - exit_code == 0
       - "Grid services (capacity-at-events)" line in output
       - a positive event-derived £ figure in output
@@ -680,14 +680,12 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     GREEN after step-4: YAML flipped to capacity_at_events + CLI wired up.
     """
     from pathlib import Path
-    from unittest.mock import patch
 
     import pytest
-    from typer.testing import CliRunner
 
-    from solar_challenge.cli.main import app
     from solar_challenge.config import load_config, parse_finance_config
     from solar_challenge.gridservices import compute_grid_services_at_events
+    from tests._cli_fleet_simulator import invoke_finance_run
 
     scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
 
@@ -696,9 +694,7 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
 
-    with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-        runner = CliRunner()
-        result = runner.invoke(app, ["finance", "run", str(scenario_path)])
+    result = invoke_finance_run([str(scenario_path)], fr)
 
     assert result.exit_code == 0, (
         f"CLI exited {result.exit_code}. Output:\n{result.output}"

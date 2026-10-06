@@ -4,12 +4,12 @@
 
 import dataclasses
 from pathlib import Path
-from typing import Annotated, Callable, Optional
+from typing import Annotated, Optional
 
 import pandas as pd
 import typer
 
-from solar_challenge.cli.utils import handle_errors, print_info, print_report
+from solar_challenge.cli.utils import CliFleetSimulator, handle_errors, print_info, print_report
 from solar_challenge.config import (
     ConfigurationError,
     ScenarioConfig,
@@ -19,7 +19,6 @@ from solar_challenge.config import (
     parse_finance_config,
     parse_seg_rate,
 )
-from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.optimize import (
     enumerate_configs,
     run_sweep,
@@ -55,13 +54,6 @@ _SENSITIVITY_ALIAS_MAP: dict[str, tuple[str, tuple[float, ...]]] = {
         (100.0, 200.0, 350.0),
     ),
 }
-
-
-@dataclasses.dataclass(frozen=True)
-class SweepSimulator:
-    """Fleet simulator for `optimize configs`, read from Click's context object."""
-
-    simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults] = simulate_fleet
 
 
 def _parse_float_list(raw: str, flag: str) -> list[float]:
@@ -290,7 +282,7 @@ def configs(
 
     # ---- Run sweep ----------------------------------------------------------
     print_info("Solving cost-recovery rates…")
-    simulate = ctx.ensure_object(SweepSimulator).simulate
+    simulate = ctx.ensure_object(CliFleetSimulator).simulate
     ranked = run_sweep(all_configs, retained_cash_floor_gbp=retained_floor, simulate=simulate)
 
     # Report sweep summary so the user knows what to expect in the report.

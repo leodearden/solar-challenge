@@ -964,7 +964,7 @@ class TestOptimizeCLIE2EFast:
     """Fast injected-simulator end-to-end tests for `optimize configs` wiring (G2/W-H6 signal).
 
     Each test that runs a sweep passes a constant fleet simulator as the Click
-    context object (``obj=SweepSimulator(...)``), so the whole sweep,
+    context object (``obj=CliFleetSimulator(...)``), so the whole sweep,
     sensitivity panel included, runs offline without PVGIS.
     """
 
@@ -979,9 +979,7 @@ class TestOptimizeCLIE2EFast:
         Returns the CliRunner result and the fleet configs the injected simulator
         was asked to simulate.
         """
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-        from solar_challenge.cli.optimize import SweepSimulator
+        from tests._cli_fleet_simulator import invoke_cli
 
         simulated_fleets: "list[object]" = []
 
@@ -990,11 +988,7 @@ class TestOptimizeCLIE2EFast:
             return fleet_results
 
         scenario_file = _write_optimize_scenario(tmp_path)
-        result = CliRunner().invoke(
-            app,
-            ["optimize", "configs", str(scenario_file), *options],
-            obj=SweepSimulator(simulate=simulate),
-        )
+        result = invoke_cli(["optimize", "configs", str(scenario_file), *options], simulate)
         return result, simulated_fleets
 
     def test_optimize_configs_standard_sweep_output(
@@ -1027,7 +1021,7 @@ class TestOptimizeCLIE2EFast:
         )
         assert simulated_fleets, (
             "Expected 'optimize configs' to run its sweep with the simulator passed as "
-            "obj=SweepSimulator(...); it asked that simulator for no fleet simulation.\n"
+            "obj=CliFleetSimulator(...); it asked that simulator for no fleet simulation.\n"
             f"Output:\n{result.output}"
         )
         assert "cost-recovery rank" in result.output.lower(), (

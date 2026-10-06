@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests._cli_fleet_simulator import invoke_finance_run
 from tests._factories import make_bill_breakdown, make_bill_distribution
 
 
@@ -352,7 +353,7 @@ class TestFinanceCLICostRecoveryHelp:
 
 
 # ---------------------------------------------------------------------------
-# §E — Helpers for fast patched CLI tests (adapted from test_cost_recovery_solve.py)
+# §E — Helpers for fast CLI tests (adapted from test_cost_recovery_solve.py)
 # ---------------------------------------------------------------------------
 
 
@@ -493,25 +494,15 @@ def interior_fleet_results() -> "FleetResults":  # type: ignore[name-defined]
 
 
 class TestFinanceCLICostRecoveryE2EFast:
-    """Fast patched end-to-end tests for --cost-recovery flag wiring."""
+    """Fast end-to-end tests for --cost-recovery flag wiring."""
 
     def test_cost_recovery_flag_renders_block(
         self, tmp_path: "Path", interior_fleet_results: "FleetResults"  # type: ignore[name-defined]
     ) -> None:
         """--cost-recovery must render the cost-recovery block in the output."""
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_file = _write_interior_scenario(tmp_path)
-        fr = interior_fleet_results
 
-        with (
-            patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr),
-            patch("solar_challenge.fleet.simulate_fleet", return_value=fr),
-        ):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", "--cost-recovery", str(scenario_file)])
+        result = invoke_finance_run(["--cost-recovery", str(scenario_file)], interior_fleet_results)
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         output = result.output.lower()
@@ -523,19 +514,9 @@ class TestFinanceCLICostRecoveryE2EFast:
         self, tmp_path: "Path", interior_fleet_results: "FleetResults"  # type: ignore[name-defined]
     ) -> None:
         """--cost-recovery output must contain the solved own-use rate."""
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_file = _write_interior_scenario(tmp_path)
-        fr = interior_fleet_results
 
-        with (
-            patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr),
-            patch("solar_challenge.fleet.simulate_fleet", return_value=fr),
-        ):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", "--cost-recovery", str(scenario_file)])
+        result = invoke_finance_run(["--cost-recovery", str(scenario_file)], interior_fleet_results)
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         # The solved rate should appear as "X.XX p/kWh" (case-insensitive)
@@ -547,19 +528,9 @@ class TestFinanceCLICostRecoveryE2EFast:
         self, tmp_path: "Path", interior_fleet_results: "FleetResults"  # type: ignore[name-defined]
     ) -> None:
         """--cost-recovery output must contain feasibility indicator for interior regime."""
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_file = _write_interior_scenario(tmp_path)
-        fr = interior_fleet_results
 
-        with (
-            patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr),
-            patch("solar_challenge.fleet.simulate_fleet", return_value=fr),
-        ):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", "--cost-recovery", str(scenario_file)])
+        result = invoke_finance_run(["--cost-recovery", str(scenario_file)], interior_fleet_results)
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         output = result.output.lower()
@@ -572,20 +543,10 @@ class TestFinanceCLICostRecoveryE2EFast:
         self, tmp_path: "Path", interior_fleet_results: "FleetResults"  # type: ignore[name-defined]
     ) -> None:
         """--no-cost-recovery (default) must NOT render the cost-recovery block."""
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_file = _write_interior_scenario(tmp_path)
-        fr = interior_fleet_results
 
-        with (
-            patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr),
-            patch("solar_challenge.fleet.simulate_fleet", return_value=fr),
-        ):
-            runner = CliRunner()
-            # Invoke WITHOUT --cost-recovery (default is --no-cost-recovery)
-            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+        # Invoke WITHOUT --cost-recovery (default is --no-cost-recovery)
+        result = invoke_finance_run([str(scenario_file)], interior_fleet_results)
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
         assert "cost-recovery analysis" not in result.output.lower(), (

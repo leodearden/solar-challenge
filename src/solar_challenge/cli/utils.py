@@ -11,13 +11,19 @@ a terminal, Rich routes sys.stdout writes through it to stderr.
 --quiet calls set_status_quiet, which silences status_console: status
 messages go unprinted and progress displays stay off, while products,
 warnings and errors print as ever.
+
+A command that simulates a fleet reads its simulator from Click's context
+object, ctx.ensure_object(CliFleetSimulator).simulate: fleet.simulate_fleet,
+unless whoever invokes the CLI passes another CliFleetSimulator as obj.
 """
 
+import dataclasses
 import sys
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
+import pandas as pd
 import typer
 from rich.console import Console
 from rich.progress import (
@@ -35,6 +41,7 @@ from rich.table import Table
 from rich.text import Text
 
 from solar_challenge.config import ConfigurationError, load_config
+from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.location import Location
 from solar_challenge.weather import WeatherDataError
 
@@ -79,6 +86,13 @@ def _print_error_verbatim(label: str, error: Exception) -> None:
 def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
     """Print parts on target exactly as they are, never read as Rich markup or emoji codes; a (text, style) part is printed in that style."""
     target.print(Text.assemble(*parts))
+
+
+@dataclasses.dataclass(frozen=True)
+class CliFleetSimulator:
+    """Fleet simulator for the CLI's commands, read from Click's context object."""
+
+    simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults] = simulate_fleet
 
 
 def parse_location(location_str: str) -> Location:
