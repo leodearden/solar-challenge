@@ -13,7 +13,7 @@ from solar_challenge.cli import home as home_app
 from solar_challenge.cli import optimize as optimize_app
 from solar_challenge.cli import validate as validate_app
 from solar_challenge.cli import web as web_app
-from solar_challenge.cli.utils import console
+from solar_challenge.cli.utils import console, set_status_quiet
 
 # Create main app
 app = typer.Typer(
@@ -50,18 +50,11 @@ def main(
             is_eager=True,
         ),
     ] = None,
-    verbose: Annotated[
-        bool,
-        typer.Option(
-            "--verbose",
-            help="Enable verbose output",
-        ),
-    ] = False,
     quiet: Annotated[
         bool,
         typer.Option(
             "--quiet", "-q",
-            help="Suppress non-essential output",
+            help="Suppress status messages and progress; results, warnings and errors still print",
         ),
     ] = False,
 ) -> None:
@@ -83,9 +76,7 @@ def main(
       solar-challenge config template home -o my-config.yaml
       solar-challenge web start --port 8080
     """
-    # Store verbose/quiet in context for subcommands
-    # In practice, subcommands can check these via the context if needed
-    pass
+    set_status_quiet(quiet)
 
 
 if __name__ == "__main__":

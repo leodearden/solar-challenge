@@ -3,10 +3,14 @@
 
 A command prints its product (a results table, a template or a report) on
 stdout, through console and print_report, and nothing else there. Status
-messages and progress print on stderr through status_console, and errors
-through error_console, so redirecting stdout captures the product alone.
-Print the product after any progress display stops: while one runs on a
-terminal, Rich routes sys.stdout writes through it to stderr.
+messages and progress print on stderr through status_console, and warnings
+and errors through error_console, so redirecting stdout captures the product
+alone. Print the product after any progress display stops: while one runs on
+a terminal, Rich routes sys.stdout writes through it to stderr.
+
+--quiet calls set_status_quiet, which silences status_console: status
+messages go unprinted and progress displays stay off, while products,
+warnings and errors print as ever.
 """
 
 import sys
@@ -20,6 +24,7 @@ from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
     Progress,
+    ProgressColumn,
     SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
@@ -240,19 +245,28 @@ def create_summary_table(summary: Any, title: str = "Simulation Summary") -> Tab
     return table
 
 
+def set_status_quiet(quiet: bool) -> None:
+    """Silence status messages and progress on stderr while quiet is True, and print them again once it is False; products, warnings and errors print either way."""
+    status_console.quiet = quiet
+
+
+def _status_progress(*columns: str | ProgressColumn) -> Progress:
+    """A progress display of columns on status_console, off while that console is quiet, so it never captures what else a command writes to stdout or stderr."""
+    return Progress(*columns, console=status_console, disable=status_console.quiet)
+
+
 def create_progress() -> Progress:
     """Create a Rich progress bar for simulations, printed on stderr."""
-    return Progress(
+    return _status_progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         TimeElapsedColumn(),
-        console=status_console,
     )
 
 
 def create_fleet_progress() -> Progress:
     """Progress bar with ETA for fleet simulations, printed on stderr."""
-    return Progress(
+    return _status_progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -261,7 +275,6 @@ def create_fleet_progress() -> Progress:
         TimeElapsedColumn(),
         TextColumn("ETA"),
         TimeRemainingColumn(),
-        console=status_console,
     )
 
 
@@ -272,7 +285,7 @@ def print_success(message: str) -> None:
 
 def print_warning(message: str) -> None:
     """Print message in yellow on stderr, exactly as it is."""
-    _print_verbatim(status_console, (message, "yellow"))
+    _print_verbatim(error_console, (message, "yellow"))
 
 
 def print_error(message: str) -> None:
