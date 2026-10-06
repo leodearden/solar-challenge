@@ -9,7 +9,6 @@ and fleet-wide overlay application for tariff/dispatch/SEG settings.
 from __future__ import annotations
 
 import dataclasses
-import math
 import random
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -415,25 +414,13 @@ def distribution_form_spec(spec: object, path: str) -> dict[str, Any]:
 
 
 def _form_numbers(spec: Mapping[str, Any], path: str, keys: Iterable[str]) -> dict[str, float]:
-    """The *keys* of the *path* distribution *spec*, each read by :func:`_form_number`."""
-    return {key: _form_number(spec.get(key), f"{path}.{key}") for key in keys}
+    """The *keys* of the *path* distribution *spec*, each read by :func:`~solar_challenge.web.number_fields.as_finite_float`, a missing one as None."""
+    return {key: as_finite_float(spec.get(key), f"{path}.{key}") for key in keys}
 
 
 def _form_number_list(numbers: Iterable[Any], path: str) -> list[float]:
-    """Each of *numbers*, the *path* list, read by :func:`_form_number`."""
-    return [_form_number(number, f"{path}[{index}]") for index, number in enumerate(numbers)]
-
-
-def _form_number(value: object, path: str) -> float:
-    """*value*, a finite number, as the float a form field holds.
-
-    Raises:
-        ValueError: For any other value, a missing one read as None; the error names *path*
-            and the value.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise ValueError(f"{path} must be a finite number, got {value!r}")
-    return float(value)
+    """Each of *numbers*, the *path* list, read by :func:`~solar_challenge.web.number_fields.as_finite_float`."""
+    return [as_finite_float(number, f"{path}[{index}]") for index, number in enumerate(numbers)]
 
 
 def _pool_counts(rows: list[tuple[str, dict[str, Any]]], entries_field: str) -> list[int]:
