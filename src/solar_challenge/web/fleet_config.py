@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 
 from solar_challenge.home import HomeConfig
-from solar_challenge.web.number_fields import as_int, as_int_within
+from solar_challenge.web.number_fields import as_finite_float, as_int, as_int_within
 
 if TYPE_CHECKING:
     from solar_challenge.config import DispatchStrategyConfig
@@ -96,11 +96,12 @@ def sample_distribution(
             weighted_discrete/shuffled_pool row list is malformed (see
             :func:`_named_rows`), n_samples is one int() cannot read or outside
             1 to MAX_FLEET_HOMES (see
-            :func:`~solar_challenge.web.number_fields.as_int_within`), or a shuffled_pool
+            :func:`~solar_challenge.web.number_fields.as_int_within`), a shuffled_pool
             count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
-            the counts total more than that (see :func:`_pool_counts`); a row or
-            count refusal names its field under ``params``, such as
-            ``params.entries[0].count``.
+            the counts total more than that (see :func:`_pool_counts`), or a number
+            is one :func:`~solar_challenge.web.number_fields.as_finite_float` refuses;
+            a row, count or number refusal names its field under ``params``, such as
+            ``params.entries[0].count`` or ``params.mean``.
     """
     n_samples = as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
@@ -169,11 +170,13 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             int() cannot read (see :func:`~solar_challenge.web.number_fields.as_int`),
             a pv/battery/load block is neither null nor a dict (see
             :func:`_component_block`), a weighted_discrete/shuffled_pool
-            row list is malformed (see :func:`_named_rows`), or a shuffled_pool
+            row list is malformed (see :func:`_named_rows`), a shuffled_pool
             count is one int() cannot read or outside 0 to MAX_FLEET_HOMES, or
-            the counts total more than that (see :func:`_pool_counts`); a row or
-            count refusal names its field under its distribution's, such as
-            ``pv.capacity_kw.entries[0].count``.
+            the counts total more than that (see :func:`_pool_counts`), or a
+            distribution number is one
+            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses; a row,
+            count or number refusal names its field under its distribution's, such as
+            ``pv.capacity_kw.entries[0].count`` or ``pv.capacity_kw.mean``.
     """
     config: dict[str, Any] = {
         "n_homes": as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
@@ -269,7 +272,10 @@ def _parse_component_distribution(
 
     Raises:
         ValueError: As :func:`_build_distribution_dict`, for the distribution at
-            ``block.primary_field``, or at ``block`` when *data* itself is the distribution.
+            ``block.primary_field``, or at ``block`` when *data* itself is the distribution;
+            or if the number there is one
+            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses, a boolean
+            included, named ``block.primary_field``.
     """
     result: dict[str, Any] = {}
     spec = data.get(primary_field)
@@ -277,7 +283,7 @@ def _parse_component_distribution(
     if isinstance(spec, dict) and "type" in spec:
         result[primary_field] = _build_distribution_dict(spec, f"{block}.{primary_field}")
     elif isinstance(spec, (int, float)):
-        result[primary_field] = float(spec)
+        result[primary_field] = as_finite_float(spec, f"{block}.{primary_field}")
     elif "type" in data:
         result[primary_field] = _build_distribution_dict(data, block)
     else:
@@ -307,36 +313,48 @@ def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:
 
     Raises:
         ValueError: If a weighted_discrete/shuffled_pool row list is malformed
-            (see :func:`_named_rows`), or a shuffled_pool count is one int() cannot
+            (see :func:`_named_rows`), a shuffled_pool count is one int() cannot
             read or outside 0 to MAX_FLEET_HOMES, or the counts total more than
-            that (see :func:`_pool_counts`); each error names its field under *path*.
+            that (see :func:`_pool_counts`), or a number is one
+            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses (see
+            :func:`_spec_number`); each error names its field under *path*.
     """
     dist_type = data["type"]
     result: dict[str, Any] = {"type": dist_type}
 
     if dist_type == "normal":
-        result["mean"] = float(data.get("mean", 0))
-        result["std"] = float(data.get("std", 1))
+        result["mean"] = _spec_number(data, "mean", 0, path)
+        result["std"] = _spec_number(data, "std", 1, path)
         if data.get("min") is not None:
-            result["min"] = float(data["min"])
+            result["min"] = as_finite_float(data["min"], f"{path}.min")
         if data.get("max") is not None:
-            result["max"] = float(data["max"])
+            result["max"] = as_finite_float(data["max"], f"{path}.max")
 
     elif dist_type == "uniform":
-        result["min"] = float(data.get("min", 0))
-        result["max"] = float(data.get("max", 1))
+        result["min"] = _spec_number(data, "min", 0, path)
+        result["max"] = _spec_number(data, "max", 1, path)
 
     elif dist_type == "weighted_discrete":
         rows = _named_rows(data, "values", path)
-        result["values"] = [float(row.get("value", 0)) for _, row in rows]
-        result["weights"] = [float(row.get("weight", 1)) for _, row in rows]
+        result["values"] = [_spec_number(row, "value", 0, field) for field, row in rows]
+        result["weights"] = [_spec_number(row, "weight", 1, field) for field, row in rows]
 
     elif dist_type == "shuffled_pool":
         rows = _named_rows(data, "entries", path)
-        result["values"] = [float(row.get("value", 0)) for _, row in rows]
+        result["values"] = [_spec_number(row, "value", 0, field) for field, row in rows]
         result["counts"] = _pool_counts(rows, f"{path}.entries")
 
     return result
+
+
+def _spec_number(spec: dict[str, Any], key: str, default: float, path: str) -> float:
+    """Return the *key* number of *spec*, the distribution or row at *path*, *default* when absent.
+
+    Raises:
+        ValueError: If :func:`~solar_challenge.web.number_fields.as_finite_float` refuses
+            it; the error names ``path.key`` and the value sent.
+    """
+    return as_finite_float(spec.get(key, default), f"{path}.{key}")
 
 
 #: The distribution types the fleet page's distribution editor holds.
