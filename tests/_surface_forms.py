@@ -18,17 +18,31 @@ and Annotated's metadata are values, not annotations: each is spelled by its rep
 Literal['a'] never reads as Literal[a]. A ParamSpec's args and kwargs are spelled by
 their repr as well, P.args and P.kwargs, which keeps the two apart.
 
+A class's public members, the methods, properties and class constants its own body
+defines, have forms too. A method's form is its signature, self included. A
+classmethod, staticmethod, property or cached_property is spelled by its kind, then its
+function's signature, and a constant by its type. A property that can be set or deleted
+says so in its kind, as property[settable, deletable] does, and an abstract member's
+form begins with abstract. An inherited member belongs to the class that defines it.
+
 Usage::
 
-    from tests._surface_forms import surface_form
+    from tests._surface_forms import member_forms, surface_form
 
     def scale(values: Optional[List[float]], factor: float = 1.0) -> "Series": ...
 
+    class Meter:
+        @property
+        def reading(self) -> float: ...
+
     assert surface_form(scale) == "(values: list[float] | None, factor: float = 1.0) -> Series"
     assert surface_form({"peak": 0.3}) == "dict"
+    assert member_forms(Meter) == {"reading": "property (self) -> float"}
 """
 
+import dataclasses
 import enum
+import functools
 import inspect
 import types
 import typing
@@ -56,6 +70,21 @@ def surface_form(obj: object) -> str:
             return_annotation=_spelled(signature.return_annotation),
         )
     )
+
+
+def member_forms(cls: type) -> dict[str, str]:
+    """The form of each public member of *cls*, by name in class-body order.
+
+    A member is a public attribute that *cls*'s own body defines, other than those
+    surface_form(cls) already pins: a dataclass's fields, which its constructor's
+    signature carries, and an Enum's members.
+    """
+    pinned = _pinned_by_class_form(cls)
+    return {
+        name: _member_form(member)
+        for name, member in vars(cls).items()
+        if not name.startswith("_") and name not in pinned
+    }
 
 
 class _Spelling(str):
@@ -123,3 +152,39 @@ def _annotations_text(annotations: Iterable[object]) -> str:
 
 def _values_text(values: Iterable[object]) -> str:
     return ", ".join(repr(value) for value in values)
+
+
+def _pinned_by_class_form(cls: type) -> set[str]:
+    if issubclass(cls, enum.Enum):
+        return set(cls.__members__)
+    if dataclasses.is_dataclass(cls):
+        return {field.name for field in dataclasses.fields(cls)}
+    return set()
+
+
+def _member_form(member: object) -> str:
+    form = _form_by_kind(member)
+    if getattr(member, "__isabstractmethod__", False):
+        return f"abstract {form}"
+    return form
+
+
+def _form_by_kind(member: object) -> str:
+    match member:
+        case classmethod() | staticmethod():
+            return f"{type(member).__name__} {surface_form(member.__func__)}"
+        case property():
+            return f"{_property_kind(member)} {surface_form(member.fget)}"
+        case functools.cached_property():
+            return f"cached_property {surface_form(member.func)}"
+        case _:
+            return surface_form(member)
+
+
+def _property_kind(member: property) -> str:
+    abilities = [
+        ability
+        for ability, accessor in (("settable", member.fset), ("deletable", member.fdel))
+        if accessor is not None
+    ]
+    return f"property[{', '.join(abilities)}]" if abilities else "property"

@@ -5,10 +5,8 @@ This document is the consumer-facing recipe for depending on the
 `solar-challenge-platform`) as a **git dependency pinned to a release tag**.
 
 The authoritative public surface is `solar_challenge.__all__` (defined in
-`src/solar_challenge/__init__.py`). It is frozen by
-`tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
-public name and that name's signature, while
-`tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
+`src/solar_challenge/__init__.py`).
+[Frozen public surface](#frozen-public-surface) names the tests that freeze it.
 
 ---
 
@@ -115,8 +113,19 @@ is listed here as an **Unreleased on main** line, added by the commit that makes
 the change. A change to what a finance-model name returns is listed instead in
 the header of [cost-recovery-finance-model.md](cost-recovery-finance-model.md),
 and the next release folds both lists into its notes. A change to an exported
-signature must also edit `FROZEN_SURFACE` in
+signature, or to an exported class's public members, must also edit
+`FROZEN_SURFACE` or `FROZEN_MEMBERS` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
+
+**Unreleased on main** (task 200): `TariffConfig` gains two read-only members,
+`peak_rate`, its highest period rate, and `mean_period_rate`, the mean of its
+period rates with each period counted once whatever its length, both in £/kWh;
+the 0.5.0 tag has neither. Consumers need no change when they re-pin.
+
+**Unreleased on main** (task 323): `BatteryConfig` gains the read-only property
+`nominal_usable_capacity_kwh`, its usable capacity between the SOC limits before
+SOH de-rating, in kWh; the 0.5.0 tag lacks it. Consumers need no change when
+they re-pin.
 
 **Unreleased on main** (task 466): `FleetResults` refuses input the 0.5.0 tag
 accepts, and raises `ValueError`: an empty `per_home_results`, or a
@@ -247,7 +256,9 @@ changed. Rebuild a pre-built cache with `my_test_cache.put(df, "tmy", location)`
 The authoritative public surface is `solar_challenge.__all__`, defined in
 `src/solar_challenge/__init__.py`.  It is frozen by
 `tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
-public name and that name's signature, and enforced at import time via the
-module's `__getattr__` guard; `tests/unit/test_init_lazy_surface.py` checks the
-lazy loader's structure.  Consumers should reference `__all__` directly rather
-than relying on any copy maintained in this document.
+public name and that name's signature, and whose `FROZEN_MEMBERS` pins every
+exported class's public methods, properties and class constants.  It is also
+enforced at import time via the module's `__getattr__` guard, and
+`tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
+Consumers should reference `__all__` directly rather than relying on any copy
+maintained in this document.
