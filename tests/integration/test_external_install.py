@@ -16,6 +16,9 @@ These tests prove that an EXTERNAL consumer can:
   - Confirm the wheel ships, under .dist-info/licenses, the license texts of the
     Tailwind code compiled into solar_challenge/web/static/dist/style.css, kept
     beside that stylesheet.
+  - Confirm the license texts the wheel ships beside that stylesheet are exactly
+    those tests/_tailwindcss_license_copies.py names, the copies the css-build
+    lane compares with the locked tailwindcss package.
   - Confirm that License-Expression names the license each package vendored
     under solar_challenge/web/static/vendor records in its upstream.toml.
 
@@ -52,6 +55,7 @@ from pathlib import Path
 import pytest
 from packaging.utils import canonicalize_name
 
+from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
 from tests._uv_env import isolated_uv_env
 
 # Module-scoped fixtures cannot request the function-scoped project_root fixture.
@@ -388,34 +392,69 @@ _COMPILED_TAILWIND_COPYRIGHT_NOTICES = {
 }
 
 
+def _license_texts_beside_compiled_css(built_wheel: Path) -> dict[str, str]:
+    """Return the text of each license file *built_wheel* carries from beside the compiled CSS, keyed by
+    its file name in _COMPILED_CSS_DIR.
+    """
+    prefix = f"{_COMPILED_CSS_DIR}/"
+    return {
+        entry.removeprefix(prefix): text
+        for entry, text in _shipped_license_texts(built_wheel).items()
+        if entry.startswith(prefix)
+    }
+
+
 @pytest.mark.build
 def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compiled_css(built_wheel: Path) -> None:
     """The Tailwind CLI compiles two MIT-licensed works into web/static/dist/style.css. One is the
     CSS tailwindcss's engine emits (the --tw-* defaults and the utilities), under tailwindcss's
-    LICENSE. The other, after the /*! tailwindcss ... */ banner, is a copy of its preflight.css,
-    under the separate LICENSE beside preflight.css in the tailwindcss package's src/css/.
+    license. The other, after the /*! tailwindcss ... */ banner, is a copy of its preflight.css,
+    under a separate license of its own.
 
     The banner names their license but carries neither their copyright notices nor the permission
     notice that MIT requires to accompany a copy. Both license texts, kept verbatim beside the
-    compiled CSS, carry them. The wheel declares them, so they also land in .dist-info/licenses/.
+    compiled CSS, carry them; tests/_tailwindcss_license_copies.py names the tailwindcss file each
+    one copies. The wheel declares them, so they also land in .dist-info/licenses/.
     """
-    shipped = _shipped_license_texts(built_wheel)
-    beside_css = [text for entry, text in shipped.items() if entry.startswith(f"{_COMPILED_CSS_DIR}/")]
+    beside_css = _license_texts_beside_compiled_css(built_wheel)
     absent = {
-        work: [notice for notice in notices if not any(notice in text for text in beside_css)]
+        work: [notice for notice in notices if not any(notice in text for text in beside_css.values())]
         for work, notices in _COMPILED_TAILWIND_COPYRIGHT_NOTICES.items()
     }
     unlicensed = {work: notices for work, notices in absent.items() if notices}
+    shipped = _shipped_license_files(built_wheel)
+    copies = "; ".join(
+        f"{licensed_file} to {_COMPILED_CSS_DIR}/{license_copy}"
+        for license_copy, licensed_file in TAILWINDCSS_LICENSE_COPIES.items()
+    )
 
     assert unlicensed == {}, (
         f"The built wheel ships, beside the compiled CSS in {_COMPILED_CSS_DIR}, no license text "
         f"carrying these copyright notices of the Tailwind works: {unlicensed}; the license texts it "
-        f"ships are {list(shipped)}. Copy the tailwindcss package's LICENSE to "
-        f"{_COMPILED_CSS_DIR}/LICENSE-tailwindcss.txt and its src/css/LICENSE to "
-        f"{_COMPILED_CSS_DIR}/LICENSE-tailwindcss-preflight.txt, verbatim, from the version that "
+        f"ships are {shipped}. Copy, verbatim, from the tailwindcss package of the version that "
         "compiled style.css (its banner names it; node_modules/tailwindcss holds it once the web "
-        "package's npm dependencies are installed in src/solar_challenge/web). Match them with the "
-        f'[project] license-files pattern "{_COMPILED_CSS_DIR}/LICENSE*" in pyproject.toml.'
+        f"package's npm dependencies are installed in src/solar_challenge/web): {copies}. Match them "
+        f'with the [project] license-files pattern "{_COMPILED_CSS_DIR}/LICENSE*" in pyproject.toml.'
+    )
+
+
+@pytest.mark.build
+def test_built_wheel_ships_beside_the_compiled_css_exactly_the_license_texts_the_css_build_lane_checks(
+    built_wheel: Path,
+) -> None:
+    """Every license text the wheel ships beside the compiled CSS is a copy TAILWINDCSS_LICENSE_COPIES
+    names, and every copy it names ships, so the css-build lane, which compares only the named copies
+    with the locked tailwindcss package, checks exactly the texts the wheel ships.
+    """
+    beside_css = sorted(_license_texts_beside_compiled_css(built_wheel))
+    named_copies = sorted(TAILWINDCSS_LICENSE_COPIES)
+
+    assert beside_css == named_copies, (
+        f"The built wheel ships beside the compiled CSS in {_COMPILED_CSS_DIR} the license texts "
+        f"{beside_css}, while TAILWINDCSS_LICENSE_COPIES in tests/_tailwindcss_license_copies.py names "
+        f"the copies {named_copies}. The css-build lane compares only the copies it names, byte for byte, "
+        "with the locked tailwindcss package. Map each license text kept beside the compiled CSS to the "
+        "file of the tailwindcss package it copies, and drop each entry whose text the wheel no longer ships."
     )
 
 
