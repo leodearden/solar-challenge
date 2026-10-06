@@ -392,6 +392,18 @@ _COMPILED_TAILWIND_COPYRIGHT_NOTICES = {
 }
 
 
+def _license_texts_beside_compiled_css(built_wheel: Path) -> dict[str, str]:
+    """Return the text of each license file *built_wheel* carries from beside the compiled CSS, keyed by
+    its file name in _COMPILED_CSS_DIR.
+    """
+    prefix = f"{_COMPILED_CSS_DIR}/"
+    return {
+        entry.removeprefix(prefix): text
+        for entry, text in _shipped_license_texts(built_wheel).items()
+        if entry.startswith(prefix)
+    }
+
+
 @pytest.mark.build
 def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compiled_css(built_wheel: Path) -> None:
     """The Tailwind CLI compiles two MIT-licensed works into web/static/dist/style.css. One is the
@@ -404,13 +416,13 @@ def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compile
     compiled CSS, carry them; tests/_tailwindcss_license_copies.py names the tailwindcss file each
     one copies. The wheel declares them, so they also land in .dist-info/licenses/.
     """
-    shipped = _shipped_license_texts(built_wheel)
-    beside_css = [text for entry, text in shipped.items() if entry.startswith(f"{_COMPILED_CSS_DIR}/")]
+    beside_css = _license_texts_beside_compiled_css(built_wheel)
     absent = {
-        work: [notice for notice in notices if not any(notice in text for text in beside_css)]
+        work: [notice for notice in notices if not any(notice in text for text in beside_css.values())]
         for work, notices in _COMPILED_TAILWIND_COPYRIGHT_NOTICES.items()
     }
     unlicensed = {work: notices for work, notices in absent.items() if notices}
+    shipped = _shipped_license_files(built_wheel)
     copies = "; ".join(
         f"{licensed_file} to {_COMPILED_CSS_DIR}/{license_copy}"
         for license_copy, licensed_file in TAILWINDCSS_LICENSE_COPIES.items()
@@ -419,7 +431,7 @@ def test_built_wheel_ships_the_license_texts_of_the_tailwind_code_in_the_compile
     assert unlicensed == {}, (
         f"The built wheel ships, beside the compiled CSS in {_COMPILED_CSS_DIR}, no license text "
         f"carrying these copyright notices of the Tailwind works: {unlicensed}; the license texts it "
-        f"ships are {list(shipped)}. Copy, verbatim, from the tailwindcss package of the version that "
+        f"ships are {shipped}. Copy, verbatim, from the tailwindcss package of the version that "
         "compiled style.css (its banner names it; node_modules/tailwindcss holds it once the web "
         f"package's npm dependencies are installed in src/solar_challenge/web): {copies}. Match them "
         f'with the [project] license-files pattern "{_COMPILED_CSS_DIR}/LICENSE*" in pyproject.toml.'
@@ -434,11 +446,7 @@ def test_built_wheel_ships_beside_the_compiled_css_exactly_the_license_texts_the
     names, and every copy it names ships, so the css-build lane, which compares only the named copies
     with the locked tailwindcss package, checks exactly the texts the wheel ships.
     """
-    beside_css = sorted(
-        entry.removeprefix(f"{_COMPILED_CSS_DIR}/")
-        for entry in _shipped_license_files(built_wheel)
-        if entry.startswith(f"{_COMPILED_CSS_DIR}/")
-    )
+    beside_css = sorted(_license_texts_beside_compiled_css(built_wheel))
     named_copies = sorted(TAILWINDCSS_LICENSE_COPIES)
 
     assert beside_css == named_copies, (
