@@ -1,18 +1,21 @@
-"""End-to-end test: the dashboard renders its Alpine UI when the app's own origin is the
-only one reachable.
+"""End-to-end tests: the dashboard's pages work when the app's own origin is the only one
+reachable.
 """
 
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
+import yaml
 from playwright.sync_api import Page, Route, expect
 
 pytestmark = pytest.mark.e2e
 
 
-def test_the_home_form_renders_with_every_other_origin_unreachable(
-    page: Page, live_server: str
-) -> None:
+@pytest.fixture
+def refused_offsite_requests(page: Page, live_server: str) -> list[str]:
+    """The URL of each request the test's page makes to another origin than the app's,
+    in the order made; each is refused as if the network were down."""
     app_host = urlsplit(live_server).netloc
     refused: list[str] = []
 
@@ -21,13 +24,44 @@ def test_the_home_form_renders_with_every_other_origin_unreachable(
         route.abort("internetdisconnected")
 
     page.route(lambda url: urlsplit(url).netloc != app_host, refuse)
+    return refused
+
+
+def test_the_home_form_renders_with_every_other_origin_unreachable(
+    page: Page, live_server: str, refused_offsite_requests: list[str]
+) -> None:
     page.goto(live_server + "/simulate/home")
 
     expect(
         page.get_by_role("tab", name="Battery", exact=True),
         "Alpine never rendered the home form's tabs;"
-        f" requests refused to other origins: {refused}",
+        f" requests refused to other origins: {refused_offsite_requests}",
     ).to_be_visible()
-    assert refused == [], (
-        f"/simulate/home requested these from other origins: {refused}"
+    assert refused_offsite_requests == [], (
+        f"/simulate/home requested these from other origins: {refused_offsite_requests}"
+    )
+
+
+def test_the_builder_reads_an_uploaded_yaml_with_every_other_origin_unreachable(
+    page: Page, live_server: str, refused_offsite_requests: list[str], tmp_path: Path
+) -> None:
+    with page.expect_response("**/api/scenarios/preview-yaml"):
+        page.goto(live_server + "/scenarios/builder")
+    path = tmp_path / "scenario.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {"name": "Uploaded offline", "fleet_distribution": {"n_homes": 3}}
+        ),
+        encoding="utf-8",
+    )
+
+    page.set_input_files('input[type="file"]', path)
+
+    expect(
+        page.get_by_role("textbox", name="Scenario Name", exact=True),
+        "the builder never read the uploaded scenario into its form;"
+        f" requests refused to other origins: {refused_offsite_requests}",
+    ).to_have_value("Uploaded offline")
+    assert refused_offsite_requests == [], (
+        f"/scenarios/builder requested these from other origins: {refused_offsite_requests}"
     )

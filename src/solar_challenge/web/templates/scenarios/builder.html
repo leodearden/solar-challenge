@@ -100,8 +100,9 @@
 {% block title %}Scenario Builder{% endblock %}
 
 {% block head %}
+{# Vendored verbatim; why, and how to upgrade: tests/unit/test_web_page_scripts.py #}
 <!-- js-yaml for client-side YAML parsing (used by Upload YAML feature) -->
-<script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/js-yaml/js-yaml-4.1.0.min.js') }}" integrity="sha384-+pxiN6T7yvpryuJmE1gM9PX7yQit15auDb+ZwwvJOd/4be2Cie5/IuVXgQb/S9du"></script>
 <script src="{{ url_for('static', filename='js/scenario-builder.js') }}" defer></script>
 {% endblock %}
 
