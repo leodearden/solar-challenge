@@ -319,6 +319,26 @@ class TestFleetFormFromScenario:
             form=_FLEET_FORM, not_loaded=()
         )
 
+    @pytest.mark.parametrize("key", ["start_date", "end_date"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("2024/07/01", id="slashes"),
+            pytest.param("2024-02-30", id="no-such-day"),
+            pytest.param("", id="empty-string"),
+            pytest.param(20240701, id="number"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_period_date_that_is_not_an_iso_date_is_refused_naming_it(
+        self, key: str, value: object
+    ) -> None:
+        """A period date that is neither a YAML date nor an ISO 8601 date string (YYYY-MM-DD) is refused with a ValueError naming it as period.<key> and the value as written; the other date is the round trip's."""
+        period = {**_FLEET_SCENARIO["period"], key: value}
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
+        assert str(exc_info.value) == f"period.{key} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
+
     def test_a_tariff_key_the_form_has_no_field_for_is_not_loaded(self) -> None:
         """An Economy 7 tariff loads its type and rates, and names the off-peak start the page has no field for."""
         tariff = {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1, "off_peak_start": "01:00"}
