@@ -2,6 +2,7 @@
 """Parse the web dashboard's flat simulation-parameter dicts into engine configuration."""
 
 from collections.abc import Mapping
+from datetime import date, timedelta
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -22,10 +23,13 @@ from solar_challenge.seg import SEGTariff
 from solar_challenge.web.number_fields import as_finite_float, as_int, as_int_within
 from solar_challenge.web.shared import require_json_object, resolve_location
 
-_DAYS_WINDOW_START = pd.Timestamp("2024-06-01")
+_FULL_YEAR_START = date(2024, 1, 1)
+_FULL_YEAR_END = date(2024, 12, 31)
+_DAYS_WINDOW_START = date(2024, 6, 1)
 
-#: The most days a request may ask for: the longest window from _DAYS_WINDOW_START that ends by pd.Timestamp.max.
-MAX_WINDOW_DAYS: int = (pd.Timestamp.max - _DAYS_WINDOW_START).days + 1
+#: The most days a simulation window may span: the full 2024 calendar year that days=365 and a request
+#: without dates run; rationale in docs/web-ui-design.md (Period).
+MAX_WINDOW_DAYS: int = (_FULL_YEAR_END - _FULL_YEAR_START).days + 1
 
 # Each parser's recognised top-level keys, and the value each reads as when absent.
 _DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
@@ -56,48 +60,78 @@ _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
 })
 
 
+def _read_date(value: Any, field: str, default: date) -> date:
+    """Read a request body's ``field`` as an ISO 8601 calendar date; a falsy value reads as ``default``.
+
+    Raises:
+        ValueError: If the value is not a string date.fromisoformat reads; the
+            error names the field and the value sent.
+    """
+    if not value:
+        return default
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}") from exc
+
+
+def _days_window(days: int) -> tuple[date, date]:
+    """The window a ``days`` request runs: the full 2024 calendar year for 365, else *days* days from 2024-06-01."""
+    if days == 365:
+        return _FULL_YEAR_START, _FULL_YEAR_END
+    return _DAYS_WINDOW_START, _DAYS_WINDOW_START + timedelta(days=days - 1)
+
+
+def _refuse_reversed_or_overlong_window(start: date, end: date) -> None:
+    """Refuse a window that ends before it starts or spans more than MAX_WINDOW_DAYS days, naming start and end."""
+    if end < start:
+        raise ValueError(f"end must not be before start, got start '{start}' and end '{end}'")
+    span = (end - start).days + 1
+    if span > MAX_WINDOW_DAYS:
+        raise ValueError(
+            f"start to end must span at most {MAX_WINDOW_DAYS} days, "
+            f"got start '{start}' and end '{end}', {span:,} days"
+        )
+
+
 def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     """Extract a (start, end) date-string pair from a JSON request body.
 
     Three resolution modes (checked in order):
 
-    1. ``days == 365``  → **sentinel for a full calendar year**: returns the
-       complete 2024 calendar year ``("2024-01-01", "2024-12-31")``.  Because
-       2024 is a leap year this window spans 366 days; ``365`` is intentionally
-       a *named sentinel* (not a literal day count) so callers can request a
-       full-year run without specifying explicit dates.
+    1. ``days == 365``  → **sentinel for a full calendar year**: the 2024
+       calendar year ``("2024-01-01", "2024-12-31")``, 366 days since 2024 is a
+       leap year, so callers can request a full-year run without explicit dates.
     2. ``days`` key present (an integer from 1 to :data:`MAX_WINDOW_DAYS` other
        than 365, read as int() reads it) → *days*-day window anchored at
        2024-06-01.
-    3. Otherwise → use ``start`` / ``end`` keys with defaults
-       ``"2024-01-01"`` / ``"2024-12-31"``.
+    3. Otherwise → read ``start`` / ``end`` as ISO 8601 dates (``YYYY-MM-DD``);
+       a falsy one reads as ``"2024-01-01"`` / ``"2024-12-31"``.
+
+    Whichever mode resolves it, the window must end on or after its start and
+    span at most :data:`MAX_WINDOW_DAYS` days.
 
     Args:
         data: Parsed JSON body from the request.
 
     Returns:
-        Tuple of ``(start, end)`` as ``"YYYY-MM-DD"`` strings.
+        Tuple of ``(start, end)`` as ``"YYYY-MM-DD"`` strings, ``end`` inclusive.
 
     Raises:
         ValueError: If ``days`` is present but is one int() cannot read or is
-            outside 1 to MAX_WINDOW_DAYS; the error names days and the value sent.
+            outside 1 to MAX_WINDOW_DAYS, or if ``start`` or ``end`` is not an
+            ISO 8601 date, naming the field and the value sent; or if the
+            window ends before it starts or spans more than MAX_WINDOW_DAYS
+            days, naming start and end as read.
     """
     params = {**_DATE_RANGE_DEFAULTS, **data}
-    days_raw = params["days"]
-    start_raw = params["start"]
-    end_raw = params["end"]
-
-    if days_raw is not None:
-        days = as_int_within(days_raw, "days", 1, MAX_WINDOW_DAYS)
-        if days == 365:
-            return "2024-01-01", "2024-12-31"
-        start = _DAYS_WINDOW_START.strftime("%Y-%m-%d")
-        end = (_DAYS_WINDOW_START + pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
-        return start, end
-
-    start = str(start_raw) if start_raw else "2024-01-01"
-    end = str(end_raw) if end_raw else "2024-12-31"
-    return start, end
+    if params["days"] is not None:
+        start, end = _days_window(as_int_within(params["days"], "days", 1, MAX_WINDOW_DAYS))
+    else:
+        start = _read_date(params["start"], "start", _FULL_YEAR_START)
+        end = _read_date(params["end"], "end", _FULL_YEAR_END)
+    _refuse_reversed_or_overlong_window(start, end)
+    return start.isoformat(), end.isoformat()
 
 
 def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
@@ -214,10 +248,11 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             received), if a float field is a boolean or not a finite number
             float() reads, or occupants is one int() cannot read (the error
             names the field, as heat_pump.<key> for a heat-pump number, and
-            the value sent), or if required fields are missing or invalid. The
-            battery settings (max_charge_kw, max_discharge_kw, efficiency_pct
-            and dispatch_strategy) are read, and refused, whatever battery_kwh
-            is; a null setting reads as unset.
+            the value sent), if its days, start or end is one
+            parse_date_range refuses, or if required fields are missing or
+            invalid. The battery settings (max_charge_kw, max_discharge_kw,
+            efficiency_pct and dispatch_strategy) are read, and refused,
+            whatever battery_kwh is; a null setting reads as unset.
     """
     data = require_json_object(data, "Home config")
     _refuse_unrecognised_keys(data)

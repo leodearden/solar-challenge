@@ -10,6 +10,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
 
 
@@ -248,6 +249,32 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("window", "message"),
+        [
+            pytest.param(
+                {"start": "2024-06-10", "end": "2024-06-01"},
+                "end must not be before start, got start '2024-06-10' and end '2024-06-01'",
+                id="end-before-start",
+            ),
+            pytest.param(
+                {"start": "2024-01-01", "end": "2025-01-01"},
+                f"start to end must span at most {MAX_WINDOW_DAYS} days, "
+                "got start '2024-01-01' and end '2025-01-01', 367 days",
+                id="one-day-past-the-longest-window",
+            ),
+        ],
+    )
+    def test_window_it_cannot_run_returns_400_naming_start_and_end_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, window: dict, message: str
+    ) -> None:
+        """A fleet window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is a 400 naming start and end; no fleet is queued."""
+        body = {key: value for key, value in self._VALID_BODY.items() if key != "days"}
+        resp = client.post("/api/simulate/fleet-from-distribution", json={**body, **window})
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == message
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(

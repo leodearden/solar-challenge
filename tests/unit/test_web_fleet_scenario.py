@@ -20,6 +20,7 @@ from solar_challenge.web.fleet_scenario import (
     scenario_from_fleet_form,
 )
 from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 
 _FLEET_FORM: dict[str, Any] = {
     "name": "Round Trip Fleet",
@@ -393,6 +394,11 @@ class TestFleetFormFromScenario:
                 _with_fleet_distribution(n_homes=MAX_FLEET_HOMES + 1),
                 f"n_homes must be between 1 and {MAX_FLEET_HOMES}",
                 id="more-homes-than-the-page-runs",
+            ),
+            pytest.param(
+                {**_FLEET_SCENARIO, "period": {"start_date": "2024-01-01", "end_date": "2025-12-31"}},
+                f"start to end must span at most {MAX_WINDOW_DAYS} days",
+                id="a-period-longer-than-the-page-runs",
             ),
             pytest.param(
                 {

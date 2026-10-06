@@ -104,8 +104,51 @@ class TestParseDateRange:
         assert end == "2024-12-31"
 
     def test_days_max_window_days_is_the_longest_window(self) -> None:
-        """days=MAX_WINDOW_DAYS is the longest window: it ends on the day of pd.Timestamp.max."""
-        assert parse_date_range({"days": MAX_WINDOW_DAYS}) == ("2024-06-01", "2262-04-11")
+        """days=MAX_WINDOW_DAYS is the longest window, a year of days from 2024-06-01."""
+        assert parse_date_range({"days": MAX_WINDOW_DAYS}) == ("2024-06-01", "2025-06-01")
+
+    def test_full_leap_year_is_the_longest_start_end_window(self) -> None:
+        """The full 2024 leap year, 366 days, is the longest start/end window, and is accepted."""
+        assert parse_date_range({"start": "2024-01-01", "end": "2024-12-31"}) == (
+            "2024-01-01",
+            "2024-12-31",
+        )
+
+    def test_single_day_window_is_accepted(self) -> None:
+        """A start/end window that starts and ends on the same day is accepted."""
+        assert parse_date_range({"start": "2024-06-01", "end": "2024-06-01"}) == (
+            "2024-06-01",
+            "2024-06-01",
+        )
+
+    @pytest.mark.parametrize(
+        ("data", "message"),
+        [
+            pytest.param(
+                {"start": "2024-06-02", "end": "2024-06-01"},
+                "end must not be before start, got start '2024-06-02' and end '2024-06-01'",
+                id="one-day-reversed",
+            ),
+            pytest.param(
+                {"end": "2023-12-31"},
+                "end must not be before start, got start '2024-01-01' and end '2023-12-31'",
+                id="end-before-the-default-start",
+            ),
+            pytest.param(
+                {"start": "2024-01-01", "end": "2025-01-01"},
+                f"start to end must span at most {MAX_WINDOW_DAYS} days, "
+                "got start '2024-01-01' and end '2025-01-01', 367 days",
+                id="one-day-past-the-longest-window",
+            ),
+        ],
+    )
+    def test_window_it_cannot_run_is_refused_naming_start_and_end(
+        self, data: dict, message: str
+    ) -> None:
+        """A window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is refused with a ValueError naming start and end as read."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range(data)
+        assert str(exc_info.value) == message
 
     @pytest.mark.parametrize(
         ("days", "message"),
@@ -142,6 +185,25 @@ class TestParseDateRange:
         with pytest.raises(ValueError) as exc_info:
             parse_date_range({"days": days})
         assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize("field", ["start", "end"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("2024/06/01", id="slashes"),
+            pytest.param("2024-06-01T12:00", id="time-of-day"),
+            pytest.param("2024-02-30", id="no-such-day"),
+            pytest.param("NaT", id="pandas-not-a-time"),
+            pytest.param(20240601, id="number"),
+        ],
+    )
+    def test_date_it_cannot_read_is_refused_naming_the_field_and_the_value_sent(
+        self, field: str, value: object
+    ) -> None:
+        """A start or end that is not an ISO 8601 date is refused with a ValueError naming the field and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({field: value})
+        assert str(exc_info.value) == f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
 
 
 class TestParseHomeConfigKeys:
