@@ -55,7 +55,7 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers for steps 3–6 seam-verification
+# Shared helpers for the seam-verification tests
 # ---------------------------------------------------------------------------
 
 
@@ -148,7 +148,7 @@ def _surplus_at(
 
 
 # ---------------------------------------------------------------------------
-# Step-3 (GREEN on arrival): board surplus carries the central increment
+# Board surplus carries the central increment
 # ---------------------------------------------------------------------------
 
 
@@ -193,7 +193,7 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-4 (GREEN on arrival): each band moves surplus by its increment
+# Each band moves surplus by its increment
 # ---------------------------------------------------------------------------
 
 
@@ -246,7 +246,7 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-5 (GREEN on arrival): unset grid_services is θ-safe no-op
+# Unset grid_services is a θ-safe no-op
 # ---------------------------------------------------------------------------
 
 
@@ -331,7 +331,7 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-6 (GREEN on arrival): battery vs no-battery home differ by flex increment
+# Battery vs no-battery home differ by flex increment
 # ---------------------------------------------------------------------------
 
 
