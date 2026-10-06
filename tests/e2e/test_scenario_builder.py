@@ -72,12 +72,8 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
     page.wait_for_load_state("networkidle")
 
     for section_name in _ACCORDION_SECTIONS:
-        accordion_btn = page.locator(
-            "button",
-            has_text=section_name,
-        ).first
         expect(
-            accordion_btn,
+            page.get_by_role("button", name=section_name, exact=True),
             f"Accordion section '{section_name}' should be visible",
         ).to_be_visible()
 
@@ -745,7 +741,7 @@ def test_tabbing_to_upload_yaml_and_pressing_key_opens_a_file_chooser_whose_scen
     path.write_text(_LOCATION_WITHOUT_ALTITUDE_YAML, encoding="utf-8")
     page.get_by_role("button", name="Load Preset", exact=True).focus()
 
-    # Playwright intercepts a chooser only once the server has handled the listener's registration, which a key press sent straight after it can outrun; the Tab and focus check leave round trips between the two
+    # The Tab and the focus check stay inside the with: they let the chooser listener register before the key press
     with page.expect_file_chooser() as chooser:
         page.keyboard.press("Tab")
         expect(page.get_by_role("button", name="Upload YAML", exact=True)).to_be_focused()
