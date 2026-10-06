@@ -9,6 +9,8 @@ import pytest
 import yaml
 from playwright.sync_api import Page, Route, expect
 
+from tests.e2e._scenario_builder_page import open_builder
+
 pytestmark = pytest.mark.e2e
 
 
@@ -45,8 +47,7 @@ def test_the_home_form_renders_with_every_other_origin_unreachable(
 def test_the_builder_reads_an_uploaded_yaml_with_every_other_origin_unreachable(
     page: Page, live_server: str, refused_offsite_requests: list[str], tmp_path: Path
 ) -> None:
-    with page.expect_response("**/api/scenarios/preview-yaml"):
-        page.goto(live_server + "/scenarios/builder")
+    open_builder(page, live_server)
     path = tmp_path / "scenario.yaml"
     path.write_text(
         yaml.safe_dump(
