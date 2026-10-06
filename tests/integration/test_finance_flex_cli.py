@@ -2,9 +2,10 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Integration tests for task-70: --flex-band CLI flag wiring into finance run.
 
-All tests are offline (simulate_fleet is patched) and run without @pytest.mark.slow
-so they execute in the offline verify loop.  This file must NOT be added to
-tests/unit/test_marker_registration.py's INTEGRATION_FILES allow-list.
+All tests are offline (the fleet simulator is injected through Click's context
+object) and run without @pytest.mark.slow so they execute in the offline verify
+loop.  This file must NOT be added to tests/unit/test_marker_registration.py's
+INTEGRATION_FILES allow-list.
 """
 from __future__ import annotations
 
@@ -148,13 +149,28 @@ class TestFinanceFlexCLIHelp:
         )
 
 
+def _invoke_finance_run(
+    args: "list[str]", fleet_results: "FleetResults"  # type: ignore[name-defined]
+) -> "Result":  # type: ignore[name-defined]
+    """Run `finance run` with *args*, answering every fleet simulation with *fleet_results*."""
+    from typer.testing import CliRunner
+    from solar_challenge.cli.main import app
+    from solar_challenge.cli.utils import CliFleetSimulator
+
+    return CliRunner().invoke(
+        app,
+        ["finance", "run", *args],
+        obj=CliFleetSimulator(simulate=lambda fleet_config, start, end: fleet_results),
+    )
+
+
 # ---------------------------------------------------------------------------
 # §D — Behaviour tests (step-3 RED drivers)
 # ---------------------------------------------------------------------------
 
 
 class TestFinanceFlexCLIBehaviour:
-    """CLI-level behaviour tests for --flex-band wiring (offline, patched fleet)."""
+    """CLI-level behaviour tests for --flex-band wiring (offline, fleet simulator injected through Click's context object)."""
 
     def test_flex_band_central_renders_block(
         self, tmp_path: "Path", flex_fleet_results: "FleetResults"  # type: ignore[name-defined]
@@ -163,19 +179,10 @@ class TestFinanceFlexCLIBehaviour:
 
         (a) Checks heading token, band name, and a central-specific monetary amount.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_file = _write_scenario(tmp_path / "a")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                ["finance", "run", "--flex-band", "central", str(scenario_file)],
-            )
+        result = _invoke_finance_run(["--flex-band", "central", str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
@@ -198,20 +205,11 @@ class TestFinanceFlexCLIBehaviour:
 
         (b) Scenario says 'low'; CLI says 'high' → high wins.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # Scenario has flex_band: low
         scenario_file = _write_scenario(tmp_path / "b", flex_band="low")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(
-                app,
-                ["finance", "run", "--flex-band", "high", str(scenario_file)],
-            )
+        result = _invoke_finance_run(["--flex-band", "high", str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
@@ -232,17 +230,11 @@ class TestFinanceFlexCLIBehaviour:
 
         (c) Additive default: the block is absent when neither source provides a band.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # No flex_band key in scenario, no CLI flag
         scenario_file = _write_scenario(tmp_path / "c")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+        result = _invoke_finance_run([str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
@@ -282,17 +274,11 @@ class TestFinanceFlexCLIBehaviour:
         ValueError → handle_errors → Exit(1)), which is distinct from the typer-enum
         rejection of an invalid CLI flag.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # Scenario has flex_band: bogus (not low/central/high)
         scenario_file = _write_scenario(tmp_path / "e_bad", flex_band="bogus")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+        result = _invoke_finance_run([str(scenario_file)], fr)
 
         assert result.exit_code != 0, (
             f"Expected non-zero exit for invalid scenario flex_band 'bogus', "
@@ -307,17 +293,11 @@ class TestFinanceFlexCLIBehaviour:
         The YAML value is normalised to lowercase before being passed to
         resolve_flex_band, matching the CLI's case-insensitive FlexBand enum.
         """
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # Scenario has flex_band: Central (capital C)
         scenario_file = _write_scenario(tmp_path / "e_case", flex_band="Central")
         fr = flex_fleet_results
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", str(scenario_file)])
+        result = _invoke_finance_run([str(scenario_file)], fr)
 
         assert result.exit_code == 0, (
             f"Expected exit 0 for scenario flex_band='Central' (case-normalised), "
@@ -349,16 +329,11 @@ class TestFinanceFlexNamedScenario:
     ) -> None:
         """finance run scenarios/bristol-phase1-flex.yaml → Flexibility Value block with 'central'."""
         from pathlib import Path
-        from unittest.mock import patch
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
 
         scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
         fr = _make_fleet_results()
 
-        with patch("solar_challenge.cli.finance.simulate_fleet", return_value=fr):
-            runner = CliRunner()
-            result = runner.invoke(app, ["finance", "run", str(scenario_path)])
+        result = _invoke_finance_run([str(scenario_path)], fr)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"

@@ -971,7 +971,7 @@ class TestGenerateFinanceReportEconomics:
 
 
 class TestFinanceProjectCLI:
-    """Fast CLI tests for finance run --project (typer CliRunner, no simulation)."""
+    """Fast CLI tests for finance run --project (typer CliRunner; a test that simulates injects its fleet simulator through Click's context object)."""
 
     def test_help_shows_project_flag(self) -> None:
         """`finance run --help` must show --project flag."""
@@ -1011,6 +1011,47 @@ class TestFinanceProjectCLI:
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--project", str(scenario_file)])
         assert result.exit_code != 0
+
+    def test_project_renders_the_economics_block_from_the_injected_fleet_simulator(
+        self, tmp_path: "Path"
+    ) -> None:
+        """`finance run --project` renders the Project Economics block when every fleet simulation, each projected age's included, is answered by the simulator passed as Click's context object."""
+        import yaml
+        from typer.testing import CliRunner
+        from solar_challenge.cli.main import app
+        from solar_challenge.cli.utils import CliFleetSimulator
+        from tests._finance_builders import make_fleet_results
+
+        scenario = {
+            "name": "Project CLI Test",
+            "location": {
+                "latitude": 51.45,
+                "longitude": -2.58,
+                "timezone": "Europe/London",
+            },
+            "fleet_distribution": {
+                "n_homes": 2,
+                "seed": 1,
+                "pv": {"capacity_kw": 4.0, "azimuth": 180, "tilt": 35},
+                "battery": {"capacity_kwh": None},
+                "load": {"annual_consumption_kwh": 3500},
+            },
+            "finance": {"standing_charge_pence_per_day": 28.0},
+        }
+        scenario_file = tmp_path / "project.yaml"
+        scenario_file.write_text(yaml.dump(scenario))
+        fleet = make_fleet_results(n_homes=2, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+
+        result = CliRunner().invoke(
+            app,
+            ["finance", "run", "--project", str(scenario_file)],
+            obj=CliFleetSimulator(simulate=lambda fleet_config, start, end: fleet),
+        )
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        assert "Project Economics" in result.output, (
+            f"Expected the 'Project Economics' block in output:\n{result.output}"
+        )
 
 
 @pytest.mark.slow
