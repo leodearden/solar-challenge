@@ -31,7 +31,7 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.web import database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.number_fields import as_whole_number
+from solar_challenge.web.number_fields import as_finite_float, as_whole_number
 from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
@@ -728,24 +728,28 @@ def dispatch_tool(
 
     Args:
         name:        The tool name as sent by the model.
-        tool_input:  The validated input dict from the model's tool_use block.
+        tool_input:  The input dict the model sent in its tool_use block.
         db_path:     The SQLite database that the DB-backed tools read and that
                      submitted jobs record their runs in.
         job_manager: The app's JobManager, which the trigger tools submit jobs to.
         data_dir:    The root directory for submitted runs' artefacts.
 
     Returns:
-        The handler's result dict, or ``{"error": "..."}`` for unknown names.
-        Never raises.
+        The handler's result dict; ``{"error": "..."}`` for an unknown name; or
+        ``{"error": "..."}`` naming the field and the value sent when
+        suggest_config's annual_consumption_kwh or list_recent_runs' limit is a
+        number its tool cannot use.  Never raises.
     """
     if name == "explain_metric":
         metric: str = str(tool_input.get("metric", ""))
         return explain_metric(metric)
     if name == "suggest_config":
         try:
-            annual_kwh: float = float(tool_input.get("annual_consumption_kwh", 0.0))
-        except (ValueError, TypeError):
-            return {"error": "annual_consumption_kwh must be numeric"}
+            annual_kwh = as_finite_float(
+                tool_input.get("annual_consumption_kwh", 0.0), "annual_consumption_kwh"
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
         goal: str = str(tool_input.get("goal", ""))
         return suggest_config(annual_kwh, goal)
     if name == "get_run_results":
@@ -753,9 +757,9 @@ def dispatch_tool(
         return get_run_results(run_id_or_name, RunStorage(db_path=db_path, data_dir=data_dir))
     if name == "list_recent_runs":
         try:
-            limit: int = int(tool_input.get("limit", 10))
-        except (ValueError, TypeError):
-            limit = 10
+            limit = as_whole_number(tool_input.get("limit", 10), "limit")
+        except ValueError as exc:
+            return {"error": str(exc)}
         return list_recent_runs(limit, db_path)
     if name == "run_home_simulation":
         return run_home_simulation(dict(tool_input), job_manager, db_path, data_dir)
