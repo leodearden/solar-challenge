@@ -289,6 +289,49 @@ class TestFleetConfigHelpers:
                 {"entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}]},
             )
 
+    @pytest.mark.parametrize(
+        ("dist_type", "params", "message"),
+        [
+            pytest.param(
+                "weighted_discrete",
+                {"values": [1]},
+                "params.values[0] must be a mapping, got int",
+                id="weighted-discrete-int-row",
+            ),
+            pytest.param(
+                "weighted_discrete",
+                {"values": "ab"},
+                "params.values must be a list, got str",
+                id="weighted-discrete-str-values",
+            ),
+            pytest.param(
+                "shuffled_pool",
+                {"entries": [{"value": 3.0, "count": float("inf")}]},
+                "params.entries[0].count must be an integer, got inf",
+                id="shuffled-pool-infinite-count",
+            ),
+            pytest.param(
+                "shuffled_pool",
+                {
+                    "entries": [
+                        {"value": 3.0, "count": MAX_FLEET_HOMES},
+                        {"value": 5.0, "count": 1},
+                    ]
+                },
+                f"params.entries counts must total at most {MAX_FLEET_HOMES}, "
+                f"got {MAX_FLEET_HOMES + 1}",
+                id="shuffled-pool-total-one-above-the-fleet-limit",
+            ),
+        ],
+    )
+    def test_sample_distribution_names_a_row_or_count_refusal_under_params(
+        self, dist_type: str, params: dict, message: str
+    ) -> None:
+        """A preview's malformed row list, row or count is refused naming its field under params, the distribution the preview reads."""
+        with pytest.raises(ValueError) as exc_info:
+            sample_distribution(dist_type, params, 3)
+        assert str(exc_info.value) == message
+
     def test_form_to_fleet_distribution_config(self) -> None:
         """Test converting form data to fleet distribution config."""
         form_data = {
@@ -536,6 +579,74 @@ class TestFleetConfigHelpers:
         )
 
         assert config["pv"]["capacity_kw"]["counts"] == [0, MAX_FLEET_HOMES]
+
+    @pytest.mark.parametrize(
+        ("patch", "message"),
+        [
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "weighted_discrete", "values": ["x"]}}},
+                "battery.capacity_kwh.values[0] must be a mapping, got str",
+                id="battery-weighted-discrete-str-row",
+            ),
+            pytest.param(
+                {"load": {"annual_consumption_kwh": {"type": "shuffled_pool", "entries": "ab"}}},
+                "load.annual_consumption_kwh.entries must be a list, got str",
+                id="load-shuffled-pool-str-entries",
+            ),
+            pytest.param(
+                {
+                    "pv": {
+                        "capacity_kw": {
+                            "type": "shuffled_pool",
+                            "entries": [{"value": 4.0, "count": -1}],
+                        }
+                    }
+                },
+                f"pv.capacity_kw.entries[0].count must be between 0 and {MAX_FLEET_HOMES}, got -1",
+                id="pv-shuffled-pool-negative-count",
+            ),
+            pytest.param(
+                {
+                    "pv": {
+                        "capacity_kw": {
+                            "type": "shuffled_pool",
+                            "entries": [{"value": 4.0, "count": "x"}],
+                        }
+                    }
+                },
+                "pv.capacity_kw.entries[0].count must be an integer, got 'x'",
+                id="pv-shuffled-pool-str-count",
+            ),
+            pytest.param(
+                {
+                    "pv": {
+                        "capacity_kw": {
+                            "type": "shuffled_pool",
+                            "entries": [
+                                {"value": 4.0, "count": MAX_FLEET_HOMES},
+                                {"value": 5.0, "count": 1},
+                            ],
+                        }
+                    }
+                },
+                f"pv.capacity_kw.entries counts must total at most {MAX_FLEET_HOMES}, "
+                f"got {MAX_FLEET_HOMES + 1}",
+                id="pv-shuffled-pool-total-one-above-the-fleet-limit",
+            ),
+            pytest.param(
+                {"pv": {"type": "weighted_discrete", "values": ["x"]}},
+                "pv.values[0] must be a mapping, got str",
+                id="pv-block-that-is-the-distribution-str-row",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_names_a_row_or_count_refusal_by_its_distribution(
+        self, patch: dict, message: str
+    ) -> None:
+        """A malformed row list, row or count is refused naming its distribution's field, which is the block itself when the block is the distribution."""
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
+        assert str(exc_info.value) == message
 
     @pytest.mark.parametrize(
         "spec",

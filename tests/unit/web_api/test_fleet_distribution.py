@@ -512,6 +512,41 @@ class TestFleetFromDistribution:
         assert message in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("patch", "message"),
+        [
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "weighted_discrete", "values": ["x"]}}},
+                "battery.capacity_kwh.values[0] must be a mapping, got str",
+                id="battery-weighted-discrete-str-row",
+            ),
+            pytest.param(
+                {
+                    "load": {
+                        "annual_consumption_kwh": {
+                            "type": "shuffled_pool",
+                            "entries": [{"value": 3500.0, "count": -1}],
+                        }
+                    }
+                },
+                f"load.annual_consumption_kwh.entries[0].count must be between 0 and "
+                f"{MAX_FLEET_HOMES}, got -1",
+                id="load-shuffled-pool-negative-count",
+            ),
+        ],
+    )
+    def test_row_or_count_it_cannot_use_returns_400_naming_its_distribution(
+        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, message: str
+    ) -> None:
+        """A malformed distribution row or count is a 400 naming its field under the distribution it belongs to; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, **patch},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": message}
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
     def test_malformed_fleet_seg_returns_400_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: MagicMock, seg: object
