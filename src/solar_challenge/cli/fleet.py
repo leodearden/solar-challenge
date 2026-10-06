@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 from solar_challenge.cli.utils import (
     console,
     create_fleet_progress,
-    create_progress,
     create_summary_table,
     handle_errors,
     print_info,
