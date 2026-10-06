@@ -12,6 +12,8 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Tuple
 
+from solar_challenge.timebase import HOURS_PER_MINUTE
+
 
 @dataclass(frozen=True)
 class DispatchDecision:
@@ -181,7 +183,7 @@ def compute_grid_charge_power_kw(
 
     # Convert SOC gap to a grid-side charge-power request for this timestep.
     # gap_kwh / charge_efficiency: more grid energy needed than actually stored.
-    dt_h = timestep_minutes / 60.0
+    dt_h = timestep_minutes * HOURS_PER_MINUTE
     gap_power_kw = gap_kwh / ctx.charge_efficiency / dt_h
 
     # Residual battery-side charging headroom after PV already occupies some.
