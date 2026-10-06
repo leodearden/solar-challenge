@@ -132,13 +132,12 @@ conventions:
       external-wheel install test (imports every __all__ name in a fresh interpreter). Both tables
       are spelled alike on every admitted Python minor, and each fails until its table edit lands,
       naming every drifted symbol and asking for the change's 'Unreleased on main' line in the
-      same commit. The member lock reads class bodies, so no test pins the public attributes a
-      plain class assigns only in __init__: Battery's config and its SOC and efficiency
-      attributes, and WeatherCache.cache_dir (task 426 decides them). Neither table pins a class
-      outside __all__, even one the exported surface names: HomeConfig, SimulationResults,
-      SimulationPeriod, OutputConfig, DispatchStrategyConfig and GridChargeConfig (task 505
-      decides them). `__init__.py` is deliberately LAZY (PEP-562
-      __getattr__ + _SYMBOL_MODULE map) so `import solar_challenge` stays pvlib-free; the
+      same commit. The member lock reads class bodies only, so no test pins a public attribute
+      that a plain class assigns only in __init__, and neither table pins a class outside
+      __all__, even one the exported surface names. Tasks 426 and 505 list the measured
+      instances of each gap and decide whether they join the contract. `__init__.py` is
+      deliberately LAZY (PEP-562 __getattr__ + _SYMBOL_MODULE map) so `import solar_challenge`
+      stays pvlib-free; the
       import-time _SYMBOL_MODULE/__all__ sync check uses raise RuntimeError (not assert) on
       purpose so it survives -O/-OO. The DispatchTariffPeriod alias (dispatch.TariffPeriod enum,
       re-exported renamed to avoid colliding with tariff.TariffPeriod) is intentional. Do not
