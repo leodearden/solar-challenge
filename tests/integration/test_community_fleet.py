@@ -788,19 +788,19 @@ class TestFleetRunCommunityBillingCLI:
         )
 
     def test_cli_stdout_has_billing_rows(self) -> None:
-        """CLI stdout community table includes billing rows (step-8 drives this)."""
+        """CLI stdout community table includes billing rows."""
         result = _fleet_run_in_process(
             SCENARIO, "--start", "2024-06-21", "--end", "2024-06-21"
         )
         assert result.exit_code == 0, result.output
-        # Billing rows in the Rich table — implemented in step-8
+        # Billing rows in the Rich table
         assert "Baseline Net Cost" in result.output or "Savings" in result.output, (
             f"Expected billing rows in community table stdout:\n{result.output[-500:]}"
         )
 
 
 # ---------------------------------------------------------------------------
-# Task-86 Step-3: TestComputeCommunityMetricsSharingMode
+# TestComputeCommunityMetricsSharingMode
 # ---------------------------------------------------------------------------
 
 class TestComputeCommunityMetricsSharingMode:

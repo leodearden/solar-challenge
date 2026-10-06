@@ -118,7 +118,7 @@ def _make_fleet_from_sim_results(per_home: list[SimulationResults]) -> FleetResu
 
 
 # ---------------------------------------------------------------------------
-# Step-1: TestCommunityConfig
+# TestCommunityConfig
 # ---------------------------------------------------------------------------
 
 class TestCommunityConfig:
@@ -186,7 +186,7 @@ class TestCommunityConfig:
 
 
 # ---------------------------------------------------------------------------
-# Step-3: TestSimulateCommunityP2P
+# TestSimulateCommunityP2P
 # ---------------------------------------------------------------------------
 
 class TestSimulateCommunityP2P:
@@ -285,7 +285,7 @@ class TestSimulateCommunityP2P:
 
 
 # ---------------------------------------------------------------------------
-# Step-5: TestValidateCommunityBalance
+# TestValidateCommunityBalance
 # ---------------------------------------------------------------------------
 
 class TestValidateCommunityBalance:

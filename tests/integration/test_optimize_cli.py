@@ -1106,7 +1106,7 @@ class TestOptimizeCLIE2EFast:
 
 
 # ---------------------------------------------------------------------------
-# §H — @pytest.mark.slow real-PVGIS board signal (step-11)
+# §H — @pytest.mark.slow real-PVGIS board signal
 # ---------------------------------------------------------------------------
 
 _FLEX_SCENARIO = Path(__file__).parent.parent.parent / "scenarios" / "bristol-phase1-flex.yaml"

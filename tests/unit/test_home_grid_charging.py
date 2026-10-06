@@ -25,10 +25,9 @@ class TestSimulateHomeStrategyPathGridCharging:
 
     The Strategy path (else branch in home.simulate_home) is taken when
     BatteryConfig.dispatch_strategy is set, making use_tariff_tou False.
-    Before the fix, simulate_timestep on this path never receives tariff=…,
-    so grid_charge_ctx is always None and grid-charging is dead.
-    After the fix (adding tariff=config.tariff_config), the full grid-charge
-    chain fires: is_cheap + spread gates pass → battery charged from grid.
+    simulate_timestep on this path receives tariff=config.tariff_config, so
+    the full grid-charge chain fires: is_cheap + spread gates pass → battery
+    charged from grid.
     """
 
     @pytest.fixture
@@ -127,7 +126,7 @@ class TestSimulateHomeStrategyPathGridCharging:
         """Without tariff_config, grid-charging stays inert (battery_charge == 0 with zero PV).
 
         Guard/non-regression: pins the 'tariff_config=None → no behaviour change' contract.
-        Green before and after the fix (the impl threads config.tariff_config which is None here).
+        The Strategy path threads config.tariff_config, which is None here.
         """
         config_no_tariff = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
