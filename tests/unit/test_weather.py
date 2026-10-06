@@ -1,8 +1,10 @@
 """Tests for weather data handling."""
 
 import json
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -177,6 +179,37 @@ class TestWeatherCache:
         cache.put(frame, "tmy", bristol)
 
         pd.testing.assert_frame_equal(cache.get("tmy", bristol), frame, check_exact=True)
+
+    @pytest.mark.parametrize(
+        "tz",
+        [
+            pytest.param("dateutil/Europe/London", id="a dateutil zone"),
+            pytest.param(timezone(timedelta(hours=1), "BST"), id="a named fixed offset"),
+        ],
+    )
+    def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, cache, bristol, tz):
+        """put refuses a frame indexed in a timezone whose str, from which get restores it, names none: its
+        ValueError names that str, and put leaves no file, so a get finds no entry."""
+        index = pd.date_range("2024-06-21", periods=48, freq="h", tz=tz)
+        frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
+
+        with pytest.raises(ValueError, match=re.escape(str(index.tz))):
+            cache.put(frame, "tmy", bristol)
+
+        assert list(cache.cache_dir.iterdir()) == []
+        assert cache.get("tmy", bristol) is None
+
+    def test_get_refuses_an_entry_recording_a_timezone_it_could_not_restore(self, cache, bristol):
+        """get refuses an entry recording its timezone as a str that names none, a dateutil zone's say, which put
+        refuses to record: its ValueError names that str."""
+        index = pd.date_range("2024-06-21", periods=48, freq="h", tz="Europe/London")
+        cache.put(pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index), "tmy", bristol)
+        dateutil_london = "tzfile('/usr/share/zoneinfo/Europe/London')"
+        [meta_file] = cache.cache_dir.glob("*.meta.json")
+        meta_file.write_text(json.dumps({**json.loads(meta_file.read_text()), "timezone": dateutil_london}))
+
+        with pytest.raises(ValueError, match=re.escape(dateutil_london)):
+            cache.get("tmy", bristol)
 
     def test_different_locations_different_cache(self, cache, sample_weather_data):
         """Different locations use different cache entries."""

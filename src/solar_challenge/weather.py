@@ -70,6 +70,17 @@ def _staged_beside(entry_file: Path) -> Iterator[Path]:
         raise
 
 
+def _require_timezone_name(name: str) -> None:
+    """Refuse a name pandas resolves to no timezone: put records a frame's timezone as its str, and get restores the timezone from it."""
+    try:
+        pd.DatetimeIndex([], tz="UTC").tz_convert(name)
+    except (LookupError, ValueError) as e:
+        raise ValueError(
+            "A cached frame's timezone must have a str that names it, such as 'Europe/London', 'UTC' or "
+            f"'UTC+01:00', for WeatherCache to restore it, got {name!r}"
+        ) from e
+
+
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
@@ -132,6 +143,9 @@ class WeatherCache:
 
         Returns:
             The cached DataFrame, or None if not found
+
+        Raises:
+            ValueError: If the entry records its timezone as a str that names none; put refuses such a timezone
         """
         key = self._make_key(prefix, location, start_date, end_date)
         cache_file = self._cache_path(key)
@@ -145,6 +159,7 @@ class WeatherCache:
                     metadata = json.load(f)
                 tz = metadata.get("timezone")
                 if tz:
+                    _require_timezone_name(tz)
                     df.index = pd.to_datetime(df.index, utc=True).tz_convert(tz)
                 freq = metadata.get("freq")
                 if freq:
@@ -168,12 +183,18 @@ class WeatherCache:
             location: Location for the data
             start_date: Optional start of a date-ranged entry (part of the key)
             end_date: Optional end of a date-ranged entry (part of the key)
+
+        Raises:
+            ValueError: If data's index is in a timezone get could not restore from its str, such as a dateutil
+                zone; nothing is then written
         """
         key = self._make_key(prefix, location, start_date, end_date)
         cache_file = self._cache_path(key)
         meta_file = self._meta_path(key)
 
         tz_str = str(data.index.tz) if data.index.tz else None
+        if tz_str is not None:
+            _require_timezone_name(tz_str)
         freq_str = data.index.freqstr if hasattr(data.index, "freqstr") and data.index.freqstr else None
         metadata = {
             "prefix": prefix,
@@ -288,8 +309,8 @@ def get_tmy_data(
         - dni: Direct normal irradiance (W/m²)
         - dhi: Diffuse horizontal irradiance (W/m²)
         - wind_speed: Wind speed at 10m (m/s)
-        Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put, which accepts
-        any timezone, comes back in the timezone it was put in.
+        Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put comes back in
+        the timezone it was put in.
 
     Raises:
         WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
