@@ -623,7 +623,8 @@ def run_fleet_simulation(
     """Submit a fleet simulation job via the JobManager and return {run_id, results_url}.
 
     Builds a homogeneous N-home fleet by parsing the per-home param dict
-    (minus ``n_homes``) N times using ``parse_home_config``.  ``n_homes``
+    (minus ``n_homes``) once with ``parse_home_config`` and repeating the
+    resulting frozen ``HomeConfig`` ``n_homes`` times.  ``n_homes``
     is clamped to [1, 100] to protect the single-worker JobManager.
 
     Args:
