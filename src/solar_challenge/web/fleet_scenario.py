@@ -30,7 +30,12 @@ from solar_challenge.web.fleet_config import (
     form_to_fleet_distribution_config,
 )
 from solar_challenge.web.shared import resolve_location
-from solar_challenge.web.simulation_params import parse_date_range, parse_seg_tariff
+from solar_challenge.web.simulation_params import (
+    parse_date_range,
+    parse_seg_tariff,
+    read_iso_date,
+    refuse_reversed_or_overlong_window,
+)
 
 _NAMELESS_FLEET_NAME = "Fleet Distribution Simulation"
 
@@ -171,7 +176,9 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     or seed the scenario leaves out is left out of the form too, and the fleet page runs its
     own default for it.  A null battery capacity reads as 0 kWh, a home with no battery
     either way.  A setting the form needs but cannot hold exactly is refused, naming it,
-    since loading it anyway would run a different fleet.  Every other setting, and a
+    since loading it anyway would run a different fleet.  A period the page cannot run,
+    ending before it starts or longer than MAX_WINDOW_DAYS days, is refused naming
+    period.start_date and period.end_date.  Every other setting, and a
     location other than the page's, is named in not_loaded.  A form the page could not run,
     as parse_fleet_form refuses it, is refused too.
 
@@ -274,27 +281,31 @@ def _read_period(period: Any) -> _BlockRead:
     """The fleet form's start and end dates: the scenario's period, none when it is absent or null.
 
     Raises:
-        ValueError: For a period that is not a mapping, or a date that is not one, naming it.
+        ValueError: For a period that is not a mapping, or a date that is not a day,
+            naming it as period.start_date or period.end_date; or for a window the page
+            cannot run, naming period.start_date and period.end_date.
     """
     if period is None:
         return {}, ()
     if not isinstance(period, Mapping):
         raise ValueError(f"period must be a mapping, got {type(period).__name__}")
-    form = {
-        "start": _iso_date(period.get("start_date"), "period.start_date"),
-        "end": _iso_date(period.get("end_date"), "period.end_date"),
-    }
+    start_path, end_path = "period.start_date", "period.end_date"
+    start = _read_day(period.get("start_date"), start_path)
+    end = _read_day(period.get("end_date"), end_path)
+    refuse_reversed_or_overlong_window(start, end, start_field=start_path, end_field=end_path)
+    form = {"start": start.isoformat(), "end": end.isoformat()}
     return form, _not_loaded(period, "period", {"start_date": (), "end_date": ()})
 
 
-def _iso_date(value: Any, path: str) -> str:
-    """*value*, a date as YAML reads one or a date string, as the fleet form's date string.
+def _read_day(value: Any, path: str) -> date:
+    """*value*, a date as YAML reads one or an ISO 8601 date string, as the day it names.
 
     A YAML timestamp is its day when it is that day's midnight with no time zone.
 
     Raises:
-        ValueError: For any other value, a missing one read as None, or a timestamp with a
-            time of day or a time zone, which the form's date fields cannot hold, naming *path*.
+        ValueError: For a timestamp with a time of day or a time zone, which the form's
+            date fields cannot hold, or, from read_iso_date, any other value that is not
+            an ISO 8601 date string, a missing one read as None included, naming *path*.
     """
     if isinstance(value, datetime):
         if value.tzinfo is not None or value.time() != time.min:
@@ -302,12 +313,10 @@ def _iso_date(value: Any, path: str) -> str:
                 f"{path} must be a day, got {value!r}: the fleet page's date fields hold "
                 "no time of day or time zone"
             )
-        return value.date().isoformat()
+        return value.date()
     if isinstance(value, date):
-        return value.isoformat()
-    if isinstance(value, str):
         return value
-    raise ValueError(f"{path} must be a date, got {value!r}")
+    return read_iso_date(value, path)
 
 
 def _read_location(location: Any) -> _BlockRead:

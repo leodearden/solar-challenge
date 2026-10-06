@@ -60,19 +60,29 @@ _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
 })
 
 
-def _read_date(value: Any, field: str, default: date) -> date:
-    """Read a request body's ``field`` as an ISO 8601 calendar date; a falsy value reads as ``default``.
+def read_iso_date(value: Any, field: str) -> date:
+    """Read *value*, the setting named *field*, as an ISO 8601 calendar date (``YYYY-MM-DD``).
 
     Raises:
-        ValueError: If the value is not a string date.fromisoformat reads; the
-            error names the field and the value sent.
+        ValueError: If *value* is not a string date.fromisoformat reads; the
+            error names *field* and the value.
     """
-    if not value:
-        return default
     try:
         return date.fromisoformat(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}") from exc
+
+
+def _read_date(value: Any, field: str, default: date) -> date:
+    """Read a request body's ``field`` as an ISO 8601 calendar date; a falsy value reads as ``default``.
+
+    Raises:
+        ValueError: From :func:`read_iso_date`, for a value that is not an ISO
+            8601 date, naming the field and the value sent.
+    """
+    if not value:
+        return default
+    return read_iso_date(value, field)
 
 
 def _days_window(days: int) -> tuple[date, date]:
@@ -82,15 +92,20 @@ def _days_window(days: int) -> tuple[date, date]:
     return _DAYS_WINDOW_START, _DAYS_WINDOW_START + timedelta(days=days - 1)
 
 
-def _refuse_reversed_or_overlong_window(start: date, end: date) -> None:
-    """Refuse a window that ends before it starts or spans more than MAX_WINDOW_DAYS days, naming start and end."""
+def refuse_reversed_or_overlong_window(
+    start: date, end: date, *, start_field: str, end_field: str
+) -> None:
+    """Refuse a window that ends before it starts or spans more than MAX_WINDOW_DAYS days, naming *start_field* and *end_field*."""
     if end < start:
-        raise ValueError(f"end must not be before start, got start '{start}' and end '{end}'")
+        raise ValueError(
+            f"{end_field} must not be before {start_field}, "
+            f"got {start_field} '{start}' and {end_field} '{end}'"
+        )
     span = (end - start).days + 1
     if span > MAX_WINDOW_DAYS:
         raise ValueError(
-            f"start to end must span at most {MAX_WINDOW_DAYS} days, "
-            f"got start '{start}' and end '{end}', {span:,} days"
+            f"{start_field} to {end_field} must span at most {MAX_WINDOW_DAYS} days, "
+            f"got {start_field} '{start}' and {end_field} '{end}', {span:,} days"
         )
 
 
@@ -130,7 +145,7 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     else:
         start = _read_date(params["start"], "start", _FULL_YEAR_START)
         end = _read_date(params["end"], "end", _FULL_YEAR_END)
-    _refuse_reversed_or_overlong_window(start, end)
+    refuse_reversed_or_overlong_window(start, end, start_field="start", end_field="end")
     return start.isoformat(), end.isoformat()
 
 

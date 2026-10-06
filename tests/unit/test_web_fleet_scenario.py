@@ -319,6 +319,57 @@ class TestFleetFormFromScenario:
             form=_FLEET_FORM, not_loaded=()
         )
 
+    @pytest.mark.parametrize("key", ["start_date", "end_date"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("2024/07/01", id="slashes"),
+            pytest.param("2024-02-30", id="no-such-day"),
+            pytest.param("", id="empty-string"),
+            pytest.param(20240701, id="number"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_period_date_that_is_not_an_iso_date_is_refused_naming_it(
+        self, key: str, value: object
+    ) -> None:
+        """A period date that is neither a YAML date nor an ISO 8601 date string (YYYY-MM-DD) is refused with a ValueError naming it as period.<key> and the value as written; the other date is the round trip's."""
+        period = {**_FLEET_SCENARIO["period"], key: value}
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
+        assert str(exc_info.value) == f"period.{key} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
+
+    @pytest.mark.parametrize(
+        ("period", "message"),
+        [
+            pytest.param(
+                {"start_date": "2024-06-10", "end_date": "2024-06-01"},
+                "period.end_date must not be before period.start_date, "
+                "got period.start_date '2024-06-10' and period.end_date '2024-06-01'",
+                id="end-before-start",
+            ),
+            pytest.param(
+                yaml.safe_load("start_date: 2024-06-10\nend_date: 2024-06-01\n"),
+                "period.end_date must not be before period.start_date, "
+                "got period.start_date '2024-06-10' and period.end_date '2024-06-01'",
+                id="yaml-dates-end-before-start",
+            ),
+            pytest.param(
+                {"start_date": "2024-01-01", "end_date": "2025-12-31"},
+                f"period.start_date to period.end_date must span at most {MAX_WINDOW_DAYS} days, "
+                "got period.start_date '2024-01-01' and period.end_date '2025-12-31', 731 days",
+                id="longer-than-the-page-runs",
+            ),
+        ],
+    )
+    def test_a_period_the_page_cannot_run_is_refused_naming_start_date_and_end_date(
+        self, period: dict[str, Any], message: str
+    ) -> None:
+        """A period that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is refused with a ValueError naming the scenario's period.start_date and period.end_date as read."""
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
+        assert str(exc_info.value) == message
+
     def test_a_tariff_key_the_form_has_no_field_for_is_not_loaded(self) -> None:
         """An Economy 7 tariff loads its type and rates, and names the off-peak start the page has no field for."""
         tariff = {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1, "off_peak_start": "01:00"}
@@ -394,11 +445,6 @@ class TestFleetFormFromScenario:
                 _with_fleet_distribution(n_homes=MAX_FLEET_HOMES + 1),
                 f"n_homes must be between 1 and {MAX_FLEET_HOMES}",
                 id="more-homes-than-the-page-runs",
-            ),
-            pytest.param(
-                {**_FLEET_SCENARIO, "period": {"start_date": "2024-01-01", "end_date": "2025-12-31"}},
-                f"start to end must span at most {MAX_WINDOW_DAYS} days",
-                id="a-period-longer-than-the-page-runs",
             ),
             pytest.param(
                 {
