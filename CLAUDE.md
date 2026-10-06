@@ -146,6 +146,9 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   the red run printed no failing node-id (it hit the job's `timeout`, or pytest
   could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
   `uv run --locked --extra dev --extra web --extra e2e pytest <node-id> -p no:cacheprovider`.
+  An e2e test that fails after Chromium failed one of its requests with
+  `net::ERR_NETWORK_CHANGED` runs once more and shows as `RERUN`;
+  `docs/e2e-network-change-reruns.md` says why.
   The browser comes from `~/.cache/ms-playwright`, which the sandbox cannot
   write, so the playwright locked in `uv.lock` must match an installed
   chromium-headless-shell. This shows the revision it needs:
