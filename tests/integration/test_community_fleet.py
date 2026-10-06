@@ -158,7 +158,7 @@ def clear_june_tmy(weather_cache: WeatherCache) -> None:
 # ---------------------------------------------------------------------------
 
 class TestGenerateCommunityReport:
-    """RED/GREEN tests for output.generate_community_report.
+    """Tests for output.generate_community_report.
 
     Uses a hand-built synthetic FleetResults to avoid any PVGIS calls.
     """
@@ -580,14 +580,11 @@ class TestCommunityPipelineAB:
 
 
 # ---------------------------------------------------------------------------
-# Task-34 step-5: TestCommunityBillingReport (RED)
+# TestCommunityBillingReport
 # ---------------------------------------------------------------------------
 
 class TestCommunityBillingReport:
-    """RED tests for the markdown billing section in generate_community_report.
-
-    Implementation arrives in step-6 (output.py).
-    """
+    """Markdown billing section in generate_community_report."""
 
     @pytest.fixture
     def billing_idx(self) -> pd.DatetimeIndex:
@@ -675,7 +672,7 @@ class TestCommunityBillingReport:
 
 
 # ---------------------------------------------------------------------------
-# Task-34 step-7: TestCommunityBillingAB + TestFleetRunCommunityBillingCLI (RED)
+# TestCommunityBillingAB + TestFleetRunCommunityBillingCLI
 # ---------------------------------------------------------------------------
 
 class TestCommunityBillingAB:
@@ -746,9 +743,8 @@ class TestCommunityBillingAB:
 class TestFleetRunCommunityBillingCLI:
     """CLI integration test: fleet run on bristol-community.yaml produces billing section.
 
-    Weather comes from clear_june_tmy.  Step-7 RED for the
-    _print_community_section billing rows (implemented in step-8) and the
-    --community-report billing section (implemented in step-6).
+    Weather comes from clear_june_tmy.  Covers the _print_community_section
+    billing rows and the --community-report billing section.
     """
 
     def test_community_report_has_billing_section(self, tmp_path: Path) -> None:

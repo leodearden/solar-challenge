@@ -5,8 +5,7 @@
 Tests the cross-task seam: board scenario YAML → parse_finance_config →
 project_multi_year → project_economics.mean_fleet_surplus_per_year_gbp.
 
-Step-1 (RED) → Step-2 (GREEN): field-fill assertion on the YAML literal.
-Steps 3–6 (GREEN on arrival): seam-verification that the consuming math
+Field-fill assertion on the YAML literal, then seam verification that the consuming math
 (W2-CR2, project_multi_year._simulate_age) propagates the band value into project surplus.
 """
 from __future__ import annotations
@@ -22,7 +21,7 @@ SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-f
 
 
 # ---------------------------------------------------------------------------
-# Step-1 RED / Step-2 GREEN: field-fill assertion
+# Field-fill assertion
 # ---------------------------------------------------------------------------
 
 
@@ -30,8 +29,7 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
     """Board scenario finance.grid_services_income_per_kw_per_year_gbp must equal
     resolve_grid_services_band("central") == £12.0/kW.
 
-    RED on base: YAML field is currently 0.0 != 12.0.
-    GREEN after step-2 YAML edit (12.0 written directly with provenance comment).
+    The YAML writes 12.0 directly, with a provenance comment.
 
     Also asserts the scenario's flex_band key lowers to "central" to document
     provenance: the value derives from this band.

@@ -1,11 +1,14 @@
 """Tests for solar_challenge.community module.
 
-TDD test suite for:
-  - CommunityConfig / CommunityBillingConfig (step-1 / step-2)
-  - simulate_community p2p netting (step-3 / step-4)
-  - validate_community_balance (step-5 / step-6)
-  - time-of-use import billing via simulate_community
-  - CommunityResults billing fields via simulate_community (task-34 step-3 / step-4)
+Test classes, in file order:
+  - TestCommunityConfig: CommunityConfig / CommunityBillingConfig validation
+  - TestSimulateCommunityP2P: simulate_community p2p netting
+  - TestValidateCommunityBalance: validate_community_balance
+  - TestSimulateCommunityBattery: the community_battery dispatch path
+  - TestCommunityBillingTimeOfUse: time-of-use import billing via simulate_community
+  - TestCommunityBillingSavings: CommunityResults billing fields via simulate_community
+  - TestCommunityResultsSharingMode: sharing_mode carried onto CommunityResults
+  - TestCommunityRowLength: the row length simulate_community bills each row over
 """
 from __future__ import annotations
 
@@ -119,7 +122,7 @@ def _make_fleet_from_sim_results(per_home: list[SimulationResults]) -> FleetResu
 # ---------------------------------------------------------------------------
 
 class TestCommunityConfig:
-    """RED tests for CommunityConfig validation, frozen, and picklable."""
+    """CommunityConfig validates its fields, is frozen and survives pickling."""
 
     def test_valid_p2p_config(self) -> None:
         """p2p config with no community_battery constructs OK."""
@@ -187,7 +190,7 @@ class TestCommunityConfig:
 # ---------------------------------------------------------------------------
 
 class TestSimulateCommunityP2P:
-    """RED tests for simulate_community p2p netting on synthetic data."""
+    """simulate_community nets surplus against deficit peer-to-peer on synthetic data."""
 
     @pytest.fixture
     def index(self) -> pd.DatetimeIndex:
@@ -286,7 +289,7 @@ class TestSimulateCommunityP2P:
 # ---------------------------------------------------------------------------
 
 class TestValidateCommunityBalance:
-    """RED tests for validate_community_balance."""
+    """validate_community_balance accepts balanced results and rejects unbalanced ones."""
 
     @pytest.fixture
     def index(self) -> pd.DatetimeIndex:
@@ -408,7 +411,7 @@ class TestValidateCommunityBalance:
 
 
 # ---------------------------------------------------------------------------
-# TestSimulateCommunityBattery (step-1 RED, step-3 RED boundary)
+# TestSimulateCommunityBattery
 # ---------------------------------------------------------------------------
 
 class TestSimulateCommunityBattery:
@@ -554,7 +557,7 @@ class TestSimulateCommunityBattery:
         pd.testing.assert_index_equal(result.battery_discharge.index, index5)
         pd.testing.assert_index_equal(result.battery_soc.index, index5)
 
-    # --- boundary tests (step-3 RED/boundary) ---
+    # --- boundary tests ---
 
     def test_community_balance_holds_with_cb(
         self, fleet5: FleetResults, cb_cfg: CommunityConfig
@@ -683,7 +686,7 @@ class TestSimulateCommunityBattery:
 
 
 # ---------------------------------------------------------------------------
-# Task-510: TestCommunityBillingTimeOfUse
+# TestCommunityBillingTimeOfUse
 # ---------------------------------------------------------------------------
 
 class TestCommunityBillingTimeOfUse:
@@ -706,11 +709,11 @@ class TestCommunityBillingTimeOfUse:
 
 
 # ---------------------------------------------------------------------------
-# Task-34 step-3: TestCommunityBillingSavings (RED)
+# TestCommunityBillingSavings
 # ---------------------------------------------------------------------------
 
 class TestCommunityBillingSavings:
-    """RED unit tests for billing fields on CommunityResults via simulate_community.
+    """Billing fields on CommunityResults via simulate_community.
 
     Uses a deterministic 2-step hourly fleet:
       exporter: gen=[4,4], dem=[1,1] → export=[3,3], import=[0,0]
@@ -849,7 +852,7 @@ class TestCommunityBillingSavings:
 
 
 # ---------------------------------------------------------------------------
-# Task-86 Step-1: TestCommunityResultsSharingMode
+# TestCommunityResultsSharingMode
 # ---------------------------------------------------------------------------
 
 class TestCommunityResultsSharingMode:
@@ -905,7 +908,7 @@ class TestCommunityResultsSharingMode:
 
 
 # ---------------------------------------------------------------------------
-# Task-408: TestCommunityRowLength
+# TestCommunityRowLength
 # ---------------------------------------------------------------------------
 
 class TestCommunityRowLength:

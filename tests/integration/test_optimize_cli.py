@@ -298,12 +298,12 @@ def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# §C — RED tests for generate_config_ranking_report Table (1) (step-1)
+# §C — generate_config_ranking_report Table (1)
 # ---------------------------------------------------------------------------
 
 
 class TestGenerateConfigRankingReportTable1:
-    """RED: generate_config_ranking_report renders the COST-RECOVERY RANK table."""
+    """generate_config_ranking_report renders the COST-RECOVERY RANK table."""
 
     def _make_sweep_two_feasible(self) -> "RankedSweep":  # type: ignore[name-defined]
         """Build a RankedSweep with two feasible configs and one infeasible."""
@@ -525,12 +525,12 @@ class TestGenerateConfigRankingReportTable1:
 
 
 # ---------------------------------------------------------------------------
-# §D — RED tests for generate_config_ranking_report Table (2) (step-3)
+# §D — generate_config_ranking_report Table (2)
 # ---------------------------------------------------------------------------
 
 
 class TestGenerateConfigRankingReportTable2:
-    """RED: generate_config_ranking_report renders the FIXED-15p TRADE-OFF table."""
+    """generate_config_ranking_report renders the FIXED-15p TRADE-OFF table."""
 
     def _make_sweep_with_pareto(self) -> "RankedSweep":  # type: ignore[name-defined]
         """Build a RankedSweep where some (not all) feasible configs are on the Pareto front."""
@@ -709,12 +709,12 @@ class TestGenerateConfigRankingReportTable2:
 
 
 # ---------------------------------------------------------------------------
-# §E — RED tests for sensitivity section + optional-panel omission (step-5)
+# §E — sensitivity section + optional-panel omission
 # ---------------------------------------------------------------------------
 
 
 class TestGenerateConfigRankingReportSensitivity:
-    """RED: generate_config_ranking_report renders SENSITIVITY section only when panel provided."""
+    """generate_config_ranking_report renders SENSITIVITY section only when panel provided."""
 
     def _make_sweep_one(self) -> "RankedSweep":  # type: ignore[name-defined]
         """A minimal single-config RankedSweep."""
@@ -846,12 +846,12 @@ class TestGenerateConfigRankingReportSensitivity:
 
 
 # ---------------------------------------------------------------------------
-# §F — RED tests for CLI registration + help (step-7)
+# §F — CLI registration + help
 # ---------------------------------------------------------------------------
 
 
 class TestOptimizeCLIHelp:
-    """RED: `optimize configs --help` exits 0 and lists required flags."""
+    """`optimize configs --help` exits 0 and lists required flags."""
 
     def test_optimize_help_shows_configs_command(self) -> None:
         """`optimize --help` must list the 'configs' subcommand."""
@@ -946,7 +946,7 @@ class TestOptimizeCLIHelp:
 
 
 # ---------------------------------------------------------------------------
-# §G — RED tests for fast injected-simulate E2E (step-9)
+# §G — fast injected-simulate E2E
 # ---------------------------------------------------------------------------
 
 

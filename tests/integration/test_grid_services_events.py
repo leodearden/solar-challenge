@@ -6,12 +6,13 @@ Tests the cross-task seam: capacity_at_events model → project_multi_year →
 compute_grid_services_at_events → annual_income_gbp replaces (not adds to)
 the flat per-kW term, gated by FinanceConfig.grid_services_model.
 
-Pre-1 (scaffold): shared helpers, no test functions.
-Step-1 (RED) → Step-2 (GREEN): B3 supersede takes effect.
-Step-3 (RED) → Step-4 (GREEN): Guard — capacity_at_events + events=None → ConfigurationError.
-Step-5 (RED) → Step-6 (GREEN): Compute-once / reuse-across-ages (PRD decision 7).
-Step-7 (GREEN on arrival): B4 backward-compat / flat bit-identical regression.
-Step-8 (GREEN on arrival): B5 solve-still-holds + I4 rate-independence.
+Covers, after the shared helpers:
+- B3: supersede takes effect.
+- Guard: capacity_at_events + events=None → ConfigurationError.
+- Compute-once / reuse-across-ages (PRD decision 7).
+- B4: backward-compat / flat bit-identical regression.
+- B5: solve-still-holds + I4 rate-independence.
+- ε: the finance report and the CLI render the capacity-at-events line.
 """
 from __future__ import annotations
 
@@ -129,7 +130,7 @@ def _isolate_gs_component(
 
 
 # ---------------------------------------------------------------------------
-# Step-1 (RED) → Step-2 (GREEN): B3 — supersede takes effect
+# B3 — supersede takes effect
 # ---------------------------------------------------------------------------
 
 
@@ -139,10 +140,9 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     Isolated grid_services component from the delta (rev_events - rev_flat0)
     EQUALS compute_grid_services_at_events directly AND differs from the flat term.
 
-    RED on base: _simulate_age always computes the flat term, so the isolated delta
-    equals the flat increment (0, since flat rate=0) and the event-derived figure
-    is positive — first assertion fails.
-    GREEN after step-2: the capacity_at_events branch replaces the flat term.
+    The capacity_at_events branch replaces the flat term: were the flat term still
+    computed, the isolated delta would equal the flat increment (0, since flat
+    rate=0) while the event-derived figure is positive.
     """
     from solar_challenge.gridservices import (
         GridServicesEventsConfig,
@@ -178,7 +178,7 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     # I3: isolated == event-derived (supersede, not add)
     assert isolated_gs == pytest.approx(expected_gs, rel=1e-6), (
         f"Isolated gs component ({isolated_gs:.4f}) must equal event-derived figure "
-        f"({expected_gs:.4f}). RED if _simulate_age still uses the flat term."
+        f"({expected_gs:.4f}). The flat term must not be used."
     )
 
     # Teeth: event figure ≠ flat term for a non-zero flat rate
@@ -196,7 +196,7 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-3 (RED) → Step-4 (GREEN): Guard — None events → ConfigurationError
+# Guard — None events → ConfigurationError
 # ---------------------------------------------------------------------------
 
 
@@ -206,9 +206,7 @@ def test_guard_capacity_at_events_with_events_none_raises_configuration_error() 
     α permits grid_services_events=None even when model='capacity_at_events'
     (α only validates the selector field; δ is the consumer that must guard this).
 
-    RED after step-2: the transient `assert finance.grid_services_events is not None`
-    raises AssertionError — pytest.raises(ConfigurationError) does not match.
-    GREEN after step-4: assert replaced with explicit ConfigurationError guard.
+    An explicit ConfigurationError guard, not a bare assert, rejects the missing events.
     """
     from solar_challenge.config import ConfigurationError  # type: ignore[attr-defined]
 
@@ -230,7 +228,7 @@ def test_guard_capacity_at_events_with_events_none_raises_configuration_error() 
 
 
 # ---------------------------------------------------------------------------
-# Step-5 (RED) → Step-6 (GREEN): Compute-once / reuse-across-ages
+# Compute-once / reuse-across-ages
 # ---------------------------------------------------------------------------
 
 
@@ -245,9 +243,8 @@ def test_compute_once_event_figure_reused_across_ages(monkeypatch: pytest.Monkey
     With asset_life_years=25 → seed_ages=[0,12,24] (3 ages) + bisection trial
     nodes → ≥3 _simulate_age calls without memoization.
 
-    RED after step-4: per-age implementation calls the function for every
-    _simulate_age invocation → call count ≥ 3.
-    GREEN after step-6: first-call memoization → count == 1.
+    First-call memoization keeps the count at 1; a per-age implementation would
+    call the function for every _simulate_age invocation (count ≥ 3).
     """
     import solar_challenge.gridservices as gs_module
     from solar_challenge.gridservices import (
@@ -283,7 +280,7 @@ def test_compute_once_event_figure_reused_across_ages(monkeypatch: pytest.Monkey
     assert call_count["n"] == 1, (
         f"compute_grid_services_at_events must be called exactly once per "
         f"project_multi_year run; got {call_count['n']}. "
-        f"RED if not memoized (step-6 adds the closure-captured memo dict)."
+        f"The figure must be memoized across ages."
     )
 
 
@@ -406,7 +403,7 @@ def test_compute_once_memo_reused_on_bisection_path(monkeypatch: pytest.MonkeyPa
 
 
 # ---------------------------------------------------------------------------
-# Step-7 (GREEN on arrival): B4 — flat model bit-identical regression
+# B4 — flat model bit-identical regression
 # ---------------------------------------------------------------------------
 
 
@@ -419,8 +416,8 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
         The event config is inert unless grid_services_model=='capacity_at_events'.
     (3) Flat curve ≠ capacity_at_events curve for the same fleet (teeth).
 
-    GREEN on arrival: the single conditional in step-2/step-6 preserves the flat path
-    char-for-char and ignores grid_services_events when model is "flat".
+    The single conditional on the model preserves the flat path char-for-char and
+    ignores grid_services_events when model is "flat".
     """
     from solar_challenge.finance import FinanceConfig, project_multi_year
     from solar_challenge.gridservices import GridServicesEventsConfig
@@ -474,7 +471,7 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-8 (GREEN on arrival): B5 — solve-still-holds + I4 rate-independence
+# B5 — solve-still-holds + I4 rate-independence
 # ---------------------------------------------------------------------------
 
 
@@ -489,7 +486,7 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
         own_use_rate_pence_per_kwh (event income does not depend on the CBS tariff,
         so the affine reconstruction in solve_cost_recovery_rate stays valid).
 
-    GREEN on arrival: event income (like the flat term) is rate-independent
+    Event income (like the flat term) is rate-independent
     (own_use_rate never enters physical dispatch or gridservices computation),
     so the existing affine reconstruction (finance.py:1789-1802) remains exact.
     """
@@ -565,7 +562,7 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-1 (RED) → Step-2 (GREEN): ε — finance report renders capacity-at-events line
+# ε — finance report renders capacity-at-events line
 # ---------------------------------------------------------------------------
 
 
@@ -578,10 +575,8 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
       - the formatted annual £ (event-derived)
       - the per-window avail_kW value
 
-    RED because generate_finance_report has no grid_services_at_events param yet
-    (TypeError on the keyword argument).
-    GREEN after step-2 adds the Optional[GridServicesAtEvents] param and renders
-    the line inside the existing flex-value block.
+    The Optional[GridServicesAtEvents] param renders the line inside the existing
+    flex-value block.
     """
     from solar_challenge.finance import FinanceConfig, bill_distribution
     from solar_challenge.flex import resolve_flex_band
@@ -633,7 +628,7 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
         "Synthetic in-window fleet must yield positive annual event income"
     )
 
-    # Call generate_finance_report with the new param (RED: TypeError before step-2)
+    # Call generate_finance_report with the grid_services_at_events param
     report = generate_finance_report(
         dist,
         scenario_name="Epsilon-Events-Test",
@@ -660,7 +655,7 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-3 (RED) → Step-4 (GREEN): ε — CLI finance run emits event-derived line
+# ε — CLI finance run emits event-derived line
 # ---------------------------------------------------------------------------
 
 
@@ -674,10 +669,8 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
       - a positive event-derived £ figure in output
       - (after YAML flip) the supersede inequality: event income ≠ flat_rate × Σ kW
 
-    RED because: (a) the board YAML is still flat → CLI computes no event figure
-    → no "Grid services (capacity-at-events)" line in output; (b) cli/finance.py
-    does not yet compute/pass grid_services_at_events to generate_finance_report.
-    GREEN after step-4: YAML flipped to capacity_at_events + CLI wired up.
+    The board YAML selects capacity_at_events and the CLI passes the computed
+    grid_services_at_events to generate_finance_report.
     """
     from pathlib import Path
 
@@ -700,7 +693,7 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
         f"CLI exited {result.exit_code}. Output:\n{result.output}"
     )
 
-    # Main assertion (RED before step-4): the capacity-at-events line must appear
+    # Main assertion: the capacity-at-events line must appear
     assert "Grid services (capacity-at-events)" in result.output, (
         f"Expected 'Grid services (capacity-at-events)' line in output.\n{result.output}"
     )

@@ -66,12 +66,12 @@ def _make_solution(
 
 
 # ---------------------------------------------------------------------------
-# §B — RED tests for output.py cost-recovery block (step-1 / step-3)
+# §B — output.py cost-recovery block
 # ---------------------------------------------------------------------------
 
 
 class TestGenerateFinanceReportCostRecoveryBasic:
-    """RED: generate_finance_report accepts cost_recovery kwarg and renders a block."""
+    """generate_finance_report accepts cost_recovery kwarg and renders a block."""
 
     def test_cost_recovery_section_heading_present(self) -> None:
         """Report must contain a Cost-Recovery section heading when cost_recovery is provided."""
@@ -158,12 +158,12 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 
 
 # ---------------------------------------------------------------------------
-# §C — RED tests for full board-readable content (step-3)
+# §C — full board-readable content
 # ---------------------------------------------------------------------------
 
 
 class TestGenerateFinanceReportCostRecoveryFull:
-    """RED: full board-readable content — distribution table, binding labels."""
+    """Full board-readable content — distribution table, binding labels."""
 
     def test_outlay_distribution_renders(self) -> None:
         """Cost-recovery block must render the per-home total-outlay distribution at solved rate."""
@@ -308,12 +308,12 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
 
 # ---------------------------------------------------------------------------
-# §D — RED tests for CLI --cost-recovery flag existence (step-5)
+# §D — CLI --cost-recovery flag existence
 # ---------------------------------------------------------------------------
 
 
 class TestFinanceCLICostRecoveryHelp:
-    """RED: `finance run --help` must list the --cost-recovery flag."""
+    """`finance run --help` lists the --cost-recovery flag."""
 
     def test_help_exits_zero(self) -> None:
         """`finance run --help` must exit 0."""
@@ -479,7 +479,7 @@ def _write_interior_scenario(tmp_path: "Path", n_homes: int = 5) -> "Path":  # t
 
 
 # ---------------------------------------------------------------------------
-# §F — Module-scoped fixture + RED end-to-end CLI tests (step-7)
+# §F — Module-scoped fixture + end-to-end CLI tests
 # ---------------------------------------------------------------------------
 
 
