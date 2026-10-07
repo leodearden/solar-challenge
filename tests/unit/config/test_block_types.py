@@ -5,11 +5,17 @@ An unknown type is refused, naming every supported type. Each type refuses a blo
 it requires, and reads the numbers it takes as floats.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 
-from solar_challenge.config import ConfigurationError, parse_tariff_config
+from solar_challenge.config import (
+    ConfigurationError,
+    DistributionSpec,
+    ProportionalDistribution,
+    parse_fleet_distribution_config,
+    parse_tariff_config,
+)
 
 _FULL_PERIOD: dict[str, Any] = {"start_time": "00:00", "end_time": "00:00", "rate_per_kwh": 0.25}
 
@@ -87,6 +93,78 @@ _INTEGER_RATE_TARIFF_BLOCKS = [
 ]
 
 
+_SPEC_PATH = "fleet_distribution.battery.capacity_kwh"
+
+
+def _parsed_distribution_spec(spec: object) -> DistributionSpec:
+    """Parse *spec* as the capacity of the battery in a one-home ``fleet_distribution:`` block."""
+    fleet = parse_fleet_distribution_config(
+        {"n_homes": 1, "pv": {"capacity_kw": 4.0}, "battery": {"capacity_kwh": spec}}
+    )
+    assert fleet.battery is not None
+    return fleet.battery.capacity_kwh
+
+
+_NON_MAPPING_DISTRIBUTION_SPECS = [
+    pytest.param("5kWh", id="string"),
+    pytest.param([5.0], id="list"),
+]
+
+_DISTRIBUTION_SPECS_NAMING_NO_TYPE = [
+    pytest.param({"value": 5.0}, id="absent-type"),
+    pytest.param({"type": None, "value": 5.0}, id="null-type"),
+]
+
+_UNKNOWN_DISTRIBUTION_TYPES = [
+    pytest.param("lognormal", id="unknown-name"),
+    pytest.param(3, id="integer"),
+    pytest.param(["normal"], id="list"),
+]
+
+_DISTRIBUTION_SPECS_LACKING_A_REQUIRED_KEY = [
+    pytest.param(
+        {"type": "weighted_discrete", "values": [5.0]},
+        f"weighted_discrete distribution for '{_SPEC_PATH}' requires 'values' and 'weights'",
+        id="weighted_discrete",
+    ),
+    pytest.param(
+        {"type": "normal", "mean": 5.0},
+        f"normal distribution for '{_SPEC_PATH}' requires 'mean' and 'std'",
+        id="normal",
+    ),
+    pytest.param(
+        {"type": "uniform", "min": 5.0},
+        f"uniform distribution for '{_SPEC_PATH}' requires 'min' and 'max'",
+        id="uniform",
+    ),
+    pytest.param(
+        {"type": "fixed"},
+        f"fixed distribution for '{_SPEC_PATH}' requires 'value'",
+        id="fixed",
+    ),
+    pytest.param(
+        {"type": "shuffled_pool", "values": [5.0]},
+        f"shuffled_pool distribution for '{_SPEC_PATH}' requires 'values' and 'counts'",
+        id="shuffled_pool",
+    ),
+    pytest.param(
+        {"type": "proportional_to", "multiplier": 2.0},
+        f"proportional_to distribution for '{_SPEC_PATH}' requires 'source'",
+        id="proportional_to",
+    ),
+]
+
+_MULTIPLIER_MAPPINGS_THAT_ARE_NO_SWEEP = [
+    pytest.param({"min": 0.5, "max": 2.0, "steps": 3}, id="untyped"),
+    pytest.param({"type": "normal", "mean": 1.0, "std": 0.1}, id="other-type"),
+]
+
+_FIXED_SPEC_VALUES = [
+    pytest.param(None, None, id="null"),
+    pytest.param(5, 5.0, id="integer"),
+]
+
+
 class TestTariffTypes:
     """Tests for the tariff types a tariff: block can name."""
 
@@ -121,3 +199,74 @@ class TestTariffTypes:
         assert [(type(period.rate_per_kwh), period.rate_per_kwh) for period in tariff.periods] == [
             (float, rate) for rate in rates
         ]
+
+
+class TestDistributionSpecTypes:
+    """Tests for the distribution-spec types a distribution parameter can name."""
+
+    @pytest.mark.parametrize("spec", _NON_MAPPING_DISTRIBUTION_SPECS)
+    def test_spec_that_is_no_number_null_or_mapping_is_refused(self, spec: object) -> None:
+        """A spec that is not a number, null or a mapping is refused, naming its path."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_distribution_spec(spec)
+        assert str(refusal.value) == (
+            f"Invalid distribution spec for '{_SPEC_PATH}': expected number, null, or dict"
+        )
+
+    @pytest.mark.parametrize("spec", _DISTRIBUTION_SPECS_NAMING_NO_TYPE)
+    def test_mapping_naming_no_type_is_refused(self, spec: dict[str, Any]) -> None:
+        """A mapping whose type is absent or null is refused, naming the spec's path."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_distribution_spec(spec)
+        assert str(refusal.value) == f"Distribution for '{_SPEC_PATH}' requires 'type' field"
+
+    @pytest.mark.parametrize("spec_type", _UNKNOWN_DISTRIBUTION_TYPES)
+    def test_unknown_type_is_refused_naming_every_supported_type(
+        self, spec_type: object
+    ) -> None:
+        """A type that is no supported name, whatever its kind, is refused as unknown."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_distribution_spec({"type": spec_type})
+        assert str(refusal.value) == (
+            f"Unknown distribution type '{spec_type}' for '{_SPEC_PATH}'. Supported: "
+            "weighted_discrete, normal, uniform, fixed, shuffled_pool, proportional_to"
+        )
+
+    @pytest.mark.parametrize(("spec", "message"), _DISTRIBUTION_SPECS_LACKING_A_REQUIRED_KEY)
+    def test_spec_lacking_a_required_key_is_refused_naming_the_key(
+        self, spec: dict[str, Any], message: str
+    ) -> None:
+        """A spec lacking a key its type requires is refused, naming the type, the path and the key."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_distribution_spec(spec)
+        assert str(refusal.value) == message
+
+    @pytest.mark.parametrize("multiplier", _MULTIPLIER_MAPPINGS_THAT_ARE_NO_SWEEP)
+    def test_proportional_to_multiplier_mapping_that_is_no_sweep_is_refused(
+        self, multiplier: dict[str, Any]
+    ) -> None:
+        """A proportional_to multiplier given as a mapping must be a sweep."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_distribution_spec(
+                {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": multiplier}
+            )
+        assert str(refusal.value) == (
+            f"proportional_to multiplier dict for '{_SPEC_PATH}' must have type='sweep'"
+        )
+
+    @pytest.mark.parametrize(("value", "expected"), _FIXED_SPEC_VALUES)
+    def test_fixed_spec_is_its_value_as_a_float(
+        self, value: Optional[int], expected: Optional[float]
+    ) -> None:
+        """A fixed spec is its value read as a float, or None for a null value."""
+        parsed = _parsed_distribution_spec({"type": "fixed", "value": value})
+        assert (type(parsed), parsed) == (type(expected), expected)
+
+    def test_proportional_to_spec_naming_only_its_source_has_multiplier_one_and_offset_zero(
+        self,
+    ) -> None:
+        """A proportional_to spec that gives no multiplier and no offset scales its source by 1.0, plus 0.0."""
+        parsed = _parsed_distribution_spec({"type": "proportional_to", "source": "pv.capacity_kw"})
+        assert parsed == ProportionalDistribution(
+            source="pv.capacity_kw", multiplier=1.0, offset=0.0
+        )
