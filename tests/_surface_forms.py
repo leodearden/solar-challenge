@@ -26,8 +26,9 @@ attribute the body only annotates, as an instance attribute is declared, is spel
 attribute, then its annotation. A ClassVar annotation declares a class variable, not an
 attribute, so its name is a member only if the body assigns it a value, as a constant.
 A dataclass field its constructor does not take, as field(init=False) declares one, is
-spelled as an attribute too, because the class form pins only the fields the
-constructor takes. A property that can be set or deleted says so in its kind, as
+spelled as an attribute too, whether or not it has a default, since the class form pins
+only the fields the constructor takes and a default is the field's, not a class
+constant. A property that can be set or deleted says so in its kind, as
 property[settable, deletable] does, and an abstract member's form begins with abstract.
 An inherited member belongs to the class that defines it.
 
@@ -104,10 +105,10 @@ def member_forms(cls: type) -> dict[str, str]:
     """The form of each public member of *cls*, by name.
 
     A member is a public name that *cls*'s own body defines, or declares as an instance
-    attribute by annotating it alone, except those surface_form(cls) already pins: the
-    dataclass fields its constructor's signature takes, and an Enum's members. The names
-    the body only annotates come first, in annotation order, then the names it defines,
-    in class-body order.
+    attribute by annotating it alone or as a dataclass field, except those
+    surface_form(cls) already pins: the dataclass fields its constructor's signature
+    takes, and an Enum's members. The attributes the body declares come first, in
+    annotation order, then the other names it defines, in class-body order.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -344,7 +345,7 @@ def _fields(cls: type) -> dict[str, dataclasses.Field[object]]:
 
 @dataclasses.dataclass(frozen=True)
 class _AnnotatedAttribute:
-    """The annotation of a name a class body only annotates, as an instance attribute is declared."""
+    """The annotation of a name a class body declares as an instance attribute, by annotating it alone or as a dataclass field."""
 
     annotation: object
 
@@ -360,25 +361,26 @@ def _public_members(cls: type) -> dict[str, object]:
 
 
 def _own_members(cls: type) -> dict[str, object]:
-    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each name it defines, as its value."""
+    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each other name it defines, as its value."""
     declared = {
         name: _AnnotatedAttribute(annotation)
         for name, annotation in _declared_attributes(cls).items()
     }
-    return {**declared, **vars(cls)}
+    defined = {name: value for name, value in vars(cls).items() if name not in declared}
+    return declared | defined
 
 
 def _declared_attributes(cls: type) -> dict[str, object]:
-    """The annotation of each attribute *cls*'s own body declares, by name: each name it only annotates, other than as a ClassVar.
+    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; a dataclass field's default is the field's, not a class value.
 
     inspect.get_annotations reads the body's own annotations, never a base's, and leaves
     a string annotation a string.
     """
-    defined = vars(cls)
+    class_values = vars(cls).keys() - _fields(cls).keys()
     return {
         name: annotation
         for name, annotation in inspect.get_annotations(cls).items()
-        if name not in defined and not _is_class_var(annotation)
+        if name not in class_values and not _is_class_var(annotation)
     }
 
 
