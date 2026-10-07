@@ -20,7 +20,7 @@ PresetType = Literal["home", "fleet"]
 class PresetNameTaken(ValueError):
     """A save under a name a saved preset of the other type holds; the message names the name and that type."""
 
-    def __init__(self, name: str, holder_type: str) -> None:
+    def __init__(self, name: str, holder_type: PresetType) -> None:
         super().__init__(f"A saved {holder_type} preset is already named {name!r}")
 
 
