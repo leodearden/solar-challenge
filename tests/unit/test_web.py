@@ -1,5 +1,6 @@
 """Tests for the Flask web dashboard module."""
 
+import dataclasses
 import json
 import re
 import uuid
@@ -345,25 +346,6 @@ def _make_sim_results(days: int = 3) -> SimulationResults:
     )
 
 
-def _make_summary_dict() -> dict:
-    """Return a minimal summary dictionary for testing sankey_diagram."""
-    return {
-        "total_generation_kwh": 100.0,
-        "total_demand_kwh": 80.0,
-        "total_self_consumption_kwh": 50.0,
-        "total_grid_import_kwh": 30.0,
-        "total_grid_export_kwh": 40.0,
-        "total_battery_charge_kwh": 10.0,
-        "total_battery_discharge_kwh": 8.0,
-        "peak_generation_kw": 4.0,
-        "peak_demand_kw": 2.5,
-        "self_consumption_ratio": 0.5,
-        "grid_dependency_ratio": 0.375,
-        "export_ratio": 0.4,
-        "simulation_days": 3,
-    }
-
-
 def _steady_run(
     days: int,
     *,
@@ -410,14 +392,34 @@ class TestChartFunctions:
         parsed = json.loads(output)
         assert "data" in parsed
 
-    def test_sankey_returns_json(self) -> None:
-        """Test sankey_diagram returns a non-empty JSON string."""
-        summary = _make_summary_dict()
-        output = sankey_diagram(summary)
-        assert isinstance(output, str)
-        assert len(output) > 2
-        parsed = json.loads(output)
-        assert "data" in parsed
+    def test_sankey_links_are_the_summarys_energy_flows(self) -> None:
+        """Each link is one of the summary's flows, PV used directly being self-consumption less battery discharge.
+
+        The summary is calculate_summary's, so renaming a field the sankey reads fails this test.
+        """
+        summary = dataclasses.replace(
+            calculate_summary(
+                make_sim_results(self_kwh=50.0, export_kwh=40.0, import_kwh=30.0, discharge_kwh=8.0, days=1)
+            ),
+            total_battery_charge_kwh=10.0,
+        )
+
+        sankey = json.loads(sankey_diagram(summary))["data"][0]
+        labels = sankey["node"]["label"]
+        links = {
+            (labels[source], labels[target]): kwh
+            for source, target, kwh in zip(
+                sankey["link"]["source"], sankey["link"]["target"], sankey["link"]["value"], strict=True
+            )
+        }
+
+        assert links == {
+            ("PV Generation", "Demand"): 42.0,
+            ("PV Generation", "Battery"): 10.0,
+            ("PV Generation", "Export"): 40.0,
+            ("Grid", "Demand"): 30.0,
+            ("Battery", "Demand"): 8.0,
+        }
 
     def test_power_flow_timeline_returns_json(self) -> None:
         """Test power_flow_timeline returns a non-empty JSON string."""
