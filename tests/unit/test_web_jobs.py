@@ -2,6 +2,7 @@
 
 import collections
 import json
+import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -618,6 +619,19 @@ def _run_storage(tmp_path: Path) -> RunStorage:
     return storage
 
 
+def _refuse_new_rows(storage: RunStorage, table: str) -> None:
+    """Make storage's database refuse every row inserted into *table*."""
+    with get_db(storage.db_path) as conn:
+        conn.execute(
+            f"CREATE TRIGGER refuse_new_{table} BEFORE INSERT ON {table} "
+            f"BEGIN SELECT RAISE(ABORT, 'the database refuses new {table} rows'); END"
+        )
+
+
+def _ids_with_a_status(manager: JobManager, ids: list[str]) -> list[str]:
+    return [job_id for job_id in ids if manager.get_job_status(job_id) is not None]
+
+
 def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + 30
     while True:
@@ -723,6 +737,27 @@ class TestJobManagerIds:
         assert {job_id, status["run_id"]} == set(ids.issued)
 
 
+class TestJobManagerRefusedRows:
+    """Tests for a submit whose run or job row the database refuses."""
+
+    @pytest.mark.parametrize("table", ["runs", "jobs"])
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_job_whose_row_the_database_refuses_leaves_no_record(
+        self, submit_job: Callable[[JobManager, Path], str], table: str, tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        _refuse_new_rows(storage, table)
+        ids = _CountingIds()
+        manager = JobManager(max_workers=1, new_id=ids)
+
+        with pytest.raises(sqlite3.IntegrityError, match=f"refuses new {table} rows"):
+            submit_job(manager, tmp_path)
+
+        assert ids.issued
+        assert _ids_with_a_status(manager, ids.issued) == []
+        assert storage.list_runs() == []
+
+
 class TestJobManagerShutdown:
     """Tests for JobManager shutdown."""
 
@@ -735,15 +770,18 @@ class TestJobManagerShutdown:
             _submit_home_job(manager, tmp_path)
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
-    def test_a_refused_job_leaves_no_run_in_the_history(
+    def test_a_refused_job_leaves_no_record(
         self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
     ) -> None:
-        manager = JobManager(max_workers=1)
+        ids = _CountingIds()
+        manager = JobManager(max_workers=1, new_id=ids)
         manager.shutdown()
 
         with pytest.raises(RuntimeError, match="after shutdown"):
             submit_job(manager, tmp_path)
 
+        assert ids.issued
+        assert _ids_with_a_status(manager, ids.issued) == []
         assert _run_storage(tmp_path).list_runs() == []
 
     def test_shutdown_all_managers_shuts_down_every_live_manager(self, tmp_path: Path) -> None:
