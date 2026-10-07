@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the AI assistant's tool handlers, called directly rather than from a chat turn."""
 
+from datetime import date
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -751,6 +752,51 @@ class TestRunHomeSimulation:
             "Handler uses full-year fallback for days=None instead of the 7-day default"
         )
 
+    def test_start_and_end_sent_run_that_window_not_the_7_day_default(self, tmp_path: Path) -> None:
+        """A start and end the model sends are run as POST /api/simulate/home runs them, not overridden by the 7-day default."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        result = run_home_simulation(
+            {"pv_kw": 4, "location": "bristol", "start": "2024-03-01", "end": "2024-03-05"},
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
+
+        assert result == {"run_id": "run-h", "results_url": "/results/home/run-h"}
+        submitted = jm.submit_home_job.call_args.kwargs
+        assert (submitted["start_date"].date(), submitted["end_date"].date()) == (
+            date(2024, 3, 1),
+            date(2024, 3, 5),
+        )
+
+    def test_days_sent_with_start_and_end_returns_the_refusal_naming_what_was_sent(
+        self, tmp_path: Path
+    ) -> None:
+        """A days the model sends with a start and end is refused naming those values, never replaced by the default; nothing is submitted."""
+        from solar_challenge.web.assistant import run_home_simulation
+
+        jm = self._make_jm()
+        result = run_home_simulation(
+            {
+                "pv_kw": 4,
+                "location": "bristol",
+                "days": 30,
+                "start": "2024-03-01",
+                "end": "2024-03-05",
+            },
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
+
+        assert result == {
+            "error": "Invalid simulation parameters: days must not be sent with start or end, "
+            "got days 30 with start '2024-03-01' and end '2024-03-05'"
+        }
+        jm.submit_home_job.assert_not_called()
+
 
 class TestRunFleetSimulation:
     """Tests for run_fleet_simulation(params, job_manager, db_path, data_dir) -> dict."""
@@ -909,6 +955,33 @@ class TestRunFleetSimulation:
         )
         assert span != 365, (
             "Fleet handler uses full-year fallback for days=None instead of the 7-day default"
+        )
+
+    def test_fleet_start_and_end_sent_run_that_window_not_the_7_day_default(
+        self, tmp_path: Path
+    ) -> None:
+        """A start and end the model sends are the window the fleet runs, not overridden by the 7-day default."""
+        from solar_challenge.web.assistant import run_fleet_simulation
+
+        jm = self._make_jm()
+        result = run_fleet_simulation(
+            {
+                "n_homes": 2,
+                "pv_kw": 4,
+                "location": "bristol",
+                "start": "2024-03-01",
+                "end": "2024-03-05",
+            },
+            jm,
+            str(tmp_path / "t.db"),
+            str(tmp_path),
+        )
+
+        assert result == {"run_id": "run-f", "results_url": "/results/fleet/run-f"}
+        submitted = jm.submit_fleet_job.call_args.kwargs
+        assert (submitted["start_date"].date(), submitted["end_date"].date()) == (
+            date(2024, 3, 1),
+            date(2024, 3, 5),
         )
 
 
