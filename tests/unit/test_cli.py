@@ -87,6 +87,18 @@ class TestMainCLI:
         assert "No such option: --verbose" in " ".join(result.stderr.split())
 
 
+def _usage_line(result: Result) -> str:
+    """Return the line of a --help *result*'s stdout that holds "Usage:", failing the test with the whole stdout if none does.
+
+    The usage line names the command's positional arguments, which typer 0.26
+    renders upper-case (PV_KW) and typer 0.27 lower-case in braces ({pv_kw}).
+    """
+    for line in result.stdout.splitlines():
+        if "Usage:" in line:
+            return line
+    pytest.fail(f"the --help output has no Usage: line:\n{result.stdout}")
+
+
 class TestHomeCLI:
     """Tests for home subcommands."""
 
@@ -111,7 +123,7 @@ class TestHomeCLI:
         """Test home quick --help."""
         result = runner.invoke(app, ["home", "quick", "--help"])
         assert result.exit_code == 0
-        assert "PV_KW" in result.stdout
+        assert "pv_kw" in _usage_line(result).lower()
         assert "--days" in result.stdout
 
 
@@ -128,7 +140,7 @@ class TestFleetCLI:
         """Test fleet run --help."""
         result = runner.invoke(app, ["fleet", "run", "--help"])
         assert result.exit_code == 0
-        assert "CONFIG" in result.stdout
+        assert "config" in _usage_line(result).lower()
         assert "--start" in result.stdout
         assert "--output" in result.stdout
 
