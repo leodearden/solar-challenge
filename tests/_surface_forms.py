@@ -11,10 +11,11 @@ unlike 3.12, 3.13 renders pathlib.Path as pathlib._local.Path, and 3.14 renders 
 evaluated Optional[X] as X | None. So inspect lays out the signature, and each annotation
 is respelled: a union with bars, a typing alias by its builtin origin (a bare one, as
 List is, by that origin alone), an empty subscription, as tuple[()] is, with
-parentheses, a class by its qualified name without its module, Callable's parameter
-types as a bracketed list, and a forward reference, a string inside a generic included,
-by its name. A string annotation is spelled verbatim, never evaluated. Literal's values
-and Annotated's metadata are values, not annotations: each is spelled by its repr, so
+parentheses, a class by its qualified name without its module, an InitVar likewise,
+around its respelled type, as InitVar[float | None], Callable's parameter types as a
+bracketed list, and a forward reference, a string inside a generic included, by its
+name. A string annotation is spelled verbatim, never evaluated. Literal's values and
+Annotated's metadata are values, not annotations: each is spelled by its repr, so
 Literal['a'] never reads as Literal[a]. A ParamSpec's args and kwargs are spelled by
 their repr as well, P.args and P.kwargs, which keeps the two apart.
 
@@ -201,6 +202,8 @@ def _annotation_text(annotation: object) -> str:
         return "..."
     if isinstance(annotation, list):
         return f"[{_annotations_text(annotation)}]"
+    if isinstance(annotation, dataclasses.InitVar):
+        return f"InitVar[{_annotation_text(annotation.type)}]"
     if _is_bare_alias(annotation):
         return _annotation_text(typing.get_origin(annotation))
     if isinstance(annotation, (typing.ParamSpecArgs, typing.ParamSpecKwargs)):
