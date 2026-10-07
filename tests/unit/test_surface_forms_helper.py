@@ -21,7 +21,7 @@ import functools
 import importlib.util
 import pathlib
 import sys
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -429,6 +429,22 @@ def test_a_dataclass_field_its_constructor_takes_is_not_a_member_but_a_class_var
         tags: list[str] = field(default_factory=list)
 
     assert member_forms(Site) == {"LAT": "float"}
+
+
+def test_a_dataclass_init_only_variable_is_neither_a_member_nor_an_unset_attribute() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        LAT: ClassVar[float] = 51.45
+        kwh: float
+        scale: InitVar[float]
+        offset: "InitVar[float]"
+        floor: InitVar[float] = 0.0
+
+        def __post_init__(self, scale: float, offset: float, floor: float) -> None:
+            object.__setattr__(self, "kwh", max(self.kwh * scale + offset, floor))
+
+    assert member_forms(Reading) == {"LAT": "float"}
+    assert unset_attributes(Reading) == set()
 
 
 def test_an_enum_member_is_not_a_class_member_but_an_enum_method_is() -> None:
