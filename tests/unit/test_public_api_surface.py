@@ -10,7 +10,10 @@ Concerns:
   H2 signature     — FROZEN_SURFACE pins each public name's surface form: a class's or
                      routine's signature, an Enum's members, a constant's type
                      (test_every_exported_signature_matches_frozen_surface)
-  H2 members       — FROZEN_MEMBERS pins each exported class's public members: its
+  H2 closure       — FROZEN_CLOSURE pins the surface form of each class outside __all__
+                     that the frozen surface names, directly or through another such class
+                     (test_every_class_the_frozen_surface_names_matches_frozen_closure)
+  H2 members      — FROZEN_MEMBERS pins each exported class's public members: its
                      methods, properties, class constants and declared attributes
                      (test_every_exported_class_member_matches_frozen_members,
                       test_exported_classes_inherit_only_from_exported_classes,
@@ -39,6 +42,7 @@ from collections.abc import Mapping
 import solar_challenge
 from tests._surface_forms import (
     member_forms,
+    named_classes,
     surface_form,
     undeclared_attributes,
     unset_attributes,
@@ -187,12 +191,28 @@ def _drift_message(
         for path, current in drifted.items()
     )
     return (
-        f"Exported surface forms differ from {table}:{symbols}\n"
+        f"Surface forms differ from {table}:{symbols}\n"
         "Every change to the frozen public API (review/briefing.yaml), an addition "
         "included, needs an 'Unreleased on main' release note in the 'Tag / release "
         "convention' section of docs/domain-library-consumption.md, landed in the same "
         f"commit as the {table} edit."
     )
+
+
+def _drifted(
+    frozen: Mapping[str, str], current: Mapping[str, str], *, absent: str
+) -> dict[str, str]:
+    """Map each path whose current form is not its frozen one to its current form.
+
+    *current*'s paths come first, in its order, then each frozen path *current* lacks,
+    whose current form reads *absent*.
+    """
+    missing = [path for path in frozen if path not in current]
+    return {
+        path: current.get(path, absent)
+        for path in [*current, *missing]
+        if current.get(path) != frozen.get(path)
+    }
 
 
 def test_every_exported_signature_matches_frozen_surface() -> None:
@@ -212,6 +232,67 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
         if form != FROZEN_SURFACE.get(name)
     }
     assert not drifted, _drift_message("FROZEN_SURFACE", FROZEN_SURFACE, drifted)
+
+
+# ---------------------------------------------------------------------------
+# H2 closure: the classes outside __all__ that the frozen surface names, directly
+# or through another such class, each with its frozen surface form
+#
+# A consumer needs them to use exported names: a ScenarioConfig is built from a
+# SimulationPeriod and HomeConfigs, and FleetResults.per_home_results holds
+# SimulationResults.  Each key is the path below solar_challenge of the module
+# that defines the class, then its qualified name, e.g. 'home.HomeConfig', in
+# path order; each value is the class's surface_form, on one line.
+# FROZEN_MEMBERS pins their members.  A class leaves this table when it joins
+# __all__.
+# ---------------------------------------------------------------------------
+FROZEN_CLOSURE: dict[str, str] = {}
+
+_SUBMODULE_PREFIX = f"{solar_challenge.__name__}."
+
+
+def _closure_classes() -> dict[str, type]:
+    """The classes outside __all__ that the frozen surface names, directly or through another such class, by path in path order.
+
+    The walk starts from every name in __all__ and follows each class it finds through
+    that class's own constructor and member forms, so the forms alone decide the set.
+    A class is outside __all__ unless it is an exported object, whatever its name.
+    """
+    exported = set(_exported_classes().values())
+    found: set[type] = set()
+    pending: list[object] = [
+        getattr(solar_challenge, name) for name in solar_challenge.__all__
+    ]
+    while pending:
+        new = {
+            cls
+            for cls in named_classes(pending.pop())
+            if cls.__module__.startswith(_SUBMODULE_PREFIX)
+            and cls not in exported
+            and cls not in found
+        }
+        found |= new
+        pending.extend(new)
+    by_path = {
+        f"{cls.__module__.removeprefix(_SUBMODULE_PREFIX)}.{cls.__qualname__}": cls
+        for cls in found
+    }
+    return dict(sorted(by_path.items()))
+
+
+def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
+    """H2 closure-lock: each class outside __all__ that the frozen surface names has the surface form FROZEN_CLOSURE pins.
+
+    Fails once, naming each drifted class with its frozen and current forms, in path
+    order.  A class a pinned form newly names counts as drifted, so its current form is
+    printed ready to paste; a pinned class no form names any longer is listed last, its
+    current form reading (not named by the frozen surface).
+    """
+    current = {path: surface_form(cls) for path, cls in _closure_classes().items()}
+    drifted = _drifted(
+        FROZEN_CLOSURE, current, absent="(not named by the frozen surface)"
+    )
+    assert not drifted, _drift_message("FROZEN_CLOSURE", FROZEN_CLOSURE, drifted)
 
 
 # ---------------------------------------------------------------------------
@@ -359,12 +440,7 @@ def test_every_exported_class_member_matches_frozen_members() -> None:
     current = _forms_by_member_path(
         {name: member_forms(cls) for name, cls in _exported_classes().items()}
     )
-    removed = [path for path in frozen if path not in current]
-    drifted = {
-        path: current.get(path, "(removed)")
-        for path in [*current, *removed]
-        if current.get(path) != frozen.get(path)
-    }
+    drifted = _drifted(frozen, current, absent="(removed)")
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
 
 
