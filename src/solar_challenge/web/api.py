@@ -523,9 +523,10 @@ def simulate_sweep() -> tuple[Response, int]:
         HTTP 400 for an unsupported parameter (the error lists the supported
         ones), a min, max or steps it cannot use, or a steps outside 2 to
         _MAX_SWEEP_POINTS (the error names the field and the value sent), an
-        invalid range, a base_config that is not a JSON object (the error
-        names the type sent), or a point whose home config is invalid, a
-        window parse_home_config refuses included.
+        invalid range, a min and max too far apart for the sweep's points to
+        be computed (the error names both), a base_config that is not a JSON
+        object (the error names the type sent), or a point whose home config
+        is invalid, a window parse_home_config refuses included.
         Every 400 comes before any job is submitted.
     """
     data = request_json_object()
@@ -555,6 +556,13 @@ def simulate_sweep() -> tuple[Response, int]:
         values = [min_val * ratio ** (i / (steps - 1)) for i in range(steps)]
     else:
         values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
+    if not all(math.isfinite(v) for v in values):
+        return jsonify({
+            "error": (
+                f"min {min_val!r} and max {max_val!r} are too far apart to sweep:"
+                " computing the points between them overflows a float"
+            ),
+        }), 400
 
     rounded_values = [round(v, 3) for v in values]
 
