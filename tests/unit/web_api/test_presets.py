@@ -1,10 +1,32 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the home preset endpoints: GET /api/presets, POST /api/presets and GET /api/presets/<name>."""
 
+import sqlite3
+import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+
 import pytest
 
 pytest.importorskip("flask")
+from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
+
+
+def _answers_to_saves_sent_together(app: Flask, *saves: tuple[str, dict[str, object]]) -> list[TestResponse]:
+    """Send each (path, JSON body) save from its own thread, and return the answers in order.
+
+    Another connection holds the database's write lock while the saves are sent and lets go
+    half a second later, so every save is in flight before any of them can write.
+    """
+    with closing(sqlite3.connect(app.config["DATABASE"], isolation_level=None)) as other_writer:
+        other_writer.execute("BEGIN IMMEDIATE")
+        with ThreadPoolExecutor(max_workers=len(saves)) as pool:
+            sent = [pool.submit(app.test_client().post, path, json=body) for path, body in saves]
+            time.sleep(0.5)
+            other_writer.execute("ROLLBACK")
+            return [answer.result(timeout=30) for answer in sent]
 
 
 class TestListPresets:
@@ -153,6 +175,22 @@ class TestSavePreset:
         assert (first.status_code, second.status_code) == (201, 201)
         assert second.get_json()["id"] == first.get_json()["id"]
         assert client.get("/api/presets/Again").get_json()["pv_kw"] == 2.0
+
+    @pytest.mark.parametrize(
+        ("rival_save", "statuses"),
+        [
+            pytest.param(("/api/presets", {"name": "Raced", "pv_kw": 2.0}), [201, 201], id="home-save"),
+            pytest.param(
+                ("/api/scenarios/save", {"name": "Raced", "config": {"n_homes": 9}}), [201, 409], id="fleet-save"
+            ),
+        ],
+    )
+    def test_saves_racing_for_a_new_name_answer_as_they_would_one_after_the_other(
+        self, app: Flask, rival_save: tuple[str, dict[str, object]], statuses: list[int]
+    ) -> None:
+        """Two saves racing for a new name are never a 500: two home saves both answer 201, and a home and a fleet save answer 201 and 409."""
+        answers = _answers_to_saves_sent_together(app, ("/api/presets", {"name": "Raced", "pv_kw": 1.0}), rival_save)
+        assert sorted(answer.status_code for answer in answers) == statuses
 
 
 class TestGetPreset:

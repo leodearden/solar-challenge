@@ -29,7 +29,9 @@ def save_config_preset(
 ) -> str:
     """Save *config* as the *preset_type* preset *name* and return the preset's id.
 
-    A preset of that type already named *name* keeps its id and takes *config*.
+    A preset of that type already named *name* keeps its id and takes *config*. The lookup
+    of *name* and the write share one write transaction, so saves of one name take effect
+    one after the other.
 
     Raises:
         PresetNameTaken: Writing nothing, when a saved preset of the other type holds *name*.
@@ -37,6 +39,7 @@ def save_config_preset(
     config_json = json.dumps(config)
     saved_at = datetime.now(timezone.utc).isoformat()
     with get_db(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         holder = conn.execute("SELECT id, type FROM config_presets WHERE name = ?", (name,)).fetchone()
         if holder is None:
             preset_id = str(uuid.uuid4())
