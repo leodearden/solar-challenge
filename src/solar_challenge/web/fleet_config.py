@@ -212,6 +212,11 @@ def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, 
 def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
     """Refuse the fleet form's *battery* block when it sets a dispatch strategy: every battery takes the form's dispatch_strategy.
 
+    config.py's grammar reads a battery block's dispatch_strategy, but the fleet form
+    spells the setting once, at its root:
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form` gives the form's
+    dispatch_strategy to every battery, over any the block sets.
+
     Raises:
         ValueError: If the block's dispatch_strategy is present and not null; the error
             names battery.dispatch_strategy, the form's dispatch_strategy and the value sent.
