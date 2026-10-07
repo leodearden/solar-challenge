@@ -51,7 +51,7 @@ class LaneJob:
 
 
 LANE_JOBS: tuple[LaneJob, ...] = (
-    # test_interpreter_matrix_lane.py checks its collection more strictly, one case per off-pin minor.
+    # test_interpreter_matrix_lane.py checks its COLLECTS_ONLY_ITS_SUITE more strictly: one case per off-pin minor.
     LaneJob(
         "interpreter-matrix",
         "tests/interpreter_matrix",

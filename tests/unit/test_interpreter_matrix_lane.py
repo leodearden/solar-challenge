@@ -36,19 +36,20 @@ def _interpreters_named_by(node_ids: Iterable[str]) -> list[str]:
 def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(
     project_root: Path, uv_probe_environment: dict[str, str]
 ) -> None:
-    """Run as the lane runs it, the interpreter-matrix job collects one case per off-pin admitted minor.
+    """Run as the lane runs it, the interpreter-matrix job collects one case per off-pin admitted minor, all in its suite.
 
     Each case's node-id must name its interpreter: that node-id is the only
     attribution a fix task filed by the lane carries.
     """
     collection = collect_lane_job(project_root, _MATRIX_JOB, env=uv_probe_environment)
 
+    outside = collection.node_ids_outside(_MATRIX_SUITE)
     expected = _off_pin_interpreters(project_root)
     collected = _interpreters_named_by(collection.node_ids)
-    assert collected == expected, (
+    assert not outside and collected == expected, (
         f"the {_MATRIX_JOB!r} lane job collected {collection.node_ids}; expected exactly one case per minor "
         f"requires-python admits other than the .python-version pin {python_version_pin(project_root)}, "
-        f"each node-id ending in its interpreter: {expected}"
+        f"each in {_MATRIX_SUITE}, its node-id ending in its interpreter: {expected}"
     )
 
 
