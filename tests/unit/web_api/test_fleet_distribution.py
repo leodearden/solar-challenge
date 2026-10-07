@@ -313,6 +313,21 @@ class TestFleetFromDistribution:
         assert resp.get_json()["error"] == message
         mock_job_manager.submit_fleet_job.assert_not_called()
 
+    def test_days_sent_with_start_and_end_returns_400_naming_them_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A fleet window set by both days and start/end is a 400 naming days, start and end as sent; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "start": "2024-03-01", "end": "2024-03-31"},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == (
+            "days must not be sent with start or end, "
+            "got days 1 with start '2024-03-01' and end '2024-03-31'"
+        )
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:

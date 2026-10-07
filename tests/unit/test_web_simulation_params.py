@@ -152,6 +152,61 @@ class TestParseDateRange:
         assert str(exc_info.value) == message
 
     @pytest.mark.parametrize(
+        ("data", "message"),
+        [
+            pytest.param(
+                {"days": 7, "start": "2024-01-01", "end": "2024-03-31"},
+                "days must not be sent with start or end, "
+                "got days 7 with start '2024-01-01' and end '2024-03-31'",
+                id="days-with-start-and-end",
+            ),
+            pytest.param(
+                {"days": 7, "start": "2024-03-01"},
+                "days must not be sent with start or end, got days 7 with start '2024-03-01'",
+                id="days-with-start",
+            ),
+            pytest.param(
+                {"days": 365, "end": "2024-03-31"},
+                "days must not be sent with start or end, got days 365 with end '2024-03-31'",
+                id="full-year-days-with-end",
+            ),
+        ],
+    )
+    def test_days_sent_with_start_or_end_is_refused_naming_each_value_sent(
+        self, data: dict, message: str
+    ) -> None:
+        """A body that sets its window by days and by a start or end is refused with a ValueError naming days and each date as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range(data)
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize(
+        ("data", "window"),
+        [
+            pytest.param(
+                {"days": None, "start": "2024-03-01", "end": "2024-03-05"},
+                ("2024-03-01", "2024-03-05"),
+                id="null-days-with-start-and-end",
+            ),
+            pytest.param(
+                {"days": 7, "start": "", "end": ""},
+                ("2024-06-01", "2024-06-07"),
+                id="days-with-empty-start-and-end",
+            ),
+            pytest.param(
+                {"days": 7, "start": None, "end": None},
+                ("2024-06-01", "2024-06-07"),
+                id="days-with-null-start-and-end",
+            ),
+        ],
+    )
+    def test_null_days_and_empty_or_null_start_and_end_read_as_not_sent(
+        self, data: dict, window: tuple[str, str]
+    ) -> None:
+        """A null days, and an empty or null start or end, read as not sent, so the body runs the window it does send."""
+        assert parse_date_range(data) == window
+
+    @pytest.mark.parametrize(
         ("days", "message"),
         [
             pytest.param(float("inf"), "days must be an integer, got inf", id="infinity"),
