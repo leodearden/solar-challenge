@@ -285,12 +285,14 @@ def list_presets() -> tuple[Response, int]:
 
 @api_bp.route("/presets", methods=["POST"])
 def save_preset() -> tuple[Response, int]:
-    """Save a configuration preset to the database.
+    """Save a home preset to the database.
 
-    Expects a JSON body with at least ``name`` and configuration fields.
+    Expects a JSON body with at least ``name`` and configuration fields. A ``type``, when sent,
+    must be 'home': fleet presets are saved through POST /api/scenarios/save.
 
     Returns:
-        JSON confirmation with the preset name, HTTP 201 on success.
+        JSON confirmation with the preset name and id, HTTP 201 on success; or the ``error``,
+        HTTP 400, for an empty name or a type other than 'home'.
     """
     import uuid as _uuid  # noqa: PLC0415
     from datetime import datetime, timezone  # noqa: PLC0415
@@ -300,6 +302,10 @@ def save_preset() -> tuple[Response, int]:
     if not name:
         return jsonify({"error": "Preset name is required"}), 400
     preset_type = data.get("type", "home")
+    if preset_type != "home":
+        return jsonify(
+            {"error": f"type must be 'home', got {preset_type!r}; POST /api/scenarios/save saves fleet presets"}
+        ), 400
     config_payload = {
         k: v for k, v in data.items() if k not in ("name", "type")
     }
