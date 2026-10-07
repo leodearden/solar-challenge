@@ -21,7 +21,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import SimulationResults
+from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.output import aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
 
 _AMBER = "#f5a623"
@@ -210,23 +210,21 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
     return str(fig.to_json())
 
 
-def sankey_diagram(summary: dict[str, Any]) -> str:
+def sankey_diagram(summary: SummaryStatistics) -> str:
     """Sankey diagram of energy flows from PV and Grid to end uses.
 
     Args:
-        summary: Dictionary with SummaryStatistics fields.
+        summary: The run's summary statistics, whose energy totals the links draw.
 
     Returns:
         Plotly figure JSON string, or ``"{}"`` if there is no energy flow
         to draw.
     """
-    total_gen = summary.get("total_generation_kwh", 0)
-    total_demand = summary.get("total_demand_kwh", 0)
-    total_self = summary.get("total_self_consumption_kwh", 0)
-    total_export = summary.get("total_grid_export_kwh", 0)
-    total_import = summary.get("total_grid_import_kwh", 0)
-    total_charge = summary.get("total_battery_charge_kwh", 0)
-    total_discharge = summary.get("total_battery_discharge_kwh", 0)
+    total_self = summary.total_self_consumption_kwh
+    total_export = summary.total_grid_export_kwh
+    total_import = summary.total_grid_import_kwh
+    total_charge = summary.total_battery_charge_kwh
+    total_discharge = summary.total_battery_discharge_kwh
 
     # Nodes: PV(0), Grid(1), Battery(2), Demand(3), Export(4)
     node_labels = ["PV Generation", "Grid", "Battery", "Demand", "Export"]

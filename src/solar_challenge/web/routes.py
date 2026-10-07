@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -134,7 +133,7 @@ def home_results(run_id: str) -> Any:
     has_battery = config.battery_config is not None
 
     charts: dict[str, Any] = {
-        "sankey": sankey_diagram(asdict(summary)),
+        "sankey": sankey_diagram(summary),
         "daily_balance": daily_energy_balance(sim_results),
         "power_flow": power_flow_timeline(sim_results),
         "battery_soc": (
