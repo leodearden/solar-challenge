@@ -18,7 +18,7 @@ import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
-from typing import Any, Generator, TypeAlias
+from typing import Any, Generator, Literal, TypeAlias
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -159,75 +159,13 @@ class JobManager:
 
         Raises:
             RuntimeError: If the manager has shut down; the refused job leaves no record.
+            sqlite3.Error: If the database refuses the job's run or job row; the refused job leaves no record.
         """
         self._cleanup_old_jobs()
 
-        job_id = self._new_id()
-        run_id = self._new_id()
-        created_at = datetime.now(timezone.utc).isoformat()
-
-        # Initialize in-memory tracking
-        with self._lock:
-            self._jobs[job_id] = {
-                "job_id": job_id,
-                "run_id": run_id,
-                "status": "queued",
-                "progress_pct": 0.0,
-                "current_step": "Queued",
-                "message": "Waiting to start...",
-                "created_at": time.monotonic(),
-            }
-            self._event_queues[job_id] = collections.deque(maxlen=100)
-
-        # Create run record in database
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO runs (
-                    id, name, type, config_json, summary_json,
-                    status, error_message, created_at, completed_at,
-                    duration_seconds, n_homes, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    name or config.name or "Web Simulation",
-                    "home",
-                    None,  # config_json filled on completion
-                    None,  # summary_json filled on completion
-                    "running",
-                    None,
-                    created_at,
-                    None,
-                    None,
-                    1,
-                    None,
-                ),
-            )
-
-            # Create job record in database
-            cursor.execute(
-                """
-                INSERT INTO jobs (
-                    id, run_id, status, progress_pct, current_step,
-                    message, created_at, started_at, completed_at,
-                    error_traceback
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    run_id,
-                    "queued",
-                    0.0,
-                    "Queued",
-                    "Waiting to start...",
-                    created_at,
-                    None,
-                    None,
-                    None,
-                ),
-            )
+        job_id, run_id, created_at = self._record_new_job(
+            db_path, run_name=name or config.name or "Web Simulation", run_type="home", n_homes=1
+        )
 
         # Submit to thread pool
         self._schedule(
@@ -277,75 +215,13 @@ class JobManager:
 
         Raises:
             RuntimeError: If the manager has shut down; the refused job leaves no record.
+            sqlite3.Error: If the database refuses the job's run or job row; the refused job leaves no record.
         """
         self._cleanup_old_jobs()
 
-        job_id = self._new_id()
-        run_id = self._new_id()
-        created_at = datetime.now(timezone.utc).isoformat()
-
-        # Initialize in-memory tracking
-        with self._lock:
-            self._jobs[job_id] = {
-                "job_id": job_id,
-                "run_id": run_id,
-                "status": "queued",
-                "progress_pct": 0.0,
-                "current_step": "Queued",
-                "message": "Waiting to start...",
-                "created_at": time.monotonic(),
-            }
-            self._event_queues[job_id] = collections.deque(maxlen=100)
-
-        # Create run record in database
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO runs (
-                    id, name, type, config_json, summary_json,
-                    status, error_message, created_at, completed_at,
-                    duration_seconds, n_homes, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    name or "Fleet Simulation",
-                    "fleet",
-                    None,
-                    None,
-                    "running",
-                    None,
-                    created_at,
-                    None,
-                    None,
-                    len(configs),
-                    None,
-                ),
-            )
-
-            # Create job record in database
-            cursor.execute(
-                """
-                INSERT INTO jobs (
-                    id, run_id, status, progress_pct, current_step,
-                    message, created_at, started_at, completed_at,
-                    error_traceback
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    run_id,
-                    "queued",
-                    0.0,
-                    "Queued",
-                    "Waiting to start...",
-                    created_at,
-                    None,
-                    None,
-                    None,
-                ),
-            )
+        job_id, run_id, created_at = self._record_new_job(
+            db_path, run_name=name or "Fleet Simulation", run_type="fleet", n_homes=len(configs)
+        )
 
         # Submit to thread pool
         self._schedule(
@@ -427,6 +303,80 @@ class JobManager:
             for jid in expired:
                 del self._jobs[jid]
                 self._event_queues.pop(jid, None)
+
+    def _record_new_job(
+        self, db_path: str, run_name: str, run_type: Literal["home", "fleet"], n_homes: int
+    ) -> tuple[str, str, str]:
+        """Write a new queued job's run and job rows, then track the job in memory.
+
+        The job is tracked only once both rows are written, so a database that refuses either leaves no record of it.
+
+        Returns:
+            Tuple of (job_id, run_id, created_at).
+        """
+        job_id = self._new_id()
+        run_id = self._new_id()
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        with get_db(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO runs (
+                    id, name, type, config_json, summary_json,
+                    status, error_message, created_at, completed_at,
+                    duration_seconds, n_homes, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    run_name,
+                    run_type,
+                    None,  # config_json filled on completion
+                    None,  # summary_json filled on completion
+                    "running",
+                    None,
+                    created_at,
+                    None,
+                    None,
+                    n_homes,
+                    None,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    id, run_id, status, progress_pct, current_step,
+                    message, created_at, started_at, completed_at,
+                    error_traceback
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    run_id,
+                    "queued",
+                    0.0,
+                    "Queued",
+                    "Waiting to start...",
+                    created_at,
+                    None,
+                    None,
+                    None,
+                ),
+            )
+
+        with self._lock:
+            self._jobs[job_id] = {
+                "job_id": job_id,
+                "run_id": run_id,
+                "status": "queued",
+                "progress_pct": 0.0,
+                "current_step": "Queued",
+                "message": "Waiting to start...",
+                "created_at": time.monotonic(),
+            }
+            self._event_queues[job_id] = collections.deque(maxlen=100)
+
+        return job_id, run_id, created_at
 
     def _schedule(self, job_id: str, run_id: str, db_path: str, job: Callable[[], None]) -> None:
         """Queue *job* on the thread pool, counting it as unfinished until it completes, fails or is dropped by shutdown.
