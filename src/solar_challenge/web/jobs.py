@@ -243,16 +243,22 @@ class JobManager:
         )
 
     def get_job_status(self, job_id: str) -> dict[str, Any] | None:
-        """Get the current status of a job.
+        """Return a copy of the in-memory status of a job this manager tracks.
 
-        Checks in-memory cache first, then falls back to database.
+        A manager tracks only the jobs submitted to it, and stops tracking each
+        one, finished or not, at the first submit made more than an hour after
+        it (_cleanup_old_jobs).  It never reads the jobs table, so a job it does
+        not track, such as one from before a restart, is unknown here although
+        the job's rows remain in the database.
 
         Args:
             job_id: Unique job identifier.
 
         Returns:
-            Dict with job_id, status, progress_pct, current_step, message,
-            and run_id. Returns None if job not found.
+            Dict with job_id, run_id, status, progress_pct, current_step,
+            message and created_at: the time.monotonic() reading taken when
+            the manager began tracking the job, not a wall-clock time.  None
+            if this manager does not track the job.
         """
         with self._lock:
             if job_id in self._jobs:
