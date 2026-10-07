@@ -564,10 +564,10 @@ def _job_rows(storage: RunStorage) -> list[tuple[str, str]]:
 
 
 def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
-    """Return the status, progress_pct, current_step and message of job *job_id*'s row in storage's jobs table."""
+    """Return the status, progress_pct, current_step, message and created_at of job *job_id*'s row in storage's jobs table."""
     with get_db(storage.db_path) as conn:
         row = conn.execute(
-            "SELECT status, progress_pct, current_step, message FROM jobs WHERE id = ?", (job_id,)
+            "SELECT status, progress_pct, current_step, message, created_at FROM jobs WHERE id = ?", (job_id,)
         ).fetchone()
     return dict(row)
 
@@ -684,13 +684,12 @@ class TestJobManagerIds:
 class TestJobManagerStatus:
     """Tests for the status a JobManager reports for a job: only while it tracks the job in memory."""
 
-    def test_a_jobs_status_holds_its_ids_its_progress_and_when_the_manager_began_tracking_it(
+    def test_a_jobs_status_holds_its_ids_its_progress_and_its_rows_creation_time(
         self, tmp_path: Path
     ) -> None:
         storage = _run_storage(tmp_path)
         manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
 
-        before_submit = time.monotonic()
         job_id, run_id = manager.submit_home_job(
             config=_A_HOME,
             start_date=_JUNE_1,
@@ -698,7 +697,6 @@ class TestJobManagerStatus:
             db_path=str(storage.db_path),
             data_dir=str(storage.data_dir),
         )
-        after_submit = time.monotonic()
         assert manager.wait_until_idle(timeout=30)
 
         status = manager.get_job_status(job_id)
@@ -708,7 +706,7 @@ class TestJobManagerStatus:
         assert (status["job_id"], status["run_id"]) == (job_id, run_id)
         assert status["status"] == "completed", status["message"]
         assert status["progress_pct"] == 100.0
-        assert before_submit <= status["created_at"] <= after_submit
+        assert status["created_at"] == _job_state(storage, job_id)["created_at"]
 
     def test_a_manager_does_not_know_a_job_another_manager_ran_although_its_rows_remain(
         self, tmp_path: Path
