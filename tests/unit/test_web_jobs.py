@@ -638,6 +638,15 @@ def _job_rows(storage: RunStorage) -> list[tuple[str, str]]:
         return [(row["id"], row["run_id"]) for row in conn.execute("SELECT id, run_id FROM jobs")]
 
 
+def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
+    """Return the status, progress_pct, current_step and message of job *job_id*'s row in storage's jobs table."""
+    with get_db(storage.db_path) as conn:
+        row = conn.execute(
+            "SELECT status, progress_pct, current_step, message FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    return dict(row)
+
+
 def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + 30
     while True:
@@ -745,6 +754,29 @@ class TestJobManagerIds:
         storage = _run_storage(tmp_path)
         assert [run["id"] for run in storage.list_runs()] == [run_id]
         assert _job_rows(storage) == [(job_id, run_id)]
+
+
+class TestJobManagerQueuedJobs:
+    """Tests for a job that waits in the queue behind a running one."""
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_queued_job_is_in_the_same_state_in_memory_and_in_its_job_row(
+        self,
+        submit_job: Callable[[JobManager, Path], str],
+        blocking_simulation: _BlockingSimulation,
+        tmp_path: Path,
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+
+        queued_job_id = submit_job(manager, tmp_path)
+
+        in_memory = manager.get_job_status(queued_job_id)
+        assert in_memory is not None
+        stored = _job_state(_run_storage(tmp_path), queued_job_id)
+        assert stored["status"] == "queued"
+        assert {column: in_memory[column] for column in stored} == stored
 
 
 class TestJobManagerRefusedRows:
