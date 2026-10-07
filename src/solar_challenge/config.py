@@ -1121,16 +1121,127 @@ def _parse_output_config(
 # --- Distribution Parsing and Sampling ---
 
 
-_DISTRIBUTION_SPEC_KEYS: Mapping[str, frozenset[str]] = MappingProxyType({
-    "weighted_discrete": frozenset({"type", "values", "weights"}),
-    "normal": frozenset({"type", "mean", "std", "min", "max"}),
-    "uniform": frozenset({"type", "min", "max"}),
-    "fixed": frozenset({"type", "value"}),
-    "shuffled_pool": frozenset({"type", "values", "counts"}),
-    "proportional_to": frozenset({"type", "source", "multiplier", "offset"}),
-})
-
 _SWEEP_SPEC_KEYS: frozenset[str] = frozenset({"type", "min", "max", "steps", "mode"})
+
+
+def _build_weighted_discrete_spec(
+    data: dict[str, Any], param_name: str
+) -> WeightedDiscreteDistribution:
+    """Build the weighted_discrete distribution a spec names, refusing it unless it gives values and weights."""
+    if "values" not in data or "weights" not in data:
+        raise ConfigurationError(
+            f"weighted_discrete distribution for '{param_name}' requires 'values' and 'weights'"
+        )
+    return WeightedDiscreteDistribution(
+        values=tuple(data["values"]),
+        weights=tuple(float(w) for w in data["weights"]),
+    )
+
+
+def _build_normal_spec(data: dict[str, Any], param_name: str) -> NormalDistribution:
+    """Build the normal distribution a spec names, refusing it unless it gives a mean and a std."""
+    if "mean" not in data or "std" not in data:
+        raise ConfigurationError(
+            f"normal distribution for '{param_name}' requires 'mean' and 'std'"
+        )
+    return NormalDistribution(
+        mean=float(data["mean"]),
+        std=float(data["std"]),
+        min=_float_or_none(data.get("min")),
+        max=_float_or_none(data.get("max")),
+    )
+
+
+def _build_uniform_spec(data: dict[str, Any], param_name: str) -> UniformDistribution:
+    """Build the uniform distribution a spec names, refusing it unless it gives a min and a max."""
+    if "min" not in data or "max" not in data:
+        raise ConfigurationError(
+            f"uniform distribution for '{param_name}' requires 'min' and 'max'"
+        )
+    return UniformDistribution(min=float(data["min"]), max=float(data["max"]))
+
+
+def _build_fixed_spec(data: dict[str, Any], param_name: str) -> Optional[float]:
+    """Build the fixed value a spec names, refusing it unless it gives a value."""
+    if "value" not in data:
+        raise ConfigurationError(
+            f"fixed distribution for '{param_name}' requires 'value'"
+        )
+    return _float_or_none(data["value"])
+
+
+def _build_shuffled_pool_spec(
+    data: dict[str, Any], param_name: str
+) -> ShuffledPoolDistribution:
+    """Build the shuffled_pool distribution a spec names, refusing it unless it gives values and counts."""
+    if "values" not in data or "counts" not in data:
+        raise ConfigurationError(
+            f"shuffled_pool distribution for '{param_name}' requires 'values' and 'counts'"
+        )
+    return ShuffledPoolDistribution(
+        values=tuple(data["values"]),
+        counts=tuple(int(c) for c in data["counts"]),
+    )
+
+
+def _parse_proportional_to_multiplier(data: Any, param_name: str) -> Union[float, SweepSpec]:
+    """Parse a proportional_to spec's multiplier: a number, or a sweep given as a mapping."""
+    if not isinstance(data, dict):
+        return float(data)
+    if data.get("type") != "sweep":
+        raise ConfigurationError(
+            f"proportional_to multiplier dict for '{param_name}' must have type='sweep'"
+        )
+    _refuse_unrecognised_keys(_child_path(param_name, "multiplier"), data, _SWEEP_SPEC_KEYS)
+    return SweepSpec(
+        min=float(data["min"]),
+        max=float(data["max"]),
+        steps=int(data["steps"]),
+        mode=data.get("mode", "geometric"),
+    )
+
+
+def _build_proportional_to_spec(
+    data: dict[str, Any], param_name: str
+) -> ProportionalDistribution:
+    """Build the proportional_to distribution a spec names, refusing it unless it gives a source."""
+    if "source" not in data:
+        raise ConfigurationError(
+            f"proportional_to distribution for '{param_name}' requires 'source'"
+        )
+    return ProportionalDistribution(
+        source=data["source"],
+        multiplier=_parse_proportional_to_multiplier(data.get("multiplier", 1.0), param_name),
+        offset=float(data.get("offset", 0.0)),
+    )
+
+
+_DISTRIBUTION_SPEC_TYPES: Mapping[str, _BlockType[DistributionSpec]] = MappingProxyType({
+    "weighted_discrete": _BlockType(
+        frozenset({"type", "values", "weights"}),
+        _build_weighted_discrete_spec,
+    ),
+    "normal": _BlockType(
+        frozenset({"type", "mean", "std", "min", "max"}),
+        _build_normal_spec,
+    ),
+    "uniform": _BlockType(
+        frozenset({"type", "min", "max"}),
+        _build_uniform_spec,
+    ),
+    "fixed": _BlockType(
+        frozenset({"type", "value"}),
+        _build_fixed_spec,
+    ),
+    "shuffled_pool": _BlockType(
+        frozenset({"type", "values", "counts"}),
+        _build_shuffled_pool_spec,
+    ),
+    "proportional_to": _BlockType(
+        frozenset({"type", "source", "multiplier", "offset"}),
+        _build_proportional_to_spec,
+    ),
+})
 
 
 def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
@@ -1163,89 +1274,14 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
         raise ConfigurationError(
             f"Distribution for '{param_name}' requires 'type' field"
         )
-    recognised = _DISTRIBUTION_SPEC_KEYS.get(dist_type) if isinstance(dist_type, str) else None
-    if recognised is None:
+    block_type = _DISTRIBUTION_SPEC_TYPES.get(dist_type) if isinstance(dist_type, str) else None
+    if block_type is None:
         raise ConfigurationError(
             f"Unknown distribution type '{dist_type}' for '{param_name}'. "
-            f"Supported: {', '.join(_DISTRIBUTION_SPEC_KEYS)}"
+            f"Supported: {', '.join(_DISTRIBUTION_SPEC_TYPES)}"
         )
-    _refuse_unrecognised_keys(param_name, data, recognised)
-
-    if dist_type == "weighted_discrete":
-        if "values" not in data or "weights" not in data:
-            raise ConfigurationError(
-                f"weighted_discrete distribution for '{param_name}' requires 'values' and 'weights'"
-            )
-        values = tuple(v if v is not None else None for v in data["values"])
-        weights = tuple(float(w) for w in data["weights"])
-        return WeightedDiscreteDistribution(values=values, weights=weights)
-
-    elif dist_type == "normal":
-        if "mean" not in data or "std" not in data:
-            raise ConfigurationError(
-                f"normal distribution for '{param_name}' requires 'mean' and 'std'"
-            )
-        return NormalDistribution(
-            mean=float(data["mean"]),
-            std=float(data["std"]),
-            min=_float_or_none(data.get("min")),
-            max=_float_or_none(data.get("max")),
-        )
-
-    elif dist_type == "uniform":
-        if "min" not in data or "max" not in data:
-            raise ConfigurationError(
-                f"uniform distribution for '{param_name}' requires 'min' and 'max'"
-            )
-        return UniformDistribution(min=float(data["min"]), max=float(data["max"]))
-
-    elif dist_type == "fixed":
-        if "value" not in data:
-            raise ConfigurationError(
-                f"fixed distribution for '{param_name}' requires 'value'"
-            )
-        return _float_or_none(data["value"])
-
-    elif dist_type == "shuffled_pool":
-        if "values" not in data or "counts" not in data:
-            raise ConfigurationError(
-                f"shuffled_pool distribution for '{param_name}' requires 'values' and 'counts'"
-            )
-        values = tuple(v if v is not None else None for v in data["values"])
-        counts = tuple(int(c) for c in data["counts"])
-        return ShuffledPoolDistribution(values=values, counts=counts)
-
-    elif dist_type == "proportional_to":
-        if "source" not in data:
-            raise ConfigurationError(
-                f"proportional_to distribution for '{param_name}' requires 'source'"
-            )
-        multiplier_data = data.get("multiplier", 1.0)
-        multiplier: Union[float, SweepSpec]
-        if isinstance(multiplier_data, dict):
-            # Parse sweep spec for multiplier
-            if multiplier_data.get("type") != "sweep":
-                raise ConfigurationError(
-                    f"proportional_to multiplier dict for '{param_name}' must have type='sweep'"
-                )
-            _refuse_unrecognised_keys(
-                _child_path(param_name, "multiplier"), multiplier_data, _SWEEP_SPEC_KEYS
-            )
-            multiplier = SweepSpec(
-                min=float(multiplier_data["min"]),
-                max=float(multiplier_data["max"]),
-                steps=int(multiplier_data["steps"]),
-                mode=multiplier_data.get("mode", "geometric"),
-            )
-        else:
-            multiplier = float(multiplier_data)
-        return ProportionalDistribution(
-            source=data["source"],
-            multiplier=multiplier,
-            offset=float(data.get("offset", 0.0)),
-        )
-
-    raise AssertionError(f"distribution type {dist_type!r} has recognised keys but no parser branch")
+    _refuse_unrecognised_keys(param_name, data, block_type.recognised_keys)
+    return block_type.build(data, param_name)
 
 
 def _sample_from_distribution(spec: DistributionSpec, rng: random.Random) -> Optional[float]:
