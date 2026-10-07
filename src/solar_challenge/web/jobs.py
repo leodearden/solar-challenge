@@ -274,9 +274,8 @@ class JobManager:
 
         Returns:
             Dict with job_id, run_id, status, progress_pct, current_step,
-            message and created_at: the time.monotonic() reading taken when
-            the manager began tracking the job, not a wall-clock time.  None
-            if this manager does not track the job.
+            message and created_at, the ISO 8601 UTC time the job's rows were
+            created.  None if this manager does not track the job.
         """
         with self._lock:
             job = self._jobs.get(job_id)
@@ -374,7 +373,7 @@ class JobManager:
 
         with self._lock:
             self._jobs[job_id] = _TrackedJob(
-                status={"job_id": job_id, "run_id": run_id, **_QUEUED_JOB_STATE, "created_at": self._clock()}
+                status={"job_id": job_id, "run_id": run_id, **_QUEUED_JOB_STATE, "created_at": created_at}
             )
 
         return _NewJob(job_id=job_id, run_id=run_id, created_at=created_at)
