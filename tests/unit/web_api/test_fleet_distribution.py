@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
+from solar_challenge.config import DispatchStrategyConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
@@ -471,6 +472,53 @@ class TestFleetFromDistribution:
         assert (home.status_code, home.get_json()) == (fleet.status_code, fleet.get_json())
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "fleet_dispatch",
+        [
+            pytest.param({}, id="alone"),
+            pytest.param(
+                {"dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 4.5}},
+                id="beside-the-fleets-dispatch-strategy",
+            ),
+        ],
+    )
+    def test_battery_dispatch_strategy_returns_400_naming_the_fleets_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, fleet_dispatch: dict
+    ) -> None:
+        """A battery block's own dispatch_strategy is a 400 naming it and the fleet's dispatch_strategy, which every battery takes, whether or not the fleet's is set; no fleet is queued."""
+        strategy = {"strategy_type": "self_consumption"}
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "battery": {"capacity_kwh": 5.0, "dispatch_strategy": strategy},
+                **fleet_dispatch,
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": "battery.dispatch_strategy must be absent or null: every battery takes the "
+            f"fleet's dispatch_strategy, got {strategy!r}"
+        }
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_null_battery_dispatch_strategy_leaves_every_battery_the_fleets(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A null battery dispatch_strategy reads as absent: every queued battery takes the fleet's dispatch_strategy."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "battery": {"capacity_kwh": 5.0, "dispatch_strategy": None},
+                "dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 4.5},
+            },
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        configs = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
+        fleet_dispatch = DispatchStrategyConfig("peak_shaving", import_limit_kw=4.5)
+        assert [config.battery_config.dispatch_strategy for config in configs] == [fleet_dispatch] * 2
 
     @pytest.mark.parametrize(
         ("key", "distribution"),

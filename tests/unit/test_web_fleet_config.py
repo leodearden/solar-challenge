@@ -846,11 +846,35 @@ class TestFleetConfigHelpers:
         assert str(exc_info.value) == f"{block}.{key} must be a finite number, got {value!r}"
 
     @pytest.mark.parametrize(
+        "strategy",
+        [
+            pytest.param({"strategy_type": "self_consumption"}, id="mapping"),
+            pytest.param({}, id="empty-mapping"),
+            pytest.param("self_consumption", id="str"),
+            pytest.param(False, id="false"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_battery_dispatch_strategy_naming_the_fleets(
+        self, strategy: object
+    ) -> None:
+        """A battery block's own dispatch_strategy, any value but null, is refused naming it and the fleet's dispatch_strategy, which every battery takes."""
+        form = valid_distribution_form()
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config(
+                {**form, "battery": {**form["battery"], "dispatch_strategy": strategy}}
+            )
+        assert str(exc_info.value) == (
+            "battery.dispatch_strategy must be absent or null: every battery takes the "
+            f"fleet's dispatch_strategy, got {strategy!r}"
+        )
+
+    @pytest.mark.parametrize(
         ("block", "key", "value"),
         [
             pytest.param("load", "use_stochastic", False, id="load-use-stochastic-false"),
             pytest.param("load", "use_stochastic", True, id="load-use-stochastic-true"),
             pytest.param("pv", "tilt", None, id="pv-tilt-null"),
+            pytest.param("battery", "dispatch_strategy", None, id="battery-dispatch-strategy-null"),
         ],
     )
     def test_form_to_fleet_distribution_config_passes_null_and_boolean_block_settings_on_as_given(

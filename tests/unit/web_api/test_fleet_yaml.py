@@ -116,6 +116,15 @@ class TestExportFleetYAML:
             pytest.param({"tariff": {"type": "flat_rate"}}, id="tariff-the-loaders-refuse"),
             pytest.param({"dispatch_strategy": ""}, id="empty-string-dispatch"),
             pytest.param({"days": float("inf")}, id="days-infinity"),
+            pytest.param(
+                {
+                    "battery": {
+                        **_FLEET_FORM_BODY["battery"],
+                        "dispatch_strategy": {"strategy_type": "self_consumption"},
+                    }
+                },
+                id="battery-dispatch-strategy",
+            ),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(
