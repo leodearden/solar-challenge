@@ -17,9 +17,10 @@ import functools
 import json
 import re
 import shutil
+import sqlite3
 import sys
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, UnionType
@@ -159,6 +160,32 @@ def stored_home_config(config: Mapping[str, Any]) -> HomeConfig:
 def stored_fleet_home_configs(config: Mapping[str, Any]) -> list[HomeConfig]:
     """The HomeConfigs a fleet run's stored config holds, as save_fleet_run wrote it."""
     return [stored_home_config(home) for home in config["homes"]]
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    """One row of the runs table, each column in the field of the same name.
+
+    config_json and summary_json are the JSON texts a save wrote; None while the run has none.
+    """
+
+    id: str
+    name: str | None
+    type: str | None
+    config_json: str | None
+    summary_json: str | None
+    status: str | None
+    error_message: str | None
+    created_at: str | None
+    completed_at: str | None
+    duration_seconds: float | None
+    n_homes: int | None
+    notes: str | None
+
+
+def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
+    """The RunRecord of a runs row read with SELECT *, or None when no row was read."""
+    return None if row is None else RunRecord(**dict(row))
 
 
 class RunStorage:
@@ -551,15 +578,19 @@ class RunStorage:
 
         return fleet_results, fleet_summary, per_home_summaries
 
+    def run_record(self, run_id: str) -> RunRecord | None:
+        """The record of run *run_id*: its row in the runs table. None when no run has that id."""
+        with get_db(self.db_path) as conn:
+            row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+        return _record_of_row(row)
+
     def run_name(self, run_id: str) -> str | None:
         """The name run *run_id* is saved under, the one Run History lists and renames.
 
         None when no run has that id, or its name is NULL.
         """
-        with get_db(self.db_path) as conn:
-            row = conn.execute("SELECT name FROM runs WHERE id = ?", (run_id,)).fetchone()
-        name: str | None = None if row is None else row["name"]
-        return name
+        record = self.run_record(run_id)
+        return None if record is None else record.name
 
     def list_runs(
         self,
