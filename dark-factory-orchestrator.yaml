@@ -81,6 +81,12 @@ git:
   #   not the locked tailwindcss package's. It needs npm and registry.npmjs.org.
   #   `timeout` caps a hung run at 600 s; a run measures 17-38 s, by host load:
   #   uv syncs a fresh .venv, then 6-19 s of npm ci and the build.
+  # - newest-releases: re-runs the verify suite in a scratch copy of the tree
+  #   whose uv.lock is upgraded to the newest releases pyproject.toml's ranges
+  #   admit (tests/newest_releases), the releases a consumer that re-locks
+  #   installs, so an upstream release that breaks this code files a fix task.
+  #   It needs PyPI. Like interpreter-matrix it has no `timeout`: its suite
+  #   timeout bounds a hang. A run measures 17-19 min, by host load.
   # The legacy numeric and infra seams are off: this repo has neither
   # scripts/run-offline-deep.sh nor reify's tests/infra/run_all.sh.
   # offline_lane_enabled and persistent_offline_deep_worktree take effect at
@@ -102,6 +108,9 @@ git:
       fix_task_priority: "medium"
     - name: css-build
       command: "timeout -k 60 600 uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider"
+      fix_task_priority: "medium"
+    - name: newest-releases
+      command: "uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider"
       fix_task_priority: "medium"
 
 # OS filesystem sandbox (Landlock) — dark-factory-fleet OS filesystem sandbox
