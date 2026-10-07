@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the fleet distribution endpoints: POST /api/fleet/preview-distribution and POST /api/simulate/fleet-from-distribution."""
 
+from collections.abc import Callable
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,7 @@ from flask.testing import FlaskClient
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
 
 
@@ -146,6 +148,40 @@ class TestPreviewDistribution:
         )
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
+
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize(
+        ("dist_type", "params", "field"),
+        [
+            pytest.param(
+                "normal", lambda v: {"mean": v, "std": 1.0}, "params.mean", id="normal-mean"
+            ),
+            pytest.param(
+                "uniform", lambda v: {"min": 2.0, "max": v}, "params.max", id="uniform-max"
+            ),
+            pytest.param(
+                "weighted_discrete",
+                lambda v: {"values": [{"value": 3.0, "weight": v}]},
+                "params.values[0].weight",
+                id="weighted-discrete-weight",
+            ),
+        ],
+    )
+    def test_params_number_that_is_not_finite_returns_400_naming_it(
+        self,
+        client: FlaskClient,
+        dist_type: str,
+        params: Callable[[object], dict],
+        field: str,
+        value: object,
+    ) -> None:
+        """A params number that is not a finite number, a boolean included, is a 400 naming its field under params and the value sent."""
+        resp = client.post(
+            "/api/fleet/preview-distribution",
+            json={"type": dist_type, "params": params(value), "n_samples": 3},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
 
 
 class TestFleetFromDistribution:
@@ -511,6 +547,116 @@ class TestFleetFromDistribution:
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("patch", "message"),
+        [
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "weighted_discrete", "values": ["x"]}}},
+                "battery.capacity_kwh.values[0] must be a mapping, got str",
+                id="battery-weighted-discrete-str-row",
+            ),
+            pytest.param(
+                {
+                    "load": {
+                        "annual_consumption_kwh": {
+                            "type": "shuffled_pool",
+                            "entries": [{"value": 3500.0, "count": -1}],
+                        }
+                    }
+                },
+                f"load.annual_consumption_kwh.entries[0].count must be between 0 and "
+                f"{MAX_FLEET_HOMES}, got -1",
+                id="load-shuffled-pool-negative-count",
+            ),
+        ],
+    )
+    def test_row_or_count_it_cannot_use_returns_400_naming_its_distribution(
+        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, message: str
+    ) -> None:
+        """A malformed distribution row or count is a 400 naming its field under the distribution it belongs to; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, **patch},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": message}
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize(
+        ("patch", "field"),
+        [
+            pytest.param(
+                lambda v: {"battery": {"capacity_kwh": v}},
+                "battery.capacity_kwh",
+                id="battery-fixed",
+            ),
+            pytest.param(
+                lambda v: {"pv": {"capacity_kw": {"type": "normal", "mean": v, "std": 1.0}}},
+                "pv.capacity_kw.mean",
+                id="pv-normal-mean",
+            ),
+            pytest.param(
+                lambda v: {
+                    "load": {
+                        "annual_consumption_kwh": {
+                            "type": "weighted_discrete",
+                            "values": [{"value": 3500.0, "weight": v}],
+                        }
+                    }
+                },
+                "load.annual_consumption_kwh.values[0].weight",
+                id="load-weighted-discrete-weight",
+            ),
+        ],
+    )
+    def test_distribution_number_that_is_not_finite_returns_400_naming_it(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        patch: Callable[[object], dict],
+        field: str,
+        value: object,
+    ) -> None:
+        """A distribution number that is not a finite number, a boolean included, is a 400 naming its field and the value sent; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, **patch(value)},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_block_setting_too_large_for_a_float_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A block setting too large for a float is a 400 naming it and the value sent, not a 500; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "pv": {**self._VALID_BODY["pv"], "tilt": 10**400}},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": f"pv.tilt must be a finite number, got {10**400!r}"}
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_boolean_block_setting_reaches_the_queued_homes_as_given(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A boolean block setting, load.use_stochastic, reaches every queued home as the boolean sent, not as a number."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "load": {"annual_consumption_kwh": 3500.0, "use_stochastic": False},
+            },
+        )
+        assert resp.status_code == 201, (
+            f"Expected 201, got {resp.status_code}: {resp.get_data(as_text=True)}"
+        )
+        call_kwargs = mock_job_manager.submit_fleet_job.call_args
+        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
+        assert all(config.load_config.use_stochastic is False for config in configs)
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
     def test_malformed_fleet_seg_returns_400_and_submits_nothing(
