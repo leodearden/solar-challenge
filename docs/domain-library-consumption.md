@@ -117,6 +117,13 @@ signature, or to an exported class's public members, must also edit
 `FROZEN_SURFACE` or `FROZEN_MEMBERS` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 426): `Battery` declares `config`,
+`min_soc_fraction`, `max_soc_fraction`, `charge_efficiency` and
+`discharge_efficiency` in its class body, and `WeatherCache` declares
+`cache_dir`, so the frozen contract now covers them. Each is still a plain
+instance attribute that `__init__` sets, read and assigned as on the 0.5.0 tag.
+Consumers need no change when they re-pin.
+
 **Unreleased on main** (task 436): `SimulationResults`, reached through
 `FleetResults.per_home_results`, is frozen, so that each of its series stays
 named the column `to_dataframe()` writes it under. Assigning to one of its

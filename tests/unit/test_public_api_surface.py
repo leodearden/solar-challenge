@@ -11,7 +11,7 @@ Concerns:
                      routine's signature, an Enum's members, a constant's type
                      (test_every_exported_signature_matches_frozen_surface)
   H2 members       — FROZEN_MEMBERS pins each exported class's public members: its
-                     methods, properties and class constants
+                     methods, properties, class constants and declared attributes
                      (test_every_exported_class_member_matches_frozen_members,
                       test_exported_classes_inherit_only_from_exported_classes,
                       test_exported_classes_declare_the_public_attributes_they_set_on_self)
@@ -257,6 +257,11 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     # --- battery (battery.py) ---
     "Battery": {
+        "config": "attribute BatteryConfig",
+        "min_soc_fraction": "attribute float",
+        "max_soc_fraction": "attribute float",
+        "charge_efficiency": "attribute float",
+        "discharge_efficiency": "attribute float",
         "soh": "property (self) -> float",
         "effective_capacity_kwh": "property (self) -> float",
         "soc_kwh": "property (self) -> float",
@@ -301,6 +306,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     # --- weather (weather.py) ---
     "WeatherCache": {
+        "cache_dir": "attribute Path",
         "get": "(self, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> DataFrame | None",
         "put": "(self, data: DataFrame, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> None",
         "clear": "(self) -> int",
