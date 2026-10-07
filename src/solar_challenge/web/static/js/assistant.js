@@ -29,14 +29,14 @@
     const avatar = document.createElement('div');
     avatar.className = 'flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ' +
       (isUser
-        ? 'bg-amber-500 text-white'
-        : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400');
+        ? 'bg-primary-500 text-white'
+        : 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400');
     avatar.textContent = isUser ? 'You' : 'AI';
 
     const bubble = document.createElement('div');
     bubble.className = 'flex-1 rounded-lg px-4 py-3 text-sm ' +
       (isUser
-        ? 'bg-amber-500 text-white'
+        ? 'bg-primary-500 text-white'
         : 'bg-slate-50 dark:bg-slate-700/50 text-slate-700 dark:text-slate-200');
     bubble.textContent = text;
 

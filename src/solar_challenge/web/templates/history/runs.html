@@ -17,7 +17,7 @@
                 id="filter-type"
                 x-model="filters.type"
                 @change="resetPage(); fetchRuns()"
-                class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
                 <option value="">All</option>
                 <option value="home">Home</option>
@@ -35,7 +35,7 @@
                 x-model="filters.q"
                 @input.debounce.300ms="resetPage(); fetchRuns()"
                 placeholder="Search by name or notes..."
-                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
         </div>
 
@@ -47,7 +47,7 @@
                 id="filter-date-from"
                 x-model="filters.date_from"
                 @change="resetPage(); fetchRuns()"
-                class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
         </div>
         <div class="space-y-1">
@@ -57,7 +57,7 @@
                 id="filter-date-to"
                 x-model="filters.date_to"
                 @change="resetPage(); fetchRuns()"
-                class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
         </div>
     </div>
@@ -66,7 +66,7 @@
     <div class="fixed bottom-6 right-6 z-30" x-show="selectedIds.length >= 2" x-cloak x-transition>
         <a
             :href="'/history/compare?ids=' + selectedIds.join(',')"
-            class="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-lg transition-colors shadow-sm shadow-lg"
+            class="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white font-medium text-sm rounded-lg transition-colors shadow-sm shadow-lg"
         >
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                 <path d="M5 4a1 1 0 00-2 0v7.268a2 2 0 000 3.464V16a1 1 0 102 0v-1.268a2 2 0 000-3.464V4zM11 4a1 1 0 10-2 0v1.268a2 2 0 000 3.464V16a1 1 0 102 0V8.732a2 2 0 000-3.464V4zM16 3a1 1 0 011 1v7.268a2 2 0 010 3.464V16a1 1 0 11-2 0v-1.268a2 2 0 010-3.464V4a1 1 0 011-1z" />
@@ -89,7 +89,7 @@
                         @click="toggleSort('name')"
                     >
                         Name
-                        <span x-show="sort === 'name'" x-cloak x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
+                        <span x-show="sort === 'name'" x-cloak x-text="order === 'asc' ? ' ^' : ' v'" class="text-primary-500"></span>
                     </th>
                     <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Type</th>
                     <th
@@ -97,14 +97,14 @@
                         @click="toggleSort('created_at')"
                     >
                         Date
-                        <span x-show="sort === 'created_at'" x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
+                        <span x-show="sort === 'created_at'" x-text="order === 'asc' ? ' ^' : ' v'" class="text-primary-500"></span>
                     </th>
                     <th
                         class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-700 dark:hover:text-slate-200"
                         @click="toggleSort('duration_seconds')"
                     >
                         Duration
-                        <span x-show="sort === 'duration_seconds'" x-cloak x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
+                        <span x-show="sort === 'duration_seconds'" x-cloak x-text="order === 'asc' ? ' ^' : ' v'" class="text-primary-500"></span>
                     </th>
                     <th class="hidden xl:table-cell px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Generation</th>
                     <th class="hidden xl:table-cell px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Self-Cons.</th>
@@ -123,7 +123,7 @@
                                 :checked="selectedIds.includes(run.id)"
                                 @change="toggleSelect(run.id)"
                                 :disabled="!selectedIds.includes(run.id) && selectedIds.length >= 4"
-                                class="h-4 w-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+                                class="h-4 w-4 rounded border-slate-300 text-primary-500 focus:ring-primary-500"
                             >
                         </td>
                         {# Name (inline editable) #}
@@ -131,7 +131,7 @@
                             <template x-if="editingId !== run.id">
                                 <div>
                                     <span
-                                        class="text-sm font-medium text-slate-900 dark:text-white cursor-pointer hover:text-amber-600 dark:hover:text-amber-400"
+                                        class="text-sm font-medium text-slate-900 dark:text-white cursor-pointer hover:text-primary-600 dark:hover:text-primary-400"
                                         @dblclick="startEdit(run)"
                                         x-text="run.name || 'Unnamed Run'"
                                     ></span>
@@ -145,7 +145,7 @@
                                     @keydown.escape="cancelEdit()"
                                     @blur="saveEdit(run.id)"
                                     x-ref="editInput"
-                                    class="text-sm px-2 py-1 rounded border border-amber-400 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 w-full"
+                                    class="text-sm px-2 py-1 rounded border border-primary-400 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 w-full"
                                 >
                             </template>
                         </td>
@@ -191,7 +191,7 @@
                                 {# View results #}
                                 <a
                                     :href="'/results/' + run.type + '/' + run.id"
-                                    class="p-1 rounded text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    class="p-1 rounded text-slate-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="View results"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -253,7 +253,7 @@
     {# Loading and empty states: one copy, shown at every width #}
     <template x-if="loading">
         <div class="mt-4 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
-            <svg class="animate-spin h-6 w-6 mx-auto mb-2 text-amber-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <svg class="animate-spin h-6 w-6 mx-auto mb-2 text-primary-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
@@ -296,10 +296,10 @@
                 </div>
                 <div class="flex items-center justify-between">
                     <div class="flex items-center gap-2">
-                        <input type="checkbox" :value="run.id" :checked="selectedIds.includes(run.id)" @change="toggleSelect(run.id)" :disabled="!selectedIds.includes(run.id) && selectedIds.length >= 4" class="h-4 w-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500">
+                        <input type="checkbox" :value="run.id" :checked="selectedIds.includes(run.id)" @change="toggleSelect(run.id)" :disabled="!selectedIds.includes(run.id) && selectedIds.length >= 4" class="h-4 w-4 rounded border-slate-300 text-primary-500 focus:ring-primary-500">
                         <span class="text-xs text-slate-400">Compare</span>
                     </div>
-                    <a :href="'/results/' + run.type + '/' + run.id" class="text-sm text-amber-600 dark:text-amber-400 hover:underline">View</a>
+                    <a :href="'/results/' + run.type + '/' + run.id" class="text-sm text-primary-600 dark:text-primary-400 hover:underline">View</a>
                 </div>
             </div>
         </template>
@@ -321,7 +321,7 @@
                     @click="goToPage(p)"
                     class="px-3 py-1.5 text-sm rounded-lg border transition-colors"
                     :class="p === pagination.page
-                        ? 'bg-amber-500 border-amber-500 text-white'
+                        ? 'bg-primary-500 border-primary-500 text-white'
                         : 'border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300'"
                     x-text="p"
                 ></button>
