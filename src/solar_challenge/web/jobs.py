@@ -42,6 +42,7 @@ _RunType: TypeAlias = Literal["home", "fleet"]
 _QUEUED_JOB_STATE: Mapping[str, str | float] = MappingProxyType(
     {"status": "queued", "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
 )
+_FINISHED_JOB_TTL_SECONDS = 3600.0
 
 # Module-level weak registry of all live JobManager instances.
 # WeakSet avoids keeping managers alive past their natural lifetime.
@@ -84,10 +85,15 @@ class _NewJob:
 
 @dataclass
 class _TrackedJob:
-    """A job a JobManager tracks: the status get_job_status reports and the SSE events get_events has not yet yielded."""
+    """A job a JobManager tracks.
+
+    The status get_job_status reports, the SSE events get_events has not yet yielded, and the manager's
+    clock reading when the job finished (None while it is queued or running).
+    """
 
     status: dict[str, Any]
     events: collections.deque[dict[str, Any]] = field(default_factory=lambda: collections.deque(maxlen=100))
+    finished_at: float | None = None
 
 
 class JobManager:
@@ -256,12 +262,12 @@ class JobManager:
     def get_job_status(self, job_id: str) -> dict[str, Any] | None:
         """Return a copy of the in-memory status of a job this manager tracks.
 
-        A manager tracks only the jobs submitted to it, and stops tracking each
-        one, finished or not, at the first submit made after the job is older
-        than the age limit that _cleanup_old_jobs applies.  It never reads the
-        jobs table, so a job it does not track, such as one from before a
-        restart, is unknown here although the job's rows remain in the
-        database.
+        A manager tracks only the jobs submitted to it.  It tracks each one
+        until the job finishes, and stops at the first submit made once the
+        job has been finished for longer than _FINISHED_JOB_TTL_SECONDS.  It
+        never reads the jobs table, so a job it does not track, such as one
+        from before a restart, is unknown here although the job's rows remain
+        in the database.
 
         Args:
             job_id: Unique job identifier.
@@ -298,22 +304,14 @@ class JobManager:
         for event in events:
             yield event
 
-    def _cleanup_old_jobs(self, max_age_seconds: float = 3600.0) -> None:
-        """Remove jobs older than max_age_seconds from in-memory tracking.
-
-        Compares each job's ``created_at`` monotonic timestamp against the
-        current time and removes entries that exceed the threshold.
-
-        Args:
-            max_age_seconds: Maximum age in seconds before a job is removed.
-                Defaults to 3600 (1 hour).
-        """
+    def _stop_tracking_jobs_finished_long_ago(self) -> None:
+        """Stop tracking every job that finished more than _FINISHED_JOB_TTL_SECONDS ago; a queued or running job stays tracked."""
         now = self._clock()
         with self._lock:
             expired = [
                 job_id
                 for job_id, job in self._jobs.items()
-                if now - job.status["created_at"] > max_age_seconds
+                if job.finished_at is not None and now - job.finished_at > _FINISHED_JOB_TTL_SECONDS
             ]
             for job_id in expired:
                 del self._jobs[job_id]
@@ -328,7 +326,7 @@ class JobManager:
         run_simulation: Callable[[_NewJob], None],
     ) -> tuple[str, str]:
         """Record a new job, queue run_simulation(new_job) on the thread pool, and return (job_id, run_id)."""
-        self._cleanup_old_jobs()
+        self._stop_tracking_jobs_finished_long_ago()
         new_job = self._record_new_job(db_path, run_name=run_name, run_type=run_type, n_homes=n_homes)
         self._schedule(new_job.job_id, new_job.run_id, db_path, functools.partial(run_simulation, new_job))
         return new_job.job_id, new_job.run_id
@@ -397,7 +395,16 @@ class JobManager:
             self._stop_counting_job()
             self._forget_job(job_id, run_id, db_path)
             raise
-        future.add_done_callback(lambda _future: self._stop_counting_job())
+        future.add_done_callback(lambda _future: self._finish_job(job_id))
+
+    def _finish_job(self, job_id: str) -> None:
+        """Record the clock reading when the executor was done with a job, then stop counting it as unfinished."""
+        try:
+            finished_at = self._clock()
+            with self._lock:
+                self._jobs[job_id].finished_at = finished_at
+        finally:
+            self._stop_counting_job()
 
     def _stop_counting_job(self) -> None:
         """Stop counting one job as unfinished, waking every wait_until_idle caller once none is left."""
