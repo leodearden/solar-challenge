@@ -28,6 +28,7 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
+from solar_challenge.web.presets import PresetNameTaken, PresetType, save_config_preset
 from solar_challenge.web.shared import (
     NotAJsonObject,
     get_job_manager,
@@ -283,6 +284,21 @@ def list_presets() -> tuple[Response, int]:
 
     return jsonify(builtin + saved), 200
 
+def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str, Any]) -> tuple[Response, int]:
+    """Save *config* as the *preset_type* preset *name*, answering as both preset save endpoints do.
+
+    Returns:
+        JSON with the preset name and id, HTTP 201; or the ``error``: HTTP 409 for a
+        name a saved preset of the other type holds, HTTP 500 for a database fault.
+    """
+    try:
+        preset_id = save_config_preset(current_app.config["DATABASE"], name, preset_type, config)
+    except PresetNameTaken as taken:
+        return jsonify({"error": str(taken)}), 409
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"name": name, "id": preset_id}), 201
+
 @api_bp.route("/presets", methods=["POST"])
 def save_preset() -> tuple[Response, int]:
     """Save a home preset to the database.
@@ -291,12 +307,10 @@ def save_preset() -> tuple[Response, int]:
     must be 'home': fleet presets are saved through POST /api/scenarios/save.
 
     Returns:
-        JSON confirmation with the preset name and id, HTTP 201 on success; or the ``error``,
-        HTTP 400, for an empty name or a type other than 'home'.
+        JSON confirmation with the preset name and id, HTTP 201 on success; or the ``error``:
+        HTTP 400 for an empty name or a type other than 'home', HTTP 409 for a name a saved
+        fleet preset holds.
     """
-    import uuid as _uuid  # noqa: PLC0415
-    from datetime import datetime, timezone  # noqa: PLC0415
-
     data = request_json_object()
     name = data.get("name", "").strip()
     if not name:
@@ -309,36 +323,7 @@ def save_preset() -> tuple[Response, int]:
     config_payload = {
         k: v for k, v in data.items() if k not in ("name", "type")
     }
-
-    db_path = current_app.config["DATABASE"]
-
-    from solar_challenge.web.database import get_db  # noqa: PLC0415
-
-    preset_id = str(_uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-
-    try:
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id FROM config_presets WHERE name = ? AND type = ?",
-                (name, preset_type),
-            )
-            existing = cursor.fetchone()
-            if existing:
-                cursor.execute(
-                    "UPDATE config_presets SET config_json = ?, created_at = ? WHERE id = ?",
-                    (json.dumps(config_payload), now, existing["id"]),
-                )
-                preset_id = existing["id"]
-            else:
-                cursor.execute(
-                    "INSERT INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (preset_id, name, preset_type, json.dumps(config_payload), now),
-                )
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": str(exc)}), 500
-    return jsonify({"name": name, "id": preset_id}), 201
+    return _answer_preset_save(name, "home", config_payload)
 
 @api_bp.route("/presets/<name>", methods=["GET"])
 def get_preset(name: str) -> tuple[Response, int]:
@@ -986,16 +971,14 @@ def scenarios_validate_scenario() -> tuple[Response, int]:
 
 @api_bp.route("/scenarios/save", methods=["POST"])
 def scenarios_save_scenario() -> tuple[Response, int]:
-    """Save a scenario configuration to the config_presets table.
+    """Save a scenario configuration as a fleet preset.
 
     Expects a JSON body with at least ``name`` and ``config`` fields.
 
     Returns:
-        JSON confirmation with preset name and id, HTTP 201 on success.
+        JSON confirmation with preset name and id, HTTP 201 on success; or the ``error``:
+        HTTP 400 for an empty name, HTTP 409 for a name a saved home preset holds.
     """
-    import uuid  # noqa: PLC0415
-    from datetime import datetime, timezone  # noqa: PLC0415
-
     data = request_json_object()
     name = str(data.get("name", "")).strip()
     if not name:
@@ -1004,33 +987,7 @@ def scenarios_save_scenario() -> tuple[Response, int]:
     if not config_payload:
         # Accept flat form data as config
         config_payload = {k: v for k, v in data.items() if k not in ("name", "type")}
-
-    db_path = current_app.config["DATABASE"]
-    preset_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-
-    try:
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id FROM config_presets WHERE name = ? AND type = ?",
-                (name, "fleet"),
-            )
-            existing = cursor.fetchone()
-            if existing:
-                cursor.execute(
-                    "UPDATE config_presets SET config_json = ?, created_at = ? WHERE id = ?",
-                    (json.dumps(config_payload), now, existing["id"]),
-                )
-                preset_id = existing["id"]
-            else:
-                cursor.execute(
-                    "INSERT INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (preset_id, name, "fleet", json.dumps(config_payload), now),
-                )
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": str(exc)}), 500
-    return jsonify({"name": name, "id": preset_id}), 201
+    return _answer_preset_save(name, "fleet", config_payload)
 
 
 @api_bp.route("/scenarios/presets", methods=["GET"])
