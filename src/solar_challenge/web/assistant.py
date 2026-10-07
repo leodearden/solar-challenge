@@ -28,7 +28,7 @@ from flask.typing import ResponseReturnValue
 
 from solar_challenge.web import database
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import NotAJsonObject, get_job_manager, request_json_object
+from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
 from solar_challenge.web.simulation_params import parse_home_config
 from solar_challenge.web.storage import RunStorage
 
@@ -818,6 +818,7 @@ def chat() -> Response:
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
     job_manager = get_job_manager()
+    storage = get_storage()
 
     def generate() -> Generator[str, None, None]:
         # Pre-check: API key must be set
@@ -863,7 +864,7 @@ def chat() -> Response:
         # - NOT placed in the cached system block (preserves prompt-cache stability).
         # - Graceful no-op when run_id is absent/empty or the run is not found.
         if run_id and messages and messages[-1]["role"] == "user":
-            run_data = get_run_results(run_id, RunStorage(db_path=db_path, data_dir=data_dir))
+            run_data = get_run_results(run_id, storage)
             if "error" not in run_data:
                 preamble = (
                     f"[Run context for run_id={run_id!r}, name={run_data.get('name')!r}: "
