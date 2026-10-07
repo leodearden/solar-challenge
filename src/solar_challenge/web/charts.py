@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import numpy as np
@@ -829,12 +830,21 @@ def fleet_grid_impact(fleet: FleetResults) -> str:
     return str(fig.to_json())
 
 
-_PER_HOME_ENERGY_TOTALS: tuple[tuple[str, str, Callable[[SummaryStatistics], float]], ...] = (
-    ("Generation", "pv_generation", lambda summary: summary.total_generation_kwh),
-    ("Demand", "demand", lambda summary: summary.total_demand_kwh),
-    ("Self-Consumption", "self_consumption", lambda summary: summary.total_self_consumption_kwh),
-    ("Grid Import", "grid_import", lambda summary: summary.total_grid_import_kwh),
-    ("Grid Export", "grid_export", lambda summary: summary.total_grid_export_kwh),
+@dataclass(frozen=True)
+class _EnergyTotal:
+    """An energy total the fleet charts draw for each home: its label, its COLOUR_PALETTE role, and its kWh in a home's summary."""
+
+    label: str
+    colour_role: str
+    kwh: Callable[[SummaryStatistics], float]
+
+
+_PER_HOME_ENERGY_TOTALS: tuple[_EnergyTotal, ...] = (
+    _EnergyTotal("Generation", "pv_generation", lambda summary: summary.total_generation_kwh),
+    _EnergyTotal("Demand", "demand", lambda summary: summary.total_demand_kwh),
+    _EnergyTotal("Self-Consumption", "self_consumption", lambda summary: summary.total_self_consumption_kwh),
+    _EnergyTotal("Grid Import", "grid_import", lambda summary: summary.total_grid_import_kwh),
+    _EnergyTotal("Grid Export", "grid_export", lambda summary: summary.total_grid_export_kwh),
 )
 
 
@@ -855,8 +865,8 @@ def fleet_heatmap(home_summaries: Sequence[SummaryStatistics]) -> str:
     summaries = home_summaries[:50]
 
     y_labels = [f"Home {i+1}" for i in range(len(summaries))]
-    x_labels = [label for label, _, _ in _PER_HOME_ENERGY_TOTALS]
-    z = [[round(total(summary), 2) for _, _, total in _PER_HOME_ENERGY_TOTALS] for summary in summaries]
+    x_labels = [total.label for total in _PER_HOME_ENERGY_TOTALS]
+    z = [[round(total.kwh(summary), 2) for total in _PER_HOME_ENERGY_TOTALS] for summary in summaries]
 
     fig = go.Figure(data=go.Heatmap(
         z=z,
@@ -890,12 +900,12 @@ def fleet_box_plots(home_summaries: Sequence[SummaryStatistics]) -> str:
     """
     traces: list[Any] = [
         go.Box(
-            name=label,
-            y=[total(summary) for summary in home_summaries],
-            marker_color=COLOUR_PALETTE[role],
+            name=total.label,
+            y=[total.kwh(summary) for summary in home_summaries],
+            marker_color=COLOUR_PALETTE[total.colour_role],
             boxmean=True,
         )
-        for label, role, total in _PER_HOME_ENERGY_TOTALS
+        for total in _PER_HOME_ENERGY_TOTALS
     ]
 
     fig = go.Figure(data=traces)
