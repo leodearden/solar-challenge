@@ -296,6 +296,26 @@ class TestRunDetailAPI:
             "notes": None,
         }
 
+    def test_api_get_run_decodes_a_config_or_summary_that_is_not_json_as_empty(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A config or summary whose stored text is not JSON is decoded as {}, beside that raw text."""
+        with get_db(app.config["DATABASE"]) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, config_json, summary_json, status, created_at)"
+                " VALUES ('garbled-run', 'Garbled', 'home', '{not json', 'not json either', 'completed',"
+                " '2025-06-03T10:00:00')"
+            )
+
+        data = client.get("/api/history/runs/garbled-run").get_json()
+
+        assert {key: data[key] for key in ("config_json", "summary_json", "config", "summary")} == {
+            "config_json": "{not json",
+            "summary_json": "not json either",
+            "config": {},
+            "summary": {},
+        }
+
 
 class TestDeleteAPI:
     """Tests for the run delete API endpoint."""
