@@ -106,6 +106,19 @@ class _CountingIds:
         return self.issued[-1]
 
 
+class _ManualClock:
+    """Stands in for a JobManager's clock: time stands still until advance() moves it on."""
+
+    def __init__(self) -> None:
+        self._now = 0.0
+
+    def __call__(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+
 @pytest.fixture
 def app(tmp_path: Path) -> Flask:
     """Create a test Flask application with temporary database."""
@@ -560,73 +573,8 @@ class TestJobManagerDirect:
         events = list(jm.get_events("nonexistent-job-id"))
         assert events == []
 
-    def test_ttl_cleanup_removes_old_jobs(self) -> None:
-        """Test that _cleanup_old_jobs removes entries older than the TTL."""
-        jm = JobManager(max_workers=1)
 
-        # Insert a job with a created_at time in the distant past
-        old_job_id = "old-job"
-        new_job_id = "new-job"
-        now = time.monotonic()
-
-        with jm._lock:
-            jm._jobs[old_job_id] = {
-                "job_id": old_job_id,
-                "run_id": "old-run",
-                "status": "completed",
-                "progress_pct": 100.0,
-                "current_step": "Done",
-                "message": "Done",
-                "created_at": now - 7200,  # 2 hours ago
-            }
-            jm._event_queues[old_job_id] = collections.deque(maxlen=100)
-
-            jm._jobs[new_job_id] = {
-                "job_id": new_job_id,
-                "run_id": "new-run",
-                "status": "running",
-                "progress_pct": 50.0,
-                "current_step": "Running",
-                "message": "Running",
-                "created_at": now,  # just now
-            }
-            jm._event_queues[new_job_id] = collections.deque(maxlen=100)
-
-        # Run cleanup with default 1-hour TTL
-        jm._cleanup_old_jobs(max_age_seconds=3600.0)
-
-        # Old job should be removed
-        assert jm.get_job_status(old_job_id) is None
-        assert old_job_id not in jm._event_queues
-
-        # New job should still exist
-        assert jm.get_job_status(new_job_id) is not None
-        assert new_job_id in jm._event_queues
-
-    def test_ttl_cleanup_preserves_all_when_young(self) -> None:
-        """Test that _cleanup_old_jobs preserves jobs within the TTL."""
-        jm = JobManager(max_workers=1)
-        now = time.monotonic()
-
-        with jm._lock:
-            jm._jobs["young-job"] = {
-                "job_id": "young-job",
-                "run_id": "run",
-                "status": "completed",
-                "progress_pct": 100.0,
-                "current_step": "Done",
-                "message": "Done",
-                "created_at": now - 60,  # 1 minute ago
-            }
-            jm._event_queues["young-job"] = collections.deque(maxlen=100)
-
-        jm._cleanup_old_jobs(max_age_seconds=3600.0)
-
-        # Should still be there
-        assert jm.get_job_status("young-job") is not None
-
-
-_A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
+_A_HOME =HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
 _JUNE_1 = pd.Timestamp("2024-06-01", tz="UTC")
 _JUNE_2 = pd.Timestamp("2024-06-02", tz="UTC")
 
@@ -812,6 +760,36 @@ class TestJobManagerStatus:
 
         assert JobManager(max_workers=1).get_job_status(job_id) is None
         assert _job_state(_run_storage(tmp_path), job_id)["status"] == "completed"
+
+
+_A_MINUTE = 60.0
+_A_DAY = 24 * 60 * 60.0
+
+
+class TestJobManagerAgeLimit:
+    """Tests for how long a JobManager tracks a job: until it finishes, and for a while after."""
+
+    def test_a_finished_job_is_still_tracked_at_a_submit_a_minute_after_it_finished(self, tmp_path: Path) -> None:
+        clock = _ManualClock()
+        manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation(), clock=clock)
+        job_id = _submit_home_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+        clock.advance(_A_MINUTE)
+
+        _submit_home_job(manager, tmp_path)
+
+        assert _status_of(manager, job_id) == "completed"
+
+    def test_a_finished_job_is_not_tracked_after_a_submit_a_day_after_it_finished(self, tmp_path: Path) -> None:
+        clock = _ManualClock()
+        manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation(), clock=clock)
+        job_id = _submit_home_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+        clock.advance(_A_DAY)
+
+        _submit_home_job(manager, tmp_path)
+
+        assert manager.get_job_status(job_id) is None
 
 
 class TestJobManagerQueuedJobs:
