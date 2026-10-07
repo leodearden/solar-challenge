@@ -10,6 +10,8 @@ import pytest
 pytest.importorskip("flask")
 from flask import Flask
 
+from solar_challenge.web.storage import RunStorage
+
 from tests.unit.web_assistant._fakes import seed_run
 
 
@@ -214,11 +216,19 @@ class TestSuggestConfig:
         )
 
 
+def _storage(db_path: Path) -> RunStorage:
+    """The RunStorage over the database at *db_path*, its run files beside it."""
+    return RunStorage(db_path=db_path, data_dir=db_path.parent)
+
+
 class TestGetRunResults:
-    """Tests for get_run_results(run_id_or_name, db_path) -> dict."""
+    """Tests for get_run_results(run_id_or_name, storage) -> dict."""
 
     def test_lookup_by_id_returns_seeded_fields(self, tmp_path: Path) -> None:
-        """get_run_results(run_id, db_path) returns dict with seeded row fields."""
+        """get_run_results(run_id, storage) answers the seeded row's fields, its summary decoded.
+
+        seed_run leaves n_homes at the schema's default, 1.
+        """
         from solar_challenge.web.assistant import get_run_results
 
         db_path = tmp_path / "grr_test.db"
@@ -233,22 +243,20 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result = get_run_results("run-abc-123", db_path)
+        result = get_run_results("run-abc-123", _storage(db_path))
 
-        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-        assert result.get("run_id") == "run-abc-123", f"run_id mismatch: {result}"
-        assert result.get("name") == "test-run", f"name mismatch: {result}"
-        assert result.get("type") == "home", f"type mismatch: {result}"
-        assert result.get("status") == "completed", f"status mismatch: {result}"
-        assert result.get("created_at") == "2026-01-01T12:00:00+00:00", (
-            f"created_at mismatch: {result}"
-        )
-        assert result.get("summary") == summary, (
-            f"summary dict mismatch: expected {summary!r}, got {result.get('summary')!r}"
-        )
+        assert result == {
+            "run_id": "run-abc-123",
+            "name": "test-run",
+            "type": "home",
+            "status": "completed",
+            "created_at": "2026-01-01T12:00:00+00:00",
+            "n_homes": 1,
+            "summary": summary,
+        }
 
     def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
-        """get_run_results(name, db_path) resolves to the same row as lookup by id."""
+        """get_run_results(name, storage) resolves to the same row as lookup by id."""
         from solar_challenge.web.assistant import get_run_results
 
         db_path = tmp_path / "grr_name_test.db"
@@ -263,8 +271,8 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result_by_id = get_run_results("run-xyz-456", db_path)
-        result_by_name = get_run_results("my-named-run", db_path)
+        result_by_id = get_run_results("run-xyz-456", _storage(db_path))
+        result_by_name = get_run_results("my-named-run", _storage(db_path))
 
         # Both should resolve to the same row
         assert result_by_id.get("run_id") == "run-xyz-456"
@@ -290,7 +298,7 @@ class TestGetRunResults:
         )
 
         try:
-            result = get_run_results("totally-unknown-id-xyz", db_path)
+            result = get_run_results("totally-unknown-id-xyz", _storage(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for unknown id; got: {exc!r}"
@@ -327,7 +335,7 @@ class TestGetRunResults:
             summary={"total_generation_kwh": 200.0},
         )
 
-        result = get_run_results("shared-run-name", db_path)
+        result = get_run_results("shared-run-name", _storage(db_path))
 
         assert result.get("run_id") == "run-new-collision", (
             f"Name tie-break should return newest run (run-new-collision); "
@@ -350,7 +358,7 @@ class TestGetRunResults:
             )
 
         try:
-            result = get_run_results("run-null-summary", db_path)
+            result = get_run_results("run-null-summary", _storage(db_path))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for NULL summary_json; got: {exc!r}"
@@ -361,13 +369,13 @@ class TestGetRunResults:
         )
 
     def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
-        """get_run_results with a nonexistent/unreadable db_path returns {'error':...}, no raise."""
+        """get_run_results over a storage whose database cannot be opened returns {'error':...}, no raise."""
         from solar_challenge.web.assistant import get_run_results
 
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = get_run_results("any-run-id", bad_path)
+            result = get_run_results("any-run-id", RunStorage(db_path=bad_path, data_dir=tmp_path))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for bad db_path; got: {exc!r}"
@@ -923,6 +931,7 @@ class TestRunHomeSimulationWithRealJobManager:
         db_path: str = app.config["DATABASE"]
         data_dir: str = app.config["DATA_DIR"]
         job_manager = app.extensions["job_manager"]
+        storage = RunStorage(db_path=db_path, data_dir=data_dir)
 
         result = run_home_simulation(
             {
@@ -951,7 +960,7 @@ class TestRunHomeSimulationWithRealJobManager:
         deadline = _time.monotonic() + 120
         status = "running"
         while _time.monotonic() < deadline:
-            run_data = get_run_results(run_id, db_path)
+            run_data = get_run_results(run_id, storage)
             status = run_data.get("status", "")
             if status in ("completed", "failed"):
                 break
@@ -963,7 +972,7 @@ class TestRunHomeSimulationWithRealJobManager:
         )
 
         # Assert the completed run is fetchable with a non-None generation metric
-        run_data = get_run_results(run_id, db_path)
+        run_data = get_run_results(run_id, storage)
         assert "error" not in run_data, f"get_run_results returned error: {run_data}"
         summary = run_data.get("summary", {})
         assert summary.get("total_generation_kwh") is not None, (
