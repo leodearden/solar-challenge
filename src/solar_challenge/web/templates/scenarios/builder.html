@@ -30,7 +30,7 @@
     </div>
 </template>
 <button type="button" @click="addRow({{ rows }}, { value: {{ new_row_value }}, {{ column }}: 10 })"
-    class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ add_label }}</button>
+    class="text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ add_label }}</button>
 {% endmacro %}
 
 {# One fleet component's distribution card, bound to scenarioBuilder's <prefix>_* fields and to its fixed_field #}
@@ -42,7 +42,7 @@
             <div>
                 <label for="builder_{{ prefix }}_distribution_type" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Distribution Type</label>
                 <select id="builder_{{ prefix }}_distribution_type" x-model="{{ prefix }}_distribution_type" @change="updatePreview()"
-                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     <option value="">Fixed Value</option>
                     <option value="normal">Normal Distribution</option>
                     <option value="uniform">Uniform Distribution</option>
@@ -53,7 +53,7 @@
             <div x-show="!{{ prefix }}_distribution_type">
                 <label for="builder_{{ fixed_field }}" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Fixed Value</label>
                 <input id="builder_{{ fixed_field }}" type="number" step="{{ step }}" min="{{ fixed_min }}" max="{{ fixed_max }}" x-model="{{ fixed_field }}" @input="updatePreview()"
-                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
             </div>
             <div x-show="{{ prefix }}_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
                 {{ _parameter_input(prefix, 'mean', 'Mean', step) }}
@@ -125,33 +125,33 @@
                 <div>
                     <label for="builder_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Scenario Name</label>
                     <input id="builder_name" type="text" x-model="name" @input="updatePreview()" placeholder="e.g. Bristol Phase 1"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
                 <div>
                     <label for="builder_description" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
                     <textarea id="builder_description" x-model="description" @input="updatePreview()" rows="2" placeholder="Optional description"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"></textarea>
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"></textarea>
                 </div>
         {% endcall %}
 
         {% call accordion_section('period', 'Period') %}
                 <div class="flex flex-wrap gap-2 mb-3">
-                    <button @click="setPeriod('full-year')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">Full Year</button>
-                    <button @click="setPeriod('summer')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">Summer</button>
-                    <button @click="setPeriod('winter')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">Winter</button>
-                    <button @click="setPeriod('month')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">1 Month</button>
-                    <button @click="setPeriod('week')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">1 Week</button>
+                    <button @click="setPeriod('full-year')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Full Year</button>
+                    <button @click="setPeriod('summer')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Summer</button>
+                    <button @click="setPeriod('winter')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Winter</button>
+                    <button @click="setPeriod('month')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">1 Month</button>
+                    <button @click="setPeriod('week')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">1 Week</button>
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label for="builder_start_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Start Date</label>
                         <input id="builder_start_date" type="date" x-model="start_date" @change="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                     <div>
                         <label for="builder_end_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">End Date</label>
                         <input id="builder_end_date" type="date" x-model="end_date" @change="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                 </div>
         {% endcall %}
@@ -160,7 +160,7 @@
                 <div>
                     <label for="builder_location_preset" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Location Preset</label>
                     <select id="builder_location_preset" x-model="location_preset" @change="updatePreview()"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                         <option value="bristol">Bristol, UK</option>
                         <option value="london">London, UK</option>
                         <option value="edinburgh">Edinburgh, UK</option>
@@ -172,17 +172,17 @@
                     <div>
                         <label for="builder_latitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
                         <input id="builder_latitude" type="number" step="0.01" x-model="latitude" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                     <div>
                         <label for="builder_longitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Longitude</label>
                         <input id="builder_longitude" type="number" step="0.01" x-model="longitude" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                     <div>
                         <label for="builder_altitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Altitude (m)</label>
                         <input id="builder_altitude" type="number" step="1" x-model="altitude" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                 </div>
         {% endcall %}
@@ -191,7 +191,7 @@
                 <div>
                     <label for="builder_n_homes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Number of Homes</label>
                     <input id="builder_n_homes" type="number" min="1" max="10000" x-model="n_homes" @input="updatePreview()"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
 
                 {# One card per entry of COMPONENTS in static/js/scenario-builder.js, passing the entry's prefix and fixedField #}
@@ -205,12 +205,12 @@
                     <div>
                         <label for="builder_import_rate" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Import Rate (GBP/kWh)</label>
                         <input id="builder_import_rate" type="number" step="0.001" x-model="import_rate" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                     <div>
                         <label for="builder_seg_rate_pence_per_kwh" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">SEG Export Rate (p/kWh)</label>
                         <input id="builder_seg_rate_pence_per_kwh" type="number" step="0.1" min="0" x-model="seg_rate_pence_per_kwh" @input="updatePreview()"
-                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                            class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                 </div>
         {% endcall %}
@@ -218,7 +218,7 @@
         <!-- Action Buttons -->
         <div class="flex flex-wrap gap-3">
             <button @click="validateScenario()"
-                class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
+                class="px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
                 Validate
             </button>
 
@@ -283,7 +283,7 @@
                     <input type="text" id="save_name" x-model="saveName"
                         @keydown.enter="doSave()"
                         x-ref="saveNameInput"
-                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
                 <div class="flex justify-end gap-3">
                     <button @click="showSaveModal = false"

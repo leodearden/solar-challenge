@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to the CSS names the dashboard and its stylesheets share:
 the classes templates and scripts apply and selectors name, the custom properties
-stylesheets declare and var() reads, the @keyframes stylesheets define, and the
-properties lone-class rules declare and inline style attributes set.
+stylesheets declare and var() reads, the @keyframes stylesheets define, the properties
+lone-class rules declare and inline style attributes set, and the colour palettes
+classes name.
 
 Usage::
 
@@ -199,6 +200,17 @@ def linked_stylesheets(template_source: str) -> list[str]:
     calls = _JINJA.parse(template_source).find_all(nodes.Call)
     filenames = [_static_filename(call) for call in calls]
     return [name for name in filenames if name is not None and name.endswith(".css")]
+
+
+def names_palette(css_class: str, palette: str) -> bool:
+    """Whether *css_class* names a shade of the colour *palette*, whatever its variants.
+
+    It does when it ends with ``-<palette>-<shade>``, optionally followed by an opacity
+    modifier: ``bg-primary-500``, ``dark:[&::-webkit-slider-thumb]:bg-primary-400`` and
+    ``dark:bg-primary-900/20`` each name primary. A palette's DEFAULT shade, written
+    ``bg-<palette>``, is not recognised: a bare ``-<palette>`` suffix would also match
+    hand-written classes such as ``btn--primary``."""
+    return re.search(rf"-{re.escape(palette)}-\w+(?:/\S+)?$", css_class) is not None
 
 
 class _TemplateMarkup(HTMLParser):

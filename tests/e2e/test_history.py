@@ -164,7 +164,7 @@ def test_sort_columns(page: Page, live_server: str) -> None:
 
     # After clicking Name, the sort indicator span with text " ^" or " v"
     # should become visible (it uses x-show="sort === 'name'")
-    sort_indicator = name_header.locator("span.text-amber-500")
+    sort_indicator = name_header.locator("span")
     expect(sort_indicator).to_be_visible()
 
     # The indicator should contain a caret character (^ or v)

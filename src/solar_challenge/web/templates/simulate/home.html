@@ -305,7 +305,7 @@ document.addEventListener('alpine:init', () => {
                     @click="activeTab = tab.id"
                     class="px-6 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0"
                     :class="activeTab === tab.id
-                        ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                        ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                         : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600'"
                     :aria-selected="activeTab === tab.id"
                     role="tab"
@@ -353,7 +353,7 @@ document.addEventListener('alpine:init', () => {
                             id="location"
                             name="location"
                             x-model="formData.location"
-                            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
                         >
                             <option value="bristol">Bristol (51.45&deg;N, 2.58&deg;W)</option>
                             <option value="london">London (51.51&deg;N, 0.13&deg;W)</option>
@@ -375,7 +375,7 @@ document.addEventListener('alpine:init', () => {
                                 max="90"
                                 step="0.01"
                                 x-model.number="formData.custom_lat"
-                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
                             >
                         </div>
                         <div class="space-y-1.5">
@@ -388,7 +388,7 @@ document.addEventListener('alpine:init', () => {
                                 max="180"
                                 step="0.01"
                                 x-model.number="formData.custom_lon"
-                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
                             >
                         </div>
                     </div>
@@ -405,12 +405,12 @@ document.addEventListener('alpine:init', () => {
                     <div class="flex gap-4">
                         <label class="flex items-center gap-2 cursor-pointer">
                             <input type="radio" name="period_mode" value="preset" x-model="formData.period_mode"
-                                   class="text-amber-500 focus:ring-amber-500">
+                                   class="text-primary-500 focus:ring-primary-500">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Quick preset</span>
                         </label>
                         <label class="flex items-center gap-2 cursor-pointer">
                             <input type="radio" name="period_mode" value="custom" x-model="formData.period_mode"
-                                   class="text-amber-500 focus:ring-amber-500">
+                                   class="text-primary-500 focus:ring-primary-500">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Custom range</span>
                         </label>
                     </div>
@@ -424,8 +424,8 @@ document.addEventListener('alpine:init', () => {
                                     @click="formData.period_days = d"
                                     class="px-4 py-2 rounded-lg text-sm font-medium border transition-colors"
                                     :class="formData.period_days == d
-                                        ? 'bg-amber-500 text-white border-amber-500'
-                                        : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-amber-400 dark:hover:border-amber-500'"
+                                        ? 'bg-primary-500 text-white border-primary-500'
+                                        : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-primary-400 dark:hover:border-primary-500'"
                                     x-text="d === 365 ? '1 year' : d + ' days'"
                                 ></button>
                             </template>
@@ -441,7 +441,7 @@ document.addEventListener('alpine:init', () => {
                                 id="start_date"
                                 name="start_date"
                                 x-model="formData.start_date"
-                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
                             >
                         </div>
                         <div class="space-y-1.5">
@@ -451,7 +451,7 @@ document.addEventListener('alpine:init', () => {
                                 id="end_date"
                                 name="end_date"
                                 x-model="formData.end_date"
-                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
                             >
                         </div>
                     </div>
@@ -472,7 +472,7 @@ document.addEventListener('alpine:init', () => {
                     name="name"
                     x-model="formData.name"
                     placeholder="My Simulation"
-                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
                 >
             </div>
 
@@ -484,7 +484,7 @@ document.addEventListener('alpine:init', () => {
                     name="preset"
                     x-model="formData.preset"
                     @change="if (formData.preset) applyPreset(formData.preset)"
-                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors text-sm"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
                 >
                     <option value="">-- No preset --</option>
                     <template x-for="p in presets" :key="p.name">
@@ -497,7 +497,7 @@ document.addEventListener('alpine:init', () => {
             <button
                 type="submit"
                 :disabled="submitting"
-                class="px-6 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-sm transition-colors flex items-center gap-2 whitespace-nowrap"
+                class="px-6 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-sm transition-colors flex items-center gap-2 whitespace-nowrap"
             >
                 <svg x-show="submitting" x-cloak class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
