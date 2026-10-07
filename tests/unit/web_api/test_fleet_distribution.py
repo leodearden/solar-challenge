@@ -12,6 +12,7 @@ from flask.testing import FlaskClient
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
 
 
@@ -31,14 +32,6 @@ UNUSABLE_SHUFFLED_POOL_ENTRIES = [
         f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
         id="pool-total-one-above-the-fleet-limit",
     ),
-]
-
-# One value of each kind number_fields.as_finite_float refuses; its full matrix is tested there.
-_UNUSABLE_NUMBERS = [
-    pytest.param(10**400, id="integer-too-large-for-a-float"),
-    pytest.param(float("inf"), id="infinity"),
-    pytest.param(float("nan"), id="nan"),
-    pytest.param(True, id="boolean"),
 ]
 
 
@@ -156,7 +149,7 @@ class TestPreviewDistribution:
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
 
-    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
         ("dist_type", "params", "field"),
         [
@@ -590,7 +583,7 @@ class TestFleetFromDistribution:
         assert resp.get_json() == {"error": message}
         mock_job_manager.submit_fleet_job.assert_not_called()
 
-    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
         ("patch", "field"),
         [

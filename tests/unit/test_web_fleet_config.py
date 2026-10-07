@@ -27,15 +27,7 @@ from tests._fleet_form import (
     FLEET_FORM_COMPONENT_BLOCKS,
     valid_distribution_form,
 )
-
-# One value of each kind number_fields.as_finite_float refuses other than a boolean; its full matrix is tested there.
-_UNUSABLE_NON_BOOLEAN_NUMBERS = [
-    pytest.param(10**400, id="integer-too-large-for-a-float"),
-    pytest.param(float("inf"), id="infinity"),
-    pytest.param(float("nan"), id="nan"),
-]
-
-_UNUSABLE_NUMBERS = [*_UNUSABLE_NON_BOOLEAN_NUMBERS, pytest.param(True, id="boolean")]
+from tests._unusable_numbers import UNUSABLE_NON_BOOLEAN_NUMBERS, UNUSABLE_NUMBERS
 
 #: Fields of a fleet form block that hold one number: each block's fixed value, sent in its distribution's field, and another block setting.
 _SINGLE_NUMBER_FIELDS = [
@@ -350,7 +342,7 @@ class TestFleetConfigHelpers:
             sample_distribution(dist_type, params, 3)
         assert str(exc_info.value) == message
 
-    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
         ("dist_type", "params", "field"),
         [
@@ -722,7 +714,7 @@ class TestFleetConfigHelpers:
             form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
         assert str(exc_info.value) == message
 
-    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
         ("form_patch", "field"),
         [
@@ -829,7 +821,7 @@ class TestFleetConfigHelpers:
             form_to_fleet_distribution_config({**valid_distribution_form(), **form_patch(value)})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
-    @pytest.mark.parametrize("value", _UNUSABLE_NON_BOOLEAN_NUMBERS)
+    @pytest.mark.parametrize("value", UNUSABLE_NON_BOOLEAN_NUMBERS)
     @pytest.mark.parametrize(
         ("block", "distribution", "key"),
         [
