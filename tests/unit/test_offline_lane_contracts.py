@@ -17,7 +17,7 @@ import pytest
 
 from tests._collect_only import requires_uv
 from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
-from tests._orchestrator_config import lane_job_enabled, sole_offline_lane_job
+from tests._orchestrator_config import lane_job_enabled, offline_lane_jobs, sole_offline_lane_job
 
 
 class LaneContract(Enum):
@@ -94,6 +94,19 @@ def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: P
     lane_job = sole_offline_lane_job(project_root, job.name)
 
     assert lane_job_enabled(lane_job), f"the {job.name!r} lane job is disabled, so {job.if_unrun}"
+
+
+def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> None:
+    """Every job the offline lane runs has a LANE_JOBS row, so no lane job goes without its contracts."""
+    row_names = {job.name for job in LANE_JOBS}
+    rowless = [
+        lane_job.get("name") for lane_job in offline_lane_jobs(project_root) if lane_job.get("name") not in row_names
+    ]
+
+    assert not rowless, (
+        f"git.offline_lane_commands runs {rowless}, with no row in LANE_JOBS, so none of the lane contracts is "
+        "checked for them; add a row naming each job's suite and the contracts it keeps"
+    )
 
 
 @requires_uv
