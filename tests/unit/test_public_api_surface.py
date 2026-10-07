@@ -10,11 +10,15 @@ Concerns:
   H2 signature     — FROZEN_SURFACE pins each public name's surface form: a class's or
                      routine's signature, an Enum's members, a constant's type
                      (test_every_exported_signature_matches_frozen_surface)
-  H2 members       — FROZEN_MEMBERS pins each exported class's public members: its
-                     methods, properties, class constants and declared attributes
-                     (test_every_exported_class_member_matches_frozen_members,
-                      test_exported_classes_inherit_only_from_exported_classes,
-                      test_exported_classes_declare_the_public_attributes_they_set_on_self)
+  H2 closure       — FROZEN_CLOSURE pins the surface form of each class outside __all__
+                     that the frozen surface names, directly or through another such class
+                     (test_every_class_the_frozen_surface_names_matches_frozen_closure)
+  H2 members       — FROZEN_MEMBERS pins each pinned class's public members, exported
+                     or in FROZEN_CLOSURE: its methods, properties, class constants
+                     and declared attributes
+                     (test_every_pinned_class_member_matches_frozen_members,
+                      test_pinned_classes_inherit_only_from_pinned_classes,
+                      test_pinned_classes_declare_the_public_attributes_they_set_on_self)
   H2 kind          — EXPECTED_KIND pins the introspected kind of each name
                      (test_expected_kind_keys_match_frozen_set,
                       test_every_name_resolves_to_expected_kind)
@@ -31,14 +35,17 @@ Relationship to T3 (tests/unit/test_init_lazy_surface.py):
 
 import abc
 import enum
+import functools
 import inspect
 import subprocess
 import sys
+import types
 from collections.abc import Mapping
 
 import solar_challenge
 from tests._surface_forms import (
     member_forms,
+    signature_closure,
     surface_form,
     undeclared_attributes,
     unset_attributes,
@@ -187,12 +194,28 @@ def _drift_message(
         for path, current in drifted.items()
     )
     return (
-        f"Exported surface forms differ from {table}:{symbols}\n"
+        f"Surface forms differ from {table}:{symbols}\n"
         "Every change to the frozen public API (review/briefing.yaml), an addition "
         "included, needs an 'Unreleased on main' release note in the 'Tag / release "
         "convention' section of docs/domain-library-consumption.md, landed in the same "
         f"commit as the {table} edit."
     )
+
+
+def _drifted(
+    frozen: Mapping[str, str], current: Mapping[str, str], *, absent: str
+) -> dict[str, str]:
+    """Map each path whose current form is not its frozen one to its current form.
+
+    *current*'s paths come first, in its order, then each frozen path *current* lacks,
+    whose current form reads *absent*.
+    """
+    missing = [path for path in frozen if path not in current]
+    return {
+        path: current.get(path, absent)
+        for path in [*current, *missing]
+        if current.get(path) != frozen.get(path)
+    }
 
 
 def test_every_exported_signature_matches_frozen_surface() -> None:
@@ -215,13 +238,73 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 members: each exported class's public members, with their frozen forms
+# H2 closure: the classes outside __all__ that the frozen surface names, directly
+# or through another such class, each with its frozen surface form
 #
-# Keys are exported class names, then member names, in __all__ order and
-# class-body order, the order a failure lists drifted members in.  Each value is
-# the member's form as member_forms spells it (tests/_surface_forms.py).  A class
-# with no public member has no entry.  Each value stays on one line, so the
-# current form a failure prints pastes in verbatim.
+# A consumer needs them to use exported names: a ScenarioConfig is built from a
+# SimulationPeriod and HomeConfigs, and FleetResults.per_home_results holds
+# SimulationResults.  Each key is the path below solar_challenge of the module
+# that defines the class, then its qualified name, e.g. 'home.HomeConfig', in
+# path order; each value is the class's surface_form, on one line.
+# FROZEN_MEMBERS pins their members.  A class leaves this table when it joins
+# __all__.
+# ---------------------------------------------------------------------------
+FROZEN_CLOSURE: dict[str, str] = {
+    "config.DispatchStrategyConfig": "(strategy_type: str, peak_hours: list[tuple[int, int]] | None = None, import_limit_kw: float | None = None) -> None",
+    "config.GridChargeConfig": "(target_soc_fraction: float = 0.9) -> None",
+    "config.OutputConfig": "(csv_path: str | None = None, include_minute_data: bool = True, include_summary: bool = True, aggregation: str = 'minute') -> None",
+    "config.SimulationPeriod": "(start_date: str | Timestamp, end_date: str | Timestamp) -> None",
+    "ev.EVConfig": "(charger_type: str, arrival_hour: int, departure_hour: int = 7, required_charge_kwh: float = 35.0, smart_charging_mode: str = 'none', name: str = '') -> None",
+    "heat_pump.HeatPumpConfig": "(heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
+    "home.HomeConfig": "(pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, dispatch_strategy: str = 'greedy', seg_tariff: SEGTariff | None = None) -> None",
+    "home.SimulationResults": "(generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', heat_pump_load: Series | None = None, grid_charge_cost: Series | None = None) -> None",
+}
+
+_SUBMODULE_PREFIX = f"{solar_challenge.__name__}."
+
+
+@functools.cache
+def _closure_classes() -> Mapping[str, type]:
+    """The classes outside __all__ that the frozen surface names, directly or through another such class, by path in path order.
+
+    They are the signature_closure, within solar_challenge, of every object in __all__.
+    The modules it reads are fixed for the run, so it is computed once and handed out
+    read-only.
+    """
+    exported = [getattr(solar_challenge, name) for name in solar_challenge.__all__]
+    by_path = {
+        f"{cls.__module__.removeprefix(_SUBMODULE_PREFIX)}.{cls.__qualname__}": cls
+        for cls in signature_closure(exported, solar_challenge.__name__)
+    }
+    return types.MappingProxyType(dict(sorted(by_path.items())))
+
+
+def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
+    """H2 closure-lock: each class outside __all__ that the frozen surface names has the surface form FROZEN_CLOSURE pins.
+
+    Fails once, naming each drifted class with its frozen and current forms, in path
+    order.  A class a pinned form newly names counts as drifted, so its current form is
+    printed ready to paste; a pinned class no form names any longer is listed last, its
+    current form reading (not named by the frozen surface).
+    """
+    current = {path: surface_form(cls) for path, cls in _closure_classes().items()}
+    drifted = _drifted(
+        FROZEN_CLOSURE, current, absent="(not named by the frozen surface)"
+    )
+    assert not drifted, _drift_message("FROZEN_CLOSURE", FROZEN_CLOSURE, drifted)
+
+
+# ---------------------------------------------------------------------------
+# H2 members: each pinned class's public members, with their frozen forms
+#
+# A pinned class is an exported class or a FROZEN_CLOSURE class.  Keys are the
+# pinned classes' paths below solar_challenge, then member names: exported
+# classes first, in __all__ order, then closure classes in path order, and
+# members in class-body order, the order a failure lists drifted members in.
+# Each value is the member's form as member_forms spells it
+# (tests/_surface_forms.py).  A class with no public member has no entry.  Each
+# value stays on one line, so the current form a failure prints pastes in
+# verbatim.
 # ---------------------------------------------------------------------------
 FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     # --- signature-closure types ---
@@ -327,6 +410,25 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "BRISTOL_ALT": "float",
         "bristol": "classmethod (cls) -> Location",
     },
+    # --- classes outside __all__ (FROZEN_CLOSURE) ---
+    "config.SimulationPeriod": {
+        "get_start_timestamp": "(self, timezone: str = 'Europe/London') -> Timestamp",
+        "get_end_timestamp": "(self, timezone: str = 'Europe/London') -> Timestamp",
+    },
+    "ev.EVConfig": {
+        "get_charger_power_kw": "(self) -> float",
+        "get_available_charging_hours": "(self) -> float",
+    },
+    "heat_pump.HeatPumpConfig": {
+        "default_ashp": "classmethod (cls) -> HeatPumpConfig",
+        "default_gshp": "classmethod (cls) -> HeatPumpConfig",
+    },
+    "home.SimulationResults": {
+        "per_minute_amounts": "(self) -> DataFrame",
+        "total_amounts": "(self) -> dict[str, float]",
+        "to_dataframe": "(self) -> DataFrame",
+        "from_dataframe": "classmethod (cls, frame: DataFrame, *, strategy_name: str) -> SimulationResults",
+    },
 }
 
 
@@ -336,78 +438,79 @@ def _exported_classes() -> dict[str, type]:
     return {name: obj for name, obj in exported.items() if inspect.isclass(obj)}
 
 
+def _pinned_classes() -> dict[str, type]:
+    """Each pinned class by its path below solar_challenge: the exported classes by export name, in __all__ order, then the classes outside __all__ that the frozen surface names, in path order."""
+    return {**_exported_classes(), **_closure_classes()}
+
+
 def _forms_by_member_path(
     forms_by_class: Mapping[str, Mapping[str, str]],
 ) -> dict[str, str]:
-    """Flatten *forms_by_class* to {"Class.member": form}, a path built for display and comparison, never split."""
+    """Flatten *forms_by_class*, keyed by class path, to {"path.member": form}, a path built for display and comparison, never split."""
     return {
-        f"{class_name}.{member}": form
-        for class_name, forms in forms_by_class.items()
+        f"{class_path}.{member}": form
+        for class_path, forms in forms_by_class.items()
         for member, form in forms.items()
     }
 
 
-def test_every_exported_class_member_matches_frozen_members() -> None:
-    """H2 member-lock: every exported class's public members have the forms FROZEN_MEMBERS pins.
+def test_every_pinned_class_member_matches_frozen_members() -> None:
+    """H2 member-lock: every pinned class's public members have the forms FROZEN_MEMBERS pins.
 
     Fails once, naming each added, changed or removed member with its frozen and current
-    forms, in __all__ and class-body order, removed members last.  An added member's
+    forms, in pinned-class and class-body order, removed members last.  An added member's
     current form is printed ready to paste; a removed member's current form reads
     (removed).
     """
     frozen = _forms_by_member_path(FROZEN_MEMBERS)
     current = _forms_by_member_path(
-        {name: member_forms(cls) for name, cls in _exported_classes().items()}
+        {path: member_forms(cls) for path, cls in _pinned_classes().items()}
     )
-    removed = [path for path in frozen if path not in current]
-    drifted = {
-        path: current.get(path, "(removed)")
-        for path in [*current, *removed]
-        if current.get(path) != frozen.get(path)
-    }
+    drifted = _drifted(frozen, current, absent="(removed)")
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
 
 
 _STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum)
 
 
-def test_exported_classes_inherit_only_from_exported_classes() -> None:
-    """H2 member-lock guard: an exported class's bases are exported classes or _STDLIB_BASES.
+def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
+    """H2 member-lock guard: a pinned class's bases are pinned classes or _STDLIB_BASES.
 
-    FROZEN_MEMBERS pins a member under the exported class whose own body defines it.
+    FROZEN_MEMBERS pins a member under the pinned class whose own body defines it.
     """
-    classes = _exported_classes()
-    exported = set(classes.values())
+    classes = _pinned_classes()
+    pinned = set(classes.values())
     foreign_bases = [
-        f"{name} <- {base.__module__}.{base.__qualname__}"
-        for name, cls in classes.items()
+        f"{path} <- {base.__module__}.{base.__qualname__}"
+        for path, cls in classes.items()
         for base in cls.__mro__[1:]
-        if base not in exported and base not in _STDLIB_BASES
+        if base not in pinned and base not in _STDLIB_BASES
     ]
     assert not foreign_bases, (
-        f"Exported classes inherit from classes outside __all__: {foreign_bases}. "
+        "Pinned classes, those exported or outside __all__ and named by the frozen "
+        f"surface, inherit from classes that are neither: {foreign_bases}. "
         "member_forms reads each class's own body, so a public member defined on such a "
         "base escapes FROZEN_MEMBERS. Export the base, move its public members into the "
-        "exported class, or widen the member lock."
+        "pinned class, or widen the member lock."
     )
 
 
-def test_exported_classes_declare_the_public_attributes_they_set_on_self() -> None:
-    """H2 member-lock guard: an exported class declares in a class body each public attribute it sets on self, and sets each one its body only declares.
+def test_pinned_classes_declare_the_public_attributes_they_set_on_self() -> None:
+    """H2 member-lock guard: a pinned class declares in a class body each public attribute it sets on self, and sets each one its body only declares.
 
     member_forms reads class bodies, so FROZEN_MEMBERS pins an instance attribute only
     once its class body declares it, e.g. `cache_dir: Path`; and a declaration that
     nothing sets would pin a name that instances lack.
     """
-    classes = _exported_classes()
+    classes = _pinned_classes()
     undeclared = [
-        f"{name}.{attribute}"
-        for name, cls in classes.items()
+        f"{path}.{attribute}"
+        for path, cls in classes.items()
         for attribute in sorted(undeclared_attributes(cls))
     ]
     unset = [
-        f"{name}.{attribute}"
-        for name, cls in classes.items()
+        f"{path}.{attribute}"
+        for path, cls in classes.items()
         for attribute in sorted(unset_attributes(cls))
     ]
     assert not undeclared and not unset, (
