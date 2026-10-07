@@ -13,7 +13,8 @@ Concerns:
   H2 members       — FROZEN_MEMBERS pins each exported class's public members: its
                      methods, properties and class constants
                      (test_every_exported_class_member_matches_frozen_members,
-                      test_exported_classes_inherit_only_from_exported_classes)
+                      test_exported_classes_inherit_only_from_exported_classes,
+                      test_exported_classes_declare_the_public_attributes_they_set_on_self)
   H2 kind          — EXPECTED_KIND pins the introspected kind of each name
                      (test_expected_kind_keys_match_frozen_set,
                       test_every_name_resolves_to_expected_kind)
@@ -29,6 +30,7 @@ Relationship to T3 (tests/unit/test_init_lazy_surface.py):
 """
 
 import abc
+import ast
 import enum
 import inspect
 import subprocess
@@ -377,6 +379,65 @@ def test_exported_classes_inherit_only_from_exported_classes() -> None:
         "member_forms reads each class's own body, so a public member defined on such a "
         "base escapes FROZEN_MEMBERS. Export the base, move its public members into the "
         "exported class, or widen the member lock."
+    )
+
+
+def _public_attributes_set_on_self(cls: type) -> set[str]:
+    """The public attributes *cls*'s own source sets on self.
+
+    A frozen dataclass can set one only by object.__setattr__(self, "name", value), so
+    that call counts as setting it too.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(inspect.getsource(cls))):
+        match node:
+            case ast.Attribute(value=ast.Name(id="self"), attr=name, ctx=ast.Store()):
+                names.add(name)
+            case ast.Call(
+                func=ast.Attribute(value=ast.Name(id="object"), attr="__setattr__"),
+                args=[ast.Name(id="self"), ast.Constant(value=str() as name), *_],
+            ):
+                names.add(name)
+    return {name for name in names if not name.startswith("_")}
+
+
+def _declared_names(cls: type) -> set[str]:
+    """The names some class body in *cls*'s MRO defines or annotates."""
+    return {
+        name
+        for base in cls.__mro__
+        for name in [*vars(base), *inspect.get_annotations(base)]
+    }
+
+
+def test_exported_classes_declare_the_public_attributes_they_set_on_self() -> None:
+    """H2 member-lock guard: an exported class declares in a class body each public attribute it sets on self, and sets each one its body only declares.
+
+    member_forms reads class bodies, so FROZEN_MEMBERS pins an instance attribute only
+    once its class body declares it, e.g. `cache_dir: Path`; and a declaration that
+    nothing sets would pin a name that instances lack.
+    """
+    undeclared: list[str] = []
+    unset: list[str] = []
+    for name, cls in _exported_classes().items():
+        set_on_self = _public_attributes_set_on_self(cls)
+        declared_only = member_forms(cls).keys() - vars(cls).keys()
+        undeclared += [
+            f"{name}.{attribute}"
+            for attribute in sorted(set_on_self - _declared_names(cls))
+        ]
+        unset += [
+            f"{name}.{attribute}"
+            for attribute in sorted(declared_only - set_on_self)
+        ]
+    assert not undeclared and not unset, (
+        f"Public attributes set on self that no class body declares: {undeclared}. "
+        f"Attributes a class body declares that nothing sets on self: {unset}. "
+        "member_forms reads class bodies, so FROZEN_MEMBERS cannot pin an attribute "
+        "that is only set on self. Declare each such attribute in its class body, e.g. "
+        "`cache_dir: Path`, then add its FROZEN_MEMBERS entry and its 'Unreleased on "
+        "main' line in docs/domain-library-consumption.md, or make it private; and drop "
+        "each declaration that nothing sets."
     )
 
 
