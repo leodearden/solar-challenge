@@ -8,6 +8,7 @@ data export.
 
 import json
 import logging
+from dataclasses import asdict
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,6 @@ logger = logging.getLogger(__name__)
 from flask import (
     Blueprint,
     Response,
-    current_app,
     flash,
     jsonify,
     redirect,
@@ -24,7 +24,6 @@ from flask import (
     url_for,
 )
 
-from solar_challenge.web.database import get_db
 from solar_challenge.web.shared import get_storage
 
 bp = Blueprint("history", __name__)
@@ -79,32 +78,29 @@ def compare_page() -> str | Response:
     if len(run_ids) > 4:
         run_ids = run_ids[:4]
 
-    db_path = current_app.config["DATABASE"]
+    storage = get_storage()
     runs: list[dict[str, Any]] = []
     for rid in run_ids:
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM runs WHERE id = ?", (rid,))
-            row = cursor.fetchone()
-            if row is not None:
-                run_dict = dict(row)
-                # Parse summary JSON for display
-                if run_dict.get("summary_json"):
-                    try:
-                        run_dict["summary"] = json.loads(run_dict["summary_json"])
-                    except (json.JSONDecodeError, TypeError):
-                        run_dict["summary"] = {}
-                else:
+        record = storage.run_record(rid)
+        if record is not None:
+            run_dict = asdict(record)
+            # Parse summary JSON for display
+            if run_dict.get("summary_json"):
+                try:
+                    run_dict["summary"] = json.loads(run_dict["summary_json"])
+                except (json.JSONDecodeError, TypeError):
                     run_dict["summary"] = {}
-                # Parse config JSON for display
-                if run_dict.get("config_json"):
-                    try:
-                        run_dict["config"] = json.loads(run_dict["config_json"])
-                    except (json.JSONDecodeError, TypeError):
-                        run_dict["config"] = {}
-                else:
+            else:
+                run_dict["summary"] = {}
+            # Parse config JSON for display
+            if run_dict.get("config_json"):
+                try:
+                    run_dict["config"] = json.loads(run_dict["config_json"])
+                except (json.JSONDecodeError, TypeError):
                     run_dict["config"] = {}
-                runs.append(run_dict)
+            else:
+                run_dict["config"] = {}
+            runs.append(run_dict)
 
     if len(runs) < 2:
         flash("Could not find at least 2 valid runs to compare.", "error")
