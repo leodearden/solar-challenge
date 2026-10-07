@@ -20,6 +20,7 @@ from tests._css_classes import (
     inline_styled_elements,
     keyframes_names,
     linked_stylesheets,
+    names_palette,
     selector_classes,
 )
 
@@ -319,3 +320,21 @@ def test_declared_and_inline_property_names_are_lower_cased_except_custom_proper
             inline_properties=frozenset({"-webkit-line-clamp", "--Bar-Color"}),
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("css_class", "named"),
+    [
+        pytest.param("bg-primary-500", True, id="plain shade"),
+        pytest.param("dark:[&::-webkit-slider-thumb]:bg-primary-400", True, id="arbitrary variant"),
+        pytest.param("dark:bg-primary-900/20", True, id="opacity modifier"),
+        pytest.param("focus:ring-offset-primary-500", True, id="multi-part utility"),
+        pytest.param("bg-primary", False, id="DEFAULT shade"),
+        pytest.param("btn--primary", False, id="hand-written modifier"),
+        pytest.param("bg-notprimary-500", False, id="palette name inside another word"),
+    ],
+)
+def test_names_palette_reads_a_shade_suffix_whatever_the_variants(
+    css_class: str, named: bool
+) -> None:
+    assert names_palette(css_class, "primary") is named
