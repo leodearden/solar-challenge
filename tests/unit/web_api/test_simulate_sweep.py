@@ -237,25 +237,34 @@ class TestSimulateSweep:
         )
         assert resp.status_code == 400
 
-    def test_a_geometric_sweep_up_to_the_largest_float_is_refused_not_a_server_error(
-        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(
+                {"min": 1e-10, "max": sys.float_info.max, "steps": 7, "mode": "geometric"},
+                id="geometric-from-a-tiny-min-to-the-largest-float",
+            ),
+            pytest.param(
+                {"min": -sys.float_info.max, "max": sys.float_info.max, "steps": 2, "mode": "linear"},
+                id="linear-from-the-most-negative-to-the-largest-float",
+            ),
+        ],
+    )
+    def test_a_min_and_max_too_far_apart_for_the_points_to_be_computed_are_refused_naming_both(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        body: dict[str, object],
     ) -> None:
-        """A geometric sweep from a tiny min to the largest float is a 400, never a 500, and submits nothing.
-
-        as_finite_float accepts both ends, as they are finite, but the last point's exponent can
-        round above log(DBL_MAX), so a sweep computed in log space would raise OverflowError.
-        """
-        resp = client.post(
-            "/api/simulate/sweep",
-            json={
-                "parameter": "pv_capacity_kw",
-                "min": 1e-10,
-                "max": sys.float_info.max,
-                "steps": 7,
-                "mode": "geometric",
-            },
-        )
+        """A finite min and max so far apart that computing the points between them overflows a float is a 400 naming both, never a 500, and no point is submitted."""
+        resp = client.post("/api/simulate/sweep", json=body)
         assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": (
+                f"min {body['min']!r} and max {body['max']!r} are too far apart to sweep:"
+                " computing the points between them overflows a float"
+            )
+        }
         assert recording_job_manager.submitted_homes == []
 
     @pytest.mark.parametrize(
