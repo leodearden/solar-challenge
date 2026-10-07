@@ -410,6 +410,16 @@ def test_a_dataclass_field_its_constructor_does_not_take_is_spelled_attribute_th
     assert member_forms(Cache) == {"path": "attribute Path"}
 
 
+def test_a_dataclass_field_with_a_default_is_spelled_and_names_classes_by_its_annotation_not_its_default() -> None:
+    @dataclass(frozen=True)
+    class Meter:
+        UNITS: ClassVar[str] = "kWh"
+        preset: Optional[Preset] = field(init=False, default=None)
+
+    assert member_forms(Meter) == {"preset": "attribute Preset | None", "UNITS": "str"}
+    assert named_classes(Meter) == {Preset, type(None), str}
+
+
 def test_a_dataclass_field_its_constructor_takes_is_not_a_member_but_a_class_variable_is() -> None:
     @dataclass(frozen=True)
     class Site:
