@@ -117,6 +117,17 @@ signature, or to an exported class's public members, must also edit
 `FROZEN_SURFACE` or `FROZEN_MEMBERS` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 505): the frozen contract now covers the
+constructors and public members of the eight classes outside `__all__` that the
+frozen surface names, directly or through another such class:
+`DispatchStrategyConfig`, `GridChargeConfig`, `OutputConfig` and
+`SimulationPeriod` in `solar_challenge.config`, `EVConfig` in
+`solar_challenge.ev`, `HeatPumpConfig` in `solar_challenge.heat_pump`, and
+`HomeConfig` and `SimulationResults` in `solar_challenge.home`. Consumers still
+import each from its module, as on the 0.5.0 tag, e.g.
+`from solar_challenge.home import HomeConfig`, and need no change when they
+re-pin.
+
 **Unreleased on main** (task 426): `Battery` declares `config`,
 `min_soc_fraction`, `max_soc_fraction`, `charge_efficiency` and
 `discharge_efficiency` in its class body, and `WeatherCache` declares
