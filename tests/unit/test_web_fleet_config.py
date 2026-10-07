@@ -37,6 +37,14 @@ _UNUSABLE_NON_BOOLEAN_NUMBERS = [
 
 _UNUSABLE_NUMBERS = [*_UNUSABLE_NON_BOOLEAN_NUMBERS, pytest.param(True, id="boolean")]
 
+#: Fields of a fleet form block that hold one number: each block's fixed value, sent in its distribution's field, and another block setting.
+_SINGLE_NUMBER_FIELDS = [
+    pytest.param("pv", "capacity_kw", id="pv-fixed"),
+    pytest.param("battery", "capacity_kwh", id="battery-fixed"),
+    pytest.param("load", "annual_consumption_kwh", id="load-fixed"),
+    pytest.param("pv", "tilt", id="pv-tilt"),
+]
+
 
 def _make_test_homes() -> tuple:
     """Build two HomeConfig instances for overlay tests.
@@ -846,22 +854,43 @@ class TestFleetConfigHelpers:
         assert str(exc_info.value) == f"{block}.{key} must be a finite number, got {value!r}"
 
     @pytest.mark.parametrize(
-        ("block", "key", "value", "expected"),
+        ("block", "key", "value"),
         [
-            pytest.param("load", "use_stochastic", False, False, id="load-use-stochastic-false"),
-            pytest.param("load", "use_stochastic", True, True, id="load-use-stochastic-true"),
-            pytest.param("pv", "tilt", None, None, id="pv-tilt-null"),
-            pytest.param("pv", "tilt", "30", 30.0, id="pv-tilt-numeric-string"),
+            pytest.param("load", "use_stochastic", False, id="load-use-stochastic-false"),
+            pytest.param("load", "use_stochastic", True, id="load-use-stochastic-true"),
+            pytest.param("pv", "tilt", None, id="pv-tilt-null"),
         ],
     )
     def test_form_to_fleet_distribution_config_passes_null_and_boolean_block_settings_on_as_given(
-        self, block: str, key: str, value: object, expected: object
+        self, block: str, key: str, value: object
     ) -> None:
-        """A block setting that is null or a boolean passes on to config.py's grammar as given; any other is read as a number, a numeric string included."""
+        """A block setting that is null or a boolean passes on to config.py's grammar as given."""
         form = valid_distribution_form()
         config = form_to_fleet_distribution_config({**form, block: {**form[block], key: value}})
+        assert config[block][key] is value
+
+    @pytest.mark.parametrize(("block", "key"), _SINGLE_NUMBER_FIELDS)
+    def test_form_to_fleet_distribution_config_reads_a_numeric_string_fixed_value_or_setting_as_its_number(
+        self, block: str, key: str
+    ) -> None:
+        """A fixed value, like a block's other settings, is read as float() reads it: a numeric string as its number."""
+        form = valid_distribution_form()
+        config = form_to_fleet_distribution_config({**form, block: {**form[block], key: "4.5"}})
         got = config[block][key]
-        assert (type(got), got) == (type(expected), expected)
+        assert (type(got), got) == (float, 4.5)
+
+    @pytest.mark.parametrize(
+        "value", [pytest.param("abc", id="non-numeric-string"), pytest.param([4.0], id="list")]
+    )
+    @pytest.mark.parametrize(("block", "key"), _SINGLE_NUMBER_FIELDS)
+    def test_form_to_fleet_distribution_config_refuses_a_fixed_value_or_setting_float_cannot_read_naming_it(
+        self, block: str, key: str, value: object
+    ) -> None:
+        """A fixed value, like a block's other settings, that float() cannot read is refused naming <block>.<key> and the value sent."""
+        form = valid_distribution_form()
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config({**form, block: {**form[block], key: value}})
+        assert str(exc_info.value) == f"{block}.{key} must be a finite number, got {value!r}"
 
     @pytest.mark.parametrize(
         "spec",

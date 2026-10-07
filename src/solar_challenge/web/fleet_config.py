@@ -259,10 +259,11 @@ def _parse_component_distribution(
 ) -> dict[str, Any]:
     """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
 
-    Its *primary_field* is the distribution *data* holds there, a mapping with a type or a
-    number; else *data* itself, when it has a type; else *data* whole.  Its other settings,
-    but for ``type``, ``enabled`` and mappings, are read by :func:`_other_setting`, each
-    named ``block.key``.
+    Its *primary_field* is the distribution *data* holds there: a mapping with a type, or a
+    fixed value, which is any other value but null or a mapping, read by
+    :func:`~solar_challenge.web.number_fields.as_finite_float`; else *data* itself, when it
+    has a type; else *data* whole.  Its other settings, but for ``type``, ``enabled`` and
+    mappings, are read by :func:`_other_setting`, each named ``block.key``.
 
     Args:
         data: Component form data dict.
@@ -275,7 +276,7 @@ def _parse_component_distribution(
     Raises:
         ValueError: As :func:`_build_distribution_dict`, for the distribution at
             ``block.primary_field``, or at ``block`` when *data* itself is the distribution;
-            if the number there is one
+            if the fixed value there is one
             :func:`~solar_challenge.web.number_fields.as_finite_float` refuses, a boolean
             included, named ``block.primary_field``; or if :func:`_other_setting` refuses
             another setting.
@@ -285,7 +286,7 @@ def _parse_component_distribution(
 
     if isinstance(spec, dict) and "type" in spec:
         result[primary_field] = _build_distribution_dict(spec, f"{block}.{primary_field}")
-    elif isinstance(spec, (int, float)):
+    elif spec is not None and not isinstance(spec, dict):
         result[primary_field] = as_finite_float(spec, f"{block}.{primary_field}")
     elif "type" in data:
         result[primary_field] = _build_distribution_dict(data, block)
