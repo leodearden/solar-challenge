@@ -90,11 +90,6 @@ def _checked_for(contract: LaneContract) -> tuple[LaneJob, ...]:
     return tuple(job for job in LANE_JOBS if contract in job.checked)
 
 
-def _job_name(job: LaneJob) -> str:
-    """Return *job*'s name, the test id that makes each failing node id name its job."""
-    return job.name
-
-
 def test_offline_lane_starts_and_skips_the_seams_this_repo_lacks(project_root: Path) -> None:
     """The offline lane must start, and skip the seams this repo lacks."""
     git = git_config(project_root)
@@ -117,7 +112,7 @@ def test_offline_lane_starts_and_skips_the_seams_this_repo_lacks(project_root: P
     )
 
 
-@pytest.mark.parametrize("job", LANE_JOBS, ids=_job_name)
+@pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: Path) -> None:
     """The offline lane runs exactly one job of the row's name, and it is enabled."""
     lane_job = sole_offline_lane_job(project_root, job.name)
@@ -140,7 +135,7 @@ def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> No
 
 @requires_uv
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
-@pytest.mark.parametrize("job", _checked_for(LaneContract.COLLECTS_ONLY_ITS_SUITE), ids=_job_name)
+@pytest.mark.parametrize("job", _checked_for(LaneContract.COLLECTS_ONLY_ITS_SUITE), ids=lambda job: job.name)
 def test_the_job_collects_its_suite_and_nothing_else(
     job: LaneJob, project_root: Path, uv_probe_environment: dict[str, str]
 ) -> None:
@@ -164,7 +159,7 @@ def test_the_job_collects_its_suite_and_nothing_else(
     )
 
 
-@pytest.mark.parametrize("job", _checked_for(LaneContract.NEVER_IN_A_DEFAULT_COLLECTION), ids=_job_name)
+@pytest.mark.parametrize("job", _checked_for(LaneContract.NEVER_IN_A_DEFAULT_COLLECTION), ids=lambda job: job.name)
 def test_a_default_collection_never_reaches_the_suite(job: LaneJob, project_root: Path) -> None:
     """Collecting tests/ never reaches the job's suite, even with addopts cleared."""
     reached = default_collection_node_ids_under(project_root, job.suite)
@@ -176,7 +171,7 @@ def test_a_default_collection_never_reaches_the_suite(job: LaneJob, project_root
     )
 
 
-@pytest.mark.parametrize("job", _checked_for(LaneContract.EVERY_TEST_SLOW), ids=_job_name)
+@pytest.mark.parametrize("job", _checked_for(LaneContract.EVERY_TEST_SLOW), ids=lambda job: job.name)
 def test_every_test_in_the_suite_is_slow(job: LaneJob, project_root: Path) -> None:
     """Every test in the job's suite is marked slow, so it reaches the live service it needs outside the offline guard.
 
