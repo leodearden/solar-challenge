@@ -116,22 +116,20 @@ document.addEventListener('alpine:init', () => {
             ]
         },
 
-        /* ---- Form validation ---- */
-        validationErrors: {},
-        validate() {
-            const errors = {};
+        /* ---- Form validation: why Run refuses the form, none when it runs it ---- */
+        formErrors() {
+            const errors = [];
             const n = parseInt(this.n_homes);
-            if (isNaN(n) || n < 1) errors.n_homes = 'Fleet size must be at least 1';
-            if (n > 1000) errors.n_homes = 'Fleet size must be at most 1000';
-            // Validate PV distribution
-            if (this.pvDist.type === 'normal') {
-                if (parseFloat(this.pvDist.std) <= 0) errors.pv_std = 'PV std deviation must be positive';
+            if (isNaN(n) || n < 1) errors.push('Fleet size must be at least 1');
+            if (n > 1000) errors.push('Fleet size must be at most 1000');
+            if (this.pvDist.type === 'normal' && parseFloat(this.pvDist.std) <= 0) {
+                errors.push('PV std deviation must be positive');
             }
-            if (this.pvDist.type === 'uniform' || this.pvDist.type === 'normal') {
-                if (parseFloat(this.pvDist.min) >= parseFloat(this.pvDist.max)) errors.pv_range = 'PV min must be less than max';
+            if ((this.pvDist.type === 'uniform' || this.pvDist.type === 'normal')
+                && parseFloat(this.pvDist.min) >= parseFloat(this.pvDist.max)) {
+                errors.push('PV min must be less than max');
             }
-            this.validationErrors = errors;
-            return Object.keys(errors).length === 0;
+            return errors;
         },
 
         /* ---- Build payload from current state ---- */
@@ -205,7 +203,11 @@ document.addEventListener('alpine:init', () => {
 
         /* ---- Simulation submission ---- */
         async submitFleet() {
-            if (!this.validate()) return;
+            const errors = this.formErrors();
+            if (errors.length > 0) {
+                this.errorMsg = errors.join('; ');
+                return;
+            }
             this.submitting = true;
             this.errorMsg = '';
             this.jobId = null;
