@@ -117,11 +117,15 @@ conventions:
       The public API surface is a FROZEN CONTRACT. `solar_challenge.__all__` (currently 69 names),
       the signatures of the exported callables, and the public members of the exported classes
       (the methods, classmethods, properties, class constants and instance attributes each class
-      body defines or declares) are consumed by a separate, pinned repo. Adding, removing,
-      renaming, or changing the signature of a public symbol or member is a BREAKING CHANGE that
-      requires a deliberate version/tag bump — never a silent edit. An exported class declares in
-      its class body each public attribute it sets on its instances, as an annotation such as
-      `cache_dir: Path`.
+      body defines or declares) are consumed by a separate, pinned repo. The contract also covers
+      the classes outside __all__ that the exported surface names, directly or through another
+      such class, such as HomeConfig, SimulationResults, SimulationPeriod and GridChargeConfig:
+      their constructors and public members. Other names importable only from submodules stay
+      outside it; this refines the freeze policy in docs/prds/domain-library-extraction.md §3.1.
+      Adding, removing, renaming, or changing the signature of a public symbol or member is a
+      BREAKING CHANGE that requires a deliberate version/tag bump — never a silent edit. Each class
+      the contract covers declares in its class body each public attribute it sets on its
+      instances, as an annotation such as `cache_dir: Path`.
     why: >
       This package was extracted as a domain library; `solar-challenge-platform` depends on it
       via a git tag and builds against the frozen surface. Members are in the contract (task 404)
@@ -130,18 +134,25 @@ conventions:
       WeatherCache.put. Public instance attributes are members too (task 426): the platform reads
       Battery.config and max_soc_fraction, and reads and assigns min_soc_fraction. They are
       declared as annotations and stay plain attributes, because a read-only property would break
-      that assignment; do not tidy them into properties. The surface-lock tests are intentional
-      gates, not redundant ceremony: the frozen-__all__ freeze test; the two tables of
-      tests/unit/test_public_api_surface.py, FROZEN_SURFACE (each name's signature) and
-      FROZEN_MEMBERS (each exported class's public members); the guard beside FROZEN_MEMBERS that
-      fails on a public attribute set on self that no class body declares, and on a declaration
-      that nothing sets; the ast-parsed TYPE_CHECKING-block ↔ __all__ consistency check; and the
-      isolated external-wheel install test (imports every __all__ name in a fresh interpreter).
-      Both tables are spelled alike on every admitted Python minor, and each fails until its
-      table edit lands, naming every drifted symbol and asking for the change's 'Unreleased on
-      main' line in the same commit. Neither table pins a class outside __all__, even one the
-      exported surface names; task 505 lists the measured instances of that gap and decides
-      whether they join the contract. `__init__.py` is
+      that assignment; do not tidy them into properties. The classes outside __all__ that the
+      exported surface names are in the contract too (task 505): the closure rule of
+      docs/prds/domain-library-extraction.md §2 puts a frozen function's parameter and return
+      types in the frozen surface, and consumers need these classes to use exported names. A
+      ScenarioConfig needs a SimulationPeriod and HomeConfigs, FleetResults.per_home_results holds
+      SimulationResults, and BatteryConfig takes a GridChargeConfig; the platform constructs
+      HomeConfig, SimulationPeriod, SimulationResults and GridChargeConfig. The surface-lock tests
+      are intentional gates, not redundant ceremony: the frozen-__all__ freeze test; the three
+      tables of tests/unit/test_public_api_surface.py, FROZEN_SURFACE (each name's signature),
+      FROZEN_CLOSURE (the signature of each class outside __all__ that the exported surface names;
+      the set of classes is derived from the exported forms, so a class newly named fails until
+      it is pinned or exported) and FROZEN_MEMBERS (the public members of every class those two
+      tables pin); the guard beside FROZEN_MEMBERS that fails on a public attribute set on self
+      that no class body declares, and on a declaration that nothing sets; the ast-parsed
+      TYPE_CHECKING-block ↔ __all__ consistency check; and the isolated external-wheel install
+      test (imports every __all__ name in a fresh interpreter). All three tables are spelled alike
+      on every admitted Python minor, and each fails until its table edit lands, naming every
+      drifted symbol and asking for the change's 'Unreleased on main' line in the same commit.
+      `__init__.py` is
       deliberately LAZY (PEP-562 __getattr__ + _SYMBOL_MODULE map) so `import solar_challenge`
       stays pvlib-free; the
       import-time _SYMBOL_MODULE/__all__ sync check uses raise RuntimeError (not assert) on

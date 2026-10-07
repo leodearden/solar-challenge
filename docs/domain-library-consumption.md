@@ -113,8 +113,9 @@ is listed here as an **Unreleased on main** line, added by the commit that makes
 the change. A change to what a finance-model name returns is listed instead in
 the header of [cost-recovery-finance-model.md](cost-recovery-finance-model.md),
 and the next release folds both lists into its notes. A change to an exported
-signature, or to an exported class's public members, must also edit
-`FROZEN_SURFACE` or `FROZEN_MEMBERS` in
+signature, to the constructor of a class outside `__all__` that the frozen
+surface names, or to either kind of class's public members, must also edit
+`FROZEN_SURFACE`, `FROZEN_CLOSURE` or `FROZEN_MEMBERS` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
 **Unreleased on main** (task 392): `SimulationResults`, reached through
@@ -306,10 +307,12 @@ changed. Rebuild a pre-built cache with `my_test_cache.put(df, "tmy", location)`
 The authoritative public surface is `solar_challenge.__all__`, defined in
 `src/solar_challenge/__init__.py`.  It is frozen by
 `tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
-public name and that name's signature, and whose `FROZEN_MEMBERS` pins every
-exported class's public methods, properties, class constants, and the instance
-attributes its class body declares.  It is also
-enforced at import time via the module's `__getattr__` guard, and
-`tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
+public name and that name's signature, and whose `FROZEN_MEMBERS` pins the
+public methods, properties, class constants, and declared instance attributes of
+every exported class and of every class outside `__all__` that the frozen
+surface names.  The same file's `FROZEN_CLOSURE` pins the constructor of each
+such class, such as `HomeConfig`, which consumers import from its module.
+`__all__` is also enforced at import time via the module's `__getattr__` guard,
+and `tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
 Consumers should reference `__all__` directly rather than relying on any copy
 maintained in this document.
