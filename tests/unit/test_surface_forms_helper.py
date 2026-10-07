@@ -291,9 +291,25 @@ def test_a_class_constant_member_is_spelled_by_its_type() -> None:
     assert member_forms(Meter) == {"UNITS": "str", "SCALE": "float"}
 
 
+def test_an_attribute_the_class_body_only_annotates_is_spelled_attribute_then_its_annotation() -> None:
+    class Meter:
+        site: pathlib.Path
+        reading: Optional[float]
+
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+            self.reading = None
+
+    assert member_forms(Meter) == {
+        "site": "attribute Path",
+        "reading": "attribute float | None",
+    }
+
+
 def test_private_and_dunder_names_are_not_members() -> None:
     class Meter:
         _cache: dict[str, float] = {}
+        _level: float
 
         def _read(self) -> float: ...
 
