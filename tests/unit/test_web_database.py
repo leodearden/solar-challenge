@@ -15,7 +15,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db, init_db
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.storage import RunRecord, RunStorage
 
 from tests._run_storage_layout import stored_run_dir
 
@@ -732,6 +732,56 @@ class TestDeleteRun:
         """Test deleting nonexistent run doesn't raise error."""
         # Should not raise
         storage.delete_run("nonexistent-run-id")
+
+
+class TestRunRecord:
+    """Tests for RunStorage.run_record, one run's row read by its id."""
+
+    def test_run_record_reads_every_column_of_the_row_into_the_field_of_its_name(self, storage):
+        """Each column of the run's row is read into the RunRecord field of the same name.
+
+        No save writes notes, and a save stamps completed_at with the clock, so the test
+        inserts the row to give every column a fixed, distinct value.
+        """
+        with get_db(storage.db_path) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, config_json, summary_json, status, error_message,"
+                " created_at, completed_at, duration_seconds, n_homes, notes)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "fleet-row",
+                    "Community Fleet",
+                    "fleet",
+                    '{"homes": [], "n_homes": 3}',
+                    '{"n_homes": 3, "total_generation_kwh": 300.0}',
+                    "failed",
+                    "Simulation diverged",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:05:00+00:00",
+                    300.0,
+                    3,
+                    "Second attempt",
+                ),
+            )
+
+        assert storage.run_record("fleet-row") == RunRecord(
+            id="fleet-row",
+            name="Community Fleet",
+            type="fleet",
+            config_json='{"homes": [], "n_homes": 3}',
+            summary_json='{"n_homes": 3, "total_generation_kwh": 300.0}',
+            status="failed",
+            error_message="Simulation diverged",
+            created_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:05:00+00:00",
+            duration_seconds=300.0,
+            n_homes=3,
+            notes="Second attempt",
+        )
+
+    def test_run_record_of_an_id_no_run_has_is_none(self, storage):
+        """An id no run has answers None."""
+        assert storage.run_record("no-such-run") is None
 
 
 class TestRunName:
