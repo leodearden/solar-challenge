@@ -460,6 +460,21 @@ def test_a_dataclass_init_only_variable_is_neither_a_member_nor_an_unset_attribu
     assert unset_attributes(Reading) == set()
 
 
+def test_a_hand_written_constructor_parameter_does_not_hide_a_member_of_the_same_name() -> None:
+    @dataclass(init=False)
+    class Meter:
+        site: str
+
+        def __init__(self, site: str, reading: float) -> None:
+            self.site = site
+            self._reading = reading
+
+        @property
+        def reading(self) -> float: ...
+
+    assert member_forms(Meter) == {"reading": "property (self) -> float"}
+
+
 def test_an_enum_member_is_not_a_class_member_but_an_enum_method_is() -> None:
     class Period(enum.Enum):
         PEAK = "peak"

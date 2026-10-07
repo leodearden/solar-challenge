@@ -339,12 +339,13 @@ def _type_checking_imports(module: str) -> types.CodeType:
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
-    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass field and init-only variable its constructor takes."""
+    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass field and init-only variable its constructor takes; an init-only variable is one its body annotates."""
     if issubclass(cls, enum.Enum):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
-        field_or_annotated_names = _fields(cls).keys() | inspect.get_annotations(cls).keys()
-        return field_or_annotated_names & inspect.signature(cls).parameters.keys()
+        annotated = inspect.get_annotations(cls).keys()
+        parameters = inspect.signature(cls).parameters.keys()
+        return (_fields(cls).keys() | annotated) & parameters
     return set()
 
 
