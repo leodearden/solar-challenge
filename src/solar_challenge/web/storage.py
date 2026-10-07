@@ -182,6 +182,24 @@ class RunRecord:
     n_homes: int | None
     notes: str | None
 
+    def decoded_config(self) -> Any:
+        """The value config_json encodes; {} when the run has no config text or it is not JSON."""
+        return _decoded_or_empty(self.config_json)
+
+    def decoded_summary(self) -> Any:
+        """The value summary_json encodes; {} when the run has no summary text or it is not JSON."""
+        return _decoded_or_empty(self.summary_json)
+
+
+def _decoded_or_empty(text: str | None) -> Any:
+    """The value JSON *text* encodes; {} when *text* is None, empty or not JSON."""
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
 
 def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     """The RunRecord of a runs row read with SELECT *, or None when no row was read."""

@@ -6,7 +6,6 @@ past simulation runs, plus API endpoints for CRUD operations and
 data export.
 """
 
-import json
 import logging
 from dataclasses import asdict
 from typing import Any
@@ -83,24 +82,9 @@ def compare_page() -> str | Response:
     for rid in run_ids:
         record = storage.run_record(rid)
         if record is not None:
-            run_dict = asdict(record)
-            # Parse summary JSON for display
-            if run_dict.get("summary_json"):
-                try:
-                    run_dict["summary"] = json.loads(run_dict["summary_json"])
-                except (json.JSONDecodeError, TypeError):
-                    run_dict["summary"] = {}
-            else:
-                run_dict["summary"] = {}
-            # Parse config JSON for display
-            if run_dict.get("config_json"):
-                try:
-                    run_dict["config"] = json.loads(run_dict["config_json"])
-                except (json.JSONDecodeError, TypeError):
-                    run_dict["config"] = {}
-            else:
-                run_dict["config"] = {}
-            runs.append(run_dict)
+            runs.append(
+                {**asdict(record), "summary": record.decoded_summary(), "config": record.decoded_config()}
+            )
 
     if len(runs) < 2:
         flash("Could not find at least 2 valid runs to compare.", "error")

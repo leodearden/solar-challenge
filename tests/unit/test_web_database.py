@@ -1,5 +1,6 @@
 """Tests for the web database and storage modules."""
 
+import dataclasses
 import json
 import tempfile
 from pathlib import Path
@@ -782,6 +783,50 @@ class TestRunRecord:
     def test_run_record_of_an_id_no_run_has_is_none(self, storage):
         """An id no run has answers None."""
         assert storage.run_record("no-such-run") is None
+
+
+class TestRunRecordDecoding:
+    """Tests for RunRecord.decoded_config and RunRecord.decoded_summary, a run's JSON texts decoded."""
+
+    @pytest.fixture
+    def north_roof_record(self):
+        """A completed home run's record, with no config or summary text until a test gives it some."""
+        return RunRecord(
+            id="north-roof",
+            name="North Roof",
+            type="home",
+            config_json=None,
+            summary_json=None,
+            status="completed",
+            error_message=None,
+            created_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:01:00+00:00",
+            duration_seconds=60.0,
+            n_homes=1,
+            notes=None,
+        )
+
+    def test_decoded_config_and_summary_are_the_values_their_texts_encode(self, north_roof_record):
+        """Each decodes its own text: the config's from config_json, the summary's from summary_json."""
+        record = dataclasses.replace(
+            north_roof_record,
+            config_json='{"pv_config": {"capacity_kw": 4.0}}',
+            summary_json='{"total_generation_kwh": 100.0}',
+        )
+
+        assert (record.decoded_config(), record.decoded_summary()) == (
+            {"pv_config": {"capacity_kw": 4.0}},
+            {"total_generation_kwh": 100.0},
+        )
+
+    @pytest.mark.parametrize("text", [None, "", "{not json"], ids=["null", "empty", "not-json"])
+    def test_decoded_config_and_summary_are_empty_when_their_text_is_null_empty_or_not_json(
+        self, north_roof_record, text
+    ):
+        """A text that is NULL, empty or not JSON decodes as {}."""
+        record = dataclasses.replace(north_roof_record, config_json=text, summary_json=text)
+
+        assert (record.decoded_config(), record.decoded_summary()) == ({}, {})
 
 
 class TestRunName:

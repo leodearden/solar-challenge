@@ -778,15 +778,10 @@ def history_get_run(run_id: str) -> Response | tuple[Response, int]:
         return jsonify({"error": "Run not found"}), 404
 
     run_dict = asdict(run)
-
-    # Parse JSON fields
-    for field in ("config_json", "summary_json"):
-        raw = run_dict.get(field)
-        if raw:
-            try:
-                run_dict[field.replace("_json", "")] = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                run_dict[field.replace("_json", "")] = {}
+    if run.config_json:
+        run_dict["config"] = run.decoded_config()
+    if run.summary_json:
+        run_dict["summary"] = run.decoded_summary()
 
     return jsonify(run_dict)
 
