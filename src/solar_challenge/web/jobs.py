@@ -102,6 +102,7 @@ class JobManager:
         *,
         simulate_home: HomeSimulator = _default_simulate_home,
         new_id: Callable[[], str] = _random_id,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Initialize the job manager.
 
@@ -111,10 +112,14 @@ class JobManager:
                 solar_challenge.home.simulate_home.
             new_id: Returns a new, unique id on each call; each job and each run
                 takes one. Defaults to a random UUID.
+            clock: Returns the time in seconds on a clock that never goes
+                backwards, which the manager reads to age the jobs it tracks.
+                Defaults to time.monotonic.
         """
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._simulate_home = simulate_home
         self._new_id = new_id
+        self._clock = clock
         self._lock = threading.Lock()
         self._idle = threading.Condition(self._lock)
         self._unfinished_job_count = 0
@@ -298,7 +303,7 @@ class JobManager:
             max_age_seconds: Maximum age in seconds before a job is removed.
                 Defaults to 3600 (1 hour).
         """
-        now = time.monotonic()
+        now = self._clock()
         with self._lock:
             expired = [
                 jid
@@ -370,7 +375,7 @@ class JobManager:
                 "job_id": job_id,
                 "run_id": run_id,
                 **_QUEUED_JOB_STATE,
-                "created_at": time.monotonic(),
+                "created_at": self._clock(),
             }
             self._event_queues[job_id] = collections.deque(maxlen=100)
 
