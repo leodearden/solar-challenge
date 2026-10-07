@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import random
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 
 from solar_challenge.home import HomeConfig
@@ -148,7 +148,8 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     :func:`solar_challenge.config.generate_homes_from_distribution`.
 
     Its pv/battery/load blocks follow the fleet form's presence rule (see
-    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`).
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`).  Its battery block sets
+    no dispatch strategy: every battery takes the form's dispatch_strategy.
 
     Args:
         form_data: Form data dict from the web UI.
@@ -161,8 +162,10 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             (see :func:`~solar_challenge.web.number_fields.as_int_within`), seed is one
             int() cannot read (see :func:`~solar_challenge.web.number_fields.as_int`), a
             pv/battery/load block is neither null nor a dict (see :func:`_component_block`),
-            or :func:`_parse_component_distribution` refuses a block; each refusal names
-            its field as a dot path from the form's root.
+            an enabled battery block sets a dispatch strategy (see
+            :func:`_refuse_battery_dispatch_strategy`), or
+            :func:`_parse_component_distribution` refuses a block; each refusal names its
+            field as a dot path from the form's root.
     """
     config: dict[str, Any] = {
         "n_homes": as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
@@ -176,6 +179,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     # Process Battery distribution
     battery_data = _component_block(form_data, "battery")
     if battery_data is not None and battery_data.get("enabled", True):
+        _refuse_battery_dispatch_strategy(battery_data)
         config["battery"] = _parse_component_distribution(battery_data, "battery", "capacity_kwh")
 
     # Process Load distribution
@@ -203,6 +207,26 @@ def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, 
     """
     block = _component_block(form_data, key)
     return {} if block is None else block
+
+
+def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
+    """Refuse the fleet form's *battery* block when it sets a dispatch strategy: every battery takes the form's dispatch_strategy.
+
+    config.py's grammar reads a battery block's dispatch_strategy, but the fleet form
+    spells the setting once, at its root:
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form` gives the form's
+    dispatch_strategy to every battery, over any the block sets.
+
+    Raises:
+        ValueError: If the block's dispatch_strategy is present and not null; the error
+            names battery.dispatch_strategy, the form's dispatch_strategy and the value sent.
+    """
+    strategy = battery.get("dispatch_strategy")
+    if strategy is not None:
+        raise ValueError(
+            "battery.dispatch_strategy must be absent or null: every battery takes the "
+            f"fleet's dispatch_strategy, got {strategy!r}"
+        )
 
 
 def _require_dict(value: object, field: str) -> dict[str, Any]:
@@ -244,12 +268,12 @@ def _parse_component_distribution(
 ) -> dict[str, Any]:
     """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
 
-    Its distribution is what *data* holds at *primary_field*: a mapping with a type, or a
-    fixed value, which is any other value but null or a mapping; else *data* itself, when it
-    has a type; else *data* whole.  A distribution is read by
-    :func:`_build_distribution_dict`, a fixed value by
+    Its distribution is what *data* holds at *primary_field*: a distribution (see
+    :func:`_is_distribution`), or a fixed value, which is any other value but null or a
+    mapping; else *data* itself, when it is a distribution; else *data* whole.  A
+    distribution is read by :func:`_build_distribution_dict`, a fixed value by
     :func:`~solar_challenge.web.number_fields.as_finite_float`, and the block's other
-    settings, but for ``type``, ``enabled`` and mappings, by :func:`_other_setting`.
+    settings, but for ``type`` and ``enabled``, by :func:`_other_setting`.
 
     Args:
         data: Component form data dict.
@@ -266,17 +290,17 @@ def _parse_component_distribution(
     result: dict[str, Any] = {}
     spec = data.get(primary_field)
 
-    if isinstance(spec, dict) and "type" in spec:
+    if _is_distribution(spec):
         result[primary_field] = _build_distribution_dict(spec, f"{block}.{primary_field}")
     elif spec is not None and not isinstance(spec, dict):
         result[primary_field] = as_finite_float(spec, f"{block}.{primary_field}")
-    elif "type" in data:
+    elif _is_distribution(data):
         result[primary_field] = _build_distribution_dict(data, block)
     else:
         result[primary_field] = data
 
     for key, value in data.items():
-        if key not in (primary_field, "type", "enabled") and not isinstance(value, dict):
+        if key not in (primary_field, "type", "enabled"):
             result[key] = _other_setting(value, f"{block}.{key}")
 
     return result
@@ -285,16 +309,27 @@ def _parse_component_distribution(
 def _other_setting(value: object, field: str) -> object:
     """Return *value*, a block setting other than its distribution, as it is passed to config.py's grammar.
 
-    Null (the grammar's default) and booleans (flags such as load.use_stochastic) pass as
-    given; any other value is read as a number, named *field*.
+    A distribution (see :func:`_is_distribution`) is read as the block's own is, by
+    :func:`_build_distribution_dict`.  Null, booleans (flags such as load.use_stochastic)
+    and any other mapping (a block such as battery.grid_charging) pass as given, for
+    config.py's grammar to read or refuse; any other value is read as a number, named
+    *field*.
 
     Raises:
-        ValueError: If :func:`~solar_challenge.web.number_fields.as_finite_float` refuses
-            *value*; the error names *field* and the value sent.
+        ValueError: If :func:`_build_distribution_dict` or
+            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses *value*; the
+            error names its field under *field* and what was sent.
     """
-    if value is None or isinstance(value, bool):
+    if _is_distribution(value):
+        return _build_distribution_dict(value, field)
+    if value is None or isinstance(value, (bool, dict)):
         return value
     return as_finite_float(value, field)
+
+
+def _is_distribution(value: object) -> TypeGuard[dict[str, Any]]:
+    """Whether *value* is a fleet form distribution: a mapping with a type."""
+    return isinstance(value, dict) and "type" in value
 
 
 def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:

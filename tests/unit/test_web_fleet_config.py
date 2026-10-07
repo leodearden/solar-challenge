@@ -704,6 +704,16 @@ class TestFleetConfigHelpers:
                 "pv.values[0] must be a mapping, got str",
                 id="pv-block-that-is-the-distribution-str-row",
             ),
+            pytest.param(
+                {
+                    "pv": {
+                        "capacity_kw": 4.0,
+                        "tilt": {"type": "weighted_discrete", "values": ["x"]},
+                    }
+                },
+                "pv.tilt.values[0] must be a mapping, got str",
+                id="pv-tilt-distribution-str-row",
+            ),
         ],
     )
     def test_form_to_fleet_distribution_config_names_a_row_or_count_refusal_by_its_distribution(
@@ -811,6 +821,13 @@ class TestFleetConfigHelpers:
                 "pv.mean",
                 id="pv-block-that-is-the-distribution-mean",
             ),
+            pytest.param(
+                lambda v: {
+                    "pv": {"capacity_kw": 4.0, "tilt": {"type": "normal", "mean": v, "std": 1.0}}
+                },
+                "pv.tilt.mean",
+                id="pv-tilt-distribution-mean",
+            ),
         ],
     )
     def test_form_to_fleet_distribution_config_refuses_a_distribution_number_that_is_not_finite_naming_it(
@@ -846,11 +863,35 @@ class TestFleetConfigHelpers:
         assert str(exc_info.value) == f"{block}.{key} must be a finite number, got {value!r}"
 
     @pytest.mark.parametrize(
+        "strategy",
+        [
+            pytest.param({"strategy_type": "self_consumption"}, id="mapping"),
+            pytest.param({}, id="empty-mapping"),
+            pytest.param("self_consumption", id="str"),
+            pytest.param(False, id="false"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_battery_dispatch_strategy_naming_the_fleets(
+        self, strategy: object
+    ) -> None:
+        """A battery block's own dispatch_strategy, any value but null, is refused naming it and the fleet's dispatch_strategy, which every battery takes."""
+        form = valid_distribution_form()
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config(
+                {**form, "battery": {**form["battery"], "dispatch_strategy": strategy}}
+            )
+        assert str(exc_info.value) == (
+            "battery.dispatch_strategy must be absent or null: every battery takes the "
+            f"fleet's dispatch_strategy, got {strategy!r}"
+        )
+
+    @pytest.mark.parametrize(
         ("block", "key", "value"),
         [
             pytest.param("load", "use_stochastic", False, id="load-use-stochastic-false"),
             pytest.param("load", "use_stochastic", True, id="load-use-stochastic-true"),
             pytest.param("pv", "tilt", None, id="pv-tilt-null"),
+            pytest.param("battery", "dispatch_strategy", None, id="battery-dispatch-strategy-null"),
         ],
     )
     def test_form_to_fleet_distribution_config_passes_null_and_boolean_block_settings_on_as_given(
@@ -860,6 +901,67 @@ class TestFleetConfigHelpers:
         form = valid_distribution_form()
         config = form_to_fleet_distribution_config({**form, block: {**form[block], key: value}})
         assert config[block][key] is value
+
+    @pytest.mark.parametrize(
+        ("block", "key", "spec", "converted"),
+        [
+            pytest.param(
+                "pv",
+                "tilt",
+                {"type": "normal", "mean": 20.0, "std": 1.0},
+                {"type": "normal", "mean": 20.0, "std": 1.0},
+                id="pv-tilt-normal",
+            ),
+            pytest.param(
+                "pv",
+                "azimuth",
+                {"type": "uniform", "min": 150, "max": 210},
+                {"type": "uniform", "min": 150.0, "max": 210.0},
+                id="pv-azimuth-uniform",
+            ),
+            pytest.param(
+                "battery",
+                "max_charge_kw",
+                {
+                    "type": "weighted_discrete",
+                    "values": [{"value": 2.5, "weight": 3}, {"value": 3.6}],
+                },
+                {"type": "weighted_discrete", "values": [2.5, 3.6], "weights": [3.0, 1.0]},
+                id="battery-max-charge-weighted-discrete",
+            ),
+            pytest.param(
+                "load",
+                "household_occupants",
+                {"type": "shuffled_pool", "entries": [{"value": 2, "count": 1}, {"value": 4}]},
+                {"type": "shuffled_pool", "values": [2.0, 4.0], "counts": [1, 1]},
+                id="load-household-occupants-shuffled-pool",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_converts_a_block_settings_distribution_as_its_own(
+        self, block: str, key: str, spec: dict, converted: dict
+    ) -> None:
+        """A block setting sent as a distribution, a mapping with a type, converts to config.py's grammar as the block's own distribution does."""
+        form = valid_distribution_form()
+        config = form_to_fleet_distribution_config({**form, block: {**form[block], key: spec}})
+        assert config[block].get(key) == converted
+
+    @pytest.mark.parametrize(
+        ("block", "key", "value"),
+        [
+            pytest.param(
+                "battery", "grid_charging", {"target_soc_fraction": 0.5}, id="battery-grid-charging"
+            ),
+            pytest.param("pv", "tilt", {"mean": 20.0}, id="pv-tilt-mapping-without-a-type"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_passes_a_block_setting_mapping_without_a_type_on_as_given(
+        self, block: str, key: str, value: dict
+    ) -> None:
+        """A block setting sent as a mapping without a type passes on to config.py's grammar as given, for the grammar to read or refuse."""
+        form = valid_distribution_form()
+        config = form_to_fleet_distribution_config({**form, block: {**form[block], key: value}})
+        assert config[block].get(key) == value
 
     @pytest.mark.parametrize(("block", "key"), _SINGLE_NUMBER_FIELDS)
     def test_form_to_fleet_distribution_config_reads_a_numeric_string_fixed_value_or_setting_as_its_number(
