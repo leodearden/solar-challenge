@@ -74,13 +74,13 @@ def read_iso_date(value: Any, field: str) -> date:
 
 
 def _read_date(value: Any, field: str, default: date) -> date:
-    """Read a request body's ``field`` as an ISO 8601 calendar date; a falsy value reads as ``default``.
+    """Read a request body's ``field`` as an ISO 8601 calendar date; None, a date not sent, reads as ``default``.
 
     Raises:
         ValueError: From :func:`read_iso_date`, for a value that is not an ISO
             8601 date, naming the field and the value sent.
     """
-    if not value:
+    if value is None:
         return default
     return read_iso_date(value, field)
 
@@ -109,22 +109,37 @@ def refuse_reversed_or_overlong_window(
         )
 
 
+def _dates_sent(params: Mapping[str, Any]) -> dict[str, Any]:
+    """The start and end *params* sends, keyed by field, start first.
+
+    A falsy value, which is how _DATE_RANGE_DEFAULTS gives an absent one, is not sent.
+    """
+    return {field: params[field] for field in ("start", "end") if params[field]}
+
+
+def _refuse_days_with_dates(days: Any, dates: Mapping[str, Any]) -> None:
+    """Refuse a *days* sent with any of *dates*: days and start/end are two ways to set one window, so a body may send only one."""
+    if days is not None and dates:
+        named = " and ".join(f"{field} {value!r}" for field, value in dates.items())
+        raise ValueError(f"days must not be sent with start or end, got days {days!r} with {named}")
+
+
 def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     """Extract a (start, end) date-string pair from a JSON request body.
 
-    Three resolution modes (checked in order):
+    A body sets its window in one of two ways, never both:
 
-    1. ``days == 365``  → **sentinel for a full calendar year**: the 2024
-       calendar year ``("2024-01-01", "2024-12-31")``, 366 days since 2024 is a
-       leap year, so callers can request a full-year run without explicit dates.
-    2. ``days`` key present (an integer from 1 to :data:`MAX_WINDOW_DAYS` other
-       than 365, read as int() reads it) → *days*-day window anchored at
-       2024-06-01.
-    3. Otherwise → read ``start`` / ``end`` as ISO 8601 dates (``YYYY-MM-DD``);
-       a falsy one reads as ``"2024-01-01"`` / ``"2024-12-31"``.
+    - ``days``: 365 is the sentinel for the full 2024 calendar year,
+      ``("2024-01-01", "2024-12-31")``, 366 days since 2024 is a leap year;
+      any other integer from 1 to :data:`MAX_WINDOW_DAYS`, read as int()
+      reads it, runs that many days from 2024-06-01.
+    - ``start`` / ``end``: ISO 8601 dates (``YYYY-MM-DD``); one not sent reads
+      as ``"2024-01-01"`` / ``"2024-12-31"``.
 
-    Whichever mode resolves it, the window must end on or after its start and
-    span at most :data:`MAX_WINDOW_DAYS` days.
+    A null ``days``, and an empty or null ``start`` or ``end``, read as not sent.
+
+    Whichever way sets it, the window must end on or after its start and span
+    at most :data:`MAX_WINDOW_DAYS` days.
 
     Args:
         data: Parsed JSON body from the request.
@@ -133,18 +148,21 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
         Tuple of ``(start, end)`` as ``"YYYY-MM-DD"`` strings, ``end`` inclusive.
 
     Raises:
-        ValueError: If ``days`` is present but is one int() cannot read or is
+        ValueError: If ``days`` is sent with a start or end, naming days and
+            each of them as sent; if ``days`` is one int() cannot read or is
             outside 1 to MAX_WINDOW_DAYS, or if ``start`` or ``end`` is not an
             ISO 8601 date, naming the field and the value sent; or if the
             window ends before it starts or spans more than MAX_WINDOW_DAYS
             days, naming start and end as read.
     """
     params = {**_DATE_RANGE_DEFAULTS, **data}
+    dates = _dates_sent(params)
+    _refuse_days_with_dates(params["days"], dates)
     if params["days"] is not None:
         start, end = _days_window(as_int_within(params["days"], "days", 1, MAX_WINDOW_DAYS))
     else:
-        start = _read_date(params["start"], "start", _FULL_YEAR_START)
-        end = _read_date(params["end"], "end", _FULL_YEAR_END)
+        start = _read_date(dates.get("start"), "start", _FULL_YEAR_START)
+        end = _read_date(dates.get("end"), "end", _FULL_YEAR_END)
     refuse_reversed_or_overlong_window(start, end, start_field="start", end_field="end")
     return start.isoformat(), end.isoformat()
 
