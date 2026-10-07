@@ -19,6 +19,7 @@ from solar_challenge.web.simulation_params import (
     parse_home_config,
     parse_seg_tariff,
 )
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 VALID_HOME_PAYLOAD: dict = {
@@ -526,19 +527,10 @@ class TestParseHomeConfigBatterySettings:
         )
 
 
-# One value of each kind number_fields.as_finite_float refuses, so unusable in a float field; its full matrix is tested there.
-UNUSABLE_FLOATS = [
-    pytest.param(10**400, id="integer-too-large-for-a-float"),
-    pytest.param(float("inf"), id="infinity"),
-    pytest.param(float("nan"), id="nan"),
-    pytest.param(True, id="boolean"),
-]
-
-
 class TestParseHomeConfigNumberFields:
     """Each number field parse_home_config reads is refused, naming the field and the value sent, when it is not a number the field can hold."""
 
-    @pytest.mark.parametrize("value", UNUSABLE_FLOATS)
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
         "field",
         [
@@ -562,7 +554,7 @@ class TestParseHomeConfigNumberFields:
             parse_home_config({**VALID_HOME_PAYLOAD, field: value})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
-    @pytest.mark.parametrize("value", UNUSABLE_FLOATS)
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize("key", ["thermal_capacity_kw", "annual_heat_demand_kwh"])
     def test_heat_pump_field_that_is_not_a_finite_number_is_refused_naming_it_in_its_block(
         self, key: str, value: object
