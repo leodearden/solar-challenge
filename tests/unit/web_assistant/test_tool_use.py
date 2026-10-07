@@ -18,6 +18,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.storage import RunStorage
 
 from tests._sse import parse_sse_events
 from tests.unit.web_assistant._fakes import (
@@ -464,7 +465,7 @@ class TestRunLookupToolSurface:
             {"run_id_or_name": "disp-run-001"},
             **dispatch_dependencies(tmp_path, db_path=str(db_path)),
         )
-        expected = get_run_results("disp-run-001", db_path)
+        expected = get_run_results("disp-run-001", RunStorage(db_path=db_path, data_dir=tmp_path))
 
         assert result == expected, f"dispatch result mismatch: {result!r} vs {expected!r}"
 

@@ -239,6 +239,83 @@ class TestRunDetailAPI:
         response = client.get("/api/history/runs/nonexistent-id")
         assert response.status_code == 404
 
+    def test_api_get_run_answers_every_column_with_config_and_summary_decoded(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A run's detail is each column of its row, plus its config and summary decoded."""
+        config = {"pv_config": {"capacity_kw": 4.0}}
+        summary = {"total_generation_kwh": 100.0, "self_consumption_ratio": 0.6}
+        _insert_test_run(app, run_id="detail-run", name="Detail Run", summary=summary, config=config)
+
+        response = client.get("/api/history/runs/detail-run")
+
+        assert response.get_json() == {
+            "id": "detail-run",
+            "name": "Detail Run",
+            "type": "home",
+            "config_json": json.dumps(config),
+            "summary_json": json.dumps(summary),
+            "status": "completed",
+            "error_message": None,
+            "created_at": "2025-06-01T12:00:00",
+            "completed_at": "2025-06-01T12:01:00",
+            "duration_seconds": 60.0,
+            "n_homes": 1,
+            "notes": None,
+            "config": config,
+            "summary": summary,
+        }
+
+    def test_api_get_run_of_a_running_run_answers_its_row_without_decoded_config_or_summary(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A running run's detail is its row alone: with no config or summary stored yet, neither is decoded.
+
+        The row is the placeholder JobManager.submit_fleet_job writes when it queues a fleet run.
+        """
+        with get_db(app.config["DATABASE"]) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, status, created_at, n_homes)"
+                " VALUES ('running-run', 'Still Running', 'fleet', 'running', '2025-06-02T09:00:00', 3)"
+            )
+
+        response = client.get("/api/history/runs/running-run")
+
+        assert response.get_json() == {
+            "id": "running-run",
+            "name": "Still Running",
+            "type": "fleet",
+            "config_json": None,
+            "summary_json": None,
+            "status": "running",
+            "error_message": None,
+            "created_at": "2025-06-02T09:00:00",
+            "completed_at": None,
+            "duration_seconds": None,
+            "n_homes": 3,
+            "notes": None,
+        }
+
+    def test_api_get_run_decodes_a_config_or_summary_that_is_not_json_as_empty(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A config or summary whose stored text is not JSON is decoded as {}, beside that raw text."""
+        with get_db(app.config["DATABASE"]) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, config_json, summary_json, status, created_at)"
+                " VALUES ('garbled-run', 'Garbled', 'home', '{not json', 'not json either', 'completed',"
+                " '2025-06-03T10:00:00')"
+            )
+
+        data = client.get("/api/history/runs/garbled-run").get_json()
+
+        assert {key: data[key] for key in ("config_json", "summary_json", "config", "summary")} == {
+            "config_json": "{not json",
+            "summary_json": "not json either",
+            "config": {},
+            "summary": {},
+        }
+
 
 class TestDeleteAPI:
     """Tests for the run delete API endpoint."""
@@ -247,6 +324,13 @@ class TestDeleteAPI:
         """Test DELETE /api/history/runs/<id> returns 404 for missing run."""
         response = client.delete("/api/history/runs/nonexistent-id")
         assert response.status_code == 404
+
+    def test_api_delete_of_an_id_that_is_no_valid_run_id_is_404(self, client: FlaskClient) -> None:
+        """An id the store refuses answers 404, as an id no run has does, not a server error."""
+        response = client.delete("/api/history/runs/no.such.run")
+
+        assert response.status_code == 404
+        assert response.get_json() == {"error": "Run not found"}
 
     def test_api_delete_existing_run(self, app: Flask, client: FlaskClient) -> None:
         """Test DELETE /api/history/runs/<id> deletes an existing run."""
@@ -307,6 +391,42 @@ class TestPatchAPI:
         )
         assert response.status_code == 400
 
+    def test_api_patch_of_name_and_notes_answers_the_updated_row(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A PATCH of name and notes answers the run's row as updated, its config and summary not decoded."""
+        config = {"pv_config": {"capacity_kw": 4.0}}
+        summary = {"total_generation_kwh": 100.0, "self_consumption_ratio": 0.6}
+        _insert_test_run(app, run_id="relabel-me", name="Old Name", summary=summary, config=config)
+
+        response = client.patch(
+            "/api/history/runs/relabel-me",
+            json={"name": "New Name", "notes": "Checked"},
+        )
+
+        assert response.status_code == 200
+        assert response.get_json() == {
+            "id": "relabel-me",
+            "name": "New Name",
+            "type": "home",
+            "config_json": json.dumps(config),
+            "summary_json": json.dumps(summary),
+            "status": "completed",
+            "error_message": None,
+            "created_at": "2025-06-01T12:00:00",
+            "completed_at": "2025-06-01T12:01:00",
+            "duration_seconds": 60.0,
+            "n_homes": 1,
+            "notes": "Checked",
+        }
+
+    def test_api_patch_with_no_fields_of_an_unknown_run_is_404(self, client: FlaskClient) -> None:
+        """An unknown run answers 404 even when the body has no fields to update, which would answer 400."""
+        response = client.patch("/api/history/runs/nonexistent-id", json={})
+
+        assert response.status_code == 404
+        assert response.get_json() == {"error": "Run not found"}
+
 
 class TestExportAPI:
     """Tests for the CSV and YAML export API endpoints."""
@@ -333,6 +453,24 @@ class TestExportAPI:
         response = client.get("/api/history/runs/yaml-export/export/yaml")
         assert response.status_code == 200
         assert "attachment" in response.headers.get("Content-Disposition", "")
+
+    @pytest.mark.parametrize("export", ["csv", "yaml"])
+    def test_export_is_named_after_its_run(
+        self, storage: RunStorage, client: FlaskClient, export: str
+    ) -> None:
+        """An export's file is named after its run's name and the first 8 characters of its id."""
+        run_id = "0123456789-named-export"
+        _store_home_run(
+            storage,
+            run_id,
+            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+            name="North Roof",
+        )
+
+        response = client.get(f"/api/history/runs/{run_id}/export/{export}")
+
+        assert response.status_code == 200
+        assert response.headers["Content-Disposition"] == f'attachment; filename="North Roof_01234567.{export}"'
 
     def test_export_of_a_home_run_loads_back_through_home_run(
         self, storage: RunStorage, client: FlaskClient, tmp_path: Path
@@ -523,6 +661,33 @@ class TestComparisonRoute:
         assert "Compare Runs" in html
         assert "Compare A" in html
         assert "Compare B" in html
+
+    def test_compare_shows_each_run_s_name_type_creation_time_and_summary_metrics(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each run's header card shows its name, type and creation time; each metric row its values, Delta and % Change.
+
+        The cards are read after the page's subtitle, the one text before them, since each run
+        name appears twice on the page.
+        """
+        _insert_test_run(
+            app, run_id="cmp-a", name="Compare A", run_type="home", summary={"total_generation_kwh": 100.0}
+        )
+        _insert_test_run(
+            app, run_id="cmp-b", name="Compare B", run_type="fleet", summary={"total_generation_kwh": 120.0}
+        )
+
+        page = client.get("/history/compare?ids=cmp-a,cmp-b").get_data(as_text=True)
+
+        assert texts_after(page, "Side-by-side comparison of selected simulation runs", 6) == [
+            "Compare A",
+            "home",
+            "2025-06-01T12:00:00",
+            "Compare B",
+            "fleet",
+            "2025-06-01T12:00:00",
+        ]
+        assert texts_after(page, "Total Generation", 4) == ["100.0 kWh", "120.0 kWh", "+20.0 kWh", "+20.0%"]
 
     def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
         """Test GET /history/compare with all invalid IDs redirects to runs page."""

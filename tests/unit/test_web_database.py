@@ -1,5 +1,6 @@
 """Tests for the web database and storage modules."""
 
+import dataclasses
 import json
 import tempfile
 from pathlib import Path
@@ -15,7 +16,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db, init_db
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.storage import RunRecord, RunStorage
 
 from tests._run_storage_layout import stored_run_dir
 
@@ -734,6 +735,100 @@ class TestDeleteRun:
         storage.delete_run("nonexistent-run-id")
 
 
+class TestRunRecord:
+    """Tests for RunStorage.run_record, one run's row read by its id."""
+
+    def test_run_record_reads_every_column_of_the_row_into_the_field_of_its_name(self, storage):
+        """Each column of the run's row is read into the RunRecord field of the same name.
+
+        No save writes notes, and a save stamps completed_at with the clock, so the test
+        inserts the row to give every column a fixed, distinct value.
+        """
+        with get_db(storage.db_path) as conn:
+            conn.execute(
+                "INSERT INTO runs (id, name, type, config_json, summary_json, status, error_message,"
+                " created_at, completed_at, duration_seconds, n_homes, notes)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "fleet-row",
+                    "Community Fleet",
+                    "fleet",
+                    '{"homes": [], "n_homes": 3}',
+                    '{"n_homes": 3, "total_generation_kwh": 300.0}',
+                    "failed",
+                    "Simulation diverged",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:05:00+00:00",
+                    300.0,
+                    3,
+                    "Second attempt",
+                ),
+            )
+
+        assert storage.run_record("fleet-row") == RunRecord(
+            id="fleet-row",
+            name="Community Fleet",
+            type="fleet",
+            config_json='{"homes": [], "n_homes": 3}',
+            summary_json='{"n_homes": 3, "total_generation_kwh": 300.0}',
+            status="failed",
+            error_message="Simulation diverged",
+            created_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:05:00+00:00",
+            duration_seconds=300.0,
+            n_homes=3,
+            notes="Second attempt",
+        )
+
+    def test_run_record_of_an_id_no_run_has_is_none(self, storage):
+        """An id no run has answers None."""
+        assert storage.run_record("no-such-run") is None
+
+
+class TestRunRecordDecoding:
+    """Tests for RunRecord.decoded_config and RunRecord.decoded_summary, a run's JSON texts decoded."""
+
+    @pytest.fixture
+    def north_roof_record(self):
+        """A completed home run's record, with no config or summary text until a test gives it some."""
+        return RunRecord(
+            id="north-roof",
+            name="North Roof",
+            type="home",
+            config_json=None,
+            summary_json=None,
+            status="completed",
+            error_message=None,
+            created_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:01:00+00:00",
+            duration_seconds=60.0,
+            n_homes=1,
+            notes=None,
+        )
+
+    def test_decoded_config_and_summary_are_the_values_their_texts_encode(self, north_roof_record):
+        """Each decodes its own text: the config's from config_json, the summary's from summary_json."""
+        record = dataclasses.replace(
+            north_roof_record,
+            config_json='{"pv_config": {"capacity_kw": 4.0}}',
+            summary_json='{"total_generation_kwh": 100.0}',
+        )
+
+        assert (record.decoded_config(), record.decoded_summary()) == (
+            {"pv_config": {"capacity_kw": 4.0}},
+            {"total_generation_kwh": 100.0},
+        )
+
+    @pytest.mark.parametrize("text", [None, "", "{not json"], ids=["null", "empty", "not-json"])
+    def test_decoded_config_and_summary_are_empty_when_their_text_is_null_empty_or_not_json(
+        self, north_roof_record, text
+    ):
+        """A text that is NULL, empty or not JSON decodes as {}."""
+        record = dataclasses.replace(north_roof_record, config_json=text, summary_json=text)
+
+        assert (record.decoded_config(), record.decoded_summary()) == ({}, {})
+
+
 class TestRunName:
     """Tests for RunStorage.run_name, the name Run History lists and renames a run under."""
 
@@ -793,6 +888,122 @@ class TestRunName:
             conn.execute("UPDATE runs SET name = NULL WHERE id = ?", (run_id,))
 
         assert storage.run_name(run_id) is None
+
+
+class TestLatestRunNamed:
+    """Tests for RunStorage.latest_run_named, the most recently created run with a given name."""
+
+    def test_latest_run_named_is_the_most_recently_created_run_with_that_name(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """The run with the name that was created last answers, whichever order the runs were saved in.
+
+        The newest run is saved neither first nor last, so only its creation time singles it
+        out. The run created after it has another name, so it pins the name filter.
+        """
+        for run_id, name, created_at in (
+            ("middle", "Shared Name", "2026-02-01T00:00:00+00:00"),
+            ("newest", "Shared Name", "2026-03-01T00:00:00+00:00"),
+            ("oldest", "Shared Name", "2026-01-01T00:00:00+00:00"),
+            ("other-name", "Other Name", "2026-05-01T00:00:00+00:00"),
+        ):
+            storage.save_home_run(
+                run_id=run_id,
+                config=sample_home_config,
+                results=sample_simulation_results,
+                summary=sample_summary,
+                name=name,
+                created_at=created_at,
+            )
+
+        assert storage.latest_run_named("Shared Name") == storage.run_record("newest")
+
+    def test_latest_run_named_of_a_name_no_run_has_is_none(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """A name no run has answers None."""
+        storage.save_home_run(
+            run_id="north-roof",
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            name="North Roof",
+        )
+
+        assert storage.latest_run_named("South Roof") is None
+
+
+class TestUpdateRunLabels:
+    """Tests for RunStorage.update_run_labels, which writes a run's name and notes as Run History edits them."""
+
+    @pytest.fixture
+    def north_roof_run_id(self, storage, sample_home_config, sample_simulation_results, sample_summary):
+        """The id of a home run saved under the name 'North Roof', its notes NULL as every save leaves them."""
+        run_id = "north-roof"
+        storage.save_home_run(
+            run_id=run_id,
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            name="North Roof",
+        )
+        return run_id
+
+    def test_update_run_labels_writes_each_label_given_and_answers_the_updated_record(
+        self, storage, north_roof_run_id
+    ):
+        """Each label given is written, and the run's record as written is answered."""
+        updated = storage.update_run_labels(north_roof_run_id, {"name": "South Roof", "notes": "Checked"})
+
+        assert updated == storage.run_record(north_roof_run_id)
+        assert (updated.name, updated.notes) == ("South Roof", "Checked")
+
+    def test_update_run_labels_leaves_each_label_not_given_unchanged(self, storage, north_roof_run_id):
+        """A label absent from the labels keeps its value."""
+        storage.update_run_labels(north_roof_run_id, {"notes": "Checked"})
+        after_notes = storage.run_record(north_roof_run_id)
+        storage.update_run_labels(north_roof_run_id, {"name": "South Roof"})
+        after_name = storage.run_record(north_roof_run_id)
+
+        assert [(after_notes.name, after_notes.notes), (after_name.name, after_name.notes)] == [
+            ("North Roof", "Checked"),
+            ("South Roof", "Checked"),
+        ]
+
+    def test_update_run_labels_writes_a_none_label_as_null(self, storage, north_roof_run_id):
+        """A label given as None is cleared to NULL."""
+        storage.update_run_labels(north_roof_run_id, {"notes": "Checked"})
+        storage.update_run_labels(north_roof_run_id, {"notes": None})
+
+        assert storage.run_record(north_roof_run_id).notes is None
+
+    def test_update_run_labels_with_no_labels_answers_the_record_unchanged(self, storage, north_roof_run_id):
+        """No labels write nothing, and answer the run's record as it was."""
+        before = storage.run_record(north_roof_run_id)
+
+        assert storage.update_run_labels(north_roof_run_id, {}) == before
+
+    def test_update_run_labels_of_an_id_no_run_has_is_none(self, storage):
+        """An id no run has answers None, and no run is written under it."""
+        assert storage.update_run_labels("no-such-run", {"name": "South Roof"}) is None
+        assert storage.run_record("no-such-run") is None
+
+    def test_update_run_labels_refuses_a_key_that_is_not_a_run_label_and_writes_nothing(
+        self, storage, north_roof_run_id
+    ):
+        """A key that is not a run label raises ValueError naming it, before any label is written.
+
+        The keys become column names in SQL, so the valid label beside the refused key is not
+        written either.
+        """
+        before = storage.run_record(north_roof_run_id)
+
+        with pytest.raises(
+            ValueError, match=r"Not run labels: \['status'\]; the run labels are \['name', 'notes'\]"
+        ):
+            storage.update_run_labels(north_roof_run_id, {"status": "failed", "notes": "Checked"})
+
+        assert storage.run_record(north_roof_run_id) == before
 
 
 class TestDatabasePragmas:

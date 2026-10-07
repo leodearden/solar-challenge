@@ -28,8 +28,9 @@ from flask.typing import ResponseReturnValue
 
 from solar_challenge.web import database
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import NotAJsonObject, get_job_manager, request_json_object
+from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
 from solar_challenge.web.simulation_params import parse_home_config
+from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("assistant", __name__)
 
@@ -446,7 +447,7 @@ TOOLS: Sequence[Mapping[str, Any]] = (
 )
 
 
-def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any]:
+def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
     """Return a simulation run's fields and parsed summary, or a graceful error dict.
 
     Tries to resolve *run_id_or_name* first as an ``id`` (exact match), then as a
@@ -454,7 +455,7 @@ def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any
 
     Args:
         run_id_or_name: A run ``id`` or ``name`` string to look up.
-        db_path:        Path to the SQLite database file.
+        storage:        The RunStorage whose runs are looked up.
 
     Returns:
         Dict with keys ``run_id``, ``name``, ``type``, ``status``,
@@ -463,38 +464,19 @@ def get_run_results(run_id_or_name: str, db_path: "str | Path") -> dict[str, Any
         Never raises.
     """
     try:
-        with database.get_db(db_path) as conn:
-            cursor = conn.cursor()
-            # First attempt: exact id match
-            cursor.execute(
-                "SELECT id, name, type, status, created_at, n_homes, summary_json "
-                "FROM runs WHERE id = ?",
-                (run_id_or_name,),
-            )
-            row = cursor.fetchone()
-
-            # Fallback: most-recent row with matching name
-            if row is None:
-                cursor.execute(
-                    "SELECT id, name, type, status, created_at, n_homes, summary_json "
-                    "FROM runs WHERE name = ? ORDER BY created_at DESC LIMIT 1",
-                    (run_id_or_name,),
-                )
-                row = cursor.fetchone()
-
-        if row is None:
+        run = storage.run_record(run_id_or_name) or storage.latest_run_named(run_id_or_name)
+        if run is None:
             return {"error": f"Run not found: {run_id_or_name!r}"}
 
-        summary_raw: Any = row["summary_json"]
-        summary: dict[str, Any] = json.loads(summary_raw) if summary_raw else {}
+        summary: dict[str, Any] = json.loads(run.summary_json) if run.summary_json else {}
 
         return {
-            "run_id": row["id"],
-            "name": row["name"],
-            "type": row["type"],
-            "status": row["status"],
-            "created_at": row["created_at"],
-            "n_homes": row["n_homes"],
+            "run_id": run.id,
+            "name": run.name,
+            "type": run.type,
+            "status": run.status,
+            "created_at": run.created_at,
+            "n_homes": run.n_homes,
             "summary": summary,
         }
     except Exception as exc:
@@ -716,7 +698,7 @@ def dispatch_tool(
         return suggest_config(annual_kwh, goal)
     if name == "get_run_results":
         run_id_or_name: str = str(tool_input.get("run_id_or_name", ""))
-        return get_run_results(run_id_or_name, db_path)
+        return get_run_results(run_id_or_name, RunStorage(db_path=db_path, data_dir=data_dir))
     if name == "list_recent_runs":
         try:
             limit: int = int(tool_input.get("limit", 10))
@@ -836,6 +818,7 @@ def chat() -> Response:
     db_path = current_app.config["DATABASE"]
     data_dir = current_app.config["DATA_DIR"]
     job_manager = get_job_manager()
+    storage = get_storage()
 
     def generate() -> Generator[str, None, None]:
         # Pre-check: API key must be set
@@ -881,7 +864,7 @@ def chat() -> Response:
         # - NOT placed in the cached system block (preserves prompt-cache stability).
         # - Graceful no-op when run_id is absent/empty or the run is not found.
         if run_id and messages and messages[-1]["role"] == "user":
-            run_data = get_run_results(run_id, db_path)
+            run_data = get_run_results(run_id, storage)
             if "error" not in run_data:
                 preamble = (
                     f"[Run context for run_id={run_id!r}, name={run_data.get('name')!r}: "

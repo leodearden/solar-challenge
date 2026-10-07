@@ -10,6 +10,7 @@ import json
 import logging
 import time
 from collections.abc import Mapping
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Generator
 
@@ -35,7 +36,7 @@ from solar_challenge.web.shared import (
     require_json_object,
 )
 from solar_challenge.web.simulation_params import parse_home_config
-from solar_challenge.web.storage import stored_fleet_home_configs, stored_home_config
+from solar_challenge.web.storage import RUN_LABELS, stored_fleet_home_configs, stored_home_config
 
 logger = logging.getLogger(__name__)
 
@@ -230,23 +231,17 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         }), 409
     # Load run summary from database
     run_id = status.get("run_id", "")
-    db_path = current_app.config["DATABASE"]
+    run = get_storage().run_record(run_id)
 
-    with get_db(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT summary_json, name, type, created_at FROM runs WHERE id = ?", (run_id,))
-        row = cursor.fetchone()
-
-    if row is None:
+    if run is None:
         return jsonify({"error": "Run not found"}), 404
-    summary_json = row["summary_json"]
-    summary = json.loads(summary_json) if summary_json else {}
+    summary = json.loads(run.summary_json) if run.summary_json else {}
 
     return jsonify({
         "run_id": run_id,
-        "name": row["name"],
-        "type": row["type"],
-        "created_at": row["created_at"],
+        "name": run.name,
+        "type": run.type,
+        "created_at": run.created_at,
         "summary": summary,
     }), 200
 
@@ -777,26 +772,16 @@ def history_get_run(run_id: str) -> Response | tuple[Response, int]:
     Returns:
         JSON response with full run detail, or 404 if not found.
     """
-    db_path = current_app.config["DATABASE"]
+    run = get_storage().run_record(run_id)
 
-    with get_db(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
-        row = cursor.fetchone()
-
-    if row is None:
+    if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    run_dict = dict(row)
-
-    # Parse JSON fields
-    for field in ("config_json", "summary_json"):
-        raw = run_dict.get(field)
-        if raw:
-            try:
-                run_dict[field.replace("_json", "")] = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                run_dict[field.replace("_json", "")] = {}
+    run_dict = asdict(run)
+    if run.config_json:
+        run_dict["config"] = run.decoded_config()
+    if run.summary_json:
+        run_dict["summary"] = run.decoded_summary()
 
     return jsonify(run_dict)
 
@@ -811,18 +796,10 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
     Returns:
         JSON success response, or 404 if not found.
     """
-    db_path = current_app.config["DATABASE"]
-
-    # Check if run exists first
-    with get_db(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM runs WHERE id = ?", (run_id,))
-        row = cursor.fetchone()
-
-    if row is None:
+    storage = get_storage()
+    if storage.run_record(run_id) is None:
         return jsonify({"error": "Run not found"}), 404
 
-    storage = get_storage()
     storage.delete_run(run_id)
     return jsonify({"success": True, "message": f"Run {run_id} deleted"})
 
@@ -839,40 +816,21 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     Returns:
         JSON response with updated run data, or 404 if not found.
     """
-    db_path = current_app.config["DATABASE"]
     data = request_json_object()
+    storage = get_storage()
 
-    with get_db(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM runs WHERE id = ?", (run_id,))
-        row = cursor.fetchone()
+    if storage.run_record(run_id) is None:
+        return jsonify({"error": "Run not found"}), 404
 
-        if row is None:
-            return jsonify({"error": "Run not found"}), 404
+    labels = {label: data[label] for label in RUN_LABELS if label in data}
+    if not labels:
+        return jsonify({"error": "No fields to update"}), 400
 
-        updates: list[str] = []
-        params: list[Any] = []
+    updated = storage.update_run_labels(run_id, labels)
+    if updated is None:
+        return jsonify({"error": "Run not found"}), 404
 
-        if "name" in data:
-            updates.append("name = ?")
-            params.append(data["name"])
-
-        if "notes" in data:
-            updates.append("notes = ?")
-            params.append(data["notes"])
-
-        if not updates:
-            return jsonify({"error": "No fields to update"}), 400
-
-        params.append(run_id)
-        set_clause = ", ".join(updates)
-        cursor.execute(f"UPDATE runs SET {set_clause} WHERE id = ?", params)
-
-        # Return updated row
-        cursor.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
-        updated_row = cursor.fetchone()
-
-    return jsonify(dict(updated_row))
+    return jsonify(asdict(updated))
 
 
 @api_bp.route("/history/runs/<run_id>/export/csv")
@@ -885,22 +843,16 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
     Returns:
         CSV file response, or 404 if not found.
     """
-    db_path = current_app.config["DATABASE"]
+    storage = get_storage()
+    run = storage.run_record(run_id)
 
-    with get_db(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, name, type FROM runs WHERE id = ?", (run_id,))
-        row = cursor.fetchone()
-
-    if row is None:
+    if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    storage = get_storage()
-    run_type = row["type"]
-    run_name = row["name"] or "run"
+    run_name = run.name or "run"
 
     try:
-        if run_type == "home":
+        if run.type == "home":
             _config, results, _summary = storage.load_home_run(run_id)
             df = results.to_dataframe()
         else:
@@ -932,32 +884,26 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
         YAML file response; 404 if the run or its config is missing, 500 if the
         stored config does not decode, 422 if the scenario grammar cannot express it.
     """
-    db_path = current_app.config["DATABASE"]
+    run = get_storage().run_record(run_id)
 
-    with get_db(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, name, type, config_json FROM runs WHERE id = ?", (run_id,))
-        row = cursor.fetchone()
-
-    if row is None:
+    if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    config_json = row["config_json"]
-    if not config_json:
+    if not run.config_json:
         return jsonify({"error": "No config data available"}), 404
 
     try:
-        config = json.loads(config_json)
+        config = json.loads(run.config_json)
     except (json.JSONDecodeError, TypeError):
         return jsonify({"error": "Invalid config data"}), 500
 
-    is_fleet = row["type"] == "fleet"
+    is_fleet = run.type == "fleet"
     try:
         homes = stored_fleet_home_configs(config) if is_fleet else [stored_home_config(config)]
     except (TypeError, ValueError, KeyError, AttributeError, ConfigurationError) as exc:
         return jsonify({"error": f"Invalid config data: {exc}"}), 500
 
-    run_name = row["name"] or "run"
+    run_name = run.name or "run"
     try:
         document = (
             fleet_scenario(homes, name=run_name)
