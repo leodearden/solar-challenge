@@ -19,11 +19,13 @@ Literal['a'] never reads as Literal[a]. A ParamSpec's args and kwargs are spelle
 their repr as well, P.args and P.kwargs, which keeps the two apart.
 
 A class's public members, the methods, properties and class constants its own body
-defines, have forms too. A method's form is its signature, self included. A
-classmethod, staticmethod, property or cached_property is spelled by its kind, then its
-function's signature, and a constant by its type. A property that can be set or deleted
-says so in its kind, as property[settable, deletable] does, and an abstract member's
-form begins with abstract. An inherited member belongs to the class that defines it.
+defines, and the attributes it only annotates, have forms too. A method's form is its
+signature, self included. A classmethod, staticmethod, property or cached_property is
+spelled by its kind, then its function's signature, and a constant by its type. An
+attribute the body only annotates, as an instance attribute is declared, is spelled
+attribute, then its annotation. A property that can be set or deleted says so in its
+kind, as property[settable, deletable] does, and an abstract member's form begins with
+abstract. An inherited member belongs to the class that defines it.
 
 Usage::
 
@@ -32,12 +34,14 @@ Usage::
     def scale(values: Optional[List[float]], factor: float = 1.0) -> "Series": ...
 
     class Meter:
+        site: Path
+
         @property
         def reading(self) -> float: ...
 
     assert surface_form(scale) == "(values: list[float] | None, factor: float = 1.0) -> Series"
     assert surface_form({"peak": 0.3}) == "dict"
-    assert member_forms(Meter) == {"reading": "property (self) -> float"}
+    assert member_forms(Meter) == {"site": "attribute Path", "reading": "property (self) -> float"}
 """
 
 import dataclasses
@@ -73,16 +77,18 @@ def surface_form(obj: object) -> str:
 
 
 def member_forms(cls: type) -> dict[str, str]:
-    """The form of each public member of *cls*, by name in class-body order.
+    """The form of each public member of *cls*, by name.
 
-    A member is a public attribute that *cls*'s own body defines, other than those
-    surface_form(cls) already pins: a dataclass's fields, which its constructor's
-    signature carries, and an Enum's members.
+    A member is a public name that *cls*'s own body defines or only annotates, other
+    than those surface_form(cls) already pins: a dataclass's fields, which its
+    constructor's signature carries, and an Enum's members. The names the body only
+    annotates come first, in annotation order, then the names it defines, in
+    class-body order.
     """
     pinned = _pinned_by_class_form(cls)
     return {
         name: _member_form(member)
-        for name, member in vars(cls).items()
+        for name, member in _own_members(cls).items()
         if not name.startswith("_") and name not in pinned
     }
 
@@ -162,6 +168,28 @@ def _pinned_by_class_form(cls: type) -> set[str]:
     return set()
 
 
+@dataclasses.dataclass(frozen=True)
+class _AnnotatedAttribute:
+    """The annotation of a name a class body only annotates, as an instance attribute is declared."""
+
+    annotation: object
+
+
+def _own_members(cls: type) -> dict[str, object]:
+    """Each name *cls*'s own body only annotates, as an _AnnotatedAttribute, then each name it defines, as its value.
+
+    inspect.get_annotations reads the body's own annotations, never a base's, and leaves
+    a string annotation a string.
+    """
+    defined = vars(cls)
+    annotated_only = {
+        name: _AnnotatedAttribute(annotation)
+        for name, annotation in inspect.get_annotations(cls).items()
+        if name not in defined
+    }
+    return {**annotated_only, **defined}
+
+
 def _member_form(member: object) -> str:
     form = _form_by_kind(member)
     if getattr(member, "__isabstractmethod__", False):
@@ -177,6 +205,8 @@ def _form_by_kind(member: object) -> str:
             return f"{_property_kind(member)} {surface_form(member.fget)}"
         case functools.cached_property():
             return f"cached_property {surface_form(member.func)}"
+        case _AnnotatedAttribute(annotation=annotation):
+            return f"attribute {_annotation_text(annotation)}"
         case _:
             return surface_form(member)
 
