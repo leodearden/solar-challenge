@@ -181,16 +181,16 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   or `css-build::nonzero-exit` when the red run printed no failing node-id (it
   hit the job's `timeout`, or pytest could not start). The fix is the Tailwind
   rebuild in Commands, then a commit of the stylesheet. The job also fails when
-  `static/dist/LICENSE-tailwindcss.txt` is not byte for byte the locked
-  tailwindcss package's `LICENSE`, or `LICENSE-tailwindcss-preflight.txt` its
-  `src/css/LICENSE`. A fix task for that names
+  a license text beside it in `static/dist` is not byte for byte the file of
+  the locked tailwindcss package that `tests/_tailwindcss_license_copies.py`
+  names for it. A fix task for that names
   `tests/css_build/test_dist_style_css.py::test_dist_license_text_matches_the_locked_tailwindcss_package[<file>]`,
   `<file>` being the stale copy. The fix is the `cp` its failure message gives,
   from `node_modules/tailwindcss` after `npm ci` in `src/solar_challenge/web`,
   then a commit of the copy. Reproduce with
   `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. To change
   the Tailwind version, run `npm install tailwindcss@<version>`, which rewrites
-  `package-lock.json`, then rebuild and copy both license texts from the new
+  `package-lock.json`, then rebuild and copy each license text from the new
   `node_modules/tailwindcss`.
 - The lane's `newest-releases` job re-runs the verify suite in a scratch copy
   of the tree whose `uv.lock` is upgraded to the newest releases
