@@ -57,6 +57,7 @@ from packaging.utils import canonicalize_name
 
 from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
 from tests._uv_env import isolated_uv_env
+from tests._working_tree import copy_working_tree
 
 # Module-scoped fixtures cannot request the function-scoped project_root fixture.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -106,21 +107,7 @@ def wheel_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
     stops declaring them.
     """
     _skip_unless_a_clean_wheel_can_be_built()
-    listing = subprocess.run(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    copy_root = tmp_path_factory.mktemp("wheel_source")
-    for relative_path in filter(None, listing.stdout.split("\0")):
-        source = PROJECT_ROOT / relative_path
-        if source.is_file():
-            destination = copy_root / relative_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-    return copy_root
+    return copy_working_tree(PROJECT_ROOT, tmp_path_factory.mktemp("wheel_source"))
 
 
 def _build_wheel(source: Path, out_dir: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:

@@ -19,7 +19,7 @@ from tests._uv_env import isolated_uv_env
 pytest_plugins = ["pytester"]
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs them by explicit path.
-collect_ignore = ["interpreter_matrix", "css_build"]
+collect_ignore = ["interpreter_matrix", "css_build", "newest_releases"]
 
 
 @pytest.fixture
