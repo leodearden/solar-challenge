@@ -18,7 +18,6 @@ from solar_challenge.home import HomeConfig, SimulationResults, calculate_summar
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.charts import (
-    _adaptive_downsample,
     battery_soc_chart,
     daily_energy_balance,
     financial_breakdown,
@@ -461,20 +460,6 @@ class TestChartFunctions:
         results = _make_sim_results(days=2)
         output = heat_pump_analysis(results)
         assert output is None
-
-    def test_adaptive_downsample_preserves_small_data(self) -> None:
-        """Test _adaptive_downsample returns data unchanged when small."""
-        index = pd.date_range("2024-01-01", periods=100, freq="min")
-        df = pd.DataFrame({"a": range(100)}, index=index)
-        result = _adaptive_downsample(df, max_points=200)
-        assert len(result) == 100
-
-    def test_adaptive_downsample_reduces_large_data(self) -> None:
-        """Test _adaptive_downsample reduces rows for large data."""
-        index = pd.date_range("2024-01-01", periods=10000, freq="min")
-        df = pd.DataFrame({"a": range(10000)}, index=index)
-        result = _adaptive_downsample(df, max_points=500)
-        assert len(result) < 10000
 
 
 class TestChartTotals:

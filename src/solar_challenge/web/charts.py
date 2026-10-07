@@ -13,7 +13,7 @@ palette role.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -74,112 +74,63 @@ def _with_alpha(colour: str, alpha: float) -> str:
     return f"rgba({red},{green},{blue},{alpha})"
 
 
-def _adaptive_downsample(df: pd.DataFrame, max_points: int = 2000) -> pd.DataFrame:
-    """Downsample a DataFrame to approximately max_points rows.
+_TimeIndexed = TypeVar("_TimeIndexed", pd.Series, pd.DataFrame)
 
-    If the DataFrame already has fewer rows than max_points, it is
-    returned unchanged. Otherwise the data is resampled using the mean
-    to reach roughly max_points rows.
 
-    Args:
-        df: Time-indexed DataFrame to downsample.
-        max_points: Target maximum number of rows.
+def _adaptive_downsample(data: _TimeIndexed, max_points: int = 2000) -> _TimeIndexed:
+    """*data*, a time-indexed Series or DataFrame, as the mean of each of about *max_points* evenly spaced windows.
 
-    Returns:
-        Original or downsampled DataFrame.
+    Data of at most *max_points* rows is returned unchanged.
     """
-    if len(df) <= max_points:
-        return df
+    if len(data) <= max_points:
+        return data
 
-    # Calculate the resample frequency needed to hit ~max_points rows
-    total_seconds = (df.index[-1] - df.index[0]).total_seconds()
+    total_seconds = (data.index[-1] - data.index[0]).total_seconds()
     freq_seconds = max(1, int(total_seconds / max_points))
-
-    # Pick a human-friendly frequency string
     if freq_seconds < 60:
         freq = f"{freq_seconds}s"
     elif freq_seconds < 3600:
-        freq = f"{max(1, freq_seconds // 60)}min"
+        freq = f"{freq_seconds // 60}min"
     else:
-        freq = f"{max(1, freq_seconds // 3600)}h"
-
-    return df.resample(freq).mean()
-
-
-def _adaptive_downsample_series(series: pd.Series, max_points: int = 2000) -> pd.Series:
-    """Downsample a single Series (convenience wrapper).
-
-    Args:
-        series: Time-indexed Series.
-        max_points: Target maximum rows.
-
-    Returns:
-        Original or downsampled Series.
-    """
-    if len(series) <= max_points:
-        return series
-
-    total_seconds = (series.index[-1] - series.index[0]).total_seconds()
-    freq_seconds = max(1, int(total_seconds / max_points))
-
-    if freq_seconds < 60:
-        freq = f"{freq_seconds}s"
-    elif freq_seconds < 3600:
-        freq = f"{max(1, freq_seconds // 60)}min"
-    else:
-        freq = f"{max(1, freq_seconds // 3600)}h"
-
-    return series.resample(freq).mean()
+        freq = f"{freq_seconds // 3600}h"
+    return data.resample(freq).mean()
 
 
-def power_flow_timeline(results: SimulationResults) -> str:
-    """Stacked area chart of power flows over time.
-
-    Shows PV generation, demand, self-consumption, grid import and grid
-    export with a range-slider for zooming.
-
-    Args:
-        results: SimulationResults instance.
-
-    Returns:
-        Plotly figure JSON string.
-    """
-    # Build a DataFrame from the relevant series and downsample
-    df = pd.DataFrame({
-        "PV Generation": results.generation,
-        "Demand": results.demand,
-        "Self-Consumption": results.self_consumption,
-        "Grid Import": results.grid_import,
-        "Grid Export": results.grid_export,
-    })
-    df = _adaptive_downsample(df)
-
-    series_meta = [
-        ("PV Generation", COLOUR_PALETTE["pv_generation"]),
-        ("Demand", COLOUR_PALETTE["demand"]),
-        ("Self-Consumption", COLOUR_PALETTE["self_consumption"]),
-        ("Grid Import", COLOUR_PALETTE["grid_import"]),
-        ("Grid Export", COLOUR_PALETTE["grid_export"]),
-    ]
-
-    traces: list[Any] = []
+def _stacked_power_flow_timeline(
+    title: str,
+    *,
+    generation: pd.Series,
+    demand: pd.Series,
+    self_consumption: pd.Series,
+    grid_import: pd.Series,
+    grid_export: pd.Series,
+) -> str:
+    """Plotly JSON of a stacked area chart, titled *title*, of the five power flows over time, with a range slider."""
+    flows = (
+        ("PV Generation", "pv_generation", generation),
+        ("Demand", "demand", demand),
+        ("Self-Consumption", "self_consumption", self_consumption),
+        ("Grid Import", "grid_import", grid_import),
+        ("Grid Export", "grid_export", grid_export),
+    )
+    df = _adaptive_downsample(pd.DataFrame({name: series for name, _, series in flows}))
     dates = [d.isoformat() for d in df.index]
-    for col, colour in series_meta:
-        traces.append(
-            go.Scatter(
-                name=col,
-                x=dates,
-                y=df[col].round(4).tolist(),
-                mode="lines",
-                stackgroup="one",
-                line=dict(width=0.5, color=colour),
-            )
+    traces: list[Any] = [
+        go.Scatter(
+            name=name,
+            x=dates,
+            y=df[name].round(4).tolist(),
+            mode="lines",
+            stackgroup="one",
+            line=dict(width=0.5, color=COLOUR_PALETTE[role]),
         )
+        for name, role, _ in flows
+    ]
 
     fig = go.Figure(data=traces)
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Power Flow Timeline",
+        title=title,
         xaxis=dict(
             title="Time",
             rangeslider=dict(visible=True),
@@ -188,6 +139,18 @@ def power_flow_timeline(results: SimulationResults) -> str:
         height=500,
     )
     return str(fig.to_json())
+
+
+def power_flow_timeline(results: SimulationResults) -> str:
+    """Plotly JSON of the home's power flows in *results*, stacked over time with a range slider."""
+    return _stacked_power_flow_timeline(
+        "Power Flow Timeline",
+        generation=results.generation,
+        demand=results.demand,
+        self_consumption=results.self_consumption,
+        grid_import=results.grid_import,
+        grid_export=results.grid_export,
+    )
 
 
 def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -> str:
@@ -202,7 +165,7 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
     Returns:
         Plotly figure JSON string.
     """
-    soc = _adaptive_downsample_series(results.battery_soc)
+    soc = _adaptive_downsample(results.battery_soc)
     dates = [d.isoformat() for d in soc.index]
     values = soc.round(4).tolist()
 
@@ -600,7 +563,7 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
     )
 
     # --- Heat pump load profile over time ---
-    hp_series = _adaptive_downsample_series(results.heat_pump_load)
+    hp_series = _adaptive_downsample(results.heat_pump_load)
     dates = [d.isoformat() for d in hp_series.index]
 
     load_fig = go.Figure(data=[go.Scatter(
@@ -656,8 +619,8 @@ def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str
     for i, (results, label) in enumerate(zip(results_list, labels)):
         colour = _comparison_run_colour(i)
 
-        gen = _adaptive_downsample_series(results.generation)
-        dem = _adaptive_downsample_series(results.demand)
+        gen = _adaptive_downsample(results.generation)
+        dem = _adaptive_downsample(results.demand)
 
         gen_dates = [d.isoformat() for d in gen.index]
         dem_dates = [d.isoformat() for d in dem.index]
@@ -802,60 +765,15 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
 
 
 def fleet_aggregate_timeline(fleet: FleetResults) -> str:
-    """Stacked area chart of the fleet's power flows over time, each summed across its homes.
-
-    Shows total generation, demand, self-consumption, grid import, and
-    grid export.
-
-    Args:
-        fleet: The fleet whose totals are drawn.
-
-    Returns:
-        Plotly figure JSON string.
-    """
-    df = pd.DataFrame({
-        "PV Generation": fleet.total_generation,
-        "Demand": fleet.total_demand,
-        "Self-Consumption": fleet.total_self_consumption,
-        "Grid Import": fleet.total_grid_import,
-        "Grid Export": fleet.total_grid_export,
-    })
-    df = _adaptive_downsample(df)
-
-    series_meta = [
-        ("PV Generation", COLOUR_PALETTE["pv_generation"]),
-        ("Demand", COLOUR_PALETTE["demand"]),
-        ("Self-Consumption", COLOUR_PALETTE["self_consumption"]),
-        ("Grid Import", COLOUR_PALETTE["grid_import"]),
-        ("Grid Export", COLOUR_PALETTE["grid_export"]),
-    ]
-
-    traces: list[Any] = []
-    dates = [d.isoformat() for d in df.index]
-    for col, colour in series_meta:
-        traces.append(
-            go.Scatter(
-                name=col,
-                x=dates,
-                y=df[col].round(4).tolist(),
-                mode="lines",
-                stackgroup="one",
-                line=dict(width=0.5, color=colour),
-            )
-        )
-
-    fig = go.Figure(data=traces)
-    fig.update_layout(
-        **_SHARED_LAYOUT,
-        title="Fleet Aggregate Power Flow",
-        xaxis=dict(
-            title="Time",
-            rangeslider=dict(visible=True),
-        ),
-        yaxis=dict(title="Power (kW)"),
-        height=500,
+    """Plotly JSON of *fleet*'s power flows, each summed across its homes, stacked over time with a range slider."""
+    return _stacked_power_flow_timeline(
+        "Fleet Aggregate Power Flow",
+        generation=fleet.total_generation,
+        demand=fleet.total_demand,
+        self_consumption=fleet.total_self_consumption,
+        grid_import=fleet.total_grid_import,
+        grid_export=fleet.total_grid_export,
     )
-    return str(fig.to_json())
 
 
 def fleet_grid_impact(fleet: FleetResults) -> str:
@@ -871,7 +789,7 @@ def fleet_grid_impact(fleet: FleetResults) -> str:
         Plotly figure JSON string.
     """
     net = fleet.total_grid_import - fleet.total_grid_export
-    net = _adaptive_downsample_series(net)
+    net = _adaptive_downsample(net)
     dates = [d.isoformat() for d in net.index]
     values = net.round(4).tolist()
 
