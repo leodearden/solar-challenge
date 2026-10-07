@@ -41,6 +41,11 @@ HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], Si
 _active_managers: "weakref.WeakSet[JobManager]" = weakref.WeakSet()
 
 
+def _random_id() -> str:
+    """Return a new random UUID as a string."""
+    return str(uuid.uuid4())
+
+
 def live_managers() -> "frozenset[JobManager]":
     """Return a snapshot of every JobManager not yet garbage-collected, shut down or not."""
     return frozenset(_active_managers)
@@ -75,16 +80,25 @@ class JobManager:
         _unfinished_job_count: Number of jobs queued or running; wait_until_idle waits for it to reach 0.
     """
 
-    def __init__(self, max_workers: int = 2, *, simulate_home: HomeSimulator = _default_simulate_home) -> None:
+    def __init__(
+        self,
+        max_workers: int = 2,
+        *,
+        simulate_home: HomeSimulator = _default_simulate_home,
+        new_id: Callable[[], str] = _random_id,
+    ) -> None:
         """Initialize the job manager.
 
         Args:
             max_workers: Maximum number of concurrent simulation threads.
             simulate_home: Simulates one home over a date range; defaults to
                 solar_challenge.home.simulate_home.
+            new_id: Returns a new, unique id on each call; each job and each run
+                takes one. Defaults to a random UUID.
         """
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._simulate_home = simulate_home
+        self._new_id = new_id
         self._lock = threading.Lock()
         self._idle = threading.Condition(self._lock)
         self._unfinished_job_count = 0
@@ -148,8 +162,8 @@ class JobManager:
         """
         self._cleanup_old_jobs()
 
-        job_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
+        job_id = self._new_id()
+        run_id = self._new_id()
         created_at = datetime.now(timezone.utc).isoformat()
 
         # Initialize in-memory tracking
@@ -266,8 +280,8 @@ class JobManager:
         """
         self._cleanup_old_jobs()
 
-        job_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
+        job_id = self._new_id()
+        run_id = self._new_id()
         created_at = datetime.now(timezone.utc).isoformat()
 
         # Initialize in-memory tracking
