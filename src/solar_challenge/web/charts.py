@@ -13,6 +13,7 @@ palette role.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
 import numpy as np
@@ -828,7 +829,16 @@ def fleet_grid_impact(fleet: FleetResults) -> str:
     return str(fig.to_json())
 
 
-def fleet_heatmap(home_summaries: list[dict[str, Any]]) -> str:
+_PER_HOME_ENERGY_TOTALS: tuple[tuple[str, str, Callable[[SummaryStatistics], float]], ...] = (
+    ("Generation", "pv_generation", lambda summary: summary.total_generation_kwh),
+    ("Demand", "demand", lambda summary: summary.total_demand_kwh),
+    ("Self-Consumption", "self_consumption", lambda summary: summary.total_self_consumption_kwh),
+    ("Grid Import", "grid_import", lambda summary: summary.total_grid_import_kwh),
+    ("Grid Export", "grid_export", lambda summary: summary.total_grid_export_kwh),
+)
+
+
+def fleet_heatmap(home_summaries: Sequence[SummaryStatistics]) -> str:
     """Homes x metrics heatmap matrix.
 
     Rows represent individual homes and columns represent energy
@@ -837,27 +847,16 @@ def fleet_heatmap(home_summaries: list[dict[str, Any]]) -> str:
     are more.
 
     Args:
-        home_summaries: List of dicts with per-home energy totals.
+        home_summaries: Each home's summary statistics, in the fleet's order.
 
     Returns:
         Plotly figure JSON string.
     """
     summaries = home_summaries[:50]
-    metrics = [
-        ("total_generation_kwh", "Generation"),
-        ("total_demand_kwh", "Demand"),
-        ("total_self_consumption_kwh", "Self-Consumption"),
-        ("total_grid_import_kwh", "Grid Import"),
-        ("total_grid_export_kwh", "Grid Export"),
-    ]
 
     y_labels = [f"Home {i+1}" for i in range(len(summaries))]
-    x_labels = [label for _, label in metrics]
-
-    z: list[list[float]] = []
-    for s in summaries:
-        row = [round(s.get(key, 0), 2) for key, _ in metrics]
-        z.append(row)
+    x_labels = [label for label, _, _ in _PER_HOME_ENERGY_TOTALS]
+    z = [[round(total(summary), 2) for _, _, total in _PER_HOME_ENERGY_TOTALS] for summary in summaries]
 
     fig = go.Figure(data=go.Heatmap(
         z=z,
@@ -877,35 +876,27 @@ def fleet_heatmap(home_summaries: list[dict[str, Any]]) -> str:
     return str(fig.to_json())
 
 
-def fleet_box_plots(home_summaries: list[dict[str, Any]]) -> str:
+def fleet_box_plots(home_summaries: Sequence[SummaryStatistics]) -> str:
     """Box plots of energy metrics across all homes.
 
     One box per metric showing the distribution of values across
     the fleet.
 
     Args:
-        home_summaries: List of dicts with per-home energy totals.
+        home_summaries: Each home's summary statistics, in the fleet's order.
 
     Returns:
         Plotly figure JSON string.
     """
-    metrics = [
-        ("total_generation_kwh", "Generation", COLOUR_PALETTE["pv_generation"]),
-        ("total_demand_kwh", "Demand", COLOUR_PALETTE["demand"]),
-        ("total_self_consumption_kwh", "Self-Consumption", COLOUR_PALETTE["self_consumption"]),
-        ("total_grid_import_kwh", "Grid Import", COLOUR_PALETTE["grid_import"]),
-        ("total_grid_export_kwh", "Grid Export", COLOUR_PALETTE["grid_export"]),
-    ]
-
-    traces: list[Any] = []
-    for key, label, colour in metrics:
-        values = [s.get(key, 0) for s in home_summaries]
-        traces.append(go.Box(
+    traces: list[Any] = [
+        go.Box(
             name=label,
-            y=values,
-            marker_color=colour,
+            y=[total(summary) for summary in home_summaries],
+            marker_color=COLOUR_PALETTE[role],
             boxmean=True,
-        ))
+        )
+        for label, role, total in _PER_HOME_ENERGY_TOTALS
+    ]
 
     fig = go.Figure(data=traces)
     fig.update_layout(
@@ -917,15 +908,14 @@ def fleet_box_plots(home_summaries: list[dict[str, Any]]) -> str:
     return str(fig.to_json())
 
 
-def fleet_distribution_histograms(home_summaries: list[dict[str, Any]]) -> str:
+def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -> str:
     """Histograms showing distribution of key metrics across homes.
 
     Three subplots: generation (kWh), self-consumption ratio, and
     grid dependency ratio.
 
     Args:
-        home_summaries: List of dicts with per-home energy totals and
-            ratios.
+        home_summaries: Each home's summary statistics, in the fleet's order.
 
     Returns:
         Plotly figure JSON string.
@@ -935,9 +925,9 @@ def fleet_distribution_histograms(home_summaries: list[dict[str, Any]]) -> str:
         subplot_titles=["Generation (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"],
     )
 
-    gen_values = [s.get("total_generation_kwh", 0) for s in home_summaries]
-    sc_values = [s.get("self_consumption_ratio", 0) for s in home_summaries]
-    gd_values = [s.get("grid_dependency_ratio", 0) for s in home_summaries]
+    gen_values = [summary.total_generation_kwh for summary in home_summaries]
+    sc_values = [summary.self_consumption_ratio for summary in home_summaries]
+    gd_values = [summary.grid_dependency_ratio for summary in home_summaries]
 
     fig.add_trace(
         go.Histogram(

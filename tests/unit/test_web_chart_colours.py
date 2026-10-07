@@ -233,10 +233,10 @@ _FIGURES: dict[str, _FigureCase] = {
     ),
     "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: build(_fleet_year())),
     "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: build(_fleet_year())),
-    "fleet_heatmap": _FigureCase(charts.fleet_heatmap, lambda build: build([dataclasses.asdict(_SUMMARY)] * 3)),
-    "fleet_box_plots": _FigureCase(charts.fleet_box_plots, lambda build: build([dataclasses.asdict(_SUMMARY)] * 3)),
+    "fleet_heatmap": _FigureCase(charts.fleet_heatmap, lambda build: build([_SUMMARY] * 3)),
+    "fleet_box_plots": _FigureCase(charts.fleet_box_plots, lambda build: build([_SUMMARY] * 3)),
     "fleet_distribution_histograms": _FigureCase(
-        charts.fleet_distribution_histograms, lambda build: build([dataclasses.asdict(_SUMMARY)] * 3)
+        charts.fleet_distribution_histograms, lambda build: build([_SUMMARY] * 3)
     ),
     "sweep_parameter_chart": _FigureCase(
         charts.sweep_parameter_chart,

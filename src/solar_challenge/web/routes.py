@@ -223,26 +223,12 @@ def fleet_results(run_id: str) -> Any:
         fleet_heatmap,
     )
 
-    home_summaries = [
-        {
-            "total_generation_kwh": s.total_generation_kwh,
-            "total_demand_kwh": s.total_demand_kwh,
-            "total_self_consumption_kwh": s.total_self_consumption_kwh,
-            "total_grid_import_kwh": s.total_grid_import_kwh,
-            "total_grid_export_kwh": s.total_grid_export_kwh,
-            "self_consumption_ratio": s.self_consumption_ratio,
-            "grid_dependency_ratio": s.grid_dependency_ratio,
-            "export_ratio": s.export_ratio,
-        }
-        for s in per_home_summaries
-    ]
-
     charts: dict[str, Any] = {
         "aggregate_timeline": fleet_aggregate_timeline(fleet_results_data),
         "grid_impact": fleet_grid_impact(fleet_results_data),
-        "heatmap": fleet_heatmap(home_summaries),
-        "box_plots": fleet_box_plots(home_summaries),
-        "distribution_histograms": fleet_distribution_histograms(home_summaries),
+        "heatmap": fleet_heatmap(per_home_summaries),
+        "box_plots": fleet_box_plots(per_home_summaries),
+        "distribution_histograms": fleet_distribution_histograms(per_home_summaries),
     }
 
     return render_template(
