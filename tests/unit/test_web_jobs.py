@@ -780,14 +780,28 @@ class TestJobManagerStatus:
     def test_a_jobs_status_holds_its_ids_its_progress_and_when_the_manager_began_tracking_it(
         self, tmp_path: Path
     ) -> None:
+        storage = _run_storage(tmp_path)
         manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
-        job_id = _submit_home_job(manager, tmp_path)
+
+        before_submit = time.monotonic()
+        job_id, run_id = manager.submit_home_job(
+            config=_A_HOME,
+            start_date=_JUNE_1,
+            end_date=_JUNE_2,
+            db_path=str(storage.db_path),
+            data_dir=str(storage.data_dir),
+        )
+        after_submit = time.monotonic()
         assert manager.wait_until_idle(timeout=30)
 
         status = manager.get_job_status(job_id)
 
         assert status is not None
         assert set(status) == {"job_id", "run_id", "status", "progress_pct", "current_step", "message", "created_at"}
+        assert (status["job_id"], status["run_id"]) == (job_id, run_id)
+        assert status["status"] == "completed", status["message"]
+        assert status["progress_pct"] == 100.0
+        assert before_submit <= status["created_at"] <= after_submit
 
     def test_a_manager_does_not_know_a_job_another_manager_ran_although_its_rows_remain(
         self, tmp_path: Path

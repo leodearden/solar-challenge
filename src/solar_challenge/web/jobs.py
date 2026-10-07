@@ -246,10 +246,11 @@ class JobManager:
         """Return a copy of the in-memory status of a job this manager tracks.
 
         A manager tracks only the jobs submitted to it, and stops tracking each
-        one, finished or not, at the first submit made more than an hour after
-        it (_cleanup_old_jobs).  It never reads the jobs table, so a job it does
-        not track, such as one from before a restart, is unknown here although
-        the job's rows remain in the database.
+        one, finished or not, at the first submit made after the job is older
+        than the age limit that _cleanup_old_jobs applies.  It never reads the
+        jobs table, so a job it does not track, such as one from before a
+        restart, is unknown here although the job's rows remain in the
+        database.
 
         Args:
             job_id: Unique job identifier.
