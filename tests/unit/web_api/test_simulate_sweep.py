@@ -19,9 +19,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.simulation_params import parse_home_config
-
-
-_MOST_POINTS_A_SWEEP_MAY_HAVE = 50
+from tests._html_page import element_attributes
 
 
 class _RecordingJobManager:
@@ -75,6 +73,15 @@ class TestRecordingJobManager:
         double = _RecordingJobManager()
 
         assert _call_shape(double.submit_home_job) == _call_shape(real_job_manager.submit_home_job)
+
+
+def _steps_the_sweep_page_offers(client: FlaskClient) -> tuple[int, int]:
+    """The fewest and the most steps the sweep page's Steps box offers: its min and its max."""
+    page = client.get("/scenarios/sweep").get_data(as_text=True)
+    [steps_box] = [box for box in element_attributes(page, "input") if box.get("x-model") == "steps"]
+    fewest, most = steps_box["min"], steps_box["max"]
+    assert fewest is not None and most is not None
+    return int(fewest), int(most)
 
 
 class TestSimulateSweep:
@@ -164,32 +171,36 @@ class TestSimulateSweep:
         self, client: FlaskClient, recording_job_manager: _RecordingJobManager
     ) -> None:
         """A sweep with as many points as the sweep page's Steps box offers submits one home per point."""
+        _, most = _steps_the_sweep_page_offers(client)
         resp = client.post(
             "/api/simulate/sweep",
-            json={"min": 1.0, "max": 10.0, "steps": _MOST_POINTS_A_SWEEP_MAY_HAVE},
+            json={"min": 1.0, "max": 10.0, "steps": most},
         )
         assert resp.status_code == 201
-        assert len(recording_job_manager.submitted_homes) == _MOST_POINTS_A_SWEEP_MAY_HAVE
+        assert len(recording_job_manager.submitted_homes) == most
 
     @pytest.mark.parametrize(
-        "steps",
+        "steps_the_page_does_not_offer",
         [
-            pytest.param(1, id="too-few"),
-            pytest.param(_MOST_POINTS_A_SWEEP_MAY_HAVE + 1, id="more-than-the-page-offers"),
+            pytest.param(lambda fewest, most: fewest - 1, id="fewer-than-the-page-offers"),
+            pytest.param(lambda fewest, most: most + 1, id="more-than-the-page-offers"),
         ],
     )
-    def test_a_step_count_outside_2_to_the_most_points_is_refused_before_any_point_is_submitted(
-        self, client: FlaskClient, recording_job_manager: _RecordingJobManager, steps: int
+    def test_a_step_count_the_sweep_page_does_not_offer_is_refused_before_any_point_is_submitted(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+        steps_the_page_does_not_offer: Callable[[int, int], int],
     ) -> None:
-        """Fewer than 2 points, or more than the sweep page offers, is a 400 naming steps, the range and the value sent; no point is submitted."""
+        """One step fewer, or one more, than the sweep page's Steps box offers is a 400 naming steps, the range the page offers and the value sent; no point is submitted."""
+        fewest, most = _steps_the_sweep_page_offers(client)
+        steps = steps_the_page_does_not_offer(fewest, most)
         resp = client.post(
             "/api/simulate/sweep",
             json={"min": 1.0, "max": 10.0, "steps": steps},
         )
         assert resp.status_code == 400
-        assert resp.get_json() == {
-            "error": f"steps must be between 2 and {_MOST_POINTS_A_SWEEP_MAY_HAVE}, got {steps}"
-        }
+        assert resp.get_json() == {"error": f"steps must be between {fewest} and {most}, got {steps}"}
         assert recording_job_manager.submitted_homes == []
 
     def test_min_gte_max_returns_400(self, client: FlaskClient) -> None:
