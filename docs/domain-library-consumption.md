@@ -117,6 +117,13 @@ signature, or to an exported class's public members, must also edit
 `FROZEN_SURFACE` or `FROZEN_MEMBERS` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 426): `Battery` declares `config`,
+`min_soc_fraction`, `max_soc_fraction`, `charge_efficiency` and
+`discharge_efficiency` in its class body, and `WeatherCache` declares
+`cache_dir`, so the frozen contract now covers them. Each is still a plain
+instance attribute that `__init__` sets, read and assigned as on the 0.5.0 tag.
+Consumers need no change when they re-pin.
+
 **Unreleased on main** (task 436): `SimulationResults`, reached through
 `FleetResults.per_home_results`, is frozen, so that each of its series stays
 named the column `to_dataframe()` writes it under. Assigning to one of its
@@ -283,7 +290,8 @@ The authoritative public surface is `solar_challenge.__all__`, defined in
 `src/solar_challenge/__init__.py`.  It is frozen by
 `tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
 public name and that name's signature, and whose `FROZEN_MEMBERS` pins every
-exported class's public methods, properties and class constants.  It is also
+exported class's public methods, properties, class constants, and the instance
+attributes its class body declares.  It is also
 enforced at import time via the module's `__getattr__` guard, and
 `tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
 Consumers should reference `__all__` directly rather than relying on any copy

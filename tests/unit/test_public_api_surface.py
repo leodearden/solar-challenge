@@ -11,9 +11,10 @@ Concerns:
                      routine's signature, an Enum's members, a constant's type
                      (test_every_exported_signature_matches_frozen_surface)
   H2 members       — FROZEN_MEMBERS pins each exported class's public members: its
-                     methods, properties and class constants
+                     methods, properties, class constants and declared attributes
                      (test_every_exported_class_member_matches_frozen_members,
-                      test_exported_classes_inherit_only_from_exported_classes)
+                      test_exported_classes_inherit_only_from_exported_classes,
+                      test_exported_classes_declare_the_public_attributes_they_set_on_self)
   H2 kind          — EXPECTED_KIND pins the introspected kind of each name
                      (test_expected_kind_keys_match_frozen_set,
                       test_every_name_resolves_to_expected_kind)
@@ -36,7 +37,12 @@ import sys
 from collections.abc import Mapping
 
 import solar_challenge
-from tests._surface_forms import member_forms, surface_form
+from tests._surface_forms import (
+    member_forms,
+    surface_form,
+    undeclared_attributes,
+    unset_attributes,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +261,11 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     # --- battery (battery.py) ---
     "Battery": {
+        "config": "attribute BatteryConfig",
+        "min_soc_fraction": "attribute float",
+        "max_soc_fraction": "attribute float",
+        "charge_efficiency": "attribute float",
+        "discharge_efficiency": "attribute float",
         "soh": "property (self) -> float",
         "effective_capacity_kwh": "property (self) -> float",
         "soc_kwh": "property (self) -> float",
@@ -299,6 +310,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     # --- weather (weather.py) ---
     "WeatherCache": {
+        "cache_dir": "attribute Path",
         "get": "(self, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> DataFrame | None",
         "put": "(self, data: DataFrame, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> None",
         "clear": "(self) -> int",
@@ -377,6 +389,35 @@ def test_exported_classes_inherit_only_from_exported_classes() -> None:
         "member_forms reads each class's own body, so a public member defined on such a "
         "base escapes FROZEN_MEMBERS. Export the base, move its public members into the "
         "exported class, or widen the member lock."
+    )
+
+
+def test_exported_classes_declare_the_public_attributes_they_set_on_self() -> None:
+    """H2 member-lock guard: an exported class declares in a class body each public attribute it sets on self, and sets each one its body only declares.
+
+    member_forms reads class bodies, so FROZEN_MEMBERS pins an instance attribute only
+    once its class body declares it, e.g. `cache_dir: Path`; and a declaration that
+    nothing sets would pin a name that instances lack.
+    """
+    classes = _exported_classes()
+    undeclared = [
+        f"{name}.{attribute}"
+        for name, cls in classes.items()
+        for attribute in sorted(undeclared_attributes(cls))
+    ]
+    unset = [
+        f"{name}.{attribute}"
+        for name, cls in classes.items()
+        for attribute in sorted(unset_attributes(cls))
+    ]
+    assert not undeclared and not unset, (
+        f"Public attributes set on self that no class body declares: {undeclared}. "
+        f"Attributes a class body declares that nothing sets on self: {unset}. "
+        "member_forms reads class bodies, so FROZEN_MEMBERS cannot pin an attribute "
+        "that is only set on self. Declare each such attribute in its class body, e.g. "
+        "`cache_dir: Path`, then add its FROZEN_MEMBERS entry and its 'Unreleased on "
+        "main' line in docs/domain-library-consumption.md, or make it private; and drop "
+        "each declaration that nothing sets."
     )
 
 

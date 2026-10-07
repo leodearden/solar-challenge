@@ -88,6 +88,8 @@ class WeatherCache:
     timezone and frequency, keyed by prefix, location and an optional date range.
     """
 
+    cache_dir: Path
+
     _KEY_VERSION = 2
     """Part of every key: bump it whenever what an entry means changes, so that older entries are never read.
 

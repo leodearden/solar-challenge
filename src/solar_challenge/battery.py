@@ -225,6 +225,12 @@ class Battery:
         discharge_efficiency: Efficiency of discharging (default 0.975)
     """
 
+    config: BatteryConfig
+    min_soc_fraction: float
+    max_soc_fraction: float
+    charge_efficiency: float
+    discharge_efficiency: float
+
     def __init__(
         self,
         config: BatteryConfig,
