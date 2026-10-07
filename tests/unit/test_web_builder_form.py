@@ -9,6 +9,7 @@ pytest.importorskip("flask")
 
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.shared import NotAJsonObject
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FORMS_THAT_ARE_NOT_JSON_OBJECTS = [
     pytest.param([1], "list", id="array"),
@@ -24,14 +25,6 @@ _ACCEPTED_FORM: dict[str, object] = {
     "battery_capacity_kwh": 5,
 }
 """A builder form builder_form_errors accepts. It needs its battery: without one the builder writes battery: {}, which load_fleet_config refuses."""
-
-# One value of each kind number_fields.as_finite_float refuses; its full matrix is tested there.
-_UNUSABLE_NUMBERS = [
-    pytest.param(10**400, id="integer-too-large-for-a-float"),
-    pytest.param(float("inf"), id="infinity"),
-    pytest.param(float("nan"), id="nan"),
-    pytest.param(True, id="boolean"),
-]
 
 
 class TestScenarioFromBuilderForm:
@@ -50,7 +43,7 @@ class TestScenarioFromBuilderForm:
             scenario_from_builder_form(form)
         assert str(exc_info.value) == f"Builder form must be a JSON object, got {type_name}"
 
-    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
         ("arm", "field"),
         [
@@ -76,7 +69,7 @@ class TestScenarioFromBuilderForm:
             scenario_from_builder_form({**_ACCEPTED_FORM, **arm, field: value})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
-    @pytest.mark.parametrize("value", _UNUSABLE_NUMBERS)
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
         ("rows_holding", "field"),
         [
