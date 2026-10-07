@@ -12,7 +12,7 @@ import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Collection, Iterator, Literal, Mapping, Optional, Union, cast
+from typing import Any, Callable, Collection, Generic, Iterator, Literal, Mapping, Optional, TypeVar, Union, cast
 
 import pandas as pd
 import yaml
@@ -646,6 +646,22 @@ def _refuse_unrecognised_keys(
     return mapping
 
 
+_Built = TypeVar("_Built")
+
+
+@dataclass(frozen=True)
+class _BlockType(Generic[_Built]):
+    """One type a block names in its ``type:`` key.
+
+    *recognised_keys* is every key a block of the type recognises, ``type`` among them. *build*
+    reads a block holding only those keys; its second argument is the block's path, named in
+    its messages.
+    """
+
+    recognised_keys: frozenset[str]
+    build: Callable[[dict[str, Any], str], _Built]
+
+
 def _float_or_none(value: Any) -> Optional[float]:
     """Coerce *value* to a float, keeping a null as None."""
     return None if value is None else float(value)
@@ -819,19 +835,99 @@ def parse_dispatch_strategy_config(
     )
 
 
-_TARIFF_BLOCK_KEYS: Mapping[str, frozenset[str]] = MappingProxyType({
-    "flat_rate": frozenset({"type", "rate_per_kwh", "name"}),
-    "economy_7": frozenset({
-        "type", "off_peak_rate", "peak_rate", "off_peak_start", "off_peak_end",
-    }),
-    "economy_10": frozenset({
-        "type", "off_peak_rate", "peak_rate", "night_start", "night_end", "afternoon_start",
-        "afternoon_end", "evening_start", "evening_end",
-    }),
-    "custom": frozenset({"type", "periods", "name"}),
-})
-
 _TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
+
+_PRESET_TARIFF_RATE_KEYS: frozenset[str] = frozenset({"off_peak_rate", "peak_rate"})
+
+
+def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
+    """Build the flat_rate tariff a block names, refusing it unless it gives a rate."""
+    rate = data.get("rate_per_kwh")
+    if rate is None:
+        raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
+    return TariffConfig.flat_rate(
+        rate_per_kwh=float(rate),
+        name=data.get("name", "")
+    )
+
+
+def _preset_tariff_overrides(data: dict[str, Any]) -> dict[str, Any]:
+    """Return the keyword overrides a preset tariff block sets, its rates read as floats.
+
+    Reads a block that parse_tariff_config has already confined to its type's keys.
+    """
+    return {
+        key: float(value) if key in _PRESET_TARIFF_RATE_KEYS else value
+        for key, value in data.items()
+        if key != "type"
+    }
+
+
+def _build_economy_7_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
+    """Build the Economy 7 tariff a block names, with the overrides it sets."""
+    return TariffConfig.economy_7(**_preset_tariff_overrides(data))
+
+
+def _build_economy_10_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
+    """Build the Economy 10 tariff a block names, with the overrides it sets."""
+    return TariffConfig.economy_10(**_preset_tariff_overrides(data))
+
+
+def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
+    """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate."""
+    period = _refuse_unrecognised_keys(block_path, data, _TARIFF_PERIOD_KEYS)
+    for key in ("start_time", "end_time", "rate_per_kwh"):
+        if key not in period:
+            raise ConfigurationError(f"Tariff period requires '{key}' field")
+    return TariffPeriod(
+        start_time=period["start_time"],
+        end_time=period["end_time"],
+        rate_per_kwh=float(period["rate_per_kwh"]),
+        name=period.get("name", "")
+    )
+
+
+def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
+    """Build the custom tariff a block names from its periods, refusing it unless it gives some."""
+    if "periods" not in data:
+        raise ConfigurationError("custom tariff requires 'periods' field")
+
+    periods_data = data["periods"]
+    if not periods_data:
+        raise ConfigurationError("custom tariff must have at least one period")
+
+    return TariffConfig(
+        periods=tuple(
+            _parse_tariff_period(period, block_path=_child_path(block_path, f"periods[{index}]"))
+            for index, period in enumerate(periods_data)
+        ),
+        name=data.get("name", "")
+    )
+
+
+_TARIFF_TYPES: Mapping[str, _BlockType[TariffConfig]] = MappingProxyType({
+    "flat_rate": _BlockType(
+        frozenset({"type", "rate_per_kwh", "name"}),
+        _build_flat_rate_tariff,
+    ),
+    "economy_7": _BlockType(
+        frozenset({
+            "type", "off_peak_rate", "peak_rate", "off_peak_start", "off_peak_end",
+        }),
+        _build_economy_7_tariff,
+    ),
+    "economy_10": _BlockType(
+        frozenset({
+            "type", "off_peak_rate", "peak_rate", "night_start", "night_end", "afternoon_start",
+            "afternoon_end", "evening_start", "evening_end",
+        }),
+        _build_economy_10_tariff,
+    ),
+    "custom": _BlockType(
+        frozenset({"type", "periods", "name"}),
+        _build_custom_tariff,
+    ),
+})
 
 
 def parse_tariff_config(
@@ -861,90 +957,14 @@ def parse_tariff_config(
     tariff_type = data.get("type")
     if tariff_type is None:
         raise ConfigurationError("Tariff configuration requires 'type' field")
-    recognised = _TARIFF_BLOCK_KEYS.get(tariff_type) if isinstance(tariff_type, str) else None
-    if recognised is None:
+    block_type = _TARIFF_TYPES.get(tariff_type) if isinstance(tariff_type, str) else None
+    if block_type is None:
         raise ConfigurationError(
             f"Unknown tariff type '{tariff_type}'. "
-            f"Supported types: {', '.join(_TARIFF_BLOCK_KEYS)}"
+            f"Supported types: {', '.join(_TARIFF_TYPES)}"
         )
-    _refuse_unrecognised_keys(block_path, data, recognised)
-
-    if tariff_type == "flat_rate":
-        rate = data.get("rate_per_kwh")
-        if rate is None:
-            raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
-        return TariffConfig.flat_rate(
-            rate_per_kwh=float(rate),
-            name=data.get("name", "")
-        )
-
-    elif tariff_type == "economy_7":
-        kwargs: dict[str, Any] = {}
-        if "off_peak_rate" in data:
-            kwargs["off_peak_rate"] = float(data["off_peak_rate"])
-        if "peak_rate" in data:
-            kwargs["peak_rate"] = float(data["peak_rate"])
-        if "off_peak_start" in data:
-            kwargs["off_peak_start"] = data["off_peak_start"]
-        if "off_peak_end" in data:
-            kwargs["off_peak_end"] = data["off_peak_end"]
-        return TariffConfig.economy_7(**kwargs)
-
-    elif tariff_type == "economy_10":
-        kwargs = {}
-        if "off_peak_rate" in data:
-            kwargs["off_peak_rate"] = float(data["off_peak_rate"])
-        if "peak_rate" in data:
-            kwargs["peak_rate"] = float(data["peak_rate"])
-        if "night_start" in data:
-            kwargs["night_start"] = data["night_start"]
-        if "night_end" in data:
-            kwargs["night_end"] = data["night_end"]
-        if "afternoon_start" in data:
-            kwargs["afternoon_start"] = data["afternoon_start"]
-        if "afternoon_end" in data:
-            kwargs["afternoon_end"] = data["afternoon_end"]
-        if "evening_start" in data:
-            kwargs["evening_start"] = data["evening_start"]
-        if "evening_end" in data:
-            kwargs["evening_end"] = data["evening_end"]
-        return TariffConfig.economy_10(**kwargs)
-
-    elif tariff_type == "custom":
-        if "periods" not in data:
-            raise ConfigurationError("custom tariff requires 'periods' field")
-
-        periods_data = data["periods"]
-        if not periods_data:
-            raise ConfigurationError("custom tariff must have at least one period")
-
-        periods = []
-        for index, period_data in enumerate(periods_data):
-            _refuse_unrecognised_keys(
-                _child_path(block_path, f"periods[{index}]"), period_data, _TARIFF_PERIOD_KEYS
-            )
-            if "start_time" not in period_data:
-                raise ConfigurationError("Tariff period requires 'start_time' field")
-            if "end_time" not in period_data:
-                raise ConfigurationError("Tariff period requires 'end_time' field")
-            if "rate_per_kwh" not in period_data:
-                raise ConfigurationError("Tariff period requires 'rate_per_kwh' field")
-
-            periods.append(
-                TariffPeriod(
-                    start_time=period_data["start_time"],
-                    end_time=period_data["end_time"],
-                    rate_per_kwh=float(period_data["rate_per_kwh"]),
-                    name=period_data.get("name", "")
-                )
-            )
-
-        return TariffConfig(
-            periods=tuple(periods),
-            name=data.get("name", "")
-        )
-
-    raise AssertionError(f"tariff type {tariff_type!r} has recognised keys but no parser branch")
+    _refuse_unrecognised_keys(block_path, data, block_type.recognised_keys)
+    return block_type.build(data, block_path)
 
 
 _HEAT_PUMP_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -1874,7 +1894,7 @@ def _parse_grid_services_events_config(
         return None
     gs_data = _refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
     # Parse event_windows list-of-dicts -> tuple[EventWindow, ...]
-    # mirroring parse_tariff_config 'custom' branch.
+    # mirroring _build_custom_tariff's periods.
     ew_raw_list = gs_data.get("event_windows", [])
     if not isinstance(ew_raw_list, list):
         raise ConfigurationError(
