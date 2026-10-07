@@ -31,7 +31,7 @@ from solar_challenge.config import (
     SweepSpec,
     UniformDistribution,
     WeightedDiscreteDistribution,
-    detect_sweep_spec,
+    detect_fleet_sweep_spec,
     expand_sweep_configs,
     generate_homes_from_distribution,
     load_community_config,
@@ -44,6 +44,7 @@ from solar_challenge.config import (
     parse_home_block,
     parse_location_block,
     parse_seg_rate,
+    parse_sweep_fleet_configs,
     parse_tariff_config,
 )
 from solar_challenge.ev import EVConfig
@@ -127,20 +128,16 @@ def _assert_blocks_recognise_exactly_their_keys(
 def _parse_every_block(path: Path) -> None:
     """Read every block of the file at *path* through the public reader that consumes it.
 
-    A fleet_distribution carrying a sweep is read as ``fleet sweep`` reads it, with the
-    top-level tariff ``fleet run`` would apply; any other fleet is read as ``fleet run``
-    reads it; only a file naming its scenario is read as one.
+    A fleet file defining a YAML sweep is read as ``fleet sweep`` builds its points, any
+    other fleet file as ``fleet run`` loads it; only a file naming its scenario is read
+    as one.
     """
     document = load_config(path)
     if "home" in document:
         parse_home_block(document["home"], parse_location_block(document.get("location")))
-    if "fleet_distribution" in document:
-        distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-        if detect_sweep_spec(distribution) is None:
-            load_fleet_config(path)
-        else:
-            parse_tariff_config(document.get("tariff"))
-    elif "homes" in document:
+    if detect_fleet_sweep_spec(document) is not None:
+        parse_sweep_fleet_configs(document)
+    elif "fleet_distribution" in document or "homes" in document:
         load_fleet_config(path)
     if {"name", "period"} <= document.keys() and ("home" in document or "homes" in document):
         load_scenarios(path)
