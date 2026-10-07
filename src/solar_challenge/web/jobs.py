@@ -15,7 +15,7 @@ import time
 import traceback
 import uuid
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable, Mapping
@@ -82,6 +82,14 @@ class _NewJob:
     created_at: str
 
 
+@dataclass
+class _TrackedJob:
+    """A job a JobManager tracks: the status get_job_status reports and the SSE events get_events has not yet yielded."""
+
+    status: dict[str, Any]
+    events: collections.deque[dict[str, Any]] = field(default_factory=lambda: collections.deque(maxlen=100))
+
+
 class JobManager:
     """Manages background simulation jobs with progress tracking.
 
@@ -91,8 +99,7 @@ class JobManager:
 
     Attributes:
         _executor: Thread pool for background job execution.
-        _jobs: In-memory dict tracking job metadata.
-        _event_queues: Per-job deques of SSE event dicts.
+        _jobs: Each job the manager tracks, by id.
         _unfinished_job_count: Number of jobs queued or running; wait_until_idle waits for it to reach 0.
     """
 
@@ -123,8 +130,7 @@ class JobManager:
         self._lock = threading.Lock()
         self._idle = threading.Condition(self._lock)
         self._unfinished_job_count = 0
-        self._jobs: dict[str, dict[str, Any]] = {}
-        self._event_queues: dict[str, collections.deque[dict[str, Any]]] = {}
+        self._jobs: dict[str, _TrackedJob] = {}
         _active_managers.add(self)
 
     def shutdown(self, wait: bool = False) -> None:
@@ -267,9 +273,8 @@ class JobManager:
             if this manager does not track the job.
         """
         with self._lock:
-            if job_id in self._jobs:
-                return dict(self._jobs[job_id])
-            return None
+            job = self._jobs.get(job_id)
+            return None if job is None else dict(job.status)
 
     def get_events(self, job_id: str) -> Generator[dict[str, Any], None, None]:
         """Yield SSE events from the job's event queue.
@@ -283,12 +288,12 @@ class JobManager:
             Dict with event data (type, data fields).
         """
         with self._lock:
-            queue = self._event_queues.get(job_id)
-            if queue is None:
+            job = self._jobs.get(job_id)
+            if job is None:
                 return
             # Copy and drain events under the lock to avoid TOCTOU
-            events = list(queue)
-            queue.clear()
+            events = list(job.events)
+            job.events.clear()
 
         for event in events:
             yield event
@@ -306,13 +311,12 @@ class JobManager:
         now = self._clock()
         with self._lock:
             expired = [
-                jid
-                for jid, job in self._jobs.items()
-                if now - job.get("created_at", now) > max_age_seconds
+                job_id
+                for job_id, job in self._jobs.items()
+                if now - job.status["created_at"] > max_age_seconds
             ]
-            for jid in expired:
-                del self._jobs[jid]
-                self._event_queues.pop(jid, None)
+            for job_id in expired:
+                del self._jobs[job_id]
 
     def _submit_job(
         self,
@@ -371,13 +375,9 @@ class JobManager:
             )
 
         with self._lock:
-            self._jobs[job_id] = {
-                "job_id": job_id,
-                "run_id": run_id,
-                **_QUEUED_JOB_STATE,
-                "created_at": self._clock(),
-            }
-            self._event_queues[job_id] = collections.deque(maxlen=100)
+            self._jobs[job_id] = _TrackedJob(
+                status={"job_id": job_id, "run_id": run_id, **_QUEUED_JOB_STATE, "created_at": self._clock()}
+            )
 
         return _NewJob(job_id=job_id, run_id=run_id, created_at=created_at)
 
@@ -410,7 +410,6 @@ class JobManager:
         """Erase every record of a job that the executor refused to schedule."""
         with self._lock:
             self._jobs.pop(job_id, None)
-            self._event_queues.pop(job_id, None)
         with get_db(db_path) as conn:
             conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
@@ -439,11 +438,9 @@ class JobManager:
         """
         # Update in-memory state
         with self._lock:
-            if job_id in self._jobs:
-                self._jobs[job_id]["progress_pct"] = pct
-                self._jobs[job_id]["current_step"] = step
-                self._jobs[job_id]["message"] = message
-                self._jobs[job_id]["status"] = status
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.status.update(progress_pct=pct, current_step=step, message=message, status=status)
 
         # Update database
         if conn is not None:
@@ -486,16 +483,17 @@ class JobManager:
             },
         }
         with self._lock:
-            if job_id in self._event_queues:
-                self._event_queues[job_id].append(event)
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.events.append(event)
 
     def _emit_event(self, job_id: str, event_type: str, data: dict[str, Any]) -> None:
         """Update in-memory job state and append an SSE event."""
         with self._lock:
-            if job_id in self._jobs:
-                self._jobs[job_id].update(data)
-            if job_id in self._event_queues:
-                self._event_queues[job_id].append({"event": event_type, "data": data})
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.status.update(data)
+                job.events.append({"event": event_type, "data": data})
 
     def _run_job(
         self,
