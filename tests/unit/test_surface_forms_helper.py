@@ -242,6 +242,19 @@ def test_a_class_form_is_its_constructor_signature() -> None:
     assert surface_form(Plain) == "(a: int, b: str | None = None) -> None"
 
 
+def test_an_init_only_variable_is_spelled_init_var_then_its_type() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+        scale: InitVar[Optional[float]]
+        site: InitVar[Outer.Inner]
+
+    assert (
+        surface_form(Reading)
+        == "(kwh: float, scale: InitVar[float | None], site: InitVar[Outer.Inner]) -> None"
+    )
+
+
 def test_an_enum_form_is_its_members_in_definition_order() -> None:
     class Period(enum.Enum):
         PEAK = "peak"
