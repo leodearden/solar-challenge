@@ -29,14 +29,24 @@ A property that can be set or deleted says so in its kind, as property[settable,
 deletable] does, and an abstract member's form begins with abstract. An inherited
 member belongs to the class that defines it.
 
+member_forms reads class bodies, so it sees an instance attribute only once a body
+declares it. undeclared_attributes names each public attribute a class's own source
+sets on self, by assignment or, as a frozen dataclass must, by object.__setattr__, that
+no class body in its MRO defines or declares; unset_attributes names each declared
+attribute member_forms lists that the source never sets, which instances would lack.
+
 Usage::
 
-    from tests._surface_forms import member_forms, surface_form
+    from tests._surface_forms import member_forms, surface_form, undeclared_attributes
 
     def scale(values: Optional[List[float]], factor: float = 1.0) -> "Series": ...
 
     class Meter:
         site: Path
+
+        def __init__(self, site: Path) -> None:
+            self.site = site
+            self.label = site.name
 
         @property
         def reading(self) -> float: ...
@@ -44,12 +54,15 @@ Usage::
     assert surface_form(scale) == "(values: list[float] | None, factor: float = 1.0) -> Series"
     assert surface_form({"peak": 0.3}) == "dict"
     assert member_forms(Meter) == {"site": "attribute Path", "reading": "property (self) -> float"}
+    assert undeclared_attributes(Meter) == {"label"}
 """
 
+import ast
 import dataclasses
 import enum
 import functools
 import inspect
+import textwrap
 import types
 import typing
 from collections.abc import Iterable
@@ -93,6 +106,18 @@ def member_forms(cls: type) -> dict[str, str]:
         for name, member in _own_members(cls).items()
         if not name.startswith("_") and name not in pinned
     }
+
+
+def undeclared_attributes(cls: type) -> set[str]:
+    """The public attributes *cls*'s own source sets on self that no class body in its MRO defines or declares."""
+    declared = {name for base in cls.__mro__ for name in _own_members(base)}
+    return _attributes_set_on_self(cls) - declared
+
+
+def unset_attributes(cls: type) -> set[str]:
+    """The attributes member_forms(cls) lists as declared that *cls*'s own source never sets on self."""
+    declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
+    return declared - _attributes_set_on_self(cls)
 
 
 class _Spelling(str):
@@ -178,18 +203,26 @@ class _AnnotatedAttribute:
 
 
 def _own_members(cls: type) -> dict[str, object]:
-    """Each name *cls*'s own body only annotates, other than as a ClassVar, as an _AnnotatedAttribute, then each name it defines, as its value.
+    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each name it defines, as its value."""
+    declared = {
+        name: _AnnotatedAttribute(annotation)
+        for name, annotation in _declared_attributes(cls).items()
+    }
+    return {**declared, **vars(cls)}
+
+
+def _declared_attributes(cls: type) -> dict[str, object]:
+    """The annotation of each attribute *cls*'s own body declares, by name: each name it only annotates, other than as a ClassVar.
 
     inspect.get_annotations reads the body's own annotations, never a base's, and leaves
     a string annotation a string.
     """
     defined = vars(cls)
-    annotated_only = {
-        name: _AnnotatedAttribute(annotation)
+    return {
+        name: annotation
         for name, annotation in inspect.get_annotations(cls).items()
         if name not in defined and not _is_class_var(annotation)
     }
-    return {**annotated_only, **defined}
 
 
 def _is_class_var(annotation: object) -> bool:
@@ -225,3 +258,22 @@ def _property_kind(member: property) -> str:
         if accessor is not None
     ]
     return f"property[{', '.join(abilities)}]" if abilities else "property"
+
+
+def _attributes_set_on_self(cls: type) -> set[str]:
+    """The public attributes *cls*'s own source sets on self.
+
+    A frozen dataclass can set one only by object.__setattr__(self, "name", value), so
+    that call counts as setting it too.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(cls)))):
+        match node:
+            case ast.Attribute(value=ast.Name(id="self"), attr=name, ctx=ast.Store()):
+                names.add(name)
+            case ast.Call(
+                func=ast.Attribute(value=ast.Name(id="object"), attr="__setattr__"),
+                args=[ast.Name(id="self"), ast.Constant(value=str() as name), *_],
+            ):
+                names.add(name)
+    return {name for name in names if not name.startswith("_")}

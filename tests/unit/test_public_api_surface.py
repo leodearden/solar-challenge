@@ -30,7 +30,6 @@ Relationship to T3 (tests/unit/test_init_lazy_surface.py):
 """
 
 import abc
-import ast
 import enum
 import inspect
 import subprocess
@@ -38,7 +37,12 @@ import sys
 from collections.abc import Mapping
 
 import solar_challenge
-from tests._surface_forms import member_forms, surface_form
+from tests._surface_forms import (
+    member_forms,
+    surface_form,
+    undeclared_attributes,
+    unset_attributes,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -388,34 +392,6 @@ def test_exported_classes_inherit_only_from_exported_classes() -> None:
     )
 
 
-def _public_attributes_set_on_self(cls: type) -> set[str]:
-    """The public attributes *cls*'s own source sets on self.
-
-    A frozen dataclass can set one only by object.__setattr__(self, "name", value), so
-    that call counts as setting it too.
-    """
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(inspect.getsource(cls))):
-        match node:
-            case ast.Attribute(value=ast.Name(id="self"), attr=name, ctx=ast.Store()):
-                names.add(name)
-            case ast.Call(
-                func=ast.Attribute(value=ast.Name(id="object"), attr="__setattr__"),
-                args=[ast.Name(id="self"), ast.Constant(value=str() as name), *_],
-            ):
-                names.add(name)
-    return {name for name in names if not name.startswith("_")}
-
-
-def _declared_names(cls: type) -> set[str]:
-    """The names some class body in *cls*'s MRO defines or annotates."""
-    return {
-        name
-        for base in cls.__mro__
-        for name in [*vars(base), *inspect.get_annotations(base)]
-    }
-
-
 def test_exported_classes_declare_the_public_attributes_they_set_on_self() -> None:
     """H2 member-lock guard: an exported class declares in a class body each public attribute it sets on self, and sets each one its body only declares.
 
@@ -423,19 +399,17 @@ def test_exported_classes_declare_the_public_attributes_they_set_on_self() -> No
     once its class body declares it, e.g. `cache_dir: Path`; and a declaration that
     nothing sets would pin a name that instances lack.
     """
-    undeclared: list[str] = []
-    unset: list[str] = []
-    for name, cls in _exported_classes().items():
-        set_on_self = _public_attributes_set_on_self(cls)
-        declared_only = member_forms(cls).keys() - vars(cls).keys()
-        undeclared += [
-            f"{name}.{attribute}"
-            for attribute in sorted(set_on_self - _declared_names(cls))
-        ]
-        unset += [
-            f"{name}.{attribute}"
-            for attribute in sorted(declared_only - set_on_self)
-        ]
+    classes = _exported_classes()
+    undeclared = [
+        f"{name}.{attribute}"
+        for name, cls in classes.items()
+        for attribute in sorted(undeclared_attributes(cls))
+    ]
+    unset = [
+        f"{name}.{attribute}"
+        for name, cls in classes.items()
+        for attribute in sorted(unset_attributes(cls))
+    ]
     assert not undeclared and not unset, (
         f"Public attributes set on self that no class body declares: {undeclared}. "
         f"Attributes a class body declares that nothing sets on self: {unset}. "

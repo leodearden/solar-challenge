@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_surface_forms.py, the spelling of a public name's surface form, and of an exported class's member forms, that every admitted Python minor shares.
+"""Unit tests for tests/_surface_forms.py: the spelling of a public name's surface form, and of an exported class's member forms, that every admitted Python minor shares, and the check that a class declares each public attribute it sets on self.
 
-Each test pins one spelling rule, so an edit that lets one minor's own rendering through,
-or drops part of a signature, fails here instead of turning the frozen-surface lock red
-on one interpreter or blind to a real change.
+Each test pins one rule, so an edit that lets one minor's own rendering through, drops
+part of a signature, or lets an attribute set on self go undeclared, fails here instead
+of turning the frozen-surface lock red on one interpreter or blind to a real change.
 
 The annotations below are evaluated, as in the modules they stand in for, so this module
 does not import annotations from __future__. The classes whose qualified names are
@@ -33,7 +33,12 @@ from typing import (
     Union,
 )
 
-from tests._surface_forms import member_forms, surface_form
+from tests._surface_forms import (
+    member_forms,
+    surface_form,
+    undeclared_attributes,
+    unset_attributes,
+)
 
 
 class Outer:
@@ -356,3 +361,71 @@ def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
 
     assert member_forms(Base) == {"read": "(self) -> float"}
     assert member_forms(Child) == {"reset": "(self) -> None"}
+
+
+def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:
+    class Meter:
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+            self.reading: float = 0.0
+            self.low, self.high = 0.0, 1.0
+
+        def add(self, kwh: float) -> None:
+            self.total += kwh
+
+    assert undeclared_attributes(Meter) == {"site", "reading", "low", "high", "total"}
+
+
+def test_object_setattr_on_self_sets_the_attribute_it_names() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+
+        def __post_init__(self) -> None:
+            object.__setattr__(self, "kwh", float(self.kwh))
+            object.__setattr__(self, "label", f"{self.kwh} kWh")
+
+    assert undeclared_attributes(Reading) == {"label"}
+
+
+def test_an_attribute_a_class_body_in_the_mro_declares_or_defines_is_not_undeclared() -> None:
+    class Base:
+        site: pathlib.Path
+
+    class Meter(Base):
+        UNITS = "kWh"
+        reading: float
+
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+            self.UNITS = "MWh"
+            self.reading = 0.0
+
+    assert undeclared_attributes(Meter) == set()
+
+
+def test_a_private_attribute_set_on_self_is_never_undeclared() -> None:
+    class Meter:
+        def __init__(self) -> None:
+            self._cache: dict[str, float] = {}
+            object.__setattr__(self, "_level", 0.0)
+
+    assert undeclared_attributes(Meter) == set()
+
+
+def test_a_declared_attribute_member_forms_lists_that_the_source_never_sets_is_unset() -> None:
+    class Meter:
+        UNITS: ClassVar[str]
+        site: pathlib.Path
+        reading: float
+        _level: float
+
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+
+    assert unset_attributes(Meter) == {"reading"}
+    assert unset_attributes(Reading) == set()
