@@ -90,6 +90,17 @@ class TestFleetChartFunctions:
         assert heatmap["y"] == [f"Home {n}" for n in range(1, 51)]
         assert [row[2] for row in heatmap["z"]] == [float(n) for n in range(1, 51)]
 
+    def test_fleet_heatmap_rounds_each_total_to_two_decimal_places(self) -> None:
+        """Each cell is the home's total rounded to 2 dp; the box plots draw the same totals unrounded, so the rounding is the heatmap's own."""
+        home = make_sim_results(self_kwh=18.456, export_kwh=54.321, import_kwh=27.788, days=1)
+        summaries = [calculate_summary(home)]
+
+        heatmap = json.loads(fleet_heatmap(summaries))["data"][0]
+        boxes = json.loads(fleet_box_plots(summaries))["data"]
+
+        assert [box["y"][0] for box in boxes] == pytest.approx([72.777, 46.244, 18.456, 27.788, 54.321])
+        assert heatmap["z"] == [[72.78, 46.24, 18.46, 27.79, 54.32]]
+
     def test_fleet_box_plots_draw_each_energy_total_across_the_homes(self) -> None:
         """Each box is one energy total, drawn from each home's summary in the homes' order."""
         summaries = [calculate_summary(home) for home in _one_day_homes(2)]
