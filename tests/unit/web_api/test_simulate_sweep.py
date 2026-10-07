@@ -126,33 +126,14 @@ class TestSimulateSweep:
         resp = client.post("/api/simulate/sweep", data=data, content_type=content_type)
         assert resp.status_code == 400
 
+    # One value for each field, refused by that field's number_fields reader; each reader's full matrix is tested there.
     @pytest.mark.parametrize(
         ("body", "message"),
         [
             pytest.param(
-                {"min": 1, "max": 5, "steps": float("inf")},
-                "steps must be a finite number, got inf",
-                id="steps-infinity",
-            ),
-            pytest.param(
                 {"min": 10**400, "max": 5, "steps": 2},
                 f"min must be a finite number, got {10**400!r}",
                 id="min-too-large-for-a-float",
-            ),
-            pytest.param(
-                {"min": 1, "max": 10**400, "steps": 2},
-                f"max must be a finite number, got {10**400!r}",
-                id="max-too-large-for-a-float",
-            ),
-            pytest.param(
-                {"min": 1, "max": 5, "steps": 10**400},
-                f"steps must be a finite number, got {10**400!r}",
-                id="steps-too-large-for-a-float",
-            ),
-            pytest.param(
-                {"min": float("nan"), "max": 5, "steps": 2},
-                "min must be a finite number, got nan",
-                id="min-nan",
             ),
             pytest.param(
                 {"min": 1, "max": float("inf"), "steps": 2},
@@ -160,24 +141,9 @@ class TestSimulateSweep:
                 id="max-infinity",
             ),
             pytest.param(
-                {"min": True, "max": 5, "steps": 2},
-                "min must be a finite number, got True",
-                id="min-boolean",
-            ),
-            pytest.param(
-                {"min": "abc", "max": 10.0, "steps": 3},
-                "min must be a finite number, got 'abc'",
-                id="min-non-numeric-string",
-            ),
-            pytest.param(
                 {"min": 1, "max": 5, "steps": 2.5},
                 "steps must be a whole number, got 2.5",
                 id="steps-fraction",
-            ),
-            pytest.param(
-                {"min": 1, "max": 5, "steps": None},
-                "steps must be a finite number, got None",
-                id="steps-null",
             ),
         ],
     )
