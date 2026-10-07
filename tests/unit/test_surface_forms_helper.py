@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_surface_forms.py: the spelling of a public name's surface form, and of an exported class's member forms, that every admitted Python minor shares, the classes those forms name, and the check that a class declares each public attribute it sets on self.
+"""Unit tests for tests/_surface_forms.py: the spelling of a public name's surface form, and of an exported class's member forms, that every admitted Python minor shares, the classes those forms name, directly or through other classes of a package, and the check that a class declares each public attribute it sets on self.
 
 Each test pins one rule, so an edit that lets one minor's own rendering through, drops
 part of a signature, or lets an attribute set on self go undeclared, fails here instead
@@ -44,6 +44,7 @@ import pytest
 from tests._surface_forms import (
     member_forms,
     named_classes,
+    signature_closure,
     surface_form,
     undeclared_attributes,
     unset_attributes,
@@ -86,6 +87,24 @@ class Gauge:
     def inner(self) -> Outer.Inner: ...
 
     def _cache(self) -> bytes: ...
+
+
+@dataclass(frozen=True)
+class Feeder:
+    """A class whose constructor names Tap and whose only member names Tally, which names Feeder back."""
+
+    tap: "Tap"
+
+    def tally(self) -> "Tally": ...
+
+
+@dataclass(frozen=True)
+class Tap:
+    site: pathlib.Path
+
+
+class Tally:
+    def feeder(self) -> Feeder: ...
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -506,6 +525,25 @@ def test_an_enum_names_its_methods_classes_but_not_its_members() -> None:
 def test_a_constant_names_its_type() -> None:
     assert named_classes({"a": 1}) == {dict}
     assert named_classes(Preset(rate=0.1)) == {Preset}
+
+
+def test_a_signature_closure_follows_each_class_it_finds_through_its_constructor_and_its_members() -> None:
+    def supply(feeder: Feeder) -> None: ...
+
+    assert signature_closure([supply], "tests") == {Feeder, Tap, Tally}
+
+
+def test_a_signature_closure_leaves_out_a_root_class_but_follows_its_forms() -> None:
+    def supply(feeder: Feeder, preset: Preset) -> None: ...
+
+    assert signature_closure([supply, Feeder, Preset], "tests") == {Tap, Tally}
+
+
+def test_a_signature_closure_holds_only_classes_the_package_defines() -> None:
+    def supply(feeder: Feeder, site: pathlib.Path) -> float: ...
+
+    assert signature_closure([supply], "tests.unit") == {Feeder, Tap, Tally}
+    assert signature_closure([supply], "solar_challenge") == set()
 
 
 def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:

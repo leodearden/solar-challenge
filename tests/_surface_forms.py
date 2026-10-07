@@ -29,8 +29,10 @@ A property that can be set or deleted says so in its kind, as property[settable,
 deletable] does, and an abstract member's form begins with abstract. An inherited
 member belongs to the class that defines it.
 
-named_classes gives the classes a name's forms name, reading a string annotation as a
-type checker does: in its module, with that module's TYPE_CHECKING imports bound.
+named_classes gives the classes a name's forms name, and signature_closure the classes of
+a package that some names' forms name, directly or through another such class. Both read
+a string annotation as a type checker does: in its module, with that module's
+TYPE_CHECKING imports bound.
 
 member_forms reads class bodies, so it sees an instance attribute only once a body
 declares it. undeclared_attributes names each public attribute a class's own source
@@ -127,6 +129,29 @@ def named_classes(obj: object) -> set[type]:
         _member_form_classes(member, obj) for member in _public_members(obj).values()
     )
     return _form_classes(obj).union(*member_classes)
+
+
+def signature_closure(roots: Iterable[object], package: str) -> set[type]:
+    """The classes outside *roots* that a submodule of *package* defines and the forms pinning *roots* name, directly or through another such class.
+
+    Each class found is followed through its own forms, as named_classes reads them, so
+    the forms alone decide the set. A class among *roots* is left out by identity,
+    whatever name it goes by, though its forms are followed as a root's.
+    """
+    pending = list(roots)
+    root_classes = {root for root in pending if inspect.isclass(root)}
+    found: set[type] = set()
+    while pending:
+        new = {
+            cls
+            for cls in named_classes(pending.pop())
+            if cls.__module__.startswith(f"{package}.")
+            and cls not in root_classes
+            and cls not in found
+        }
+        found |= new
+        pending.extend(new)
+    return found
 
 
 def undeclared_attributes(cls: type) -> set[str]:

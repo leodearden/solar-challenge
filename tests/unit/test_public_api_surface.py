@@ -35,15 +35,17 @@ Relationship to T3 (tests/unit/test_init_lazy_surface.py):
 
 import abc
 import enum
+import functools
 import inspect
 import subprocess
 import sys
+import types
 from collections.abc import Mapping
 
 import solar_challenge
 from tests._surface_forms import (
     member_forms,
-    named_classes,
+    signature_closure,
     surface_form,
     undeclared_attributes,
     unset_attributes,
@@ -261,33 +263,20 @@ FROZEN_CLOSURE: dict[str, str] = {
 _SUBMODULE_PREFIX = f"{solar_challenge.__name__}."
 
 
-def _closure_classes() -> dict[str, type]:
+@functools.cache
+def _closure_classes() -> Mapping[str, type]:
     """The classes outside __all__ that the frozen surface names, directly or through another such class, by path in path order.
 
-    The walk starts from every name in __all__ and follows each class it finds through
-    that class's own constructor and member forms, so the forms alone decide the set.
-    A class is outside __all__ unless it is an exported object, whatever its name.
+    They are the signature_closure, within solar_challenge, of every object in __all__.
+    The modules it reads are fixed for the run, so it is computed once and handed out
+    read-only.
     """
-    exported = set(_exported_classes().values())
-    found: set[type] = set()
-    pending: list[object] = [
-        getattr(solar_challenge, name) for name in solar_challenge.__all__
-    ]
-    while pending:
-        new = {
-            cls
-            for cls in named_classes(pending.pop())
-            if cls.__module__.startswith(_SUBMODULE_PREFIX)
-            and cls not in exported
-            and cls not in found
-        }
-        found |= new
-        pending.extend(new)
+    exported = [getattr(solar_challenge, name) for name in solar_challenge.__all__]
     by_path = {
         f"{cls.__module__.removeprefix(_SUBMODULE_PREFIX)}.{cls.__qualname__}": cls
-        for cls in found
+        for cls in signature_closure(exported, solar_challenge.__name__)
     }
-    return dict(sorted(by_path.items()))
+    return types.MappingProxyType(dict(sorted(by_path.items())))
 
 
 def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
