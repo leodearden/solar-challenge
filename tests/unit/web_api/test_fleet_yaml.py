@@ -95,6 +95,36 @@ class TestExportFleetYAML:
             pd.Timestamp(period["end_date"], tz=timezone),
         ) == (submitted["start_date"], submitted["end_date"])
 
+    def test_export_writes_a_blocks_other_settings_and_loads_back_as_the_fleet_simulate_runs(
+        self, client: FlaskClient, mock_job_manager: MagicMock, tmp_path: Path
+    ) -> None:
+        """A block's settings other than its distribution, a pv.tilt distribution and battery.grid_charging, are exported in config.py's grammar, and the file loads back as the fleet the simulate endpoint runs.
+
+        The form sets no seg, which load_fleet_config does not read yet (task 185).
+        """
+        tilt = {"type": "uniform", "min": 10.0, "max": 20.0}
+        grid_charging = {"target_soc_fraction": 0.5}
+        without_seg = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "seg"}
+        body = {
+            **without_seg,
+            "pv": {**without_seg["pv"], "tilt": tilt},
+            "battery": {**without_seg["battery"], "grid_charging": grid_charging},
+        }
+
+        export = client.post("/api/fleet/export-yaml", json=body)
+        assert export.status_code == 200, export.get_data(as_text=True)
+        text = export.get_data(as_text=True)
+        fleet_distribution = yaml.safe_load(text)["fleet_distribution"]
+        assert fleet_distribution["pv"].get("tilt") == tilt
+        assert fleet_distribution["battery"].get("grid_charging") == grid_charging
+        path = tmp_path / "fleet.yaml"
+        path.write_text(text, encoding="utf-8")
+
+        simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert simulate.status_code == 201, simulate.get_data(as_text=True)
+        homes = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
+        assert load_fleet_config(path).homes == homes
+
     def test_export_names_a_nameless_fleet_as_simulate_runs_it(
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:

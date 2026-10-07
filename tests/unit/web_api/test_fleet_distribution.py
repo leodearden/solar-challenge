@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.config import DispatchStrategyConfig
+from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
@@ -705,6 +705,61 @@ class TestFleetFromDistribution:
         call_kwargs = mock_job_manager.submit_fleet_job.call_args
         configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
         assert all(config.load_config.use_stochastic is False for config in configs)
+
+    def test_a_block_settings_distribution_and_grid_charging_reach_the_queued_homes(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A block setting sent as a distribution, pv.tilt, is sampled for every queued home, and the battery block's grid_charging reaches every queued battery."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "pv": {
+                    **self._VALID_BODY["pv"],
+                    "tilt": {"type": "uniform", "min": 10.0, "max": 20.0},
+                },
+                "battery": {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 0.5}},
+            },
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        configs = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
+        assert len(configs) == 2
+        tilts = [config.pv_config.tilt for config in configs]
+        assert all(10.0 <= tilt <= 20.0 for tilt in tilts), tilts
+        grid_charging = GridChargeConfig(target_soc_fraction=0.5)
+        assert [config.battery_config.grid_charging for config in configs] == [grid_charging] * 2
+
+    @pytest.mark.parametrize(
+        ("patch", "named"),
+        [
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": {"mean": 20.0}}},
+                "pv.tilt",
+                id="pv-tilt-mapping-without-a-type",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": 5.0, "grid_charging": {"target_soc": 0.5}}},
+                "battery.grid_charging",
+                id="battery-grid-charging-unknown-key",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "orientation": {"azimuth": 180.0}}},
+                "'orientation'",
+                id="pv-mapping-setting-the-grammar-has-no-key-for",
+            ),
+        ],
+    )
+    def test_a_mapping_block_setting_the_grammar_refuses_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, named: str
+    ) -> None:
+        """A block setting sent as a mapping that config.py's grammar refuses is a 400 naming the setting, in the grammar's wording; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, **patch},
+        )
+        assert resp.status_code == 400
+        assert named in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
     def test_malformed_fleet_seg_returns_400_and_submits_nothing(
