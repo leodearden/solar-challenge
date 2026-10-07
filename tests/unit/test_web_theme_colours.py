@@ -15,10 +15,15 @@ comments included. The compiled dist/style.css derives from the theme and is not
 checked. The hex checks skip scripts, which hand colour strings to chart libraries.
 
 A focus indicator is a class, as tests/_css_classes.py reads it, under a focus,
-focus-visible or focus-within variant, alone or as group- or peer-. Amber utilities
-outside focus indicators are not checked: amber also marks status and category roles
-that are independent of the accent, such as the 'running' status badge and the PV
-distribution card, and no rule over class names tells those from accent uses.
+focus-visible or focus-within variant, alone or as group- or peer-, named or not, such as
+group-focus/item:. An arbitrary variant that selects focus, such as [&:focus]:, is not
+read. Amber utilities outside focus indicators are not checked: amber also marks status
+and category roles that are independent of the accent, such as the 'running' status
+badge and the PV distribution card, and no rule over class names tells those from accent
+uses.
+
+The focus check holds only while primary copies amber, so it first checks that premise
+through one shade: tailwind.config.js's primary-500 must be amber-500's value.
 """
 
 import re
@@ -30,6 +35,7 @@ pytest.importorskip("jinja2")
 from tests._css_classes import names_palette
 from tests._dashboard_sources import (
     HAND_WRITTEN_STYLESHEET_KEY,
+    TAILWIND_CONFIG_KEY,
     dashboard_applied_classes_by_source,
     dashboard_template_sources,
     hand_written_stylesheet_source,
@@ -38,7 +44,11 @@ from tests._dashboard_sources import (
 
 _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 _BUILT_IN_PALETTE_PRIMARY_COPIES = "amber"
-_FOCUS_VARIANT = re.compile(r"(?:^|:)(?:(?:group|peer)-)?focus(?:-visible|-within)?:")
+_BUILT_IN_500_SHADE_PRIMARY_COPIES = "#f59e0b"
+_PRIMARY_500_ENTRY = re.compile(
+    r"""\bprimary\s*:\s*\{[^{}]*?\b500\s*:\s*['"](#[0-9a-fA-F]{6})['"]"""
+)
+_FOCUS_VARIANT = re.compile(r"(?:^|:)(?:(?:group|peer)-)?focus(?:-visible|-within)?(?:/[\w-]+)?:")
 
 
 def _hex_colours(source: str) -> set[str]:
@@ -57,6 +67,17 @@ def _written_theme_colours(sources: Mapping[str, str]) -> dict[str, list[str]]:
         for path, source in sources.items()
         if (written := _hex_colours(source) & theme)
     }
+
+
+def _primary_500() -> str:
+    """The hex colour tailwind.config.js gives primary's 500 shade, lower-cased."""
+    entry = _PRIMARY_500_ENTRY.search(tailwind_config_source())
+    assert entry, (
+        f"read no hex primary-500 from {TAILWIND_CONFIG_KEY}, so this guard cannot check that "
+        f"primary still copies Tailwind's built-in {_BUILT_IN_PALETTE_PRIMARY_COPIES}: extend "
+        "_PRIMARY_500_ENTRY to read the form primary-500 is now written in"
+    )
+    return entry[1].lower()
 
 
 def _focus_indicators_naming(palette: str, applied: Iterable[str]) -> list[str]:
@@ -97,7 +118,37 @@ def test_the_hand_written_stylesheet_writes_no_theme_colour() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("css_class", "is_indicator"),
+    [
+        pytest.param("focus:ring-amber-500", True, id="focus"),
+        pytest.param("dark:focus:ring-amber-500", True, id="focus after another variant"),
+        pytest.param("focus-visible:ring-amber-500", True, id="focus-visible"),
+        pytest.param("group-focus-within:text-amber-500", True, id="group-focus-within"),
+        pytest.param("peer-focus:border-amber-500", True, id="peer-focus"),
+        pytest.param("group-focus/item:ring-amber-500", True, id="named group"),
+        pytest.param("hover:bg-amber-500", False, id="another variant"),
+        pytest.param("focus:ring-sky-500", False, id="another palette"),
+    ],
+)
+def test_a_focus_indicator_is_a_shade_of_the_palette_under_any_focus_variant(
+    css_class: str, is_indicator: bool
+) -> None:
+    expected = [css_class] if is_indicator else []
+
+    assert _focus_indicators_naming("amber", [css_class]) == expected
+
+
 def test_no_template_or_script_draws_a_focus_indicator_in_amber() -> None:
+    assert _primary_500() == _BUILT_IN_500_SHADE_PRIMARY_COPIES, (
+        f"{TAILWIND_CONFIG_KEY}'s primary-500 is not Tailwind's built-in "
+        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES}-500, so primary no longer copies "
+        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} and a focus indicator in "
+        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} would be a colour of its own, not a second home "
+        "of a theme colour. Point _BUILT_IN_PALETTE_PRIMARY_COPIES and "
+        "_BUILT_IN_500_SHADE_PRIMARY_COPIES at the built-in palette primary now copies, or "
+        "delete this test if it copies none."
+    )
     applied = dashboard_applied_classes_by_source()
     assert _focus_indicators_naming("primary", set().union(*applied.values())), (
         "read no focus indicator naming primary from the dashboard's templates and scripts, "

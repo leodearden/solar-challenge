@@ -8,8 +8,7 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Tailwind's built-in amber, shade for shade. tests/unit/test_web_theme_colours.py
-        // relies on that to reject amber focus indicators: update it if primary changes.
+        // Copies Tailwind's built-in amber: tests/unit/test_web_theme_colours.py relies on that.
         primary: {
           50: '#fffbeb',
           100: '#fef3c7',
