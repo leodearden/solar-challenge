@@ -100,9 +100,10 @@ conventions:
       expression also names MIT for the third-party code the wheel bundles: the scripts vendored
       under src/solar_challenge/web/static/vendor/ and the Tailwind CSS compiled into
       src/solar_challenge/web/static/dist/style.css. Each ships its license text beside it and
-      under license-files. For the compiled CSS that means the verbatim LICENSE-tailwindcss*.txt
-      copies of the tailwindcss package files that tests/_tailwindcss_license_copies.py names,
-      which a Tailwind upgrade refreshes from the new tailwindcss package. New dependencies and vendored code must be AGPL-compatible.
+      under license-files. For the compiled CSS that means verbatim copies, beside it in
+      static/dist, of the tailwindcss package files that tests/_tailwindcss_license_copies.py
+      names, which a Tailwind upgrade refreshes from the new tailwindcss package.
+      New dependencies and vendored code must be AGPL-compatible.
     why: >
       Copyleft obligations apply to the whole work, so a proprietary or GPL-incompatible
       dependency is a licensing bug. The AND in pyproject's license expression is not a
