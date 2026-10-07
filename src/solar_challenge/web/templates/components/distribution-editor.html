@@ -1,56 +1,49 @@
 {#
-    distribution-editor.html -- Reusable distribution editor component.
+    distribution_editor(dist, new_row_value, subject) writes the controls that edit one distribution, inside a
+    distributionEditor scope (static/js/distribution-editor.js) of their own.
 
-    Exports distribution_editor(subject). subject is the card's heading text,
-    and every control's accessible name starts with it, e.g.
-    "PV Capacity Distribution Type".
-
-    The macro must be called inside the distributionEditor Alpine.js
-    component, registered in static/js/fleet-simulator.js, which supplies:
-        - dist           : the distribution data object (reactive)
-        - addRow()       : adds a row to values or entries
-        - removeRow(idx) : removes a row from values or entries
-
-    `dist` has the shape:
-
-        {
-            type: 'normal' | 'uniform' | 'weighted_discrete' | 'shuffled_pool',
-            mean: number,
-            std: number,
-            min: number,
-            max: number,
-            values: [{value: number, weight: number}, ...],
-            entries: [{value: number, count: number}, ...]
-        }
-
-    Usage (from fleet.html): import it with
-        {% from "simulate/partials/distribution-editor.html" import distribution_editor %}
-    then call it inside the element that creates the component:
-        <div x-data="distributionEditor(() => pvDist, 4.0)">{{ distribution_editor('PV Capacity') }}</div>
+    dist is the Alpine expression, in the caller's scope, of the distribution:
+        { type, mean, std, min, max, values: [{value, weight}, ...], entries: [{value, count}, ...] }
+    new_row_value is the value an added row starts at.
+    subject starts every control's accessible name, e.g. 'PV Capacity Value 2'.
 #}
 
-{% macro _label_text(subject, text) -%}<span class="sr-only">{{ subject }} </span>{{ text }}{%- endmacro %}
-{% macro _row_label_text(subject, text) -%}{{ _label_text(subject, text) }} <span class="sr-only" x-text="idx + 1"></span>{%- endmacro %}
+{% macro _caption(subject, text) -%}
+{% if subject %}<span class="sr-only">{{ subject }} </span>{% endif %}{{ text }}
+{%- endmacro %}
 
-{% macro _row_list(subject, rows, paired_key, paired_caption, paired_step) %}
+{# _row_caption reads the Alpine loop variable idx, which only _row_list's x-for defines, so call it only inside it #}
+{% macro _row_caption(subject, text) -%}
+{{ _caption(subject, text) }} <span class="sr-only" x-text="idx + 1"></span>
+{%- endmacro %}
+
+{% macro _number_input(model, step, min=none, max=none) %}
+<input type="number" step="{{ step }}"{% if min is not none %} min="{{ min }}"{% endif %}{% if max is not none %} max="{{ max }}"{% endif %} x-model.number="{{ model }}"
+    class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
+{% endmacro %}
+
+{% macro _parameter(subject, caption, model, step, min=none, max=none) %}
+<label class="block space-y-1.5">
+    <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _caption(subject, caption) }}</span>
+    {{ _number_input(model, step, min, max) }}
+</label>
+{% endmacro %}
+
+{% macro _row_list(subject, rows, paired_key, paired_caption, paired_step, step) %}
 <template x-for="(row, idx) in {{ rows }}" :key="idx">
-    <div class="flex items-center gap-3">
-        <label class="flex-1 space-y-1">
-            <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_label_text(subject, 'Value') }}</span>
-            <input type="number" step="any" x-model.number="row.value"
-                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
+    <div class="flex items-end gap-3">
+        <label class="flex-1 min-w-0 space-y-1">
+            <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_caption(subject, 'Value') }}</span>
+            {{ _number_input('row.value', step) }}
         </label>
-        <label class="flex-1 space-y-1">
-            <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_label_text(subject, paired_caption) }}</span>
-            <input type="number" step="{{ paired_step }}" min="0" x-model.number="row.{{ paired_key }}"
-                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
+        <label class="flex-1 min-w-0 space-y-1">
+            <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_caption(subject, paired_caption) }}</span>
+            {{ _number_input('row.' ~ paired_key, paired_step, min=0) }}
         </label>
-        <button type="button" @click="removeRow(idx)"
-            class="mt-auto p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-            :disabled="{{ rows }}.length <= 1"
-            :class="{{ rows }}.length <= 1 ? 'opacity-30 cursor-not-allowed' : ''"
+        <button type="button" @click="removeRow({{ rows }}, idx)" x-show="canRemoveRow({{ rows }})"
+            class="p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
         >
-            <span class="sr-only">{{ _row_label_text(subject, 'Remove Row') }}</span>
+            <span class="sr-only">{{ _row_caption(subject, 'Remove Row') }}</span>
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                 <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
             </svg>
@@ -58,90 +51,56 @@
     </div>
 </template>
 <div class="flex items-center justify-between">
-    <button type="button" @click="addRow()"
+    <button type="button" @click="addRow({{ rows }}, '{{ paired_key }}')"
         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
     >
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
             <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
         </svg>
-        {{ _label_text(subject, 'Add Row') }}
+        {{ _caption(subject, 'Add Row') }}
     </button>
     {% if caller is defined %}{{ caller() }}{% endif %}
 </div>
 {% endmacro %}
 
-{% macro distribution_editor(subject) %}
-<!-- Distribution type selector -->
-<label class="block space-y-1.5 mb-4">
-    <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Distribution Type') }}</span>
-    <select
-        x-model="dist.type"
-        class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
-    >
-        <option value="normal">Normal (Gaussian)</option>
-        <option value="uniform">Uniform</option>
-        <option value="weighted_discrete">Weighted Discrete</option>
-        <option value="shuffled_pool">Shuffled Pool</option>
-    </select>
-</label>
+{% macro distribution_editor(dist, new_row_value, subject) %}
+<div x-data="distributionEditor(() => {{ dist }}, {{ new_row_value }})" class="space-y-4">
+    <label class="block space-y-1.5">
+        <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _caption(subject, 'Distribution Type') }}</span>
+        <select x-model="dist.type"
+            class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
+        >
+            <option value="normal">Normal (Gaussian)</option>
+            <option value="uniform">Uniform</option>
+            <option value="weighted_discrete">Weighted Discrete</option>
+            <option value="shuffled_pool">Shuffled Pool</option>
+        </select>
+    </label>
 
-<!-- Normal distribution inputs -->
-<div x-show="dist.type === 'normal'" x-cloak x-transition class="space-y-4">
-    <div class="grid grid-cols-2 gap-4">
-        <label class="block space-y-1.5">
-            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Mean') }}</span>
-            <input type="number" step="any" x-model.number="dist.mean"
-                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
-        </label>
-        <label class="block space-y-1.5">
-            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Std Dev') }}</span>
-            <input type="number" step="any" min="0" x-model.number="dist.std"
-                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
-        </label>
+    <div x-show="dist.type === 'normal'" x-cloak class="grid grid-cols-2 gap-4">
+        {{ _parameter(subject, 'Mean', 'dist.mean', 'any') }}
+        {{ _parameter(subject, 'Std Dev', 'dist.std', 'any', min=0) }}
+        {{ _parameter(subject, 'Min (clamp)', 'dist.min', 'any') }}
+        {{ _parameter(subject, 'Max (clamp)', 'dist.max', 'any') }}
     </div>
-    <div class="grid grid-cols-2 gap-4">
-        <label class="block space-y-1.5">
-            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Min (clamp)') }}</span>
-            <input type="number" step="any" x-model.number="dist.min"
-                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
-        </label>
-        <label class="block space-y-1.5">
-            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Max (clamp)') }}</span>
-            <input type="number" step="any" x-model.number="dist.max"
-                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
-        </label>
+
+    <div x-show="dist.type === 'uniform'" x-cloak class="grid grid-cols-2 gap-4">
+        {{ _parameter(subject, 'Min', 'dist.min', 'any') }}
+        {{ _parameter(subject, 'Max', 'dist.max', 'any') }}
     </div>
-</div>
 
-<!-- Uniform distribution inputs -->
-<div x-show="dist.type === 'uniform'" x-cloak x-transition class="space-y-4">
-    <div class="grid grid-cols-2 gap-4">
-        <label class="block space-y-1.5">
-            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Min') }}</span>
-            <input type="number" step="any" x-model.number="dist.min"
-                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
-        </label>
-        <label class="block space-y-1.5">
-            <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _label_text(subject, 'Max') }}</span>
-            <input type="number" step="any" x-model.number="dist.max"
-                class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
-        </label>
+    <div x-show="dist.type === 'weighted_discrete'" x-cloak class="space-y-3">
+        <div class="text-sm text-slate-500 dark:text-slate-400">Define value-weight pairs. Weights are auto-normalised.</div>
+        {{ _row_list(subject, 'dist.values', 'weight', 'Weight', 'any', 'any') }}
     </div>
-</div>
 
-<!-- Weighted discrete distribution inputs -->
-<div x-show="dist.type === 'weighted_discrete'" x-cloak x-transition class="space-y-3">
-    <div class="text-sm text-slate-500 dark:text-slate-400 mb-2">Define value-weight pairs. Weights are auto-normalised.</div>
-    {{ _row_list(subject, rows='dist.values', paired_key='weight', paired_caption='Weight', paired_step='any') }}
-</div>
-
-<!-- Shuffled pool distribution inputs -->
-<div x-show="dist.type === 'shuffled_pool'" x-cloak x-transition class="space-y-3">
-    <div class="text-sm text-slate-500 dark:text-slate-400 mb-2">Define exact value-count pairs. Counts should sum to the fleet size.</div>
-    {% call _row_list(subject, rows='dist.entries', paired_key='count', paired_caption='Count', paired_step='1') %}
-    <span class="text-xs text-slate-500 dark:text-slate-400">
-        Total: <span x-text="dist.entries.reduce((s, e) => s + (e.count || 0), 0)"></span> homes
-    </span>
-    {% endcall %}
+    <div x-show="dist.type === 'shuffled_pool'" x-cloak class="space-y-3">
+        <div class="text-sm text-slate-500 dark:text-slate-400">Define exact value-count pairs. Counts should sum to the fleet size.</div>
+        {% call _row_list(subject, 'dist.entries', 'count', 'Count', '1', 'any') %}
+        <span class="text-xs text-slate-500 dark:text-slate-400">
+            Total: <span x-text="dist.entries.reduce((s, e) => s + (e.count || 0), 0)"></span> homes
+        </span>
+        {% endcall %}
+    </div>
 </div>
 {% endmacro %}

@@ -7,6 +7,7 @@
 {% block title %}Fleet Simulation{% endblock %}
 
 {% block head %}
+<script src="{{ url_for('static', filename='js/distribution-editor.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/fleet-simulator.js') }}" defer></script>
 {% endblock %}
 
@@ -99,8 +100,8 @@
                 </div>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of PV system sizes (kW)</p>
             </div>
-            <div class="p-6" x-data="distributionEditor(() => pvDist, 4.0)">
-                {{ distribution_editor(subject) }}
+            <div class="p-6">
+                {{ distribution_editor('pvDist', 4.0, subject=subject) }}
             </div>
         </div>
         {% endwith %}
@@ -120,8 +121,8 @@
                 </div>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of battery sizes (kWh); use 0 for no battery</p>
             </div>
-            <div class="p-6" x-data="distributionEditor(() => batteryDist, 5.0)" x-show="batteryEnabled" x-transition>
-                {{ distribution_editor(subject) }}
+            <div class="p-6" x-show="batteryEnabled" x-transition>
+                {{ distribution_editor('batteryDist', 5.0, subject=subject) }}
             </div>
             <div class="p-6 text-sm text-slate-500 dark:text-slate-400" x-show="!batteryEnabled" x-cloak>
                 Battery storage is disabled for this fleet.
@@ -139,8 +140,8 @@
                 </div>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of annual consumption (kWh/year)</p>
             </div>
-            <div class="p-6" x-data="distributionEditor(() => loadDist, 3500)">
-                {{ distribution_editor(subject) }}
+            <div class="p-6">
+                {{ distribution_editor('loadDist', 3500, subject=subject) }}
             </div>
         </div>
         {% endwith %}
