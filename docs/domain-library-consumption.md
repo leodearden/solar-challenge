@@ -117,6 +117,15 @@ signature, or to an exported class's public members, must also edit
 `FROZEN_SURFACE` or `FROZEN_MEMBERS` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 436): `SimulationResults`, reached through
+`FleetResults.per_home_results`, is frozen, so that each of its series stays
+named the column `to_dataframe()` writes it under. Assigning to one of its
+fields, such as `results.demand = series`, raises
+`dataclasses.FrozenInstanceError`; the 0.5.0 tag accepts the assignment.
+Consumers that assign to a results field build new results with
+`dataclasses.replace(results, demand=series)` instead when they re-pin.
+`hash(results)` still raises `TypeError`.
+
 **Unreleased on main** (task 464): `WeatherCache.get`, and so `get_tmy_data` on
 a cache hit, returns exactly the frame `WeatherCache.put` stored. Its floats
 come back bit for bit; on the 0.5.0 tag the CSV reader left some values 1 ulp

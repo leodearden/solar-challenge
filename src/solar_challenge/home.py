@@ -95,7 +95,7 @@ def _level(column: str) -> dict[str, object]:
     return {_COLUMN: column}
 
 
-@dataclass
+@dataclass(frozen=True)
 class SimulationResults:
     """Comprehensive results from a home simulation.
 
@@ -142,7 +142,7 @@ class SimulationResults:
         for name, column in self._series_columns():
             series = getattr(self, name)
             if series is not None:
-                setattr(self, name, series.rename(column))
+                object.__setattr__(self, name, series.rename(column))
 
     @classmethod
     def _series_columns(cls) -> Iterator[tuple[str, str]]:

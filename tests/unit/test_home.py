@@ -209,6 +209,22 @@ class TestSimulationResults:
 
         assert {name: series.name for name, series in given.items()} == dict.fromkeys(given, "temp_air")
 
+    @pytest.mark.parametrize("name", _series_field_names())
+    def test_a_series_field_cannot_be_reassigned_after_construction(self, name):
+        """Reassigning a series field after construction raises FrozenInstanceError, leaving the series named its column."""
+        results = _results_with_every_series_set()
+        column = getattr(results, name).name
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(results, name, getattr(results, name).rename("temp_air"))
+
+        assert getattr(results, name).name == column
+
+    def test_results_stay_unhashable_though_frozen(self):
+        """hash(results) raises TypeError: freezing SimulationResults does not make it hashable."""
+        with pytest.raises(TypeError):
+            hash(_results_with_every_series_set())
+
     def test_optional_series_left_unset_come_back_none(self, sample_results):
         """An optional series left unset is written as no column, and comes back None rather than NaN or zero."""
         restored = SimulationResults.from_dataframe(
