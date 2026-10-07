@@ -2,6 +2,7 @@
 
 import collections
 import json
+import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -92,6 +93,17 @@ class _BlockingSimulation:
 
     def release(self) -> None:
         self._released.set()
+
+
+class _CountingIds:
+    """Stands in for a JobManager's id source: issues "id-1", "id-2", ... and keeps every id it issued."""
+
+    def __init__(self) -> None:
+        self.issued: list[str] = []
+
+    def __call__(self) -> str:
+        self.issued.append(f"id-{len(self.issued) + 1}")
+        return self.issued[-1]
 
 
 @pytest.fixture
@@ -607,6 +619,34 @@ def _run_storage(tmp_path: Path) -> RunStorage:
     return storage
 
 
+def _refuse_new_rows(storage: RunStorage, table: str) -> None:
+    """Make storage's database refuse every row inserted into *table*."""
+    with get_db(storage.db_path) as conn:
+        conn.execute(
+            f"CREATE TRIGGER refuse_new_{table} BEFORE INSERT ON {table} "
+            f"BEGIN SELECT RAISE(ABORT, 'the database refuses new {table} rows'); END"
+        )
+
+
+def _ids_with_a_status(manager: JobManager, ids: list[str]) -> list[str]:
+    return [job_id for job_id in ids if manager.get_job_status(job_id) is not None]
+
+
+def _job_rows(storage: RunStorage) -> list[tuple[str, str]]:
+    """Return (id, run_id) of every row in storage's jobs table."""
+    with get_db(storage.db_path) as conn:
+        return [(row["id"], row["run_id"]) for row in conn.execute("SELECT id, run_id FROM jobs")]
+
+
+def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
+    """Return the status, progress_pct, current_step and message of job *job_id*'s row in storage's jobs table."""
+    with get_db(storage.db_path) as conn:
+        row = conn.execute(
+            "SELECT status, progress_pct, current_step, message FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    return dict(row)
+
+
 def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + 30
     while True:
@@ -695,6 +735,71 @@ class TestJobManagerSimulation:
         assert [summary.total_generation_kwh for summary in per_home_summaries] == pytest.approx([4.0, 2.0])
 
 
+class TestJobManagerIds:
+    """Tests for the ids a JobManager gives its jobs and their runs."""
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_job_and_its_run_take_their_ids_from_the_managers_id_source(
+        self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
+    ) -> None:
+        ids = _CountingIds()
+        manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation(), new_id=ids)
+
+        job_id = submit_job(manager, tmp_path)
+
+        status = manager.get_job_status(job_id)
+        assert status is not None
+        run_id = status["run_id"]
+        assert {job_id, run_id} == set(ids.issued)
+        storage = _run_storage(tmp_path)
+        assert [run["id"] for run in storage.list_runs()] == [run_id]
+        assert _job_rows(storage) == [(job_id, run_id)]
+
+
+class TestJobManagerQueuedJobs:
+    """Tests for a job that waits in the queue behind a running one."""
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_queued_job_is_in_the_same_state_in_memory_and_in_its_job_row(
+        self,
+        submit_job: Callable[[JobManager, Path], str],
+        blocking_simulation: _BlockingSimulation,
+        tmp_path: Path,
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+
+        queued_job_id = submit_job(manager, tmp_path)
+
+        in_memory = manager.get_job_status(queued_job_id)
+        assert in_memory is not None
+        stored = _job_state(_run_storage(tmp_path), queued_job_id)
+        assert stored["status"] == "queued"
+        assert {column: in_memory[column] for column in stored} == stored
+
+
+class TestJobManagerRefusedRows:
+    """Tests for a submit whose run or job row the database refuses."""
+
+    @pytest.mark.parametrize("table", ["runs", "jobs"])
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_job_whose_row_the_database_refuses_leaves_no_record(
+        self, submit_job: Callable[[JobManager, Path], str], table: str, tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        _refuse_new_rows(storage, table)
+        ids = _CountingIds()
+        manager = JobManager(max_workers=1, new_id=ids)
+
+        with pytest.raises(sqlite3.IntegrityError, match=f"refuses new {table} rows"):
+            submit_job(manager, tmp_path)
+
+        assert ids.issued
+        assert _ids_with_a_status(manager, ids.issued) == []
+        assert storage.list_runs() == []
+
+
 class TestJobManagerShutdown:
     """Tests for JobManager shutdown."""
 
@@ -707,15 +812,18 @@ class TestJobManagerShutdown:
             _submit_home_job(manager, tmp_path)
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
-    def test_a_refused_job_leaves_no_run_in_the_history(
+    def test_a_refused_job_leaves_no_record(
         self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
     ) -> None:
-        manager = JobManager(max_workers=1)
+        ids = _CountingIds()
+        manager = JobManager(max_workers=1, new_id=ids)
         manager.shutdown()
 
         with pytest.raises(RuntimeError, match="after shutdown"):
             submit_job(manager, tmp_path)
 
+        assert ids.issued
+        assert _ids_with_a_status(manager, ids.issued) == []
         assert _run_storage(tmp_path).list_runs() == []
 
     def test_shutdown_all_managers_shuts_down_every_live_manager(self, tmp_path: Path) -> None:

@@ -15,10 +15,12 @@ import time
 import traceback
 import uuid
 import weakref
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Callable
-from typing import Any, Generator, TypeAlias
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import Any, Generator, Literal, TypeAlias
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -35,10 +37,20 @@ from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
 
 HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], SimulationResults]
+_RunType: TypeAlias = Literal["home", "fleet"]
+
+_QUEUED_JOB_STATE: Mapping[str, str | float] = MappingProxyType(
+    {"status": "queued", "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
+)
 
 # Module-level weak registry of all live JobManager instances.
 # WeakSet avoids keeping managers alive past their natural lifetime.
 _active_managers: "weakref.WeakSet[JobManager]" = weakref.WeakSet()
+
+
+def _random_id() -> str:
+    """Return a new random UUID as a string."""
+    return str(uuid.uuid4())
 
 
 def live_managers() -> "frozenset[JobManager]":
@@ -61,6 +73,15 @@ def shutdown_all_managers(wait: bool = False) -> None:
         manager.shutdown(wait=wait)
 
 
+@dataclass(frozen=True)
+class _NewJob:
+    """A job just recorded: its id, its run's id, and the ISO 8601 UTC time its rows were created."""
+
+    job_id: str
+    run_id: str
+    created_at: str
+
+
 class JobManager:
     """Manages background simulation jobs with progress tracking.
 
@@ -75,16 +96,25 @@ class JobManager:
         _unfinished_job_count: Number of jobs queued or running; wait_until_idle waits for it to reach 0.
     """
 
-    def __init__(self, max_workers: int = 2, *, simulate_home: HomeSimulator = _default_simulate_home) -> None:
+    def __init__(
+        self,
+        max_workers: int = 2,
+        *,
+        simulate_home: HomeSimulator = _default_simulate_home,
+        new_id: Callable[[], str] = _random_id,
+    ) -> None:
         """Initialize the job manager.
 
         Args:
             max_workers: Maximum number of concurrent simulation threads.
             simulate_home: Simulates one home over a date range; defaults to
                 solar_challenge.home.simulate_home.
+            new_id: Returns a new, unique id on each call; each job and each run
+                takes one. Defaults to a random UUID.
         """
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._simulate_home = simulate_home
+        self._new_id = new_id
         self._lock = threading.Lock()
         self._idle = threading.Condition(self._lock)
         self._unfinished_job_count = 0
@@ -145,96 +175,25 @@ class JobManager:
 
         Raises:
             RuntimeError: If the manager has shut down; the refused job leaves no record.
+            sqlite3.Error: If the database refuses the job's run or job row; the refused job leaves no record.
         """
-        self._cleanup_old_jobs()
-
-        job_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
-        created_at = datetime.now(timezone.utc).isoformat()
-
-        # Initialize in-memory tracking
-        with self._lock:
-            self._jobs[job_id] = {
-                "job_id": job_id,
-                "run_id": run_id,
-                "status": "queued",
-                "progress_pct": 0.0,
-                "current_step": "Queued",
-                "message": "Waiting to start...",
-                "created_at": time.monotonic(),
-            }
-            self._event_queues[job_id] = collections.deque(maxlen=100)
-
-        # Create run record in database
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO runs (
-                    id, name, type, config_json, summary_json,
-                    status, error_message, created_at, completed_at,
-                    duration_seconds, n_homes, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    name or config.name or "Web Simulation",
-                    "home",
-                    None,  # config_json filled on completion
-                    None,  # summary_json filled on completion
-                    "running",
-                    None,
-                    created_at,
-                    None,
-                    None,
-                    1,
-                    None,
-                ),
-            )
-
-            # Create job record in database
-            cursor.execute(
-                """
-                INSERT INTO jobs (
-                    id, run_id, status, progress_pct, current_step,
-                    message, created_at, started_at, completed_at,
-                    error_traceback
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    run_id,
-                    "queued",
-                    0.0,
-                    "Queued",
-                    "Waiting to start...",
-                    created_at,
-                    None,
-                    None,
-                    None,
-                ),
-            )
-
-        # Submit to thread pool
-        self._schedule(
-            job_id,
-            run_id,
+        return self._submit_job(
             db_path,
-            functools.partial(
-                self._run_home_simulation,
-                job_id,
-                run_id,
+            run_name=name or config.name or "Web Simulation",
+            run_type="home",
+            n_homes=1,
+            run_simulation=lambda new_job: self._run_home_simulation(
+                new_job.job_id,
+                new_job.run_id,
                 config,
                 start_date,
                 end_date,
                 db_path,
                 data_dir,
                 name,
-                created_at,
+                new_job.created_at,
             ),
         )
-
-        return job_id, run_id
 
     def submit_fleet_job(
         self,
@@ -263,96 +222,25 @@ class JobManager:
 
         Raises:
             RuntimeError: If the manager has shut down; the refused job leaves no record.
+            sqlite3.Error: If the database refuses the job's run or job row; the refused job leaves no record.
         """
-        self._cleanup_old_jobs()
-
-        job_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
-        created_at = datetime.now(timezone.utc).isoformat()
-
-        # Initialize in-memory tracking
-        with self._lock:
-            self._jobs[job_id] = {
-                "job_id": job_id,
-                "run_id": run_id,
-                "status": "queued",
-                "progress_pct": 0.0,
-                "current_step": "Queued",
-                "message": "Waiting to start...",
-                "created_at": time.monotonic(),
-            }
-            self._event_queues[job_id] = collections.deque(maxlen=100)
-
-        # Create run record in database
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO runs (
-                    id, name, type, config_json, summary_json,
-                    status, error_message, created_at, completed_at,
-                    duration_seconds, n_homes, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    name or "Fleet Simulation",
-                    "fleet",
-                    None,
-                    None,
-                    "running",
-                    None,
-                    created_at,
-                    None,
-                    None,
-                    len(configs),
-                    None,
-                ),
-            )
-
-            # Create job record in database
-            cursor.execute(
-                """
-                INSERT INTO jobs (
-                    id, run_id, status, progress_pct, current_step,
-                    message, created_at, started_at, completed_at,
-                    error_traceback
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    run_id,
-                    "queued",
-                    0.0,
-                    "Queued",
-                    "Waiting to start...",
-                    created_at,
-                    None,
-                    None,
-                    None,
-                ),
-            )
-
-        # Submit to thread pool
-        self._schedule(
-            job_id,
-            run_id,
+        return self._submit_job(
             db_path,
-            functools.partial(
-                self._run_fleet_simulation,
-                job_id,
-                run_id,
+            run_name=name or "Fleet Simulation",
+            run_type="fleet",
+            n_homes=len(configs),
+            run_simulation=lambda new_job: self._run_fleet_simulation(
+                new_job.job_id,
+                new_job.run_id,
                 configs,
                 start_date,
                 end_date,
                 db_path,
                 data_dir,
                 name,
-                created_at,
+                new_job.created_at,
             ),
         )
-
-        return job_id, run_id
 
     def get_job_status(self, job_id: str) -> dict[str, Any] | None:
         """Get the current status of a job.
@@ -413,6 +301,73 @@ class JobManager:
             for jid in expired:
                 del self._jobs[jid]
                 self._event_queues.pop(jid, None)
+
+    def _submit_job(
+        self,
+        db_path: str,
+        *,
+        run_name: str,
+        run_type: _RunType,
+        n_homes: int,
+        run_simulation: Callable[[_NewJob], None],
+    ) -> tuple[str, str]:
+        """Record a new job, queue run_simulation(new_job) on the thread pool, and return (job_id, run_id)."""
+        self._cleanup_old_jobs()
+        new_job = self._record_new_job(db_path, run_name=run_name, run_type=run_type, n_homes=n_homes)
+        self._schedule(new_job.job_id, new_job.run_id, db_path, functools.partial(run_simulation, new_job))
+        return new_job.job_id, new_job.run_id
+
+    def _record_new_job(self, db_path: str, run_name: str, run_type: _RunType, n_homes: int) -> _NewJob:
+        """Write a new queued job's run and job rows, then track the job in memory.
+
+        The job is tracked only once both rows are written, so a database that refuses either leaves no record of it.
+        """
+        job_id = self._new_id()
+        run_id = self._new_id()
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        with get_db(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO runs (
+                    id, name, type, config_json, summary_json,
+                    status, error_message, created_at, completed_at,
+                    duration_seconds, n_homes, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    run_name,
+                    run_type,
+                    None,  # config_json filled on completion
+                    None,  # summary_json filled on completion
+                    "running",
+                    None,
+                    created_at,
+                    None,
+                    None,
+                    n_homes,
+                    None,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO jobs (id, run_id, status, progress_pct, current_step, message, created_at)
+                VALUES (:job_id, :run_id, :status, :progress_pct, :current_step, :message, :created_at)
+                """,
+                {"job_id": job_id, "run_id": run_id, "created_at": created_at, **_QUEUED_JOB_STATE},
+            )
+
+        with self._lock:
+            self._jobs[job_id] = {
+                "job_id": job_id,
+                "run_id": run_id,
+                **_QUEUED_JOB_STATE,
+                "created_at": time.monotonic(),
+            }
+            self._event_queues[job_id] = collections.deque(maxlen=100)
+
+        return _NewJob(job_id=job_id, run_id=run_id, created_at=created_at)
 
     def _schedule(self, job_id: str, run_id: str, db_path: str, job: Callable[[], None]) -> None:
         """Queue *job* on the thread pool, counting it as unfinished until it completes, fails or is dropped by shutdown.
