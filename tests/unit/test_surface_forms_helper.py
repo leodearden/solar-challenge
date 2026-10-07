@@ -645,3 +645,18 @@ def test_a_declared_attribute_member_forms_lists_that_the_source_never_sets_is_u
 
     assert unset_attributes(Meter) == {"reading"}
     assert unset_attributes(Reading) == set()
+
+
+def test_a_dataclass_field_with_a_default_or_a_default_factory_is_never_unset() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+        derived: float = field(init=False, default=0.0)
+        history: list[float] = field(init=False, default_factory=list)
+        label: str = field(init=False)
+        note: str = field(init=False)
+
+        def __post_init__(self) -> None:
+            object.__setattr__(self, "label", f"{self.kwh} kWh")
+
+    assert unset_attributes(Reading) == {"note"}
