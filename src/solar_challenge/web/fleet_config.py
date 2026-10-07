@@ -148,7 +148,8 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     :func:`solar_challenge.config.generate_homes_from_distribution`.
 
     Its pv/battery/load blocks follow the fleet form's presence rule (see
-    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`).
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`).  Its battery block sets
+    no dispatch strategy: every battery takes the form's dispatch_strategy.
 
     Args:
         form_data: Form data dict from the web UI.
@@ -161,8 +162,10 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             (see :func:`~solar_challenge.web.number_fields.as_int_within`), seed is one
             int() cannot read (see :func:`~solar_challenge.web.number_fields.as_int`), a
             pv/battery/load block is neither null nor a dict (see :func:`_component_block`),
-            or :func:`_parse_component_distribution` refuses a block; each refusal names
-            its field as a dot path from the form's root.
+            an enabled battery block sets a dispatch strategy (see
+            :func:`_refuse_battery_dispatch_strategy`), or
+            :func:`_parse_component_distribution` refuses a block; each refusal names its
+            field as a dot path from the form's root.
     """
     config: dict[str, Any] = {
         "n_homes": as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
@@ -176,6 +179,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     # Process Battery distribution
     battery_data = _component_block(form_data, "battery")
     if battery_data is not None and battery_data.get("enabled", True):
+        _refuse_battery_dispatch_strategy(battery_data)
         config["battery"] = _parse_component_distribution(battery_data, "battery", "capacity_kwh")
 
     # Process Load distribution
@@ -203,6 +207,21 @@ def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, 
     """
     block = _component_block(form_data, key)
     return {} if block is None else block
+
+
+def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
+    """Refuse the fleet form's *battery* block when it sets a dispatch strategy: every battery takes the form's dispatch_strategy.
+
+    Raises:
+        ValueError: If the block's dispatch_strategy is present and not null; the error
+            names battery.dispatch_strategy, the form's dispatch_strategy and the value sent.
+    """
+    strategy = battery.get("dispatch_strategy")
+    if strategy is not None:
+        raise ValueError(
+            "battery.dispatch_strategy must be absent or null: every battery takes the "
+            f"fleet's dispatch_strategy, got {strategy!r}"
+        )
 
 
 def _require_dict(value: object, field: str) -> dict[str, Any]:
