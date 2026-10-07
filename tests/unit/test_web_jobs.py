@@ -1,6 +1,5 @@
 """Tests for the background simulation API endpoints and job lifecycle."""
 
-import collections
 import json
 import sqlite3
 import threading
@@ -483,89 +482,44 @@ class TestJobManagerIntegration:
 class TestJobManagerDirect:
     """Unit tests for JobManager exercised directly without Flask."""
 
-    def test_thread_safety_concurrent_access(self, tmp_path: Path) -> None:
+    def test_thread_safety_concurrent_access(self, blocking_simulation: _BlockingSimulation, tmp_path: Path) -> None:
         """Test that concurrent get_job_status and get_events calls are thread-safe."""
-        jm = JobManager(max_workers=1)
-
-        # Manually inject some jobs into internal state
-        with jm._lock:
-            for i in range(10):
-                jid = f"job-{i}"
-                jm._jobs[jid] = {
-                    "job_id": jid,
-                    "run_id": f"run-{i}",
-                    "status": "running",
-                    "progress_pct": 50.0,
-                    "current_step": "Testing",
-                    "message": "In progress",
-                    "created_at": time.monotonic(),
-                }
-                jm._event_queues[jid] = collections.deque(maxlen=100)
-                jm._event_queues[jid].append({"event": "progress", "data": {"pct": 50}})
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_ids = [_submit_home_job(manager, tmp_path) for _ in range(10)]
+        blocking_simulation.wait_until_started()
 
         errors: list[Exception] = []
         barrier = threading.Barrier(20)
 
-        def worker(thread_id: int) -> None:
+        def worker() -> None:
             try:
                 barrier.wait()
-                for i in range(10):
-                    jid = f"job-{i}"
-                    # Read job status
-                    status = jm.get_job_status(jid)
-                    assert status is None or isinstance(status, dict)
-                    # Drain events
-                    events = list(jm.get_events(jid))
-                    assert isinstance(events, list)
+                for job_id in job_ids:
+                    assert manager.get_job_status(job_id) is not None
+                    list(manager.get_events(job_id))
             except Exception as exc:
                 errors.append(exc)
 
-        threads = [threading.Thread(target=worker, args=(t,)) for t in range(20)]
+        threads = [threading.Thread(target=worker) for _ in range(20)]
         for t in threads:
             t.start()
         for t in threads:
-            # Use a bounded timeout so a deadlocked thread surfaces as a clear
-            # test failure rather than hanging the suite indefinitely.  60 s is
-            # generous enough for any normal CI environment.  The barrier itself
-            # has no timeout (barrier.wait()) so we can't get a BrokenBarrierError
-            # from CPU contention; the only way join() times out is a real deadlock.
+            # A bounded join turns a deadlock into a clear failure instead of a hung suite.
             t.join(timeout=60)
             assert not t.is_alive(), f"Thread did not finish within 60 s: {t}"
 
         assert len(errors) == 0, f"Thread safety errors: {errors}"
 
-    def test_get_events_drains_queue(self) -> None:
-        """Test that get_events yields events and clears the queue."""
-        jm = JobManager(max_workers=1)
+    def test_get_events_drains_queue(self, blocking_simulation: _BlockingSimulation, tmp_path: Path) -> None:
+        """Test that get_events yields each queued event once."""
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_id = _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
 
-        job_id = "drain-test"
-        with jm._lock:
-            jm._jobs[job_id] = {
-                "job_id": job_id,
-                "run_id": "r1",
-                "status": "running",
-                "progress_pct": 0.0,
-                "current_step": "test",
-                "message": "test",
-                "created_at": time.monotonic(),
-            }
-            jm._event_queues[job_id] = collections.deque(maxlen=100)
+        events = list(manager.get_events(job_id))
 
-        # Add events
-        with jm._lock:
-            jm._event_queues[job_id].append({"event": "progress", "data": {"pct": 10}})
-            jm._event_queues[job_id].append({"event": "progress", "data": {"pct": 20}})
-            jm._event_queues[job_id].append({"event": "progress", "data": {"pct": 30}})
-
-        # First call should yield all 3 events
-        events = list(jm.get_events(job_id))
-        assert len(events) == 3
-        assert events[0]["data"]["pct"] == 10
-        assert events[2]["data"]["pct"] == 30
-
-        # Second call should yield nothing (queue was drained)
-        events_again = list(jm.get_events(job_id))
-        assert len(events_again) == 0
+        assert [event["data"]["current_step"] for event in events] == ["Starting", "Simulating"]
+        assert list(manager.get_events(job_id)) == []
 
     def test_get_events_unknown_job_yields_nothing(self) -> None:
         """Test that get_events for an unknown job yields no events."""
