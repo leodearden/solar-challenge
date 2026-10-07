@@ -9,7 +9,12 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.config import (
+    ConfigurationError,
+    DispatchStrategyConfig,
+    GridChargeConfig,
+    parse_fleet_distribution_config,
+)
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
@@ -752,12 +757,15 @@ class TestFleetFromDistribution:
     def test_a_mapping_block_setting_the_grammar_refuses_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, named: str
     ) -> None:
-        """A block setting sent as a mapping that config.py's grammar refuses is a 400 naming the setting, in the grammar's wording; no fleet is queued."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**self._VALID_BODY, **patch},
-        )
+        """A block setting sent as a mapping that config.py's grammar refuses reaches the grammar unchanged, and is a 400 whose error is the grammar's own refusal, naming the setting; no fleet is queued."""
+        body = {**self._VALID_BODY, **patch}
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(
+                {key: body[key] for key in ("n_homes", "seed", "pv", "battery", "load") if key in body}
+            )
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(grammar_refusal.value)}
         assert named in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
