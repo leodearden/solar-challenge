@@ -124,10 +124,15 @@ def app(tmp_path: Path) -> Flask:
     return build_test_app(tmp_path)
 
 
+def _client_using(app: Flask, manager: JobManager) -> FlaskClient:
+    """Install *manager* as the app's job manager, and return a client of the app."""
+    app.extensions["job_manager"] = manager
+    return app.test_client()
+
+
 def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
     """Install a JobManager that runs *simulation* as the app's job manager, and return a client of the app."""
-    app.extensions["job_manager"] = JobManager(simulate_home=simulation)
-    return app.test_client()
+    return _client_using(app, JobManager(simulate_home=simulation))
 
 
 @pytest.fixture
@@ -744,6 +749,57 @@ class TestJobManagerAgeLimit:
         _submit_home_job(manager, tmp_path)
 
         assert manager.get_job_status(job_id) is None
+
+    def test_a_job_that_finished_a_minute_ago_is_still_tracked_though_it_was_submitted_a_day_before(
+        self, blocking_simulation: _BlockingSimulation, tmp_path: Path
+    ) -> None:
+        clock = _ManualClock()
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation, clock=clock)
+        job_id = _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+        clock.advance(_A_DAY)
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+        clock.advance(_A_MINUTE)
+
+        _submit_home_job(manager, tmp_path)
+
+        assert _status_of(manager, job_id) == "completed"
+
+    def test_a_job_still_running_a_day_after_it_was_submitted_is_still_reported_after_a_later_submit(
+        self, app: Flask, blocking_simulation: _BlockingSimulation
+    ) -> None:
+        clock = _ManualClock()
+        manager = JobManager(simulate_home=blocking_simulation, clock=clock)
+        client = _client_using(app, manager)
+        job_id = client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).get_json()["job_id"]
+        blocking_simulation.wait_until_started()
+        clock.advance(_A_DAY)
+
+        assert client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).status_code == 201
+
+        assert _status_of(manager, job_id) == "running"
+        response = client.get(f"/api/jobs/{job_id}")
+        assert response.status_code == 200
+        assert response.get_json()["status"] == "running"
+
+    def test_the_progress_stream_of_a_job_that_ran_past_a_later_submit_a_day_on_ends_with_its_completion(
+        self, app: Flask, blocking_simulation: _BlockingSimulation
+    ) -> None:
+        clock = _ManualClock()
+        manager = JobManager(simulate_home=blocking_simulation, clock=clock)
+        client = _client_using(app, manager)
+        submitted = client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).get_json()
+        blocking_simulation.wait_until_started()
+        clock.advance(_A_DAY)
+        assert client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).status_code == 201
+
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        stream = client.get(f"/api/jobs/{submitted['job_id']}/progress").get_data(as_text=True)
+        assert "event: complete" in stream
+        assert submitted["run_id"] in stream
 
 
 class TestJobManagerQueuedJobs:
