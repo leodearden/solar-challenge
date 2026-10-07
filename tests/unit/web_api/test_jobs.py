@@ -169,10 +169,10 @@ class TestGetJobResults:
         assert "not yet completed" in data["error"]
         assert data["status"] == "running"
 
-    def test_completed_job_returns_summary(
+    def test_completed_job_answers_its_run_s_id_name_type_creation_time_and_summary(
         self, app: Flask, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
-        """Completed job with a matching run record returns summary data."""
+        """A completed job whose run has a row answers the run's id, name, type, creation time and decoded summary."""
         run_id = "run-complete-001"
         mock_job_manager.get_job_status.return_value = {
             "job_id": "job-complete",
@@ -193,10 +193,13 @@ class TestGetJobResults:
 
         resp = client.get("/api/jobs/job-complete/results")
         assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["run_id"] == run_id
-        assert data["name"] == "Test Run"
-        assert data["summary"]["total_generation_kwh"] == 1234.5
+        assert resp.get_json() == {
+            "run_id": run_id,
+            "name": "Test Run",
+            "type": "home",
+            "created_at": "2024-01-01T00:00:00",
+            "summary": summary,
+        }
 
     def test_completed_job_missing_run_returns_404(
         self, client: FlaskClient, mock_job_manager: MagicMock
