@@ -95,7 +95,7 @@
                             </div>
                             <div>
                                 <label for="sweep_base_days" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Days</label>
-                                <input id="sweep_base_days" type="number" min="1" max="365" x-model="baseConfig.days"
+                                <input id="sweep_base_days" type="number" min="1" max="{{ max_window_days }}" x-model="baseConfig.days"
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
                         </div>

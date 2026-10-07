@@ -22,7 +22,8 @@ from solar_challenge.config import (
 )
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.shared import LOCATION_PRESETS
-from tests._html_page import element_count, texts, texts_after
+from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._html_page import element_attributes, element_count, texts, texts_after
 from tests._web_app import build_test_app
 
 
@@ -103,6 +104,18 @@ class TestSweepRoute:
         response = client.get("/scenarios/sweep")
         page = response.get_data(as_text=True)
         assert texts(page).count("Sweep Point Preview") == 1
+
+    def test_sweep_page_days_input_allows_the_days_the_server_accepts(self, client: FlaskClient) -> None:
+        """The base Days input, whose value the page sends as base_config.days, allows 1 to MAX_WINDOW_DAYS: the days parse_date_range accepts."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        days_inputs = [
+            attributes
+            for attributes in element_attributes(page, "input")
+            if attributes.get("x-model") == "baseConfig.days"
+        ]
+        assert [(attributes.get("min"), attributes.get("max")) for attributes in days_inputs] == [
+            ("1", str(MAX_WINDOW_DAYS))
+        ]
 
 
 class TestOldScenarioApiPaths:
