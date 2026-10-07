@@ -211,6 +211,9 @@ class TestSimulateHomeEndpoint:
         assert response.status_code == 400
 
 
+_A_HOME_JOB_REQUEST = {"pv_kw": 4.0, "battery_kwh": 0, "occupants": 3, "location": "bristol", "days": 1}
+
+
 class TestGetJobStatusEndpoint:
     """Tests for GET /api/jobs/<id>."""
 
@@ -245,6 +248,21 @@ class TestGetJobStatusEndpoint:
         assert response.status_code == 404
         data = response.get_json()
         assert "error" in data
+
+    def test_after_a_restart_an_earlier_job_is_not_found_although_its_rows_remain(self, tmp_path: Path) -> None:
+        before_restart = build_test_app(tmp_path)
+        submitted = (
+            _client_whose_jobs_run(before_restart, _RecordingSimulation())
+            .post("/api/simulate/home", json=_A_HOME_JOB_REQUEST)
+            .get_json()
+        )
+        assert before_restart.extensions["job_manager"].wait_until_idle(timeout=30)
+
+        after_restart = build_test_app(tmp_path)
+
+        response = after_restart.test_client().get(f"/api/jobs/{submitted['job_id']}")
+        assert response.status_code == 404
+        assert _job_rows(after_restart.extensions["storage"]) == [(submitted["job_id"], submitted["run_id"])]
 
 
 class TestJobProgressEndpoint:
@@ -754,6 +772,46 @@ class TestJobManagerIds:
         storage = _run_storage(tmp_path)
         assert [run["id"] for run in storage.list_runs()] == [run_id]
         assert _job_rows(storage) == [(job_id, run_id)]
+
+
+class TestJobManagerStatus:
+    """Tests for the status a JobManager reports for a job: only while it tracks the job in memory."""
+
+    def test_a_jobs_status_holds_its_ids_its_progress_and_when_the_manager_began_tracking_it(
+        self, tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
+
+        before_submit = time.monotonic()
+        job_id, run_id = manager.submit_home_job(
+            config=_A_HOME,
+            start_date=_JUNE_1,
+            end_date=_JUNE_2,
+            db_path=str(storage.db_path),
+            data_dir=str(storage.data_dir),
+        )
+        after_submit = time.monotonic()
+        assert manager.wait_until_idle(timeout=30)
+
+        status = manager.get_job_status(job_id)
+
+        assert status is not None
+        assert set(status) == {"job_id", "run_id", "status", "progress_pct", "current_step", "message", "created_at"}
+        assert (status["job_id"], status["run_id"]) == (job_id, run_id)
+        assert status["status"] == "completed", status["message"]
+        assert status["progress_pct"] == 100.0
+        assert before_submit <= status["created_at"] <= after_submit
+
+    def test_a_manager_does_not_know_a_job_another_manager_ran_although_its_rows_remain(
+        self, tmp_path: Path
+    ) -> None:
+        first = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
+        job_id = _submit_home_job(first, tmp_path)
+        assert first.wait_until_idle(timeout=30)
+
+        assert JobManager(max_workers=1).get_job_status(job_id) is None
+        assert _job_state(_run_storage(tmp_path), job_id)["status"] == "completed"
 
 
 class TestJobManagerQueuedJobs:
