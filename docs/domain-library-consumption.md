@@ -290,7 +290,8 @@ The authoritative public surface is `solar_challenge.__all__`, defined in
 `src/solar_challenge/__init__.py`.  It is frozen by
 `tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
 public name and that name's signature, and whose `FROZEN_MEMBERS` pins every
-exported class's public methods, properties and class constants.  It is also
+exported class's public methods, properties, class constants, and the instance
+attributes its class body declares.  It is also
 enforced at import time via the module's `__getattr__` guard, and
 `tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
 Consumers should reference `__all__` directly rather than relying on any copy
