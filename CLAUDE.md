@@ -201,11 +201,13 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   or `newest-releases::nonzero-exit` when the red run printed no failing
   node-id (pytest could not start, e.g. uv refused a stale `uv.lock`). Its
   failure message lists the releases `uv lock --upgrade` moved, then the
-  failing tests. Make the code or the test work on both the locked and the new
-  release; bound that dependency's range in `pyproject.toml`, committing the
-  `uv lock` re-lock with it, only when the release itself is broken. Fix a
-  pytest deprecation error as the "pytest deprecations are errors" bullet in
-  Key Patterns says. If uv could not reach PyPI, retry later before changing
-  code. Reproduce with the newest-releases check in Commands; to iterate on
-  one failing test, overlay its one new release on the locked environment:
+  failing tests. If it moved none, the message says so: the red then comes
+  from the tree, not from an upstream release. Make the code or the test work
+  on both the locked and the new release; bound that dependency's range in
+  `pyproject.toml`, committing the `uv lock` re-lock with it, only when the
+  release itself is broken. Fix a pytest deprecation error as the "pytest
+  deprecations are errors" bullet in Key Patterns says. If uv could not reach
+  PyPI, retry later before changing code. Reproduce with the newest-releases
+  check in Commands; to iterate on one failing test, overlay its one new
+  release on the locked environment:
   `uv run --locked --extra dev --extra web --with '<dist>==<new version>' pytest <node-id> -p no:cacheprovider`.
