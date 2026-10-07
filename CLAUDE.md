@@ -51,6 +51,11 @@ cd src/solar_challenge/web && npm ci && npm run build:css
 # network access, and the per-task verify never runs it
 uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider
 
+# Newest-releases check: what the offline lane's newest-releases job runs after
+# every merge (~15-20 min); it upgrades a scratch copy's uv.lock from PyPI, so it
+# needs network access, and the per-task verify never runs it
+uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider
+
 # CLI entry point
 solar-challenge --help
 ```
@@ -187,3 +192,20 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   the Tailwind version, run `npm install tailwindcss@<version>`, which rewrites
   `package-lock.json`, then rebuild and copy both license texts from the new
   `node_modules/tailwindcss`.
+- The lane's `newest-releases` job re-runs the verify suite in a scratch copy
+  of the tree whose `uv.lock` is upgraded to the newest releases
+  `pyproject.toml`'s ranges admit, the releases a consumer that re-locks
+  installs. A red there usually comes from an upstream release, not from the
+  merged commit in the fix task's suspect range. A fix task it files names
+  `tests/newest_releases/test_verify_suite_on_newest_releases.py::test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit`,
+  or `newest-releases::nonzero-exit` when the red run printed no failing
+  node-id (pytest could not start, e.g. uv refused a stale `uv.lock`). Its
+  failure message lists the releases `uv lock --upgrade` moved, then the
+  failing tests. Make the code or the test work on both the locked and the new
+  release; bound that dependency's range in `pyproject.toml`, committing the
+  `uv lock` re-lock with it, only when the release itself is broken. Fix a
+  pytest deprecation error as the "pytest deprecations are errors" bullet in
+  Key Patterns says. If uv could not reach PyPI, retry later before changing
+  code. Reproduce with the newest-releases check in Commands; to iterate on
+  one failing test, overlay its one new release on the locked environment:
+  `uv run --locked --extra dev --extra web --with '<dist>==<new version>' pytest <node-id> -p no:cacheprovider`.
