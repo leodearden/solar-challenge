@@ -3,10 +3,10 @@
 
 After every merge, the orchestrator's offline lane runs each job in
 dark-factory-orchestrator.yaml's git.offline_lane_commands, and each job runs a
-suite the per-task verify never runs. These tests pin the contracts every job
-keeps, with one row per job in LANE_JOBS, so a new lane job adds one row. A
-test only one job needs stays in that job's module, as in test_pvgis_lane.py
-and test_interpreter_matrix_lane.py.
+suite the per-task verify never runs. These tests pin the git settings that
+start the lane, and the contracts every job keeps, with one row per job in
+LANE_JOBS, so a new lane job adds one row. A test only one job needs stays in
+that job's module, as in test_pvgis_lane.py and test_interpreter_matrix_lane.py.
 """
 
 from dataclasses import dataclass
@@ -17,7 +17,7 @@ import pytest
 
 from tests._collect_only import requires_uv
 from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
-from tests._orchestrator_config import lane_job_enabled, offline_lane_jobs, sole_offline_lane_job
+from tests._orchestrator_config import git_config, lane_job_enabled, offline_lane_jobs, sole_offline_lane_job
 
 
 class LaneContract(Enum):
@@ -51,6 +51,13 @@ class LaneJob:
 
 
 LANE_JOBS: tuple[LaneJob, ...] = (
+    # test_interpreter_matrix_lane.py checks its collection more strictly, one case per off-pin minor.
+    LaneJob(
+        "interpreter-matrix",
+        "tests/interpreter_matrix",
+        if_unrun="the interpreters other than the .python-version pin are never re-verified",
+        checked=frozenset({LaneContract.NEVER_IN_A_DEFAULT_COLLECTION, LaneContract.EVERY_TEST_SLOW}),
+    ),
     LaneJob(
         "e2e",
         "tests/e2e",
@@ -86,6 +93,28 @@ def _checked_for(contract: LaneContract) -> tuple[LaneJob, ...]:
 def _job_name(job: LaneJob) -> str:
     """Return *job*'s name, the test id that makes each failing node id name its job."""
     return job.name
+
+
+def test_offline_lane_starts_and_skips_the_seams_this_repo_lacks(project_root: Path) -> None:
+    """The offline lane must start, and skip the seams this repo lacks."""
+    git = git_config(project_root)
+
+    assert git.get("offline_lane_enabled") is True, (
+        "git.offline_lane_enabled is not true, so the offline lane never starts and none of its jobs runs"
+    )
+    assert git.get("persistent_offline_deep_worktree") is True, (
+        "git.persistent_offline_deep_worktree is not true, so the lane has no _offline-deep "
+        "worktree to run in and never starts"
+    )
+    assert git.get("offline_lane_legacy_numeric_enabled") is False, (
+        "git.offline_lane_legacy_numeric_enabled is not false; that default-on seam runs "
+        "scripts/run-offline-deep.sh, which this repo does not have, so every lane run goes red"
+    )
+    assert git.get("offline_lane_infra_enabled") is False, (
+        "git.offline_lane_infra_enabled is not false; when on, that seam runs reify's "
+        "tests/infra/run_all.sh, which this repo does not have, so every lane run goes red, and "
+        "when unset it is on if dark-factory's default ever is"
+    )
 
 
 @pytest.mark.parametrize("job", LANE_JOBS, ids=_job_name)
