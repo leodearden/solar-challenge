@@ -387,7 +387,30 @@ def test_private_and_dunder_names_are_not_members() -> None:
     assert member_forms(Meter) == {}
 
 
-def test_a_dataclass_field_is_not_a_member_but_a_class_variable_is() -> None:
+def test_a_dataclass_field_its_constructor_does_not_take_is_spelled_attribute_then_its_annotation() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+        history: list[float] = field(init=False, default_factory=list)
+        label: Optional[str] = field(init=False)
+
+    @dataclass(init=False)
+    class Cache:
+        root: str
+        path: pathlib.Path
+
+        def __init__(self, root: str) -> None:
+            self.root = root
+            self.path = pathlib.Path(root)
+
+    assert member_forms(Reading) == {
+        "history": "attribute list[float]",
+        "label": "attribute str | None",
+    }
+    assert member_forms(Cache) == {"path": "attribute Path"}
+
+
+def test_a_dataclass_field_its_constructor_takes_is_not_a_member_but_a_class_variable_is() -> None:
     @dataclass(frozen=True)
     class Site:
         LAT: ClassVar[float] = 51.45
