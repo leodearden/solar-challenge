@@ -28,9 +28,11 @@ attribute, so its name is a member only if the body assigns it a value, as a con
 A dataclass field its constructor does not take, as field(init=False) declares one, is
 spelled as an attribute too, whether or not it has a default, since the class form pins
 only the fields the constructor takes and a default is the field's, not a class
-constant. A property that can be set or deleted says so in its kind, as
-property[settable, deletable] does, and an abstract member's form begins with abstract.
-An inherited member belongs to the class that defines it.
+constant. A dataclass's InitVar declares a constructor parameter, which the class form
+pins, not an attribute, so its name is never a member, even with a default. A property
+that can be set or deleted says so in its kind, as property[settable, deletable] does,
+and an abstract member's form begins with abstract. An inherited member belongs to the
+class that defines it.
 
 named_classes gives the classes a name's forms name, and signature_closure the classes of
 a package that some names' forms name, directly or through another such class. Both read
@@ -107,9 +109,10 @@ def member_forms(cls: type) -> dict[str, str]:
 
     A member is a public name that *cls*'s own body defines, or declares as an instance
     attribute by annotating it alone or as a dataclass field, except those
-    surface_form(cls) already pins: the dataclass fields its constructor's signature
-    takes, and an Enum's members. The attributes the body declares come first, in
-    annotation order, then the other names it defines, in class-body order.
+    surface_form(cls) already pins: the dataclass fields and init-only variables its
+    constructor's signature takes, and an Enum's members. The attributes the body
+    declares come first, in annotation order, then the other names it defines, in
+    class-body order.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -333,11 +336,12 @@ def _type_checking_imports(module: str) -> types.CodeType:
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
-    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass field its constructor takes."""
+    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass field and init-only variable its constructor takes."""
     if issubclass(cls, enum.Enum):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
-        return _fields(cls).keys() & inspect.signature(cls).parameters.keys()
+        field_or_annotated_names = _fields(cls).keys() | inspect.get_annotations(cls).keys()
+        return field_or_annotated_names & inspect.signature(cls).parameters.keys()
     return set()
 
 
