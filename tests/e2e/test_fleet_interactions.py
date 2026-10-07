@@ -1,9 +1,10 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
 Verifies slider-input sync, that each distribution editor's controls are named
-for their card, that each card's row buttons change only its rows, that Import
-YAML shows each distribution in its card, that a fleet exported as YAML imports
-back into the form, that Load Preset fills the form and names the preset's
+for their card, that each card's row buttons change only its rows, that a
+card's last row has no remove button, that Import YAML shows each distribution
+in its card, that a fleet exported as YAML imports back into the form, that
+Load Preset fills the form and names the preset's
 settings the form has no control for, that a preset without a period runs the
 page's default period, that the page shows why a preset cannot
 load or a fleet cannot export, that the simulation name reaches the submitted
@@ -171,6 +172,32 @@ def test_fleet_distribution_row_buttons_change_only_their_cards_rows(
     expect(page.get_by_role("spinbutton", name=f"{card} Value 1", exact=True)).to_have_value(
         second_value
     )
+
+
+@pytest.mark.parametrize(
+    ("distribution_type", "row_field"),
+    [
+        pytest.param("Weighted Discrete", "Weight", id="weighted_discrete"),
+        pytest.param("Shuffled Pool", "Count", id="shuffled_pool"),
+    ],
+)
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_last_row_has_no_remove_button(
+    page: Page, live_server: str, card: str, distribution_type: str, row_field: str
+) -> None:
+    """Removing a card's first row until one is left leaves that row without a remove button."""
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True).select_option(
+        label=distribution_type
+    )
+    _expect_only_row_list_shown(page, card, row_field)
+    remove_buttons = page.get_by_role("button", name=re.compile(rf"^{card} Remove Row \d+$"))
+
+    for remaining in range(_value_inputs(page, card).count() - 1, 0, -1):
+        page.get_by_role("button", name=f"{card} Remove Row 1", exact=True).click()
+        expect(_value_inputs(page, card)).to_have_count(remaining)
+
+    expect(remove_buttons).to_have_count(0)
 
 
 # -- Import YAML ------------------------------------------------------------
