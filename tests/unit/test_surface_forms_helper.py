@@ -16,8 +16,11 @@ import collections.abc
 import datetime
 import decimal
 import enum
+import fractions
 import functools
+import importlib.util
 import pathlib
+import sys
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
@@ -461,6 +464,28 @@ def test_a_class_names_the_classes_its_constructor_and_each_public_member_name()
         Preset,
         Outer.Inner,
     }
+
+
+def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "metering.py"
+    source.write_text(
+        "from fractions import Fraction\n"
+        "\n"
+        "class Meter:\n"
+        "    def __init__(self, ratio: 'Fraction') -> None: ...\n"
+    )
+    spec = importlib.util.spec_from_file_location("metering", source)
+    assert spec is not None and spec.loader is not None
+    metering = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "metering", metering)
+    spec.loader.exec_module(metering)
+
+    class Submeter(metering.Meter):
+        pass
+
+    assert named_classes(Submeter) == {fractions.Fraction}
 
 
 def test_a_default_value_and_a_none_return_name_no_class() -> None:

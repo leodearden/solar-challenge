@@ -114,10 +114,12 @@ def named_classes(obj: object) -> set[type]:
     Only annotations name classes, never a default value. A generic names its origin and
     its arguments' classes, a union its members' alone, and Literal's values and
     Annotated's metadata none. A string annotation or a forward reference names the class
-    its name is bound to in the module defining the annotated function or class, read as
-    a type checker reads it: its globals, with the imports of its top-level
-    `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises NameError.
-    A constant names its type, and an Enum's members name nothing.
+    its name is bound to in the module that spells it, read as a type checker reads it:
+    its globals, with the imports of its top-level `if TYPE_CHECKING:` blocks bound over
+    them. A name bound in neither raises NameError. A class's constructor is spelled in
+    the module of the class in its MRO whose own body defines __init__ or __new__, which
+    may be a base defined in another module. A constant names its type, and an Enum's
+    members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -215,7 +217,18 @@ def _form_classes(obj: object) -> set[type]:
     signature = inspect.signature(obj)
     annotations = [parameter.annotation for parameter in signature.parameters.values()]
     annotations.append(signature.return_annotation)
-    return _annotations_classes(annotations, obj.__module__)
+    return _annotations_classes(annotations, _signature_module(obj))
+
+
+def _signature_module(obj: object) -> str:
+    """The module whose source spells inspect.signature(*obj*)'s annotations: a routine's own; for a class, that of the class in its MRO whose own body defines __init__ or __new__."""
+    if not inspect.isclass(obj):
+        return obj.__module__
+    return next(
+        base.__module__
+        for base in obj.__mro__
+        if "__init__" in vars(base) or "__new__" in vars(base)
+    )
 
 
 def _member_form_classes(member: object, cls: type) -> set[type]:
