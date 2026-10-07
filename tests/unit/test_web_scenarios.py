@@ -332,6 +332,28 @@ class TestScenarioAPI:
         )
         assert response.status_code == 400
 
+    def test_save_under_a_name_a_saved_home_preset_holds_returns_409_and_changes_nothing(
+        self, client: FlaskClient
+    ) -> None:
+        """Saved presets share one namespace: a scenario save under a home preset's name is a 409 naming that preset, which keeps its config."""
+        assert client.post("/api/presets", json={"name": "Taken", "pv_kw": 3.0}).status_code == 201
+
+        response = client.post("/api/scenarios/save", json={"name": "Taken", "config": {"n_homes": 9}})
+
+        assert response.status_code == 409
+        assert response.get_json() == {"error": "A saved home preset is already named 'Taken'"}
+        home_preset = client.get("/api/presets/Taken").get_json()
+        assert (home_preset["source"], home_preset["pv_kw"]) == ("saved", 3.0)
+        assert "Taken" not in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+    def test_saving_a_scenario_again_replaces_its_config_and_keeps_its_id(self, client: FlaskClient) -> None:
+        """A second save under a saved scenario's name updates that preset in place."""
+        first = client.post("/api/scenarios/save", json={"name": "again", "config": {"n_homes": 9}})
+        second = client.post("/api/scenarios/save", json={"name": "again", "config": {"n_homes": 12}})
+        assert (first.status_code, second.status_code) == (201, 201)
+        assert second.get_json()["id"] == first.get_json()["id"]
+        assert client.get("/api/scenarios/presets/again").get_json()["config"] == {"n_homes": 12}
+
     def test_save_and_list_roundtrip(self, client: FlaskClient) -> None:
         """Test saving a preset and then finding it in the list."""
         # Save

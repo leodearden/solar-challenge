@@ -1,10 +1,32 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the home preset endpoints: GET /api/presets, POST /api/presets and GET /api/presets/<name>."""
 
+import sqlite3
+import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+
 import pytest
 
 pytest.importorskip("flask")
+from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
+
+
+def _answers_to_saves_sent_together(app: Flask, *saves: tuple[str, dict[str, object]]) -> list[TestResponse]:
+    """Send each (path, JSON body) save from its own thread, and return the answers in order.
+
+    Another connection holds the database's write lock while the saves are sent and lets go
+    half a second later, so every save is in flight before any of them can write.
+    """
+    with closing(sqlite3.connect(app.config["DATABASE"], isolation_level=None)) as other_writer:
+        other_writer.execute("BEGIN IMMEDIATE")
+        with ThreadPoolExecutor(max_workers=len(saves)) as pool:
+            sent = [pool.submit(app.test_client().post, path, json=body) for path, body in saves]
+            time.sleep(0.5)
+            other_writer.execute("ROLLBACK")
+            return [answer.result(timeout=30) for answer in sent]
 
 
 class TestListPresets:
@@ -85,6 +107,90 @@ class TestSavePreset:
             json={"name": "   ", "pv_kw": 4.0},
         )
         assert resp.status_code == 400
+
+    @pytest.mark.parametrize(
+        ("preset_type", "error"),
+        [
+            pytest.param(
+                "fleet",
+                "type must be 'home', got 'fleet'; POST /api/scenarios/save saves fleet presets",
+                id="fleet",
+            ),
+            pytest.param(
+                "banana",
+                "type must be 'home', got 'banana'; POST /api/scenarios/save saves fleet presets",
+                id="unknown",
+            ),
+            pytest.param(
+                5,
+                "type must be 'home', got 5; POST /api/scenarios/save saves fleet presets",
+                id="integer",
+            ),
+            pytest.param(
+                [1],
+                "type must be 'home', got [1]; POST /api/scenarios/save saves fleet presets",
+                id="array",
+            ),
+            pytest.param(
+                None,
+                "type must be 'home', got None; POST /api/scenarios/save saves fleet presets",
+                id="null",
+            ),
+        ],
+    )
+    def test_save_type_other_than_home_returns_400_naming_it_and_saves_nothing(
+        self, client: FlaskClient, preset_type: object, error: str
+    ) -> None:
+        """POST /api/presets saves home presets only: any other type, null included, is a 400 naming type and the value sent, and nothing is saved."""
+        resp = client.post("/api/presets", json={"name": "Typed", "type": preset_type, "pv_kw": 3.0})
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": error}
+        assert client.get("/api/presets/Typed").status_code == 404
+
+    def test_save_type_home_saves_a_home_preset(self, client: FlaskClient) -> None:
+        """A type of 'home', the one type POST /api/presets saves, is accepted."""
+        resp = client.post("/api/presets", json={"name": "Typed home", "type": "home", "pv_kw": 3.0})
+        assert resp.status_code == 201
+        assert "Typed home" in [
+            p["name"] for p in client.get("/api/presets").get_json() if p["source"] == "saved"
+        ]
+
+    def test_save_under_a_name_a_saved_fleet_preset_holds_returns_409_and_changes_nothing(
+        self, client: FlaskClient
+    ) -> None:
+        """Saved presets share one namespace: a home save under a fleet preset's name is a 409 naming that preset, which keeps its config."""
+        assert client.post("/api/scenarios/save", json={"name": "Taken", "config": {"n_homes": 9}}).status_code == 201
+
+        resp = client.post("/api/presets", json={"name": "Taken", "pv_kw": 3.0})
+
+        assert resp.status_code == 409
+        assert resp.get_json() == {"error": "A saved fleet preset is already named 'Taken'"}
+        assert client.get("/api/scenarios/presets/Taken").get_json()["config"] == {"n_homes": 9}
+        assert "Taken" not in [p["name"] for p in client.get("/api/presets").get_json()]
+
+    def test_saving_a_name_again_replaces_its_config_and_keeps_its_id(self, client: FlaskClient) -> None:
+        """A second save under a saved home preset's name updates that preset in place."""
+        first = client.post("/api/presets", json={"name": "Again", "pv_kw": 1.0})
+        second = client.post("/api/presets", json={"name": "Again", "pv_kw": 2.0})
+        assert (first.status_code, second.status_code) == (201, 201)
+        assert second.get_json()["id"] == first.get_json()["id"]
+        assert client.get("/api/presets/Again").get_json()["pv_kw"] == 2.0
+
+    @pytest.mark.parametrize(
+        ("rival_save", "statuses"),
+        [
+            pytest.param(("/api/presets", {"name": "Raced", "pv_kw": 2.0}), [201, 201], id="home-save"),
+            pytest.param(
+                ("/api/scenarios/save", {"name": "Raced", "config": {"n_homes": 9}}), [201, 409], id="fleet-save"
+            ),
+        ],
+    )
+    def test_saves_racing_for_a_new_name_answer_as_they_would_one_after_the_other(
+        self, app: Flask, rival_save: tuple[str, dict[str, object]], statuses: list[int]
+    ) -> None:
+        """Two saves racing for a new name are never a 500: two home saves both answer 201, and a home and a fleet save answer 201 and 409."""
+        answers = _answers_to_saves_sent_together(app, ("/api/presets", {"name": "Raced", "pv_kw": 1.0}), rival_save)
+        assert sorted(answer.status_code for answer in answers) == statuses
 
 
 class TestGetPreset:
