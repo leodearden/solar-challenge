@@ -1,75 +1,13 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
+{% from "components/distribution-editor.html" import distribution_editor %}
 
-{% macro _parameter_input(prefix, parameter, caption, step) %}
-<div>
-    <label for="builder_{{ prefix }}_{{ parameter }}" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">{{ caption }}</label>
-    <input id="builder_{{ prefix }}_{{ parameter }}" type="number" step="{{ step }}" x-model="{{ prefix }}_{{ parameter }}" @input="updatePreview()"
-        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-</div>
-{% endmacro %}
-
-{# _row_caption and _row_input read the Alpine loop variables item and idx, which only _row_list's x-for defines, so call them only inside it #}
-{% macro _row_caption(text) -%}{{ text }} <span class="sr-only" x-text="idx + 1"></span>{%- endmacro %}
-
-{% macro _row_input(caption, field, step, width_class) %}
-<label class="{{ width_class }}">
-    <span class="block text-xs text-slate-500 dark:text-slate-400 mb-1" :class="{ 'sr-only': idx > 0 }">{{ _row_caption(caption) }}</span>
-    <input type="number" step="{{ step }}" x-model.number="item.{{ field }}" @input="updatePreview()"
-        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-</label>
-{% endmacro %}
-
-{% macro _row_list(rows, column, column_caption, add_label, step, new_row_value) %}
-<template x-for="(item, idx) in {{ rows }}" :key="idx">
-    <div class="flex gap-2 items-end">
-        {{ _row_input('Value', 'value', step, width_class='flex-1 min-w-0') }}
-        {{ _row_input(column_caption, column, '1', width_class='w-24') }}
-        <button type="button" @click="removeRow({{ rows }}, idx)" x-show="canRemoveRow({{ rows }})"
-            class="p-2 text-red-400 hover:text-red-600 text-sm"><span class="sr-only">{{ _row_caption('Remove Row') }}</span><span aria-hidden="true">X</span></button>
-    </div>
-</template>
-<button type="button" @click="addRow({{ rows }}, { value: {{ new_row_value }}, {{ column }}: 10 })"
-    class="text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ add_label }}</button>
-{% endmacro %}
-
-{# One fleet component's distribution card, bound to scenarioBuilder's <prefix>_* fields and to its fixed_field #}
-{% macro distribution_card(prefix, heading, fixed_field, fixed_min, fixed_max, step, new_row_value) %}
+{# One fleet component's distribution card: a group, named by its heading, editing scenarioBuilder's dists.<prefix> #}
+{% macro distribution_card(prefix, heading, fixed_range, step, new_row_value) %}
 <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
     <fieldset class="min-w-0">
         <legend><h4 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">{{ heading }}</h4></legend>
-        <div class="space-y-3">
-            <div>
-                <label for="builder_{{ prefix }}_distribution_type" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Distribution Type</label>
-                <select id="builder_{{ prefix }}_distribution_type" x-model="{{ prefix }}_distribution_type" @change="updatePreview()"
-                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-                    <option value="">Fixed Value</option>
-                    <option value="normal">Normal Distribution</option>
-                    <option value="uniform">Uniform Distribution</option>
-                    <option value="weighted_discrete">Weighted Discrete</option>
-                    <option value="shuffled_pool">Shuffled Pool</option>
-                </select>
-            </div>
-            <div x-show="!{{ prefix }}_distribution_type">
-                <label for="builder_{{ fixed_field }}" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Fixed Value</label>
-                <input id="builder_{{ fixed_field }}" type="number" step="{{ step }}" min="{{ fixed_min }}" max="{{ fixed_max }}" x-model="{{ fixed_field }}" @input="updatePreview()"
-                    class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-            </div>
-            <div x-show="{{ prefix }}_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
-                {{ _parameter_input(prefix, 'mean', 'Mean', step) }}
-                {{ _parameter_input(prefix, 'std', 'Std Dev', step) }}
-            </div>
-            <div x-show="{{ prefix }}_distribution_type === 'normal' || {{ prefix }}_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
-                {{ _parameter_input(prefix, 'min', 'Min', step) }}
-                {{ _parameter_input(prefix, 'max', 'Max', step) }}
-            </div>
-            <div x-show="{{ prefix }}_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
-                {{ _row_list(prefix ~ '_wd_values', 'weight', 'Weight', '+ Add value', step, new_row_value) }}
-            </div>
-            <div x-show="{{ prefix }}_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
-                {{ _row_list(prefix ~ '_sp_entries', 'count', 'Count', '+ Add entry', step, new_row_value) }}
-            </div>
-        </div>
+        {{ distribution_editor('dists.' ~ prefix, new_row_value, step=step, fixed_range=fixed_range) }}
     </fieldset>
 </div>
 {% endmacro %}
@@ -103,6 +41,7 @@
 {# Vendored verbatim; why, and how to upgrade: tests/unit/test_web_page_scripts.py #}
 <!-- js-yaml for client-side YAML parsing (used by Upload YAML feature) -->
 <script src="{{ url_for('static', filename='vendor/js-yaml/js-yaml-4.1.0.min.js') }}" integrity="sha384-+pxiN6T7yvpryuJmE1gM9PX7yQit15auDb+ZwwvJOd/4be2Cie5/IuVXgQb/S9du"></script>
+<script src="{{ url_for('static', filename='js/distribution-editor.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/scenario-builder.js') }}" defer></script>
 {% endblock %}
 
@@ -194,10 +133,10 @@
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
 
-                {# One card per entry of COMPONENTS in static/js/scenario-builder.js, passing the entry's prefix and fixedField #}
-                {{ distribution_card('pv', 'PV Capacity (kW)', fixed_field='pv_capacity_kw', fixed_min='0.5', fixed_max='20', step='0.1', new_row_value='4.0') }}
-                {{ distribution_card('battery', 'Battery Capacity (kWh)', fixed_field='battery_capacity_kwh', fixed_min='0', fixed_max='100', step='0.1', new_row_value='5.0') }}
-                {{ distribution_card('load', 'Annual Consumption (kWh)', fixed_field='annual_consumption_kwh', fixed_min='500', fixed_max='20000', step='100', new_row_value='3500') }}
+                {# One card per entry of COMPONENTS in static/js/scenario-builder.js, passing the entry's prefix #}
+                {{ distribution_card('pv', 'PV Capacity (kW)', fixed_range=(0.5, 20), step='0.1', new_row_value=4.0) }}
+                {{ distribution_card('battery', 'Battery Capacity (kWh)', fixed_range=(0, 100), step='0.1', new_row_value=5.0) }}
+                {{ distribution_card('load', 'Annual Consumption (kWh)', fixed_range=(500, 20000), step='100', new_row_value=3500) }}
         {% endcall %}
 
         {% call accordion_section('tariff', 'Tariff') %}

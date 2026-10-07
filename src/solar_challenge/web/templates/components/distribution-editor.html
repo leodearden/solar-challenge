@@ -1,11 +1,14 @@
 {#
-    distribution_editor(dist, new_row_value, subject) writes the controls that edit one distribution, inside a
-    distributionEditor scope (static/js/distribution-editor.js) of their own.
+    distribution_editor(dist, new_row_value, subject='', step='any', fixed_range=none) writes the controls that edit
+    one distribution, inside a distributionEditor scope (static/js/distribution-editor.js) of their own.
+    simulate/fleet.html and scenarios/builder.html both call it.
 
     dist is the Alpine expression, in the caller's scope, of the distribution:
-        { type, mean, std, min, max, values: [{value, weight}, ...], entries: [{value, count}, ...] }
-    new_row_value is the value an added row starts at.
-    subject starts every control's accessible name, e.g. 'PV Capacity Value 2'.
+        { type, mean, std, min, max, values: [{value, weight}, ...], entries: [{value, count}, ...], fixed }
+    new_row_value is the value an added row starts at; step is the step of every value but a weight or count.
+    fixed_range, the (min, max) of a fixed value, makes the editor offer type '' = Fixed Value, editing dist.fixed.
+    subject starts every control's accessible name, e.g. 'PV Capacity Value 2'; without it a control is named by its
+    caption alone, e.g. 'Value 2', for a page whose cards are fieldset groups.
 #}
 
 {% macro _caption(subject, text) -%}
@@ -63,13 +66,14 @@
 </div>
 {% endmacro %}
 
-{% macro distribution_editor(dist, new_row_value, subject) %}
+{% macro distribution_editor(dist, new_row_value, subject='', step='any', fixed_range=none) %}
 <div x-data="distributionEditor(() => {{ dist }}, {{ new_row_value }})" class="space-y-4">
     <label class="block space-y-1.5">
         <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _caption(subject, 'Distribution Type') }}</span>
         <select x-model="dist.type"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
         >
+            {% if fixed_range %}<option value="">Fixed Value</option>{% endif %}
             <option value="normal">Normal (Gaussian)</option>
             <option value="uniform">Uniform</option>
             <option value="weighted_discrete">Weighted Discrete</option>
@@ -77,26 +81,32 @@
         </select>
     </label>
 
+    {% if fixed_range %}
+    <div x-show="!dist.type">
+        {{ _parameter(subject, 'Fixed Value', 'dist.fixed', step, min=fixed_range[0], max=fixed_range[1]) }}
+    </div>
+    {% endif %}
+
     <div x-show="dist.type === 'normal'" x-cloak class="grid grid-cols-2 gap-4">
-        {{ _parameter(subject, 'Mean', 'dist.mean', 'any') }}
-        {{ _parameter(subject, 'Std Dev', 'dist.std', 'any', min=0) }}
-        {{ _parameter(subject, 'Min (clamp)', 'dist.min', 'any') }}
-        {{ _parameter(subject, 'Max (clamp)', 'dist.max', 'any') }}
+        {{ _parameter(subject, 'Mean', 'dist.mean', step) }}
+        {{ _parameter(subject, 'Std Dev', 'dist.std', step, min=0) }}
+        {{ _parameter(subject, 'Min (clamp)', 'dist.min', step) }}
+        {{ _parameter(subject, 'Max (clamp)', 'dist.max', step) }}
     </div>
 
     <div x-show="dist.type === 'uniform'" x-cloak class="grid grid-cols-2 gap-4">
-        {{ _parameter(subject, 'Min', 'dist.min', 'any') }}
-        {{ _parameter(subject, 'Max', 'dist.max', 'any') }}
+        {{ _parameter(subject, 'Min', 'dist.min', step) }}
+        {{ _parameter(subject, 'Max', 'dist.max', step) }}
     </div>
 
     <div x-show="dist.type === 'weighted_discrete'" x-cloak class="space-y-3">
         <div class="text-sm text-slate-500 dark:text-slate-400">Define value-weight pairs. Weights are auto-normalised.</div>
-        {{ _row_list(subject, 'dist.values', 'weight', 'Weight', 'any', 'any') }}
+        {{ _row_list(subject, 'dist.values', 'weight', 'Weight', 'any', step) }}
     </div>
 
     <div x-show="dist.type === 'shuffled_pool'" x-cloak class="space-y-3">
         <div class="text-sm text-slate-500 dark:text-slate-400">Define exact value-count pairs. Counts should sum to the fleet size.</div>
-        {% call _row_list(subject, 'dist.entries', 'count', 'Count', '1', 'any') %}
+        {% call _row_list(subject, 'dist.entries', 'count', 'Count', '1', step) %}
         <span class="text-xs text-slate-500 dark:text-slate-400">
             Total: <span x-text="dist.entries.reduce((s, e) => s + (e.count || 0), 0)"></span> homes
         </span>
