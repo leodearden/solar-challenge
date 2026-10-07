@@ -845,6 +845,49 @@ class TestRunName:
         assert storage.run_name(run_id) is None
 
 
+class TestLatestRunNamed:
+    """Tests for RunStorage.latest_run_named, the most recently created run with a given name."""
+
+    def test_latest_run_named_is_the_most_recently_created_run_with_that_name(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """The run with the name that was created last answers, whichever order the runs were saved in.
+
+        The newest run is saved neither first nor last, so only its creation time singles it
+        out. The run created after it has another name, so it pins the name filter.
+        """
+        for run_id, name, created_at in (
+            ("middle", "Shared Name", "2026-02-01T00:00:00+00:00"),
+            ("newest", "Shared Name", "2026-03-01T00:00:00+00:00"),
+            ("oldest", "Shared Name", "2026-01-01T00:00:00+00:00"),
+            ("other-name", "Other Name", "2026-05-01T00:00:00+00:00"),
+        ):
+            storage.save_home_run(
+                run_id=run_id,
+                config=sample_home_config,
+                results=sample_simulation_results,
+                summary=sample_summary,
+                name=name,
+                created_at=created_at,
+            )
+
+        assert storage.latest_run_named("Shared Name") == storage.run_record("newest")
+
+    def test_latest_run_named_of_a_name_no_run_has_is_none(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """A name no run has answers None."""
+        storage.save_home_run(
+            run_id="north-roof",
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            name="North Roof",
+        )
+
+        assert storage.latest_run_named("South Roof") is None
+
+
 class TestDatabasePragmas:
     """Tests for SQLite pragma settings."""
 
