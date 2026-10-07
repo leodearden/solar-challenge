@@ -24,7 +24,7 @@ from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, UnionType
-from typing import Any, Type, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
@@ -186,6 +186,10 @@ class RunRecord:
 def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     """The RunRecord of a runs row read with SELECT *, or None when no row was read."""
     return None if row is None else RunRecord(**dict(row))
+
+
+RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
+RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
 
 class RunStorage:
@@ -599,6 +603,25 @@ class RunStorage:
                 "SELECT * FROM runs WHERE name = ? ORDER BY created_at DESC LIMIT 1", (name,)
             ).fetchone()
         return _record_of_row(row)
+
+    def update_run_labels(
+        self, run_id: str, labels: Mapping[RunLabel, str | None]
+    ) -> RunRecord | None:
+        """Write each of *labels* to run *run_id*, None as NULL; a label not in *labels* keeps its value.
+
+        Returns:
+            The run's record as written, or None when no run has that id.
+
+        Raises:
+            ValueError: Writing nothing, when a key of *labels* is not one of RUN_LABELS.
+        """
+        unknown = sorted(set(labels) - set(RUN_LABELS))
+        if unknown:
+            raise ValueError(f"Not run labels: {unknown}; the run labels are {list(RUN_LABELS)}")
+        with get_db(self.db_path) as conn:
+            for label, value in labels.items():
+                conn.execute(f"UPDATE runs SET {label} = ? WHERE id = ?", (value, run_id))
+        return self.run_record(run_id)
 
     def list_runs(
         self,
