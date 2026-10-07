@@ -5,8 +5,7 @@
 Tests the cross-task seam: board scenario YAML → parse_finance_config →
 project_multi_year → project_economics.mean_fleet_surplus_per_year_gbp.
 
-Step-1 (RED) → Step-2 (GREEN): field-fill assertion on the YAML literal.
-Steps 3–6 (GREEN on arrival): seam-verification that the consuming math
+Field-fill assertion on the YAML literal, then seam verification that the consuming math
 (W2-CR2, project_multi_year._simulate_age) propagates the band value into project surplus.
 """
 from __future__ import annotations
@@ -22,7 +21,7 @@ SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-f
 
 
 # ---------------------------------------------------------------------------
-# Step-1 RED / Step-2 GREEN: field-fill assertion
+# Field-fill assertion
 # ---------------------------------------------------------------------------
 
 
@@ -30,8 +29,7 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
     """Board scenario finance.grid_services_income_per_kw_per_year_gbp must equal
     resolve_grid_services_band("central") == £12.0/kW.
 
-    RED on base: YAML field is currently 0.0 != 12.0.
-    GREEN after step-2 YAML edit (12.0 written directly with provenance comment).
+    The YAML writes 12.0 directly, with a provenance comment.
 
     Also asserts the scenario's flex_band key lowers to "central" to document
     provenance: the value derives from this band.
@@ -57,7 +55,7 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers for steps 3–6 seam-verification
+# Shared helpers for the seam-verification tests
 # ---------------------------------------------------------------------------
 
 
@@ -150,7 +148,7 @@ def _surplus_at(
 
 
 # ---------------------------------------------------------------------------
-# Step-3 (GREEN on arrival): board surplus carries the central increment
+# Board surplus carries the central increment
 # ---------------------------------------------------------------------------
 
 
@@ -195,7 +193,7 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-4 (GREEN on arrival): each band moves surplus by its increment
+# Each band moves surplus by its increment
 # ---------------------------------------------------------------------------
 
 
@@ -248,7 +246,7 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-5 (GREEN on arrival): unset grid_services is θ-safe no-op
+# Unset grid_services is a θ-safe no-op
 # ---------------------------------------------------------------------------
 
 
@@ -333,7 +331,7 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-6 (GREEN on arrival): battery vs no-battery home differ by flex increment
+# Battery vs no-battery home differ by flex increment
 # ---------------------------------------------------------------------------
 
 

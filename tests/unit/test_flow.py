@@ -543,13 +543,13 @@ class _RecordingStrategy(DispatchStrategy):
 
 
 # ---------------------------------------------------------------------------
-# step-1: RED tests for simulate_timestep_tou grid-charge split accounting
+# simulate_timestep_tou grid-charge split accounting
 # ---------------------------------------------------------------------------
 
 class TestSimulateTimestepTouGridCharge:
     """Function-path grid-charge tests using real Economy 7 + GridChargeConfig.
 
-    Tests (a) and (b) fail on current code (which ignores grid_charging).
+    Tests (a) and (b) cover grid charging itself.
     Tests (c)-(e) are forward-/backward-compat guards.
     """
 
@@ -663,15 +663,15 @@ class TestSimulateTimestepTouGridCharge:
 
 
 # ---------------------------------------------------------------------------
-# step-3: RED tests for simulate_timestep grid-charge strategy path
+# simulate_timestep grid-charge strategy path
 # ---------------------------------------------------------------------------
 
 class TestSimulateTimestepGridCharge:
     """Strategy-path grid-charge tests using _RecordingStrategy stub.
 
-    Tests (a)-(f) all fail on current code because simulate_timestep lacks
-    the tariff keyword argument.  Test (c-i) is the exception — it passes on
-    current code (no tariff given, ctx stays None).
+    Tests (a)-(f) cover the tariff keyword argument of simulate_timestep.
+    Test (c-i) covers the case where no tariff is given, so the grid-charge
+    context stays None.
     """
 
     def test_accepts_tariff_kwarg(
@@ -851,14 +851,11 @@ class TestSimulateTimestepGridCharge:
 
 
 # ---------------------------------------------------------------------------
-# CR2 step-1: RED tests for EnergyFlowResult.grid_charge field
+# EnergyFlowResult.grid_charge field
 # ---------------------------------------------------------------------------
 
 class TestEnergyFlowResultGridCharge:
-    """RED tests for the new EnergyFlowResult.grid_charge field (CR2 step-1).
-
-    All tests below fail until step-2 adds grid_charge to EnergyFlowResult.
-    """
+    """EnergyFlowResult.grid_charge: defaults to zero and is carried by the result."""
 
     def test_grid_charge_field_defaults_to_zero(self) -> None:
         """(a) EnergyFlowResult exposes grid_charge defaulting to 0.0."""

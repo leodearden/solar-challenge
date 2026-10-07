@@ -25,10 +25,9 @@ class TestSimulateHomeStrategyPathGridCharging:
 
     The Strategy path (else branch in home.simulate_home) is taken when
     BatteryConfig.dispatch_strategy is set, making use_tariff_tou False.
-    Before the fix, simulate_timestep on this path never receives tariff=…,
-    so grid_charge_ctx is always None and grid-charging is dead.
-    After the fix (adding tariff=config.tariff_config), the full grid-charge
-    chain fires: is_cheap + spread gates pass → battery charged from grid.
+    simulate_timestep on this path receives tariff=config.tariff_config, so
+    the full grid-charge chain fires: is_cheap + spread gates pass → battery
+    charged from grid.
     """
 
     @pytest.fixture
@@ -67,8 +66,8 @@ class TestSimulateHomeStrategyPathGridCharging:
     ):
         """Strategy path: zero-PV + tariff threaded → battery_charge > 0 (grid charging active).
 
-        RED before fix: home.py Strategy else-branch omits tariff= → grid_charge_ctx is
-        None → no grid charging → battery_charge.sum() == 0. GREEN after fix.
+        Without tariff= on the Strategy branch, grid_charge_ctx would be None and
+        battery_charge.sum() would be 0.
 
         Also verifies the §3.1 split-accounting energy balance closes on the Strategy path:
         generation + grid_import ≈ demand + grid_export + (battery_charge - battery_discharge).
@@ -104,9 +103,8 @@ class TestSimulateHomeStrategyPathGridCharging:
     ):
         """SOC climbs above the observed starting SOC during the cheap overnight window.
 
-        RED before fix: with tariff absent from the call, grid_charge_ctx is None,
-        no charging occurs, SOC stays at whatever the battery initialises to.
-        GREEN after fix: overnight charging raises SOC toward target 0.9 × capacity.
+        Overnight charging raises SOC toward target 0.9 × capacity; with the tariff
+        absent, no charging would occur and SOC would stay at its initial value.
 
         Uses results.battery_soc.iloc[0] rather than a re-derived constant so the
         test stays decoupled from Battery's internal initial-SOC formula.
@@ -128,7 +126,7 @@ class TestSimulateHomeStrategyPathGridCharging:
         """Without tariff_config, grid-charging stays inert (battery_charge == 0 with zero PV).
 
         Guard/non-regression: pins the 'tariff_config=None → no behaviour change' contract.
-        Green before and after the fix (the impl threads config.tariff_config which is None here).
+        The Strategy path threads config.tariff_config, which is None here.
         """
         config_no_tariff = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
@@ -162,7 +160,7 @@ class TestSimulateHomeStrategyPathGridCharging:
 
 
 # ---------------------------------------------------------------------------
-# CR2 step-3: RED tests for per-home grid-charge cost channel
+# Per-home grid-charge cost channel
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -207,7 +205,7 @@ def flat_tariff_no_gc_home_config() -> HomeConfig:
 
 
 class TestSimulationResultsGridChargeCost:
-    """RED tests for the new SimulationResults.grid_charge_cost field (CR2 step-3a)."""
+    """SimulationResults.grid_charge_cost field: defaults and construction."""
 
     def test_grid_charge_cost_field_defaults_to_none(self) -> None:
         """(a-i) SimulationResults.grid_charge_cost defaults to None (back-compat)."""
@@ -250,7 +248,7 @@ class TestSimulationResultsGridChargeCost:
 
 
 class TestCalculateSummaryGridChargeCost:
-    """RED tests for SummaryStatistics.total_grid_charge_cost_gbp (CR2 step-3b)."""
+    """calculate_summary_statistics aggregates SummaryStatistics.total_grid_charge_cost_gbp."""
 
     def _make_results(
         self, grid_charge_cost: "pd.Series | None" = None
@@ -287,7 +285,7 @@ class TestCalculateSummaryGridChargeCost:
 
 
 class TestSimulateHomeGridChargeCost:
-    """RED tests for simulate_home producing grid_charge_cost (CR2 step-3c/d)."""
+    """simulate_home produces grid_charge_cost for time-of-use grid-charging homes."""
 
     def test_tou_grid_charging_home_produces_nonzero_cost(
         self,
