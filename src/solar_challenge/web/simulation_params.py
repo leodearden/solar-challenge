@@ -167,6 +167,19 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
+def with_default_days(data: Mapping[str, Any], days: int) -> dict[str, Any]:
+    """A copy of *data*, a request body, with days=*days* when the body sends no window of its own.
+
+    No window means neither a days that is not null nor a start or end that is
+    not empty, as parse_date_range reads them. A body that sends one is
+    returned as sent, so the window it sends is read, or refused, as sent.
+    """
+    params = {**_DATE_RANGE_DEFAULTS, **data}
+    if params["days"] is not None or _dates_sent(params):
+        return dict(data)
+    return {**data, "days": days}
+
+
 def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     """Read a request body's ``seg`` value with :func:`~solar_challenge.config.parse_seg_rate`'s grammar.
 
