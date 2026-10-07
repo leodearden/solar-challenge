@@ -117,6 +117,12 @@ signature, or to an exported class's public members, must also edit
 `FROZEN_SURFACE` or `FROZEN_MEMBERS` in
 `tests/unit/test_public_api_surface.py`, which fails until it does.
 
+**Unreleased on main** (task 392): `SimulationResults`, reached through
+`FleetResults.per_home_results`, gains two methods: `per_minute_amounts()`, a
+frame of each minute's energy in kWh and money in £, one column per amount, and
+`total_amounts()`, the run's total of each amount, keyed by column; the 0.5.0
+tag has neither. Consumers need no change when they re-pin.
+
 **Unreleased on main** (task 505): the frozen contract now covers the
 constructors and public members of the eight classes outside `__all__` that the
 frozen surface names, directly or through another such class:
