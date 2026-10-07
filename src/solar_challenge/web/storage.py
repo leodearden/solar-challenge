@@ -592,6 +592,14 @@ class RunStorage:
         record = self.run_record(run_id)
         return None if record is None else record.name
 
+    def latest_run_named(self, name: str) -> RunRecord | None:
+        """The run named *name* that was created last. None when no run has that name."""
+        with get_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT * FROM runs WHERE name = ? ORDER BY created_at DESC LIMIT 1", (name,)
+            ).fetchone()
+        return _record_of_row(row)
+
     def list_runs(
         self,
         run_type: str | None = None,
