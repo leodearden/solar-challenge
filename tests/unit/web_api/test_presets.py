@@ -86,6 +86,53 @@ class TestSavePreset:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize(
+        ("preset_type", "error"),
+        [
+            pytest.param(
+                "fleet",
+                "type must be 'home', got 'fleet'; POST /api/scenarios/save saves fleet presets",
+                id="fleet",
+            ),
+            pytest.param(
+                "banana",
+                "type must be 'home', got 'banana'; POST /api/scenarios/save saves fleet presets",
+                id="unknown",
+            ),
+            pytest.param(
+                5,
+                "type must be 'home', got 5; POST /api/scenarios/save saves fleet presets",
+                id="integer",
+            ),
+            pytest.param(
+                [1],
+                "type must be 'home', got [1]; POST /api/scenarios/save saves fleet presets",
+                id="array",
+            ),
+            pytest.param(
+                None,
+                "type must be 'home', got None; POST /api/scenarios/save saves fleet presets",
+                id="null",
+            ),
+        ],
+    )
+    def test_save_type_other_than_home_returns_400_naming_it_and_saves_nothing(
+        self, client: FlaskClient, preset_type: object, error: str
+    ) -> None:
+        """POST /api/presets saves home presets only: any other type, null included, is a 400 naming type and the value sent, and nothing is saved."""
+        resp = client.post("/api/presets", json={"name": "Typed", "type": preset_type, "pv_kw": 3.0})
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": error}
+        assert client.get("/api/presets/Typed").status_code == 404
+
+    def test_save_type_home_saves_a_home_preset(self, client: FlaskClient) -> None:
+        """A type of 'home', the one type POST /api/presets saves, is accepted."""
+        resp = client.post("/api/presets", json={"name": "Typed home", "type": "home", "pv_kw": 3.0})
+        assert resp.status_code == 201
+        assert "Typed home" in [
+            p["name"] for p in client.get("/api/presets").get_json() if p["source"] == "saved"
+        ]
+
 
 class TestGetPreset:
     """Tests for GET /api/presets/<name>."""
