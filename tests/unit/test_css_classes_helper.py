@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_css_classes.py, the reader of the CSS names the dashboard
-uses and its stylesheets define: classes, custom properties, @keyframes, and the
-properties class rules declare and inline styles set.
+uses and its stylesheets define: classes, custom properties, @keyframes, the
+properties class rules declare and inline styles set, and the colour palettes
+classes name.
 
 Each test pins one extraction rule, so an edit that weakens a reader fails here
 instead of letting a repository guard that uses it pass vacuously.

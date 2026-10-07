@@ -10,14 +10,11 @@ A palette is a key, bare or quoted, whose value is an object literal of six-digi
 shades, such as ``primary: { 50: '#fffbeb', ... }``. A palette written any other way, such
 as a reference to one of Tailwind's built-in palettes, is not read.
 
-A template or script applies a palette through a class that ends with
-``-<palette>-<shade>``, optionally followed by an opacity modifier, whatever its variants:
-``bg-primary-500``, ``dark:[&::-webkit-slider-thumb]:bg-primary-400``,
+A template or script applies a palette through a class that names one of its shades,
+whatever its variants, as tests/_css_classes.py's names_palette reads it: ``bg-primary-500``,
 ``dark:bg-primary-900/20``. A palette applied only through its ``DEFAULT`` shade, as
-``bg-<palette>``, is not recognised: a bare ``-<palette>`` suffix would also match
-hand-written classes such as ``btn--primary``, so an unused palette could pass. The
-applied classes come from tests/_css_classes.py, whose docstring lists the channels it
-does not read.
+``bg-<palette>``, is not recognised. The applied classes come from tests/_css_classes.py,
+whose docstring lists the channels it does not read.
 """
 
 import re
@@ -25,6 +22,7 @@ import re
 import pytest
 
 pytest.importorskip("jinja2")
+from tests._css_classes import names_palette
 from tests._dashboard_sources import (
     TAILWIND_CONFIG_KEY,
     dashboard_applied_classes_by_source,
@@ -37,10 +35,6 @@ _PALETTE = re.compile(r"""['"]?([\w-]+)['"]?\s*:\s*\{[^{}]*#[0-9a-fA-F]{6}""")
 def _palette_names(config_source: str) -> list[str]:
     """The names of the colour palettes *config_source* defines, in source order."""
     return _PALETTE.findall(config_source)
-
-
-def _applies(applied_class: str, palette: str) -> bool:
-    return re.search(rf"-{re.escape(palette)}-\w+(?:/\S+)?$", applied_class) is not None
 
 
 @pytest.mark.parametrize(
@@ -68,7 +62,7 @@ def test_every_theme_palette_is_applied_by_the_dashboard() -> None:
         f"read no colour palette from {TAILWIND_CONFIG_KEY}, so this guard would pass vacuously"
     )
     applied = set().union(*dashboard_applied_classes_by_source().values())
-    unapplied = sorted(p for p in palettes if not any(_applies(c, p) for c in applied))
+    unapplied = sorted(p for p in palettes if not any(names_palette(c, p) for c in applied))
 
     assert unapplied == [], (
         f"{TAILWIND_CONFIG_KEY} defines colour palettes that no dashboard template or script "
@@ -77,5 +71,6 @@ def test_every_theme_palette_is_applied_by_the_dashboard() -> None:
         "If the dashboard does apply one, through a channel tests/_css_classes.py does not read "
         "(its docstring lists the known gaps), extend that reader and pin the new channel in "
         "tests/unit/test_css_classes_helper.py instead. A palette applied only through its "
-        "DEFAULT shade, as bg-<palette>, is not recognised by _applies in this module: extend it."
+        "DEFAULT shade, as bg-<palette>, is not recognised by tests/_css_classes.py's "
+        "names_palette: extend it and its pins in tests/unit/test_css_classes_helper.py."
     )
