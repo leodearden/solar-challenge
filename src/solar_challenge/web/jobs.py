@@ -15,6 +15,7 @@ import time
 import traceback
 import uuid
 import weakref
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
@@ -64,6 +65,15 @@ def shutdown_all_managers(wait: bool = False) -> None:
     """
     for manager in live_managers():
         manager.shutdown(wait=wait)
+
+
+@dataclass(frozen=True)
+class _NewJob:
+    """A job just recorded: its id, its run's id, and the ISO 8601 UTC time its rows were created."""
+
+    job_id: str
+    run_id: str
+    created_at: str
 
 
 class JobManager:
@@ -163,30 +173,30 @@ class JobManager:
         """
         self._cleanup_old_jobs()
 
-        job_id, run_id, created_at = self._record_new_job(
+        new_job = self._record_new_job(
             db_path, run_name=name or config.name or "Web Simulation", run_type="home", n_homes=1
         )
 
         # Submit to thread pool
         self._schedule(
-            job_id,
-            run_id,
+            new_job.job_id,
+            new_job.run_id,
             db_path,
             functools.partial(
                 self._run_home_simulation,
-                job_id,
-                run_id,
+                new_job.job_id,
+                new_job.run_id,
                 config,
                 start_date,
                 end_date,
                 db_path,
                 data_dir,
                 name,
-                created_at,
+                new_job.created_at,
             ),
         )
 
-        return job_id, run_id
+        return new_job.job_id, new_job.run_id
 
     def submit_fleet_job(
         self,
@@ -219,30 +229,30 @@ class JobManager:
         """
         self._cleanup_old_jobs()
 
-        job_id, run_id, created_at = self._record_new_job(
+        new_job = self._record_new_job(
             db_path, run_name=name or "Fleet Simulation", run_type="fleet", n_homes=len(configs)
         )
 
         # Submit to thread pool
         self._schedule(
-            job_id,
-            run_id,
+            new_job.job_id,
+            new_job.run_id,
             db_path,
             functools.partial(
                 self._run_fleet_simulation,
-                job_id,
-                run_id,
+                new_job.job_id,
+                new_job.run_id,
                 configs,
                 start_date,
                 end_date,
                 db_path,
                 data_dir,
                 name,
-                created_at,
+                new_job.created_at,
             ),
         )
 
-        return job_id, run_id
+        return new_job.job_id, new_job.run_id
 
     def get_job_status(self, job_id: str) -> dict[str, Any] | None:
         """Get the current status of a job.
@@ -306,13 +316,10 @@ class JobManager:
 
     def _record_new_job(
         self, db_path: str, run_name: str, run_type: Literal["home", "fleet"], n_homes: int
-    ) -> tuple[str, str, str]:
+    ) -> _NewJob:
         """Write a new queued job's run and job rows, then track the job in memory.
 
         The job is tracked only once both rows are written, so a database that refuses either leaves no record of it.
-
-        Returns:
-            Tuple of (job_id, run_id, created_at).
         """
         job_id = self._new_id()
         run_id = self._new_id()
@@ -376,7 +383,7 @@ class JobManager:
             }
             self._event_queues[job_id] = collections.deque(maxlen=100)
 
-        return job_id, run_id, created_at
+        return _NewJob(job_id=job_id, run_id=run_id, created_at=created_at)
 
     def _schedule(self, job_id: str, run_id: str, db_path: str, job: Callable[[], None]) -> None:
         """Queue *job* on the thread pool, counting it as unfinished until it completes, fails or is dropped by shutdown.
