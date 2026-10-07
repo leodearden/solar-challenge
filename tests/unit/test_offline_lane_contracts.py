@@ -52,6 +52,12 @@ class LaneJob:
 
 LANE_JOBS: tuple[LaneJob, ...] = (
     LaneJob(
+        "e2e",
+        "tests/e2e",
+        if_unrun="e2e regressions go unseen",
+        checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE}),
+    ),
+    LaneJob(
         "css-build",
         "tests/css_build",
         if_unrun="a stylesheet its sources no longer build to, or a stale Tailwind license text, goes unseen",
