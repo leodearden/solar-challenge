@@ -13,6 +13,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
+from tests.e2e._scenario_builder_page import open_builder, upload_scenario
 
 pytestmark = pytest.mark.e2e
 
@@ -367,10 +368,7 @@ def _card_fields(sent: dict[str, Any], card: _Card) -> set[str]:
 
 def test_a_card_at_fixed_value_sends_only_its_fixed_value(page: Page, live_server: str) -> None:
     """Every card opens at Fixed Value, and the form the builder previews on opening gives each card's fixed value alone."""
-    with page.expect_response("**/api/scenarios/preview-yaml") as opened:
-        page.goto(live_server + "/scenarios/builder")
-
-    sent = opened.value.request.post_data_json
+    sent = open_builder(page, live_server).request.post_data_json
 
     assert {card.prefix: _card_fields(sent, card) for card in _CARDS} == {
         card.prefix: {card.fixed_field} for card in _CARDS
@@ -606,10 +604,7 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
     payload of getFormData(), which tests/unit/test_web_scenarios.py's
     TestBuilderScenarioYaml._DEFAULT_FORM mirrors.
     """
-    with page.expect_response("**/api/scenarios/preview-yaml") as preview:
-        page.goto(live_server + "/scenarios/builder")
-
-    response = preview.value
+    response = open_builder(page, live_server)
     assert response.status == 200
     path = tmp_path / "builder.yaml"
     path.write_text(response.json()["yaml"], encoding="utf-8")
@@ -624,13 +619,10 @@ def _preview_after_uploading(
     page: Page, live_server: str, tmp_path: Path, yaml_text: str
 ) -> Response:
     """The preview the builder, freshly opened, requests once *yaml_text* is uploaded to it."""
-    with page.expect_response("**/api/scenarios/preview-yaml"):
-        page.goto(live_server + "/scenarios/builder")
-    path = tmp_path / "scenario.yaml"
-    path.write_text(yaml_text, encoding="utf-8")
+    open_builder(page, live_server)
 
     with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
-        page.set_input_files('input[type="file"]', path)
+        upload_scenario(page, tmp_path / "scenario.yaml", yaml_text)
     return after_upload.value
 
 
@@ -735,8 +727,7 @@ def test_tabbing_to_upload_yaml_and_pressing_key_opens_a_file_chooser_whose_scen
     page: Page, live_server: str, tmp_path: Path, key: str
 ) -> None:
     """Tab moves focus from the Load Preset button to the Upload YAML button, and pressing *key* there opens a file chooser; the scenario chosen in it sets the form the builder previews."""
-    with page.expect_response("**/api/scenarios/preview-yaml"):
-        page.goto(live_server + "/scenarios/builder")
+    open_builder(page, live_server)
     path = tmp_path / "scenario.yaml"
     path.write_text(_LOCATION_WITHOUT_ALTITUDE_YAML, encoding="utf-8")
     page.get_by_role("button", name="Load Preset", exact=True).focus()
@@ -788,13 +779,9 @@ def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
     A run-history export has no fleet_distribution: block for the form to edit, and a
     weighted_discrete distribution without values has no rows to show.
     """
-    with page.expect_response("**/api/scenarios/preview-yaml") as opened:
-        page.goto(live_server + "/scenarios/builder")
-    form_before_upload = opened.value.request.post_data_json
-    path = tmp_path / "scenario.yaml"
-    path.write_text(yaml_text, encoding="utf-8")
+    form_before_upload = open_builder(page, live_server).request.post_data_json
 
-    page.set_input_files('input[type="file"]', path)
+    upload_scenario(page, tmp_path / "scenario.yaml", yaml_text)
 
     expect(page.locator("pre")).to_have_text(
         re.compile(rf"^# scenario\.yaml was not loaded: .*{re.escape(refusal)}")
