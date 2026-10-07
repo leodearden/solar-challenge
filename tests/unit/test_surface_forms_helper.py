@@ -306,6 +306,14 @@ def test_an_attribute_the_class_body_only_annotates_is_spelled_attribute_then_it
     }
 
 
+def test_a_name_the_class_body_only_annotates_as_a_class_variable_is_not_a_member() -> None:
+    class Meter:
+        UNITS: ClassVar[str]
+        SCALE: ClassVar
+
+    assert member_forms(Meter) == {}
+
+
 def test_private_and_dunder_names_are_not_members() -> None:
     class Meter:
         _cache: dict[str, float] = {}
@@ -322,6 +330,7 @@ def test_a_dataclass_field_is_not_a_member_but_a_class_variable_is() -> None:
     @dataclass(frozen=True)
     class Site:
         LAT: ClassVar[float] = 51.45
+        site_id: int
         name: str = ""
         tags: list[str] = field(default_factory=list)
 

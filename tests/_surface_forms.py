@@ -23,9 +23,11 @@ defines, and the attributes it only annotates, have forms too. A method's form i
 signature, self included. A classmethod, staticmethod, property or cached_property is
 spelled by its kind, then its function's signature, and a constant by its type. An
 attribute the body only annotates, as an instance attribute is declared, is spelled
-attribute, then its annotation. A property that can be set or deleted says so in its
-kind, as property[settable, deletable] does, and an abstract member's form begins with
-abstract. An inherited member belongs to the class that defines it.
+attribute, then its annotation. A ClassVar annotation declares a class variable, not an
+attribute, so its name is a member only if the body assigns it a value, as a constant.
+A property that can be set or deleted says so in its kind, as property[settable,
+deletable] does, and an abstract member's form begins with abstract. An inherited
+member belongs to the class that defines it.
 
 Usage::
 
@@ -79,11 +81,11 @@ def surface_form(obj: object) -> str:
 def member_forms(cls: type) -> dict[str, str]:
     """The form of each public member of *cls*, by name.
 
-    A member is a public name that *cls*'s own body defines or only annotates, other
-    than those surface_form(cls) already pins: a dataclass's fields, which its
-    constructor's signature carries, and an Enum's members. The names the body only
-    annotates come first, in annotation order, then the names it defines, in
-    class-body order.
+    A member is a public name that *cls*'s own body defines, or declares as an instance
+    attribute by annotating it alone, except those surface_form(cls) already pins: a
+    dataclass's fields, which its constructor's signature carries, and an Enum's
+    members. The names the body only annotates come first, in annotation order, then
+    the names it defines, in class-body order.
     """
     pinned = _pinned_by_class_form(cls)
     return {
@@ -176,7 +178,7 @@ class _AnnotatedAttribute:
 
 
 def _own_members(cls: type) -> dict[str, object]:
-    """Each name *cls*'s own body only annotates, as an _AnnotatedAttribute, then each name it defines, as its value.
+    """Each name *cls*'s own body only annotates, other than as a ClassVar, as an _AnnotatedAttribute, then each name it defines, as its value.
 
     inspect.get_annotations reads the body's own annotations, never a base's, and leaves
     a string annotation a string.
@@ -185,9 +187,14 @@ def _own_members(cls: type) -> dict[str, object]:
     annotated_only = {
         name: _AnnotatedAttribute(annotation)
         for name, annotation in inspect.get_annotations(cls).items()
-        if name not in defined
+        if name not in defined and not _is_class_var(annotation)
     }
     return {**annotated_only, **defined}
+
+
+def _is_class_var(annotation: object) -> bool:
+    """Whether *annotation* is ClassVar, bare or subscripted, which declares a class variable, not an instance attribute."""
+    return annotation is typing.ClassVar or typing.get_origin(annotation) is typing.ClassVar
 
 
 def _member_form(member: object) -> str:
