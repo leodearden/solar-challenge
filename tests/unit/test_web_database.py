@@ -888,6 +888,79 @@ class TestLatestRunNamed:
         assert storage.latest_run_named("South Roof") is None
 
 
+class TestUpdateRunLabels:
+    """Tests for RunStorage.update_run_labels, which writes a run's name and notes as Run History edits them."""
+
+    @pytest.fixture
+    def north_roof_run_id(self, storage, sample_home_config, sample_simulation_results, sample_summary):
+        """The id of a home run saved under the name 'North Roof', its notes NULL as every save leaves them."""
+        run_id = "north-roof"
+        storage.save_home_run(
+            run_id=run_id,
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            name="North Roof",
+        )
+        return run_id
+
+    def test_update_run_labels_writes_each_label_given_and_answers_the_updated_record(
+        self, storage, north_roof_run_id
+    ):
+        """Each label given is written, and the run's record as written is answered."""
+        updated = storage.update_run_labels(north_roof_run_id, {"name": "South Roof", "notes": "Checked"})
+
+        assert updated == storage.run_record(north_roof_run_id)
+        assert (updated.name, updated.notes) == ("South Roof", "Checked")
+
+    def test_update_run_labels_leaves_each_label_not_given_unchanged(self, storage, north_roof_run_id):
+        """A label absent from the labels keeps its value."""
+        storage.update_run_labels(north_roof_run_id, {"notes": "Checked"})
+        after_notes = storage.run_record(north_roof_run_id)
+        storage.update_run_labels(north_roof_run_id, {"name": "South Roof"})
+        after_name = storage.run_record(north_roof_run_id)
+
+        assert [(after_notes.name, after_notes.notes), (after_name.name, after_name.notes)] == [
+            ("North Roof", "Checked"),
+            ("South Roof", "Checked"),
+        ]
+
+    def test_update_run_labels_writes_a_none_label_as_null(self, storage, north_roof_run_id):
+        """A label given as None is cleared to NULL."""
+        storage.update_run_labels(north_roof_run_id, {"notes": "Checked"})
+        storage.update_run_labels(north_roof_run_id, {"notes": None})
+
+        assert storage.run_record(north_roof_run_id).notes is None
+
+    def test_update_run_labels_with_no_labels_answers_the_record_unchanged(self, storage, north_roof_run_id):
+        """No labels write nothing, and answer the run's record as it was."""
+        before = storage.run_record(north_roof_run_id)
+
+        assert storage.update_run_labels(north_roof_run_id, {}) == before
+
+    def test_update_run_labels_of_an_id_no_run_has_is_none(self, storage):
+        """An id no run has answers None, and no run is written under it."""
+        assert storage.update_run_labels("no-such-run", {"name": "South Roof"}) is None
+        assert storage.run_record("no-such-run") is None
+
+    def test_update_run_labels_refuses_a_key_that_is_not_a_run_label_and_writes_nothing(
+        self, storage, north_roof_run_id
+    ):
+        """A key that is not a run label raises ValueError naming it, before any label is written.
+
+        The keys become column names in SQL, so the valid label beside the refused key is not
+        written either.
+        """
+        before = storage.run_record(north_roof_run_id)
+
+        with pytest.raises(
+            ValueError, match=r"Not run labels: \['status'\]; the run labels are \['name', 'notes'\]"
+        ):
+            storage.update_run_labels(north_roof_run_id, {"status": "failed", "notes": "Checked"})
+
+        assert storage.run_record(north_roof_run_id) == before
+
+
 class TestDatabasePragmas:
     """Tests for SQLite pragma settings."""
 
