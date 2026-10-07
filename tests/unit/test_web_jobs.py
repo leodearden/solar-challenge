@@ -94,6 +94,17 @@ class _BlockingSimulation:
         self._released.set()
 
 
+class _CountingIds:
+    """Stands in for a JobManager's id source: issues "id-1", "id-2", ... and keeps every id it issued."""
+
+    def __init__(self) -> None:
+        self.issued: list[str] = []
+
+    def __call__(self) -> str:
+        self.issued.append(f"id-{len(self.issued) + 1}")
+        return self.issued[-1]
+
+
 @pytest.fixture
 def app(tmp_path: Path) -> Flask:
     """Create a test Flask application with temporary database."""
@@ -693,6 +704,23 @@ class TestJobManagerSimulation:
         assert simulation.calls == [(home, _JUNE_1, _JUNE_2) for home in homes]
         _, _, per_home_summaries = storage.load_fleet_run(run_id)
         assert [summary.total_generation_kwh for summary in per_home_summaries] == pytest.approx([4.0, 2.0])
+
+
+class TestJobManagerIds:
+    """Tests for the ids a JobManager gives its jobs and their runs."""
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_job_and_its_run_take_their_ids_from_the_managers_id_source(
+        self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
+    ) -> None:
+        ids = _CountingIds()
+        manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation(), new_id=ids)
+
+        job_id = submit_job(manager, tmp_path)
+
+        status = manager.get_job_status(job_id)
+        assert status is not None
+        assert {job_id, status["run_id"]} == set(ids.issued)
 
 
 class TestJobManagerShutdown:
