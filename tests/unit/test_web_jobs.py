@@ -632,6 +632,12 @@ def _ids_with_a_status(manager: JobManager, ids: list[str]) -> list[str]:
     return [job_id for job_id in ids if manager.get_job_status(job_id) is not None]
 
 
+def _job_rows(storage: RunStorage) -> list[tuple[str, str]]:
+    """Return (id, run_id) of every row in storage's jobs table."""
+    with get_db(storage.db_path) as conn:
+        return [(row["id"], row["run_id"]) for row in conn.execute("SELECT id, run_id FROM jobs")]
+
+
 def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + 30
     while True:
@@ -734,7 +740,11 @@ class TestJobManagerIds:
 
         status = manager.get_job_status(job_id)
         assert status is not None
-        assert {job_id, status["run_id"]} == set(ids.issued)
+        run_id = status["run_id"]
+        assert {job_id, run_id} == set(ids.issued)
+        storage = _run_storage(tmp_path)
+        assert [run["id"] for run in storage.list_runs()] == [run_id]
+        assert _job_rows(storage) == [(job_id, run_id)]
 
 
 class TestJobManagerRefusedRows:
