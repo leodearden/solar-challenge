@@ -642,6 +642,33 @@ class TestComparisonRoute:
         assert "Compare A" in html
         assert "Compare B" in html
 
+    def test_compare_shows_each_run_s_name_type_creation_time_and_summary_metrics(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each run's header card shows its name, type and creation time; each metric row its values, Delta and % Change.
+
+        The cards are read after the page's subtitle, the one text before them, since each run
+        name appears twice on the page.
+        """
+        _insert_test_run(
+            app, run_id="cmp-a", name="Compare A", run_type="home", summary={"total_generation_kwh": 100.0}
+        )
+        _insert_test_run(
+            app, run_id="cmp-b", name="Compare B", run_type="fleet", summary={"total_generation_kwh": 120.0}
+        )
+
+        page = client.get("/history/compare?ids=cmp-a,cmp-b").get_data(as_text=True)
+
+        assert texts_after(page, "Side-by-side comparison of selected simulation runs", 6) == [
+            "Compare A",
+            "home",
+            "2025-06-01T12:00:00",
+            "Compare B",
+            "fleet",
+            "2025-06-01T12:00:00",
+        ]
+        assert texts_after(page, "Total Generation", 4) == ["100.0 kWh", "120.0 kWh", "+20.0 kWh", "+20.0%"]
+
     def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
         """Test GET /history/compare with all invalid IDs redirects to runs page."""
         response = client.get("/history/compare?ids=fake-1,fake-2")
