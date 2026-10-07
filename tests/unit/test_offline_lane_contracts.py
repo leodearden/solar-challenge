@@ -58,6 +58,12 @@ LANE_JOBS: tuple[LaneJob, ...] = (
         checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE}),
     ),
     LaneJob(
+        "pvgis",
+        "tests/integration/test_pvgis.py",
+        if_unrun="a change in PVGIS's or pvlib's response goes unseen",
+        checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE}),
+    ),
+    LaneJob(
         "css-build",
         "tests/css_build",
         if_unrun="a stylesheet its sources no longer build to, or a stale Tailwind license text, goes unseen",
