@@ -16,7 +16,12 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 
 
 from solar_challenge.home import HomeConfig
-from solar_challenge.web.number_fields import as_finite_float, as_int, as_int_within
+from solar_challenge.web.number_fields import (
+    as_finite_float,
+    as_int_within,
+    as_whole_number,
+    as_whole_number_within,
+)
 
 if TYPE_CHECKING:
     from solar_challenge.config import DispatchStrategyConfig
@@ -26,6 +31,16 @@ if TYPE_CHECKING:
 #: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, a
 #: shuffled pool that holds values for more homes, and a preview that draws more values.
 MAX_FLEET_HOMES = 10_000
+
+
+def read_fleet_size(value: Any, field: str) -> int:
+    """Read *value*, the setting named *field*, as a dashboard fleet's number of homes, a whole number from 1 to :data:`MAX_FLEET_HOMES`.
+
+    Raises:
+        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+            naming *field* and the value sent.
+    """
+    return as_whole_number_within(value, field, 1, MAX_FLEET_HOMES)
 
 
 def apply_fleet_overlay(
@@ -177,9 +192,9 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
         Fleet distribution config dict.
 
     Raises:
-        ValueError: If n_homes is one int() cannot read or outside 1 to MAX_FLEET_HOMES
-            (see :func:`~solar_challenge.web.number_fields.as_int_within`), seed is one
-            int() cannot read (see :func:`~solar_challenge.web.number_fields.as_int`), a
+        ValueError: If n_homes is not a whole number from 1 to MAX_FLEET_HOMES (see
+            :func:`read_fleet_size`), seed is not a whole number (see
+            :func:`~solar_challenge.web.number_fields.as_whole_number`), a
             pv/battery/load block is neither null nor a dict (see :func:`_component_block`),
             an enabled battery block sets a dispatch strategy (see
             :func:`_refuse_battery_dispatch_strategy`), or
@@ -187,8 +202,8 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             field as a dot path from the form's root.
     """
     config: dict[str, Any] = {
-        "n_homes": as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
-        "seed": as_int(form_data.get("seed", 42), "seed"),
+        "n_homes": read_fleet_size(form_data.get("n_homes", 100), "n_homes"),
+        "seed": as_whole_number(form_data.get("seed", 42), "seed"),
     }
 
     # Process PV distribution
