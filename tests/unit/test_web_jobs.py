@@ -572,11 +572,11 @@ def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
     return dict(row)
 
 
-def _run_of_job(manager: JobManager, job_id: str, tmp_path: Path) -> RunRecord:
-    """Return the record RunStorage reads from tmp_path's database for the run of job *job_id*, which *manager* tracks."""
+def _run_of_job(manager: JobManager, job_id: str, storage: RunStorage) -> RunRecord:
+    """Return the record storage holds for the run of job *job_id*, which *manager* tracks."""
     status = manager.get_job_status(job_id)
     assert status is not None, f"the manager does not track job {job_id}"
-    run = _run_storage(tmp_path).run_record(status["run_id"])
+    run = storage.run_record(status["run_id"])
     assert run is not None, f"no run has job {job_id}'s run id {status['run_id']}"
     return run
 
@@ -842,11 +842,12 @@ class TestJobManagerRuns:
         blocking_simulation: _BlockingSimulation,
         tmp_path: Path,
     ) -> None:
+        storage = _run_storage(tmp_path)
         manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
         job_id = submit_job(manager, tmp_path)
         blocking_simulation.wait_until_started()
 
-        run = _run_of_job(manager, job_id, tmp_path)
+        run = _run_of_job(manager, job_id, storage)
 
         assert (run.status, run.error_message, run.completed_at) == ("running", None, None)
 
@@ -854,11 +855,12 @@ class TestJobManagerRuns:
     def test_a_failed_jobs_run_is_failed_with_the_jobs_error_and_a_completion_time(
         self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
     ) -> None:
+        storage = _run_storage(tmp_path)
         manager = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
         job_id = submit_job(manager, tmp_path)
         assert manager.wait_until_idle(timeout=30)
 
-        run = _run_of_job(manager, job_id, tmp_path)
+        run = _run_of_job(manager, job_id, storage)
 
         assert (run.status, run.error_message) == ("failed", "the simulation failed")
         assert run.completed_at is not None
@@ -1078,6 +1080,7 @@ class TestRecoverStaleJobs:
     def test_recovery_fails_the_run_of_a_job_dropped_when_its_manager_shut_down(
         self, blocking_simulation: _BlockingSimulation, tmp_path: Path
     ) -> None:
+        storage = _run_storage(tmp_path)
         manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
         _submit_home_job(manager, tmp_path)
         blocking_simulation.wait_until_started()
@@ -1085,22 +1088,24 @@ class TestRecoverStaleJobs:
         manager.shutdown()
         blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
-        assert _run_of_job(manager, dropped_job_id, tmp_path).status == "running"
+        assert _run_of_job(manager, dropped_job_id, storage).status == "running"
 
-        recover_stale_jobs(_run_storage(tmp_path).db_path)
+        recover_stale_jobs(storage.db_path)
 
-        run = _run_of_job(manager, dropped_job_id, tmp_path)
+        run = _run_of_job(manager, dropped_job_id, storage)
         assert (run.status, run.error_message) == ("failed", "Interrupted by server restart")
         assert run.completed_at is not None
 
     def test_recovery_leaves_a_completed_run_and_a_failed_run_as_they_were(self, tmp_path: Path) -> None:
+        storage = _run_storage(tmp_path)
         completing = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
         failing = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
         jobs = [(completing, _submit_home_job(completing, tmp_path)), (failing, _submit_home_job(failing, tmp_path))]
-        assert completing.wait_until_idle(timeout=30) and failing.wait_until_idle(timeout=30)
-        before = [_run_of_job(manager, job_id, tmp_path) for manager, job_id in jobs]
+        assert completing.wait_until_idle(timeout=30)
+        assert failing.wait_until_idle(timeout=30)
+        before = [_run_of_job(manager, job_id, storage) for manager, job_id in jobs]
         assert [run.status for run in before] == ["completed", "failed"]
 
-        recover_stale_jobs(_run_storage(tmp_path).db_path)
+        recover_stale_jobs(storage.db_path)
 
-        assert [_run_of_job(manager, job_id, tmp_path) for manager, job_id in jobs] == before
+        assert [_run_of_job(manager, job_id, storage) for manager, job_id in jobs] == before
