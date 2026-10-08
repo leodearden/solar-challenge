@@ -254,6 +254,7 @@ class TestParseDateRange:
             pytest.param(20240601, id="number"),
             pytest.param(0, id="zero"),
             pytest.param(False, id="false"),
+            pytest.param([], id="empty-array"),
         ],
     )
     def test_date_it_cannot_read_is_refused_naming_the_field_and_the_value_sent(
