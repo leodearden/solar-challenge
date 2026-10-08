@@ -81,10 +81,10 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
         ).to_be_visible()
 
 
-def _expect_expanded_headers(page: Page, open_section: str | None) -> None:
-    """Expect the header of *open_section* to be exposed as expanded and every other section's header as collapsed; with None, every header as collapsed."""
+def _expect_expanded_headers(page: Page, open_section: str | None, *, message: str | None = None) -> None:
+    """Expect the header of *open_section* to be exposed as expanded and every other section's header as collapsed; with None, every header as collapsed. A failure reports *message*, if given."""
     for section in _ACCORDION_SECTIONS:
-        expect(page.get_by_role("button", name=section, exact=True, expanded=section == open_section)).to_be_visible()
+        expect(page.get_by_role("button", name=section, exact=True, expanded=section == open_section), message).to_be_visible()
 
 
 def test_only_the_open_sections_header_is_exposed_as_expanded(page: Page, live_server: str) -> None:
@@ -119,11 +119,11 @@ def test_the_section_the_builder_shows_before_alpine_starts_is_the_one_it_opens(
     (shown_section,) = shown
 
     page.goto(live_server + "/scenarios/builder")
-    expect(
-        page.get_by_role("button", name=shown_section, exact=True, expanded=True),
-        f"the builder shows {shown_section}'s control before Alpine starts, so {shown_section}'s header should be the one exposed as expanded once Alpine has",
-    ).to_be_visible()
-    _expect_expanded_headers(page, shown_section)
+    _expect_expanded_headers(
+        page,
+        shown_section,
+        message=f"the builder shows {shown_section}'s control before Alpine starts, so {shown_section}'s header alone should be exposed as expanded once Alpine has",
+    )
 
 
 def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
