@@ -26,6 +26,11 @@ def _custom_block_whose_only_period_lacks(key: str) -> dict[str, Any]:
     return {"type": "custom", "periods": [period]}
 
 
+_TARIFF_BLOCKS_NAMING_NO_TYPE = [
+    pytest.param({}, id="absent-type"),
+    pytest.param({"type": None}, id="null-type"),
+]
+
 _UNKNOWN_TARIFF_TYPES = [
     pytest.param("economy_8", id="unknown-name"),
     pytest.param(7, id="integer"),
@@ -167,6 +172,13 @@ _FIXED_SPEC_VALUES = [
 
 class TestTariffTypes:
     """Tests for the tariff types a tariff: block can name."""
+
+    @pytest.mark.parametrize("block", _TARIFF_BLOCKS_NAMING_NO_TYPE)
+    def test_block_naming_no_type_is_refused(self, block: dict[str, Any]) -> None:
+        """A block whose type is absent or null is refused for naming none."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_tariff_config(block)
+        assert str(refusal.value) == "Tariff configuration requires 'type' field"
 
     @pytest.mark.parametrize("tariff_type", _UNKNOWN_TARIFF_TYPES)
     def test_unknown_type_is_refused_naming_every_supported_type(
