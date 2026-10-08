@@ -16,7 +16,11 @@ from solar_challenge.config import (
     parse_fleet_distribution_config,
 )
 from solar_challenge.home import HomeConfig
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, sample_distribution
+from solar_challenge.web.fleet_config import (
+    MAX_FLEET_HOMES,
+    form_to_fleet_distribution_config,
+    sample_distribution,
+)
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
@@ -565,6 +569,30 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
         assert distribution in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "pv",
+        [
+            pytest.param({"type": "normal", "mean": 4.0, "std": 1.0}, id="normal"),
+            pytest.param(
+                {"type": "weighted_discrete", "values": [{"value": 4.0, "weight": 1}]},
+                id="weighted-discrete",
+            ),
+        ],
+    )
+    def test_pv_block_that_is_itself_a_distribution_returns_400_naming_pv_type_and_pv_capacity_kw(
+        self, client: FlaskClient, mock_job_manager: MagicMock, pv: dict
+    ) -> None:
+        """A pv block sent as its distribution, instead of holding it in pv.capacity_kw, is a 400 carrying form_to_fleet_distribution_config's refusal, which names pv.type and pv.capacity_kw; no fleet is queued."""
+        body = {**self._VALID_BODY, "pv": pv}
+        with pytest.raises(ValueError) as conversion_refusal:
+            form_to_fleet_distribution_config(body)
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(conversion_refusal.value)}
+        assert "pv.type" in resp.get_json()["error"]
+        assert "pv.capacity_kw" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(

@@ -288,11 +288,12 @@ def _parse_component_distribution(
     """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
 
     Its distribution is what *data* holds at *primary_field*: a distribution (see
-    :func:`_is_distribution`), or a fixed value, which is any other value but null or a
-    mapping; else *data* itself, when it is a distribution; else *data* whole.  A
-    distribution is read by :func:`_build_distribution_dict`, a fixed value by
-    :func:`~solar_challenge.web.number_fields.as_finite_float`, and the block's other
-    settings, but for ``type`` and ``enabled``, by :func:`_other_setting`.
+    :func:`_is_distribution`), read by :func:`_build_distribution_dict`, or a fixed value,
+    which is any other value but null or a mapping, read by
+    :func:`~solar_challenge.web.number_fields.as_finite_float`.  A mapping without a type
+    passes as given, and an absent or null field as an empty mapping, for config.py's
+    grammar to refuse.  The block's other settings, but for ``enabled``, are read by
+    :func:`_other_setting`.
 
     Args:
         data: Component form data dict.
@@ -303,9 +304,11 @@ def _parse_component_distribution(
         Component distribution config dict.
 
     Raises:
-        ValueError: If one of those readers refuses what it reads; the error names its
-            field as a dot path under *block*.
+        ValueError: If *data* is itself a distribution (see
+            :func:`_refuse_block_that_is_a_distribution`), or one of those readers refuses
+            what it reads; the error names its field as a dot path under *block*.
     """
+    _refuse_block_that_is_a_distribution(data, block, primary_field)
     result: dict[str, Any] = {}
     spec = data.get(primary_field)
 
@@ -313,16 +316,31 @@ def _parse_component_distribution(
         result[primary_field] = _build_distribution_dict(spec, f"{block}.{primary_field}")
     elif spec is not None and not isinstance(spec, dict):
         result[primary_field] = as_finite_float(spec, f"{block}.{primary_field}")
-    elif _is_distribution(data):
-        result[primary_field] = _build_distribution_dict(data, block)
     else:
-        result[primary_field] = data
+        result[primary_field] = {} if spec is None else spec
 
     for key, value in data.items():
-        if key not in (primary_field, "type", "enabled"):
+        if key not in (primary_field, "enabled"):
             result[key] = _other_setting(value, f"{block}.{key}")
 
     return result
+
+
+def _refuse_block_that_is_a_distribution(
+    data: dict[str, Any], block: str, primary_field: str
+) -> None:
+    """Refuse *data*, the fleet form's *block* component block, when it is itself a distribution: a block holds its distribution in *primary_field*.
+
+    Raises:
+        ValueError: If *data* is a distribution (see :func:`_is_distribution`), whatever
+            else it holds; the error names ``block.type``, ``block.primary_field`` and the
+            type sent.
+    """
+    if _is_distribution(data):
+        raise ValueError(
+            f"{block}.type must be absent: the {block} block's distribution goes in "
+            f"{block}.{primary_field}, got {data['type']!r}"
+        )
 
 
 def _other_setting(value: object, field: str) -> object:
