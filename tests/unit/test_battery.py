@@ -442,6 +442,94 @@ class TestBatteryReadsSOCEffFromConfig:
             Battery(cfg, discharge_efficiency=0.0)
 
 
+class TestBatterySOCEffAssignment:
+    """Assigning a Battery's SOC limit or efficiency is checked against the bounds Battery() checks, not against the current SOC."""
+
+    @pytest.mark.parametrize(
+        ("attribute", "value", "message"),
+        [
+            ("min_soc_fraction", 0.9, "Invalid SOC limits: min=0.9, max=0.9"),
+            ("min_soc_fraction", -0.1, "Invalid SOC limits: min=-0.1, max=0.9"),
+            ("min_soc_fraction", math.nan, "Invalid SOC limits: min=nan, max=0.9"),
+            ("max_soc_fraction", 0.1, "Invalid SOC limits: min=0.1, max=0.1"),
+            ("max_soc_fraction", 1.1, "Invalid SOC limits: min=0.1, max=1.1"),
+            ("charge_efficiency", 0.0, "Charge efficiency must be (0, 1], got 0.0"),
+            ("charge_efficiency", 1.5, "Charge efficiency must be (0, 1], got 1.5"),
+            ("discharge_efficiency", 0.0, "Discharge efficiency must be (0, 1], got 0.0"),
+            ("discharge_efficiency", math.nan, "Discharge efficiency must be (0, 1], got nan"),
+        ],
+    )
+    def test_an_assignment_that_breaks_the_bounds_is_refused_and_changes_nothing(
+        self, attribute: str, value: float, message: str
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+
+        def snapshot() -> tuple[float, ...]:
+            return (
+                battery.min_soc_fraction,
+                battery.max_soc_fraction,
+                battery.charge_efficiency,
+                battery.discharge_efficiency,
+                battery.soc_kwh,
+            )
+
+        before = snapshot()
+        with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+            setattr(battery, attribute, value)
+        assert snapshot() == before
+
+    def test_an_assignment_is_checked_against_the_battery_s_current_limits(self) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+        battery.max_soc_fraction = 0.5
+        message = "Invalid SOC limits: min=0.6, max=0.5"
+        with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+            battery.min_soc_fraction = 0.6
+        assert battery.min_soc_fraction == 0.1
+
+    @pytest.mark.parametrize(
+        ("attribute", "value"),
+        [
+            ("min_soc_fraction", 0.0),
+            ("max_soc_fraction", 1.0),
+            ("charge_efficiency", 1.0),
+            ("discharge_efficiency", 1.0),
+        ],
+    )
+    def test_a_value_at_a_closed_bound_is_accepted_and_sets_only_its_own_attribute(
+        self, attribute: str, value: float
+    ) -> None:
+        defaults = {
+            "min_soc_fraction": 0.1,
+            "max_soc_fraction": 0.9,
+            "charge_efficiency": 0.975,
+            "discharge_efficiency": 0.975,
+        }
+        battery = Battery(BatteryConfig.default_5kwh())
+        setattr(battery, attribute, value)
+        assert {name: getattr(battery, name) for name in defaults} == defaults | {attribute: value}
+
+    @pytest.mark.parametrize(
+        ("attribute", "value"),
+        [("min_soc_fraction", 0.8), ("max_soc_fraction", 0.2)],
+    )
+    def test_a_soc_limit_may_move_past_the_current_soc_which_stays_unchanged(
+        self, attribute: str, value: float
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_kwh = battery.soc_kwh
+        setattr(battery, attribute, value)
+        assert getattr(battery, attribute) == value
+        assert battery.soc_kwh == soc_kwh
+        assert not battery.min_soc_kwh <= soc_kwh <= battery.max_soc_kwh
+
+    def test_discharge_stops_at_an_assigned_floor(self) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+        battery.min_soc_fraction = 0.4
+        assert battery.discharge(power_kw=2.0, duration_minutes=60) == pytest.approx(0.5 * 0.975)
+        assert battery.soc_kwh == pytest.approx(2.0)
+        assert battery.min_soc_kwh == pytest.approx(2.0)
+
+
 @pytest.fixture
 def default_config():
     """Create a default 5 kWh battery config."""

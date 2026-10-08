@@ -132,9 +132,12 @@ conventions:
       because consumers rely on them: a consumer's own dispatch strategy implements
       DispatchStrategy.decide_action and name, and the consumption guide's own recipe calls
       WeatherCache.put. Public instance attributes are members too (task 426): the platform reads
-      Battery.config and max_soc_fraction, and reads and assigns min_soc_fraction. They are
-      declared as annotations and stay plain attributes, because a read-only property would break
-      that assignment; do not tidy them into properties. The classes outside __all__ that the
+      Battery.config and max_soc_fraction, and reads and assigns min_soc_fraction. Battery.config
+      stays a plain attribute declared as an annotation. Battery's SOC limits and efficiencies are
+      settable properties (task 540): their setters refuse, with ValueError, a value outside the
+      bounds Battery() checks for them, and do not check a new SOC limit against the current SOC.
+      Keep both: the platform assigns min_soc_fraction, and may raise the floor above the SOC, as a
+      Victron Mode-2 min-SOC write can. The classes outside __all__ that the
       exported surface names are in the contract too (task 505): the closure rule of
       docs/prds/domain-library-extraction.md §2 puts a frozen function's parameter and return
       types in the frozen surface, and consumers need these classes to use exported names. A

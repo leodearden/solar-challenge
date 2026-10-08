@@ -142,6 +142,18 @@ re-pin.
 instance attribute that `__init__` sets, read and assigned as on the 0.5.0 tag.
 Consumers need no change when they re-pin.
 
+**Unreleased on main** (task 540): `Battery`'s `min_soc_fraction`,
+`max_soc_fraction`, `charge_efficiency` and `discharge_efficiency` are settable
+properties instead of plain instance attributes, still read and assigned as on
+the 0.5.0 tag. An assignment is now checked against the bounds `Battery()`
+checks for these four values: a value that breaks
+`0 <= min_soc_fraction < max_soc_fraction <= 1`, an efficiency outside (0, 1],
+or NaN for any of the four raises `ValueError` and leaves the battery
+unchanged; the 0.5.0 tag accepts the assignment. As on the tag, a new SOC limit
+is not checked against the current SOC and may move past it. Consumers that
+assign values within these bounds need no change when they re-pin, and a
+consumer's own check of these bounds before assigning can go.
+
 **Unreleased on main** (task 436): `SimulationResults`, reached through
 `FleetResults.per_home_results`, is frozen, so that each of its series stays
 named the column `to_dataframe()` writes it under. Assigning to one of its

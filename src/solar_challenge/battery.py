@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Battery storage configuration and modelling."""
 
+import dataclasses
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional
@@ -19,8 +20,7 @@ def _validate_soc_and_efficiency(
 ) -> None:
     """Validate SOC limits and per-direction efficiency values.
 
-    This is the single source of truth for these bounds; called from both
-    BatteryConfig.__post_init__ and Battery.__init__ so the checks stay in sync.
+    This is the single source of truth for these bounds.
 
     Args:
         min_soc: Minimum SOC fraction (must satisfy 0 <= min_soc < max_soc <= 1)
@@ -211,25 +211,38 @@ class BatteryConfig:
         )
 
 
-class Battery:
-    """Battery with state of charge tracking.
+@dataclass(frozen=True)
+class _SocLimitsAndEfficiencies:
+    """A Battery's SOC limits and per-direction efficiencies, refused at construction unless valid."""
 
-    Tracks current SOC and enforces charge/discharge limits.
-
-    Attributes:
-        config: BatteryConfig defining capacity and power limits
-        soc_kwh: Current state of charge in kWh
-        min_soc_fraction: Minimum SOC as fraction of capacity (default 0.1)
-        max_soc_fraction: Maximum SOC as fraction of capacity (default 0.9)
-        charge_efficiency: Efficiency of charging (default 0.975)
-        discharge_efficiency: Efficiency of discharging (default 0.975)
-    """
-
-    config: BatteryConfig
     min_soc_fraction: float
     max_soc_fraction: float
     charge_efficiency: float
     discharge_efficiency: float
+
+    def __post_init__(self) -> None:
+        _validate_soc_and_efficiency(
+            self.min_soc_fraction,
+            self.max_soc_fraction,
+            self.charge_efficiency,
+            self.discharge_efficiency,
+        )
+
+
+class Battery:
+    """Battery with state of charge tracking.
+
+    Tracks current SOC and enforces charge/discharge limits. Its SOC limits and
+    efficiencies can be reassigned after construction, as a device's settings can.
+    An assignment is checked against the bounds construction checks for these four
+    values: one that breaks them raises ValueError and leaves the battery unchanged.
+    A new SOC limit is not checked against the current SOC and may move past it.
+
+    Attributes:
+        config: BatteryConfig defining capacity and power limits
+    """
+
+    config: BatteryConfig
 
     def __init__(
         self,
@@ -251,20 +264,12 @@ class Battery:
             discharge_efficiency: Discharging efficiency (0-1); defaults to config.discharge_efficiency
         """
         self.config = config
-
-        # Resolve optional params from config when not explicitly supplied
-        resolved_min_soc: float = config.min_soc_fraction if min_soc_fraction is None else min_soc_fraction
-        resolved_max_soc: float = config.max_soc_fraction if max_soc_fraction is None else max_soc_fraction
-        resolved_charge_eff: float = config.charge_efficiency if charge_efficiency is None else charge_efficiency
-        resolved_discharge_eff: float = config.discharge_efficiency if discharge_efficiency is None else discharge_efficiency
-
-        _validate_soc_and_efficiency(
-            resolved_min_soc, resolved_max_soc, resolved_charge_eff, resolved_discharge_eff
+        self._soc_limits_and_efficiencies = _SocLimitsAndEfficiencies(
+            min_soc_fraction=config.min_soc_fraction if min_soc_fraction is None else min_soc_fraction,
+            max_soc_fraction=config.max_soc_fraction if max_soc_fraction is None else max_soc_fraction,
+            charge_efficiency=config.charge_efficiency if charge_efficiency is None else charge_efficiency,
+            discharge_efficiency=config.discharge_efficiency if discharge_efficiency is None else discharge_efficiency,
         )
-        self.min_soc_fraction = resolved_min_soc
-        self.max_soc_fraction = resolved_max_soc
-        self.charge_efficiency = resolved_charge_eff
-        self.discharge_efficiency = resolved_discharge_eff
 
         # Resolve SOH once: override wins; else calendar-only (throughput=0).
         # NOTE: cumulative_throughput_kwh is hard-coded to 0.0 here — this is
@@ -293,6 +298,50 @@ class Battery:
                     f"[{self.min_soc_kwh}, {self.max_soc_kwh}]"
                 )
             self._soc_kwh = initial_soc_kwh
+
+    @property
+    def min_soc_fraction(self) -> float:
+        """Minimum SOC as a fraction of effective capacity."""
+        return self._soc_limits_and_efficiencies.min_soc_fraction
+
+    @min_soc_fraction.setter
+    def min_soc_fraction(self, value: float) -> None:
+        self._soc_limits_and_efficiencies = dataclasses.replace(
+            self._soc_limits_and_efficiencies, min_soc_fraction=value
+        )
+
+    @property
+    def max_soc_fraction(self) -> float:
+        """Maximum SOC as a fraction of effective capacity."""
+        return self._soc_limits_and_efficiencies.max_soc_fraction
+
+    @max_soc_fraction.setter
+    def max_soc_fraction(self, value: float) -> None:
+        self._soc_limits_and_efficiencies = dataclasses.replace(
+            self._soc_limits_and_efficiencies, max_soc_fraction=value
+        )
+
+    @property
+    def charge_efficiency(self) -> float:
+        """Fraction of the energy charged that is stored."""
+        return self._soc_limits_and_efficiencies.charge_efficiency
+
+    @charge_efficiency.setter
+    def charge_efficiency(self, value: float) -> None:
+        self._soc_limits_and_efficiencies = dataclasses.replace(
+            self._soc_limits_and_efficiencies, charge_efficiency=value
+        )
+
+    @property
+    def discharge_efficiency(self) -> float:
+        """Fraction of the energy drawn from storage that is output."""
+        return self._soc_limits_and_efficiencies.discharge_efficiency
+
+    @discharge_efficiency.setter
+    def discharge_efficiency(self, value: float) -> None:
+        self._soc_limits_and_efficiencies = dataclasses.replace(
+            self._soc_limits_and_efficiencies, discharge_efficiency=value
+        )
 
     @property
     def soh(self) -> float:
