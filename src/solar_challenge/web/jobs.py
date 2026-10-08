@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Any, Generator, Literal, TypeAlias
+from typing import Any, Generator, TypeAlias
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -33,11 +33,10 @@ from solar_challenge.home import simulate_home as _default_simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import RunType, get_db
 from solar_challenge.web.storage import RunStorage
 
 HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], SimulationResults]
-_RunType: TypeAlias = Literal["home", "fleet"]
 
 _QUEUED_JOB_STATE: Mapping[str, str | float] = MappingProxyType(
     {"status": "queued", "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
@@ -320,7 +319,7 @@ class JobManager:
         db_path: str,
         *,
         run_name: str,
-        run_type: _RunType,
+        run_type: RunType,
         n_homes: int,
         run_simulation: Callable[[_NewJob], None],
     ) -> tuple[str, str]:
@@ -330,7 +329,7 @@ class JobManager:
         self._schedule(new_job.job_id, new_job.run_id, db_path, functools.partial(run_simulation, new_job))
         return new_job.job_id, new_job.run_id
 
-    def _record_new_job(self, db_path: str, run_name: str, run_type: _RunType, n_homes: int) -> _NewJob:
+    def _record_new_job(self, db_path: str, run_name: str, run_type: RunType, n_homes: int) -> _NewJob:
         """Write a new queued job's run and job rows, then track the job in memory.
 
         The job is tracked only once both rows are written, so a database that refuses either leaves no record of it.
