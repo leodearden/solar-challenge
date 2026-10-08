@@ -1899,9 +1899,17 @@ _FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
     *_FINANCE_SCALAR_COERCIONS, "grid_services_events",
 })
 
+# Rows follow GridServicesEventsConfig's field order, which decides the first bad value reported.
+_GRID_SERVICES_EVENTS_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
+    "band": lambda band: band,
+    "aggregator_share": float,
+    "utilisation_factor": float,
+    "availability_gbp_per_kw_per_event": _float_or_none,
+    "utilisation_gbp_per_mwh": _float_or_none,
+})
+
 _GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
-    "band", "event_windows", "aggregator_share", "utilisation_factor",
-    "availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh",
+    *_GRID_SERVICES_EVENTS_SCALAR_COERCIONS, "event_windows",
 })
 
 _EVENT_WINDOW_KEYS: tuple[str, ...] = (
@@ -1944,28 +1952,25 @@ def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow,
 def _parse_grid_services_events_config(
     data: object, *, block_path: str
 ) -> Optional[GridServicesEventsConfig]:
-    """Parse a finance block's grid_services_events block; absent or null is no events config."""
+    """Parse a finance block's grid_services_events block; absent or null is no events config.
+
+    A key the block omits takes GridServicesEventsConfig's declared default.
+    """
     if data is None:
         return None
     gs_data = _refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
-    parsed_windows = _parse_event_windows(
-        gs_data.get("event_windows", []), block_path=_child_path(block_path, "event_windows")
-    )
-    # Build optional override float fields; wrap numeric coercions as above.
-    avail_raw = gs_data.get("availability_gbp_per_kw_per_event")
-    util_raw = gs_data.get("utilisation_gbp_per_mwh")
-    # GridServicesEventsConfig.__post_init__ validates; ConfigurationError propagates.
-    try:
-        return GridServicesEventsConfig(
-            band=gs_data.get("band", "central"),
-            event_windows=parsed_windows,
-            aggregator_share=float(gs_data.get("aggregator_share", 0.25)),
-            utilisation_factor=float(gs_data.get("utilisation_factor", 0.6)),
-            availability_gbp_per_kw_per_event=_float_or_none(avail_raw),
-            utilisation_gbp_per_mwh=_float_or_none(util_raw),
+    fields: dict[str, Any] = {}
+    if "event_windows" in gs_data:
+        fields["event_windows"] = _parse_event_windows(
+            gs_data["event_windows"], block_path=_child_path(block_path, "event_windows")
         )
-    except ConfigurationError:
-        raise  # GridServicesEventsConfig.__post_init__ validation — propagate as-is
+    try:
+        fields.update(
+            (key, coerce(gs_data[key]))
+            for key, coerce in _GRID_SERVICES_EVENTS_SCALAR_COERCIONS.items()
+            if key in gs_data
+        )
+        return GridServicesEventsConfig(**fields)
     except (ValueError, TypeError) as exc:
         raise ConfigurationError(
             f"grid_services_events block contains a non-numeric value: {exc}"
