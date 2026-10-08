@@ -195,7 +195,7 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     """
     scenario = _fleet_scenario(document)
     fleet = scenario["fleet_distribution"]
-    n_homes = read_fleet_size(fleet.get("n_homes"), _child_path("fleet_distribution", "n_homes"))
+    fleet_size_and_seed = _read_fleet_size_and_seed(fleet)
     _refuse_what_the_loaders_refuse(scenario)
     form, not_loaded = _read_blocks(
         scenario,
@@ -204,7 +204,7 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
             "name": _read_name(scenario.get("name")),
             "period": _read_period(scenario.get("period")),
             "location": _read_location(scenario.get("location")),
-            "fleet_distribution": _read_fleet_distribution(fleet, n_homes),
+            "fleet_distribution": _read_fleet_distribution(fleet, fleet_size_and_seed),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": _read_seg(scenario.get("seg")),
         },
@@ -226,7 +226,7 @@ def _fleet_scenario(document: object) -> dict[str, Any]:
 
     Raises:
         ValueError: For a document that is not a mapping or has no fleet_distribution block,
-            or a fleet_distribution block that is not a mapping, refused in the loaders' words.
+            or a fleet_distribution block that is not a mapping.
     """
     if not isinstance(document, dict):
         raise ValueError(f"A fleet scenario must be a mapping, got {type(document).__name__}")
@@ -337,21 +337,35 @@ def _read_location(location: Any) -> _BlockRead:
     return {}, ("location",)
 
 
-def _read_fleet_distribution(fleet: Mapping[str, Any], n_homes: int) -> _BlockRead:
-    """The fleet form's fleet size, seed, distributions and dispatch strategy: the scenario's fleet_distribution block *fleet*, whose size reads as *n_homes*.
+def _read_fleet_size_and_seed(fleet: Mapping[str, Any]) -> Mapping[str, _BlockRead]:
+    """The fleet form's fleet size and seed: the reads of the scenario's fleet_distribution block *fleet*'s n_homes and seed, by key, made ahead of the loaders, whose int() would refuse n_homes first, naming no setting.
 
     Raises:
-        ValueError: For a seed that is not a whole number from -MAX_FLEET_SEED to
-            MAX_FLEET_SEED, naming fleet_distribution.seed, or from the readers of its
-            distributions and dispatch strategy.
+        ValueError: From read_fleet_size or read_fleet_seed, naming
+            fleet_distribution.n_homes or fleet_distribution.seed.
+    """
+    path = "fleet_distribution"
+    n_homes = read_fleet_size(fleet.get("n_homes"), _child_path(path, "n_homes"))
+    return {
+        "n_homes": ({"n_homes": n_homes}, ()),
+        "seed": _read_seed(fleet.get("seed"), _child_path(path, "seed")),
+    }
+
+
+def _read_fleet_distribution(
+    fleet: Mapping[str, Any], fleet_size_and_seed: Mapping[str, _BlockRead]
+) -> _BlockRead:
+    """The fleet form's fleet size, seed, distributions and dispatch strategy: the scenario's fleet_distribution block *fleet*, whose n_homes and seed read as *fleet_size_and_seed*.
+
+    Raises:
+        ValueError: From the readers of its distributions and dispatch strategy.
     """
     path = "fleet_distribution"
     return _read_blocks(
         fleet,
         path,
         {
-            "n_homes": ({"n_homes": n_homes}, ()),
-            "seed": _read_seed(fleet.get("seed"), _child_path(path, "seed")),
+            **fleet_size_and_seed,
             "pv": _read_component(fleet, path, "pv", "capacity_kw"),
             "battery": _read_battery(fleet.get("battery"), _child_path(path, "battery")),
             "load": _read_component(fleet, path, "load", "annual_consumption_kwh"),
