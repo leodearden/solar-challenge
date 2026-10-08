@@ -288,11 +288,12 @@ def _parse_component_distribution(
     """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
 
     Its distribution is what *data* holds at *primary_field*: a distribution (see
-    :func:`_is_distribution`), or a fixed value, which is any other value but null or a
-    mapping; else *data* whole, a mapping without a type, which config.py's grammar refuses
-    as a missing distribution.  A distribution is read by :func:`_build_distribution_dict`,
-    a fixed value by :func:`~solar_challenge.web.number_fields.as_finite_float`, and the
-    block's other settings, but for ``enabled``, by :func:`_other_setting`.
+    :func:`_is_distribution`), read by :func:`_build_distribution_dict`, or a fixed value,
+    which is any other value but null or a mapping, read by
+    :func:`~solar_challenge.web.number_fields.as_finite_float`.  A mapping without a type
+    passes as given, and an absent or null field as an empty mapping, for config.py's
+    grammar to refuse.  The block's other settings, but for ``enabled``, are read by
+    :func:`_other_setting`.
 
     Args:
         data: Component form data dict.
@@ -316,7 +317,7 @@ def _parse_component_distribution(
     elif spec is not None and not isinstance(spec, dict):
         result[primary_field] = as_finite_float(spec, f"{block}.{primary_field}")
     else:
-        result[primary_field] = data
+        result[primary_field] = {} if spec is None else spec
 
     for key, value in data.items():
         if key not in (primary_field, "enabled"):

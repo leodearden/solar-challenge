@@ -547,6 +547,24 @@ class TestFleetConfigHelpers:
         ) == form_to_fleet_distribution_config(without_block)
 
     @pytest.mark.parametrize(
+        ("block", "primary_field"),
+        [
+            pytest.param("pv", "capacity_kw", id="pv"),
+            pytest.param("battery", "capacity_kwh", id="battery"),
+            pytest.param("load", "annual_consumption_kwh", id="load"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_reads_a_null_distribution_as_absent(
+        self, block: str, primary_field: str
+    ) -> None:
+        """A pv/battery/load block's null distribution converts exactly as if it were left out."""
+        form = valid_distribution_form()
+        without_distribution = {k: v for k, v in form[block].items() if k != primary_field}
+        assert form_to_fleet_distribution_config(
+            {**form, block: {**form[block], primary_field: None}}
+        ) == form_to_fleet_distribution_config({**form, block: without_distribution})
+
+    @pytest.mark.parametrize(
         ("block", "primary_field", "value"),
         [
             pytest.param(
@@ -1033,12 +1051,15 @@ class TestFleetConfigHelpers:
                 "battery", "grid_charging", {"target_soc_fraction": 0.5}, id="battery-grid-charging"
             ),
             pytest.param("pv", "tilt", {"mean": 20.0}, id="pv-tilt-mapping-without-a-type"),
+            pytest.param(
+                "pv", "capacity_kw", {"mean": 4.0}, id="pv-capacity-mapping-without-a-type"
+            ),
         ],
     )
     def test_form_to_fleet_distribution_config_passes_a_block_setting_mapping_without_a_type_on_as_given(
         self, block: str, key: str, value: dict
     ) -> None:
-        """A block setting sent as a mapping without a type passes on to config.py's grammar as given, for the grammar to read or refuse."""
+        """A block setting, the block's distribution included, sent as a mapping without a type passes on to config.py's grammar as given, for the grammar to read or refuse."""
         form = valid_distribution_form()
         config = form_to_fleet_distribution_config({**form, block: {**form[block], key: value}})
         assert config[block].get(key) == value
