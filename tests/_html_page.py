@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to a rendered HTML page: the document type it declares, its
 elements with the attributes and ids they carry, the texts it shows and its headings, in
-document order.
+document order, and how many times each of some given texts occurs among them.
 
 A text is one run of character data between two tags, outside script and style elements,
 with character references decoded and whitespace collapsed. Blank runs are dropped, and an
@@ -11,7 +11,7 @@ repeats an attribute carries only its first value, as HTML reads it.
 
 Usage::
 
-    from tests._html_page import doctype, element_attributes, element_count, element_ids, headings, texts, texts_after
+    from tests._html_page import counts_of, doctype, element_attributes, element_count, element_ids, headings, texts, texts_after
 
     page = response.get_data(as_text=True)
     assert doctype(page) == "html"
@@ -21,6 +21,8 @@ Usage::
     assert headings(page).count("PV Capacity") == 1
     assert texts(page).count("YAML Preview") == 1
     assert texts_after(page, "Total Demand", 2) == ["12.0", "kWh"]
+    subjects = ("PV Capacity", "Battery Capacity")
+    assert counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
 """
 
 from collections import Counter
@@ -134,6 +136,18 @@ def texts_after(page: str, label: str, count: int) -> list[str]:
         )
     start = positions[0] + 1
     return page_texts[start : start + count]
+
+
+def counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
+    """How many times each of *keys* occurs in *items*, such as texts(page) or headings(page); a key no item equals counts 0.
+
+    An item counts only when it equals the key, as texts_after matches its label. Raises
+    ValueError, rather than return counts that equal an empty expectation whatever the
+    items, when *keys* is empty.
+    """
+    if not keys:
+        raise ValueError("Expected at least one key to count; got none")
+    return {key: items.count(key) for key in keys}
 
 
 def _refuse_names_not_in_lower_case(*names: str) -> None:

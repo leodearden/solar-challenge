@@ -37,6 +37,7 @@ from tests._fleet_form import (
     valid_distribution_form,
 )
 from tests._html_page import (
+    counts_of,
     doctype,
     element_count,
     element_ids,
@@ -73,11 +74,6 @@ def mock_job_manager(app: Flask) -> MagicMock:
     jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
     app.extensions["job_manager"] = jm
     return jm
-
-
-def _counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
-    """How many times each of *keys* occurs in *items*; a key that does not occur counts 0."""
-    return {key: items.count(key) for key in keys}
 
 
 def _run_storage(app: Flask) -> RunStorage:
@@ -186,21 +182,21 @@ class TestDashboardRoute:
         response = client.get("/")
         page = response.get_data(as_text=True)
         labels = ("Simulate", "Scenarios", "History")
-        assert _counts_of(texts(page), labels) == dict.fromkeys(labels, 2)
+        assert counts_of(texts(page), labels) == dict.fromkeys(labels, 2)
 
     def test_dashboard_contains_quick_start_cards(self, client: FlaskClient) -> None:
         """GET / renders one heading per quick-start card: Run Single Home, Run Fleet Simulation and Build Scenario."""
         response = client.get("/")
         page = response.get_data(as_text=True)
         titles = ("Run Single Home", "Run Fleet Simulation", "Build Scenario")
-        assert _counts_of(headings(page), titles) == dict.fromkeys(titles, 1)
+        assert counts_of(headings(page), titles) == dict.fromkeys(titles, 1)
 
     def test_dashboard_contains_stats_section(self, client: FlaskClient) -> None:
         """GET / renders one label per aggregate stat: Total Runs, Homes Simulated and Energy Modelled."""
         response = client.get("/")
         page = response.get_data(as_text=True)
         labels = ("Total Runs", "Homes Simulated", "Energy Modelled")
-        assert _counts_of(texts(page), labels) == dict.fromkeys(labels, 1)
+        assert counts_of(texts(page), labels) == dict.fromkeys(labels, 1)
 
     def test_dashboard_contains_recent_runs_section(self, client: FlaskClient) -> None:
         """GET / with no saved runs renders the Recent Runs heading and its empty-state message."""
@@ -220,7 +216,7 @@ class TestDashboardRoute:
         page = response.get_data(as_text=True)
         page_texts = texts(page)
         assert "recent-runs-table" in element_ids(page)
-        assert _counts_of(page_texts, run_names) == dict.fromkeys(run_names, 1)
+        assert counts_of(page_texts, run_names) == dict.fromkeys(run_names, 1)
         assert "No simulation runs yet." not in page_texts
 
     def test_dashboard_recent_runs_table_rows_show_each_run_newest_first(
@@ -614,7 +610,7 @@ class TestFleetConfigRoute:
         response = client.get("/simulate/fleet")
         page = response.get_data(as_text=True)
         subjects = ("PV Capacity", "Battery Capacity", "Annual Consumption")
-        assert _counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
+        assert counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
 
     def test_fleet_page_contains_action_buttons(self, client: FlaskClient) -> None:
         """GET /simulate/fleet renders the Import YAML and Export YAML controls and one button that runs the fleet simulation."""
