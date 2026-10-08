@@ -530,6 +530,38 @@ class TestBatterySOCEffAssignment:
         assert battery.min_soc_kwh == pytest.approx(2.0)
 
 
+class TestBatteryPastAnAssignedSocLimit:
+    """A battery whose SOC an assigned limit has moved past moves no energy further past it, and still moves energy back toward its limits."""
+
+    def test_below_an_assigned_floor_discharge_moves_no_energy(self) -> None:
+        battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=1.0)
+        battery.min_soc_fraction = 0.4
+        assert battery.discharge(power_kw=2.0, duration_minutes=60) == 0.0
+        assert battery.soc_kwh == 1.0
+        assert battery.available_discharge_capacity_kwh == 0.0
+
+    def test_above_an_assigned_ceiling_charge_moves_no_energy(self) -> None:
+        battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=4.0)
+        battery.max_soc_fraction = 0.5
+        assert battery.charge(power_kw=2.5, duration_minutes=60) == 0.0
+        assert battery.soc_kwh == 4.0
+        assert battery.available_charge_capacity_kwh == 0.0
+
+    def test_below_an_assigned_floor_charge_still_stores_energy(self) -> None:
+        battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=1.0)
+        battery.min_soc_fraction = 0.4
+        assert battery.available_charge_capacity_kwh == pytest.approx(3.5)
+        assert battery.charge(power_kw=1.0, duration_minutes=60) == pytest.approx(0.975)
+        assert battery.soc_kwh == pytest.approx(1.975)
+
+    def test_above_an_assigned_ceiling_discharge_still_outputs_energy(self) -> None:
+        battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=4.0)
+        battery.max_soc_fraction = 0.5
+        assert battery.available_discharge_capacity_kwh == pytest.approx(3.5)
+        assert battery.discharge(power_kw=1.0, duration_minutes=60) == pytest.approx(1.0)
+        assert battery.soc_kwh == pytest.approx(4.0 - 1.0 / 0.975)
+
+
 @pytest.fixture
 def default_config():
     """Create a default 5 kWh battery config."""
