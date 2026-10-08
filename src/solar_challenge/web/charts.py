@@ -392,10 +392,11 @@ def monthly_summary(results: SimulationResults) -> str | None:
     monthly = aggregate_monthly(results)
     months = [d.strftime("%Y-%m") for d in monthly.index]
 
-    stacked = (_EnergyFlow.SELF_CONSUMPTION, _EnergyFlow.GRID_IMPORT, _EnergyFlow.GRID_EXPORT)
+    stacked = frozenset({_EnergyFlow.SELF_CONSUMPTION, _EnergyFlow.GRID_IMPORT, _EnergyFlow.GRID_EXPORT})
     traces: list[Any] = [
         go.Bar(name=flow.label, x=months, y=monthly[column].round(2).tolist(), marker_color=flow.colour)
-        for flow, column in _in_flow_order({flow: _AGGREGATE_KWH_COLUMNS[flow] for flow in stacked})
+        for flow, column in _in_flow_order(_AGGREGATE_KWH_COLUMNS)
+        if flow in stacked
     ]
 
     fig = go.Figure(data=traces)
@@ -934,7 +935,7 @@ def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -
         subplot_titles=[f"{generation.label} (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"],
     )
 
-    gen_values = [summary.total_generation_kwh for summary in home_summaries]
+    gen_values = [_SUMMARY_KWH[generation](summary) for summary in home_summaries]
     sc_values = [summary.self_consumption_ratio for summary in home_summaries]
     gd_values = [summary.grid_dependency_ratio for summary in home_summaries]
 
