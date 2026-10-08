@@ -237,6 +237,8 @@ class Battery:
     An assignment is checked against the bounds construction checks for these four
     values: one that breaks them raises ValueError and leaves the battery unchanged.
     A new SOC limit is not checked against the current SOC and may move past it.
+    While the SOC is below min_soc_kwh, discharge() moves no energy and returns
+    0.0; while it is above max_soc_kwh, charge() does the same.
 
     Attributes:
         config: BatteryConfig defining capacity and power limits
@@ -388,13 +390,13 @@ class Battery:
 
     @property
     def available_charge_capacity_kwh(self) -> float:
-        """Energy that can still be stored in kWh."""
-        return self.max_soc_kwh - self._soc_kwh
+        """Energy that can still be stored in kWh: 0.0 while the SOC is at or above max_soc_kwh."""
+        return max(0.0, self.max_soc_kwh - self._soc_kwh)
 
     @property
     def available_discharge_capacity_kwh(self) -> float:
-        """Energy that can still be discharged in kWh."""
-        return self._soc_kwh - self.min_soc_kwh
+        """Energy that can still be discharged in kWh: 0.0 while the SOC is at or below min_soc_kwh."""
+        return max(0.0, self._soc_kwh - self.min_soc_kwh)
 
     def charge(self, power_kw: float, duration_minutes: float) -> float:
         """Charge the battery.
