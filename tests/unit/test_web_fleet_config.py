@@ -547,6 +547,53 @@ class TestFleetConfigHelpers:
         ) == form_to_fleet_distribution_config(without_block)
 
     @pytest.mark.parametrize(
+        ("block", "primary_field", "value"),
+        [
+            pytest.param(
+                "pv",
+                "capacity_kw",
+                {"type": "normal", "mean": 4.0, "std": 1.0},
+                id="pv-normal-without-its-capacity",
+            ),
+            pytest.param(
+                "pv",
+                "capacity_kw",
+                {"type": "weighted_discrete", "values": [{"value": 4.0, "weight": 1}]},
+                id="pv-weighted-discrete-without-its-capacity",
+            ),
+            pytest.param("pv", "capacity_kw", {"type": "uniform"}, id="pv-type-alone"),
+            pytest.param(
+                "pv",
+                "capacity_kw",
+                {"capacity_kw": 4.0, "type": "normal"},
+                id="pv-type-beside-its-capacity",
+            ),
+            pytest.param(
+                "battery",
+                "capacity_kwh",
+                {"enabled": True, "type": "uniform", "min": 3.0, "max": 10.0},
+                id="enabled-battery-uniform-without-its-capacity",
+            ),
+            pytest.param(
+                "load",
+                "annual_consumption_kwh",
+                {"type": "shuffled_pool", "entries": [{"value": 3500.0, "count": 2}]},
+                id="load-shuffled-pool-without-its-consumption",
+            ),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_component_block_that_is_itself_a_distribution_naming_where_its_distribution_goes(
+        self, block: str, primary_field: str, value: dict
+    ) -> None:
+        """A pv/battery/load block with a type, itself a distribution, is refused whatever else it holds, naming its type and the field its distribution goes in."""
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config({**valid_distribution_form(), block: value})
+        assert str(exc_info.value) == (
+            f"{block}.type must be absent: the {block} block's distribution goes in "
+            f"{block}.{primary_field}, got {value['type']!r}"
+        )
+
+    @pytest.mark.parametrize(
         ("spec", "converted"),
         [
             pytest.param(
@@ -743,11 +790,6 @@ class TestFleetConfigHelpers:
                 id="pv-shuffled-pool-total-one-above-the-fleet-limit",
             ),
             pytest.param(
-                {"pv": {"type": "weighted_discrete", "values": ["x"]}},
-                "pv.values[0] must be a mapping, got str",
-                id="pv-block-that-is-the-distribution-str-row",
-            ),
-            pytest.param(
                 {
                     "pv": {
                         "capacity_kw": 4.0,
@@ -762,7 +804,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_names_a_row_or_count_refusal_by_its_distribution(
         self, patch: dict, message: str
     ) -> None:
-        """A malformed row list, row or count is refused naming its distribution's field, which is the block itself when the block is the distribution."""
+        """A malformed row list, row or count is refused naming its distribution's field."""
         with pytest.raises(ValueError) as exc_info:
             form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
         assert str(exc_info.value) == message
@@ -858,11 +900,6 @@ class TestFleetConfigHelpers:
                 },
                 "pv.capacity_kw.entries[0].value",
                 id="pv-shuffled-pool-value",
-            ),
-            pytest.param(
-                lambda v: {"pv": {"type": "normal", "mean": v, "std": 1.0}},
-                "pv.mean",
-                id="pv-block-that-is-the-distribution-mean",
             ),
             pytest.param(
                 lambda v: {

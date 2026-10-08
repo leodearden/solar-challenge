@@ -568,6 +568,30 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
+        "pv",
+        [
+            pytest.param({"type": "normal", "mean": 4.0, "std": 1.0}, id="normal"),
+            pytest.param(
+                {"type": "weighted_discrete", "values": [{"value": 4.0, "weight": 1}]},
+                id="weighted-discrete",
+            ),
+        ],
+    )
+    def test_pv_block_that_is_itself_a_distribution_returns_400_naming_pv_type_and_pv_capacity_kw(
+        self, client: FlaskClient, mock_job_manager: MagicMock, pv: dict
+    ) -> None:
+        """A pv block sent as its distribution, instead of holding it in pv.capacity_kw, is a 400 naming pv.type and pv.capacity_kw; no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution", json={**self._VALID_BODY, "pv": pv}
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": "pv.type must be absent: the pv block's distribution goes in pv.capacity_kw, "
+            f"got {pv['type']!r}"
+        }
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
         ("block", "message"),
         [
             pytest.param(
