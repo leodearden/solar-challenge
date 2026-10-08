@@ -72,3 +72,18 @@ def test_lint_flags_an_unused_import_in_a_package_module(project_root: Path) -> 
         "the lint must report the unused import in a package module, and nothing else; it reported:\n"
         + "\n".join(map(str, findings))
     )
+
+
+def test_the_package_passes_the_lint(project_root: Path) -> None:
+    """The package has no finding under the project's lint, so the verify fails a commit that adds one."""
+    assert (project_root / _PACKAGE).is_dir(), (
+        f"the lint checks {_PACKAGE}, which is not a directory, and ruff passes a missing path; "
+        "point _PACKAGE at the package"
+    )
+
+    findings = _lint(project_root, _PACKAGE)
+
+    assert not findings, (
+        f"the package has lint findings; clear them (`uv run --locked --extra dev ruff check --fix {_PACKAGE}` "
+        "applies the safe fixes):\n" + "\n".join(map(str, findings))
+    )
