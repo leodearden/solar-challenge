@@ -28,7 +28,7 @@ from solar_challenge.web.jobs import (
     recover_stale_jobs,
     shutdown_all_managers,
 )
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.storage import RunRecord, RunStorage
 
 from tests._synthetic_weather import synthetic_june_weather
 from tests._web_app import build_test_app
@@ -572,6 +572,15 @@ def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
     return dict(row)
 
 
+def _run_of_job(manager: JobManager, job_id: str, tmp_path: Path) -> RunRecord:
+    """Return the record RunStorage reads from tmp_path's database for the run of job *job_id*, which *manager* tracks."""
+    status = manager.get_job_status(job_id)
+    assert status is not None, f"the manager does not track job {job_id}"
+    run = _run_storage(tmp_path).run_record(status["run_id"])
+    assert run is not None, f"no run has job {job_id}'s run id {status['run_id']}"
+    return run
+
+
 def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + 30
     while True:
@@ -821,6 +830,25 @@ class TestJobManagerQueuedJobs:
         stored = _job_state(_run_storage(tmp_path), queued_job_id)
         assert stored["status"] == "queued"
         assert {column: in_memory[column] for column in stored} == stored
+
+
+class TestJobManagerRuns:
+    """Tests for the row a JobManager writes for each job's run, as RunStorage reads it."""
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_jobs_run_is_running_while_its_simulation_runs(
+        self,
+        submit_job: Callable[[JobManager, Path], str],
+        blocking_simulation: _BlockingSimulation,
+        tmp_path: Path,
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_id = submit_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+
+        run = _run_of_job(manager, job_id, tmp_path)
+
+        assert (run.status, run.error_message, run.completed_at) == ("running", None, None)
 
 
 class TestJobManagerRefusedRows:
