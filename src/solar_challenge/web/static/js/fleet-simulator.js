@@ -3,26 +3,6 @@ document.addEventListener('alpine:init', () => {
     const DEFAULT_PERIOD_DAYS = 30;
     const DEFAULT_SEED = 42;
 
-    // The scope of one distribution_editor call (templates/simulate/partials/distribution-editor.html). dist calls getDist on
-    // every read because applyConfig replaces the form's distributions (pinned by test_fleet_import_yaml_shows_each_distribution_in_its_card).
-    Alpine.data('distributionEditor', (getDist, newRowValue) => ({
-        get dist() { return getDist(); },
-        addRow() {
-            if (this.dist.type === 'weighted_discrete') {
-                this.dist.values.push({ value: newRowValue, weight: 10 });
-            } else if (this.dist.type === 'shuffled_pool') {
-                this.dist.entries.push({ value: newRowValue, count: 10 });
-            }
-        },
-        removeRow(idx) {
-            if (this.dist.type === 'weighted_discrete' && this.dist.values.length > 1) {
-                this.dist.values.splice(idx, 1);
-            } else if (this.dist.type === 'shuffled_pool' && this.dist.entries.length > 1) {
-                this.dist.entries.splice(idx, 1);
-            }
-        },
-    }));
-
     Alpine.data('fleetSimulator', () => ({
         n_homes: 100,
         seed: DEFAULT_SEED,

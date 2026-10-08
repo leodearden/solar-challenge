@@ -4,9 +4,10 @@ document.addEventListener('alpine:init', () => {
         return value === undefined || value === null ? '' : value;
     }
 
-    // The fleet components the form distributes: the prefix of their form fields, the field holding a fixed value,
-    // and their spec's key in the scenario grammar, at fleet_distribution.<prefix>.<grammarKey>.
-    // templates/scenarios/builder.html calls distribution_card once for each, with its prefix and fixedField.
+    // The fleet components the form distributes: the prefix of their form fields, which also keys their distribution in
+    // dists, the field the form sends a fixed value in, and their spec's key in the scenario grammar, at
+    // fleet_distribution.<prefix>.<grammarKey>. templates/scenarios/builder.html calls distribution_card once for each,
+    // with its prefix.
     const COMPONENTS = [
         { prefix: 'pv', fixedField: 'pv_capacity_kw', grammarKey: 'capacity_kw' },
         { prefix: 'battery', fixedField: 'battery_capacity_kwh', grammarKey: 'capacity_kwh' },
@@ -18,9 +19,10 @@ document.addEventListener('alpine:init', () => {
         return value !== null && typeof value === 'object' && !Array.isArray(value);
     }
 
-    // The form fields whose preview is `scenario`, a document in the preview's grammar.
+    // The form fields whose preview is `scenario`, a document in the preview's grammar. Each component's distribution is
+    // the form's one in `dists` with what its spec sets laid over it.
     // Throws, saying why, for a document the form cannot hold.
-    function scenarioFormFields(scenario) {
+    function scenarioFormFields(scenario, dists) {
         if (!isMapping(scenario)) {
             throw new Error('it does not hold a YAML mapping');
         }
@@ -38,10 +40,10 @@ document.addEventListener('alpine:init', () => {
             n_homes: inputValue(fleet.n_homes),
             import_rate: tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '',
             seg_rate_pence_per_kwh: inputValue((scenario.seg || {}).rate_pence_per_kwh),
+            dists: Object.fromEntries(COMPONENTS.map((component) => [
+                component.prefix, { ...dists[component.prefix], ...componentDistribution(fleet, component) },
+            ])),
         };
-        for (const component of COMPONENTS) {
-            Object.assign(fields, componentFields(fleet, component));
-        }
         if (scenario.location) {
             fields.location_preset = 'custom';
             fields.latitude = inputValue(scenario.location.latitude);
@@ -51,30 +53,31 @@ document.addEventListener('alpine:init', () => {
         return fields;
     }
 
-    // One component's form fields, read from its spec in `fleet`: a fixed number, or a distribution.
+    // The fields of one component's distribution that its spec in `fleet` sets: a fixed number, or a distribution.
     // Throws, naming the spec, for one the form cannot hold.
-    function componentFields(fleet, { prefix, fixedField, grammarKey }) {
+    function componentDistribution(fleet, { prefix, grammarKey }) {
         const spec = (fleet[prefix] || {})[grammarKey];
         const path = 'fleet_distribution.' + prefix + '.' + grammarKey;
         if (spec === undefined || spec === null || typeof spec === 'number') {
-            return { [prefix + '_distribution_type']: '', [fixedField]: inputValue(spec) };
+            return { type: '', fixed: inputValue(spec) };
         }
         if (!isMapping(spec)) {
             throw new Error(path + ' must be a number or a distribution, got ' + JSON.stringify(spec));
         }
-        const fields = { [prefix + '_distribution_type']: spec.type };
         if (spec.type === 'weighted_discrete') {
-            fields[prefix + '_wd_values'] = distributionRows(spec, 'weights', 'weight', path);
-        } else if (spec.type === 'shuffled_pool') {
-            fields[prefix + '_sp_entries'] = distributionRows(spec, 'counts', 'count', path);
-        } else if (spec.type === 'normal' || spec.type === 'uniform') {
-            for (const parameter of ['mean', 'std', 'min', 'max']) {
-                fields[prefix + '_' + parameter] = inputValue(spec[parameter]);
-            }
-        } else {
-            throw new Error(path + ' has distribution type ' + JSON.stringify(spec.type) + ', which the builder does not offer');
+            return { type: spec.type, values: distributionRows(spec, 'weights', 'weight', path) };
         }
-        return fields;
+        if (spec.type === 'shuffled_pool') {
+            return { type: spec.type, entries: distributionRows(spec, 'counts', 'count', path) };
+        }
+        if (spec.type === 'normal' || spec.type === 'uniform') {
+            const distribution = { type: spec.type };
+            for (const parameter of ['mean', 'std', 'min', 'max']) {
+                distribution[parameter] = inputValue(spec[parameter]);
+            }
+            return distribution;
+        }
+        throw new Error(path + ' has distribution type ' + JSON.stringify(spec.type) + ', which the builder does not offer');
     }
 
     // The form's rows of a distribution: each of its values, with the same entry of its `listKey` list as `rowKey`.
@@ -88,26 +91,23 @@ document.addEventListener('alpine:init', () => {
         return values.map((value, i) => ({ value, [rowKey]: column[i] }));
     }
 
-    // The fields of the form the builder sends that give one component: its fixed value, or its distribution's type and
-    // the fields that type reads (all four parameters for normal and uniform alike)
-    function componentFormData(form, { prefix, fixedField }) {
-        const typeField = prefix + '_distribution_type';
-        const type = form[typeField];
-        if (!type) {
-            return { [fixedField]: form[fixedField] };
+    // The fields of the form the builder sends that give one component's distribution `dist`: its fixed value, or its
+    // type and the fields that type reads (all four parameters for normal and uniform alike)
+    function componentFormData(dist, { prefix, fixedField }) {
+        if (!dist.type) {
+            return { [fixedField]: dist.fixed };
         }
-        const data = { [typeField]: type };
-        for (const suffix of distributionFieldSuffixes(type)) {
-            data[prefix + '_' + suffix] = form[prefix + '_' + suffix];
+        const data = { [prefix + '_distribution_type']: dist.type };
+        if (dist.type === 'weighted_discrete') {
+            data[prefix + '_wd_values'] = dist.values;
+        } else if (dist.type === 'shuffled_pool') {
+            data[prefix + '_sp_entries'] = dist.entries;
+        } else {
+            for (const parameter of ['mean', 'std', 'min', 'max']) {
+                data[prefix + '_' + parameter] = dist[parameter];
+            }
         }
         return data;
-    }
-
-    // The form fields, after a component's prefix, that hold a distribution of `type`
-    function distributionFieldSuffixes(type) {
-        if (type === 'weighted_discrete') return ['wd_values'];
-        if (type === 'shuffled_pool') return ['sp_entries'];
-        return ['mean', 'std', 'min', 'max'];
     }
 
     Alpine.data('scenarioBuilder', () => ({
@@ -121,34 +121,27 @@ document.addEventListener('alpine:init', () => {
         longitude: -2.58,
         altitude: 11.0,
         n_homes: 100,
-        pv_capacity_kw: 4.0,
-        pv_distribution_type: '',
-        pv_mean: 4.0,
-        pv_std: 1.0,
-        pv_min: 2.0,
-        pv_max: 8.0,
-        battery_capacity_kwh: 5.0,
-        battery_distribution_type: '',
-        battery_mean: 5.0,
-        battery_std: 2.0,
-        battery_min: 0,
-        battery_max: 13.5,
-        annual_consumption_kwh: 3500,
-        load_distribution_type: '',
-        load_mean: 3400,
-        load_std: 800,
-        load_min: 2000,
-        load_max: 5000,
         import_rate: 0.245,
         seg_rate_pence_per_kwh: 15.0,
 
-        // Weighted discrete / shuffled pool arrays
-        pv_wd_values: [{ value: 3.0, weight: 20 }, { value: 4.0, weight: 40 }, { value: 5.0, weight: 30 }],
-        pv_sp_entries: [{ value: 3.0, count: 20 }, { value: 4.0, count: 40 }, { value: 5.0, count: 30 }, { value: 6.0, count: 10 }],
-        battery_wd_values: [{ value: 0, weight: 40 }, { value: 5.0, weight: 40 }, { value: 10.0, weight: 20 }],
-        battery_sp_entries: [{ value: 0, count: 40 }, { value: 5.0, count: 40 }, { value: 10.0, count: 20 }],
-        load_wd_values: [{ value: 2900, weight: 30 }, { value: 3500, weight: 40 }, { value: 4500, weight: 30 }],
-        load_sp_entries: [{ value: 2900, count: 30 }, { value: 3500, count: 40 }, { value: 4500, count: 30 }],
+        // Each component's distribution, by its prefix in COMPONENTS: a fixed value while type is ''
+        dists: {
+            pv: {
+                type: '', fixed: 4.0, mean: 4.0, std: 1.0, min: 2.0, max: 8.0,
+                values: [{ value: 3.0, weight: 20 }, { value: 4.0, weight: 40 }, { value: 5.0, weight: 30 }],
+                entries: [{ value: 3.0, count: 20 }, { value: 4.0, count: 40 }, { value: 5.0, count: 30 }, { value: 6.0, count: 10 }],
+            },
+            battery: {
+                type: '', fixed: 5.0, mean: 5.0, std: 2.0, min: 0, max: 13.5,
+                values: [{ value: 0, weight: 40 }, { value: 5.0, weight: 40 }, { value: 10.0, weight: 20 }],
+                entries: [{ value: 0, count: 40 }, { value: 5.0, count: 40 }, { value: 10.0, count: 20 }],
+            },
+            load: {
+                type: '', fixed: 3500, mean: 3400, std: 800, min: 2000, max: 5000,
+                values: [{ value: 2900, weight: 30 }, { value: 3500, weight: 40 }, { value: 4500, weight: 30 }],
+                entries: [{ value: 2900, count: 30 }, { value: 3500, count: 40 }, { value: 4500, count: 30 }],
+            },
+        },
 
         // UI state
         yamlPreview: '# Configure your scenario...',
@@ -178,25 +171,6 @@ document.addEventListener('alpine:init', () => {
                 this.start_date = '2024-06-01';
                 this.end_date = '2024-06-30';
             }
-            this.updatePreview();
-        },
-
-        // Appends `row` to `rows`, one of the form's lists of distribution rows
-        addRow(rows, row) {
-            rows.push(row);
-            this.updatePreview();
-        },
-
-        // Whether `rows` has a row to spare: a distribution keeps at least one
-        canRemoveRow(rows) {
-            return rows.length > 1;
-        },
-
-        // Removes row `idx` of `rows`, unless it is the last
-        removeRow(rows, idx) {
-            if (!this.canRemoveRow(rows)) return;
-            rows.splice(idx, 1);
-            this.updatePreview();
         },
 
         // Debounced YAML preview update
@@ -284,14 +258,13 @@ document.addEventListener('alpine:init', () => {
             event.target.value = '';
             let fields;
             try {
-                fields = scenarioFormFields(jsyaml.load(text));
+                fields = scenarioFormFields(jsyaml.load(text), this.dists);
             } catch (e) {
                 this.yamlPreview = '# ' + file.name + ' was not loaded: ' + e.message;
                 return;
             }
             Object.assign(this, fields);
             this.yamlPreview = text;
-            this.updatePreview();
         },
 
         // Load presets list
@@ -324,7 +297,6 @@ document.addEventListener('alpine:init', () => {
                     }
                 }
                 this.presetDropdownOpen = false;
-                this.updatePreview();
             } catch (e) { /* ignore */ }
         },
 
@@ -345,7 +317,7 @@ document.addEventListener('alpine:init', () => {
                 data.altitude = this.altitude;
             }
             for (const component of COMPONENTS) {
-                Object.assign(data, componentFormData(this, component));
+                Object.assign(data, componentFormData(this.dists[component.prefix], component));
             }
             return data;
         },
@@ -353,6 +325,9 @@ document.addEventListener('alpine:init', () => {
         init() {
             this.loadPresets();
             this.fetchPreview();
+            // The one trigger of the preview: any change to the form getFormData sends, whether a control, a button or
+            // an upload made it. $watch reads every field the form sends, rows included, and only those.
+            this.$watch(() => this.getFormData(), () => this.updatePreview());
         }
     }));
 });

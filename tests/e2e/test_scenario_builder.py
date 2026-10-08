@@ -1,6 +1,7 @@
 """End-to-end tests for the Scenario Builder page (/scenarios/builder)."""
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -250,14 +251,14 @@ class _Card(NamedTuple):
     heading: str
     prefix: str
     fixed_field: str
-    non_default_fixed_value: str
+    non_default_fixed_value: float
     new_row_value: float
 
 
 _CARDS = (
-    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw", "6.5", 4.0),
-    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh", "9.5", 5.0),
-    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh", "4200", 3500),
+    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw", 6.5, 4.0),
+    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh", 9.5, 5.0),
+    _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh", 4200, 3500),
 )
 
 _CARD_PARAMS = tuple(pytest.param(card, id=card.prefix) for card in _CARDS)
@@ -272,8 +273,8 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
 ) -> None:
     """The group named by a distribution card's heading holds that heading, and one combobox, Distribution Type.
 
-    Choosing Normal Distribution there shows four spinbuttons, Mean, Std Dev, Min and Max,
-    which set that card's fields of the form the builder sends.
+    Choosing Normal (Gaussian) there shows four spinbuttons, Mean, Std Dev, Min (clamp) and Max (clamp),
+    which set that card's fields of the form the builder sends, as numbers.
     """
     page.goto(live_server + "/scenarios/builder")
     _open_section(page, "Fleet Distribution")
@@ -282,9 +283,9 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
     expect(card_group.get_by_role("combobox")).to_have_count(1)
     expect(card_group.get_by_role("heading", name=card, exact=True)).to_be_visible()
     card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(
-        label="Normal Distribution"
+        label="Normal (Gaussian)"
     )
-    for caption, value in {"Mean": "7", "Std Dev": "3", "Min": "1", "Max": "9"}.items():
+    for caption, value in {"Mean": "7", "Std Dev": "3", "Min (clamp)": "1", "Max (clamp)": "9"}.items():
         card_group.get_by_role("spinbutton", name=caption, exact=True).fill(value)
     expect(card_group.get_by_role("spinbutton")).to_have_count(4)
 
@@ -292,10 +293,10 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
 
     assert {field: value for field, value in sent.items() if field.startswith(prefix + "_")} == {
         f"{prefix}_distribution_type": "normal",
-        f"{prefix}_mean": "7",
-        f"{prefix}_std": "3",
-        f"{prefix}_min": "1",
-        f"{prefix}_max": "9",
+        f"{prefix}_mean": 7,
+        f"{prefix}_std": 3,
+        f"{prefix}_min": 1,
+        f"{prefix}_max": 9,
     }
 
 
@@ -311,9 +312,25 @@ def test_a_card_at_fixed_value_shows_one_spinbutton_named_fixed_value_that_sets_
 
     expect(fixed_value).to_have_count(1)
     expect(card_group.get_by_role("spinbutton")).to_have_count(1)
-    fixed_value.fill(card.non_default_fixed_value)
+    fixed_value.fill(str(card.non_default_fixed_value))
 
     assert _form_sent_on_validate(page)[card.fixed_field] == card.non_default_fixed_value
+
+
+def test_a_card_at_uniform_shows_two_spinbuttons_min_and_max_that_set_its_range(page: Page, live_server: str) -> None:
+    """Choosing Uniform in a card's Distribution Type shows two spinbuttons in its group, Min and Max, which set the card's min and max of the form the builder sends."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Fleet Distribution")
+    card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
+
+    card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(label="Uniform")
+    card_group.get_by_role("spinbutton", name="Min", exact=True).fill("2.5")
+    card_group.get_by_role("spinbutton", name="Max", exact=True).fill("7.5")
+    expect(card_group.get_by_role("spinbutton")).to_have_count(2)
+
+    sent = _form_sent_on_validate(page)
+
+    assert (sent["pv_distribution_type"], sent["pv_min"], sent["pv_max"]) == ("uniform", 2.5, 7.5)
 
 
 def _layout_box(control: Locator) -> FloatRect:
@@ -344,7 +361,7 @@ def test_choosing_weighted_discrete_on_a_phone_does_not_widen_the_distribution_t
     width_before = _layout_box(distribution_type)["width"]
 
     distribution_type.select_option(label="Weighted Discrete")
-    expect(card_group.get_by_role("button", name="+ Add value", exact=True)).to_be_visible()
+    expect(card_group.get_by_role("button", name="Add Row", exact=True)).to_be_visible()
 
     assert _layout_box(distribution_type)["width"] == pytest.approx(width_before, abs=0.5)
 
@@ -378,8 +395,8 @@ def test_a_card_at_fixed_value_sends_only_its_fixed_value(page: Page, live_serve
 @pytest.mark.parametrize(
     ("distribution_type", "type_value", "parameters"),
     [
-        pytest.param("Normal Distribution", "normal", ("mean", "std", "min", "max"), id="normal"),
-        pytest.param("Uniform Distribution", "uniform", ("mean", "std", "min", "max"), id="uniform"),
+        pytest.param("Normal (Gaussian)", "normal", ("mean", "std", "min", "max"), id="normal"),
+        pytest.param("Uniform", "uniform", ("mean", "std", "min", "max"), id="uniform"),
         pytest.param("Weighted Discrete", "weighted_discrete", ("wd_values",), id="weighted_discrete"),
         pytest.param("Shuffled Pool", "shuffled_pool", ("sp_entries",), id="shuffled_pool"),
     ],
@@ -404,20 +421,17 @@ def test_a_card_set_to_a_distribution_sends_its_type_and_the_fields_that_type_re
 
 
 class _RowList(NamedTuple):
-    """A distribution the cards hold as rows: its Distribution Type option, the form field after a card's prefix that holds its rows, the number paired with each row's value and that number's caption, and the card's button that adds a row."""
+    """A distribution the cards hold as rows: its Distribution Type option, the form field after a card's prefix that holds its rows, and the number paired with each row's value and that number's caption."""
 
     distribution_type: str
     rows_field: str
     column: str
     column_caption: str
-    add_button: str
 
 
 _ROW_LISTS = (
-    pytest.param(
-        _RowList("Weighted Discrete", "wd_values", "weight", "Weight", "+ Add value"), id="weighted_discrete"
-    ),
-    pytest.param(_RowList("Shuffled Pool", "sp_entries", "count", "Count", "+ Add entry"), id="shuffled_pool"),
+    pytest.param(_RowList("Weighted Discrete", "wd_values", "weight", "Weight"), id="weighted_discrete"),
+    pytest.param(_RowList("Shuffled Pool", "sp_entries", "count", "Count"), id="shuffled_pool"),
 )
 
 _REMOVE_ROW_BUTTONS = re.compile(r"^Remove Row \d+$")
@@ -441,7 +455,7 @@ def test_a_cards_add_and_remove_buttons_change_only_its_rows(
     rows = sent_before[rows_field]
     new_row = {"value": card.new_row_value, row_list.column: 10}
 
-    card_group.get_by_role("button", name=row_list.add_button, exact=True).click()
+    card_group.get_by_role("button", name="Add Row", exact=True).click()
     expect(card_group.get_by_role("spinbutton")).to_have_count(2 * (len(rows) + 1))
     assert _form_sent_on_validate(page) == {**sent_before, rows_field: [*rows, new_row]}
 
@@ -526,6 +540,25 @@ def test_a_cards_remove_row_n_button_removes_row_n_and_the_rows_after_it_are_ren
     assert _form_sent_on_validate(page) == {**sent_before, rows_field: [rows[0], *rows[2:]]}
 
 
+def test_a_cards_shuffled_pool_shows_the_total_of_its_counts(page: Page, live_server: str) -> None:
+    """With Shuffled Pool chosen in every card, each card shows the total of its counts, and changing one card's count changes that card's total alone."""
+    page.goto(live_server + "/scenarios/builder")
+    _choose_in_every_card(page, "Shuffled Pool")
+    sent = _form_sent_on_validate(page)
+    totals = {card.heading: sum(row["count"] for row in sent[f"{card.prefix}_sp_entries"]) for card in _CARDS}
+    card_groups = {card.heading: page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS}
+    for heading, card_group in card_groups.items():
+        expect(card_group.get_by_text("Total:")).to_have_text(f"Total: {totals[heading]} homes")
+
+    pv_heading = _CARDS[0].heading
+    first_count = card_groups[pv_heading].get_by_role("spinbutton", name="Count 1", exact=True)
+    first_count.fill(str(int(first_count.input_value()) + 7))
+
+    for heading, card_group in card_groups.items():
+        total = totals[heading] + (7 if heading == pv_heading else 0)
+        expect(card_group.get_by_text("Total:")).to_have_text(f"Total: {total} homes")
+
+
 def _phone_card_groups_with_rows(page: Page, live_server: str, row_list: _RowList) -> dict[str, Locator]:
     """Open the builder at phone width with *row_list*'s distribution chosen in every card, and return each card's group by its heading, once each shows its add button."""
     page.set_viewport_size(_PHONE_VIEWPORT)
@@ -533,7 +566,7 @@ def _phone_card_groups_with_rows(page: Page, live_server: str, row_list: _RowLis
     _choose_in_every_card(page, row_list.distribution_type)
     card_groups = {card.heading: page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS}
     for card_group in card_groups.values():
-        expect(card_group.get_by_role("button", name=row_list.add_button, exact=True)).to_be_visible()
+        expect(card_group.get_by_role("button", name="Add Row", exact=True)).to_be_visible()
     return card_groups
 
 
@@ -613,6 +646,130 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
 
     assert len(fleet.homes) == 100
     assert {home.pv_config.capacity_kw for home in fleet.homes} == {4.0}
+
+
+def _form_previewed_after(page: Page, action: Callable[[], None]) -> dict[str, Any]:
+    """Run *action* and return the form of the preview the builder requests after it."""
+    with page.expect_response("**/api/scenarios/preview-yaml") as previewed:
+        action()
+    return previewed.value.request.post_data_json
+
+
+def test_each_edit_to_a_cards_distribution_previews_the_form_with_that_edit(page: Page, live_server: str) -> None:
+    """Choosing a card's distribution type, typing in one of its rows, adding a row and removing one each make the builder preview the form with that edit."""
+    open_builder(page, live_server)
+    _open_section(page, "Fleet Distribution")
+    card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
+
+    chosen = _form_previewed_after(
+        page,
+        lambda: card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(
+            label="Weighted Discrete"
+        ),
+    )
+    rows = chosen["pv_wd_values"]
+    typed = _form_previewed_after(
+        page, lambda: card_group.get_by_role("spinbutton", name="Value 1", exact=True).fill("3.5")
+    )
+    added = _form_previewed_after(page, lambda: card_group.get_by_role("button", name="Add Row", exact=True).click())
+    removed = _form_previewed_after(
+        page, lambda: card_group.get_by_role("button", name="Remove Row 1", exact=True).click()
+    )
+
+    new_row = {"value": 4.0, "weight": 10}
+    assert chosen["pv_distribution_type"] == "weighted_discrete"
+    assert typed["pv_wd_values"] == [{**rows[0], "value": 3.5}, *rows[1:]]
+    assert added["pv_wd_values"] == [{**rows[0], "value": 3.5}, *rows[1:], new_row]
+    assert removed["pv_wd_values"] == [*rows[1:], new_row]
+
+
+@pytest.mark.parametrize(("section", "role", "caption", "field", "value"), _SECTION_CONTROLS)
+def test_each_edit_to_a_section_control_previews_the_form_with_that_edit(
+    page: Page, live_server: str, section: str, role: str, caption: str, field: str, value: str
+) -> None:
+    """Typing into the control with *role* named *caption* in *section* makes the builder preview the form with *field* set to the value typed."""
+    open_builder(page, live_server)
+    _open_section(page, section)
+
+    previewed = _form_previewed_after(page, lambda: page.get_by_role(role, name=caption, exact=True).fill(value))
+
+    assert previewed[field] == value
+
+
+def test_each_edit_to_the_general_textboxes_a_period_preset_and_the_location_previews_the_form_with_that_edit(
+    page: Page, live_server: str
+) -> None:
+    """Typing a name or a description, choosing the 1 Month period, choosing Custom Location and typing each of its coordinates make the builder preview the form with that edit."""
+    open_builder(page, live_server)
+
+    named = _form_previewed_after(
+        page, lambda: page.get_by_role("textbox", name="Scenario Name", exact=True).fill("Bristol Phase 1")
+    )
+    described = _form_previewed_after(
+        page, lambda: page.get_by_role("textbox", name="Description", exact=True).fill("First 100 homes")
+    )
+    _open_section(page, "Period")
+    month = _form_previewed_after(page, lambda: page.get_by_role("button", name="1 Month", exact=True).click())
+    _open_section(page, "Location")
+    custom = _form_previewed_after(
+        page,
+        lambda: page.get_by_role("combobox", name="Location Preset", exact=True).select_option(
+            label="Custom Location"
+        ),
+    )
+    north = _form_previewed_after(
+        page, lambda: page.get_by_role("spinbutton", name="Latitude", exact=True).fill("53.4")
+    )
+    west = _form_previewed_after(
+        page, lambda: page.get_by_role("spinbutton", name="Longitude", exact=True).fill("-2.2")
+    )
+    high = _form_previewed_after(
+        page, lambda: page.get_by_role("spinbutton", name="Altitude (m)", exact=True).fill("38")
+    )
+
+    assert (named["name"], described["description"]) == ("Bristol Phase 1", "First 100 homes")
+    assert (month["start_date"], month["end_date"]) == ("2024-06-01", "2024-06-30")
+    assert custom["location_preset"] == "custom"
+    assert (north["latitude"], west["longitude"], high["altitude"]) == ("53.4", "-2.2", "38")
+
+
+_DISTRIBUTIONS_YAML = yaml.safe_dump(
+    {
+        "name": "Uploaded distributions",
+        "period": {"start_date": "2024-06-01", "end_date": "2024-06-30"},
+        "fleet_distribution": {
+            "n_homes": 12,
+            "pv": {"capacity_kw": {"type": "weighted_discrete", "values": [2.5, 7.5], "weights": [1, 3]}},
+            "battery": {"capacity_kwh": {"type": "normal", "mean": 6.0, "std": 1.5, "min": 0, "max": 12.0}},
+            "load": {"annual_consumption_kwh": {"type": "shuffled_pool", "values": [2500, 4100], "counts": [5, 7]}},
+        },
+    }
+)
+"""A fleet scenario giving each component a distribution of a different type."""
+
+
+def test_uploading_a_scenario_shows_each_distribution_in_its_card(page: Page, live_server: str, tmp_path: Path) -> None:
+    """Upload YAML shows each component's distribution in its card: its type, and its rows or parameters."""
+    open_builder(page, live_server)
+    with page.expect_response("**/api/scenarios/preview-yaml"):
+        upload_scenario(page, tmp_path / "scenario.yaml", _DISTRIBUTIONS_YAML)
+    _open_section(page, "Fleet Distribution")
+    pv, battery, load = (page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS)
+
+    for card_group, role, name, value in (
+        (pv, "combobox", "Distribution Type", "weighted_discrete"),
+        (pv, "spinbutton", "Value 1", "2.5"),
+        (pv, "spinbutton", "Weight 1", "1"),
+        (pv, "spinbutton", "Value 2", "7.5"),
+        (pv, "spinbutton", "Weight 2", "3"),
+        (battery, "combobox", "Distribution Type", "normal"),
+        (battery, "spinbutton", "Mean", "6"),
+        (battery, "spinbutton", "Std Dev", "1.5"),
+        (load, "combobox", "Distribution Type", "shuffled_pool"),
+        (load, "spinbutton", "Value 2", "4100"),
+        (load, "spinbutton", "Count 2", "7"),
+    ):
+        expect(card_group.get_by_role(role, name=name, exact=True)).to_have_value(value)
 
 
 def _preview_after_uploading(
