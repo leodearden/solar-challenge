@@ -6,7 +6,6 @@ request from: heat pump, tariff, dispatch, PV age and SEG on /simulate/home, and
 SEG on /simulate/fleet.
 """
 
-import re
 from pathlib import Path
 
 import pytest
@@ -82,38 +81,19 @@ class TestSimulateHomePageRendering:
     """Tests for the /simulate/home page rendering quality."""
 
     def test_simulate_home_no_raw_js_in_body(self, client: FlaskClient) -> None:
-        """Test /simulate/home does not expose raw JavaScript in the page body.
+        """GET /simulate/home shows none of its JavaScript as text.
 
-        JavaScript should be contained within <script> tags, not visible
-        as text content in the rendered HTML body.
+        No text of the page holds an anonymous function, an arrow function or an addEventListener call.
         """
         response = client.get("/simulate/home")
         assert response.status_code == 200
-        html = response.data.decode("utf-8")
-
-        # The page uses Alpine.js. Check that raw JS function bodies are not
-        # leaked outside of <script> tags. We do this by checking that certain
-        # JS-only patterns don't appear outside <script> blocks.
-
-        # Remove all script blocks first, then check remaining HTML body
-        # Remove all script tag contents
-        body_without_scripts = re.sub(
-            r"<script[^>]*>.*?</script>",
-            "",
-            html,
-            flags=re.DOTALL,
-        )
-
-        # These are JS-specific patterns that should NOT appear in visible body text
-        assert "function()" not in body_without_scripts, (
-            "Raw 'function()' found outside <script> tags"
-        )
-        assert "async () =>" not in body_without_scripts, (
-            "Raw arrow function found outside <script> tags"
-        )
-        assert "addEventListener" not in body_without_scripts, (
-            "Raw 'addEventListener' found outside <script> tags"
-        )
+        js_markers = ("function()", "=>", "addEventListener")
+        texts_showing_js = [
+            text
+            for text in texts(response.get_data(as_text=True))
+            if any(marker in text for marker in js_markers)
+        ]
+        assert texts_showing_js == []
 
     def test_simulate_home_has_proper_html_structure(self, client: FlaskClient) -> None:
         """Test /simulate/home has proper HTML document structure."""
