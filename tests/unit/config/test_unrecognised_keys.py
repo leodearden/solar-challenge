@@ -823,6 +823,7 @@ class TestFleetDistributionBlockKeys:
     def test_every_home_of_every_sweep_point_carries_grid_charging_and_dispatch_strategy(self) -> None:
         """Every home of every sweep point, built by parse_sweep_fleet_configs as ``fleet sweep`` builds them, carries the block's dispatch_strategy and battery.grid_charging."""
         sweep = {"type": "sweep", "min": 1.0, "max": 2.0, "steps": 2}
+        tariff_for_tou_dispatch = {"type": "economy_7"}
         fleet_file = {
             "fleet_distribution": _fleet_distribution_block(
                 dispatch_strategy="tou_optimized",
@@ -831,7 +832,7 @@ class TestFleetDistributionBlockKeys:
                     "grid_charging": {"target_soc_fraction": 0.8},
                 },
             ),
-            "tariff": {"type": "economy_7"},
+            "tariff": tariff_for_tou_dispatch,
         }
 
         homes = [home for _, fleet in parse_sweep_fleet_configs(fleet_file) for home in fleet.homes]
