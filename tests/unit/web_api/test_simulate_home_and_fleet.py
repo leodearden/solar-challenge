@@ -328,7 +328,7 @@ class TestSimulateFleetAPI:
 
 
 class TestParseHomeConfigErrorPaths:
-    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, and an unusable number."""
+    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, and a window set by both days and start/end."""
 
     def test_invalid_tariff_returns_400(
         self, client: FlaskClient
@@ -470,6 +470,44 @@ class TestParseHomeConfigErrorPaths:
         resp = client.post(url, json=body)
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "start": "2024-03-01", "end": "2024-03-31"},
+                id="home",
+            ),
+            pytest.param(
+                "/api/simulate/fleet",
+                {"homes": [{**VALID_HOME_PAYLOAD, "start": "2024-03-01", "end": "2024-03-31"}]},
+                id="fleet",
+            ),
+            pytest.param(
+                "/api/simulate/sweep",
+                {
+                    "min": 1,
+                    "max": 5,
+                    "steps": 2,
+                    "base_config": {"days": 7, "start": "2024-03-01", "end": "2024-03-31"},
+                },
+                id="sweep",
+            ),
+        ],
+    )
+    def test_window_set_by_both_days_and_start_end_returns_400_naming_them_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, url: str, body: dict
+    ) -> None:
+        """A home config that sets its window by days and by start/end is a 400 naming days, start and end as sent, never a run of either window; nothing is submitted."""
+        resp = client.post(url, json=body)
+        assert resp.status_code == 400
+        assert (
+            "days must not be sent with start or end, "
+            "got days 7 with start '2024-03-01' and end '2024-03-31'"
+        ) in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
 

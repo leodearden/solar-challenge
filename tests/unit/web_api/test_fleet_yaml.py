@@ -141,11 +141,28 @@ class TestExportFleetYAML:
         )
 
     @pytest.mark.parametrize(
-        "patch",
+        ("patch", "reason"),
         [
-            pytest.param({"tariff": {"type": "flat_rate"}}, id="tariff-the-loaders-refuse"),
-            pytest.param({"dispatch_strategy": ""}, id="empty-string-dispatch"),
-            pytest.param({"days": float("inf")}, id="days-infinity"),
+            pytest.param(
+                {"tariff": {"type": "flat_rate"}},
+                "flat_rate tariff requires 'rate_per_kwh' field",
+                id="tariff-the-loaders-refuse",
+            ),
+            pytest.param(
+                {"dispatch_strategy": ""},
+                "dispatch_strategy must be a mapping",
+                id="empty-string-dispatch",
+            ),
+            pytest.param(
+                {"days": float("inf"), "start": None, "end": None},
+                "days must be an integer",
+                id="days-infinity",
+            ),
+            pytest.param(
+                {"days": 7, "start": "2024-07-01", "end": "2024-07-03"},
+                "days must not be sent with start or end",
+                id="days-with-start-and-end",
+            ),
             pytest.param(
                 {
                     "battery": {
@@ -153,14 +170,15 @@ class TestExportFleetYAML:
                         "dispatch_strategy": {"strategy_type": "self_consumption"},
                     }
                 },
+                "battery.dispatch_strategy must be absent or null",
                 id="battery-dispatch-strategy",
             ),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(
-        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict
+        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, reason: str
     ) -> None:
-        """A form the simulate endpoint refuses gets the same 400 and error from the export, so no YAML is written for a fleet that cannot run; no job is queued.
+        """A form the simulate endpoint refuses, for the reason each case names, gets the same 400 and error from the export, so no YAML is written for a fleet that cannot run; no job is queued.
 
         The empty-string dispatch follows the nested blocks' presence rule: only null reads as absent.
         """
@@ -170,6 +188,7 @@ class TestExportFleetYAML:
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
         assert export.status_code == 400
+        assert export.get_json()["error"].startswith(reason)
         assert (export.status_code, export.get_json()) == (simulate.status_code, simulate.get_json())
         mock_job_manager.submit_fleet_job.assert_not_called()
 
