@@ -672,18 +672,18 @@ class TestSavedRunRow:
         )
 
     @pytest.mark.parametrize("kind", ["home", "fleet"])
-    def test_a_save_given_a_status_that_is_not_a_run_status_raises_value_error_naming_it_and_writes_no_runs_row(
+    def test_a_save_given_a_status_that_is_not_a_run_status_raises_value_error_naming_it_and_writes_nothing(
         self, storage, saves, kind
     ):
         """A save given a status outside RUN_STATUSES raises ValueError naming the status and the run statuses.
 
-        No runs row is written. The run's files are not asserted on: a refused save has written
-        them before the row, as it does on any database error.
+        The save writes no file and no runs row.
         """
         with pytest.raises(ValueError, match=re.escape(f"status is 'complete', not one of {list(RUN_STATUSES)}")):
             saves[kind]("bad-status", status="complete")
 
-        assert storage.run_record("bad-status") is None
+        assert list(storage.data_dir.iterdir()) == []
+        assert storage.list_runs() == []
 
 
 class TestListRuns:

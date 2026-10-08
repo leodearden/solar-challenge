@@ -391,19 +391,37 @@ class RunStorage:
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
                 original creation time from job submission.
+
+        Raises:
+            ValueError: If the store refuses run_id, or status is not one of RUN_STATUSES.
+                The save has written nothing then.
         """
-        # Create run directory
         run_dir = self._get_run_dir(run_id)
+        config_dict = _serialize_dataclass(config)
+        summary_dict = _serialize_dataclass(summary)
+        # Build the row first, so a save RunRecord refuses has written no file.
+        row = _saved_run_row(
+            run_id=run_id,
+            name=name or config.name or "Unnamed Run",
+            run_type="home",
+            config=config_dict,
+            summary=summary_dict,
+            status=status,
+            error_message=error_message,
+            created_at=created_at,
+            duration_seconds=duration_seconds,
+            n_homes=1,
+        )
+
+        # Create run directory
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Serialize config to JSON
-        config_dict = _serialize_dataclass(config)
+        # Write config to JSON
         config_path = run_dir / "config.json"
         with config_path.open("w") as f:
             json.dump(config_dict, f, indent=2)
 
-        # Serialize summary to JSON
-        summary_dict = _serialize_dataclass(summary)
+        # Write summary to JSON
         summary_path = run_dir / "summary.json"
         with summary_path.open("w") as f:
             json.dump(summary_dict, f, indent=2)
@@ -413,20 +431,7 @@ class RunStorage:
         parquet_path = run_dir / "data.parquet"
         df.to_parquet(parquet_path, engine="pyarrow")
 
-        self._upsert_run_row(
-            _saved_run_row(
-                run_id=run_id,
-                name=name or config.name or "Unnamed Run",
-                run_type="home",
-                config=config_dict,
-                summary=summary_dict,
-                status=status,
-                error_message=error_message,
-                created_at=created_at,
-                duration_seconds=duration_seconds,
-                n_homes=1,
-            )
-        )
+        self._upsert_run_row(row)
 
     def load_home_run(
         self,
@@ -503,24 +508,42 @@ class RunStorage:
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
                 original creation time from job submission.
+
+        Raises:
+            ValueError: If the store refuses run_id, or status is not one of RUN_STATUSES.
+                The save has written nothing then.
         """
-        # Create run directory and homes subdirectory
         run_dir = self._get_run_dir(run_id)
+        fleet_config_dict = {
+            "homes": [_serialize_dataclass(home) for home in fleet_results.home_configs],
+            "n_homes": len(fleet_results.home_configs),
+        }
+        summary_dict = _serialize_dataclass(fleet_summary)
+        # Build the row first, so a save RunRecord refuses has written no file.
+        row = _saved_run_row(
+            run_id=run_id,
+            name=name or "Unnamed Fleet Run",
+            run_type="fleet",
+            config=fleet_config_dict,
+            summary=summary_dict,
+            status=status,
+            error_message=error_message,
+            created_at=created_at,
+            duration_seconds=duration_seconds,
+            n_homes=len(fleet_results.home_configs),
+        )
+
+        # Create run directory and homes subdirectory
         run_dir.mkdir(parents=True, exist_ok=True)
         homes_dir = run_dir / "homes"
         homes_dir.mkdir(exist_ok=True)
 
         # Save fleet config (list of HomeConfigs) to JSON
-        fleet_config_dict = {
-            "homes": [_serialize_dataclass(home) for home in fleet_results.home_configs],
-            "n_homes": len(fleet_results.home_configs),
-        }
         config_path = run_dir / "config.json"
         with config_path.open("w") as f:
             json.dump(fleet_config_dict, f, indent=2)
 
         # Save fleet summary to JSON
-        summary_dict = _serialize_dataclass(fleet_summary)
         summary_path = run_dir / "summary.json"
         with summary_path.open("w") as f:
             json.dump(summary_dict, f, indent=2)
@@ -538,20 +561,7 @@ class RunStorage:
             with home_summary_path.open("w") as f:
                 json.dump(home_summary_dict, f, indent=2)
 
-        self._upsert_run_row(
-            _saved_run_row(
-                run_id=run_id,
-                name=name or "Unnamed Fleet Run",
-                run_type="fleet",
-                config=fleet_config_dict,
-                summary=summary_dict,
-                status=status,
-                error_message=error_message,
-                created_at=created_at,
-                duration_seconds=duration_seconds,
-                n_homes=len(fleet_results.home_configs),
-            )
-        )
+        self._upsert_run_row(row)
 
     def load_fleet_run(
         self,
