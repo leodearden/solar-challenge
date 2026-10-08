@@ -76,6 +76,12 @@ _COLOURED_BY_FLOW: dict[str, tuple[Callable[[], list[tuple[str, str]]], tuple[st
         ("Self-Consumption", "Grid Import", "Grid Export"),
     ),
     "fleet_box_plots": (lambda: _markers(charts.fleet_box_plots([_summary()] * 2)), _FIVE_FLOWS),
+    "fleet_grid_impact": (lambda: _lines(charts.fleet_grid_impact(_fleet())), ("Grid Import", "Grid Export")),
+    "fleet_distribution_histograms": (
+        # The first histogram only: the other two draw ratios, which are not flows.
+        lambda: _markers(charts.fleet_distribution_histograms([_summary()] * 2))[:1],
+        ("Generation",),
+    ),
 }
 
 
@@ -91,6 +97,23 @@ _NAMED: dict[str, tuple[Callable[[], list[str]], list[str]]] = {
     "comparison_bar_chart": (
         lambda: _traces(charts.comparison_bar_chart([dataclasses.asdict(_summary())], ["Run A"]))[0]["x"],
         list(_FIVE_FLOWS),
+    ),
+    "seasonal_comparison": (
+        lambda: [category for trace in _traces(charts.seasonal_comparison(_year())) for category in trace["x"]],
+        # The winter bars' categories, then the summer bars'.
+        ["Generation (kWh)", "Demand (kWh)", "Self-Consumption (kWh)"] * 2,
+    ),
+    "overlaid_power_flows": (
+        lambda: [trace["name"] for trace in _traces(charts.overlaid_power_flows([_year()], ["Run A"]))],
+        ["Run A - Generation", "Run A - Demand"],
+    ),
+    "fleet_distribution_histograms_subplot_title": (
+        # make_subplots writes the subplot titles as layout annotations, in subplot order.
+        lambda: [
+            annotation["text"]
+            for annotation in json.loads(charts.fleet_distribution_histograms([_summary()] * 2))["layout"]["annotations"]
+        ][:1],
+        ["Generation (kWh)"],
     ),
 }
 
