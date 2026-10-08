@@ -1092,3 +1092,15 @@ class TestRecoverStaleJobs:
         run = _run_of_job(manager, dropped_job_id, tmp_path)
         assert (run.status, run.error_message) == ("failed", "Interrupted by server restart")
         assert run.completed_at is not None
+
+    def test_recovery_leaves_a_completed_run_and_a_failed_run_as_they_were(self, tmp_path: Path) -> None:
+        completing = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
+        failing = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
+        jobs = [(completing, _submit_home_job(completing, tmp_path)), (failing, _submit_home_job(failing, tmp_path))]
+        assert completing.wait_until_idle(timeout=30) and failing.wait_until_idle(timeout=30)
+        before = [_run_of_job(manager, job_id, tmp_path) for manager, job_id in jobs]
+        assert [run.status for run in before] == ["completed", "failed"]
+
+        recover_stale_jobs(_run_storage(tmp_path).db_path)
+
+        assert [_run_of_job(manager, job_id, tmp_path) for manager, job_id in jobs] == before
