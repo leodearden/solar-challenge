@@ -922,3 +922,22 @@ class TestFinanceConfigParsingGridServices:
         }
         with pytest.raises(ConfigurationError, match="'not-a-number:event_hours'"):
             self._parse_events_block(block)
+
+    @pytest.mark.parametrize("omitted", list(_EVENTS_BLOCK))
+    def test_omitted_events_key_takes_its_declared_default(self, omitted: str) -> None:
+        """A key the grid_services_events block omits takes GridServicesEventsConfig's declared default.
+
+        An omitted event_windows is the default schedule, DEFAULT_EVENT_WINDOWS (PRD
+        enhanced-grid-services-capacity-at-events, open question 4), not an error.
+        """
+        block = {key: value for key, value in self._EVENTS_BLOCK.items() if key != omitted}
+        fields = {key: value for key, value in self._EVENTS_FIELDS.items() if key != omitted}
+        assert self._parse_events_block(block) == FinanceConfig(
+            **self._BASE, grid_services_events=GridServicesEventsConfig(**fields)
+        )
+
+    def test_empty_events_block_parses_to_the_declared_defaults(self) -> None:
+        """An empty grid_services_events block parses to the default events config, where a null block parses to none."""
+        assert self._parse_events_block({}) == FinanceConfig(
+            **self._BASE, grid_services_events=GridServicesEventsConfig()
+        )
