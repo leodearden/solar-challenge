@@ -9,6 +9,7 @@ too, and the home presets list each name once.
 
 import json
 import logging
+import sqlite3
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -80,8 +81,9 @@ def home_presets(db_path: str | Path) -> list[dict[str, Any]]:
 
     Each preset is its config with its name and its ``source``, a PresetSource; a saved one
     also has its ``created_at``. A saved home preset under a built-in preset's name is left
-    out, so that name names the built-in preset. When the saved presets cannot be read, the
-    fault is logged and the built-in presets are listed alone.
+    out, so that name names the built-in preset, and so is one whose config is not a JSON
+    object, with a logged warning naming it. When the database cannot be read, the fault is
+    logged and the built-in presets are listed alone.
     """
     builtin = [{**preset, "source": "builtin"} for preset in _BUILTIN_HOME_PRESETS]
     try:
@@ -89,20 +91,23 @@ def home_presets(db_path: str | Path) -> list[dict[str, Any]]:
             rows = conn.execute(
                 "SELECT name, config_json, created_at FROM config_presets WHERE type = 'home' ORDER BY name"
             ).fetchall()
-        saved = [
-            {
-                **(json.loads(row["config_json"]) if row["config_json"] else {}),
-                "name": row["name"],
-                "created_at": row["created_at"],
-                "source": "saved",
-            }
-            for row in rows
-            if row["name"] not in _BUILTIN_HOME_PRESET_NAMES
-        ]
-    except Exception:  # noqa: BLE001
+    except sqlite3.Error:
         logger.warning("Failed to load saved presets", exc_info=True)
         return builtin
-    return builtin + saved
+    saved = (_saved_home_preset(row) for row in rows if row["name"] not in _BUILTIN_HOME_PRESET_NAMES)
+    return builtin + [preset for preset in saved if preset is not None]
+
+
+def _saved_home_preset(row: sqlite3.Row) -> dict[str, Any] | None:
+    """The preset a saved home preset's row holds; None, with a logged warning, when its config is not a JSON object."""
+    try:
+        config = json.loads(row["config_json"]) if row["config_json"] else {}
+    except ValueError:
+        config = None
+    if not isinstance(config, dict):
+        logger.warning("Saved home preset %r is not listed: its config is not a JSON object", row["name"])
+        return None
+    return {**config, "name": row["name"], "created_at": row["created_at"], "source": "saved"}
 
 
 def home_preset_named(db_path: str | Path, name: str) -> dict[str, Any] | None:

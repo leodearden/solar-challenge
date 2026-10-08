@@ -6,6 +6,7 @@ import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -86,6 +87,38 @@ class TestListPresets:
             "consumption_kwh": 2900,
             "source": "builtin",
         }
+
+    @pytest.mark.parametrize(
+        "config_json",
+        [pytest.param("{not json", id="not-json"), pytest.param("[9.5]", id="not-an-object")],
+    )
+    def test_a_saved_home_preset_whose_config_is_not_a_json_object_is_left_out(
+        self, app: Flask, client: FlaskClient, config_json: str
+    ) -> None:
+        """A saved home preset whose config is not a JSON object is neither listed nor found, and the other saved presets are listed."""
+        insert_saved_home_preset(app.config["DATABASE"], "Broken", config_json)
+        assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
+
+        names = [p["name"] for p in client.get("/api/presets").get_json()]
+
+        assert names == ["Small Urban", "Medium Suburban", "Large with Battery", "Mine"]
+        assert client.get("/api/presets/Broken").status_code == 404
+
+    def test_the_builtin_presets_are_listed_alone_when_the_database_cannot_be_read(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A database that cannot be read leaves the list answering, with the built-in presets alone."""
+        assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
+        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+
+        resp = client.get("/api/presets")
+
+        assert resp.status_code == 200
+        assert [(p["name"], p["source"]) for p in resp.get_json()] == [
+            ("Small Urban", "builtin"),
+            ("Medium Suburban", "builtin"),
+            ("Large with Battery", "builtin"),
+        ]
 
 
 class TestSavePreset:
