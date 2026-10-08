@@ -561,10 +561,9 @@ def run_home_simulation(
     Args:
         params:      Flat parameter dict (pv_kw, battery_kwh, occupants,
                      location, days, name, …) — same shape as the JSON body
-                     accepted by POST /api/simulate/home.  A window the params
-                     send (days, or start/end) is read as that endpoint reads
-                     it; params that send none run _TRIGGER_TOOL_DEFAULT_DAYS
-                     days.
+                     accepted by POST /api/simulate/home.  Params that send no
+                     window run _TRIGGER_TOOL_DEFAULT_DAYS days; an off-schema
+                     start/end is read as that endpoint reads it.
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
         data_dir:    Root directory for storing run artefacts.
