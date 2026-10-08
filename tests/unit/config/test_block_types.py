@@ -110,6 +110,11 @@ def _parsed_distribution_spec(spec: object) -> DistributionSpec:
     return fleet.battery.capacity_kwh
 
 
+def _spec_lacking(spec: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return a copy of *spec* without *key*."""
+    return {name: value for name, value in spec.items() if name != key}
+
+
 _NON_MAPPING_DISTRIBUTION_SPECS = [
     pytest.param("5kWh", id="string"),
     pytest.param([5.0], id="list"),
@@ -126,37 +131,38 @@ _UNKNOWN_DISTRIBUTION_TYPES = [
     pytest.param(["normal"], id="list"),
 ]
 
-_DISTRIBUTION_SPECS_LACKING_A_REQUIRED_KEY = [
-    pytest.param(
-        {"type": "weighted_discrete", "values": [5.0]},
+_SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS: list[tuple[dict[str, Any], str]] = [
+    (
+        {"type": "weighted_discrete", "values": [5.0], "weights": [1.0]},
         f"weighted_discrete distribution for '{_SPEC_PATH}' requires 'values' and 'weights'",
-        id="weighted_discrete",
     ),
-    pytest.param(
-        {"type": "normal", "mean": 5.0},
+    (
+        {"type": "normal", "mean": 5.0, "std": 1.0},
         f"normal distribution for '{_SPEC_PATH}' requires 'mean' and 'std'",
-        id="normal",
     ),
-    pytest.param(
-        {"type": "uniform", "min": 5.0},
+    (
+        {"type": "uniform", "min": 5.0, "max": 6.0},
         f"uniform distribution for '{_SPEC_PATH}' requires 'min' and 'max'",
-        id="uniform",
     ),
-    pytest.param(
-        {"type": "fixed"},
+    (
+        {"type": "fixed", "value": 5.0},
         f"fixed distribution for '{_SPEC_PATH}' requires 'value'",
-        id="fixed",
     ),
-    pytest.param(
-        {"type": "shuffled_pool", "values": [5.0]},
+    (
+        {"type": "shuffled_pool", "values": [5.0], "counts": [1]},
         f"shuffled_pool distribution for '{_SPEC_PATH}' requires 'values' and 'counts'",
-        id="shuffled_pool",
     ),
-    pytest.param(
-        {"type": "proportional_to", "multiplier": 2.0},
+    (
+        {"type": "proportional_to", "source": "pv.capacity_kw"},
         f"proportional_to distribution for '{_SPEC_PATH}' requires 'source'",
-        id="proportional_to",
     ),
+]
+
+_DISTRIBUTION_SPECS_LACKING_A_REQUIRED_KEY = [
+    pytest.param(_spec_lacking(spec, key), message, id=f"{spec['type']}-absent-{key}")
+    for spec, message in _SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS
+    for key in spec
+    if key != "type"
 ]
 
 _MULTIPLIER_MAPPINGS_THAT_ARE_NO_SWEEP = [
