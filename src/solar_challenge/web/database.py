@@ -17,7 +17,24 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, Literal, get_args
+
+RunType = Literal["home", "fleet", "sweep"]  # the type of a run, held by the runs table's type column
+RUN_TYPES: tuple[RunType, ...] = get_args(RunType)
+
+RunStatus = Literal["running", "completed", "failed"]  # the status of a run, held by the runs table's status column
+RUN_STATUSES: tuple[RunStatus, ...] = get_args(RunStatus)
+_DEFAULT_RUN_STATUS: RunStatus = "running"
+
+
+def _sql_string_literal(text: str) -> str:
+    """*text* as an SQL string literal, each single quote in it doubled."""
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _check_one_of(column: str, values: tuple[str, ...]) -> str:
+    """The CHECK constraint that refuses a value of *column* other than one of *values*; NULL passes, as in any CHECK."""
+    return f"CHECK({column} IN ({', '.join(_sql_string_literal(value) for value in values)}))"
 
 
 def init_db(db_path: str | Path) -> None:
@@ -40,14 +57,14 @@ def init_db(db_path: str | Path) -> None:
     cursor = conn.cursor()
 
     # Runs table - stores metadata for home/fleet/sweep simulations
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY,
             name TEXT,
-            type TEXT CHECK(type IN ('home', 'fleet', 'sweep')),
+            type TEXT {_check_one_of("type", RUN_TYPES)},
             config_json TEXT,
             summary_json TEXT,
-            status TEXT DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+            status TEXT DEFAULT {_sql_string_literal(_DEFAULT_RUN_STATUS)} {_check_one_of("status", RUN_STATUSES)},
             error_message TEXT,
             created_at TEXT,
             completed_at TEXT,

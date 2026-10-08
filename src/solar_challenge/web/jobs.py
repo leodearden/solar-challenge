@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Any, Generator, Literal, TypeAlias
+from typing import Any, Generator, TypeAlias
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -33,16 +33,17 @@ from solar_challenge.home import simulate_home as _default_simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import RunStatus, RunType, get_db
 from solar_challenge.web.storage import RunStorage
 
 HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], SimulationResults]
-_RunType: TypeAlias = Literal["home", "fleet"]
 
 _QUEUED_JOB_STATE: Mapping[str, str | float] = MappingProxyType(
     {"status": "queued", "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
 )
 _FINISHED_JOB_TTL_SECONDS = 3600.0
+_UNFINISHED_RUN_STATUS: RunStatus = "running"
+_FAILED_RUN_STATUS: RunStatus = "failed"
 
 # Module-level weak registry of all live JobManager instances.
 # WeakSet avoids keeping managers alive past their natural lifetime.
@@ -320,7 +321,7 @@ class JobManager:
         db_path: str,
         *,
         run_name: str,
-        run_type: _RunType,
+        run_type: RunType,
         n_homes: int,
         run_simulation: Callable[[_NewJob], None],
     ) -> tuple[str, str]:
@@ -330,7 +331,7 @@ class JobManager:
         self._schedule(new_job.job_id, new_job.run_id, db_path, functools.partial(run_simulation, new_job))
         return new_job.job_id, new_job.run_id
 
-    def _record_new_job(self, db_path: str, run_name: str, run_type: _RunType, n_homes: int) -> _NewJob:
+    def _record_new_job(self, db_path: str, run_name: str, run_type: RunType, n_homes: int) -> _NewJob:
         """Write a new queued job's run and job rows, then track the job in memory.
 
         The job is tracked only once both rows are written, so a database that refuses either leaves no record of it.
@@ -354,7 +355,7 @@ class JobManager:
                     run_type,
                     None,  # config_json filled on completion
                     None,  # summary_json filled on completion
-                    "running",
+                    _UNFINISHED_RUN_STATUS,
                     None,
                     created_at,
                     None,
@@ -544,8 +545,8 @@ class JobManager:
             try:
                 conn.execute("UPDATE jobs SET status='failed', message=?, error_traceback=?, completed_at=? WHERE id=?",
                              (error_msg, traceback.format_exc(), now, job_id))
-                conn.execute("UPDATE runs SET status='failed', error_message=?, completed_at=? WHERE id=?",
-                             (error_msg, now, run_id))
+                conn.execute("UPDATE runs SET status=?, error_message=?, completed_at=? WHERE id=?",
+                             (_FAILED_RUN_STATUS, error_msg, now, run_id))
                 conn.commit()
             except Exception:
                 pass
@@ -704,11 +705,11 @@ def recover_stale_jobs(db_path: str | Path) -> int:
         cursor.execute(
             """
             UPDATE runs SET
-                status = 'failed',
+                status = ?,
                 error_message = 'Interrupted by server restart',
                 completed_at = ?
-            WHERE status = 'running'
+            WHERE status = ?
             """,
-            (now,),
+            (_FAILED_RUN_STATUS, now, _UNFINISHED_RUN_STATUS),
         )
         return recovered_jobs

@@ -31,7 +31,7 @@ import pandas as pd
 import solar_challenge.config
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, RunType, get_db
 
 T = TypeVar("T")
 
@@ -167,20 +167,26 @@ class RunRecord:
     """One row of the runs table, each column in the field of the same name.
 
     config_json and summary_json are the JSON texts a save wrote; None while the run has none.
+    type holds one of RUN_TYPES and status one of RUN_STATUSES, each None for NULL; a record
+    given another value raises ValueError.
     """
 
     id: str
     name: str | None
-    type: str | None
+    type: RunType | None
     config_json: str | None
     summary_json: str | None
-    status: str | None
+    status: RunStatus | None
     error_message: str | None
     created_at: str | None
     completed_at: str | None
     duration_seconds: float | None
     n_homes: int | None
     notes: str | None
+
+    def __post_init__(self) -> None:
+        _require_one_of("type", self.type, RUN_TYPES)
+        _require_one_of("status", self.status, RUN_STATUSES)
 
     def decoded_config(self) -> Any:
         """The value config_json encodes; {} when the run has no config text or it is not JSON."""
@@ -189,6 +195,12 @@ class RunRecord:
     def decoded_summary(self) -> Any:
         """The value summary_json encodes; {} when the run has no summary text or it is not JSON."""
         return _decoded_or_empty(self.summary_json)
+
+
+def _require_one_of(field_name: str, value: str | None, allowed: tuple[str, ...]) -> None:
+    """Raise ValueError naming RunRecord's field *field_name* unless *value* is None or one of *allowed*."""
+    if value is not None and value not in allowed:
+        raise ValueError(f"RunRecord.{field_name} is {value!r}, not one of {list(allowed)} or None")
 
 
 def _decoded_or_empty(text: str | None) -> Any:
@@ -290,7 +302,7 @@ class RunStorage:
         results: SimulationResults,
         summary: SummaryStatistics,
         name: str | None = None,
-        status: str = "completed",
+        status: RunStatus = "completed",
         error_message: str | None = None,
         duration_seconds: float | None = None,
         created_at: str | None = None,
@@ -306,7 +318,7 @@ class RunStorage:
             results: Simulation results with time series
             summary: Summary statistics
             name: Optional run name (defaults to config.name)
-            status: Run status (completed, failed, running)
+            status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
@@ -428,7 +440,7 @@ class RunStorage:
         fleet_summary: FleetSummary,
         per_home_summaries: list[SummaryStatistics],
         name: str | None = None,
-        status: str = "completed",
+        status: RunStatus = "completed",
         error_message: str | None = None,
         duration_seconds: float | None = None,
         created_at: str | None = None,
@@ -444,7 +456,7 @@ class RunStorage:
             fleet_summary: Fleet-level summary statistics
             per_home_summaries: List of SummaryStatistics for each home
             name: Optional run name
-            status: Run status (completed, failed, running)
+            status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
             created_at: Optional ISO timestamp; if provided, preserves the
@@ -643,8 +655,8 @@ class RunStorage:
 
     def list_runs(
         self,
-        run_type: str | None = None,
-        status: str | None = None,
+        run_type: RunType | None = None,
+        status: RunStatus | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -653,8 +665,8 @@ class RunStorage:
         Queries SQLite database for run metadata with optional filters.
 
         Args:
-            run_type: Filter by run type ('home', 'fleet', 'sweep'), None for all
-            status: Filter by status ('running', 'completed', 'failed'), None for all
+            run_type: Filter by run type, None for all
+            status: Filter by status, None for all
             limit: Maximum number of results to return, None for all
             offset: Number of results to skip (for pagination)
 

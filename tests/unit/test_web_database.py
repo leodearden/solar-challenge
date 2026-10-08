@@ -2,6 +2,8 @@
 
 import dataclasses
 import json
+import re
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -15,7 +17,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, get_db, init_db
 from solar_challenge.web.storage import RunRecord, RunStorage
 
 from tests._run_storage_layout import stored_run_dir
@@ -97,6 +99,21 @@ def sample_summary():
         net_cost_gbp=1.0,
         strategy_name="greedy",
     )
+
+
+RUNS_COLUMN_VALUES = [
+    *(pytest.param("type", run_type, id=f"type-{run_type}") for run_type in RUN_TYPES),
+    pytest.param("type", None, id="type-null"),
+    *(pytest.param("status", run_status, id=f"status-{run_status}") for run_status in RUN_STATUSES),
+    pytest.param("status", None, id="status-null"),
+]
+
+VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS = [
+    pytest.param("type", "hom", id="type-typo"),
+    pytest.param("type", "Home", id="type-capitalised"),
+    pytest.param("status", "complete", id="status-typo"),
+    pytest.param("status", "queued", id="status-a-job-status"),
+]
 
 
 class TestDatabaseInitialization:
@@ -182,6 +199,37 @@ class TestDatabaseInitialization:
         init_db(nested_path)
         assert nested_path.exists()
         assert nested_path.parent.exists()
+
+    @pytest.mark.parametrize(("column", "value"), RUNS_COLUMN_VALUES)
+    def test_init_db_runs_table_accepts_each_run_type_and_run_status_and_null(self, db_path, column, value):
+        """The runs table stores each run type or NULL as a run's type, and each run status or NULL as its status."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
+            stored = conn.execute(f"SELECT {column} FROM runs WHERE id = 'probe'").fetchone()[0]
+
+        assert stored == value
+
+    @pytest.mark.parametrize(("column", "value"), VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS)
+    def test_init_db_runs_table_refuses_a_type_or_status_outside_its_definition(self, db_path, column, value):
+        """The runs table refuses a type that is not a run type, and a status that is not a run status."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+                conn.execute(f"INSERT INTO runs (id, {column}) VALUES (?, ?)", ("probe", value))
+
+    def test_init_db_gives_a_run_inserted_without_a_status_the_status_running(self, db_path):
+        """A run inserted without a status has the status 'running'."""
+        init_db(db_path)
+        with get_db(db_path) as conn:
+            conn.execute("INSERT INTO runs (id) VALUES ('no-status')")
+            status = conn.execute("SELECT status FROM runs WHERE id = 'no-status'").fetchone()[0]
+
+        assert status == "running"
+
+    def test_run_type_and_run_status_definitions_are_pinned_because_saved_databases_keep_their_checks(self):
+        """init_db creates the runs table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
+        assert (RUN_TYPES, RUN_STATUSES) == (("home", "fleet", "sweep"), ("running", "completed", "failed"))
 
 
 class TestDatabaseConnectionManagement:
@@ -785,26 +833,27 @@ class TestRunRecord:
         assert storage.run_record("no-such-run") is None
 
 
+@pytest.fixture
+def north_roof_record():
+    """A completed home run's record, with no config or summary text until a test gives it some."""
+    return RunRecord(
+        id="north-roof",
+        name="North Roof",
+        type="home",
+        config_json=None,
+        summary_json=None,
+        status="completed",
+        error_message=None,
+        created_at="2026-01-01T00:00:00+00:00",
+        completed_at="2026-01-01T00:01:00+00:00",
+        duration_seconds=60.0,
+        n_homes=1,
+        notes=None,
+    )
+
+
 class TestRunRecordDecoding:
     """Tests for RunRecord.decoded_config and RunRecord.decoded_summary, a run's JSON texts decoded."""
-
-    @pytest.fixture
-    def north_roof_record(self):
-        """A completed home run's record, with no config or summary text until a test gives it some."""
-        return RunRecord(
-            id="north-roof",
-            name="North Roof",
-            type="home",
-            config_json=None,
-            summary_json=None,
-            status="completed",
-            error_message=None,
-            created_at="2026-01-01T00:00:00+00:00",
-            completed_at="2026-01-01T00:01:00+00:00",
-            duration_seconds=60.0,
-            n_homes=1,
-            notes=None,
-        )
 
     def test_decoded_config_and_summary_are_the_values_their_texts_encode(self, north_roof_record):
         """Each decodes its own text: the config's from config_json, the summary's from summary_json."""
@@ -827,6 +876,26 @@ class TestRunRecordDecoding:
         record = dataclasses.replace(north_roof_record, config_json=text, summary_json=text)
 
         assert (record.decoded_config(), record.decoded_summary()) == ({}, {})
+
+
+class TestRunRecordTypeAndStatus:
+    """Tests for RunRecord's type and status, each one of the runs table's definitions or None."""
+
+    @pytest.mark.parametrize(("column", "value"), RUNS_COLUMN_VALUES)
+    def test_a_run_record_holds_each_run_type_and_run_status_and_none(self, north_roof_record, column, value):
+        """A record holds each run type or None as its type, and each run status or None as its status."""
+        record = dataclasses.replace(north_roof_record, **{column: value})
+
+        assert getattr(record, column) == value
+
+    @pytest.mark.parametrize(("column", "value"), VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS)
+    def test_a_run_record_refuses_a_type_or_status_outside_its_definition(self, north_roof_record, column, value):
+        """A type that is not a run type, or a status that is not a run status, raises ValueError naming the field, the value and the values allowed."""
+        allowed = {"type": "['home', 'fleet', 'sweep']", "status": "['running', 'completed', 'failed']"}[column]
+        refusal = f"RunRecord.{column} is {value!r}, not one of {allowed} or None"
+
+        with pytest.raises(ValueError, match=re.escape(refusal)):
+            dataclasses.replace(north_roof_record, **{column: value})
 
 
 class TestRunName:
