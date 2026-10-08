@@ -29,6 +29,11 @@ A property that can be set or deleted says so in its kind, as property[settable,
 deletable] does, and an abstract member's form begins with abstract. An inherited
 member belongs to the class that defines it.
 
+named_classes gives the classes a name's forms name, and signature_closure the classes of
+a package that some names' forms name, directly or through another such class. Both read
+a string annotation as a type checker does: in its module, with that module's
+TYPE_CHECKING imports bound.
+
 member_forms reads class bodies, so it sees an instance attribute only once a body
 declares it. undeclared_attributes names each public attribute a class's own source
 sets on self, by assignment or, as a frozen dataclass must, by object.__setattr__, that
@@ -37,7 +42,7 @@ attribute member_forms lists that the source never sets, which instances would l
 
 Usage::
 
-    from tests._surface_forms import member_forms, surface_form, undeclared_attributes
+    from tests._surface_forms import member_forms, named_classes, surface_form, undeclared_attributes
 
     def scale(values: Optional[List[float]], factor: float = 1.0) -> "Series": ...
 
@@ -54,6 +59,7 @@ Usage::
     assert surface_form(scale) == "(values: list[float] | None, factor: float = 1.0) -> Series"
     assert surface_form({"peak": 0.3}) == "dict"
     assert member_forms(Meter) == {"site": "attribute Path", "reading": "property (self) -> float"}
+    assert named_classes(Meter) == {Path, float}
     assert undeclared_attributes(Meter) == {"label"}
 """
 
@@ -62,6 +68,7 @@ import dataclasses
 import enum
 import functools
 import inspect
+import sys
 import textwrap
 import types
 import typing
@@ -100,12 +107,51 @@ def member_forms(cls: type) -> dict[str, str]:
     members. The names the body only annotates come first, in annotation order, then
     the names it defines, in class-body order.
     """
-    pinned = _pinned_by_class_form(cls)
-    return {
-        name: _member_form(member)
-        for name, member in _own_members(cls).items()
-        if not name.startswith("_") and name not in pinned
-    }
+    return {name: _member_form(member) for name, member in _public_members(cls).items()}
+
+
+def named_classes(obj: object) -> set[type]:
+    """The classes the forms that pin *obj* name: surface_form(obj)'s and, for a class, member_forms(obj)'s.
+
+    Only annotations name classes, never a default value. A generic names its origin and
+    its arguments' classes, a union its members' alone, and Literal's values and
+    Annotated's metadata none. A string annotation or a forward reference names the class
+    its name is bound to in the module that spells it, read as a type checker reads it:
+    its globals, with the imports of its top-level `if TYPE_CHECKING:` blocks bound over
+    them. A name bound in neither raises NameError. A class's constructor is spelled in
+    the module of the class in its MRO whose own body defines __init__ or __new__, which
+    may be a base defined in another module. A constant names its type, and an Enum's
+    members name nothing.
+    """
+    if not inspect.isclass(obj):
+        return _form_classes(obj)
+    member_classes = (
+        _member_form_classes(member, obj) for member in _public_members(obj).values()
+    )
+    return _form_classes(obj).union(*member_classes)
+
+
+def signature_closure(roots: Iterable[object], package: str) -> set[type]:
+    """The classes outside *roots* that a submodule of *package* defines and the forms pinning *roots* name, directly or through another such class.
+
+    Each class found is followed through its own forms, as named_classes reads them, so
+    the forms alone decide the set. A class among *roots* is left out by identity,
+    whatever name it goes by, though its forms are followed as a root's.
+    """
+    pending = list(roots)
+    root_classes = {root for root in pending if inspect.isclass(root)}
+    found: set[type] = set()
+    while pending:
+        new = {
+            cls
+            for cls in named_classes(pending.pop())
+            if cls.__module__.startswith(f"{package}.")
+            and cls not in root_classes
+            and cls not in found
+        }
+        found |= new
+        pending.extend(new)
+    return found
 
 
 def undeclared_attributes(cls: type) -> set[str]:
@@ -187,6 +233,97 @@ def _values_text(values: Iterable[object]) -> str:
     return ", ".join(repr(value) for value in values)
 
 
+def _form_classes(obj: object) -> set[type]:
+    """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name."""
+    if inspect.isclass(obj) and issubclass(obj, enum.Enum):
+        return set()
+    if not (inspect.isclass(obj) or inspect.isroutine(obj)):
+        return {type(obj)}
+    signature = inspect.signature(obj)
+    annotations = [parameter.annotation for parameter in signature.parameters.values()]
+    annotations.append(signature.return_annotation)
+    return _annotations_classes(annotations, _signature_module(obj))
+
+
+def _signature_module(obj: object) -> str:
+    """The module whose source spells inspect.signature(*obj*)'s annotations: a routine's own; for a class, that of the class in its MRO whose own body defines __init__ or __new__."""
+    if not inspect.isclass(obj):
+        return obj.__module__
+    return next(
+        base.__module__
+        for base in obj.__mro__
+        if "__init__" in vars(base) or "__new__" in vars(base)
+    )
+
+
+def _member_form_classes(member: object, cls: type) -> set[type]:
+    """The classes the form of *member*, one of *cls*'s, names."""
+    if isinstance(member, _AnnotatedAttribute):
+        return _annotation_classes(member.annotation, cls.__module__)
+    function = _spelled_function(member)
+    return _form_classes(member if function is None else function)
+
+
+def _annotation_classes(annotation: object, module: str) -> set[type]:
+    """The classes *annotation* names, by the cases _annotation_text spells it in, a name in it resolved in *module*."""
+    if annotation is inspect.Parameter.empty:
+        return set()
+    if isinstance(annotation, str):
+        return _annotation_classes(_evaluated(annotation, module), module)
+    if isinstance(annotation, typing.ForwardRef):
+        return _annotation_classes(annotation.__forward_arg__, module)
+    if isinstance(annotation, list):
+        return _annotations_classes(annotation, module)
+    if typing.get_origin(annotation) is not None:
+        return _subscripted_classes(annotation, module)
+    if inspect.isclass(annotation):
+        return {annotation}
+    return set()
+
+
+def _subscripted_classes(annotation: object, module: str) -> set[type]:
+    origin = typing.get_origin(annotation)
+    arguments = typing.get_args(annotation)
+    if origin in (typing.Union, types.UnionType):
+        return _annotations_classes(arguments, module)
+    if origin is typing.Literal:
+        return set()
+    if origin is typing.Annotated:
+        return _annotation_classes(arguments[0], module)
+    named_origin = {origin} if inspect.isclass(origin) else set()
+    return named_origin | _annotations_classes(arguments, module)
+
+
+def _annotations_classes(annotations: Iterable[object], module: str) -> set[type]:
+    named = (_annotation_classes(annotation, module) for annotation in annotations)
+    return set().union(*named)
+
+
+def _evaluated(annotation: str, module: str) -> object:
+    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them."""
+    namespace = dict(vars(sys.modules[module]))
+    exec(_type_checking_imports(module), namespace)
+    return eval(annotation, namespace)
+
+
+@functools.cache
+def _type_checking_imports(module: str) -> types.CodeType:
+    """The Import and ImportFrom statements of *module*'s top-level `if TYPE_CHECKING:` blocks, compiled, so running them binds each name as Python binds it."""
+    imports: list[ast.stmt] = []
+    for node in ast.parse(inspect.getsource(sys.modules[module])).body:
+        match node:
+            case ast.If(
+                test=ast.Name(id="TYPE_CHECKING") | ast.Attribute(attr="TYPE_CHECKING"),
+                body=body,
+            ):
+                imports += [
+                    statement
+                    for statement in body
+                    if isinstance(statement, (ast.Import, ast.ImportFrom))
+                ]
+    return compile(ast.Module(body=imports, type_ignores=[]), module, "exec")
+
+
 def _pinned_by_class_form(cls: type) -> set[str]:
     if issubclass(cls, enum.Enum):
         return set(cls.__members__)
@@ -200,6 +337,16 @@ class _AnnotatedAttribute:
     """The annotation of a name a class body only annotates, as an instance attribute is declared."""
 
     annotation: object
+
+
+def _public_members(cls: type) -> dict[str, object]:
+    """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins."""
+    pinned = _pinned_by_class_form(cls)
+    return {
+        name: member
+        for name, member in _own_members(cls).items()
+        if not name.startswith("_") and name not in pinned
+    }
 
 
 def _own_members(cls: type) -> dict[str, object]:
@@ -238,17 +385,27 @@ def _member_form(member: object) -> str:
 
 
 def _form_by_kind(member: object) -> str:
+    if isinstance(member, _AnnotatedAttribute):
+        return f"attribute {_annotation_text(member.annotation)}"
+    function = _spelled_function(member)
+    if function is None:
+        return surface_form(member)
+    if isinstance(member, property):
+        return f"{_property_kind(member)} {surface_form(function)}"
+    return f"{type(member).__name__} {surface_form(function)}"
+
+
+def _spelled_function(member: object) -> object | None:
+    """The function whose signature the form of *member* spells after its kind: a classmethod's or staticmethod's, a property's getter or a cached_property's; None for any other member."""
     match member:
         case classmethod() | staticmethod():
-            return f"{type(member).__name__} {surface_form(member.__func__)}"
+            return member.__func__
         case property():
-            return f"{_property_kind(member)} {surface_form(member.fget)}"
+            return member.fget
         case functools.cached_property():
-            return f"cached_property {surface_form(member.func)}"
-        case _AnnotatedAttribute(annotation=annotation):
-            return f"attribute {_annotation_text(annotation)}"
+            return member.func
         case _:
-            return surface_form(member)
+            return None
 
 
 def _property_kind(member: property) -> str:

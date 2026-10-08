@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_surface_forms.py: the spelling of a public name's surface form, and of an exported class's member forms, that every admitted Python minor shares, and the check that a class declares each public attribute it sets on self.
+"""Unit tests for tests/_surface_forms.py: the spelling of a public name's surface form, and of an exported class's member forms, that every admitted Python minor shares, the classes those forms name, directly or through other classes of a package, and the check that a class declares each public attribute it sets on self.
 
 Each test pins one rule, so an edit that lets one minor's own rendering through, drops
 part of a signature, or lets an attribute set on self go undeclared, fails here instead
@@ -7,17 +7,23 @@ of turning the frozen-surface lock red on one interpreter or blind to a real cha
 
 The annotations below are evaluated, as in the modules they stand in for, so this module
 does not import annotations from __future__. The classes whose qualified names are
-asserted are defined at module level, where a qualified name carries no '<locals>'.
+asserted, or that a forward reference names, are defined at module level, where a
+qualified name carries no '<locals>' and a name resolves in this module's namespace.
 """
 
 import abc
 import collections.abc
 import datetime
+import decimal
 import enum
+import fractions
 import functools
+import importlib.util
 import pathlib
+import sys
 from dataclasses import dataclass, field
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
     Callable,
@@ -33,12 +39,19 @@ from typing import (
     Union,
 )
 
+import pytest
+
 from tests._surface_forms import (
     member_forms,
+    named_classes,
+    signature_closure,
     surface_form,
     undeclared_attributes,
     unset_attributes,
 )
+
+if TYPE_CHECKING:
+    from decimal import Decimal
 
 
 class Outer:
@@ -49,6 +62,49 @@ class Outer:
 @dataclass(frozen=True)
 class Preset:
     rate: float
+
+
+class Gauge:
+    """A class with a public member of each kind member_forms spells, each annotated with its own class, and a private one."""
+
+    reading: datetime.timedelta
+    UNITS = "kWh"
+
+    def __init__(self, site: pathlib.Path) -> None: ...
+
+    def read(self, at: datetime.datetime) -> float: ...
+
+    @classmethod
+    def default(cls) -> "Gauge": ...
+
+    @staticmethod
+    def scale(kwh: int) -> int: ...
+
+    @property
+    def tariff(self) -> Preset: ...
+
+    @functools.cached_property
+    def inner(self) -> Outer.Inner: ...
+
+    def _cache(self) -> bytes: ...
+
+
+@dataclass(frozen=True)
+class Feeder:
+    """A class whose constructor names Tap and whose only member names Tally, which names Feeder back."""
+
+    tap: "Tap"
+
+    def tally(self) -> "Tally": ...
+
+
+@dataclass(frozen=True)
+class Tap:
+    site: pathlib.Path
+
+
+class Tally:
+    def feeder(self) -> Feeder: ...
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -361,6 +417,133 @@ def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
 
     assert member_forms(Base) == {"read": "(self) -> float"}
     assert member_forms(Child) == {"reset": "(self) -> None"}
+
+
+def test_a_generic_names_its_origin_and_its_arguments_classes() -> None:
+    def f(
+        a: list[Preset],
+        b: dict[str, Outer.Inner],
+        c: Callable[[Preset], float],
+        d: tuple[int, ...],
+    ) -> None: ...
+
+    assert named_classes(f) == {
+        list,
+        Preset,
+        dict,
+        str,
+        Outer.Inner,
+        collections.abc.Callable,
+        float,
+        tuple,
+        int,
+    }
+
+
+def test_a_union_names_its_members_classes_alone() -> None:
+    def f(a: Optional[Preset], b: Union[int, str], c: float | None) -> None: ...
+
+    assert named_classes(f) == {Preset, type(None), int, str, float}
+
+
+def test_literal_values_and_annotated_metadata_name_no_class() -> None:
+    def f(a: Literal["Preset"], b: Annotated[float, Preset]) -> None: ...
+
+    assert named_classes(f) == {float}
+
+
+def test_a_string_annotation_or_a_forward_reference_names_the_class_its_module_binds_the_name_to() -> None:
+    def f(a: "Preset", b: Optional["Outer.Inner"]) -> "list[Preset]": ...
+
+    assert named_classes(f) == {Preset, Outer.Inner, type(None), list}
+
+
+def test_a_name_its_module_imports_only_for_type_checking_names_the_class_that_import_binds() -> None:
+    def f(amount: "Decimal") -> None: ...
+
+    assert named_classes(f) == {decimal.Decimal}
+
+
+def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> None:
+    def f(a: "Nowhere") -> None: ...  # noqa: F821
+
+    with pytest.raises(NameError, match="Nowhere"):
+        named_classes(f)
+
+
+def test_a_class_names_the_classes_its_constructor_and_each_public_member_name() -> None:
+    assert named_classes(Gauge) == {
+        pathlib.Path,
+        datetime.timedelta,
+        str,
+        datetime.datetime,
+        float,
+        Gauge,
+        int,
+        Preset,
+        Outer.Inner,
+    }
+
+
+def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "metering.py"
+    source.write_text(
+        "from fractions import Fraction\n"
+        "\n"
+        "class Meter:\n"
+        "    def __init__(self, ratio: 'Fraction') -> None: ...\n"
+    )
+    spec = importlib.util.spec_from_file_location("metering", source)
+    assert spec is not None and spec.loader is not None
+    metering = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "metering", metering)
+    spec.loader.exec_module(metering)
+
+    class Submeter(metering.Meter):
+        pass
+
+    assert named_classes(Submeter) == {fractions.Fraction}
+
+
+def test_a_default_value_and_a_none_return_name_no_class() -> None:
+    def f(at: object = Preset(rate=0.1)) -> None: ...
+
+    assert named_classes(f) == {object}
+
+
+def test_an_enum_names_its_methods_classes_but_not_its_members() -> None:
+    class Period(enum.Enum):
+        PEAK = 1.5
+
+        def label(self) -> str: ...
+
+    assert named_classes(Period) == {str}
+
+
+def test_a_constant_names_its_type() -> None:
+    assert named_classes({"a": 1}) == {dict}
+    assert named_classes(Preset(rate=0.1)) == {Preset}
+
+
+def test_a_signature_closure_follows_each_class_it_finds_through_its_constructor_and_its_members() -> None:
+    def supply(feeder: Feeder) -> None: ...
+
+    assert signature_closure([supply], "tests") == {Feeder, Tap, Tally}
+
+
+def test_a_signature_closure_leaves_out_a_root_class_but_follows_its_forms() -> None:
+    def supply(feeder: Feeder, preset: Preset) -> None: ...
+
+    assert signature_closure([supply, Feeder, Preset], "tests") == {Tap, Tally}
+
+
+def test_a_signature_closure_holds_only_classes_the_package_defines() -> None:
+    def supply(feeder: Feeder, site: pathlib.Path) -> float: ...
+
+    assert signature_closure([supply], "tests.unit") == {Feeder, Tap, Tally}
+    assert signature_closure([supply], "solar_challenge") == set()
 
 
 def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:

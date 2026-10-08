@@ -9,8 +9,14 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
+from solar_challenge.config import (
+    ConfigurationError,
+    DispatchStrategyConfig,
+    GridChargeConfig,
+    parse_fleet_distribution_config,
+)
 from solar_challenge.home import HomeConfig
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, sample_distribution
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
@@ -182,6 +188,17 @@ class TestPreviewDistribution:
         )
         assert resp.status_code == 400
         assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
+
+    def test_finite_params_whose_draws_are_not_finite_return_400_carrying_sample_distributions_refusal(
+        self, client: FlaskClient
+    ) -> None:
+        """Finite params that draw a sample a float cannot hold are a 400 carrying sample_distribution's refusal, not a 200 whose samples JSON cannot write."""
+        body = {"type": "uniform", "params": {"min": -1.7e308, "max": 1.7e308}, "n_samples": 100}
+        with pytest.raises(ValueError) as refusal:
+            sample_distribution(body["type"], body["params"], body["n_samples"])
+        resp = client.post("/api/fleet/preview-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(refusal.value)}
 
 
 class TestFleetFromDistribution:
@@ -488,6 +505,53 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
+        "fleet_dispatch",
+        [
+            pytest.param({}, id="alone"),
+            pytest.param(
+                {"dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 4.5}},
+                id="beside-the-fleets-dispatch-strategy",
+            ),
+        ],
+    )
+    def test_battery_dispatch_strategy_returns_400_naming_the_fleets_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock, fleet_dispatch: dict
+    ) -> None:
+        """A battery block's own dispatch_strategy is a 400 naming it and the fleet's dispatch_strategy, which every battery takes, whether or not the fleet's is set; no fleet is queued."""
+        strategy = {"strategy_type": "self_consumption"}
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "battery": {"capacity_kwh": 5.0, "dispatch_strategy": strategy},
+                **fleet_dispatch,
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": "battery.dispatch_strategy must be absent or null: every battery takes the "
+            f"fleet's dispatch_strategy, got {strategy!r}"
+        }
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_null_battery_dispatch_strategy_leaves_every_battery_the_fleets(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A null battery dispatch_strategy reads as absent: every queued battery takes the fleet's dispatch_strategy."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "battery": {"capacity_kwh": 5.0, "dispatch_strategy": None},
+                "dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 4.5},
+            },
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        configs = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
+        fleet_dispatch = DispatchStrategyConfig("peak_shaving", import_limit_kw=4.5)
+        assert [config.battery_config.dispatch_strategy for config in configs] == [fleet_dispatch] * 2
+
+    @pytest.mark.parametrize(
         ("key", "distribution"),
         [("pv", "pv.capacity_kw"), ("load", "load.annual_consumption_kwh")],
     )
@@ -672,6 +736,64 @@ class TestFleetFromDistribution:
         call_kwargs = mock_job_manager.submit_fleet_job.call_args
         configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
         assert all(config.load_config.use_stochastic is False for config in configs)
+
+    def test_a_block_settings_distribution_and_grid_charging_reach_the_queued_homes(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A block setting sent as a distribution, pv.tilt, is sampled for every queued home, and the battery block's grid_charging reaches every queued battery."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={
+                **self._VALID_BODY,
+                "pv": {
+                    **self._VALID_BODY["pv"],
+                    "tilt": {"type": "uniform", "min": 10.0, "max": 20.0},
+                },
+                "battery": {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 0.5}},
+            },
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        configs = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
+        assert len(configs) == 2
+        tilts = [config.pv_config.tilt for config in configs]
+        assert all(10.0 <= tilt <= 20.0 for tilt in tilts), tilts
+        grid_charging = GridChargeConfig(target_soc_fraction=0.5)
+        assert [config.battery_config.grid_charging for config in configs] == [grid_charging] * 2
+
+    @pytest.mark.parametrize(
+        ("patch", "named"),
+        [
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": {"mean": 20.0}}},
+                "pv.tilt",
+                id="pv-tilt-mapping-without-a-type",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": 5.0, "grid_charging": {"target_soc": 0.5}}},
+                "battery.grid_charging",
+                id="battery-grid-charging-unknown-key",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "orientation": {"azimuth": 180.0}}},
+                "'orientation'",
+                id="pv-mapping-setting-the-grammar-has-no-key-for",
+            ),
+        ],
+    )
+    def test_a_mapping_block_setting_the_grammar_refuses_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, named: str
+    ) -> None:
+        """A block setting sent as a mapping that config.py's grammar refuses reaches the grammar unchanged, and is a 400 whose error is the grammar's own refusal, naming the setting; no fleet is queued."""
+        body = {**self._VALID_BODY, **patch}
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(
+                {key: body[key] for key in ("n_homes", "seed", "pv", "battery", "load") if key in body}
+            )
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(grammar_refusal.value)}
+        assert named in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
     def test_malformed_fleet_seg_returns_400_and_submits_nothing(

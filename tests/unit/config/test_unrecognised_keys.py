@@ -31,9 +31,7 @@ from solar_challenge.config import (
     SweepSpec,
     UniformDistribution,
     WeightedDiscreteDistribution,
-    detect_sweep_spec,
-    expand_sweep_configs,
-    generate_homes_from_distribution,
+    detect_fleet_sweep_spec,
     load_community_config,
     load_config,
     load_fleet_config,
@@ -44,6 +42,7 @@ from solar_challenge.config import (
     parse_home_block,
     parse_location_block,
     parse_seg_rate,
+    parse_sweep_fleet_configs,
     parse_tariff_config,
 )
 from solar_challenge.ev import EVConfig
@@ -74,9 +73,14 @@ def _parsed_home(**blocks: Any) -> HomeConfig:
     return parse_home_block(blocks, Location.bristol())
 
 
+def _fleet_distribution_block(**sections: Any) -> dict[str, Any]:
+    """A one-home ``fleet_distribution:`` block with a 4 kW pv section, overridden by *sections*."""
+    return {"n_homes": 1, "pv": {"capacity_kw": 4.0}, **sections}
+
+
 def _parsed_fleet_distribution(**sections: Any) -> FleetDistributionConfig:
-    """Parse a one-home ``fleet_distribution:`` block with a 4 kW pv section, overridden by *sections*."""
-    return parse_fleet_distribution_config({"n_homes": 1, "pv": {"capacity_kw": 4.0}, **sections})
+    """Parse ``_fleet_distribution_block(**sections)``."""
+    return parse_fleet_distribution_config(_fleet_distribution_block(**sections))
 
 
 def _refusal(block_path: str, *keys: str) -> str:
@@ -127,20 +131,16 @@ def _assert_blocks_recognise_exactly_their_keys(
 def _parse_every_block(path: Path) -> None:
     """Read every block of the file at *path* through the public reader that consumes it.
 
-    A fleet_distribution carrying a sweep is read as ``fleet sweep`` reads it, with the
-    top-level tariff ``fleet run`` would apply; any other fleet is read as ``fleet run``
-    reads it; only a file naming its scenario is read as one.
+    A fleet file defining a YAML sweep is read as ``fleet sweep`` builds its points, any
+    other fleet file as ``fleet run`` loads it; only a file naming its scenario is read
+    as one.
     """
     document = load_config(path)
     if "home" in document:
         parse_home_block(document["home"], parse_location_block(document.get("location")))
-    if "fleet_distribution" in document:
-        distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-        if detect_sweep_spec(distribution) is None:
-            load_fleet_config(path)
-        else:
-            parse_tariff_config(document.get("tariff"))
-    elif "homes" in document:
+    if detect_fleet_sweep_spec(document) is not None:
+        parse_sweep_fleet_configs(document)
+    elif "fleet_distribution" in document or "homes" in document:
         load_fleet_config(path)
     if {"name", "period"} <= document.keys() and ("home" in document or "homes" in document):
         load_scenarios(path)
@@ -821,21 +821,21 @@ class TestFleetDistributionBlockKeys:
             _parsed_fleet_distribution(dispatch_strategy=dispatch_strategy)
 
     def test_every_home_of_every_sweep_point_carries_grid_charging_and_dispatch_strategy(self) -> None:
-        """Homes generated from each sweep point of a parsed block, as fleet sweep builds them, carry its dispatch_strategy and battery.grid_charging."""
+        """Every home of every sweep point, built by parse_sweep_fleet_configs as ``fleet sweep`` builds them, carries the block's dispatch_strategy and battery.grid_charging."""
         sweep = {"type": "sweep", "min": 1.0, "max": 2.0, "steps": 2}
-        distribution = _parsed_fleet_distribution(
-            dispatch_strategy="tou_optimized",
-            battery={
-                "capacity_kwh": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": sweep},
-                "grid_charging": {"target_soc_fraction": 0.8},
-            },
-        )
+        tariff_for_tou_dispatch = {"type": "economy_7"}
+        fleet_file = {
+            "fleet_distribution": _fleet_distribution_block(
+                dispatch_strategy="tou_optimized",
+                battery={
+                    "capacity_kwh": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": sweep},
+                    "grid_charging": {"target_soc_fraction": 0.8},
+                },
+            ),
+            "tariff": tariff_for_tou_dispatch,
+        }
 
-        homes = [
-            home
-            for _, point in expand_sweep_configs(distribution)
-            for home in generate_homes_from_distribution(point, Location.bristol())
-        ]
+        homes = [home for _, fleet in parse_sweep_fleet_configs(fleet_file) for home in fleet.homes]
 
         assert [
             (home.dispatch_strategy, home.battery_config and home.battery_config.grid_charging)

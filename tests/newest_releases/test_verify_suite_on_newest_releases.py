@@ -74,8 +74,9 @@ def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(
     throwaway environment, deleted once it has put them in uv's cache. The
     suite's own uv probes run offline under tests/conftest.py's guard and sync
     from the copy's upgraded lock, so each wheel it pins for this interpreter
-    must already be in uv's cache: test_e2e_lane's probe, for one, needs the e2e
-    extra's newest playwright wheel, which nothing else fetches.
+    must already be in uv's cache: the e2e job's collection contract in
+    tests/unit/test_offline_lane_contracts.py, for one, needs the e2e extra's
+    newest playwright wheel, which nothing else fetches.
     """
     project = copy_working_tree(PROJECT_ROOT, tmp_path / "project")
     # So the suite's tests that list the tree's files with git, such as test_external_install.py's, run.

@@ -1,6 +1,5 @@
 """Tests for the background simulation API endpoints and job lifecycle."""
 
-import collections
 import json
 import sqlite3
 import threading
@@ -106,16 +105,34 @@ class _CountingIds:
         return self.issued[-1]
 
 
+class _ManualClock:
+    """Stands in for a JobManager's clock: time stands still until advance() moves it on."""
+
+    def __init__(self) -> None:
+        self._now = 0.0
+
+    def __call__(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+
 @pytest.fixture
 def app(tmp_path: Path) -> Flask:
     """Create a test Flask application with temporary database."""
     return build_test_app(tmp_path)
 
 
+def _client_using(app: Flask, manager: JobManager) -> FlaskClient:
+    """Install *manager* as the app's job manager, and return a client of the app."""
+    app.extensions["job_manager"] = manager
+    return app.test_client()
+
+
 def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
     """Install a JobManager that runs *simulation* as the app's job manager, and return a client of the app."""
-    app.extensions["job_manager"] = JobManager(simulate_home=simulation)
-    return app.test_client()
+    return _client_using(app, JobManager(simulate_home=simulation))
 
 
 @pytest.fixture
@@ -211,6 +228,9 @@ class TestSimulateHomeEndpoint:
         assert response.status_code == 400
 
 
+_A_HOME_JOB_REQUEST = {"pv_kw": 4.0, "battery_kwh": 0, "occupants": 3, "location": "bristol", "days": 1}
+
+
 class TestGetJobStatusEndpoint:
     """Tests for GET /api/jobs/<id>."""
 
@@ -245,6 +265,21 @@ class TestGetJobStatusEndpoint:
         assert response.status_code == 404
         data = response.get_json()
         assert "error" in data
+
+    def test_after_a_restart_an_earlier_job_is_not_found_although_its_rows_remain(self, tmp_path: Path) -> None:
+        before_restart = build_test_app(tmp_path)
+        submitted = (
+            _client_whose_jobs_run(before_restart, _RecordingSimulation())
+            .post("/api/simulate/home", json=_A_HOME_JOB_REQUEST)
+            .get_json()
+        )
+        assert before_restart.extensions["job_manager"].wait_until_idle(timeout=30)
+
+        after_restart = build_test_app(tmp_path)
+
+        response = after_restart.test_client().get(f"/api/jobs/{submitted['job_id']}")
+        assert response.status_code == 404
+        assert _job_rows(after_restart.extensions["storage"]) == [(submitted["job_id"], submitted["run_id"])]
 
 
 class TestJobProgressEndpoint:
@@ -452,160 +487,50 @@ class TestJobManagerIntegration:
 class TestJobManagerDirect:
     """Unit tests for JobManager exercised directly without Flask."""
 
-    def test_thread_safety_concurrent_access(self, tmp_path: Path) -> None:
+    def test_thread_safety_concurrent_access(self, blocking_simulation: _BlockingSimulation, tmp_path: Path) -> None:
         """Test that concurrent get_job_status and get_events calls are thread-safe."""
-        jm = JobManager(max_workers=1)
-
-        # Manually inject some jobs into internal state
-        with jm._lock:
-            for i in range(10):
-                jid = f"job-{i}"
-                jm._jobs[jid] = {
-                    "job_id": jid,
-                    "run_id": f"run-{i}",
-                    "status": "running",
-                    "progress_pct": 50.0,
-                    "current_step": "Testing",
-                    "message": "In progress",
-                    "created_at": time.monotonic(),
-                }
-                jm._event_queues[jid] = collections.deque(maxlen=100)
-                jm._event_queues[jid].append({"event": "progress", "data": {"pct": 50}})
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_ids = [_submit_home_job(manager, tmp_path) for _ in range(10)]
+        blocking_simulation.wait_until_started()
 
         errors: list[Exception] = []
         barrier = threading.Barrier(20)
 
-        def worker(thread_id: int) -> None:
+        def worker() -> None:
             try:
                 barrier.wait()
-                for i in range(10):
-                    jid = f"job-{i}"
-                    # Read job status
-                    status = jm.get_job_status(jid)
-                    assert status is None or isinstance(status, dict)
-                    # Drain events
-                    events = list(jm.get_events(jid))
-                    assert isinstance(events, list)
+                for job_id in job_ids:
+                    assert manager.get_job_status(job_id) is not None
+                    list(manager.get_events(job_id))
             except Exception as exc:
                 errors.append(exc)
 
-        threads = [threading.Thread(target=worker, args=(t,)) for t in range(20)]
+        threads = [threading.Thread(target=worker) for _ in range(20)]
         for t in threads:
             t.start()
         for t in threads:
-            # Use a bounded timeout so a deadlocked thread surfaces as a clear
-            # test failure rather than hanging the suite indefinitely.  60 s is
-            # generous enough for any normal CI environment.  The barrier itself
-            # has no timeout (barrier.wait()) so we can't get a BrokenBarrierError
-            # from CPU contention; the only way join() times out is a real deadlock.
+            # A bounded join turns a deadlock into a clear failure instead of a hung suite.
             t.join(timeout=60)
             assert not t.is_alive(), f"Thread did not finish within 60 s: {t}"
 
         assert len(errors) == 0, f"Thread safety errors: {errors}"
 
-    def test_get_events_drains_queue(self) -> None:
-        """Test that get_events yields events and clears the queue."""
-        jm = JobManager(max_workers=1)
+    def test_get_events_drains_queue(self, blocking_simulation: _BlockingSimulation, tmp_path: Path) -> None:
+        """Test that get_events yields each queued event once."""
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_id = _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
 
-        job_id = "drain-test"
-        with jm._lock:
-            jm._jobs[job_id] = {
-                "job_id": job_id,
-                "run_id": "r1",
-                "status": "running",
-                "progress_pct": 0.0,
-                "current_step": "test",
-                "message": "test",
-                "created_at": time.monotonic(),
-            }
-            jm._event_queues[job_id] = collections.deque(maxlen=100)
+        events = list(manager.get_events(job_id))
 
-        # Add events
-        with jm._lock:
-            jm._event_queues[job_id].append({"event": "progress", "data": {"pct": 10}})
-            jm._event_queues[job_id].append({"event": "progress", "data": {"pct": 20}})
-            jm._event_queues[job_id].append({"event": "progress", "data": {"pct": 30}})
-
-        # First call should yield all 3 events
-        events = list(jm.get_events(job_id))
-        assert len(events) == 3
-        assert events[0]["data"]["pct"] == 10
-        assert events[2]["data"]["pct"] == 30
-
-        # Second call should yield nothing (queue was drained)
-        events_again = list(jm.get_events(job_id))
-        assert len(events_again) == 0
+        assert [event["data"]["current_step"] for event in events] == ["Starting", "Simulating"]
+        assert list(manager.get_events(job_id)) == []
 
     def test_get_events_unknown_job_yields_nothing(self) -> None:
         """Test that get_events for an unknown job yields no events."""
         jm = JobManager(max_workers=1)
         events = list(jm.get_events("nonexistent-job-id"))
         assert events == []
-
-    def test_ttl_cleanup_removes_old_jobs(self) -> None:
-        """Test that _cleanup_old_jobs removes entries older than the TTL."""
-        jm = JobManager(max_workers=1)
-
-        # Insert a job with a created_at time in the distant past
-        old_job_id = "old-job"
-        new_job_id = "new-job"
-        now = time.monotonic()
-
-        with jm._lock:
-            jm._jobs[old_job_id] = {
-                "job_id": old_job_id,
-                "run_id": "old-run",
-                "status": "completed",
-                "progress_pct": 100.0,
-                "current_step": "Done",
-                "message": "Done",
-                "created_at": now - 7200,  # 2 hours ago
-            }
-            jm._event_queues[old_job_id] = collections.deque(maxlen=100)
-
-            jm._jobs[new_job_id] = {
-                "job_id": new_job_id,
-                "run_id": "new-run",
-                "status": "running",
-                "progress_pct": 50.0,
-                "current_step": "Running",
-                "message": "Running",
-                "created_at": now,  # just now
-            }
-            jm._event_queues[new_job_id] = collections.deque(maxlen=100)
-
-        # Run cleanup with default 1-hour TTL
-        jm._cleanup_old_jobs(max_age_seconds=3600.0)
-
-        # Old job should be removed
-        assert jm.get_job_status(old_job_id) is None
-        assert old_job_id not in jm._event_queues
-
-        # New job should still exist
-        assert jm.get_job_status(new_job_id) is not None
-        assert new_job_id in jm._event_queues
-
-    def test_ttl_cleanup_preserves_all_when_young(self) -> None:
-        """Test that _cleanup_old_jobs preserves jobs within the TTL."""
-        jm = JobManager(max_workers=1)
-        now = time.monotonic()
-
-        with jm._lock:
-            jm._jobs["young-job"] = {
-                "job_id": "young-job",
-                "run_id": "run",
-                "status": "completed",
-                "progress_pct": 100.0,
-                "current_step": "Done",
-                "message": "Done",
-                "created_at": now - 60,  # 1 minute ago
-            }
-            jm._event_queues["young-job"] = collections.deque(maxlen=100)
-
-        jm._cleanup_old_jobs(max_age_seconds=3600.0)
-
-        # Should still be there
-        assert jm.get_job_status("young-job") is not None
 
 
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
@@ -639,10 +564,10 @@ def _job_rows(storage: RunStorage) -> list[tuple[str, str]]:
 
 
 def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
-    """Return the status, progress_pct, current_step and message of job *job_id*'s row in storage's jobs table."""
+    """Return the status, progress_pct, current_step, message and created_at of job *job_id*'s row in storage's jobs table."""
     with get_db(storage.db_path) as conn:
         row = conn.execute(
-            "SELECT status, progress_pct, current_step, message FROM jobs WHERE id = ?", (job_id,)
+            "SELECT status, progress_pct, current_step, message, created_at FROM jobs WHERE id = ?", (job_id,)
         ).fetchone()
     return dict(row)
 
@@ -754,6 +679,125 @@ class TestJobManagerIds:
         storage = _run_storage(tmp_path)
         assert [run["id"] for run in storage.list_runs()] == [run_id]
         assert _job_rows(storage) == [(job_id, run_id)]
+
+
+class TestJobManagerStatus:
+    """Tests for the status a JobManager reports for a job: only while it tracks the job in memory."""
+
+    def test_a_jobs_status_holds_its_ids_its_progress_and_its_rows_creation_time(
+        self, tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
+
+        job_id, run_id = manager.submit_home_job(
+            config=_A_HOME,
+            start_date=_JUNE_1,
+            end_date=_JUNE_2,
+            db_path=str(storage.db_path),
+            data_dir=str(storage.data_dir),
+        )
+        assert manager.wait_until_idle(timeout=30)
+
+        status = manager.get_job_status(job_id)
+
+        assert status is not None
+        assert set(status) == {"job_id", "run_id", "status", "progress_pct", "current_step", "message", "created_at"}
+        assert (status["job_id"], status["run_id"]) == (job_id, run_id)
+        assert status["status"] == "completed", status["message"]
+        assert status["progress_pct"] == 100.0
+        assert status["created_at"] == _job_state(storage, job_id)["created_at"]
+
+    def test_a_manager_does_not_know_a_job_another_manager_ran_although_its_rows_remain(
+        self, tmp_path: Path
+    ) -> None:
+        first = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
+        job_id = _submit_home_job(first, tmp_path)
+        assert first.wait_until_idle(timeout=30)
+
+        assert JobManager(max_workers=1).get_job_status(job_id) is None
+        assert _job_state(_run_storage(tmp_path), job_id)["status"] == "completed"
+
+
+_A_MINUTE = 60.0
+_A_DAY = 24 * 60 * 60.0
+
+
+class TestJobManagerAgeLimit:
+    """Tests for how long a JobManager tracks a job: until it finishes, and for a while after."""
+
+    def test_a_finished_job_is_still_tracked_at_a_submit_a_minute_after_it_finished(self, tmp_path: Path) -> None:
+        clock = _ManualClock()
+        manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation(), clock=clock)
+        job_id = _submit_home_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+        clock.advance(_A_MINUTE)
+
+        _submit_home_job(manager, tmp_path)
+
+        assert _status_of(manager, job_id) == "completed"
+
+    def test_a_finished_job_is_not_tracked_after_a_submit_a_day_after_it_finished(self, tmp_path: Path) -> None:
+        clock = _ManualClock()
+        manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation(), clock=clock)
+        job_id = _submit_home_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+        clock.advance(_A_DAY)
+
+        _submit_home_job(manager, tmp_path)
+
+        assert manager.get_job_status(job_id) is None
+
+    def test_a_job_that_finished_a_minute_ago_is_still_tracked_though_it_was_submitted_a_day_before(
+        self, blocking_simulation: _BlockingSimulation, tmp_path: Path
+    ) -> None:
+        clock = _ManualClock()
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation, clock=clock)
+        job_id = _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+        clock.advance(_A_DAY)
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+        clock.advance(_A_MINUTE)
+
+        _submit_home_job(manager, tmp_path)
+
+        assert _status_of(manager, job_id) == "completed"
+
+    def test_a_job_still_running_a_day_after_it_was_submitted_is_still_reported_after_a_later_submit(
+        self, app: Flask, blocking_simulation: _BlockingSimulation
+    ) -> None:
+        clock = _ManualClock()
+        manager = JobManager(simulate_home=blocking_simulation, clock=clock)
+        client = _client_using(app, manager)
+        job_id = client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).get_json()["job_id"]
+        blocking_simulation.wait_until_started()
+        clock.advance(_A_DAY)
+
+        assert client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).status_code == 201
+
+        assert _status_of(manager, job_id) == "running"
+        response = client.get(f"/api/jobs/{job_id}")
+        assert response.status_code == 200
+        assert response.get_json()["status"] == "running"
+
+    def test_the_progress_stream_of_a_job_that_ran_past_a_later_submit_a_day_on_ends_with_its_completion(
+        self, app: Flask, blocking_simulation: _BlockingSimulation
+    ) -> None:
+        clock = _ManualClock()
+        manager = JobManager(simulate_home=blocking_simulation, clock=clock)
+        client = _client_using(app, manager)
+        submitted = client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).get_json()
+        blocking_simulation.wait_until_started()
+        clock.advance(_A_DAY)
+        assert client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).status_code == 201
+
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        stream = client.get(f"/api/jobs/{submitted['job_id']}/progress").get_data(as_text=True)
+        assert "event: complete" in stream
+        assert submitted["run_id"] in stream
 
 
 class TestJobManagerQueuedJobs:

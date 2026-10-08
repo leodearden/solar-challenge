@@ -12,7 +12,7 @@ import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Collection, Iterator, Literal, Mapping, Optional, Union, cast
+from typing import Any, Callable, Collection, Generic, Iterator, Literal, Mapping, Optional, TypeVar, Union, cast
 
 import pandas as pd
 import yaml
@@ -646,6 +646,21 @@ def _refuse_unrecognised_keys(
     return mapping
 
 
+_Built = TypeVar("_Built")
+
+
+@dataclass(frozen=True)
+class _BlockType(Generic[_Built]):
+    """One type a block names in its ``type:`` key.
+
+    *recognised_keys* is every key a block of the type recognises, ``type`` among them. *build*
+    reads a block holding only those keys, and receives the block's path in its file.
+    """
+
+    recognised_keys: frozenset[str]
+    build: Callable[[dict[str, Any], str], _Built]
+
+
 def _float_or_none(value: Any) -> Optional[float]:
     """Coerce *value* to a float, keeping a null as None."""
     return None if value is None else float(value)
@@ -819,19 +834,99 @@ def parse_dispatch_strategy_config(
     )
 
 
-_TARIFF_BLOCK_KEYS: Mapping[str, frozenset[str]] = MappingProxyType({
-    "flat_rate": frozenset({"type", "rate_per_kwh", "name"}),
-    "economy_7": frozenset({
-        "type", "off_peak_rate", "peak_rate", "off_peak_start", "off_peak_end",
-    }),
-    "economy_10": frozenset({
-        "type", "off_peak_rate", "peak_rate", "night_start", "night_end", "afternoon_start",
-        "afternoon_end", "evening_start", "evening_end",
-    }),
-    "custom": frozenset({"type", "periods", "name"}),
-})
-
 _TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
+
+_PRESET_TARIFF_RATE_KEYS: frozenset[str] = frozenset({"off_peak_rate", "peak_rate"})
+
+
+def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
+    """Build the flat_rate tariff a block names, refusing it unless it gives a rate."""
+    rate = data.get("rate_per_kwh")
+    if rate is None:
+        raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
+    return TariffConfig.flat_rate(
+        rate_per_kwh=float(rate),
+        name=data.get("name", "")
+    )
+
+
+def _preset_tariff_overrides(data: dict[str, Any]) -> dict[str, Any]:
+    """Return the keyword overrides a preset tariff block sets, its rates read as floats.
+
+    Reads a block that parse_tariff_config has already confined to its type's keys.
+    """
+    return {
+        key: float(value) if key in _PRESET_TARIFF_RATE_KEYS else value
+        for key, value in data.items()
+        if key != "type"
+    }
+
+
+def _build_economy_7_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
+    """Build the Economy 7 tariff a block names, with the overrides it sets."""
+    return TariffConfig.economy_7(**_preset_tariff_overrides(data))
+
+
+def _build_economy_10_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
+    """Build the Economy 10 tariff a block names, with the overrides it sets."""
+    return TariffConfig.economy_10(**_preset_tariff_overrides(data))
+
+
+def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
+    """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate."""
+    period = _refuse_unrecognised_keys(block_path, data, _TARIFF_PERIOD_KEYS)
+    for key in ("start_time", "end_time", "rate_per_kwh"):
+        if key not in period:
+            raise ConfigurationError(f"Tariff period requires '{key}' field")
+    return TariffPeriod(
+        start_time=period["start_time"],
+        end_time=period["end_time"],
+        rate_per_kwh=float(period["rate_per_kwh"]),
+        name=period.get("name", "")
+    )
+
+
+def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
+    """Build the custom tariff a block names from its periods, refusing it unless it gives some."""
+    if "periods" not in data:
+        raise ConfigurationError("custom tariff requires 'periods' field")
+
+    periods_data = data["periods"]
+    if not periods_data:
+        raise ConfigurationError("custom tariff must have at least one period")
+
+    return TariffConfig(
+        periods=tuple(
+            _parse_tariff_period(period, block_path=_child_path(block_path, f"periods[{index}]"))
+            for index, period in enumerate(periods_data)
+        ),
+        name=data.get("name", "")
+    )
+
+
+_TARIFF_TYPES: Mapping[str, _BlockType[TariffConfig]] = MappingProxyType({
+    "flat_rate": _BlockType(
+        frozenset({"type", "rate_per_kwh", "name"}),
+        _build_flat_rate_tariff,
+    ),
+    "economy_7": _BlockType(
+        frozenset({
+            "type", "off_peak_rate", "peak_rate", "off_peak_start", "off_peak_end",
+        }),
+        _build_economy_7_tariff,
+    ),
+    "economy_10": _BlockType(
+        frozenset({
+            "type", "off_peak_rate", "peak_rate", "night_start", "night_end", "afternoon_start",
+            "afternoon_end", "evening_start", "evening_end",
+        }),
+        _build_economy_10_tariff,
+    ),
+    "custom": _BlockType(
+        frozenset({"type", "periods", "name"}),
+        _build_custom_tariff,
+    ),
+})
 
 
 def parse_tariff_config(
@@ -861,90 +956,14 @@ def parse_tariff_config(
     tariff_type = data.get("type")
     if tariff_type is None:
         raise ConfigurationError("Tariff configuration requires 'type' field")
-    recognised = _TARIFF_BLOCK_KEYS.get(tariff_type) if isinstance(tariff_type, str) else None
-    if recognised is None:
+    block_type = _TARIFF_TYPES.get(tariff_type) if isinstance(tariff_type, str) else None
+    if block_type is None:
         raise ConfigurationError(
             f"Unknown tariff type '{tariff_type}'. "
-            f"Supported types: {', '.join(_TARIFF_BLOCK_KEYS)}"
+            f"Supported types: {', '.join(_TARIFF_TYPES)}"
         )
-    _refuse_unrecognised_keys(block_path, data, recognised)
-
-    if tariff_type == "flat_rate":
-        rate = data.get("rate_per_kwh")
-        if rate is None:
-            raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
-        return TariffConfig.flat_rate(
-            rate_per_kwh=float(rate),
-            name=data.get("name", "")
-        )
-
-    elif tariff_type == "economy_7":
-        kwargs: dict[str, Any] = {}
-        if "off_peak_rate" in data:
-            kwargs["off_peak_rate"] = float(data["off_peak_rate"])
-        if "peak_rate" in data:
-            kwargs["peak_rate"] = float(data["peak_rate"])
-        if "off_peak_start" in data:
-            kwargs["off_peak_start"] = data["off_peak_start"]
-        if "off_peak_end" in data:
-            kwargs["off_peak_end"] = data["off_peak_end"]
-        return TariffConfig.economy_7(**kwargs)
-
-    elif tariff_type == "economy_10":
-        kwargs = {}
-        if "off_peak_rate" in data:
-            kwargs["off_peak_rate"] = float(data["off_peak_rate"])
-        if "peak_rate" in data:
-            kwargs["peak_rate"] = float(data["peak_rate"])
-        if "night_start" in data:
-            kwargs["night_start"] = data["night_start"]
-        if "night_end" in data:
-            kwargs["night_end"] = data["night_end"]
-        if "afternoon_start" in data:
-            kwargs["afternoon_start"] = data["afternoon_start"]
-        if "afternoon_end" in data:
-            kwargs["afternoon_end"] = data["afternoon_end"]
-        if "evening_start" in data:
-            kwargs["evening_start"] = data["evening_start"]
-        if "evening_end" in data:
-            kwargs["evening_end"] = data["evening_end"]
-        return TariffConfig.economy_10(**kwargs)
-
-    elif tariff_type == "custom":
-        if "periods" not in data:
-            raise ConfigurationError("custom tariff requires 'periods' field")
-
-        periods_data = data["periods"]
-        if not periods_data:
-            raise ConfigurationError("custom tariff must have at least one period")
-
-        periods = []
-        for index, period_data in enumerate(periods_data):
-            _refuse_unrecognised_keys(
-                _child_path(block_path, f"periods[{index}]"), period_data, _TARIFF_PERIOD_KEYS
-            )
-            if "start_time" not in period_data:
-                raise ConfigurationError("Tariff period requires 'start_time' field")
-            if "end_time" not in period_data:
-                raise ConfigurationError("Tariff period requires 'end_time' field")
-            if "rate_per_kwh" not in period_data:
-                raise ConfigurationError("Tariff period requires 'rate_per_kwh' field")
-
-            periods.append(
-                TariffPeriod(
-                    start_time=period_data["start_time"],
-                    end_time=period_data["end_time"],
-                    rate_per_kwh=float(period_data["rate_per_kwh"]),
-                    name=period_data.get("name", "")
-                )
-            )
-
-        return TariffConfig(
-            periods=tuple(periods),
-            name=data.get("name", "")
-        )
-
-    raise AssertionError(f"tariff type {tariff_type!r} has recognised keys but no parser branch")
+    _refuse_unrecognised_keys(block_path, data, block_type.recognised_keys)
+    return block_type.build(data, block_path)
 
 
 _HEAT_PUMP_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -1101,16 +1120,127 @@ def _parse_output_config(
 # --- Distribution Parsing and Sampling ---
 
 
-_DISTRIBUTION_SPEC_KEYS: Mapping[str, frozenset[str]] = MappingProxyType({
-    "weighted_discrete": frozenset({"type", "values", "weights"}),
-    "normal": frozenset({"type", "mean", "std", "min", "max"}),
-    "uniform": frozenset({"type", "min", "max"}),
-    "fixed": frozenset({"type", "value"}),
-    "shuffled_pool": frozenset({"type", "values", "counts"}),
-    "proportional_to": frozenset({"type", "source", "multiplier", "offset"}),
-})
-
 _SWEEP_SPEC_KEYS: frozenset[str] = frozenset({"type", "min", "max", "steps", "mode"})
+
+
+def _build_weighted_discrete_spec(
+    data: dict[str, Any], block_path: str
+) -> WeightedDiscreteDistribution:
+    """Build the weighted_discrete distribution a spec names, refusing it unless it gives values and weights."""
+    if "values" not in data or "weights" not in data:
+        raise ConfigurationError(
+            f"weighted_discrete distribution for '{block_path}' requires 'values' and 'weights'"
+        )
+    return WeightedDiscreteDistribution(
+        values=tuple(data["values"]),
+        weights=tuple(float(w) for w in data["weights"]),
+    )
+
+
+def _build_normal_spec(data: dict[str, Any], block_path: str) -> NormalDistribution:
+    """Build the normal distribution a spec names, refusing it unless it gives a mean and a std."""
+    if "mean" not in data or "std" not in data:
+        raise ConfigurationError(
+            f"normal distribution for '{block_path}' requires 'mean' and 'std'"
+        )
+    return NormalDistribution(
+        mean=float(data["mean"]),
+        std=float(data["std"]),
+        min=_float_or_none(data.get("min")),
+        max=_float_or_none(data.get("max")),
+    )
+
+
+def _build_uniform_spec(data: dict[str, Any], block_path: str) -> UniformDistribution:
+    """Build the uniform distribution a spec names, refusing it unless it gives a min and a max."""
+    if "min" not in data or "max" not in data:
+        raise ConfigurationError(
+            f"uniform distribution for '{block_path}' requires 'min' and 'max'"
+        )
+    return UniformDistribution(min=float(data["min"]), max=float(data["max"]))
+
+
+def _build_fixed_spec(data: dict[str, Any], block_path: str) -> Optional[float]:
+    """Build the fixed value a spec names, refusing it unless it gives a value."""
+    if "value" not in data:
+        raise ConfigurationError(
+            f"fixed distribution for '{block_path}' requires 'value'"
+        )
+    return _float_or_none(data["value"])
+
+
+def _build_shuffled_pool_spec(
+    data: dict[str, Any], block_path: str
+) -> ShuffledPoolDistribution:
+    """Build the shuffled_pool distribution a spec names, refusing it unless it gives values and counts."""
+    if "values" not in data or "counts" not in data:
+        raise ConfigurationError(
+            f"shuffled_pool distribution for '{block_path}' requires 'values' and 'counts'"
+        )
+    return ShuffledPoolDistribution(
+        values=tuple(data["values"]),
+        counts=tuple(int(c) for c in data["counts"]),
+    )
+
+
+def _parse_proportional_to_multiplier(data: Any, block_path: str) -> Union[float, SweepSpec]:
+    """Parse the multiplier of the spec at *block_path*: a number, or a sweep given as a mapping."""
+    if not isinstance(data, dict):
+        return float(data)
+    if data.get("type") != "sweep":
+        raise ConfigurationError(
+            f"proportional_to multiplier dict for '{block_path}' must have type='sweep'"
+        )
+    _refuse_unrecognised_keys(_child_path(block_path, "multiplier"), data, _SWEEP_SPEC_KEYS)
+    return SweepSpec(
+        min=float(data["min"]),
+        max=float(data["max"]),
+        steps=int(data["steps"]),
+        mode=data.get("mode", "geometric"),
+    )
+
+
+def _build_proportional_to_spec(
+    data: dict[str, Any], block_path: str
+) -> ProportionalDistribution:
+    """Build the proportional_to distribution a spec names, refusing it unless it gives a source."""
+    if "source" not in data:
+        raise ConfigurationError(
+            f"proportional_to distribution for '{block_path}' requires 'source'"
+        )
+    return ProportionalDistribution(
+        source=data["source"],
+        multiplier=_parse_proportional_to_multiplier(data.get("multiplier", 1.0), block_path),
+        offset=float(data.get("offset", 0.0)),
+    )
+
+
+_DISTRIBUTION_SPEC_TYPES: Mapping[str, _BlockType[DistributionSpec]] = MappingProxyType({
+    "weighted_discrete": _BlockType(
+        frozenset({"type", "values", "weights"}),
+        _build_weighted_discrete_spec,
+    ),
+    "normal": _BlockType(
+        frozenset({"type", "mean", "std", "min", "max"}),
+        _build_normal_spec,
+    ),
+    "uniform": _BlockType(
+        frozenset({"type", "min", "max"}),
+        _build_uniform_spec,
+    ),
+    "fixed": _BlockType(
+        frozenset({"type", "value"}),
+        _build_fixed_spec,
+    ),
+    "shuffled_pool": _BlockType(
+        frozenset({"type", "values", "counts"}),
+        _build_shuffled_pool_spec,
+    ),
+    "proportional_to": _BlockType(
+        frozenset({"type", "source", "multiplier", "offset"}),
+        _build_proportional_to_spec,
+    ),
+})
 
 
 def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
@@ -1143,89 +1273,14 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
         raise ConfigurationError(
             f"Distribution for '{param_name}' requires 'type' field"
         )
-    recognised = _DISTRIBUTION_SPEC_KEYS.get(dist_type) if isinstance(dist_type, str) else None
-    if recognised is None:
+    block_type = _DISTRIBUTION_SPEC_TYPES.get(dist_type) if isinstance(dist_type, str) else None
+    if block_type is None:
         raise ConfigurationError(
             f"Unknown distribution type '{dist_type}' for '{param_name}'. "
-            f"Supported: {', '.join(_DISTRIBUTION_SPEC_KEYS)}"
+            f"Supported: {', '.join(_DISTRIBUTION_SPEC_TYPES)}"
         )
-    _refuse_unrecognised_keys(param_name, data, recognised)
-
-    if dist_type == "weighted_discrete":
-        if "values" not in data or "weights" not in data:
-            raise ConfigurationError(
-                f"weighted_discrete distribution for '{param_name}' requires 'values' and 'weights'"
-            )
-        values = tuple(v if v is not None else None for v in data["values"])
-        weights = tuple(float(w) for w in data["weights"])
-        return WeightedDiscreteDistribution(values=values, weights=weights)
-
-    elif dist_type == "normal":
-        if "mean" not in data or "std" not in data:
-            raise ConfigurationError(
-                f"normal distribution for '{param_name}' requires 'mean' and 'std'"
-            )
-        return NormalDistribution(
-            mean=float(data["mean"]),
-            std=float(data["std"]),
-            min=_float_or_none(data.get("min")),
-            max=_float_or_none(data.get("max")),
-        )
-
-    elif dist_type == "uniform":
-        if "min" not in data or "max" not in data:
-            raise ConfigurationError(
-                f"uniform distribution for '{param_name}' requires 'min' and 'max'"
-            )
-        return UniformDistribution(min=float(data["min"]), max=float(data["max"]))
-
-    elif dist_type == "fixed":
-        if "value" not in data:
-            raise ConfigurationError(
-                f"fixed distribution for '{param_name}' requires 'value'"
-            )
-        return _float_or_none(data["value"])
-
-    elif dist_type == "shuffled_pool":
-        if "values" not in data or "counts" not in data:
-            raise ConfigurationError(
-                f"shuffled_pool distribution for '{param_name}' requires 'values' and 'counts'"
-            )
-        values = tuple(v if v is not None else None for v in data["values"])
-        counts = tuple(int(c) for c in data["counts"])
-        return ShuffledPoolDistribution(values=values, counts=counts)
-
-    elif dist_type == "proportional_to":
-        if "source" not in data:
-            raise ConfigurationError(
-                f"proportional_to distribution for '{param_name}' requires 'source'"
-            )
-        multiplier_data = data.get("multiplier", 1.0)
-        multiplier: Union[float, SweepSpec]
-        if isinstance(multiplier_data, dict):
-            # Parse sweep spec for multiplier
-            if multiplier_data.get("type") != "sweep":
-                raise ConfigurationError(
-                    f"proportional_to multiplier dict for '{param_name}' must have type='sweep'"
-                )
-            _refuse_unrecognised_keys(
-                _child_path(param_name, "multiplier"), multiplier_data, _SWEEP_SPEC_KEYS
-            )
-            multiplier = SweepSpec(
-                min=float(multiplier_data["min"]),
-                max=float(multiplier_data["max"]),
-                steps=int(multiplier_data["steps"]),
-                mode=multiplier_data.get("mode", "geometric"),
-            )
-        else:
-            multiplier = float(multiplier_data)
-        return ProportionalDistribution(
-            source=data["source"],
-            multiplier=multiplier,
-            offset=float(data.get("offset", 0.0)),
-        )
-
-    raise AssertionError(f"distribution type {dist_type!r} has recognised keys but no parser branch")
+    _refuse_unrecognised_keys(param_name, data, block_type.recognised_keys)
+    return block_type.build(data, param_name)
 
 
 def _sample_from_distribution(spec: DistributionSpec, rng: random.Random) -> Optional[float]:
@@ -1874,7 +1929,7 @@ def _parse_grid_services_events_config(
         return None
     gs_data = _refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
     # Parse event_windows list-of-dicts -> tuple[EventWindow, ...]
-    # mirroring parse_tariff_config 'custom' branch.
+    # mirroring _build_custom_tariff's periods.
     ew_raw_list = gs_data.get("event_windows", [])
     if not isinstance(ew_raw_list, list):
         raise ConfigurationError(
