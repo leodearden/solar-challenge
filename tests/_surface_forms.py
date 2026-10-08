@@ -1,51 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The surface form of a public name: the text that pins what its callers rely on.
 
-A class's or a routine's surface form is its signature: its parameters' names, kinds,
-defaults and annotations, and its return annotation. A class's signature is its
-constructor's. An Enum's surface form is its members, and a constant's is its type.
+A surface form reads the same on every Python minor that requires-python admits, which
+inspect's own rendering does not. surface_form spells a name's form. member_forms spells
+the forms of the public members a class's own body defines or declares. named_classes
+gives the classes those forms name, and signature_closure the classes of a package that
+some names' forms name, directly or through another such class. member_forms reads class
+bodies, so undeclared_attributes and unset_attributes check the attributes a class
+declares against those its own source sets on self.
 
-A surface form is spelled identically on every Python minor that requires-python admits,
-because inspect's own rendering is not. Measured: 3.11 renders an Enum's call signature
-unlike 3.12, 3.13 renders pathlib.Path as pathlib._local.Path, and 3.14 renders an
-evaluated Optional[X] as X | None. So inspect lays out the signature, and each annotation
-is respelled: a union with bars, a typing alias by its builtin origin (a bare one, as
-List is, by that origin alone), an empty subscription, as tuple[()] is, with
-parentheses, a class by its qualified name without its module, an InitVar likewise,
-around its respelled type, as InitVar[float | None], Callable's parameter types as a
-bracketed list, and a forward reference, a string inside a generic included, by its
-name. A string annotation is spelled verbatim, never evaluated. Literal's values and
-Annotated's metadata are values, not annotations: each is spelled by its repr, so
-Literal['a'] never reads as Literal[a]. A ParamSpec's args and kwargs are spelled by
-their repr as well, P.args and P.kwargs, which keeps the two apart.
-
-A class's public members, the methods, properties and class constants its own body
-defines, and the attributes it only annotates, have forms too. A method's form is its
-signature, self included. A classmethod, staticmethod, property or cached_property is
-spelled by its kind, then its function's signature, and a constant by its type. An
-attribute the body only annotates, as an instance attribute is declared, is spelled
-attribute, then its annotation. A ClassVar annotation declares a class variable, not an
-attribute, so its name is a member only if the body assigns it a value, as a constant.
-A dataclass field its constructor does not take, as field(init=False) declares one, is
-spelled as an attribute too, whether or not it has a default, since the class form pins
-only the fields the constructor takes and a default is the field's, not a class
-constant. A dataclass's InitVar declares a constructor parameter, which the class form
-pins, not an attribute, so its name is never a member, even with a default. A property
-that can be set or deleted says so in its kind, as property[settable, deletable] does,
-and an abstract member's form begins with abstract. An inherited member belongs to the
-class that defines it.
-
-named_classes gives the classes a name's forms name, and signature_closure the classes of
-a package that some names' forms name, directly or through another such class. Both read
-a string annotation as a type checker does: in its module, with that module's
-TYPE_CHECKING imports bound.
-
-member_forms reads class bodies, so it sees an instance attribute only once a body
-declares it. undeclared_attributes names each public attribute a class's own source
-sets on self, by assignment or, as a frozen dataclass must, by object.__setattr__, that
-no class body in its MRO defines or declares; unset_attributes names each declared
-attribute member_forms lists that the source never sets and that has no dataclass
-default or default factory, which instances would lack.
+tests/unit/test_surface_forms_helper.py pins each function's rules, one rule per test.
 
 Usage::
 
