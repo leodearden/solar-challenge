@@ -70,11 +70,3 @@ def resolve_location(preset_str: str) -> Location:
         return Location(latitude=lat, longitude=lon)
     except ValueError:
         return Location.bristol()
-
-
-# Built-in configuration presets for home simulations.
-BUILTIN_PRESETS: list[dict[str, Any]] = [
-    {"name": "Small Urban", "pv_kw": 3.0, "battery_kwh": 0, "consumption_kwh": 2900},
-    {"name": "Medium Suburban", "pv_kw": 4.0, "battery_kwh": 5.0, "consumption_kwh": 3500},
-    {"name": "Large with Battery", "pv_kw": 6.0, "battery_kwh": 10.0, "consumption_kwh": 4500},
-]
