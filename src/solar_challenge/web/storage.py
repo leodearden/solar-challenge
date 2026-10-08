@@ -20,7 +20,7 @@ import shutil
 import sqlite3
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, UnionType
@@ -218,6 +218,66 @@ def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     return None if row is None else RunRecord(**dict(row))
 
 
+_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", "notes")
+
+
+def _run_row_upsert() -> str:
+    """The statement writing a RunRecord, bound by field name, as the runs row under its id.
+
+    A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names and takes
+    every other column from the record.
+    """
+    columns = [field.name for field in fields(RunRecord)]
+    rewritten = [column for column in columns if column not in _COLUMNS_A_RESAVE_KEEPS]
+    column_list = ", ".join(columns)
+    placeholders = ", ".join(f":{column}" for column in columns)
+    assignments = ", ".join(f"{column} = excluded.{column}" for column in rewritten)
+    return (
+        f"INSERT INTO runs ({column_list}) VALUES ({placeholders}) "
+        f"ON CONFLICT(id) DO UPDATE SET {assignments}"
+    )
+
+
+_RUN_ROW_UPSERT = _run_row_upsert()
+
+
+def _saved_run_row(
+    *,
+    run_id: str,
+    name: str,
+    run_type: RunType,
+    config: dict[str, Any],
+    summary: dict[str, Any],
+    status: RunStatus,
+    error_message: str | None,
+    created_at: str | None,
+    duration_seconds: float | None,
+    n_homes: int,
+) -> RunRecord:
+    """The runs row a save writes for the run it stored under *run_id*, its config and summary as JSON text.
+
+    The run is created now unless *created_at* is given, is completed now if its *status* is
+    completed, and has no notes.
+
+    Raises:
+        ValueError: *status* is not one of RUN_STATUSES, as RunRecord refuses it.
+    """
+    return RunRecord(
+        id=run_id,
+        name=name,
+        type=run_type,
+        config_json=json.dumps(config),
+        summary_json=json.dumps(summary),
+        status=status,
+        error_message=error_message,
+        created_at=datetime.now(timezone.utc).isoformat() if created_at is None else created_at,
+        completed_at=datetime.now(timezone.utc).isoformat() if status == "completed" else None,
+        duration_seconds=duration_seconds,
+        n_homes=n_homes,
+        notes=None,
+    )
+
+
 RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
 RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
@@ -295,6 +355,14 @@ class RunStorage:
             raise FileNotFoundError(f"Run directory not found: {run_dir}")
         return run_dir
 
+    def _upsert_run_row(self, row: RunRecord) -> None:
+        """Write *row* as the runs row under row.id.
+
+        A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names.
+        """
+        with get_db(self.db_path) as conn:
+            conn.execute(_RUN_ROW_UPSERT, asdict(row))
+
     def save_home_run(
         self,
         run_id: str,
@@ -345,46 +413,20 @@ class RunStorage:
         parquet_path = run_dir / "data.parquet"
         df.to_parquet(parquet_path, engine="pyarrow")
 
-        # Upsert run metadata into database
-        if created_at is None:
-            created_at = datetime.now(timezone.utc).isoformat()
-        run_name = name or config.name or "Unnamed Run"
-
-        with get_db(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO runs (
-                    id, name, type, config_json, summary_json,
-                    status, error_message, created_at, completed_at,
-                    duration_seconds, n_homes, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    type = excluded.type,
-                    config_json = excluded.config_json,
-                    summary_json = excluded.summary_json,
-                    status = excluded.status,
-                    error_message = excluded.error_message,
-                    completed_at = excluded.completed_at,
-                    duration_seconds = excluded.duration_seconds,
-                    n_homes = excluded.n_homes
-                """,
-                (
-                    run_id,
-                    run_name,
-                    "home",
-                    json.dumps(config_dict),
-                    json.dumps(summary_dict),
-                    status,
-                    error_message,
-                    created_at,
-                    datetime.now(timezone.utc).isoformat() if status == "completed" else None,
-                    duration_seconds,
-                    1,  # n_homes for a single home run
-                    None,  # notes field, can be added later
-                ),
+        self._upsert_run_row(
+            _saved_run_row(
+                run_id=run_id,
+                name=name or config.name or "Unnamed Run",
+                run_type="home",
+                config=config_dict,
+                summary=summary_dict,
+                status=status,
+                error_message=error_message,
+                created_at=created_at,
+                duration_seconds=duration_seconds,
+                n_homes=1,
             )
+        )
 
     def load_home_run(
         self,
@@ -496,46 +538,20 @@ class RunStorage:
             with home_summary_path.open("w") as f:
                 json.dump(home_summary_dict, f, indent=2)
 
-        # Upsert run metadata into database
-        if created_at is None:
-            created_at = datetime.now(timezone.utc).isoformat()
-        run_name = name or "Unnamed Fleet Run"
-
-        with get_db(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO runs (
-                    id, name, type, config_json, summary_json,
-                    status, error_message, created_at, completed_at,
-                    duration_seconds, n_homes, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    type = excluded.type,
-                    config_json = excluded.config_json,
-                    summary_json = excluded.summary_json,
-                    status = excluded.status,
-                    error_message = excluded.error_message,
-                    completed_at = excluded.completed_at,
-                    duration_seconds = excluded.duration_seconds,
-                    n_homes = excluded.n_homes
-                """,
-                (
-                    run_id,
-                    run_name,
-                    "fleet",
-                    json.dumps(fleet_config_dict),
-                    json.dumps(summary_dict),
-                    status,
-                    error_message,
-                    created_at,
-                    datetime.now(timezone.utc).isoformat() if status == "completed" else None,
-                    duration_seconds,
-                    len(fleet_results.home_configs),
-                    None,
-                ),
+        self._upsert_run_row(
+            _saved_run_row(
+                run_id=run_id,
+                name=name or "Unnamed Fleet Run",
+                run_type="fleet",
+                config=fleet_config_dict,
+                summary=summary_dict,
+                status=status,
+                error_message=error_message,
+                created_at=created_at,
+                duration_seconds=duration_seconds,
+                n_homes=len(fleet_results.home_configs),
             )
+        )
 
     def load_fleet_run(
         self,
