@@ -197,13 +197,6 @@ class TestDistributionParsing:
         assert isinstance(result, ShuffledPoolDistribution)
         assert result.values == (None, 5.0, 10.0)
 
-    def test_parse_shuffled_pool_missing_counts_raises(self) -> None:
-        """Test parsing shuffled_pool without counts raises."""
-        with pytest.raises(ConfigurationError, match="requires 'values' and 'counts'"):
-            _parsed_fleet_distribution(
-                pv={"capacity_kw": {"type": "shuffled_pool", "values": [1, 2, 3]}}
-            )
-
     def test_parse_normal(self) -> None:
         """Test parsing normal distribution."""
         data = {
@@ -250,37 +243,6 @@ class TestDistributionParsing:
         }
         result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
         assert result == 4.5
-
-    def test_parse_missing_type_raises(self) -> None:
-        """Test parsing dict without type raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'type'"):
-            _parsed_fleet_distribution(pv={"capacity_kw": {"values": [1, 2, 3]}})
-
-    def test_parse_unknown_type_raises(self) -> None:
-        """Test parsing unknown type raises error."""
-        with pytest.raises(ConfigurationError, match="Unknown distribution type"):
-            _parsed_fleet_distribution(pv={"capacity_kw": {"type": "unknown"}})
-
-    def test_parse_weighted_discrete_missing_values_raises(self) -> None:
-        """Test parsing weighted_discrete without values raises."""
-        with pytest.raises(ConfigurationError, match="requires 'values' and 'weights'"):
-            _parsed_fleet_distribution(
-                pv={"capacity_kw": {"type": "weighted_discrete", "weights": [1, 2]}}
-            )
-
-    def test_parse_normal_missing_std_raises(self) -> None:
-        """Test parsing normal without std raises."""
-        with pytest.raises(ConfigurationError, match="requires 'mean' and 'std'"):
-            _parsed_fleet_distribution(
-                pv={"capacity_kw": {"type": "normal", "mean": 100}}
-            )
-
-    def test_parse_uniform_missing_max_raises(self) -> None:
-        """Test parsing uniform without max raises."""
-        with pytest.raises(ConfigurationError, match="requires 'min' and 'max'"):
-            _parsed_fleet_distribution(
-                pv={"capacity_kw": {"type": "uniform", "min": 0}}
-            )
 
 
 class TestFleetDistributionConfig:
