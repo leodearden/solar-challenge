@@ -138,14 +138,15 @@ re-pin.
 **Unreleased on main** (task 426): `Battery` declares `config`,
 `min_soc_fraction`, `max_soc_fraction`, `charge_efficiency` and
 `discharge_efficiency` in its class body, and `WeatherCache` declares
-`cache_dir`, so the frozen contract now covers them. Each is still read and
-assigned as on the 0.5.0 tag; task 540 checks an assignment to `Battery`'s SOC
-limits and efficiencies. Consumers need no change when they re-pin.
+`cache_dir`, so the frozen contract now covers them. Each is still a plain
+instance attribute that `__init__` sets, read and assigned as on the 0.5.0 tag.
+Consumers need no change when they re-pin.
 
 **Unreleased on main** (task 540): `Battery`'s `min_soc_fraction`,
 `max_soc_fraction`, `charge_efficiency` and `discharge_efficiency` are settable
-properties, read and assigned as on the 0.5.0 tag. An assignment is now checked
-as `Battery()` checks its arguments: a value that breaks
+properties instead of plain instance attributes, still read and assigned as on
+the 0.5.0 tag. An assignment is now checked as `Battery()` checks its
+arguments: a value that breaks
 `0 <= min_soc_fraction < max_soc_fraction <= 1`, an efficiency outside (0, 1],
 or NaN for any of the four raises `ValueError` and leaves the battery
 unchanged; the 0.5.0 tag accepts the assignment. Consumers that assign valid
