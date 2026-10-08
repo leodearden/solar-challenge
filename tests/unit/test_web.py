@@ -2,7 +2,6 @@
 
 import dataclasses
 import json
-import re
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -37,6 +36,7 @@ from tests._fleet_form import (
     valid_distribution_form,
 )
 from tests._html_page import (
+    counts_of,
     doctype,
     element_count,
     element_ids,
@@ -73,11 +73,6 @@ def mock_job_manager(app: Flask) -> MagicMock:
     jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
     app.extensions["job_manager"] = jm
     return jm
-
-
-def _counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
-    """How many times each of *keys* occurs in *items*; a key that does not occur counts 0."""
-    return {key: items.count(key) for key in keys}
 
 
 def _run_storage(app: Flask) -> RunStorage:
@@ -186,21 +181,21 @@ class TestDashboardRoute:
         response = client.get("/")
         page = response.get_data(as_text=True)
         labels = ("Simulate", "Scenarios", "History")
-        assert _counts_of(texts(page), labels) == dict.fromkeys(labels, 2)
+        assert counts_of(texts(page), labels) == dict.fromkeys(labels, 2)
 
     def test_dashboard_contains_quick_start_cards(self, client: FlaskClient) -> None:
         """GET / renders one heading per quick-start card: Run Single Home, Run Fleet Simulation and Build Scenario."""
         response = client.get("/")
         page = response.get_data(as_text=True)
         titles = ("Run Single Home", "Run Fleet Simulation", "Build Scenario")
-        assert _counts_of(headings(page), titles) == dict.fromkeys(titles, 1)
+        assert counts_of(headings(page), titles) == dict.fromkeys(titles, 1)
 
     def test_dashboard_contains_stats_section(self, client: FlaskClient) -> None:
         """GET / renders one label per aggregate stat: Total Runs, Homes Simulated and Energy Modelled."""
         response = client.get("/")
         page = response.get_data(as_text=True)
         labels = ("Total Runs", "Homes Simulated", "Energy Modelled")
-        assert _counts_of(texts(page), labels) == dict.fromkeys(labels, 1)
+        assert counts_of(texts(page), labels) == dict.fromkeys(labels, 1)
 
     def test_dashboard_contains_recent_runs_section(self, client: FlaskClient) -> None:
         """GET / with no saved runs renders the Recent Runs heading and its empty-state message."""
@@ -220,7 +215,7 @@ class TestDashboardRoute:
         page = response.get_data(as_text=True)
         page_texts = texts(page)
         assert "recent-runs-table" in element_ids(page)
-        assert _counts_of(page_texts, run_names) == dict.fromkeys(run_names, 1)
+        assert counts_of(page_texts, run_names) == dict.fromkeys(run_names, 1)
         assert "No simulation runs yet." not in page_texts
 
     def test_dashboard_recent_runs_table_rows_show_each_run_newest_first(
@@ -265,36 +260,6 @@ class TestDashboardRoute:
         assert texts_after(page, "Total Runs", 1) == ["2"]
         assert texts_after(page, "Homes Simulated", 1) == [str(completed_homes)]
         assert texts_after(page, "Energy Modelled", 2) == [str(round(completed_homes_generation_mwh, 2)), "MWh"]
-
-
-class TestSimulateHomeRoute:
-    """Tests for the GET /simulate/home route."""
-
-    def test_simulate_home_page_returns_200(self, client: FlaskClient) -> None:
-        """Test GET /simulate/home returns HTTP 200."""
-        response = client.get("/simulate/home")
-        assert response.status_code == 200
-
-    def test_simulate_home_page_contains_form(self, client: FlaskClient) -> None:
-        """GET /simulate/home renders the PV capacity, battery capacity and annual consumption inputs, and one submit button."""
-        response = client.get("/simulate/home")
-        page = response.get_data(as_text=True)
-        assert {"pv_kw", "battery_kwh", "consumption_kwh"} <= element_ids(page)
-        assert element_count(page, "button", {"type": "submit"}) == 1
-
-    def test_simulate_home_page_contains_tabs(self, client: FlaskClient) -> None:
-        """GET /simulate/home renders one tab list and, per tab, one panel shown while it is active."""
-        response = client.get("/simulate/home")
-        page = response.get_data(as_text=True)
-        assert element_count(page, "nav", {"role": "tablist"}) == 1
-        tab_ids = ("pv", "battery", "load", "heat_pump", "tariff", "location", "period")
-        panels_per_tab = {
-            tab_id: element_count(
-                page, "div", {"role": "tabpanel", "x-show": f"activeTab === '{tab_id}'"}
-            )
-            for tab_id in tab_ids
-        }
-        assert panels_per_tab == dict.fromkeys(tab_ids, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -594,49 +559,6 @@ class TestHomeResultsRoute:
         assert headings(response.get_data(as_text=True))[0] == "Home Simulation"
 
 
-class TestFleetConfigRoute:
-    """Tests for the GET /simulate/fleet route."""
-
-    def test_fleet_page_returns_200(self, client: FlaskClient) -> None:
-        """Test GET /simulate/fleet returns HTTP 200."""
-        response = client.get("/simulate/fleet")
-        assert response.status_code == 200
-
-    def test_fleet_page_contains_distribution_editors(self, client: FlaskClient) -> None:
-        """GET /simulate/fleet renders three distribution editors, one per card, and the n_homes input."""
-        response = client.get("/simulate/fleet")
-        page = response.get_data(as_text=True)
-        assert element_count(page, "select", {"x-model": "dist.type"}) == 3
-        assert "n_homes" in element_ids(page)
-
-    def test_fleet_page_contains_pv_battery_load_sections(self, client: FlaskClient) -> None:
-        """GET /simulate/fleet renders one heading per distribution card: PV Capacity, Battery Capacity and Annual Consumption."""
-        response = client.get("/simulate/fleet")
-        page = response.get_data(as_text=True)
-        subjects = ("PV Capacity", "Battery Capacity", "Annual Consumption")
-        assert _counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
-
-    def test_fleet_page_contains_action_buttons(self, client: FlaskClient) -> None:
-        """GET /simulate/fleet renders the Import YAML and Export YAML controls and one button that runs the fleet simulation."""
-        response = client.get("/simulate/fleet")
-        page = response.get_data(as_text=True)
-        page_texts = texts(page)
-        assert page_texts.count("Import YAML") == 1
-        assert element_count(page, "input", {"type": "file", "@change": "importYaml($event)"}) == 1
-        assert page_texts.count("Export YAML") == 1
-        assert element_count(page, "button", {"@click": "exportYaml()"}) == 1
-        assert element_count(page, "button", {"@click": "submitFleet()"}) == 1
-
-    def test_fleet_page_has_correct_page_identifier(self, client: FlaskClient) -> None:
-        """GET /simulate/fleet renders the sidebar with the simulate-fleet page identifier, so the Simulate group's links show on this page."""
-        response = client.get("/simulate/fleet")
-        page = response.get_data(as_text=True)
-        simulate_links_condition = (
-            "(openGroup === 'simulate' || 'simulate-fleet'.startsWith('simulate')) && sidebarOpen"
-        )
-        assert element_count(page, "div", {"x-show": simulate_links_condition}) == 1
-
-
 class TestFleetApiEndpoints:
     """Tests for fleet-related API endpoints."""
 
@@ -837,52 +759,3 @@ class TestErrorPages:
                 assert page_texts.count("Back to Dashboard") == 1
         finally:
             app.config["TESTING"] = True
-
-
-class TestSimulateHomePageRendering:
-    """Tests for the /simulate/home page rendering quality."""
-
-    def test_simulate_home_no_raw_js_in_body(self, client: FlaskClient) -> None:
-        """Test /simulate/home does not expose raw JavaScript in the page body.
-
-        JavaScript should be contained within <script> tags, not visible
-        as text content in the rendered HTML body.
-        """
-        response = client.get("/simulate/home")
-        assert response.status_code == 200
-        html = response.data.decode("utf-8")
-
-        # The page uses Alpine.js. Check that raw JS function bodies are not
-        # leaked outside of <script> tags. We do this by checking that certain
-        # JS-only patterns don't appear outside <script> blocks.
-
-        # Remove all script blocks first, then check remaining HTML body
-        # Remove all script tag contents
-        body_without_scripts = re.sub(
-            r"<script[^>]*>.*?</script>",
-            "",
-            html,
-            flags=re.DOTALL,
-        )
-
-        # These are JS-specific patterns that should NOT appear in visible body text
-        assert "function()" not in body_without_scripts, (
-            "Raw 'function()' found outside <script> tags"
-        )
-        assert "async () =>" not in body_without_scripts, (
-            "Raw arrow function found outside <script> tags"
-        )
-        assert "addEventListener" not in body_without_scripts, (
-            "Raw 'addEventListener' found outside <script> tags"
-        )
-
-    def test_simulate_home_has_proper_html_structure(self, client: FlaskClient) -> None:
-        """Test /simulate/home has proper HTML document structure."""
-        response = client.get("/simulate/home")
-        assert response.status_code == 200
-        html = response.data.decode("utf-8")
-
-        # Should have a proper HTML document
-        assert doctype(html) == "html"
-        assert element_count(html, "head") == 1
-        assert element_count(html, "body") == 1

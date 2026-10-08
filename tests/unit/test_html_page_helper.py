@@ -8,6 +8,7 @@ letting a page test that uses it pass vacuously.
 import pytest
 
 from tests._html_page import (
+    counts_of,
     doctype,
     element_attributes,
     element_count,
@@ -273,3 +274,41 @@ def test_a_heading_left_open_raises_rather_than_guessing_where_it_ends(
 ) -> None:
     with pytest.raises(ValueError, match="closed by its end tag.*; 1 left open"):
         headings(page)
+
+
+def test_counts_of_counts_the_items_equal_to_each_key() -> None:
+    items = ["Simulate", "History", "Simulate"]
+
+    assert counts_of(items, ("Simulate", "History")) == {"Simulate": 2, "History": 1}
+
+
+def test_counts_of_counts_a_key_no_item_equals_as_0() -> None:
+    items = ["Simulate"]
+
+    assert counts_of(items, ("Simulate", "Scenarios")) == {
+        "Simulate": 1,
+        "Scenarios": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "near_miss",
+    [
+        pytest.param("PV Capacity (kW)", id="longer-text"),
+        pytest.param("PV capacity", id="other-case"),
+    ],
+)
+def test_counts_of_counts_only_an_item_exactly_equal_to_the_key(near_miss: str) -> None:
+    assert counts_of([near_miss], ("PV Capacity",)) == {"PV Capacity": 0}
+
+
+def test_counts_of_refuses_no_keys_rather_than_equal_an_empty_expectation() -> None:
+    with pytest.raises(ValueError, match="at least one key"):
+        counts_of(["Simulate"], ())
+
+
+def test_counts_of_refuses_a_str_rather_than_count_each_key_as_its_substring() -> None:
+    page = "<h3>PV Capacity</h3>"
+
+    with pytest.raises(ValueError, match="got a str of 20 characters"):
+        counts_of(page, ("PV Capacity",))
