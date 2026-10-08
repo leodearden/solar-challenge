@@ -44,7 +44,7 @@ import pytest
 pytest.importorskip("jinja2")
 pytest.importorskip("plotly")
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import SimulationResults
+from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE
 from tests._dashboard_sources import (
@@ -169,18 +169,24 @@ def _fleet_year() -> FleetResults:
     return make_fleet_results(n_homes=2)
 
 
-_SUMMARY = {
-    "total_generation_kwh": 100.0,
-    "total_demand_kwh": 80.0,
-    "total_self_consumption_kwh": 50.0,
-    "total_grid_import_kwh": 30.0,
-    "total_grid_export_kwh": 40.0,
-    "total_battery_charge_kwh": 10.0,
-    "total_battery_discharge_kwh": 8.0,
-    "self_consumption_ratio": 0.5,
-    "grid_dependency_ratio": 0.375,
-    "export_ratio": 0.4,
-}
+_SUMMARY = SummaryStatistics(
+    total_generation_kwh=100.0,
+    total_demand_kwh=80.0,
+    total_self_consumption_kwh=50.0,
+    total_grid_import_kwh=30.0,
+    total_grid_export_kwh=40.0,
+    total_battery_charge_kwh=10.0,
+    total_battery_discharge_kwh=8.0,
+    peak_generation_kw=4.0,
+    peak_demand_kw=2.5,
+    self_consumption_ratio=0.5,
+    grid_dependency_ratio=0.375,
+    export_ratio=0.4,
+    simulation_days=1,
+    total_import_cost_gbp=0.0,
+    total_export_revenue_gbp=0.0,
+    net_cost_gbp=0.0,
+)
 _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
 
 
@@ -220,9 +226,11 @@ _FIGURES: dict[str, _FigureCase] = {
         charts.overlaid_power_flows, lambda build: build([_year()] * 5, _FIVE_RUNS)
     ),
     "comparison_bar_chart": _FigureCase(
-        charts.comparison_bar_chart, lambda build: build([_SUMMARY] * 5, _FIVE_RUNS)
+        charts.comparison_bar_chart, lambda build: build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS)
     ),
-    "comparison_radar": _FigureCase(charts.comparison_radar, lambda build: build([_SUMMARY] * 5, _FIVE_RUNS)),
+    "comparison_radar": _FigureCase(
+        charts.comparison_radar, lambda build: build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS)
+    ),
     "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: build(_fleet_year())),
     "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: build(_fleet_year())),
     "fleet_heatmap": _FigureCase(charts.fleet_heatmap, lambda build: build([_SUMMARY] * 3)),

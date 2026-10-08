@@ -66,79 +66,66 @@ def _one_day_homes(n_homes: int) -> list[SimulationResults]:
 
 
 class TestFleetChartFunctions:
-    """Tests for the fleet-specific chart functions in charts.py."""
+    """Tests for the fleet-specific chart functions in charts.py.
 
-    def test_fleet_heatmap_returns_json(self) -> None:
-        """Test fleet_heatmap returns a valid non-empty JSON string."""
-        summaries = [
-            {
-                "total_generation_kwh": 100,
-                "total_demand_kwh": 80,
-                "total_self_consumption_kwh": 60,
-                "total_grid_import_kwh": 20,
-                "total_grid_export_kwh": 40,
-            }
-            for _ in range(5)
-        ]
-        result = fleet_heatmap(summaries)
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        assert "data" in parsed
+    The per-home charts' summaries are calculate_summary's, so renaming a field a chart reads fails their tests.
+    """
 
-    def test_fleet_heatmap_limits_to_50_homes(self) -> None:
-        """Test fleet_heatmap limits display to first 50 homes."""
-        summaries = [
-            {
-                "total_generation_kwh": 100 + i,
-                "total_demand_kwh": 80,
-                "total_self_consumption_kwh": 60,
-                "total_grid_import_kwh": 20,
-                "total_grid_export_kwh": 40,
-            }
-            for i in range(70)
-        ]
-        result = fleet_heatmap(summaries)
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        # The heatmap z data should have at most 50 rows
-        z_data = parsed["data"][0]["z"]
-        assert len(z_data) <= 50
+    def test_fleet_heatmap_rows_are_each_homes_energy_totals(self) -> None:
+        """Each row is one home's five energy totals, in the order the columns name them."""
+        summaries = [calculate_summary(home) for home in _one_day_homes(2)]
 
-    def test_fleet_box_plots_returns_json(self) -> None:
-        """Test fleet_box_plots returns a valid non-empty JSON string."""
-        summaries = [
-            {
-                "total_generation_kwh": 100 + i * 10,
-                "total_demand_kwh": 80 + i * 5,
-                "total_self_consumption_kwh": 60 + i * 3,
-                "total_grid_import_kwh": 20 + i * 2,
-                "total_grid_export_kwh": 40 + i * 5,
-            }
-            for i in range(10)
-        ]
-        result = fleet_box_plots(summaries)
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        assert "data" in parsed
-        # Should have 5 box traces (one per metric)
-        assert len(parsed["data"]) == 5
+        heatmap = json.loads(fleet_heatmap(summaries))["data"][0]
 
-    def test_fleet_distribution_histograms_returns_json(self) -> None:
-        """Test fleet_distribution_histograms returns a valid non-empty JSON string."""
-        summaries = [
-            {
-                "total_generation_kwh": 100 + i * 10,
-                "self_consumption_ratio": 0.5 + i * 0.02,
-                "grid_dependency_ratio": 0.3 + i * 0.01,
-            }
-            for i in range(20)
+        assert heatmap["x"] == ["Generation", "Demand", "Self-Consumption", "Grid Import", "Grid Export"]
+        assert heatmap["y"] == ["Home 1", "Home 2"]
+        assert heatmap["z"] == [[72.0, 45.0, 18.0, 27.0, 54.0], [8.0, 46.0, 6.0, 40.0, 2.0]]
+
+    def test_fleet_heatmap_draws_only_the_first_50_homes(self) -> None:
+        """Of 51 homes, the heatmap draws the first 50, in order."""
+        summaries = [calculate_summary(make_sim_results(self_kwh=float(n), days=1)) for n in range(1, 52)]
+
+        heatmap = json.loads(fleet_heatmap(summaries))["data"][0]
+
+        assert heatmap["y"] == [f"Home {n}" for n in range(1, 51)]
+        assert [row[2] for row in heatmap["z"]] == [float(n) for n in range(1, 51)]
+
+    def test_fleet_heatmap_rounds_each_total_to_two_decimal_places(self) -> None:
+        """Each cell is the home's total rounded to 2 dp; the box plots draw the same totals unrounded, so the rounding is the heatmap's own."""
+        home = make_sim_results(self_kwh=18.456, export_kwh=54.321, import_kwh=27.788, days=1)
+        summaries = [calculate_summary(home)]
+
+        heatmap = json.loads(fleet_heatmap(summaries))["data"][0]
+        boxes = json.loads(fleet_box_plots(summaries))["data"]
+
+        assert [box["y"][0] for box in boxes] == pytest.approx([72.777, 46.244, 18.456, 27.788, 54.321])
+        assert heatmap["z"] == [[72.78, 46.24, 18.46, 27.79, 54.32]]
+
+    def test_fleet_box_plots_draw_each_energy_total_across_the_homes(self) -> None:
+        """Each box is one energy total, drawn from each home's summary in the homes' order."""
+        summaries = [calculate_summary(home) for home in _one_day_homes(2)]
+
+        data = json.loads(fleet_box_plots(summaries))["data"]
+
+        assert [(trace["name"], trace["y"]) for trace in data] == [
+            ("Generation", [72.0, 8.0]),
+            ("Demand", [45.0, 46.0]),
+            ("Self-Consumption", [18.0, 6.0]),
+            ("Grid Import", [27.0, 40.0]),
+            ("Grid Export", [54.0, 2.0]),
         ]
-        result = fleet_distribution_histograms(summaries)
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        assert "data" in parsed
-        # Should have 3 histogram traces
-        assert len(parsed["data"]) == 3
+
+    def test_fleet_distribution_histograms_draw_each_homes_generation_and_ratios(self) -> None:
+        """The three histograms draw each home's generation, self-consumption ratio and grid dependency ratio."""
+        summaries = [calculate_summary(home) for home in _one_day_homes(2)]
+
+        data = json.loads(fleet_distribution_histograms(summaries))["data"]
+
+        assert [(trace["name"], trace["x"]) for trace in data] == [
+            ("Generation", [72.0, 8.0]),
+            ("Self-Consumption", [18 / 72, 6 / 8]),
+            ("Grid Dependency", [27 / 45, 40 / 46]),
+        ]
 
     @pytest.mark.parametrize("n_homes", [1, 2], ids=["one-home", "two-homes"])
     def test_fleet_aggregate_timeline_draws_each_flow_summed_across_the_fleets_homes(
