@@ -850,6 +850,19 @@ class TestJobManagerRuns:
 
         assert (run.status, run.error_message, run.completed_at) == ("running", None, None)
 
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_failed_jobs_run_is_failed_with_the_jobs_error_and_a_completion_time(
+        self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
+        job_id = submit_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+
+        run = _run_of_job(manager, job_id, tmp_path)
+
+        assert (run.status, run.error_message) == ("failed", "the simulation failed")
+        assert run.completed_at is not None
+
 
 class TestJobManagerRefusedRows:
     """Tests for a submit whose run or job row the database refuses."""
