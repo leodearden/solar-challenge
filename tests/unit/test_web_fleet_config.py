@@ -531,7 +531,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_refuses_a_seed_beyond_max_fleet_seed(
         self, seed: int
     ) -> None:
-        """A seed beyond MAX_FLEET_SEED either way is refused, not read as the whole number a float rounds it to, naming the field, the range and the value sent."""
+        """A seed beyond MAX_FLEET_SEED, positive or negative, is refused, not read as the whole number a float rounds it to, naming the field, the range and the value sent."""
         with pytest.raises(ValueError) as exc_info:
             form_to_fleet_distribution_config({**valid_distribution_form(), "seed": seed})
         assert str(exc_info.value) == (
@@ -544,7 +544,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_reads_a_seed_up_to_max_fleet_seed_exactly(
         self, seed: int
     ) -> None:
-        """A seed as large as MAX_FLEET_SEED either way is read as the int sent."""
+        """A seed as large as MAX_FLEET_SEED, positive or negative, is read as the int sent."""
         config = form_to_fleet_distribution_config({**valid_distribution_form(), "seed": seed})
 
         assert config["seed"] == seed
