@@ -22,21 +22,11 @@ from solar_challenge.home import SimulationResults
 
 
 def make_sinusoidal_sim_results(days: int = 3) -> SimulationResults:
-    """Create a minimal SimulationResults object for testing.
-
-    Builds synthetic 1-minute resolution time series spanning the
-    requested number of days, suitable for exercising chart functions.
-
-    Args:
-        days: Number of simulation days.
-
-    Returns:
-        SimulationResults with simple but valid data.
-    """
+    """*days* days from midnight on 1 June 2024 at one row a minute: generation a daily sine
+    clipped at zero, demand flat and met by PV first; no battery, heat pump or prices."""
     freq = "min"
     index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
 
-    # Simple synthetic profiles (sinusoidal generation, flat demand)
     hours = np.arange(len(index)) / 60.0
     generation = np.maximum(0, np.sin(hours * np.pi / 12) * 3.0)
     demand = np.full(len(index), 0.5)
