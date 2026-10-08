@@ -495,6 +495,17 @@ def financial_breakdown(results: SimulationResults) -> str:
     return str(fig.to_json())
 
 
+def _season_bar(name: str, colour_role: str, kwh: Mapping[_EnergyFlow, float]) -> Any:
+    """A bar trace, named *name* in *colour_role*'s colour, of one season's kWh of each flow in *kwh*."""
+    flows = _in_flow_order(kwh)
+    return go.Bar(
+        name=name,
+        x=[f"{flow.label} (kWh)" for flow, _ in flows],
+        y=[round(total, 1) for _, total in flows],
+        marker_color=COLOUR_PALETTE[colour_role],
+    )
+
+
 def seasonal_comparison(results: SimulationResults) -> str | None:
     """Winter vs Summer grouped bar chart.
 
@@ -513,21 +524,17 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
 
     metrics = calculate_seasonal_metrics(results.demand, results.generation)
 
-    categories = ["Generation (kWh)", "Demand (kWh)", "Self-Consumption (kWh)"]
-    winter_vals = [
-        round(metrics["winter_generation_kwh"], 1),
-        round(metrics["winter_demand_kwh"], 1),
-        round(metrics["winter_self_consumption_kwh"], 1),
-    ]
-    summer_vals = [
-        round(metrics["summer_generation_kwh"], 1),
-        round(metrics["summer_demand_kwh"], 1),
-        round(metrics["summer_self_consumption_kwh"], 1),
-    ]
-
     fig = go.Figure(data=[
-        go.Bar(name="Winter (Dec-Feb)", x=categories, y=winter_vals, marker_color=COLOUR_PALETTE["winter"]),
-        go.Bar(name="Summer (Jun-Aug)", x=categories, y=summer_vals, marker_color=COLOUR_PALETTE["summer"]),
+        _season_bar("Winter (Dec-Feb)", "winter", {
+            _EnergyFlow.GENERATION: metrics["winter_generation_kwh"],
+            _EnergyFlow.DEMAND: metrics["winter_demand_kwh"],
+            _EnergyFlow.SELF_CONSUMPTION: metrics["winter_self_consumption_kwh"],
+        }),
+        _season_bar("Summer (Jun-Aug)", "summer", {
+            _EnergyFlow.GENERATION: metrics["summer_generation_kwh"],
+            _EnergyFlow.DEMAND: metrics["summer_demand_kwh"],
+            _EnergyFlow.SELF_CONSUMPTION: metrics["summer_self_consumption_kwh"],
+        }),
     ])
 
     fig.update_layout(
@@ -637,7 +644,7 @@ def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str
         dem_dates = [d.isoformat() for d in dem.index]
 
         traces.append(go.Scatter(
-            name=f"{label} - Generation",
+            name=f"{label} - {_EnergyFlow.GENERATION.label}",
             x=gen_dates,
             y=gen.round(4).tolist(),
             mode="lines",
@@ -645,7 +652,7 @@ def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str
             legendgroup=label,
         ))
         traces.append(go.Scatter(
-            name=f"{label} - Demand",
+            name=f"{label} - {_EnergyFlow.DEMAND.label}",
             x=dem_dates,
             y=dem.round(4).tolist(),
             mode="lines",
@@ -803,30 +810,21 @@ def fleet_grid_impact(fleet: FleetResults) -> str:
     dates = [d.isoformat() for d in net.index]
     values = net.round(4).tolist()
 
-    # Import (positive) fill
-    import_values = [max(0, v) for v in values]
-    # Export (negative) fill
-    export_values = [min(0, v) for v in values]
-
+    regions = _in_flow_order({
+        _EnergyFlow.GRID_IMPORT: [max(0, v) for v in values],
+        _EnergyFlow.GRID_EXPORT: [min(0, v) for v in values],
+    })
     traces: list[Any] = [
         go.Scatter(
-            name="Grid Import",
+            name=flow.label,
             x=dates,
-            y=import_values,
+            y=region,
             mode="lines",
             fill="tozeroy",
-            line=dict(width=0.5, color=COLOUR_PALETTE["grid_import"]),
-            fillcolor=_with_alpha(COLOUR_PALETTE["grid_import"], 0.3),
-        ),
-        go.Scatter(
-            name="Grid Export",
-            x=dates,
-            y=export_values,
-            mode="lines",
-            fill="tozeroy",
-            line=dict(width=0.5, color=COLOUR_PALETTE["grid_export"]),
-            fillcolor=_with_alpha(COLOUR_PALETTE["grid_export"], 0.3),
-        ),
+            line=dict(width=0.5, color=flow.colour),
+            fillcolor=_with_alpha(flow.colour, 0.3),
+        )
+        for flow, region in regions
     ]
 
     fig = go.Figure(data=traces)
@@ -930,9 +928,10 @@ def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -
     Returns:
         Plotly figure JSON string.
     """
+    generation = _EnergyFlow.GENERATION
     fig = make_subplots(
         rows=1, cols=3,
-        subplot_titles=["Generation (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"],
+        subplot_titles=[f"{generation.label} (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"],
     )
 
     gen_values = [summary.total_generation_kwh for summary in home_summaries]
@@ -942,8 +941,8 @@ def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -
     fig.add_trace(
         go.Histogram(
             x=gen_values,
-            name="Generation",
-            marker_color=COLOUR_PALETTE["pv_generation"],
+            name=generation.label,
+            marker_color=generation.colour,
         ),
         row=1, col=1,
     )
