@@ -625,6 +625,52 @@ class TestSavedRunRow:
         record = storage.run_record("new-run")
         assert before <= datetime.fromisoformat(record.created_at) <= after
 
+    @pytest.mark.parametrize(
+        ("first", "resave"),
+        [
+            pytest.param("fleet", "home", id="fleet-then-home"),
+            pytest.param("home", "fleet", id="home-then-fleet"),
+        ],
+    )
+    def test_a_resave_writes_the_row_a_first_save_would_but_keeps_created_at_and_notes(
+        self, storage, saves, first, resave
+    ):
+        """A save under the id of a saved run writes the row a first save with its arguments would, except that the row keeps its created_at and notes.
+
+        The first save is of the other run type, was completed and created earlier, and its notes
+        are set, so it differs from the re-save in every column: each column of the re-saved row
+        shows which save wrote it.
+        """
+        saves[first](
+            "resaved",
+            name="First Name",
+            status="completed",
+            duration_seconds=120.0,
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        storage.update_run_labels("resaved", {"notes": "Checked"})
+        first_record = storage.run_record("resaved")
+        resave_arguments = dict(
+            name="Second Name",
+            status="failed",
+            error_message="Simulation diverged",
+            duration_seconds=5.0,
+            created_at="2026-02-01T00:00:00+00:00",
+        )
+        saves[resave]("resaved", **resave_arguments)
+        saves[resave]("fresh", **resave_arguments)
+        fresh_record = storage.run_record("fresh")
+
+        columns_the_saves_share = [
+            field.name
+            for field in dataclasses.fields(RunRecord)
+            if getattr(first_record, field.name) == getattr(fresh_record, field.name)
+        ]
+        assert columns_the_saves_share == []
+        assert storage.run_record("resaved") == dataclasses.replace(
+            fresh_record, id="resaved", created_at="2026-01-01T00:00:00+00:00", notes="Checked"
+        )
+
 
 class TestListRuns:
     """Tests for listing and filtering runs."""
