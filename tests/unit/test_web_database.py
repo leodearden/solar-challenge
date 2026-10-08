@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import re
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -832,26 +833,27 @@ class TestRunRecord:
         assert storage.run_record("no-such-run") is None
 
 
+@pytest.fixture
+def north_roof_record():
+    """A completed home run's record, with no config or summary text until a test gives it some."""
+    return RunRecord(
+        id="north-roof",
+        name="North Roof",
+        type="home",
+        config_json=None,
+        summary_json=None,
+        status="completed",
+        error_message=None,
+        created_at="2026-01-01T00:00:00+00:00",
+        completed_at="2026-01-01T00:01:00+00:00",
+        duration_seconds=60.0,
+        n_homes=1,
+        notes=None,
+    )
+
+
 class TestRunRecordDecoding:
     """Tests for RunRecord.decoded_config and RunRecord.decoded_summary, a run's JSON texts decoded."""
-
-    @pytest.fixture
-    def north_roof_record(self):
-        """A completed home run's record, with no config or summary text until a test gives it some."""
-        return RunRecord(
-            id="north-roof",
-            name="North Roof",
-            type="home",
-            config_json=None,
-            summary_json=None,
-            status="completed",
-            error_message=None,
-            created_at="2026-01-01T00:00:00+00:00",
-            completed_at="2026-01-01T00:01:00+00:00",
-            duration_seconds=60.0,
-            n_homes=1,
-            notes=None,
-        )
 
     def test_decoded_config_and_summary_are_the_values_their_texts_encode(self, north_roof_record):
         """Each decodes its own text: the config's from config_json, the summary's from summary_json."""
@@ -874,6 +876,26 @@ class TestRunRecordDecoding:
         record = dataclasses.replace(north_roof_record, config_json=text, summary_json=text)
 
         assert (record.decoded_config(), record.decoded_summary()) == ({}, {})
+
+
+class TestRunRecordTypeAndStatus:
+    """Tests for RunRecord's type and status, each one of the runs table's definitions or None."""
+
+    @pytest.mark.parametrize(("column", "value"), RUNS_COLUMN_VALUES)
+    def test_a_run_record_holds_each_run_type_and_run_status_and_none(self, north_roof_record, column, value):
+        """A record holds each run type or None as its type, and each run status or None as its status."""
+        record = dataclasses.replace(north_roof_record, **{column: value})
+
+        assert getattr(record, column) == value
+
+    @pytest.mark.parametrize(("column", "value"), VALUES_OUTSIDE_THE_RUNS_COLUMN_DEFINITIONS)
+    def test_a_run_record_refuses_a_type_or_status_outside_its_definition(self, north_roof_record, column, value):
+        """A type that is not a run type, or a status that is not a run status, raises ValueError naming the field, the value and the values allowed."""
+        allowed = {"type": "['home', 'fleet', 'sweep']", "status": "['running', 'completed', 'failed']"}[column]
+        refusal = f"RunRecord.{column} is {value!r}, not one of {allowed} or None"
+
+        with pytest.raises(ValueError, match=re.escape(refusal)):
+            dataclasses.replace(north_roof_record, **{column: value})
 
 
 class TestRunName:
