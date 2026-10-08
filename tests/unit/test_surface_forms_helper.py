@@ -182,15 +182,15 @@ def test_a_param_spec_args_and_kwargs_are_spelled_by_their_reprs() -> None:
 
 
 def test_a_string_annotation_is_spelled_verbatim_and_unquoted() -> None:
-    def f(a: "Optional[Foo]", b: "'Bar'") -> "Baz": ...  # noqa: F821
+    def f(a: "Optional[Foo]", b: "'Bar'", c: "Optional[int]") -> "Baz": ...  # noqa: F821
 
-    assert surface_form(f) == "(a: Optional[Foo], b: 'Bar') -> Baz"
+    assert surface_form(f) == "(a: Optional[Foo], b: 'Bar', c: Optional[int]) -> Baz"
 
 
 def test_a_forward_reference_inside_an_alias_is_spelled_by_its_name() -> None:
-    def f(a: Optional["Foo"], b: List["Bar"]) -> None: ...  # noqa: F821
+    def f(a: Optional["Foo"], b: List["Bar"], c: list["Baz"]) -> None: ...  # noqa: F821
 
-    assert surface_form(f) == "(a: Foo | None, b: list[Bar]) -> None"
+    assert surface_form(f) == "(a: Foo | None, b: list[Bar], c: list[Baz]) -> None"
 
 
 def test_any_is_spelled_by_its_name() -> None:
@@ -361,8 +361,9 @@ def test_a_class_constant_member_is_spelled_by_its_type() -> None:
     class Meter:
         UNITS = "kWh"
         SCALE = 1.5
+        RATE: ClassVar[float] = 0.15
 
-    assert member_forms(Meter) == {"UNITS": "str", "SCALE": "float"}
+    assert member_forms(Meter) == {"UNITS": "str", "SCALE": "float", "RATE": "float"}
 
 
 def test_an_attribute_the_class_body_only_annotates_is_spelled_attribute_then_its_annotation() -> None:
@@ -378,6 +379,21 @@ def test_an_attribute_the_class_body_only_annotates_is_spelled_attribute_then_it
         "site": "attribute Path",
         "reading": "attribute float | None",
     }
+
+
+def test_an_attribute_set_on_self_is_a_member_only_once_a_class_body_declares_it() -> None:
+    class Undeclared:
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+
+    class Declared:
+        site: pathlib.Path
+
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+
+    assert member_forms(Undeclared) == {}
+    assert member_forms(Declared) == {"site": "attribute Path"}
 
 
 def test_a_name_the_class_body_only_annotates_as_a_class_variable_is_not_a_member() -> None:
@@ -662,6 +678,19 @@ def test_an_attribute_a_class_body_in_the_mro_declares_or_defines_is_not_undecla
             self.reading = 0.0
 
     assert undeclared_attributes(Meter) == set()
+
+
+def test_an_attribute_only_a_base_sets_on_self_is_undeclared_in_the_base_not_its_subclass() -> None:
+    class Base:
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+
+    class Meter(Base):
+        def reset(self) -> None:
+            self.reading = 0.0
+
+    assert undeclared_attributes(Base) == {"site"}
+    assert undeclared_attributes(Meter) == {"reading"}
 
 
 def test_a_private_attribute_set_on_self_is_never_undeclared() -> None:
