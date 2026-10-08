@@ -15,7 +15,9 @@ from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
-from tests._config_preset_rows import insert_saved_home_preset
+from tests._config_preset_rows import insert_saved_home_preset, saved_preset_names
+
+_BUILTIN_PRESET_NAMES = ("Small Urban", "Medium Suburban", "Large with Battery")
 
 
 def _save_home_presets_one_of_them_under_a_builtin_name(app: Flask, client: FlaskClient) -> None:
@@ -232,22 +234,16 @@ class TestSavePreset:
         assert client.get("/api/scenarios/presets/Taken").get_json()["config"] == {"n_homes": 9}
         assert "Taken" not in [p["name"] for p in client.get("/api/presets").get_json()]
 
-    @pytest.mark.parametrize("name", ["Small Urban", "Medium Suburban", "Large with Battery"])
+    @pytest.mark.parametrize("name", _BUILTIN_PRESET_NAMES)
     def test_save_under_a_builtin_presets_name_returns_409_and_saves_nothing(
-        self, client: FlaskClient, name: str
+        self, app: Flask, client: FlaskClient, name: str
     ) -> None:
-        """A home save under a built-in home preset's name is a 409 naming that preset.
-
-        The fleet save after it witnesses that no saved home preset took the name: a saved home
-        preset under it would make that save a 409 too, while GET /api/presets, which leaves such
-        a preset out, cannot show one. It also pins that a fleet save may take a built-in home
-        preset's name, which no list or lookup of fleet presets holds.
-        """
+        """A home save under a built-in home preset's name is a 409 naming that preset, and the database holds no saved preset after it."""
         resp = client.post("/api/presets", json={"name": name, "pv_kw": 9.5})
 
         assert resp.status_code == 409
         assert resp.get_json() == {"error": f"A built-in home preset is already named {name!r}"}
-        assert client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}}).status_code == 201
+        assert saved_preset_names(app.config["DATABASE"]) == []
 
     def test_saving_a_name_again_replaces_its_config_and_keeps_its_id(self, client: FlaskClient) -> None:
         """A second save under a saved home preset's name updates that preset in place."""
@@ -320,3 +316,15 @@ class TestGetPreset:
 
         assert (resp.status_code, resp.get_json()) == (404, {"error": "Preset 'Fleet only' not found"})
         assert "Fleet only" not in [p["name"] for p in client.get("/api/presets").get_json()]
+
+    @pytest.mark.parametrize("name", _BUILTIN_PRESET_NAMES)
+    def test_a_fleet_save_may_take_a_builtin_presets_name_and_the_lookup_answers_the_builtin_one(
+        self, client: FlaskClient, name: str
+    ) -> None:
+        """Only home saves are refused a built-in home preset's name: a fleet preset may hold it, since the lookup answers home presets only."""
+        assert client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}}).status_code == 201
+        assert client.get(f"/api/scenarios/presets/{name}").get_json()["config"] == {"n_homes": 9}
+
+        resp = client.get(f"/api/presets/{name}")
+
+        assert (resp.status_code, resp.get_json()["source"]) == (200, "builtin")

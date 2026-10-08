@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Write a saved home preset's row straight into a dashboard database's config_presets table.
+"""The rows of a dashboard database's config_presets table, written and read straight, past the dashboard's own saves.
 
-The row skips the dashboard's own save and the names and configs it refuses, so a test can
-give the database a saved home preset no save writes, such as one under a built-in home
-preset's name.
+insert_saved_home_preset writes a saved home preset no save writes, such as one under a
+built-in home preset's name or one whose config is not JSON. saved_preset_names reads the
+name of every saved preset, so a test can show what a save wrote.
 
 Usage::
 
-    from tests._config_preset_rows import insert_saved_home_preset
+    from tests._config_preset_rows import insert_saved_home_preset, saved_preset_names
 
     preset_id = insert_saved_home_preset(app.config["DATABASE"], "Small Urban", json.dumps({"pv_kw": 9.5}))
+    assert saved_preset_names(app.config["DATABASE"]) == ["Small Urban"]
 """
 
 import sqlite3
@@ -29,3 +30,9 @@ def insert_saved_home_preset(db_path: str | Path, name: str, config_json: str) -
                 (preset_id, name, config_json, datetime.now(timezone.utc).isoformat()),
             )
     return preset_id
+
+
+def saved_preset_names(db_path: str | Path) -> list[str]:
+    """The name of each saved preset, home and fleet alike, in the database at *db_path*, in name order."""
+    with closing(sqlite3.connect(db_path)) as conn:
+        return [name for (name,) in conn.execute("SELECT name FROM config_presets ORDER BY name")]
