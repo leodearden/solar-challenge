@@ -29,7 +29,7 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.web import database
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
-from solar_challenge.web.simulation_params import parse_home_config
+from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("assistant", __name__)
@@ -267,6 +267,10 @@ def suggest_config(
     }
 
 
+# The days a trigger tool's simulation spans when the model sends no window.
+_TRIGGER_TOOL_DEFAULT_DAYS = 7
+
+
 # ---------------------------------------------------------------------------
 # Tool definitions — fixed order for prompt-cache stability.  The tools render
 # ahead of the cached system block, so they belong to the cached prompt prefix;
@@ -404,7 +408,7 @@ TOOLS: Sequence[Mapping[str, Any]] = (
                 },
                 "days": {
                     "type": "integer",
-                    "description": "Simulation duration in days (default 7).",
+                    "description": f"Simulation duration in days (default {_TRIGGER_TOOL_DEFAULT_DAYS}).",
                 },
             },
             "required": ["pv_kw"],
@@ -438,7 +442,7 @@ TOOLS: Sequence[Mapping[str, Any]] = (
                 },
                 "days": {
                     "type": "integer",
-                    "description": "Simulation duration in days (default 7).",
+                    "description": f"Simulation duration in days (default {_TRIGGER_TOOL_DEFAULT_DAYS}).",
                 },
             },
             "required": ["n_homes"],
@@ -557,7 +561,10 @@ def run_home_simulation(
     Args:
         params:      Flat parameter dict (pv_kw, battery_kwh, occupants,
                      location, days, name, …) — same shape as the JSON body
-                     accepted by POST /api/simulate/home.
+                     accepted by POST /api/simulate/home.  A window the params
+                     send (days, or start/end) is read as that endpoint reads
+                     it; params that send none run _TRIGGER_TOOL_DEFAULT_DAYS
+                     days.
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
         data_dir:    Root directory for storing run artefacts.
@@ -566,18 +573,10 @@ def run_home_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    # Inject the documented default (7 days) when 'days' is absent OR explicitly None.
-    # A caller-supplied non-None 'days' always wins because **params overrides the sentinel
-    # key; the caller's tool_input dict is not mutated (we build a new dict).
-    # The extra None-check is needed because {"days": 7, **params} leaves days=None when
-    # the model emits an explicit null — parse_date_range would then fall through to the
-    # full 2024 calendar year (~366 days), contradicting the schema's "(default 7)".
-    effective_params: dict[str, Any] = {"days": 7, **params}
-    if effective_params.get("days") is None:
-        effective_params["days"] = 7
-
     try:
-        home_config, start_date, end_date, name = parse_home_config(effective_params)
+        home_config, start_date, end_date, name = parse_home_config(
+            with_default_days(params, _TRIGGER_TOOL_DEFAULT_DAYS)
+        )
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
@@ -629,16 +628,12 @@ def run_fleet_simulation(
 
     # Build per-home dict by excluding the fleet-level n_homes key
     per_home: dict[str, Any] = {k: v for k, v in params.items() if k != "n_homes"}
-    # Inject the documented default (7 days) when absent OR explicitly None.
-    # setdefault only guards absent keys; an explicit None bypasses it and would
-    # fall through to parse_date_range's full-year default — check both cases.
-    per_home.setdefault("days", 7)
-    if per_home.get("days") is None:
-        per_home["days"] = 7
 
     # Validate once; if it fails, return early without submitting
     try:
-        home_config_0, start_date, end_date, name = parse_home_config(per_home)
+        home_config_0, start_date, end_date, name = parse_home_config(
+            with_default_days(per_home, _TRIGGER_TOOL_DEFAULT_DAYS)
+        )
     except (ValueError, TypeError) as exc:
         return {"error": f"Invalid simulation parameters: {exc}"}
 
