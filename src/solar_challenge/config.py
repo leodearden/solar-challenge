@@ -1628,8 +1628,6 @@ def generate_homes_from_distribution(
     location: Location,
     *,
     fleet_tariff: Optional[TariffConfig] = None,
-    fleet_grid_charging: Optional[GridChargeConfig] = None,
-    fleet_dispatch_strategy: Optional[str] = None,
 ) -> list[HomeConfig]:
     """Generate a list of homes by sampling from distributions.
 
@@ -1639,16 +1637,6 @@ def generate_homes_from_distribution(
         fleet_tariff: Optional TariffConfig to apply to every home. When None
             (default) homes are generated with tariff_config=None, preserving
             bit-identical behaviour for callers that do not pass this kwarg.
-        fleet_grid_charging: Optional GridChargeConfig to apply to every home
-            that has a battery, in place of config.battery.grid_charging. When
-            None (default) the config's applies. Note: if a home's
-            sampled battery capacity is non-positive (or battery is absent), no
-            BatteryConfig is created and its grid charging is silently dropped
-            for that home — this is expected behaviour (no battery → no grid
-            charging), not an error.
-        fleet_dispatch_strategy: Optional dispatch strategy string to apply to
-            every home, in place of config.dispatch_strategy. When None (default)
-            or empty the config's applies, and "greedy" when that is None too.
 
     Returns:
         List of HomeConfig objects
@@ -1751,7 +1739,7 @@ def generate_homes_from_distribution(
                     capacity_kwh=battery_capacity,
                     max_charge_kw=charge_kw if charge_kw is not None else 2.5,
                     max_discharge_kw=discharge_kw if discharge_kw is not None else 2.5,
-                    grid_charging=fleet_grid_charging or config.battery.grid_charging,
+                    grid_charging=config.battery.grid_charging,
                     dispatch_strategy=config.battery.dispatch_strategy,
                 )
 
@@ -1835,7 +1823,7 @@ def generate_homes_from_distribution(
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=fleet_tariff,
-                dispatch_strategy=fleet_dispatch_strategy or config.dispatch_strategy or "greedy",
+                dispatch_strategy=config.dispatch_strategy or "greedy",
             )
         )
 
