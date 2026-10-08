@@ -109,12 +109,16 @@ def refuse_reversed_or_overlong_window(
         )
 
 
-def _dates_sent(params: Mapping[str, Any]) -> dict[str, Any]:
-    """The start and end *params* sends, keyed by field, start first.
+def _window_sent(data: Mapping[str, Any]) -> dict[str, Any]:
+    """The window fields *data*, a request body, sends, keyed by field in _DATE_RANGE_DEFAULTS order.
 
-    A null or empty value, as _DATE_RANGE_DEFAULTS gives an absent one, is not sent.
+    A null value, or the value _DATE_RANGE_DEFAULTS gives an absent field, is not sent.
     """
-    return {field: params[field] for field in ("start", "end") if params[field] not in (None, "")}
+    return {
+        field: data[field]
+        for field, absent in _DATE_RANGE_DEFAULTS.items()
+        if data.get(field) not in (None, absent)
+    }
 
 
 def _refuse_days_with_dates(days: Any, dates: Mapping[str, Any]) -> None:
@@ -155,14 +159,14 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
             window ends before it starts or spans more than MAX_WINDOW_DAYS
             days, naming start and end as read.
     """
-    params = {**_DATE_RANGE_DEFAULTS, **data}
-    dates = _dates_sent(params)
-    _refuse_days_with_dates(params["days"], dates)
-    if params["days"] is not None:
-        start, end = _days_window(as_int_within(params["days"], "days", 1, MAX_WINDOW_DAYS))
+    sent = _window_sent(data)
+    days = sent.pop("days", None)
+    _refuse_days_with_dates(days, sent)
+    if days is not None:
+        start, end = _days_window(as_int_within(days, "days", 1, MAX_WINDOW_DAYS))
     else:
-        start = _read_date(dates.get("start"), "start", _FULL_YEAR_START)
-        end = _read_date(dates.get("end"), "end", _FULL_YEAR_END)
+        start = _read_date(sent.get("start"), "start", _FULL_YEAR_START)
+        end = _read_date(sent.get("end"), "end", _FULL_YEAR_END)
     refuse_reversed_or_overlong_window(start, end, start_field="start", end_field="end")
     return start.isoformat(), end.isoformat()
 
@@ -170,12 +174,11 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
 def with_default_days(data: Mapping[str, Any], days: int) -> dict[str, Any]:
     """A copy of *data*, a request body, with days=*days* when the body sends no window of its own.
 
-    No window means none of days, start and end sent, as parse_date_range reads
-    them. A body that sends one is returned as sent, so the window it sends is
-    read, or refused, as sent.
+    No window means none of the window fields parse_date_range reads sent. A
+    body that sends one is returned as sent, so the window it sends is read, or
+    refused, as sent.
     """
-    params = {**_DATE_RANGE_DEFAULTS, **data}
-    if params["days"] is not None or _dates_sent(params):
+    if _window_sent(data):
         return dict(data)
     return {**data, "days": days}
 

@@ -36,7 +36,7 @@ from solar_challenge.web.shared import (
     request_json_object,
     require_json_object,
 )
-from solar_challenge.web.simulation_params import parse_home_config
+from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.storage import RUN_LABELS, stored_fleet_home_configs, stored_home_config
 
 logger = logging.getLogger(__name__)
@@ -516,21 +516,8 @@ _SWEEP_PARAMETER_HOME_KEYS: Mapping[str, str] = {
     "annual_consumption_kwh": "consumption_kwh",
 }
 
-#: The keys of a home config that set its simulation window: the ones simulation_params.parse_date_range reads.
-_HOME_WINDOW_KEYS: frozenset[str] = frozenset({"days", "start", "end"})
-
-#: The days each point of a sweep runs when its base_config sends no window key.
+#: The days each point of a sweep runs when its base_config sends no window of its own.
 _SWEEP_DEFAULT_DAYS = 7
-
-
-def _with_sweep_default_window(base_config: Mapping[str, Any]) -> Mapping[str, Any]:
-    """*base_config*, plus days=_SWEEP_DEFAULT_DAYS when it sends none of _HOME_WINDOW_KEYS.
-
-    A window key it sends is kept as sent, so parse_home_config reads its window as it reads a home's.
-    """
-    if base_config.keys().isdisjoint(_HOME_WINDOW_KEYS):
-        return {**base_config, "days": _SWEEP_DEFAULT_DAYS}
-    return base_config
 
 
 @api_bp.route("/simulate/sweep", methods=["POST"])
@@ -548,9 +535,9 @@ def simulate_sweep() -> tuple[Response, int]:
       - steps: int (>= 2)
       - mode: "linear" | "geometric"
       - base_config: JSON object (optional, default {}), the home config
-        every sweep point starts from.  A window it sends (any of days, start
-        and end) is read as parse_home_config reads a home's; one that sends
-        none runs _SWEEP_DEFAULT_DAYS days.
+        every sweep point starts from.  A window it sends is read as
+        parse_home_config reads a home's; one that sends none, as
+        with_default_days reads a body, runs _SWEEP_DEFAULT_DAYS days.
 
     Returns:
         JSON with sweep_id, parameter, values and job_ids, HTTP 201.
@@ -598,7 +585,7 @@ def simulate_sweep() -> tuple[Response, int]:
     rounded_values = [round(v, 3) for v in values]
 
     # Build every point's home before any job is submitted
-    point_base_config = _with_sweep_default_window(base_config)
+    point_base_config = with_default_days(base_config, _SWEEP_DEFAULT_DAYS)
     point_homes: list[tuple[float, HomeConfig, pd.Timestamp, pd.Timestamp]] = []
     for val in rounded_values:
         point_config = {**point_base_config, home_config_key: val}

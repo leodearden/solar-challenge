@@ -324,7 +324,10 @@ class TestSweepWindow:
             pytest.param({"start": "2024-02-01"}, id="start-only"),
             pytest.param({"end": "2024-03-31"}, id="end-only"),
             pytest.param({"days": 30}, id="days"),
-            pytest.param({"days": None}, id="days-null"),
+            pytest.param(
+                {"days": None, "start": "2024-03-01", "end": "2024-03-05"},
+                id="null-days-with-start-and-end",
+            ),
         ],
     )
     def test_every_point_runs_the_window_its_base_config_sends(
@@ -333,7 +336,7 @@ class TestSweepWindow:
         recording_job_manager: _RecordingJobManager,
         window: dict[str, Any],
     ) -> None:
-        """A base_config that sends any of days, start and end, even as null, has every point run the window parse_home_config reads from it."""
+        """A base_config that sends a days, or a start or end, has every point run the window parse_home_config reads from it, never the sweep's default 7 days."""
         response = client.post(
             "/api/simulate/sweep",
             json={"min": 1.0, "max": 5.0, "steps": 2, "base_config": window},
@@ -346,19 +349,21 @@ class TestSweepWindow:
         "base_config_fields",
         [
             pytest.param({"base_config": {"battery_kwh": 5.0}}, id="base-config-without-window-key"),
+            pytest.param({"base_config": {"days": None}}, id="null-days"),
+            pytest.param({"base_config": {"start": "", "end": None}}, id="empty-and-null-dates"),
             pytest.param({"base_config": {}}, id="empty-base-config"),
             pytest.param({}, id="no-base-config"),
         ],
     )
-    def test_a_request_that_sends_no_window_key_runs_every_point_for_7_days(
+    def test_a_request_that_sends_no_window_runs_every_point_for_7_days(
         self,
         client: FlaskClient,
         recording_job_manager: _RecordingJobManager,
         base_config_fields: dict[str, Any],
     ) -> None:
-        """A request that sends none of days, start and end has every point run the sweep's default 7 days.
+        """A request that sends no window, as parse_date_range reads one, has every point run the sweep's default 7 days.
 
-        Its base_config may hold other keys, be empty, or be left out of the body altogether.
+        Its base_config may hold other keys, a null days, or an empty or null start or end; or it may be empty, or be left out of the body altogether.
         """
         response = client.post(
             "/api/simulate/sweep",
