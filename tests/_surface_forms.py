@@ -127,7 +127,7 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 
 
 def undeclared_attributes(cls: type) -> set[str]:
-    """The public attributes *cls*'s own source sets on self that no class body in its MRO defines or declares."""
+    """The public attributes *cls*'s own source sets on self that no class body in its MRO defines or declares; a dataclass init-only variable declares a constructor parameter, not an attribute, even with a default."""
     declared = {name for base in cls.__mro__ for name in _own_members(base)}
     return _attributes_set_on_self(cls) - declared
 
@@ -303,13 +303,11 @@ def _type_checking_imports(module: str) -> types.CodeType:
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
-    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass field and init-only variable its constructor takes; an init-only variable is one its body annotates."""
+    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass field its constructor takes."""
     if issubclass(cls, enum.Enum):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
-        annotated = inspect.get_annotations(cls).keys()
-        parameters = inspect.signature(cls).parameters.keys()
-        return (_fields(cls).keys() | annotated) & parameters
+        return _fields(cls).keys() & inspect.signature(cls).parameters.keys()
     return set()
 
 
@@ -330,6 +328,15 @@ def _defaulted_fields(cls: type) -> set[str]:
     }
 
 
+def _init_only_variables(cls: type) -> set[str]:
+    """The names of the dataclass init-only variables *cls*'s own body declares: those it annotates that its constructor takes but that are no dataclass fields."""
+    if not dataclasses.is_dataclass(cls):
+        return set()
+    annotated = inspect.get_annotations(cls).keys()
+    parameters = inspect.signature(cls).parameters.keys()
+    return (annotated & parameters) - _fields(cls).keys()
+
+
 @dataclasses.dataclass(frozen=True)
 class _AnnotatedAttribute:
     """The annotation of a name a class body declares as an instance attribute, by annotating it alone or as a dataclass field."""
@@ -348,13 +355,18 @@ def _public_members(cls: type) -> dict[str, object]:
 
 
 def _own_members(cls: type) -> dict[str, object]:
-    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each other name it defines, as its value."""
+    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each other name it defines, as its value; a dataclass init-only variable declares a constructor parameter, so it is neither, even with a default."""
     declared = {
         name: _AnnotatedAttribute(annotation)
         for name, annotation in _declared_attributes(cls).items()
     }
     defined = {name: value for name, value in vars(cls).items() if name not in declared}
-    return declared | defined
+    init_only = _init_only_variables(cls)
+    return {
+        name: member
+        for name, member in (declared | defined).items()
+        if name not in init_only
+    }
 
 
 def _declared_attributes(cls: type) -> dict[str, object]:
