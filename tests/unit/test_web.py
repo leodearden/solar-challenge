@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
-import numpy as np
 import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
@@ -44,6 +43,7 @@ from tests._html_page import (
     texts,
     texts_after,
 )
+from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
 
 
@@ -210,7 +210,7 @@ class TestDashboardRoute:
         """GET / with saved runs renders the Recent Runs table, one row per run showing its name, and no empty-state message."""
         run_names = ("North Roof", "South Roof")
         for run_name in run_names:
-            _save_home_run(app, run_name, _make_sim_results(days=1))
+            _save_home_run(app, run_name, make_sinusoidal_sim_results(days=1))
         response = client.get("/")
         page = response.get_data(as_text=True)
         page_texts = texts(page)
@@ -222,7 +222,7 @@ class TestDashboardRoute:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """GET / lists the saved runs newest first by creation time in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's home or fleet results page."""
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         fleet_run_id = _save_fleet_run(
             app, "Community Fleet", [results, results], created_at="2024-06-02T09:00:00+00:00"
         )
@@ -249,7 +249,7 @@ class TestDashboardRoute:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """GET / reads Total Runs as the completed runs, Homes Simulated as their homes, each home of a fleet run counted, and Energy Modelled as those homes' total generation in MWh; a failed run adds to none of them."""
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         _save_home_run(app, "North Roof", results)
         _save_fleet_run(app, "Community Fleet", [results, results])
         _save_home_run(app, "South Roof", results, status="failed")
@@ -265,51 +265,6 @@ class TestDashboardRoute:
 # ---------------------------------------------------------------------------
 # Helpers for chart / results tests
 # ---------------------------------------------------------------------------
-
-def _make_sim_results(days: int = 3) -> SimulationResults:
-    """Create a minimal SimulationResults object for testing.
-
-    Builds synthetic 1-minute resolution time series spanning the
-    requested number of days, suitable for exercising chart functions.
-
-    Args:
-        days: Number of simulation days.
-
-    Returns:
-        SimulationResults with simple but valid data.
-    """
-    freq = "min"
-    index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
-
-    # Simple synthetic profiles (sinusoidal generation, flat demand)
-    hours = np.arange(len(index)) / 60.0
-    generation = np.maximum(0, np.sin(hours * np.pi / 12) * 3.0)
-    demand = np.full(len(index), 0.5)
-    self_consumption = np.minimum(generation, demand)
-    grid_import = np.maximum(0, demand - generation)
-    grid_export = np.maximum(0, generation - demand)
-    battery_charge = np.zeros(len(index))
-    battery_discharge = np.zeros(len(index))
-    battery_soc = np.zeros(len(index))
-
-    def _series(values: np.ndarray, name: str) -> pd.Series:
-        return pd.Series(values, index=index, name=name)
-
-    return SimulationResults(
-        generation=_series(generation, "generation_kw"),
-        demand=_series(demand, "demand_kw"),
-        self_consumption=_series(self_consumption, "self_consumption_kw"),
-        battery_charge=_series(battery_charge, "battery_charge_kw"),
-        battery_discharge=_series(battery_discharge, "battery_discharge_kw"),
-        battery_soc=_series(battery_soc, "battery_soc_kwh"),
-        grid_import=_series(grid_import, "grid_import_kw"),
-        grid_export=_series(grid_export, "grid_export_kw"),
-        import_cost=_series(np.zeros(len(index)), "import_cost_gbp"),
-        export_revenue=_series(np.zeros(len(index)), "export_revenue_gbp"),
-        tariff_rate=_series(np.zeros(len(index)), "tariff_rate_per_kwh"),
-        strategy_name="self_consumption",
-    )
-
 
 def _steady_run(
     days: int,
@@ -350,7 +305,7 @@ class TestChartFunctions:
 
     def test_daily_energy_balance_returns_json(self) -> None:
         """Test daily_energy_balance returns a non-empty JSON string."""
-        results = _make_sim_results(days=3)
+        results = make_sinusoidal_sim_results(days=3)
         output = daily_energy_balance(results)
         assert isinstance(output, str)
         assert len(output) > 2  # more than just "{}"
@@ -388,7 +343,7 @@ class TestChartFunctions:
 
     def test_power_flow_timeline_returns_json(self) -> None:
         """Test power_flow_timeline returns a non-empty JSON string."""
-        results = _make_sim_results(days=2)
+        results = make_sinusoidal_sim_results(days=2)
         output = power_flow_timeline(results)
         assert isinstance(output, str)
         parsed = json.loads(output)
@@ -396,7 +351,7 @@ class TestChartFunctions:
 
     def test_battery_soc_chart_returns_json(self) -> None:
         """Test battery_soc_chart returns a non-empty JSON string."""
-        results = _make_sim_results(days=2)
+        results = make_sinusoidal_sim_results(days=2)
         output = battery_soc_chart(results, battery_capacity_kwh=10.0)
         assert isinstance(output, str)
         parsed = json.loads(output)
@@ -404,7 +359,7 @@ class TestChartFunctions:
 
     def test_financial_breakdown_returns_json(self) -> None:
         """Test financial_breakdown returns a non-empty JSON string."""
-        results = _make_sim_results(days=3)
+        results = make_sinusoidal_sim_results(days=3)
         output = financial_breakdown(results)
         assert isinstance(output, str)
         parsed = json.loads(output)
@@ -412,19 +367,19 @@ class TestChartFunctions:
 
     def test_monthly_summary_returns_none_for_short_sim(self) -> None:
         """Test monthly_summary returns None when simulation < 90 days."""
-        results = _make_sim_results(days=30)
+        results = make_sinusoidal_sim_results(days=30)
         output = monthly_summary(results)
         assert output is None
 
     def test_seasonal_comparison_returns_none_for_short_sim(self) -> None:
         """Test seasonal_comparison returns None when simulation < 180 days."""
-        results = _make_sim_results(days=60)
+        results = make_sinusoidal_sim_results(days=60)
         output = seasonal_comparison(results)
         assert output is None
 
     def test_heat_pump_analysis_returns_none_without_hp(self) -> None:
         """Test heat_pump_analysis returns None when no heat pump data."""
-        results = _make_sim_results(days=2)
+        results = make_sinusoidal_sim_results(days=2)
         output = heat_pump_analysis(results)
         assert output is None
 
@@ -482,7 +437,7 @@ class TestHomeResultsRoute:
         Both Overview chart containers are elements of the page, and the Total
         Generation and Total Demand cards read the saved summary's totals in kWh.
         """
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         run_id = _save_home_run(app, "Test Run", results)
         summary = calculate_summary(results)
 
@@ -534,7 +489,7 @@ class TestHomeResultsRoute:
 
         The run's home keeps the name it was saved with, so the page reads the run's name, not its home's.
         """
-        run_id = _save_home_run(app, "North Roof", _make_sim_results(days=1))
+        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
         rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "South Roof"})
         assert rename.status_code == 200
 
@@ -549,7 +504,7 @@ class TestHomeResultsRoute:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """A run whose files outlived its database row still has a title: the page's own, not its home's name."""
-        run_id = _save_home_run(app, "North Roof", _make_sim_results(days=1))
+        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
         with get_db(app.config["DATABASE"]) as conn:
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
