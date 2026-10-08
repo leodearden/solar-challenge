@@ -1074,3 +1074,21 @@ class TestRecoverStaleJobs:
 
         recovered = recover_stale_jobs(db_path)
         assert recovered == 0
+
+    def test_recovery_fails_the_run_of_a_job_dropped_when_its_manager_shut_down(
+        self, blocking_simulation: _BlockingSimulation, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+        dropped_job_id = _submit_home_job(manager, tmp_path)
+        manager.shutdown()
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+        assert _run_of_job(manager, dropped_job_id, tmp_path).status == "running"
+
+        recover_stale_jobs(_run_storage(tmp_path).db_path)
+
+        run = _run_of_job(manager, dropped_job_id, tmp_path)
+        assert (run.status, run.error_message) == ("failed", "Interrupted by server restart")
+        assert run.completed_at is not None
