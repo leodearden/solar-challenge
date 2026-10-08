@@ -49,7 +49,6 @@ from solar_challenge.battery import Battery, BatteryConfig
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
-    from solar_challenge.home import SimulationResults
 
 
 # ---------------------------------------------------------------------------

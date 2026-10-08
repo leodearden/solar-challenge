@@ -371,7 +371,6 @@ def sweep(
     # Parse dates
     start_date = pd.Timestamp(start, tz=location.timezone)
     end_date = pd.Timestamp(end, tz=location.timezone)
-    days = (end_date - start_date).days + 1
 
     # Create output directory if needed
     if output_dir is not None:

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from solar_challenge.finance import BillDistribution, CostRecoverySolution, ProjectEconomics
     from solar_challenge.flex import FlexibilityValueBand
     from solar_challenge.gridservices import GridServicesAtEvents
-    from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep, SensitivityPanel
+    from solar_challenge.optimize import RankedSweep, SensitivityPanel
 
 
 def export_to_csv(
@@ -904,7 +904,7 @@ def generate_config_ranking_report(
     if panel is not None:
         report += "\n## Sensitivity Analysis\n\n"
         report += f"Rank stability: **{panel.rank_stability:.1%}** "
-        report += f"(fraction of swept values where cheapest config == baseline top)\n\n"
+        report += "(fraction of swept values where cheapest config == baseline top)\n\n"
         report += f"Baseline top config: {panel.baseline_top.pv_kwp:.1f} kWp / "
         report += f"{panel.baseline_top.battery_kwh:.1f} kWh / "
         report += f"{panel.baseline_top.inverter_kw:.1f} kW\n"
