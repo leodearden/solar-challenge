@@ -165,7 +165,11 @@ def undeclared_attributes(cls: type) -> set[str]:
 
 
 def unset_attributes(cls: type) -> set[str]:
-    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own source never sets on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies."""
+    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own source never sets on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
+
+    A known gap: a default factory counts as called by the generated __init__, so a field
+    with one that a hand-written __init__ skips goes unreported, though instances lack it.
+    """
     declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
     return declared - _attributes_set_on_self(cls) - _defaulted_fields(cls)
 

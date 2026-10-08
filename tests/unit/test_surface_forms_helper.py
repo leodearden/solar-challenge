@@ -660,3 +660,26 @@ def test_a_dataclass_field_with_a_default_or_a_default_factory_is_never_unset() 
             object.__setattr__(self, "label", f"{self.kwh} kWh")
 
     assert unset_attributes(Reading) == {"note"}
+
+
+def test_a_default_factory_field_counts_as_supplied_even_when_a_hand_written_init_skips_it() -> None:
+    @dataclass(init=False)
+    class InitFalse:
+        root: str
+        history: list[float] = field(default_factory=list)
+
+        def __init__(self, root: str) -> None:
+            self.root = root
+
+    @dataclass
+    class BodyInit:
+        root: str
+        history: list[float] = field(init=False, default_factory=list)
+
+        def __init__(self, root: str) -> None:
+            self.root = root
+
+    for cls in (InitFalse, BodyInit):
+        assert member_forms(cls) == {"history": "attribute list[float]"}
+        assert not hasattr(cls("data"), "history")
+        assert unset_attributes(cls) == set()
