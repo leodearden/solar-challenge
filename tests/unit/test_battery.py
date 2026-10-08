@@ -443,7 +443,7 @@ class TestBatteryReadsSOCEffFromConfig:
 
 
 class TestBatterySOCEffAssignment:
-    """Assigning a Battery's SOC limit or efficiency after construction is checked as Battery() checks it."""
+    """Assigning a Battery's SOC limit or efficiency is checked against the bounds Battery() checks, not against the current SOC."""
 
     @pytest.mark.parametrize(
         ("attribute", "value", "message"),
@@ -507,6 +507,20 @@ class TestBatterySOCEffAssignment:
         battery = Battery(BatteryConfig.default_5kwh())
         setattr(battery, attribute, value)
         assert {name: getattr(battery, name) for name in defaults} == defaults | {attribute: value}
+
+    @pytest.mark.parametrize(
+        ("attribute", "value"),
+        [("min_soc_fraction", 0.8), ("max_soc_fraction", 0.2)],
+    )
+    def test_a_soc_limit_may_move_past_the_current_soc_which_stays_unchanged(
+        self, attribute: str, value: float
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_kwh = battery.soc_kwh
+        setattr(battery, attribute, value)
+        assert getattr(battery, attribute) == value
+        assert battery.soc_kwh == soc_kwh
+        assert not battery.min_soc_kwh <= soc_kwh <= battery.max_soc_kwh
 
     def test_discharge_stops_at_an_assigned_floor(self) -> None:
         battery = Battery(BatteryConfig.default_5kwh())

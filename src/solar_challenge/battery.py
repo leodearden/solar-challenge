@@ -234,8 +234,9 @@ class Battery:
 
     Tracks current SOC and enforces charge/discharge limits. Its SOC limits and
     efficiencies can be reassigned after construction, as a device's settings can.
-    An assignment is checked as construction checks it: one that breaks the bounds
-    raises ValueError and leaves the battery unchanged.
+    An assignment is checked against the bounds construction checks for these four
+    values: one that breaks them raises ValueError and leaves the battery unchanged.
+    A new SOC limit is not checked against the current SOC and may move past it.
 
     Attributes:
         config: BatteryConfig defining capacity and power limits
