@@ -26,7 +26,7 @@ Usage::
 """
 
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from html.parser import HTMLParser
 
 _RAW_TEXT_ELEMENTS = frozenset({"script", "style"})
@@ -138,15 +138,21 @@ def texts_after(page: str, label: str, count: int) -> list[str]:
     return page_texts[start : start + count]
 
 
-def counts_of(items: list[str], keys: tuple[str, ...]) -> dict[str, int]:
+def counts_of(items: Sequence[str], keys: tuple[str, ...]) -> dict[str, int]:
     """How many times each of *keys* occurs in *items*, such as texts(page) or headings(page); a key no item equals counts 0.
 
     An item counts only when it equals the key, as texts_after matches its label. Raises
     ValueError, rather than return counts that equal an empty expectation whatever the
-    items, when *keys* is empty.
+    items, when *keys* is empty, and, rather than count each key as a substring, when
+    *items* is a str, such as the page itself.
     """
     if not keys:
         raise ValueError("Expected at least one key to count; got none")
+    if isinstance(items, str):
+        raise ValueError(
+            "Expected items such as texts(page), not a str, in which a key would count"
+            f" as a substring; got a str of {len(items)} characters"
+        )
     return {key: items.count(key) for key in keys}
 
 

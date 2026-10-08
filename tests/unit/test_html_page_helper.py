@@ -305,3 +305,10 @@ def test_counts_of_counts_only_an_item_exactly_equal_to_the_key(near_miss: str) 
 def test_counts_of_refuses_no_keys_rather_than_equal_an_empty_expectation() -> None:
     with pytest.raises(ValueError, match="at least one key"):
         counts_of(["Simulate"], ())
+
+
+def test_counts_of_refuses_a_str_rather_than_count_each_key_as_its_substring() -> None:
+    page = "<h3>PV Capacity</h3>"
+
+    with pytest.raises(ValueError, match="got a str of 20 characters"):
+        counts_of(page, ("PV Capacity",))
