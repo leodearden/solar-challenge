@@ -41,7 +41,8 @@ member_forms reads class bodies, so it sees an instance attribute only once a bo
 declares it. undeclared_attributes names each public attribute a class's own source
 sets on self, by assignment or, as a frozen dataclass must, by object.__setattr__, that
 no class body in its MRO defines or declares; unset_attributes names each declared
-attribute member_forms lists that the source never sets, which instances would lack.
+attribute member_forms lists that the source never sets and that has no dataclass
+default or default factory, which instances would lack.
 
 Usage::
 
@@ -164,9 +165,9 @@ def undeclared_attributes(cls: type) -> set[str]:
 
 
 def unset_attributes(cls: type) -> set[str]:
-    """The attributes member_forms(cls) lists as declared that *cls*'s own source never sets on self."""
+    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own source never sets on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies."""
     declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
-    return declared - _attributes_set_on_self(cls)
+    return declared - _attributes_set_on_self(cls) - _defaulted_fields(cls)
 
 
 class _Spelling(str):
@@ -341,6 +342,16 @@ def _fields(cls: type) -> dict[str, dataclasses.Field[object]]:
     if not dataclasses.is_dataclass(cls):
         return {}
     return {field.name: field for field in dataclasses.fields(cls)}
+
+
+def _defaulted_fields(cls: type) -> set[str]:
+    """The names of *cls*'s dataclass fields with a default, which instances read from the class, or a default factory, which the generated __init__ calls."""
+    return {
+        name
+        for name, field in _fields(cls).items()
+        if field.default is not dataclasses.MISSING
+        or field.default_factory is not dataclasses.MISSING
+    }
 
 
 @dataclasses.dataclass(frozen=True)
