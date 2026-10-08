@@ -12,7 +12,7 @@
 </div>
 {% endmacro %}
 
-{# The section scenarioBuilder's accordionOpen starts at in scenario-builder.js; every other panel is cloaked, so it stays out of view until Alpine starts #}
+{# The accordion section open when the page loads; every other panel is cloaked, so it stays out of view until Alpine starts #}
 {% set initial_section = 'general' %}
 
 {# One accordion section: its header button opens the panel, closing whichever section was open, and exposes that open state and the panel it controls to assistive technology #}
@@ -54,7 +54,7 @@
 ) }}
 
 <div
-    x-data="scenarioBuilder()"
+    x-data="scenarioBuilder('{{ initial_section }}')"
     class="grid grid-cols-1 lg:grid-cols-5 gap-6"
 >
     <!-- Left Pane: Structured Form (60%) -->

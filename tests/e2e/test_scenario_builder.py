@@ -8,6 +8,7 @@ from typing import Any, NamedTuple
 import pytest
 import yaml
 from playwright.sync_api import FloatRect, Locator, Page, Response, ViewportSize, expect
+from pytest_playwright import CreateContextCallback
 
 from solar_challenge.config import load_fleet_config
 from solar_challenge.home import HomeConfig
@@ -80,10 +81,10 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
         ).to_be_visible()
 
 
-def _expect_expanded_headers(page: Page, open_section: str | None) -> None:
-    """Expect the header of *open_section* to be exposed as expanded and every other section's header as collapsed; with None, every header as collapsed."""
+def _expect_expanded_headers(page: Page, open_section: str | None, *, message: str | None = None) -> None:
+    """Expect the header of *open_section* to be exposed as expanded and every other section's header as collapsed; with None, every header as collapsed. A failure reports *message*, if given."""
     for section in _ACCORDION_SECTIONS:
-        expect(page.get_by_role("button", name=section, exact=True, expanded=section == open_section)).to_be_visible()
+        expect(page.get_by_role("button", name=section, exact=True, expanded=section == open_section), message).to_be_visible()
 
 
 def test_only_the_open_sections_header_is_exposed_as_expanded(page: Page, live_server: str) -> None:
@@ -96,6 +97,33 @@ def test_only_the_open_sections_header_is_exposed_as_expanded(page: Page, live_s
 
     page.get_by_role("button", name="Period", exact=True).click()
     _expect_expanded_headers(page, None)
+
+
+def _sections_shown_with_javascript_off(new_context: CreateContextCallback, live_server: str) -> set[str]:
+    """The sections of _ACCORDION_SECTIONS whose control the builder shows with JavaScript off, as it shows them until Alpine starts."""
+    page = new_context(java_script_enabled=False).new_page()
+    page.goto(live_server + "/scenarios/builder")
+    return {
+        section
+        for section, (role, name) in _ACCORDION_SECTIONS.items()
+        if page.get_by_role(role, name=name, exact=True).is_visible()
+    }
+
+
+def test_the_section_the_builder_shows_before_alpine_starts_is_the_one_it_opens(
+    new_context: CreateContextCallback, page: Page, live_server: str
+) -> None:
+    """With JavaScript off, as until Alpine starts, the builder shows one section's control, and once Alpine has started that section's header alone is exposed as expanded, so no other section's panel shows while the page loads."""
+    shown = _sections_shown_with_javascript_off(new_context, live_server)
+    assert len(shown) == 1, f"with JavaScript off the builder shows the controls of {sorted(shown)}, not of exactly one section"
+    (shown_section,) = shown
+
+    page.goto(live_server + "/scenarios/builder")
+    _expect_expanded_headers(
+        page,
+        shown_section,
+        message=f"the builder shows {shown_section}'s control before Alpine starts, so {shown_section}'s header alone should be exposed as expanded once Alpine has",
+    )
 
 
 def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
