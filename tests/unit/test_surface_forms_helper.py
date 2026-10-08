@@ -500,6 +500,23 @@ def test_an_attribute_set_on_self_under_a_dataclass_init_only_variable_name_is_u
     assert undeclared_attributes(Scaled) == {"scale"}
 
 
+def test_an_undecorated_subclass_of_a_dataclass_has_no_init_only_variable_so_it_declares_what_it_annotates() -> None:
+    @dataclass
+    class Base:
+        x: int
+
+    class Sub(Base):
+        y: str
+
+        def __init__(self, x: int, y: str) -> None:
+            super().__init__(x)
+            self.y = y
+
+    assert vars(Sub(x=1, y="a")).keys() >= {"y"}
+    assert member_forms(Sub) == {"y": "attribute str"}
+    assert undeclared_attributes(Sub) == set()
+
+
 def test_a_hand_written_constructor_parameter_does_not_hide_a_member_of_the_same_name() -> None:
     @dataclass(init=False)
     class Meter:
@@ -513,6 +530,18 @@ def test_a_hand_written_constructor_parameter_does_not_hide_a_member_of_the_same
         def reading(self) -> float: ...
 
     assert member_forms(Meter) == {"reading": "property (self) -> float"}
+
+
+def test_a_class_variable_is_a_member_even_when_a_hand_written_constructor_takes_its_name() -> None:
+    @dataclass(init=False)
+    class Meter:
+        UNITS: ClassVar[str] = "kWh"
+        site: str
+
+        def __init__(self, site: str, UNITS: str = "kWh") -> None:
+            self.site = site
+
+    assert member_forms(Meter) == {"UNITS": "str"}
 
 
 def test_an_enum_member_is_not_a_class_member_but_an_enum_method_is() -> None:

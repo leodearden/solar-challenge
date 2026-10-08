@@ -127,7 +127,7 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 
 
 def undeclared_attributes(cls: type) -> set[str]:
-    """The public attributes *cls*'s own source sets on self that no class body in its MRO defines or declares; a dataclass init-only variable declares a constructor parameter, not an attribute, even with a default."""
+    """The public attributes *cls*'s own source sets on self that no class body in its MRO defines or declares."""
     declared = {name for base in cls.__mro__ for name in _own_members(base)}
     return _attributes_set_on_self(cls) - declared
 
@@ -307,7 +307,7 @@ def _pinned_by_class_form(cls: type) -> set[str]:
     if issubclass(cls, enum.Enum):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
-        return _fields(cls).keys() & inspect.signature(cls).parameters.keys()
+        return _fields(cls).keys() & _constructor_parameters(cls)
     return set()
 
 
@@ -316,6 +316,11 @@ def _fields(cls: type) -> dict[str, dataclasses.Field[object]]:
     if not dataclasses.is_dataclass(cls):
         return {}
     return {field.name: field for field in dataclasses.fields(cls)}
+
+
+def _constructor_parameters(cls: type) -> set[str]:
+    """The names of the parameters of *cls*'s constructor that surface_form(cls) spells, self excluded."""
+    return set(inspect.signature(cls).parameters)
 
 
 def _defaulted_fields(cls: type) -> set[str]:
@@ -328,13 +333,21 @@ def _defaulted_fields(cls: type) -> set[str]:
     }
 
 
+def _is_decorated_dataclass(cls: type) -> bool:
+    """Whether the dataclass decorator processed *cls* itself; is_dataclass is true as well of an undecorated subclass of a dataclass, whose annotations the decorator never read."""
+    return "__dataclass_fields__" in vars(cls)
+
+
 def _init_only_variables(cls: type) -> set[str]:
-    """The names of the dataclass init-only variables *cls*'s own body declares: those it annotates that its constructor takes but that are no dataclass fields."""
-    if not dataclasses.is_dataclass(cls):
+    """The names of the dataclass init-only variables *cls*'s own body declares: those it annotates, other than as a ClassVar, that its constructor takes but that are no dataclass fields."""
+    if not _is_decorated_dataclass(cls):
         return set()
-    annotated = inspect.get_annotations(cls).keys()
-    parameters = inspect.signature(cls).parameters.keys()
-    return (annotated & parameters) - _fields(cls).keys()
+    annotated = {
+        name
+        for name, annotation in inspect.get_annotations(cls).items()
+        if not _is_class_var(annotation)
+    }
+    return (annotated & _constructor_parameters(cls)) - _fields(cls).keys()
 
 
 @dataclasses.dataclass(frozen=True)
