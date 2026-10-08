@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -360,58 +361,10 @@ class TestHomeRunRoundTrip:
         assert (run_dir / "summary.json").exists()
         assert (run_dir / "data.parquet").exists()
 
-    def test_save_home_run_creates_database_entry(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """Test save_home_run creates database entry."""
-        run_id = "test-run-003"
-
-        storage.save_home_run(
-            run_id=run_id,
-            config=sample_home_config,
-            results=sample_simulation_results,
-            summary=sample_summary,
-            name="Test Database Entry",
-            status="completed",
-        )
-
-        with get_db(storage.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
-            row = cursor.fetchone()
-            assert row is not None
-            assert row["id"] == run_id
-            assert row["name"] == "Test Database Entry"
-            assert row["type"] == "home"
-            assert row["status"] == "completed"
-            assert row["n_homes"] == 1
-
     def test_load_home_run_nonexistent_raises(self, storage):
         """Test loading nonexistent run raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError):
             storage.load_home_run("nonexistent-run")
-
-    def test_save_home_run_with_error_status(
-        self, storage, sample_home_config, sample_simulation_results, sample_summary
-    ):
-        """Test saving a failed run with error message."""
-        run_id = "test-run-004"
-
-        storage.save_home_run(
-            run_id=run_id,
-            config=sample_home_config,
-            results=sample_simulation_results,
-            summary=sample_summary,
-            status="failed",
-            error_message="Test error message",
-        )
-
-        with get_db(storage.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT status, error_message FROM runs WHERE id = ?", (run_id,))
-            row = cursor.fetchone()
-            assert row["status"] == "failed"
-            assert row["error_message"] == "Test error message"
 
 
 @pytest.fixture
@@ -461,6 +414,32 @@ def sample_fleet_data(sample_home_config, sample_simulation_results, sample_summ
     per_home_summaries = [sample_summary] * 3
 
     return fleet_results, fleet_summary, per_home_summaries
+
+
+@pytest.fixture
+def saves(storage, sample_home_config, sample_simulation_results, sample_summary, sample_fleet_data):
+    """Each save by the type of run it stores, called with a run id and the save's other row arguments."""
+    fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
+
+    def save_home(run_id, **row_arguments):
+        storage.save_home_run(
+            run_id=run_id,
+            config=sample_home_config,
+            results=sample_simulation_results,
+            summary=sample_summary,
+            **row_arguments,
+        )
+
+    def save_fleet(run_id, **row_arguments):
+        storage.save_fleet_run(
+            run_id=run_id,
+            fleet_results=fleet_results,
+            fleet_summary=fleet_summary,
+            per_home_summaries=per_home_summaries,
+            **row_arguments,
+        )
+
+    return {"home": save_home, "fleet": save_fleet}
 
 
 class TestFleetRunRoundTrip:
@@ -543,28 +522,73 @@ class TestFleetRunRoundTrip:
         assert (homes_dir / "home_1_summary.json").exists()
         assert (homes_dir / "home_2_summary.json").exists()
 
-    def test_save_fleet_run_creates_database_entry(self, storage, sample_fleet_data):
-        """Test save_fleet_run creates database entry."""
-        run_id = "test-fleet-003"
-        fleet_results, fleet_summary, per_home_summaries = sample_fleet_data
 
-        storage.save_fleet_run(
-            run_id=run_id,
-            fleet_results=fleet_results,
-            fleet_summary=fleet_summary,
-            per_home_summaries=per_home_summaries,
-            name="Test Fleet Database Entry",
-            status="completed",
+class TestSavedRunRow:
+    """Tests for the runs row each save writes, home and fleet alike."""
+
+    @pytest.mark.parametrize(
+        ("kind", "n_homes"),
+        [pytest.param("home", 1, id="home"), pytest.param("fleet", 3, id="fleet")],
+    )
+    def test_a_save_writes_each_column_of_its_runs_row_from_its_arguments(
+        self, storage, saves, kind, n_homes
+    ):
+        """Each column of a run's row holds the save's argument for it, or the value the save gives it.
+
+        The config and summary texts are pinned by
+        tests/unit/test_web_storage_roundtrip.py::TestPersistedJson, so they are blanked here.
+        A failed run has no completed_at.
+        """
+        saves[kind](
+            "saved-run",
+            name="North Roof",
+            status="failed",
+            error_message="Simulation diverged",
+            duration_seconds=5.0,
+            created_at="2026-01-01T00:00:00+00:00",
         )
 
-        with get_db(storage.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
-            row = cursor.fetchone()
-            assert row is not None
-            assert row["type"] == "fleet"
-            assert row["n_homes"] == 3
-            assert row["name"] == "Test Fleet Database Entry"
+        saved = dataclasses.replace(storage.run_record("saved-run"), config_json=None, summary_json=None)
+        assert saved == RunRecord(
+            id="saved-run",
+            name="North Roof",
+            type=kind,
+            config_json=None,
+            summary_json=None,
+            status="failed",
+            error_message="Simulation diverged",
+            created_at="2026-01-01T00:00:00+00:00",
+            completed_at=None,
+            duration_seconds=5.0,
+            n_homes=n_homes,
+            notes=None,
+        )
+
+    def test_a_home_save_given_no_name_names_its_run_after_its_home_or_else_unnamed_run(
+        self, storage, sample_home_config, sample_simulation_results, sample_summary
+    ):
+        """A home run saved with no name takes its home's name, or 'Unnamed Run' when its home has none."""
+        for run_id, config in (
+            ("named-home", sample_home_config),
+            ("unnamed-home", dataclasses.replace(sample_home_config, name="")),
+        ):
+            storage.save_home_run(
+                run_id=run_id,
+                config=config,
+                results=sample_simulation_results,
+                summary=sample_summary,
+            )
+
+        assert [storage.run_name("named-home"), storage.run_name("unnamed-home")] == [
+            "Test Home",
+            "Unnamed Run",
+        ]
+
+    def test_a_fleet_save_given_no_name_names_its_run_unnamed_fleet_run(self, storage, saves):
+        """A fleet run saved with no name is named 'Unnamed Fleet Run'."""
+        saves["fleet"]("fleet-run")
+
+        assert storage.run_name("fleet-run") == "Unnamed Fleet Run"
 
 
 class TestListRuns:
