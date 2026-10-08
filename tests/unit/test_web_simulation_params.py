@@ -252,6 +252,8 @@ class TestParseDateRange:
             pytest.param("2024-02-30", id="no-such-day"),
             pytest.param("NaT", id="pandas-not-a-time"),
             pytest.param(20240601, id="number"),
+            pytest.param(0, id="zero"),
+            pytest.param(False, id="false"),
         ],
     )
     def test_date_it_cannot_read_is_refused_naming_the_field_and_the_value_sent(
@@ -298,6 +300,7 @@ class TestWithDefaultDays:
                 id="null-days-with-start-and-end",
             ),
             pytest.param({"days": 30, "start": "2024-03-01"}, id="days-with-start"),
+            pytest.param({"start": False}, id="false-start"),
         ],
     )
     def test_a_body_that_sends_a_window_is_returned_as_sent(self, data: dict) -> None:

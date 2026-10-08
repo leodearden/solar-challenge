@@ -74,7 +74,7 @@ def read_iso_date(value: Any, field: str) -> date:
 
 
 def _read_date(value: Any, field: str, default: date) -> date:
-    """Read a request body's ``field`` as an ISO 8601 calendar date; None, a date not sent, reads as ``default``.
+    """Read a request body's ``field`` as an ISO 8601 calendar date; *value* is None for a date not sent, which reads as ``default``.
 
     Raises:
         ValueError: From :func:`read_iso_date`, for a value that is not an ISO
@@ -112,9 +112,9 @@ def refuse_reversed_or_overlong_window(
 def _dates_sent(params: Mapping[str, Any]) -> dict[str, Any]:
     """The start and end *params* sends, keyed by field, start first.
 
-    A falsy value, which is how _DATE_RANGE_DEFAULTS gives an absent one, is not sent.
+    A null or empty value, as _DATE_RANGE_DEFAULTS gives an absent one, is not sent.
     """
-    return {field: params[field] for field in ("start", "end") if params[field]}
+    return {field: params[field] for field in ("start", "end") if params[field] not in (None, "")}
 
 
 def _refuse_days_with_dates(days: Any, dates: Mapping[str, Any]) -> None:
@@ -170,9 +170,9 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
 def with_default_days(data: Mapping[str, Any], days: int) -> dict[str, Any]:
     """A copy of *data*, a request body, with days=*days* when the body sends no window of its own.
 
-    No window means neither a days that is not null nor a start or end that is
-    not empty, as parse_date_range reads them. A body that sends one is
-    returned as sent, so the window it sends is read, or refused, as sent.
+    No window means none of days, start and end sent, as parse_date_range reads
+    them. A body that sends one is returned as sent, so the window it sends is
+    read, or refused, as sent.
     """
     params = {**_DATE_RANGE_DEFAULTS, **data}
     if params["days"] is not None or _dates_sent(params):
