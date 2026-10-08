@@ -476,6 +476,30 @@ def test_a_dataclass_init_only_variable_is_neither_a_member_nor_an_unset_attribu
     assert unset_attributes(Reading) == set()
 
 
+def test_an_attribute_set_on_self_under_a_dataclass_init_only_variable_name_is_undeclared() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+        scale: InitVar[float]
+        offset: "InitVar[float]"
+        floor: InitVar[float] = 0.0
+
+        def __post_init__(self, scale: float, offset: float, floor: float) -> None:
+            object.__setattr__(self, "scale", scale)
+            object.__setattr__(self, "offset", offset)
+            object.__setattr__(self, "floor", floor)
+
+    @dataclass(frozen=True)
+    class Scaled(Reading):
+        def __post_init__(self, scale: float, offset: float, floor: float) -> None:
+            object.__setattr__(self, "scale", scale)
+
+    reading = Reading(kwh=1.0, scale=2.0, offset=0.5)
+    assert vars(reading).keys() >= {"scale", "offset", "floor"}
+    assert undeclared_attributes(Reading) == {"scale", "offset", "floor"}
+    assert undeclared_attributes(Scaled) == {"scale"}
+
+
 def test_a_hand_written_constructor_parameter_does_not_hide_a_member_of_the_same_name() -> None:
     @dataclass(init=False)
     class Meter:
