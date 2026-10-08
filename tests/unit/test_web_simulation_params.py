@@ -274,6 +274,8 @@ class TestWithDefaultDays:
             pytest.param({}, {"days": 7}, id="nothing"),
             pytest.param({"pv_kw": 4.0}, {"pv_kw": 4.0, "days": 7}, id="other-keys-only"),
             pytest.param({"days": None}, {"days": 7}, id="null-days"),
+            pytest.param({"start": None}, {"start": None, "days": 7}, id="null-start"),
+            pytest.param({"end": ""}, {"end": "", "days": 7}, id="empty-end"),
             pytest.param(
                 {"start": "", "end": None},
                 {"start": "", "end": None, "days": 7},
@@ -284,8 +286,9 @@ class TestWithDefaultDays:
     def test_a_body_that_sends_no_window_gets_the_default_days(
         self, data: dict, expected: dict
     ) -> None:
-        """A body that sends neither a days nor a start or end gets the default days, and the body itself is unchanged."""
+        """A body parse_date_range reads as sending no window, as it reads {}, gets the default days, and the body itself is unchanged."""
         sent = dict(data)
+        assert parse_date_range(data) == parse_date_range({})
         assert with_default_days(data, 7) == expected
         assert data == sent
 
@@ -293,6 +296,7 @@ class TestWithDefaultDays:
         "data",
         [
             pytest.param({"days": 30}, id="days"),
+            pytest.param({"days": ""}, id="empty-days"),
             pytest.param({"start": "2024-03-01"}, id="start"),
             pytest.param({"end": "2024-03-05"}, id="end"),
             pytest.param(
