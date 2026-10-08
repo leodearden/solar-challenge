@@ -317,7 +317,7 @@ def get_preset(name: str) -> tuple[Response, int]:
         name: The preset name to look up.
 
     Returns:
-        JSON preset object, HTTP 200; or the ``error``, HTTP 404, when no home preset has the name.
+        JSON preset object, HTTP 200; or the ``error``, HTTP 404, when GET /api/presets lists none under the name.
     """
     preset = home_preset_named(current_app.config["DATABASE"], name)
     if preset is None:
