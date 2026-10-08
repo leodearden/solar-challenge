@@ -398,6 +398,49 @@ class TestFleetConfigHelpers:
             sample_distribution(dist_type, params(value), 3)
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
+    @pytest.mark.parametrize(
+        ("dist_type", "params", "sample"),
+        [
+            pytest.param(
+                "uniform",
+                {"min": -1.7e308, "max": 1.7e308},
+                float("inf"),
+                id="uniform-range-wider-than-a-float",
+            ),
+            pytest.param(
+                "normal",
+                {"mean": 1.7e308, "std": 1e308},
+                float("inf"),
+                id="normal-drawing-above-the-largest-float",
+            ),
+            pytest.param(
+                "normal",
+                {"mean": -1.7e308, "std": 1e308},
+                float("-inf"),
+                id="normal-drawing-below-the-lowest-float",
+            ),
+        ],
+    )
+    def test_sample_distribution_refuses_finite_params_whose_draws_are_not_finite_naming_the_sample(
+        self, dist_type: str, params: dict, sample: float
+    ) -> None:
+        """A preview whose finite params draw a sample a float cannot hold is refused naming params and that sample."""
+        with pytest.raises(ValueError) as exc_info:
+            sample_distribution(dist_type, params, 100)
+        assert str(exc_info.value) == (
+            f"params must draw samples that are finite numbers, got a sample of {sample!r}"
+        )
+
+    def test_sample_distribution_returns_a_normals_clamped_samples_when_its_draws_overflow(
+        self,
+    ) -> None:
+        """A normal whose draws overflow a float but whose min and max clamp them returns its clamped samples, each a finite number within them."""
+        samples = sample_distribution(
+            "normal", {"mean": 1.7e308, "std": 1e308, "min": 0.0, "max": 1.0}, 100
+        )
+        assert len(samples) == 100
+        assert all(0.0 <= sample <= 1.0 for sample in samples)
+
     def test_form_to_fleet_distribution_config(self) -> None:
         """Test converting form data to fleet distribution config."""
         form_data = {

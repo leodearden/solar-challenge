@@ -9,6 +9,7 @@ and fleet-wide overlay application for tariff/dispatch/SEG settings.
 from __future__ import annotations
 
 import dataclasses
+import math
 import random
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, TypeGuard
@@ -87,20 +88,38 @@ def sample_distribution(
             to :data:`MAX_FLEET_HOMES`.
 
     Returns:
-        List of sampled float values.
+        List of sampled values, each a finite float.
 
     Raises:
-        ValueError: If dist_type is unknown or params are invalid, n_samples is one
-            int() cannot read or outside 1 to MAX_FLEET_HOMES (see
+        ValueError: If dist_type or params are ones :func:`_draw_samples` cannot draw
+            from, n_samples is one int() cannot read or outside 1 to MAX_FLEET_HOMES (see
             :func:`~solar_challenge.web.number_fields.as_int_within`), params are not a
-            dict (see :func:`_require_dict`), or :func:`_build_distribution_dict` refuses
-            them, naming the field under ``params``.
+            dict (see :func:`_require_dict`), :func:`_build_distribution_dict` refuses
+            them, naming the field under ``params``, or params draw a sample that is not a
+            finite number, as finite params whose draws overflow a float can; that error
+            names params and the sample.
     """
     n_samples = as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
     spec = _build_distribution_dict({**params, "type": dist_type}, "params")
+    samples = _draw_samples(spec, n_samples)
+    for sample in samples:
+        if not math.isfinite(sample):
+            raise ValueError(
+                f"params must draw samples that are finite numbers, got a sample of {sample!r}"
+            )
+    return samples
 
+
+def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
+    """Draw *n_samples* values from *spec*, a distribution :func:`_build_distribution_dict` built, with a fixed seed.
+
+    Raises:
+        ValueError: If the type of *spec* is unknown, or its parameters are ones it cannot
+            draw from, such as a negative std or a min above max.
+    """
     rng = random.Random(42)
+    dist_type = spec["type"]
 
     if dist_type == "normal":
         if spec["std"] < 0:

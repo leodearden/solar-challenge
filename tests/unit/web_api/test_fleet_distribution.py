@@ -16,7 +16,7 @@ from solar_challenge.config import (
     parse_fleet_distribution_config,
 )
 from solar_challenge.home import HomeConfig
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, sample_distribution
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
@@ -188,6 +188,17 @@ class TestPreviewDistribution:
         )
         assert resp.status_code == 400
         assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
+
+    def test_finite_params_whose_draws_are_not_finite_return_400_carrying_sample_distributions_refusal(
+        self, client: FlaskClient
+    ) -> None:
+        """Finite params that draw a sample a float cannot hold are a 400 carrying sample_distribution's refusal, not a 200 whose samples JSON cannot write."""
+        body = {"type": "uniform", "params": {"min": -1.7e308, "max": 1.7e308}, "n_samples": 100}
+        with pytest.raises(ValueError) as refusal:
+            sample_distribution(body["type"], body["params"], body["n_samples"])
+        resp = client.post("/api/fleet/preview-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(refusal.value)}
 
 
 class TestFleetFromDistribution:
