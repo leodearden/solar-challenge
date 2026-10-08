@@ -1,8 +1,12 @@
 """End-to-end tests for interactive form behaviors on /simulate/home.
 
-Verifies preset population, location changes, period buttons,
-and conditional field visibility.
+Verifies preset population, including a preset select that lists each
+preset once and applies the built-in one when a saved home preset holds a
+built-in preset's name, location changes, period buttons, and conditional
+field visibility.
 """
+
+from urllib.parse import quote
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -35,6 +39,29 @@ def test_preset_populates_form_values(page: Page, live_server: str) -> None:
     assert form_values["pv_kw"] == 6, f"Expected pv_kw=6, got {form_values['pv_kw']}"
     assert form_values["battery_kwh"] == 10, f"Expected battery_kwh=10, got {form_values['battery_kwh']}"
     assert form_values["consumption_kwh"] == 4500, f"Expected consumption_kwh=4500, got {form_values['consumption_kwh']}"
+
+
+def test_preset_select_lists_each_preset_once_when_a_saved_one_has_a_builtin_ones_name(
+    page: Page,
+    live_server: str,
+    page_errors: list[str],
+    home_preset_saved_under_a_builtin_name: dict[str, object],
+) -> None:
+    """A saved home preset named 'Small Urban' leaves the select listing every preset once, and choosing 'Small Urban' applies the built-in one."""
+    page.goto(live_server + "/simulate/home")
+    names = [p["name"] for p in page.request.get(live_server + "/api/presets").json()]
+
+    expect(page.locator("#preset_select option")).to_have_text(["-- No preset --", *names])
+    assert names.count("Small Urban") == 1
+    page.locator("#preset_select").select_option(label="Small Urban")
+
+    builtin = page.request.get(live_server + "/api/presets/" + quote("Small Urban")).json()
+    assert builtin["source"] == "builtin"
+    form_values = form_data(page)
+    applied = {key: form_values[key] for key in ("pv_kw", "battery_kwh", "consumption_kwh")}
+    assert applied == {key: builtin[key] for key in ("pv_kw", "battery_kwh", "consumption_kwh")}
+    assert form_values["battery_enabled"] is False
+    assert page_errors == []
 
 
 # -- Location preset updates formData ---------------------------------------

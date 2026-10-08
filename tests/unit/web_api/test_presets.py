@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the home preset endpoints: GET /api/presets, POST /api/presets and GET /api/presets/<name>."""
 
+import json
 import sqlite3
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from datetime import datetime, timezone
 
 import pytest
 
@@ -12,6 +15,29 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
+
+
+def _write_saved_home_preset(app: Flask, name: str, config: dict[str, object]) -> None:
+    """Write the saved home preset *name* holding *config* into the app's database.
+
+    It writes the row as POST /api/presets saved one before it refused a built-in
+    preset's name; no public seam can write such a row any more.
+    """
+    with closing(sqlite3.connect(app.config["DATABASE"])) as conn:
+        with conn:
+            conn.execute(
+                "INSERT INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, 'home', ?, ?)",
+                (str(uuid.uuid4()), name, json.dumps(config), datetime.now(timezone.utc).isoformat()),
+            )
+
+
+def _save_home_presets_one_of_them_under_a_builtin_name(app: Flask, client: FlaskClient) -> None:
+    """Save a home preset named 'Small Urban', as a release from before the refusal could, and one named 'Mine'.
+
+    The 'Small Urban' row's values are unlike the built-in one's, so applying the wrong preset shows.
+    """
+    _write_saved_home_preset(app, "Small Urban", {"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000})
+    assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
 
 
 def _answers_to_saves_sent_together(app: Flask, *saves: tuple[str, dict[str, object]]) -> list[TestResponse]:
@@ -55,6 +81,23 @@ class TestListPresets:
         for preset in data:
             if preset["name"] in ("Small Urban", "Medium Suburban", "Large with Battery"):
                 assert preset["source"] == "builtin"
+
+    def test_a_saved_home_preset_under_a_builtin_presets_name_is_not_listed(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each name is listed once: a saved home preset under a built-in preset's name is left out, and the built-in one is listed."""
+        _save_home_presets_one_of_them_under_a_builtin_name(app, client)
+
+        presets = client.get("/api/presets").get_json()
+
+        assert [p["name"] for p in presets] == ["Small Urban", "Medium Suburban", "Large with Battery", "Mine"]
+        assert {p["name"]: p for p in presets}["Small Urban"] == {
+            "name": "Small Urban",
+            "pv_kw": 3.0,
+            "battery_kwh": 0,
+            "consumption_kwh": 2900,
+            "source": "builtin",
+        }
 
 
 class TestSavePreset:
@@ -221,3 +264,21 @@ class TestGetPreset:
         resp = client.get("/api/presets/Does Not Exist")
         assert resp.status_code == 404
         assert "error" in resp.get_json()
+
+    def test_each_listed_name_answers_the_entry_the_list_holds_under_it(self, app: Flask, client: FlaskClient) -> None:
+        """The lookup agrees with the list the home page applies presets from, even for a built-in preset's name a saved home preset also holds."""
+        _save_home_presets_one_of_them_under_a_builtin_name(app, client)
+
+        for entry in client.get("/api/presets").get_json():
+            resp = client.get(f"/api/presets/{entry['name']}")
+            assert (resp.status_code, resp.get_json()) == (200, entry)
+
+    def test_a_name_only_a_saved_fleet_preset_holds_answers_404(self, app: Flask, client: FlaskClient) -> None:
+        """The lookup answers home presets only, as the list holds them: a saved fleet preset's name is not found."""
+        _save_home_presets_one_of_them_under_a_builtin_name(app, client)
+        assert client.post("/api/scenarios/save", json={"name": "Fleet only", "config": {"n_homes": 9}}).status_code == 201
+
+        resp = client.get("/api/presets/Fleet only")
+
+        assert (resp.status_code, resp.get_json()) == (404, {"error": "Preset 'Fleet only' not found"})
+        assert "Fleet only" not in [p["name"] for p in client.get("/api/presets").get_json()]
