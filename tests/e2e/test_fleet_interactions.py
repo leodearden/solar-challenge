@@ -240,7 +240,7 @@ def test_fleet_import_yaml_shows_each_distribution_in_its_card(
     page.goto(live_server + "/simulate/fleet")
 
     with page.expect_file_chooser() as chooser:
-        page.get_by_text("Import YAML", exact=True).click()
+        page.get_by_role("button", name="Import YAML", exact=True).click()
     chooser.value.set_files(fleet_file)
 
     _expect_the_imported_fleet(page)
@@ -335,7 +335,7 @@ def test_fleet_yaml_export_imports_back_into_the_form(
     download.value.save_as(fleet_file)
     page.reload()
     with page.expect_file_chooser() as chooser:
-        page.get_by_text("Import YAML", exact=True).click()
+        page.get_by_role("button", name="Import YAML", exact=True).click()
     chooser.value.set_files(fleet_file)
 
     _expect_the_fleet_unlike_the_default(page)
@@ -444,7 +444,7 @@ def test_fleet_load_preset_without_a_period_runs_the_pages_default_period(
     # A quick preset other than the default, so keeping the last one shown would not pass.
     page.get_by_role("button", name="90 days", exact=True).click()
     with page.expect_file_chooser() as chooser:
-        page.get_by_text("Import YAML", exact=True).click()
+        page.get_by_role("button", name="Import YAML", exact=True).click()
     chooser.value.set_files(fleet_file)
     expect(page.get_by_role("radio", name="Custom range", exact=True)).to_be_checked()
     expect(page.get_by_label("Start Date", exact=True)).to_have_value("2024-07-01")
@@ -516,7 +516,7 @@ def test_fleet_run_of_an_imported_fleet_over_the_pages_size_limit_shows_the_refu
     page.goto(live_server + "/simulate/fleet")
 
     with page.expect_file_chooser() as chooser:
-        page.get_by_text("Import YAML", exact=True).click()
+        page.get_by_role("button", name="Import YAML", exact=True).click()
     chooser.value.set_files(fleet_file)
     expect(page.get_by_label("Number of Homes", exact=True)).to_have_value("1500")
 
