@@ -110,7 +110,7 @@ document.addEventListener('alpine:init', () => {
         return data;
     }
 
-    Alpine.data('scenarioBuilder', () => ({
+    Alpine.data('scenarioBuilder', (initialSection) => ({
         // Form state
         name: '',
         description: '',
@@ -146,7 +146,7 @@ document.addEventListener('alpine:init', () => {
         // UI state
         yamlPreview: '# Configure your scenario...',
         validationResult: null,
-        accordionOpen: 'general',
+        accordionOpen: initialSection,
         presetDropdownOpen: false,
         showSaveModal: false,
         saveName: '',
