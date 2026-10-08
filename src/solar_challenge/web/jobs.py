@@ -401,7 +401,13 @@ class JobManager:
         try:
             finished_at = self._clock()
             with self._lock:
-                self._jobs[job_id].finished_at = finished_at
+                job = self._jobs.get(job_id)
+                if job is None:
+                    raise RuntimeError(
+                        f"job {job_id} finished, but its JobManager no longer tracked it; "
+                        "a manager tracks each job until it finishes"
+                    )
+                job.finished_at = finished_at
         finally:
             self._stop_counting_job()
 
