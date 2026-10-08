@@ -2,15 +2,15 @@
 
 Verifies slider-input sync, that each distribution editor's controls are named
 for their card, that each card's row buttons change only its rows, that a
-card's last row has no remove button, that Import YAML shows each distribution
-in its card, that a fleet exported as YAML imports back into the form, that
-Load Preset fills the form and names the preset's
-settings the form has no control for, that a preset without a period runs the
-page's default period, that the page shows why a preset cannot
-load or a fleet cannot export, that the simulation name reaches the submitted
-run, that Run shows why the page refuses a form, submits nothing and leaves the
-results link of an earlier run in place, and that the period selector offers
-presets and a custom date range.
+card's last row has no remove button, that Import YAML, clicked or reached with
+Tab and pressed with Enter or Space, shows each distribution in its card, that
+a fleet exported as YAML imports back into the form, that Load Preset fills the
+form and names the preset's settings the form has no control for, that a preset
+without a period runs the page's default period, that the page shows why a
+preset cannot load or a fleet cannot export, that the simulation name reaches
+the submitted run, that Run shows why the page refuses a form, submits nothing
+and leaves the results link of an earlier run in place, and that the period
+selector offers presets and a custom date range.
 """
 
 import json
@@ -220,6 +220,17 @@ IMPORTED_VALUES = {
 }
 
 
+def _expect_the_imported_fleet(page: Page) -> None:
+    """Expect each card to show IMPORTED_FLEET's weighted discrete distribution: exactly the Value rows IMPORTED_VALUES lists."""
+    for subject, values in IMPORTED_VALUES.items():
+        _expect_only_row_list_shown(page, subject, "Weight")
+        expect(_value_inputs(page, subject)).to_have_count(len(values))
+        for row, value in enumerate(values, start=1):
+            expect(
+                page.get_by_role("spinbutton", name=f"{subject} Value {row}", exact=True)
+            ).to_have_value(value)
+
+
 def test_fleet_import_yaml_shows_each_distribution_in_its_card(
     page: Page, live_server: str, tmp_path: Path
 ) -> None:
@@ -229,16 +240,30 @@ def test_fleet_import_yaml_shows_each_distribution_in_its_card(
     page.goto(live_server + "/simulate/fleet")
 
     with page.expect_file_chooser() as chooser:
-        page.get_by_text("Import YAML", exact=True).click()
+        page.get_by_role("button", name="Import YAML", exact=True).click()
     chooser.value.set_files(fleet_file)
 
-    for subject, values in IMPORTED_VALUES.items():
-        _expect_only_row_list_shown(page, subject, "Weight")
-        expect(_value_inputs(page, subject)).to_have_count(len(values))
-        for row, value in enumerate(values, start=1):
-            expect(
-                page.get_by_role("spinbutton", name=f"{subject} Value {row}", exact=True)
-            ).to_have_value(value)
+    _expect_the_imported_fleet(page)
+
+
+@pytest.mark.parametrize("key", ["Enter", "Space"])
+def test_fleet_tabbing_to_import_yaml_and_pressing_key_opens_a_file_chooser_whose_fleet_shows_in_the_cards(
+    page: Page, live_server: str, tmp_path: Path, key: str
+) -> None:
+    """Tab moves focus from the Load Preset select to the Import YAML button, and pressing *key* there opens a file chooser; the fleet chosen in it shows each distribution in its card."""
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(IMPORTED_FLEET)
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_role("combobox", name="Load Preset", exact=True).focus()
+
+    # The Tab and the focus check stay inside the with: they let the chooser listener register before the key press
+    with page.expect_file_chooser() as chooser:
+        page.keyboard.press("Tab")
+        expect(page.get_by_role("button", name="Import YAML", exact=True)).to_be_focused()
+        page.keyboard.press(key)
+    chooser.value.set_files(fleet_file)
+
+    _expect_the_imported_fleet(page)
 
 
 # -- Export YAML, then import it -------------------------------------------
@@ -310,7 +335,7 @@ def test_fleet_yaml_export_imports_back_into_the_form(
     download.value.save_as(fleet_file)
     page.reload()
     with page.expect_file_chooser() as chooser:
-        page.get_by_text("Import YAML", exact=True).click()
+        page.get_by_role("button", name="Import YAML", exact=True).click()
     chooser.value.set_files(fleet_file)
 
     _expect_the_fleet_unlike_the_default(page)
@@ -419,7 +444,7 @@ def test_fleet_load_preset_without_a_period_runs_the_pages_default_period(
     # A quick preset other than the default, so keeping the last one shown would not pass.
     page.get_by_role("button", name="90 days", exact=True).click()
     with page.expect_file_chooser() as chooser:
-        page.get_by_text("Import YAML", exact=True).click()
+        page.get_by_role("button", name="Import YAML", exact=True).click()
     chooser.value.set_files(fleet_file)
     expect(page.get_by_role("radio", name="Custom range", exact=True)).to_be_checked()
     expect(page.get_by_label("Start Date", exact=True)).to_have_value("2024-07-01")
@@ -491,7 +516,7 @@ def test_fleet_run_of_an_imported_fleet_over_the_pages_size_limit_shows_the_refu
     page.goto(live_server + "/simulate/fleet")
 
     with page.expect_file_chooser() as chooser:
-        page.get_by_text("Import YAML", exact=True).click()
+        page.get_by_role("button", name="Import YAML", exact=True).click()
     chooser.value.set_files(fleet_file)
     expect(page.get_by_label("Number of Homes", exact=True)).to_have_value("1500")
 
