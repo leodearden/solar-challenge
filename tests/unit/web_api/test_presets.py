@@ -211,6 +211,23 @@ class TestSavePreset:
         assert client.get("/api/scenarios/presets/Taken").get_json()["config"] == {"n_homes": 9}
         assert "Taken" not in [p["name"] for p in client.get("/api/presets").get_json()]
 
+    @pytest.mark.parametrize("name", ["Small Urban", "Medium Suburban", "Large with Battery"])
+    def test_save_under_a_builtin_presets_name_returns_409_and_saves_nothing(
+        self, client: FlaskClient, name: str
+    ) -> None:
+        """A home save under a built-in home preset's name is a 409 naming that preset.
+
+        The fleet save after it witnesses that no saved home preset took the name: a saved home
+        preset under it would make that save a 409 too, while GET /api/presets, which leaves such
+        a preset out, cannot show one. It also pins that a fleet save may take a built-in home
+        preset's name, which no list or lookup of fleet presets holds.
+        """
+        resp = client.post("/api/presets", json={"name": name, "pv_kw": 9.5})
+
+        assert resp.status_code == 409
+        assert resp.get_json() == {"error": f"A built-in home preset is already named {name!r}"}
+        assert client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}}).status_code == 201
+
     def test_saving_a_name_again_replaces_its_config_and_keeps_its_id(self, client: FlaskClient) -> None:
         """A second save under a saved home preset's name updates that preset in place."""
         first = client.post("/api/presets", json={"name": "Again", "pv_kw": 1.0})
