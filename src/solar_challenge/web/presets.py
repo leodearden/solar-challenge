@@ -3,7 +3,8 @@
 
 config_presets holds one saved preset per name, a home or a fleet preset, as the table's UNIQUE
 name declares, so a save under a name a saved preset of the other type holds is refused. A
-built-in home preset's name names that built-in preset only, so the home presets list each name once.
+built-in home preset's name names that built-in preset only, so a home save under it is refused
+too, and the home presets list each name once.
 """
 
 import json
@@ -30,10 +31,12 @@ _BUILTIN_HOME_PRESET_NAMES: frozenset[str] = frozenset(preset["name"] for preset
 
 
 class PresetNameTaken(ValueError):
-    """A save under a name a saved preset of the other type holds; the message names the name and that type."""
+    """A save under a name another preset holds; the message names the name and the holding preset's source and type."""
 
-    def __init__(self, name: str, holder_type: PresetType) -> None:
-        super().__init__(f"A saved {holder_type} preset is already named {name!r}")
+    def __init__(self, name: str, holder_source: PresetSource, holder_type: PresetType) -> None:
+        super().__init__(
+            f"A {'built-in' if holder_source == 'builtin' else 'saved'} {holder_type} preset is already named {name!r}"
+        )
 
 
 def save_config_preset(
@@ -46,8 +49,11 @@ def save_config_preset(
     one after the other.
 
     Raises:
-        PresetNameTaken: Writing nothing, when a saved preset of the other type holds *name*.
+        PresetNameTaken: Writing nothing, when a saved preset of the other type holds *name*,
+            or when a home save is named like a built-in home preset.
     """
+    if preset_type == "home" and name in _BUILTIN_HOME_PRESET_NAMES:
+        raise PresetNameTaken(name, "builtin", "home")
     config_json = json.dumps(config)
     saved_at = datetime.now(timezone.utc).isoformat()
     with get_db(db_path) as conn:
@@ -61,7 +67,7 @@ def save_config_preset(
             )
             return preset_id
         if holder["type"] != preset_type:
-            raise PresetNameTaken(name, holder["type"])
+            raise PresetNameTaken(name, "saved", holder["type"])
         conn.execute(
             "UPDATE config_presets SET config_json = ?, created_at = ? WHERE id = ?",
             (config_json, saved_at, holder["id"]),
@@ -74,8 +80,9 @@ def home_presets(db_path: str | Path) -> list[dict[str, Any]]:
 
     Each preset is its config with its name and its ``source``, a PresetSource; a saved one
     also has its ``created_at``. A saved home preset under a built-in preset's name is left
-    out, so that name names the built-in preset. When the saved presets cannot be read, the
-    fault is logged and the built-in presets are listed alone.
+    out, so that name names the built-in preset; only a release from before the save refused
+    such a name could have saved one. When the saved presets cannot be read, the fault is
+    logged and the built-in presets are listed alone.
     """
     builtin = [{**preset, "source": "builtin"} for preset in _BUILTIN_HOME_PRESETS]
     try:

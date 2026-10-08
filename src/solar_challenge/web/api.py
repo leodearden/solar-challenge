@@ -270,7 +270,7 @@ def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str,
 
     Returns:
         JSON with the preset name and id, HTTP 201; or the ``error``: HTTP 409 for a
-        name a saved preset of the other type holds, HTTP 500 for a database fault.
+        name another preset holds, HTTP 500 for a database fault.
     """
     try:
         preset_id = save_config_preset(current_app.config["DATABASE"], name, preset_type, config)
@@ -289,8 +289,8 @@ def save_preset() -> tuple[Response, int]:
 
     Returns:
         JSON confirmation with the preset name and id, HTTP 201 on success; or the ``error``:
-        HTTP 400 for an empty name or a type other than 'home', HTTP 409 for a name a saved
-        fleet preset holds.
+        HTTP 400 for an empty name or a type other than 'home', HTTP 409 for a name a built-in
+        home preset or a saved fleet preset holds.
     """
     data = request_json_object()
     name = data.get("name", "").strip()
