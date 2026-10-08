@@ -4,10 +4,8 @@
 import json
 import sqlite3
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from datetime import datetime, timezone
 
 import pytest
 
@@ -16,27 +14,17 @@ from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
-
-def _write_saved_home_preset(app: Flask, name: str, config: dict[str, object]) -> None:
-    """Write the saved home preset *name* holding *config* into the app's database.
-
-    It writes the row as POST /api/presets saved one before it refused a built-in
-    preset's name; no public seam can write such a row any more.
-    """
-    with closing(sqlite3.connect(app.config["DATABASE"])) as conn:
-        with conn:
-            conn.execute(
-                "INSERT INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, 'home', ?, ?)",
-                (str(uuid.uuid4()), name, json.dumps(config), datetime.now(timezone.utc).isoformat()),
-            )
+from tests._config_preset_rows import insert_saved_home_preset
 
 
 def _save_home_presets_one_of_them_under_a_builtin_name(app: Flask, client: FlaskClient) -> None:
-    """Save a home preset named 'Small Urban', as a release from before the refusal could, and one named 'Mine'.
+    """Save a home preset named 'Small Urban' straight into the database, and one named 'Mine' through POST /api/presets.
 
     The 'Small Urban' row's values are unlike the built-in one's, so applying the wrong preset shows.
     """
-    _write_saved_home_preset(app, "Small Urban", {"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000})
+    insert_saved_home_preset(
+        app.config["DATABASE"], "Small Urban", json.dumps({"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000})
+    )
     assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
 
 

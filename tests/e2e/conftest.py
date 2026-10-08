@@ -8,8 +8,7 @@ live server's own RunStorage, for tests that need pre-existing
 simulation runs (dashboard, results pages, history interactions,
 compare page), and home_preset_saved_under_a_builtin_name, which writes
 a saved home preset under a built-in preset's name straight into the
-live server's database, as a release from before the save refused such
-a name could.
+live server's database.
 Also stubs the Run History page's runs-list API for tests that need it
 empty or unanswered, and collects the errors a page reports.
 
@@ -31,7 +30,6 @@ import uuid
 from collections.abc import Generator, Iterator
 from contextlib import closing
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -48,6 +46,7 @@ from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager, get_storage
 from solar_challenge.web.storage import RunStorage
 
+from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._web_app import build_test_app
 
@@ -242,19 +241,11 @@ def newest_home_run(_e2e_storage: RunStorage) -> tuple[str, str]:
 def home_preset_saved_under_a_builtin_name(_e2e_app: Flask) -> Iterator[dict[str, object]]:
     """Write a saved home preset named 'Small Urban', a built-in preset's name, into the live server's database. Yields its config.
 
-    It writes the row as POST /api/presets saved one before it refused a built-in preset's name;
-    no public seam can write such a row any more. Its values are unlike the built-in one's, so
-    applying the wrong preset shows. The session's tests share the database, so the row is
-    deleted at teardown.
+    Its values are unlike the built-in one's, so applying the wrong preset shows. The session's
+    tests share the database, so the row is deleted at teardown.
     """
     config: dict[str, object] = {"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000}
-    preset_id = str(uuid.uuid4())
-    with closing(sqlite3.connect(_e2e_app.config["DATABASE"])) as conn:
-        with conn:
-            conn.execute(
-                "INSERT INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, 'home', ?, ?)",
-                (preset_id, "Small Urban", json.dumps(config), datetime.now(timezone.utc).isoformat()),
-            )
+    preset_id = insert_saved_home_preset(_e2e_app.config["DATABASE"], "Small Urban", json.dumps(config))
     yield config
     with closing(sqlite3.connect(_e2e_app.config["DATABASE"])) as conn:
         with conn:

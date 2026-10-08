@@ -80,9 +80,8 @@ def home_presets(db_path: str | Path) -> list[dict[str, Any]]:
 
     Each preset is its config with its name and its ``source``, a PresetSource; a saved one
     also has its ``created_at``. A saved home preset under a built-in preset's name is left
-    out, so that name names the built-in preset; only a release from before the save refused
-    such a name could have saved one. When the saved presets cannot be read, the fault is
-    logged and the built-in presets are listed alone.
+    out, so that name names the built-in preset. When the saved presets cannot be read, the
+    fault is logged and the built-in presets are listed alone.
     """
     builtin = [{**preset, "source": "builtin"} for preset in _BUILTIN_HOME_PRESETS]
     try:
