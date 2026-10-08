@@ -7,15 +7,17 @@ form of one made by _with_alpha, so a palette edit reaches it; a chart that writ
 colour out by hand fails tests/unit/test_web_chart_colours.py. Every COLOUR_PALETTE role is one
 some chart draws, and a role none draws fails the same test module. Neutral chrome (backgrounds,
 annotation text, outlines) and the heatmap's named colour scale mark no series and have no
-palette role.
+palette role. Each of the five energy flows has its label, colour role and place in the charts'
+order once, in _EnergyFlow; tests/unit/test_web_chart_energy_flows.py checks that the charts agree.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Any, TypeVar
+from collections.abc import Callable, Mapping, Sequence
+from enum import Enum
+from types import MappingProxyType
+from typing import Any, Final, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -76,6 +78,33 @@ def _with_alpha(colour: str, alpha: float) -> str:
     return f"rgba({red},{green},{blue},{alpha})"
 
 
+class _EnergyFlow(Enum):
+    """The five energy flows the charts draw, in the order every chart draws them: each one's label and COLOUR_PALETTE role."""
+
+    GENERATION = ("Generation", "pv_generation")
+    DEMAND = ("Demand", "demand")
+    SELF_CONSUMPTION = ("Self-Consumption", "self_consumption")
+    GRID_IMPORT = ("Grid Import", "grid_import")
+    GRID_EXPORT = ("Grid Export", "grid_export")
+
+    def __init__(self, label: str, colour_role: str) -> None:
+        self.label: Final = label
+        self.colour_role: Final = colour_role
+
+    @property
+    def colour(self) -> str:
+        """The flow's COLOUR_PALETTE colour, read when called, so a palette edit reaches every chart of the flow."""
+        return COLOUR_PALETTE[self.colour_role]
+
+
+_FlowValue = TypeVar("_FlowValue")
+
+
+def _in_flow_order(drawn: Mapping[_EnergyFlow, _FlowValue]) -> list[tuple[_EnergyFlow, _FlowValue]]:
+    """*drawn*'s flows, each paired with its value, in the order every chart draws the five flows."""
+    return [(flow, drawn[flow]) for flow in _EnergyFlow if flow in drawn]
+
+
 _TimeIndexed = TypeVar("_TimeIndexed", pd.Series, pd.DataFrame)
 
 
@@ -108,25 +137,25 @@ def _stacked_power_flow_timeline(
     grid_export: pd.Series,
 ) -> str:
     """Plotly JSON of a stacked area chart, titled *title*, of the five power flows over time, with a range slider."""
-    flows = (
-        ("PV Generation", "pv_generation", generation),
-        ("Demand", "demand", demand),
-        ("Self-Consumption", "self_consumption", self_consumption),
-        ("Grid Import", "grid_import", grid_import),
-        ("Grid Export", "grid_export", grid_export),
-    )
-    df = _adaptive_downsample(pd.DataFrame({name: series for name, _, series in flows}))
+    flows = _in_flow_order({
+        _EnergyFlow.GENERATION: generation,
+        _EnergyFlow.DEMAND: demand,
+        _EnergyFlow.SELF_CONSUMPTION: self_consumption,
+        _EnergyFlow.GRID_IMPORT: grid_import,
+        _EnergyFlow.GRID_EXPORT: grid_export,
+    })
+    df = _adaptive_downsample(pd.DataFrame({flow: series for flow, series in flows}))
     dates = [d.isoformat() for d in df.index]
     traces: list[Any] = [
         go.Scatter(
-            name=name,
+            name=flow.label,
             x=dates,
-            y=df[name].round(4).tolist(),
+            y=df[flow].round(4).tolist(),
             mode="lines",
             stackgroup="one",
-            line=dict(width=0.5, color=COLOUR_PALETTE[role]),
+            line=dict(width=0.5, color=flow.colour),
         )
-        for name, role, _ in flows
+        for flow, _ in flows
     ]
 
     fig = go.Figure(data=traces)
@@ -308,6 +337,15 @@ def sankey_diagram(summary: SummaryStatistics) -> str:
     return str(fig.to_json())
 
 
+_AGGREGATE_KWH_COLUMNS: Mapping[_EnergyFlow, str] = MappingProxyType({
+    _EnergyFlow.GENERATION: "generation_kwh",
+    _EnergyFlow.DEMAND: "demand_kwh",
+    _EnergyFlow.SELF_CONSUMPTION: "self_consumption_kwh",
+    _EnergyFlow.GRID_IMPORT: "grid_import_kwh",
+    _EnergyFlow.GRID_EXPORT: "grid_export_kwh",
+})
+
+
 def daily_energy_balance(results: SimulationResults) -> str:
     """Grouped bar chart of daily generation, demand and related metrics.
 
@@ -320,25 +358,10 @@ def daily_energy_balance(results: SimulationResults) -> str:
     daily = aggregate_daily(results)
     dates = [d.strftime("%Y-%m-%d") for d in daily.index]
 
-    series_meta: list[tuple[str, str, str]] = [
-        ("generation_kwh", "Generation", COLOUR_PALETTE["pv_generation"]),
-        ("demand_kwh", "Demand", COLOUR_PALETTE["demand"]),
-        ("self_consumption_kwh", "Self-Consumption", COLOUR_PALETTE["self_consumption"]),
-        ("grid_import_kwh", "Grid Import", COLOUR_PALETTE["grid_import"]),
-        ("grid_export_kwh", "Grid Export", COLOUR_PALETTE["grid_export"]),
+    traces: list[Any] = [
+        go.Bar(name=flow.label, x=dates, y=daily[column].round(3).tolist(), marker_color=flow.colour)
+        for flow, column in _in_flow_order(_AGGREGATE_KWH_COLUMNS)
     ]
-
-    traces: list[Any] = []
-    for col, name, colour in series_meta:
-        if col in daily.columns:
-            traces.append(
-                go.Bar(
-                    name=name,
-                    x=dates,
-                    y=daily[col].round(3).tolist(),
-                    marker_color=colour,
-                )
-            )
 
     fig = go.Figure(data=traces)
     fig.update_layout(
@@ -369,23 +392,11 @@ def monthly_summary(results: SimulationResults) -> str | None:
     monthly = aggregate_monthly(results)
     months = [d.strftime("%Y-%m") for d in monthly.index]
 
-    series_meta: list[tuple[str, str, str]] = [
-        ("self_consumption_kwh", "Self-Consumption", COLOUR_PALETTE["self_consumption"]),
-        ("grid_import_kwh", "Grid Import", COLOUR_PALETTE["grid_import"]),
-        ("grid_export_kwh", "Grid Export", COLOUR_PALETTE["grid_export"]),
+    stacked = (_EnergyFlow.SELF_CONSUMPTION, _EnergyFlow.GRID_IMPORT, _EnergyFlow.GRID_EXPORT)
+    traces: list[Any] = [
+        go.Bar(name=flow.label, x=months, y=monthly[column].round(2).tolist(), marker_color=flow.colour)
+        for flow, column in _in_flow_order({flow: _AGGREGATE_KWH_COLUMNS[flow] for flow in stacked})
     ]
-
-    traces: list[Any] = []
-    for col, name, colour in series_meta:
-        if col in monthly.columns:
-            traces.append(
-                go.Bar(
-                    name=name,
-                    x=months,
-                    y=monthly[col].round(2).tolist(),
-                    marker_color=colour,
-                )
-            )
 
     fig = go.Figure(data=traces)
     fig.update_layout(
@@ -656,8 +667,7 @@ def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str
 def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> str:
     """Grouped bar chart comparing energy totals across runs.
 
-    Categories: Generation, Demand, Self-Consumption, Grid Import,
-    Grid Export.  One group per run, labelled.
+    One category per energy flow; one group per run, labelled.
 
     Args:
         summaries: List of summary dictionaries from different runs.
@@ -666,19 +676,19 @@ def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> 
     Returns:
         Plotly figure JSON string.
     """
-    categories = ["Generation", "Demand", "Self-Consumption", "Grid Import", "Grid Export"]
-    keys = [
-        "total_generation_kwh",
-        "total_demand_kwh",
-        "total_self_consumption_kwh",
-        "total_grid_import_kwh",
-        "total_grid_export_kwh",
-    ]
+    summary_keys = _in_flow_order({
+        _EnergyFlow.GENERATION: "total_generation_kwh",
+        _EnergyFlow.DEMAND: "total_demand_kwh",
+        _EnergyFlow.SELF_CONSUMPTION: "total_self_consumption_kwh",
+        _EnergyFlow.GRID_IMPORT: "total_grid_import_kwh",
+        _EnergyFlow.GRID_EXPORT: "total_grid_export_kwh",
+    })
+    categories = [flow.label for flow, _ in summary_keys]
 
     traces: list[Any] = []
     for i, (summary, label) in enumerate(zip(summaries, labels)):
         colour = _comparison_run_colour(i)
-        values = [round(summary.get(k, 0), 2) for k in keys]
+        values = [round(summary.get(key, 0), 2) for _, key in summary_keys]
         traces.append(go.Bar(
             name=label,
             x=categories,
@@ -830,31 +840,20 @@ def fleet_grid_impact(fleet: FleetResults) -> str:
     return str(fig.to_json())
 
 
-@dataclass(frozen=True)
-class _EnergyTotal:
-    """An energy total the fleet charts draw for each home: its label, its COLOUR_PALETTE role, and its kWh in a home's summary."""
-
-    label: str
-    colour_role: str
-    kwh: Callable[[SummaryStatistics], float]
-
-
-_PER_HOME_ENERGY_TOTALS: tuple[_EnergyTotal, ...] = (
-    _EnergyTotal("Generation", "pv_generation", lambda summary: summary.total_generation_kwh),
-    _EnergyTotal("Demand", "demand", lambda summary: summary.total_demand_kwh),
-    _EnergyTotal("Self-Consumption", "self_consumption", lambda summary: summary.total_self_consumption_kwh),
-    _EnergyTotal("Grid Import", "grid_import", lambda summary: summary.total_grid_import_kwh),
-    _EnergyTotal("Grid Export", "grid_export", lambda summary: summary.total_grid_export_kwh),
-)
+_SUMMARY_KWH: Mapping[_EnergyFlow, Callable[[SummaryStatistics], float]] = MappingProxyType({
+    _EnergyFlow.GENERATION: lambda summary: summary.total_generation_kwh,
+    _EnergyFlow.DEMAND: lambda summary: summary.total_demand_kwh,
+    _EnergyFlow.SELF_CONSUMPTION: lambda summary: summary.total_self_consumption_kwh,
+    _EnergyFlow.GRID_IMPORT: lambda summary: summary.total_grid_import_kwh,
+    _EnergyFlow.GRID_EXPORT: lambda summary: summary.total_grid_export_kwh,
+})
 
 
 def fleet_heatmap(home_summaries: Sequence[SummaryStatistics]) -> str:
     """Homes x metrics heatmap matrix.
 
-    Rows represent individual homes and columns represent energy
-    metrics (Generation, Demand, Self-Consumption, Grid Import,
-    Grid Export) in kWh.  Limits to the first 50 homes if there
-    are more.
+    Rows represent individual homes and columns the five energy flows'
+    totals in kWh. Limits to the first 50 homes if there are more.
 
     Args:
         home_summaries: Each home's summary statistics, in the fleet's order.
@@ -865,8 +864,9 @@ def fleet_heatmap(home_summaries: Sequence[SummaryStatistics]) -> str:
     summaries = home_summaries[:50]
 
     y_labels = [f"Home {i+1}" for i in range(len(summaries))]
-    x_labels = [total.label for total in _PER_HOME_ENERGY_TOTALS]
-    z = [[round(total.kwh(summary), 2) for total in _PER_HOME_ENERGY_TOTALS] for summary in summaries]
+    columns = _in_flow_order(_SUMMARY_KWH)
+    x_labels = [flow.label for flow, _ in columns]
+    z = [[round(kwh(summary), 2) for _, kwh in columns] for summary in summaries]
 
     fig = go.Figure(data=go.Heatmap(
         z=z,
@@ -900,12 +900,12 @@ def fleet_box_plots(home_summaries: Sequence[SummaryStatistics]) -> str:
     """
     traces: list[Any] = [
         go.Box(
-            name=total.label,
-            y=[total.kwh(summary) for summary in home_summaries],
-            marker_color=COLOUR_PALETTE[total.colour_role],
+            name=flow.label,
+            y=[kwh(summary) for summary in home_summaries],
+            marker_color=flow.colour,
             boxmean=True,
         )
-        for total in _PER_HOME_ENERGY_TOTALS
+        for flow, kwh in _in_flow_order(_SUMMARY_KWH)
     ]
 
     fig = go.Figure(data=traces)
