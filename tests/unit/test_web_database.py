@@ -590,6 +590,41 @@ class TestSavedRunRow:
 
         assert storage.run_name("fleet-run") == "Unnamed Fleet Run"
 
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_stamps_a_completed_run_with_the_time_it_completed(self, storage, saves, kind):
+        """A run saved as completed has the time of the save as its completed_at."""
+        before = datetime.now(timezone.utc)
+        saves[kind]("completed-run", status="completed")
+        after = datetime.now(timezone.utc)
+
+        record = storage.run_record("completed-run")
+        assert record.status == "completed"
+        assert before <= datetime.fromisoformat(record.completed_at) <= after
+
+    @pytest.mark.parametrize("status", [status for status in RUN_STATUSES if status != "completed"])
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_of_a_run_that_is_not_completed_leaves_completed_at_null(
+        self, storage, saves, kind, status
+    ):
+        """A run saved with any status but completed has no completed_at.
+
+        The statuses come from RUN_STATUSES, so a new status is covered without editing the test.
+        """
+        saves[kind]("unfinished-run", status=status)
+
+        record = storage.run_record("unfinished-run")
+        assert (record.status, record.completed_at) == (status, None)
+
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_given_no_created_at_is_created_at_the_time_it_saves(self, storage, saves, kind):
+        """A run saved with no created_at has the time of the save as its created_at."""
+        before = datetime.now(timezone.utc)
+        saves[kind]("new-run")
+        after = datetime.now(timezone.utc)
+
+        record = storage.run_record("new-run")
+        assert before <= datetime.fromisoformat(record.created_at) <= after
+
 
 class TestListRuns:
     """Tests for listing and filtering runs."""
