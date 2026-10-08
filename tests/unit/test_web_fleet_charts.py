@@ -140,7 +140,7 @@ class TestFleetChartFunctions:
         }
 
         assert drawn == {
-            "PV Generation": sum(home.generation for home in homes).round(4).tolist(),
+            "Generation": sum(home.generation for home in homes).round(4).tolist(),
             "Demand": sum(home.demand for home in homes).round(4).tolist(),
             "Self-Consumption": sum(home.self_consumption for home in homes).round(4).tolist(),
             "Grid Import": sum(home.grid_import for home in homes).round(4).tolist(),
