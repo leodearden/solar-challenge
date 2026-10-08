@@ -8,6 +8,7 @@ from solar_challenge.web.number_fields import (
     as_int,
     as_int_within,
     as_whole_number,
+    as_whole_number_within,
 )
 
 
@@ -167,4 +168,68 @@ class TestAsWholeNumber:
         """A value as_finite_float refuses is refused as it refuses it, before any whole-number check."""
         with pytest.raises(ValueError) as exc_info:
             as_whole_number(value, "n_homes")
+        assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
+
+
+class TestAsWholeNumberWithin:
+    """as_whole_number_within reads a value as as_whole_number does, and refuses one outside its inclusive range."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(1, 1, id="low"),
+            pytest.param(10, 10, id="high"),
+            pytest.param(10.0, 10, id="high-as-a-whole-float"),
+        ],
+    )
+    def test_the_range_is_inclusive_and_a_value_is_read_as_the_int_it_equals(
+        self, value: object, expected: int
+    ) -> None:
+        """Both ends of the range are accepted, each returned as the int it equals, not as a float."""
+        number = as_whole_number_within(value, "n_homes", 1, 10)
+        assert number == expected
+        assert type(number) is int
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(0, id="below"),
+            pytest.param(11, id="above"),
+            pytest.param(1e300, id="huge-float"),
+        ],
+    )
+    def test_a_value_outside_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
+        self, value: object
+    ) -> None:
+        """The refusal shows the value as sent (1e300 reads 1e+300), not the int it converts to."""
+        with pytest.raises(ValueError) as exc_info:
+            as_whole_number_within(value, "n_homes", 1, 10)
+        assert str(exc_info.value) == f"n_homes must be between 1 and 10, got {value!r}"
+
+    @pytest.mark.parametrize(
+        "value", [pytest.param(2.5, id="in-range"), pytest.param(0.5, id="out-of-range")]
+    )
+    def test_a_number_with_a_fractional_part_gets_the_as_whole_number_refusal(
+        self, value: object
+    ) -> None:
+        """A number with a fractional part is refused as as_whole_number refuses it, before any range check."""
+        with pytest.raises(ValueError) as exc_info:
+            as_whole_number_within(value, "n_homes", 1, 10)
+        assert str(exc_info.value) == f"n_homes must be a whole number, got {value!r}"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(float("inf"), id="infinity"),
+            pytest.param("abc", id="non-numeric-string"),
+            pytest.param(True, id="true"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_value_that_is_not_a_finite_number_gets_the_as_finite_float_refusal(
+        self, value: object
+    ) -> None:
+        """A value as_finite_float refuses is refused as it refuses it, before any whole-number or range check."""
+        with pytest.raises(ValueError) as exc_info:
+            as_whole_number_within(value, "n_homes", 1, 10)
         assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
