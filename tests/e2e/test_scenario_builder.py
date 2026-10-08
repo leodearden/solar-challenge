@@ -683,6 +683,56 @@ def test_each_edit_to_a_cards_distribution_previews_the_form_with_that_edit(page
     assert removed["pv_wd_values"] == [*rows[1:], new_row]
 
 
+@pytest.mark.parametrize(("section", "role", "caption", "field", "value"), _SECTION_CONTROLS)
+def test_each_edit_to_a_section_control_previews_the_form_with_that_edit(
+    page: Page, live_server: str, section: str, role: str, caption: str, field: str, value: str
+) -> None:
+    """Typing into the control with *role* named *caption* in *section* makes the builder preview the form with *field* set to the value typed."""
+    open_builder(page, live_server)
+    _open_section(page, section)
+
+    previewed = _form_previewed_after(page, lambda: page.get_by_role(role, name=caption, exact=True).fill(value))
+
+    assert previewed[field] == value
+
+
+def test_each_edit_to_the_general_textboxes_a_period_preset_and_the_location_previews_the_form_with_that_edit(
+    page: Page, live_server: str
+) -> None:
+    """Typing a name or a description, choosing the 1 Month period, choosing Custom Location and typing each of its coordinates make the builder preview the form with that edit."""
+    open_builder(page, live_server)
+
+    named = _form_previewed_after(
+        page, lambda: page.get_by_role("textbox", name="Scenario Name", exact=True).fill("Bristol Phase 1")
+    )
+    described = _form_previewed_after(
+        page, lambda: page.get_by_role("textbox", name="Description", exact=True).fill("First 100 homes")
+    )
+    _open_section(page, "Period")
+    month = _form_previewed_after(page, lambda: page.get_by_role("button", name="1 Month", exact=True).click())
+    _open_section(page, "Location")
+    custom = _form_previewed_after(
+        page,
+        lambda: page.get_by_role("combobox", name="Location Preset", exact=True).select_option(
+            label="Custom Location"
+        ),
+    )
+    north = _form_previewed_after(
+        page, lambda: page.get_by_role("spinbutton", name="Latitude", exact=True).fill("53.4")
+    )
+    west = _form_previewed_after(
+        page, lambda: page.get_by_role("spinbutton", name="Longitude", exact=True).fill("-2.2")
+    )
+    high = _form_previewed_after(
+        page, lambda: page.get_by_role("spinbutton", name="Altitude (m)", exact=True).fill("38")
+    )
+
+    assert (named["name"], described["description"]) == ("Bristol Phase 1", "First 100 homes")
+    assert (month["start_date"], month["end_date"]) == ("2024-06-01", "2024-06-30")
+    assert custom["location_preset"] == "custom"
+    assert (north["latitude"], west["longitude"], high["altitude"]) == ("53.4", "-2.2", "38")
+
+
 _DISTRIBUTIONS_YAML = yaml.safe_dump(
     {
         "name": "Uploaded distributions",

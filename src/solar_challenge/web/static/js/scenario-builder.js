@@ -171,7 +171,6 @@ document.addEventListener('alpine:init', () => {
                 this.start_date = '2024-06-01';
                 this.end_date = '2024-06-30';
             }
-            this.updatePreview();
         },
 
         // Debounced YAML preview update
@@ -266,7 +265,6 @@ document.addEventListener('alpine:init', () => {
             }
             Object.assign(this, fields);
             this.yamlPreview = text;
-            this.updatePreview();
         },
 
         // Load presets list
@@ -299,7 +297,6 @@ document.addEventListener('alpine:init', () => {
                     }
                 }
                 this.presetDropdownOpen = false;
-                this.updatePreview();
             } catch (e) { /* ignore */ }
         },
 
@@ -328,7 +325,9 @@ document.addEventListener('alpine:init', () => {
         init() {
             this.loadPresets();
             this.fetchPreview();
-            this.$watch('dists', () => this.updatePreview());
+            // The one trigger of the preview: any change to the form getFormData sends, whether a control, a button or
+            // an upload made it. $watch reads every field the form sends, rows included, and only those.
+            this.$watch(() => this.getFormData(), () => this.updatePreview());
         }
     }));
 });
