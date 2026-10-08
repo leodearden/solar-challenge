@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The rows of a dashboard database's config_presets table, written and read straight, past the dashboard's own saves.
+"""Direct access to the rows of a dashboard database's config_presets table.
 
 insert_saved_home_preset writes a saved home preset no save writes, such as one under a
 built-in home preset's name or one whose config is not JSON. saved_preset_names reads the
