@@ -387,7 +387,40 @@ def test_private_and_dunder_names_are_not_members() -> None:
     assert member_forms(Meter) == {}
 
 
-def test_a_dataclass_field_is_not_a_member_but_a_class_variable_is() -> None:
+def test_a_dataclass_field_its_constructor_does_not_take_is_spelled_attribute_then_its_annotation() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+        history: list[float] = field(init=False, default_factory=list)
+        label: Optional[str] = field(init=False)
+
+    @dataclass(init=False)
+    class Cache:
+        root: str
+        path: pathlib.Path
+
+        def __init__(self, root: str) -> None:
+            self.root = root
+            self.path = pathlib.Path(root)
+
+    assert member_forms(Reading) == {
+        "history": "attribute list[float]",
+        "label": "attribute str | None",
+    }
+    assert member_forms(Cache) == {"path": "attribute Path"}
+
+
+def test_a_dataclass_field_with_a_default_is_spelled_and_names_classes_by_its_annotation_not_its_default() -> None:
+    @dataclass(frozen=True)
+    class Meter:
+        UNITS: ClassVar[str] = "kWh"
+        preset: Optional[Preset] = field(init=False, default=None)
+
+    assert member_forms(Meter) == {"preset": "attribute Preset | None", "UNITS": "str"}
+    assert named_classes(Meter) == {Preset, type(None), str}
+
+
+def test_a_dataclass_field_its_constructor_takes_is_not_a_member_but_a_class_variable_is() -> None:
     @dataclass(frozen=True)
     class Site:
         LAT: ClassVar[float] = 51.45
@@ -612,3 +645,41 @@ def test_a_declared_attribute_member_forms_lists_that_the_source_never_sets_is_u
 
     assert unset_attributes(Meter) == {"reading"}
     assert unset_attributes(Reading) == set()
+
+
+def test_a_dataclass_field_with_a_default_or_a_default_factory_is_never_unset() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+        derived: float = field(init=False, default=0.0)
+        history: list[float] = field(init=False, default_factory=list)
+        label: str = field(init=False)
+        note: str = field(init=False)
+
+        def __post_init__(self) -> None:
+            object.__setattr__(self, "label", f"{self.kwh} kWh")
+
+    assert unset_attributes(Reading) == {"note"}
+
+
+def test_a_default_factory_field_counts_as_supplied_even_when_a_hand_written_init_skips_it() -> None:
+    @dataclass(init=False)
+    class InitFalse:
+        root: str
+        history: list[float] = field(default_factory=list)
+
+        def __init__(self, root: str) -> None:
+            self.root = root
+
+    @dataclass
+    class BodyInit:
+        root: str
+        history: list[float] = field(init=False, default_factory=list)
+
+        def __init__(self, root: str) -> None:
+            self.root = root
+
+    for cls in (InitFalse, BodyInit):
+        assert member_forms(cls) == {"history": "attribute list[float]"}
+        assert not hasattr(cls("data"), "history")
+        assert unset_attributes(cls) == set()

@@ -25,9 +25,12 @@ spelled by its kind, then its function's signature, and a constant by its type. 
 attribute the body only annotates, as an instance attribute is declared, is spelled
 attribute, then its annotation. A ClassVar annotation declares a class variable, not an
 attribute, so its name is a member only if the body assigns it a value, as a constant.
-A property that can be set or deleted says so in its kind, as property[settable,
-deletable] does, and an abstract member's form begins with abstract. An inherited
-member belongs to the class that defines it.
+A dataclass field its constructor does not take, as field(init=False) declares one, is
+spelled as an attribute too, whether or not it has a default, since the class form pins
+only the fields the constructor takes and a default is the field's, not a class
+constant. A property that can be set or deleted says so in its kind, as
+property[settable, deletable] does, and an abstract member's form begins with abstract.
+An inherited member belongs to the class that defines it.
 
 named_classes gives the classes a name's forms name, and signature_closure the classes of
 a package that some names' forms name, directly or through another such class. Both read
@@ -38,7 +41,8 @@ member_forms reads class bodies, so it sees an instance attribute only once a bo
 declares it. undeclared_attributes names each public attribute a class's own source
 sets on self, by assignment or, as a frozen dataclass must, by object.__setattr__, that
 no class body in its MRO defines or declares; unset_attributes names each declared
-attribute member_forms lists that the source never sets, which instances would lack.
+attribute member_forms lists that the source never sets and that has no dataclass
+default or default factory, which instances would lack.
 
 Usage::
 
@@ -102,10 +106,10 @@ def member_forms(cls: type) -> dict[str, str]:
     """The form of each public member of *cls*, by name.
 
     A member is a public name that *cls*'s own body defines, or declares as an instance
-    attribute by annotating it alone, except those surface_form(cls) already pins: a
-    dataclass's fields, which its constructor's signature carries, and an Enum's
-    members. The names the body only annotates come first, in annotation order, then
-    the names it defines, in class-body order.
+    attribute by annotating it alone or as a dataclass field, except those
+    surface_form(cls) already pins: the dataclass fields its constructor's signature
+    takes, and an Enum's members. The attributes the body declares come first, in
+    annotation order, then the other names it defines, in class-body order.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -161,9 +165,13 @@ def undeclared_attributes(cls: type) -> set[str]:
 
 
 def unset_attributes(cls: type) -> set[str]:
-    """The attributes member_forms(cls) lists as declared that *cls*'s own source never sets on self."""
+    """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own source never sets on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
+
+    A known gap: a default factory counts as called by the generated __init__, so a field
+    with one that a hand-written __init__ skips goes unreported, though instances lack it.
+    """
     declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
-    return declared - _attributes_set_on_self(cls)
+    return declared - _attributes_set_on_self(cls) - _defaulted_fields(cls)
 
 
 class _Spelling(str):
@@ -325,16 +333,34 @@ def _type_checking_imports(module: str) -> types.CodeType:
 
 
 def _pinned_by_class_form(cls: type) -> set[str]:
+    """The names member_forms leaves to surface_form(cls): an Enum's members, or each dataclass field its constructor takes."""
     if issubclass(cls, enum.Enum):
         return set(cls.__members__)
     if dataclasses.is_dataclass(cls):
-        return {field.name for field in dataclasses.fields(cls)}
+        return _fields(cls).keys() & inspect.signature(cls).parameters.keys()
     return set()
+
+
+def _fields(cls: type) -> dict[str, dataclasses.Field[object]]:
+    """*cls*'s dataclass fields by name, inherited ones included; none if *cls* is no dataclass."""
+    if not dataclasses.is_dataclass(cls):
+        return {}
+    return {field.name: field for field in dataclasses.fields(cls)}
+
+
+def _defaulted_fields(cls: type) -> set[str]:
+    """The names of *cls*'s dataclass fields with a default, which instances read from the class, or a default factory, which the generated __init__ calls."""
+    return {
+        name
+        for name, field in _fields(cls).items()
+        if field.default is not dataclasses.MISSING
+        or field.default_factory is not dataclasses.MISSING
+    }
 
 
 @dataclasses.dataclass(frozen=True)
 class _AnnotatedAttribute:
-    """The annotation of a name a class body only annotates, as an instance attribute is declared."""
+    """The annotation of a name a class body declares as an instance attribute, by annotating it alone or as a dataclass field."""
 
     annotation: object
 
@@ -350,25 +376,26 @@ def _public_members(cls: type) -> dict[str, object]:
 
 
 def _own_members(cls: type) -> dict[str, object]:
-    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each name it defines, as its value."""
+    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each other name it defines, as its value."""
     declared = {
         name: _AnnotatedAttribute(annotation)
         for name, annotation in _declared_attributes(cls).items()
     }
-    return {**declared, **vars(cls)}
+    defined = {name: value for name, value in vars(cls).items() if name not in declared}
+    return declared | defined
 
 
 def _declared_attributes(cls: type) -> dict[str, object]:
-    """The annotation of each attribute *cls*'s own body declares, by name: each name it only annotates, other than as a ClassVar.
+    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; a dataclass field's default is the field's, not a class value.
 
     inspect.get_annotations reads the body's own annotations, never a base's, and leaves
     a string annotation a string.
     """
-    defined = vars(cls)
+    class_values = vars(cls).keys() - _fields(cls).keys()
     return {
         name: annotation
         for name, annotation in inspect.get_annotations(cls).items()
-        if name not in defined and not _is_class_var(annotation)
+        if name not in class_values and not _is_class_var(annotation)
     }
 
 
