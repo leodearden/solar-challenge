@@ -571,8 +571,7 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.tariff_config is not None
             assert home.tariff_config == tariff
             assert home.battery_config is not None
-            assert home.battery_config.grid_charging is not None
-            assert home.battery_config.grid_charging.target_soc_fraction == 0.85
+            assert home.battery_config.grid_charging == gc
 
     def test_calibration_guard_without_tariff_or_grid_charging(self) -> None:
         """Neither a fleet_tariff nor a battery grid_charging: every home has tariff_config=None and grid_charging=None (bit-identical)."""
