@@ -17,6 +17,7 @@ from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.fleet_config import (
     MAX_FLEET_HOMES,
+    MAX_FLEET_SEED,
     apply_fleet_overlay,
     distribution_form_spec,
     form_to_fleet_distribution_config,
@@ -518,6 +519,35 @@ class TestFleetConfigHelpers:
         )
 
         assert config["n_homes"] == MAX_FLEET_HOMES
+
+    @pytest.mark.parametrize(
+        "seed",
+        [
+            pytest.param(MAX_FLEET_SEED + 1, id="one-above-the-largest"),
+            pytest.param(MAX_FLEET_SEED + 2, id="one-a-float-reads-as-the-one-below"),
+            pytest.param(-MAX_FLEET_SEED - 1, id="one-below-the-smallest"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_seed_beyond_max_fleet_seed(
+        self, seed: int
+    ) -> None:
+        """A seed beyond MAX_FLEET_SEED either way is refused, not read as the whole number a float rounds it to, naming the field, the range and the value sent."""
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config({**valid_distribution_form(), "seed": seed})
+        assert str(exc_info.value) == (
+            f"seed must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, got {seed!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "seed", [pytest.param(MAX_FLEET_SEED, id="largest"), pytest.param(-MAX_FLEET_SEED, id="smallest")]
+    )
+    def test_form_to_fleet_distribution_config_reads_a_seed_up_to_max_fleet_seed_exactly(
+        self, seed: int
+    ) -> None:
+        """A seed as large as MAX_FLEET_SEED either way is read as the int sent."""
+        config = form_to_fleet_distribution_config({**valid_distribution_form(), "seed": seed})
+
+        assert config["seed"] == seed
 
     @pytest.mark.parametrize(
         ("value", "type_name"),

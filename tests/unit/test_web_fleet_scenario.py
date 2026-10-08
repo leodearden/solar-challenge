@@ -13,7 +13,7 @@ pytest.importorskip("flask")
 from solar_challenge.config import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
     fleet_form_from_scenario,
@@ -394,6 +394,20 @@ class TestFleetFormFromScenario:
         with pytest.raises(ValueError) as exc_info:
             fleet_form_from_scenario(_with_fleet_distribution(**{key: 2.5}))
         assert str(exc_info.value) == f"fleet_distribution.{key} must be a whole number, got 2.5"
+
+    def test_a_seed_the_fleet_page_cannot_hold_exactly_is_refused_naming_it(self) -> None:
+        """A seed beyond MAX_FLEET_SEED is refused with a ValueError naming fleet_distribution.seed, the range and the value as written.
+
+        The fleet page holds the seed as a JavaScript number, which reads 2**53 + 1 as 2**53, so
+        loading it would run another fleet than the scenario's.
+        """
+        seed = MAX_FLEET_SEED + 2
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(seed=seed))
+        assert str(exc_info.value) == (
+            f"fleet_distribution.seed must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, "
+            f"got {seed!r}"
+        )
 
     @pytest.mark.parametrize(
         "n_homes",
