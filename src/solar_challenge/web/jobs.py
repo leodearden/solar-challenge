@@ -33,7 +33,7 @@ from solar_challenge.home import simulate_home as _default_simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import RunType, get_db
+from solar_challenge.web.database import RunStatus, RunType, get_db
 from solar_challenge.web.storage import RunStorage
 
 HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], SimulationResults]
@@ -42,6 +42,8 @@ _QUEUED_JOB_STATE: Mapping[str, str | float] = MappingProxyType(
     {"status": "queued", "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
 )
 _FINISHED_JOB_TTL_SECONDS = 3600.0
+_UNFINISHED_RUN_STATUS: RunStatus = "running"
+_FAILED_RUN_STATUS: RunStatus = "failed"
 
 # Module-level weak registry of all live JobManager instances.
 # WeakSet avoids keeping managers alive past their natural lifetime.
@@ -353,7 +355,7 @@ class JobManager:
                     run_type,
                     None,  # config_json filled on completion
                     None,  # summary_json filled on completion
-                    "running",
+                    _UNFINISHED_RUN_STATUS,
                     None,
                     created_at,
                     None,
@@ -543,8 +545,8 @@ class JobManager:
             try:
                 conn.execute("UPDATE jobs SET status='failed', message=?, error_traceback=?, completed_at=? WHERE id=?",
                              (error_msg, traceback.format_exc(), now, job_id))
-                conn.execute("UPDATE runs SET status='failed', error_message=?, completed_at=? WHERE id=?",
-                             (error_msg, now, run_id))
+                conn.execute("UPDATE runs SET status=?, error_message=?, completed_at=? WHERE id=?",
+                             (_FAILED_RUN_STATUS, error_msg, now, run_id))
                 conn.commit()
             except Exception:
                 pass
@@ -703,11 +705,11 @@ def recover_stale_jobs(db_path: str | Path) -> int:
         cursor.execute(
             """
             UPDATE runs SET
-                status = 'failed',
+                status = ?,
                 error_message = 'Interrupted by server restart',
                 completed_at = ?
-            WHERE status = 'running'
+            WHERE status = ?
             """,
-            (now,),
+            (_FAILED_RUN_STATUS, now, _UNFINISHED_RUN_STATUS),
         )
         return recovered_jobs
