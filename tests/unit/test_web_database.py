@@ -227,7 +227,7 @@ class TestDatabaseInitialization:
 
         assert status == "running"
 
-    def test_the_run_types_and_run_statuses_are_the_values_saved_databases_accept(self):
+    def test_run_type_and_run_status_definitions_are_pinned_because_saved_databases_keep_their_checks(self):
         """init_db creates the runs table only when it is missing, so a saved database keeps the CHECK constraints it was created with."""
         assert (RUN_TYPES, RUN_STATUSES) == (("home", "fleet", "sweep"), ("running", "completed", "failed"))
 
