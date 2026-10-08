@@ -15,7 +15,7 @@ import time
 import traceback
 import uuid
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable, Mapping
@@ -42,6 +42,7 @@ _RunType: TypeAlias = Literal["home", "fleet"]
 _QUEUED_JOB_STATE: Mapping[str, str | float] = MappingProxyType(
     {"status": "queued", "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
 )
+_FINISHED_JOB_TTL_SECONDS = 3600.0
 
 # Module-level weak registry of all live JobManager instances.
 # WeakSet avoids keeping managers alive past their natural lifetime.
@@ -82,6 +83,19 @@ class _NewJob:
     created_at: str
 
 
+@dataclass
+class _TrackedJob:
+    """A job a JobManager tracks.
+
+    The status get_job_status reports, the SSE events get_events has not yet yielded, and the manager's
+    clock reading when the job finished (None while it is queued or running).
+    """
+
+    status: dict[str, Any]
+    events: collections.deque[dict[str, Any]] = field(default_factory=lambda: collections.deque(maxlen=100))
+    finished_at: float | None = None
+
+
 class JobManager:
     """Manages background simulation jobs with progress tracking.
 
@@ -91,8 +105,7 @@ class JobManager:
 
     Attributes:
         _executor: Thread pool for background job execution.
-        _jobs: In-memory dict tracking job metadata.
-        _event_queues: Per-job deques of SSE event dicts.
+        _jobs: Each job the manager tracks, by id.
         _unfinished_job_count: Number of jobs queued or running; wait_until_idle waits for it to reach 0.
     """
 
@@ -102,6 +115,7 @@ class JobManager:
         *,
         simulate_home: HomeSimulator = _default_simulate_home,
         new_id: Callable[[], str] = _random_id,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Initialize the job manager.
 
@@ -111,15 +125,18 @@ class JobManager:
                 solar_challenge.home.simulate_home.
             new_id: Returns a new, unique id on each call; each job and each run
                 takes one. Defaults to a random UUID.
+            clock: Returns the time in seconds on a clock that never goes
+                backwards, which the manager reads to age the jobs it tracks.
+                Defaults to time.monotonic.
         """
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._simulate_home = simulate_home
         self._new_id = new_id
+        self._clock = clock
         self._lock = threading.Lock()
         self._idle = threading.Condition(self._lock)
         self._unfinished_job_count = 0
-        self._jobs: dict[str, dict[str, Any]] = {}
-        self._event_queues: dict[str, collections.deque[dict[str, Any]]] = {}
+        self._jobs: dict[str, _TrackedJob] = {}
         _active_managers.add(self)
 
     def shutdown(self, wait: bool = False) -> None:
@@ -245,26 +262,24 @@ class JobManager:
     def get_job_status(self, job_id: str) -> dict[str, Any] | None:
         """Return a copy of the in-memory status of a job this manager tracks.
 
-        A manager tracks only the jobs submitted to it, and stops tracking each
-        one, finished or not, at the first submit made after the job is older
-        than the age limit that _cleanup_old_jobs applies.  It never reads the
-        jobs table, so a job it does not track, such as one from before a
-        restart, is unknown here although the job's rows remain in the
-        database.
+        A manager tracks only the jobs submitted to it.  It tracks each one
+        until the job finishes, and stops at the first submit made once the
+        job has been finished for longer than _FINISHED_JOB_TTL_SECONDS.  It
+        never reads the jobs table, so a job it does not track, such as one
+        from before a restart, is unknown here although the job's rows remain
+        in the database.
 
         Args:
             job_id: Unique job identifier.
 
         Returns:
             Dict with job_id, run_id, status, progress_pct, current_step,
-            message and created_at: the time.monotonic() reading taken when
-            the manager began tracking the job, not a wall-clock time.  None
-            if this manager does not track the job.
+            message and created_at, the ISO 8601 UTC time the job's rows were
+            created.  None if this manager does not track the job.
         """
         with self._lock:
-            if job_id in self._jobs:
-                return dict(self._jobs[job_id])
-            return None
+            job = self._jobs.get(job_id)
+            return None if job is None else dict(job.status)
 
     def get_events(self, job_id: str) -> Generator[dict[str, Any], None, None]:
         """Yield SSE events from the job's event queue.
@@ -278,36 +293,27 @@ class JobManager:
             Dict with event data (type, data fields).
         """
         with self._lock:
-            queue = self._event_queues.get(job_id)
-            if queue is None:
+            job = self._jobs.get(job_id)
+            if job is None:
                 return
             # Copy and drain events under the lock to avoid TOCTOU
-            events = list(queue)
-            queue.clear()
+            events = list(job.events)
+            job.events.clear()
 
         for event in events:
             yield event
 
-    def _cleanup_old_jobs(self, max_age_seconds: float = 3600.0) -> None:
-        """Remove jobs older than max_age_seconds from in-memory tracking.
-
-        Compares each job's ``created_at`` monotonic timestamp against the
-        current time and removes entries that exceed the threshold.
-
-        Args:
-            max_age_seconds: Maximum age in seconds before a job is removed.
-                Defaults to 3600 (1 hour).
-        """
-        now = time.monotonic()
+    def _stop_tracking_jobs_finished_long_ago(self) -> None:
+        """Stop tracking every job that finished more than _FINISHED_JOB_TTL_SECONDS ago; a queued or running job stays tracked."""
+        now = self._clock()
         with self._lock:
             expired = [
-                jid
-                for jid, job in self._jobs.items()
-                if now - job.get("created_at", now) > max_age_seconds
+                job_id
+                for job_id, job in self._jobs.items()
+                if job.finished_at is not None and now - job.finished_at > _FINISHED_JOB_TTL_SECONDS
             ]
-            for jid in expired:
-                del self._jobs[jid]
-                self._event_queues.pop(jid, None)
+            for job_id in expired:
+                del self._jobs[job_id]
 
     def _submit_job(
         self,
@@ -319,7 +325,7 @@ class JobManager:
         run_simulation: Callable[[_NewJob], None],
     ) -> tuple[str, str]:
         """Record a new job, queue run_simulation(new_job) on the thread pool, and return (job_id, run_id)."""
-        self._cleanup_old_jobs()
+        self._stop_tracking_jobs_finished_long_ago()
         new_job = self._record_new_job(db_path, run_name=run_name, run_type=run_type, n_homes=n_homes)
         self._schedule(new_job.job_id, new_job.run_id, db_path, functools.partial(run_simulation, new_job))
         return new_job.job_id, new_job.run_id
@@ -366,13 +372,9 @@ class JobManager:
             )
 
         with self._lock:
-            self._jobs[job_id] = {
-                "job_id": job_id,
-                "run_id": run_id,
-                **_QUEUED_JOB_STATE,
-                "created_at": time.monotonic(),
-            }
-            self._event_queues[job_id] = collections.deque(maxlen=100)
+            self._jobs[job_id] = _TrackedJob(
+                status={"job_id": job_id, "run_id": run_id, **_QUEUED_JOB_STATE, "created_at": created_at}
+            )
 
         return _NewJob(job_id=job_id, run_id=run_id, created_at=created_at)
 
@@ -392,7 +394,22 @@ class JobManager:
             self._stop_counting_job()
             self._forget_job(job_id, run_id, db_path)
             raise
-        future.add_done_callback(lambda _future: self._stop_counting_job())
+        future.add_done_callback(lambda _future: self._finish_job(job_id))
+
+    def _finish_job(self, job_id: str) -> None:
+        """Record the clock reading when the executor was done with a job, then stop counting it as unfinished."""
+        try:
+            finished_at = self._clock()
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if job is None:
+                    raise RuntimeError(
+                        f"job {job_id} finished, but its JobManager no longer tracked it; "
+                        "a manager tracks each job until it finishes"
+                    )
+                job.finished_at = finished_at
+        finally:
+            self._stop_counting_job()
 
     def _stop_counting_job(self) -> None:
         """Stop counting one job as unfinished, waking every wait_until_idle caller once none is left."""
@@ -405,7 +422,6 @@ class JobManager:
         """Erase every record of a job that the executor refused to schedule."""
         with self._lock:
             self._jobs.pop(job_id, None)
-            self._event_queues.pop(job_id, None)
         with get_db(db_path) as conn:
             conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
@@ -434,11 +450,9 @@ class JobManager:
         """
         # Update in-memory state
         with self._lock:
-            if job_id in self._jobs:
-                self._jobs[job_id]["progress_pct"] = pct
-                self._jobs[job_id]["current_step"] = step
-                self._jobs[job_id]["message"] = message
-                self._jobs[job_id]["status"] = status
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.status.update(progress_pct=pct, current_step=step, message=message, status=status)
 
         # Update database
         if conn is not None:
@@ -481,16 +495,17 @@ class JobManager:
             },
         }
         with self._lock:
-            if job_id in self._event_queues:
-                self._event_queues[job_id].append(event)
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.events.append(event)
 
     def _emit_event(self, job_id: str, event_type: str, data: dict[str, Any]) -> None:
         """Update in-memory job state and append an SSE event."""
         with self._lock:
-            if job_id in self._jobs:
-                self._jobs[job_id].update(data)
-            if job_id in self._event_queues:
-                self._event_queues[job_id].append({"event": event_type, "data": data})
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.status.update(data)
+                job.events.append({"event": event_type, "data": data})
 
     def _run_job(
         self,

@@ -355,7 +355,7 @@ subprojects:
 
     key_decisions:
       - decision: "Background jobs use a threading ThreadPoolExecutor with in-memory progress queues + SSE — no Celery/Redis/WebSocket."
-        why: "The tool is a local desktop-class app; zero external infrastructure is a stated goal. Consequence (correct, not a bug): it MUST run single-worker, and in-memory job state is lost on restart (stale jobs recovered at startup; jobs older than the ~1h TTL return 404 even though their SQLite row persists)."
+        why: "The tool is a local desktop-class app; zero external infrastructure is a stated goal. Consequence (correct, not a bug): it MUST run single-worker, and in-memory job state is lost on restart (stale jobs recovered at startup; a job that finished more than ~1h ago returns 404 even though its SQLite row persists, while a queued or running job stays tracked until it finishes (task 552))."
       - decision: "SQLite holds metadata/summaries/config; time-series go to on-disk parquet under ~/.solar-challenge/runs/<id>/; Jinja + Alpine.js (no SPA, no HTMX); compiled Tailwind (dist/style.css)."
         why: "Keeps SQLite small/fast and avoids BLOBbing arrays; a deliberate 'no SPA' stance. NOTE: compiled Tailwind means dist/style.css must be rebuilt when new utility classes are used, or they render unstyled."
       - decision: "JSON endpoints are consolidated under /api/ (api.py blueprint); the page routes in routes.py are FULL Jinja page renderers."
