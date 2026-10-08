@@ -257,11 +257,13 @@ def _saved_run_row(
     """The runs row a save writes for the run it stored under *run_id*, its config and summary as JSON text.
 
     The run is created now unless *created_at* is given, is completed now if its *status* is
-    completed, and has no notes.
+    completed, and has no notes. Now is one time, read once: a run created and completed by the
+    same save has the same time for both.
 
     Raises:
         ValueError: *status* is not one of RUN_STATUSES, as RunRecord refuses it.
     """
+    now = datetime.now(timezone.utc).isoformat()
     return RunRecord(
         id=run_id,
         name=name,
@@ -270,8 +272,8 @@ def _saved_run_row(
         summary_json=json.dumps(summary),
         status=status,
         error_message=error_message,
-        created_at=datetime.now(timezone.utc).isoformat() if created_at is None else created_at,
-        completed_at=datetime.now(timezone.utc).isoformat() if status == "completed" else None,
+        created_at=now if created_at is None else created_at,
+        completed_at=now if status == "completed" else None,
         duration_seconds=duration_seconds,
         n_homes=n_homes,
         notes=None,

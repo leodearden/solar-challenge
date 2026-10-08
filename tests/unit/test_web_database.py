@@ -625,6 +625,16 @@ class TestSavedRunRow:
         record = storage.run_record("new-run")
         assert before <= datetime.fromisoformat(record.created_at) <= after
 
+    @pytest.mark.parametrize("kind", ["home", "fleet"])
+    def test_a_save_of_a_completed_run_given_no_created_at_stamps_created_at_and_completed_at_with_the_one_time_it_saves(
+        self, storage, saves, kind
+    ):
+        """A run saved as completed with no created_at was created and completed at the one time of the save."""
+        saves[kind]("new-completed-run", status="completed")
+
+        record = storage.run_record("new-completed-run")
+        assert datetime.fromisoformat(record.created_at) == datetime.fromisoformat(record.completed_at)
+
     @pytest.mark.parametrize(
         ("first", "resave"),
         [
