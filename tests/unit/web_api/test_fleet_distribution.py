@@ -189,6 +189,34 @@ class TestPreviewDistribution:
         assert resp.status_code == 400
         assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
 
+    @pytest.mark.parametrize(
+        ("dist_type", "params"),
+        [
+            pytest.param(
+                "uniform",
+                {"min": -1.7e308, "max": 1.7e308},
+                id="uniform-range-wider-than-a-float",
+            ),
+            pytest.param(
+                "normal",
+                {"mean": 1.7e308, "std": 1e308},
+                id="normal-drawing-above-the-largest-float",
+            ),
+        ],
+    )
+    def test_finite_params_whose_draws_are_not_finite_return_400_naming_the_sample(
+        self, client: FlaskClient, dist_type: str, params: dict
+    ) -> None:
+        """Finite params that draw a sample a float cannot hold are a 400 naming params and that sample, not a 200 whose samples JSON cannot write."""
+        resp = client.post(
+            "/api/fleet/preview-distribution",
+            json={"type": dist_type, "params": params, "n_samples": 100},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": "params must draw samples that are finite numbers, got a sample of inf"
+        }
+
 
 class TestFleetFromDistribution:
     """Tests for POST /api/simulate/fleet-from-distribution."""
