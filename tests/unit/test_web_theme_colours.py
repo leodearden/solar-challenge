@@ -27,7 +27,8 @@ through one shade: tailwind.config.js's primary-500 must be amber-500's value.
 """
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
+from dataclasses import dataclass
 
 import pytest
 
@@ -78,6 +79,53 @@ def _primary_500() -> str:
         "_PRIMARY_500_ENTRY to read the form primary-500 is now written in"
     )
     return entry[1].lower()
+
+
+@dataclass(frozen=True)
+class _AmberRole:
+    """A status or category the dashboard draws in amber, independently of the accent: the
+    amber classes it applies and the keys of the templates that apply them."""
+
+    name: str
+    classes: frozenset[str]
+    sources: frozenset[str]
+
+
+def _amber_role(name: str, classes: str, *sources: str) -> _AmberRole:
+    return _AmberRole(name, frozenset(classes.split()), frozenset(sources))
+
+
+def _amber_classes(applied: set[str]) -> set[str]:
+    return {c for c in applied if names_palette(c, _BUILT_IN_PALETTE_PRIMARY_COPIES)}
+
+
+def _classes_listed_for(source: str, roles: Collection[_AmberRole]) -> set[str]:
+    return {c for role in roles if source in role.sources for c in role.classes}
+
+
+def _unlisted_amber_classes(
+    applied_by_source: Mapping[str, set[str]], roles: Collection[_AmberRole]
+) -> dict[str, list[str]]:
+    """The amber classes each source applies that no role lists for that source, keyed by
+    source, for each source that applies any."""
+    return {
+        source: sorted(unlisted)
+        for source, applied in applied_by_source.items()
+        if (unlisted := _amber_classes(applied) - _classes_listed_for(source, roles))
+    }
+
+
+def _unapplied_role_classes(
+    applied_by_source: Mapping[str, set[str]], roles: Collection[_AmberRole]
+) -> dict[tuple[str, str], list[str]]:
+    """The classes each role lists that a source it lists does not apply, keyed by the
+    role's name and that source, for each pair with any."""
+    return {
+        (role.name, source): sorted(unapplied)
+        for role in roles
+        for source in sorted(role.sources)
+        if (unapplied := role.classes - applied_by_source.get(source, set()))
+    }
 
 
 def _focus_indicators_naming(palette: str, applied: Iterable[str]) -> list[str]:
