@@ -13,6 +13,9 @@
 
     {% block head %}{% endblock %}
 
+    <!-- progressTracker, the component templates/simulate/partials/progress-tracker.html opens (must load before Alpine core) -->
+    <script defer src="{{ url_for('static', filename='js/progress-tracker.js') }}"></script>
+
     {# Vendored verbatim; why, and how to upgrade: tests/unit/test_web_page_scripts.py #}
     <!-- Alpine.js plugins (must load before Alpine core) -->
     <script defer src="{{ url_for('static', filename='vendor/alpinejs/collapse-3.14.8.min.js') }}" integrity="sha384-NArNwzWsUSF+kY2lgW4YriEkjLqi+J+za6HrENUn/3nZqkBnWbxV22kCJEK5Uu6n"></script>
