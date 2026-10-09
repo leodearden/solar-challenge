@@ -242,6 +242,9 @@ class SummaryStatistics:
     # Slice of total_import_cost_gbp spent charging the battery from the grid: householder
     # import, informational, in no CBS equation (docs/cost-recovery-finance-model.md §4).
     total_grid_charge_cost_gbp: float = 0.0
+    # Energy the battery stored from the grid: a part of both total_battery_charge_kwh and
+    # total_grid_import_kwh.
+    total_grid_charge_kwh: float = 0.0
 
 
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
@@ -535,6 +538,7 @@ def calculate_summary(
 
     # Grid-charge cost: the slice of total_import_cost spent charging the battery from the grid
     total_grid_charge_cost = totals["grid_charge_cost_gbp"] if results.grid_charge_cost is not None else 0.0
+    total_grid_charge = totals["grid_charge_kwh"] if results.grid_charge is not None else 0.0
 
     # Calculate heat pump metrics if heat pump load is present
     total_heat_pump_kwh: Optional[float] = None
@@ -568,4 +572,5 @@ def calculate_summary(
         peak_heat_pump_load_kw=peak_heat_pump_kw,
         heat_pump_load_ratio=heat_pump_ratio,
         total_grid_charge_cost_gbp=total_grid_charge_cost,
+        total_grid_charge_kwh=total_grid_charge,
     )

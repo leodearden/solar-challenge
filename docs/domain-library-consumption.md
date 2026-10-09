@@ -294,9 +294,13 @@ to `None`: the power the battery stores from the grid, in kW, a part of both
 as it does `grid_charge_cost`. `to_dataframe()` gains a trailing
 `grid_charge_kw` column for those runs, so the CSV that `home run` writes and
 the web CSV export of tariffed home runs carry one more column, and
-`per_minute_amounts()` and `total_amounts()` gain `grid_charge_kwh`. The 0.5.0
-tag has none of these. Consumers that read the frame by position rather than by
-name re-check it when they re-pin.
+`per_minute_amounts()` and `total_amounts()` gain `grid_charge_kwh`.
+`SummaryStatistics` gains a last keyword, `total_grid_charge_kwh`, defaulting
+to `0.0`: the run's energy stored in the battery from the grid, in kWh, a part
+of both `total_battery_charge_kwh` and `total_grid_import_kwh`. Code that
+builds one needs no change, and a summary the web app stored before the field
+existed loads with it at `0.0`. The 0.5.0 tag has none of these. Consumers that
+read the frame by position rather than by name re-check it when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
