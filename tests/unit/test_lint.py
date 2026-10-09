@@ -3,7 +3,7 @@
 
 The lint is ruff, run with the rules pyproject.toml's [tool.ruff.lint] selects.
 The verify runs the test suite, so these tests are how it lints the package;
-dark-factory-orchestrator.yaml says why its lint_command does not.
+docs/lint-gate.md says why the orchestrator's lint_command does not.
 """
 
 import json
