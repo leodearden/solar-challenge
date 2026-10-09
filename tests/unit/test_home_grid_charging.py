@@ -288,6 +288,44 @@ class TestCalculateSummaryGridChargeCost:
         assert summary.total_grid_charge_cost_gbp == pytest.approx(gc_cost.sum())
 
 
+class TestCalculateSummaryGridCharge:
+    """calculate_summary totals the energy the battery stored from the grid as SummaryStatistics.total_grid_charge_kwh."""
+
+    def _make_results(self, grid_charge: "pd.Series | None" = None) -> SimulationResults:
+        """Three minutes in which the battery charges only from the grid, so its charge and the grid import each carry grid_charge."""
+        idx = pd.date_range("2024-01-01", periods=3, freq="1min")
+        charged_from_grid = grid_charge if grid_charge is not None else pd.Series([0.0, 0.0, 0.0], index=idx)
+        return SimulationResults(
+            generation=pd.Series([1.0, 1.0, 1.0], index=idx),
+            demand=pd.Series([0.5, 0.5, 0.5], index=idx),
+            self_consumption=pd.Series([0.5, 0.5, 0.5], index=idx),
+            battery_charge=charged_from_grid,
+            battery_discharge=pd.Series([0.0, 0.0, 0.0], index=idx),
+            battery_soc=pd.Series([2.5, 2.5, 2.5], index=idx),
+            grid_import=charged_from_grid,
+            grid_export=pd.Series([0.5, 0.5, 0.5], index=idx),
+            import_cost=pd.Series([0.0, 0.0, 0.0], index=idx),
+            export_revenue=pd.Series([0.0, 0.0, 0.0], index=idx),
+            tariff_rate=pd.Series([0.0, 0.0, 0.0], index=idx),
+            grid_charge=grid_charge,
+        )
+
+    def test_total_grid_charge_kwh_is_zero_when_grid_charge_is_none(self) -> None:
+        """A run without a grid_charge series, as every untariffed run is, stored nothing from the grid."""
+        summary = calculate_summary(self._make_results(grid_charge=None))
+
+        assert summary.total_grid_charge_kwh == 0.0
+
+    def test_total_grid_charge_kwh_is_the_grid_charges_per_minute_kwh_summed(self) -> None:
+        """1.2 kW, then 0.6 kW, then nothing, each for a minute: 0.02 + 0.01 kWh."""
+        idx = pd.date_range("2024-01-01", periods=3, freq="1min")
+        grid_charge = pd.Series([1.2, 0.6, 0.0], index=idx)
+
+        summary = calculate_summary(self._make_results(grid_charge=grid_charge))
+
+        assert summary.total_grid_charge_kwh == pytest.approx(0.03)
+
+
 class TestSimulateHomeGridChargeCost:
     """simulate_home produces grid_charge_cost for time-of-use grid-charging homes."""
 

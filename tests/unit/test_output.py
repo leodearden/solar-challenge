@@ -380,6 +380,7 @@ class TestPeriodTotalsAndPeaks:
             "import_cost_gbp": summary.total_import_cost_gbp,
             "export_revenue_gbp": summary.total_export_revenue_gbp,
             "grid_charge_cost_gbp": summary.total_grid_charge_cost_gbp,
+            "grid_charge_kwh": summary.total_grid_charge_kwh,
         }
 
         frame = aggregate(results)
