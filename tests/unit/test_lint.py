@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _PACKAGE = "src/solar_challenge"
+_PROBE = f"{_PACKAGE}/lint_probe.py"
 
 
 @dataclass(frozen=True)
@@ -56,21 +57,50 @@ def _lint(project_root: Path, *ruff_args: str, stdin: str | None = None) -> list
     ]
 
 
+def _lint_probe(project_root: Path, source: str, *ruff_args: str) -> list[_Finding]:
+    """Lint *source* as the package module _PROBE, through ruff's stdin; no file is written.
+
+    --stdin-filename makes ruff lint it with the settings a real module at that
+    path gets, per-file-ignores included.
+    """
+    return _lint(project_root, *ruff_args, "--stdin-filename", _PROBE, "-", stdin=source)
+
+
 def test_lint_flags_an_unused_import_in_a_package_module(project_root: Path) -> None:
     """The lint reports an unused import in a module of the package.
 
     Once the package is clean, test_the_package_passes_the_lint passes for a lint
     that flags nothing, so this checks the lint on a module of known verdict.
-    --stdin-filename makes ruff lint it with the settings a real module at that
-    path gets, per-file-ignores included; nothing is written.
     """
-    probe = f"{_PACKAGE}/lint_probe.py"
+    findings = _lint_probe(project_root, "import json\n")
 
-    findings = _lint(project_root, "--stdin-filename", probe, "-", stdin="import json\n")
-
-    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("F401", probe, 1)], (
+    assert [(finding.code, finding.path, finding.row) for finding in findings] == [("F401", _PROBE, 1)], (
         "the lint must report the unused import in a package module, and nothing else; it reported:\n"
         + "\n".join(map(str, findings))
+    )
+
+
+def test_lint_ignores_a_default_rule_pyproject_does_not_select(project_root: Path) -> None:
+    """The lint applies pyproject.toml's rule selection, not ruff's default rules.
+
+    The probe's bare except breaks E722, a default rule pyproject.toml does not
+    select. A control run with --isolated, which makes ruff ignore pyproject.toml,
+    shows that ruff's defaults still flag the probe, so the probe tells the
+    selection from the defaults.
+    """
+    source = "try:\n    pass\nexcept:\n    pass\n"
+
+    assert _lint_probe(project_root, source, "--isolated"), (
+        "ruff's default rules no longer flag the probe, so it cannot tell them from pyproject.toml's "
+        "selection; give it a line they flag and the selected rules pass"
+    )
+
+    findings = _lint_probe(project_root, source)
+
+    assert not findings, (
+        "the lint flagged the probe, which breaks only default rules pyproject.toml's [tool.ruff.lint] does "
+        "not select; either ruff is not applying that selection, or it now selects them and the probe needs "
+        "another rule:\n" + "\n".join(map(str, findings))
     )
 
 
