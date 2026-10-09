@@ -317,8 +317,8 @@ def _parse_component_distribution(
     """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
 
     Its distribution is what *data* holds at *primary_field*: a distribution (see
-    :func:`_is_distribution`), read by :func:`_build_distribution_dict`, or a fixed value,
-    which is any other value but null or a mapping, read by
+    :func:`_is_distribution`), read by :func:`_build_distribution_dict`, or a fixed value
+    (see :func:`_is_fixed_value`), read by
     :func:`~solar_challenge.web.number_fields.as_finite_float`.  A mapping without a type
     passes as given, and an absent or null field as an empty mapping, for config.py's
     grammar to refuse.  The block's other settings are read by :func:`_other_setting`.
@@ -342,7 +342,7 @@ def _parse_component_distribution(
 
     if _is_distribution(spec):
         result[primary_field] = _build_distribution_dict(spec, f"{block}.{primary_field}")
-    elif spec is not None and not isinstance(spec, dict):
+    elif _is_fixed_value(spec):
         result[primary_field] = as_finite_float(spec, f"{block}.{primary_field}")
     else:
         result[primary_field] = {} if spec is None else spec
@@ -395,6 +395,11 @@ def _other_setting(value: object, field: str) -> object:
 def _is_distribution(value: object) -> TypeGuard[dict[str, Any]]:
     """Whether *value* is a fleet form distribution: a mapping with a type."""
     return isinstance(value, dict) and "type" in value
+
+
+def _is_fixed_value(value: object) -> bool:
+    """Whether *value* is a fleet form block's fixed value: any value but null or a mapping."""
+    return value is not None and not isinstance(value, Mapping)
 
 
 def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:
@@ -453,27 +458,33 @@ def _spec_number(spec: dict[str, Any], key: str, default: float, path: str) -> f
     return as_finite_float(spec.get(key, default), f"{path}.{key}")
 
 
-#: The distribution types the fleet page's distribution editor holds.
+#: The distribution types the fleet page's distribution editor holds besides a fixed value.
 _EDITOR_DISTRIBUTION_TYPES: tuple[str, ...] = (
     "normal", "uniform", "weighted_discrete", "shuffled_pool",
 )
 
 
-def distribution_form_spec(spec: object, path: str) -> dict[str, Any]:
-    """The fleet form's distribution for the config.py grammar *spec* at *path*: the inverse of :func:`_build_distribution_dict`.
+def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
+    """The fleet form's distribution for the config.py grammar *spec* at *path*: the inverse of the form's conversion of a block's distribution (see :func:`_parse_component_distribution`).
 
-    *spec* is one the grammar accepts.  The form's distribution is the editor's: a normal
-    with both clamps, a uniform, or weighted_discrete or shuffled_pool rows, its numbers
-    read as _build_distribution_dict reads them.
+    *spec* is one the grammar accepts.  The form's distribution is the editor's: a fixed
+    value, which the grammar spells as a number or as a fixed distribution, and which the
+    form holds as its number; a normal with both clamps; a uniform; or weighted_discrete
+    or shuffled_pool rows.  Every number is read as the form's conversion reads it, by
+    :func:`~solar_challenge.web.number_fields.as_finite_float`.
 
     Raises:
-        ValueError: For a *spec* the editor cannot hold, naming *path*: a fixed value, a type
-            the editor has no form for, a normal without both clamps, or a value that is not
-            a finite number.
+        ValueError: For a *spec* the editor cannot hold, naming *path*: an absent
+            distribution, a type the editor has no form for, a normal without both clamps,
+            or a value that is not a finite number, a boolean included.
     """
+    if _is_fixed_value(spec):
+        return as_finite_float(spec, path)
+    if isinstance(spec, Mapping) and spec.get("type") == "fixed":
+        return as_finite_float(spec.get("value"), f"{path}.value")
     if not isinstance(spec, Mapping) or spec.get("type") not in _EDITOR_DISTRIBUTION_TYPES:
         raise ValueError(
-            f"{path} must be one of the fleet page's distributions "
+            f"{path} must be a fixed value or one of the fleet page's distributions "
             f"({', '.join(_EDITOR_DISTRIBUTION_TYPES)}), got {spec!r}"
         )
     dist_type = spec["type"]
