@@ -737,6 +737,7 @@ class TestStoredParquetColumns:
             "tariff_rate": "tariff_rate_per_kwh",
             "heat_pump_load": "heat_pump_load_kw",
             "grid_charge_cost": "grid_charge_cost_gbp",
+            "grid_charge": "grid_charge_kw",
         }
         storage.save_home_run(
             run_id="columns-home-001",

@@ -179,6 +179,22 @@ class TestSimulationResults:
         assert list(df.columns) == [*sample_results.to_dataframe().columns, "grid_charge_cost_gbp"]
         pd.testing.assert_series_equal(df["grid_charge_cost_gbp"], grid_charge_cost, check_names=False)
 
+    def test_to_dataframe_appends_a_set_grid_charge_as_grid_charge_kw(self, sample_results):
+        """A set grid_charge is the last column, grid_charge_kw, after the grid_charge_cost_gbp a tariffed run also has."""
+        index = sample_results.generation.index
+        grid_charge = pd.Series(0.25, index=index)
+
+        df = dataclasses.replace(
+            sample_results, grid_charge_cost=pd.Series(0.01, index=index), grid_charge=grid_charge
+        ).to_dataframe()
+
+        assert list(df.columns) == [
+            *sample_results.to_dataframe().columns,
+            "grid_charge_cost_gbp",
+            "grid_charge_kw",
+        ]
+        pd.testing.assert_series_equal(df["grid_charge_kw"], grid_charge, check_names=False)
+
     def test_from_dataframe_restores_every_series_to_dataframe_wrote(self):
         """from_dataframe gives back every series to_dataframe wrote, under the same name, optional ones included."""
         original = _results_with_every_series_set()
@@ -189,6 +205,7 @@ class TestSimulationResults:
 
         assert restored.heat_pump_load is not None
         assert restored.grid_charge_cost is not None
+        assert restored.grid_charge is not None
         for name in _series_field_names():
             pd.testing.assert_series_equal(getattr(restored, name), getattr(original, name), obj=name)
         assert restored.strategy_name == "tou_optimized"
@@ -242,6 +259,7 @@ class TestSimulationResults:
 
         assert restored.heat_pump_load is None
         assert restored.grid_charge_cost is None
+        assert restored.grid_charge is None
 
     def test_frame_lacking_required_series_columns_is_refused_naming_them(self, sample_results):
         """A frame lacking required series' columns is refused with a ValueError naming each, and no absent optional one."""
@@ -275,6 +293,7 @@ class TestPerMinuteAmounts:
                 "grid_import_kwh": results.grid_import / 60,
                 "grid_export_kwh": results.grid_export / 60,
                 "heat_pump_load_kwh": results.heat_pump_load / 60,
+                "grid_charge_kwh": results.grid_charge / 60,
                 "import_cost_gbp": results.import_cost,
                 "export_revenue_gbp": results.export_revenue,
                 "grid_charge_cost_gbp": results.grid_charge_cost,
@@ -285,7 +304,7 @@ class TestPerMinuteAmounts:
     def test_an_unset_optional_series_has_no_amount_column(self):
         """An optional series left unset has no amount column."""
         amounts = dataclasses.replace(
-            _results_with_every_series_set(), heat_pump_load=None, grid_charge_cost=None
+            _results_with_every_series_set(), heat_pump_load=None, grid_charge_cost=None, grid_charge=None
         ).per_minute_amounts()
 
         assert sorted(amounts.columns) == sorted(
@@ -304,7 +323,7 @@ class TestPerMinuteAmounts:
 
     @pytest.mark.parametrize(
         "unset",
-        [{}, {"heat_pump_load": None, "grid_charge_cost": None}],
+        [{}, {"heat_pump_load": None, "grid_charge_cost": None, "grid_charge": None}],
         ids=["every_series_set", "optional_series_unset"],
     )
     def test_total_amounts_are_the_per_minute_amounts_summed_over_the_run(self, unset):
