@@ -3,8 +3,7 @@
    - result_type: 'home' or 'fleet' — used to build the results URL
    - heading: Display heading text (e.g. "Simulation Progress" or "Fleet Simulation Progress")
    The tracker follows the job whose id is jobId in the calling page's Alpine scope, in a
-   progressTracker scope (static/js/progress-tracker.js), so a page that calls the macro
-   loads that script in its head block.
+   progressTracker scope (static/js/progress-tracker.js, which base.html loads).
 #}
 {% macro progress_tracker(result_type, heading="Simulation Progress") %}
 {# Keyed by job, so a new jobId replaces the tracker and the old one's destroy() closes its job's progress stream #}
