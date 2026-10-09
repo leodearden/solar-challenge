@@ -4,7 +4,9 @@
 import dataclasses
 import itertools
 import pickle
+import re
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -658,10 +660,41 @@ class TestFinanceConfigGridServicesModel:
         assert fc.grid_services_events is None
 
 
+_EVENTS_NUMERIC_KEYS = tuple(
+    f.name
+    for f in dataclasses.fields(GridServicesEventsConfig)
+    if f.name not in {"band", "event_windows"}
+)
+
+
 class TestFinanceConfigParsingGridServices:
     """Tests for parse_finance_config with grid_services_model + grid_services_events."""
 
     _BASE = {"standing_charge_pence_per_day": 60.0}
+    _WINDOW: dict[str, object] = {
+        "months": [12],
+        "weekdays": [0],
+        "hours": [17],
+        "events_per_year": 1,
+        "event_hours": 1.0,
+    }
+    _EVENTS_BLOCK: dict[str, object] = {
+        "band": "high",
+        "event_windows": [_WINDOW],
+        "aggregator_share": 0.1,
+        "utilisation_factor": 0.8,
+        "availability_gbp_per_kw_per_event": 2.5,
+        "utilisation_gbp_per_mwh": 80.0,
+    }
+    _EVENTS_FIELDS: dict[str, object] = {
+        **_EVENTS_BLOCK,
+        "event_windows": (
+            EventWindow(months=(12,), weekdays=(0,), hours=(17,), events_per_year=1, event_hours=1.0),
+        ),
+    }
+
+    def _parse_events_block(self, block: object) -> Optional[FinanceConfig]:
+        return parse_finance_config({**self._BASE, "grid_services_events": block})
 
     def test_capacity_at_events_with_nested_events_block(self) -> None:
         """grid_services_model='capacity_at_events' + events block parses fully."""
@@ -840,3 +873,116 @@ class TestFinanceConfigParsingGridServices:
         assert parse_finance_config(
             {**self._BASE, "grid_services_events": None}
         ) == FinanceConfig(**self._BASE)
+
+    @pytest.mark.parametrize(
+        ("key", "refusal"),
+        [
+            pytest.param("band", "band must be one of", id="band"),
+            pytest.param(
+                "event_windows", "event_windows must be a list of window dicts", id="event_windows"
+            ),
+            pytest.param("aggregator_share", "non-numeric", id="aggregator_share"),
+            pytest.param("utilisation_factor", "non-numeric", id="utilisation_factor"),
+        ],
+    )
+    def test_null_events_value_is_refused(self, key: str, refusal: str) -> None:
+        """A null for an events key whose declared default is not None is refused for that key, not read as that default."""
+        with pytest.raises(ConfigurationError, match=refusal):
+            self._parse_events_block({**self._EVENTS_BLOCK, key: None})
+
+    @pytest.mark.parametrize(
+        "key", ["availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh"]
+    )
+    def test_null_rate_override_parses_to_no_override(self, key: str) -> None:
+        """A null rate override parses to a GridServicesEventsConfig with no override."""
+        assert self._parse_events_block({**self._EVENTS_BLOCK, key: None}) == FinanceConfig(
+            **self._BASE,
+            grid_services_events=GridServicesEventsConfig(**{**self._EVENTS_FIELDS, key: None}),
+        )
+
+    @pytest.mark.parametrize(
+        "band",
+        [pytest.param(["high"], id="list"), pytest.param({"name": "high"}, id="mapping")],
+    )
+    def test_unhashable_band_is_refused_as_an_unknown_band(self, band: object) -> None:
+        """A list or mapping band, as malformed YAML can give, is refused by the band check, not as a raw TypeError or a non-numeric value."""
+        with pytest.raises(ConfigurationError, match="band must be one of"):
+            self._parse_events_block({**self._EVENTS_BLOCK, "band": band})
+
+    @pytest.mark.parametrize(
+        ("first", "second"), list(itertools.pairwise(_EVENTS_NUMERIC_KEYS))
+    )
+    def test_first_declared_of_two_non_numeric_events_values_is_reported(
+        self, first: str, second: str
+    ) -> None:
+        """Of two non-numeric events values, the error names the field GridServicesEventsConfig declares first.
+
+        The block lists the later-declared field first, so the block's key order cannot decide it.
+        """
+        block = {
+            second: f"not-a-number:{second}",
+            first: f"not-a-number:{first}",
+            "event_windows": [self._WINDOW],
+        }
+        with pytest.raises(ConfigurationError, match=f"'not-a-number:{first}'"):
+            self._parse_events_block(block)
+
+    def test_malformed_event_window_is_reported_before_a_non_numeric_events_value(self) -> None:
+        """A malformed event window is reported before a non-numeric scalar of the events block."""
+        block = {
+            "aggregator_share": "not-a-number:aggregator_share",
+            "event_windows": [{**self._WINDOW, "event_hours": "not-a-number:event_hours"}],
+        }
+        with pytest.raises(ConfigurationError, match="'not-a-number:event_hours'"):
+            self._parse_events_block(block)
+
+    @pytest.mark.parametrize(
+        ("windows", "message"),
+        [
+            pytest.param(
+                "winter",
+                "scenario.finance.grid_services_events.event_windows"
+                " must be a list of window dicts",
+                id="not-a-list",
+            ),
+            pytest.param(
+                [{"months": [12], "weekdays": [0], "events_per_year": 1, "event_hours": 1.0}],
+                "scenario.finance.grid_services_events.event_windows[0]"
+                " requires 'hours' field",
+                id="missing-key",
+            ),
+            pytest.param(
+                [{**_WINDOW, "event_hours": "abc"}],
+                "scenario.finance.grid_services_events.event_windows[0]"
+                " contains a non-numeric value",
+                id="non-numeric",
+            ),
+        ],
+    )
+    def test_malformed_event_windows_are_refused_naming_their_path_in_the_file(
+        self, windows: object, message: str
+    ) -> None:
+        """An event_windows refusal names the list's path, taken from the finance block's own path."""
+        with pytest.raises(ConfigurationError, match=re.escape(message)):
+            parse_finance_config(
+                {**self._BASE, "grid_services_events": {"event_windows": windows}},
+                block_path="scenario.finance",
+            )
+
+    @pytest.mark.parametrize("omitted", list(_EVENTS_BLOCK))
+    def test_omitted_events_key_takes_its_declared_default(self, omitted: str) -> None:
+        """A key the grid_services_events block omits takes GridServicesEventsConfig's declared default.
+
+        An omitted event_windows is the default schedule, DEFAULT_EVENT_WINDOWS, not an error.
+        """
+        block = {key: value for key, value in self._EVENTS_BLOCK.items() if key != omitted}
+        fields = {key: value for key, value in self._EVENTS_FIELDS.items() if key != omitted}
+        assert self._parse_events_block(block) == FinanceConfig(
+            **self._BASE, grid_services_events=GridServicesEventsConfig(**fields)
+        )
+
+    def test_empty_events_block_parses_to_the_declared_defaults(self) -> None:
+        """An empty grid_services_events block parses to the default events config, where a null block parses to none."""
+        assert self._parse_events_block({}) == FinanceConfig(
+            **self._BASE, grid_services_events=GridServicesEventsConfig()
+        )

@@ -1899,9 +1899,17 @@ _FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
     *_FINANCE_SCALAR_COERCIONS, "grid_services_events",
 })
 
+# Rows follow GridServicesEventsConfig's field order, which decides the first bad value reported.
+_GRID_SERVICES_EVENTS_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
+    "band": str,
+    "aggregator_share": float,
+    "utilisation_factor": float,
+    "availability_gbp_per_kw_per_event": _float_or_none,
+    "utilisation_gbp_per_mwh": _float_or_none,
+})
+
 _GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
-    "band", "event_windows", "aggregator_share", "utilisation_factor",
-    "availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh",
+    *_GRID_SERVICES_EVENTS_SCALAR_COERCIONS, "event_windows",
 })
 
 _EVENT_WINDOW_KEYS: tuple[str, ...] = (
@@ -1909,34 +1917,17 @@ _EVENT_WINDOW_KEYS: tuple[str, ...] = (
 )
 
 
-def _parse_grid_services_events_config(
-    data: object, *, block_path: str
-) -> Optional[GridServicesEventsConfig]:
-    """Parse a finance block's grid_services_events block; absent or null is no events config."""
-    if data is None:
-        return None
-    gs_data = _refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
-    # Parse event_windows list-of-dicts -> tuple[EventWindow, ...]
-    # mirroring _build_custom_tariff's periods.
-    ew_raw_list = gs_data.get("event_windows", [])
-    if not isinstance(ew_raw_list, list):
-        raise ConfigurationError(
-            "grid_services_events.event_windows must be a list of window dicts"
-        )
+def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow, ...]:
+    """Parse the event_windows list at *block_path* into EventWindows."""
+    if not isinstance(data, list):
+        raise ConfigurationError(f"{block_path} must be a list of window dicts")
     parsed_windows: list[EventWindow] = []
-    for i, ew_dict in enumerate(ew_raw_list):
-        _refuse_unrecognised_keys(
-            _child_path(block_path, f"event_windows[{i}]"), ew_dict, _EVENT_WINDOW_KEYS
-        )
+    for i, ew_dict in enumerate(data):
+        window_path = f"{block_path}[{i}]"
+        _refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_KEYS)
         for req_key in _EVENT_WINDOW_KEYS:
             if req_key not in ew_dict:
-                raise ConfigurationError(
-                    f"grid_services_events.event_windows[{i}] requires '{req_key}' field"
-                )
-        # Wrap numeric coercions so that malformed values (e.g. event_hours='abc'
-        # or months=5 / non-iterable) surface as ConfigurationError rather than
-        # raw ValueError/TypeError.  ConfigurationError from EventWindow.__post_init__
-        # is NOT a subclass of (ValueError, TypeError) so it propagates unaffected.
+                raise ConfigurationError(f"{window_path} requires '{req_key}' field")
         try:
             parsed_windows.append(
                 EventWindow(
@@ -1947,32 +1938,40 @@ def _parse_grid_services_events_config(
                     event_hours=float(ew_dict["event_hours"]),
                 )
             )
-        except ConfigurationError:
-            raise  # EventWindow.__post_init__ domain errors — propagate as-is
         except (ValueError, TypeError) as exc:
             raise ConfigurationError(
-                f"grid_services_events.event_windows[{i}] contains a "
-                f"non-numeric value: {exc}"
+                f"{window_path} contains a non-numeric value: {exc}"
             ) from exc
-    # Build optional override float fields; wrap numeric coercions as above.
-    avail_raw = gs_data.get("availability_gbp_per_kw_per_event")
-    util_raw = gs_data.get("utilisation_gbp_per_mwh")
-    # GridServicesEventsConfig.__post_init__ validates; ConfigurationError propagates.
-    try:
-        return GridServicesEventsConfig(
-            band=gs_data.get("band", "central"),
-            event_windows=tuple(parsed_windows),
-            aggregator_share=float(gs_data.get("aggregator_share", 0.25)),
-            utilisation_factor=float(gs_data.get("utilisation_factor", 0.6)),
-            availability_gbp_per_kw_per_event=_float_or_none(avail_raw),
-            utilisation_gbp_per_mwh=_float_or_none(util_raw),
+    return tuple(parsed_windows)
+
+
+def _parse_grid_services_events_config(
+    data: object, *, block_path: str
+) -> Optional[GridServicesEventsConfig]:
+    """Parse a finance block's grid_services_events block; absent or null is no events config.
+
+    A key the block omits takes GridServicesEventsConfig's declared default, so an omitted
+    event_windows is the default schedule, DEFAULT_EVENT_WINDOWS.
+    """
+    if data is None:
+        return None
+    gs_data = _refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
+    fields: dict[str, Any] = {}
+    if "event_windows" in gs_data:
+        fields["event_windows"] = _parse_event_windows(
+            gs_data["event_windows"], block_path=_child_path(block_path, "event_windows")
         )
-    except ConfigurationError:
-        raise  # GridServicesEventsConfig.__post_init__ validation — propagate as-is
+    try:
+        fields.update(
+            (key, coerce(gs_data[key]))
+            for key, coerce in _GRID_SERVICES_EVENTS_SCALAR_COERCIONS.items()
+            if key in gs_data
+        )
     except (ValueError, TypeError) as exc:
         raise ConfigurationError(
             f"grid_services_events block contains a non-numeric value: {exc}"
         ) from exc
+    return GridServicesEventsConfig(**fields)
 
 
 def parse_finance_config(
