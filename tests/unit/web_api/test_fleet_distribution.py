@@ -239,7 +239,6 @@ class TestFleetFromDistribution:
                 "days": 1,
                 "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
                 "battery": {
-                    "enabled": True,
                     "capacity_kwh": {"type": "uniform", "min": 3.0, "max": 10.0},
                 },
                 "load": {"annual_consumption_kwh": 3500.0},
@@ -382,7 +381,6 @@ class TestFleetFromDistribution:
                 "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0}},
                 "load": {"annual_consumption_kwh": 3500.0},
                 "battery": {
-                    "enabled": True,
                     "capacity_kwh": {
                         "type": "weighted_discrete",
                         "values": [
@@ -833,6 +831,55 @@ class TestFleetFromDistribution:
         assert resp.status_code == 400
         assert resp.get_json() == {"error": str(grammar_refusal.value)}
         assert named in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(True, id="true"),
+            pytest.param(False, id="false"),
+            pytest.param(0, id="zero"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("block", "settings"),
+        [
+            pytest.param("pv", {"capacity_kw": 4.0}, id="pv"),
+            pytest.param("battery", {"capacity_kwh": 5.0}, id="battery"),
+            pytest.param("load", {"annual_consumption_kwh": 3500.0}, id="load"),
+        ],
+    )
+    def test_a_component_blocks_enabled_returns_400_carrying_the_grammars_refusal_and_queues_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        block: str,
+        settings: dict,
+        value: object,
+    ) -> None:
+        """The fleet form has no toggle for a block: a pv/battery/load block's enabled, true, false, 0 or null, reaches config.py's grammar, which has no such key, and is a 400 whose error is the grammar's refusal naming it; no fleet is queued. A fleet without batteries leaves its battery block out or sends it null."""
+        body = {**self._VALID_BODY, block: {**settings, "enabled": value}}
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(
+                {key: body[key] for key in ("n_homes", "seed", "pv", "battery", "load") if key in body}
+            )
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(grammar_refusal.value)}
+        assert "'enabled'" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_a_battery_blocks_enabled_sent_as_the_string_false_returns_400_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A battery block's enabled sent as the string "false" toggles nothing: it is a 400 naming battery.enabled, and no fleet is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "battery": {"capacity_kwh": 5.0, "enabled": "false"}},
+        )
+        assert resp.status_code == 400
+        assert "battery.enabled" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)

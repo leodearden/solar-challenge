@@ -9,11 +9,13 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.config import ConfigurationError, parse_fleet_distribution_config
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db
+from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
 from tests._fleet_form import (
@@ -471,21 +473,19 @@ class TestFleetApiEndpoints:
         else:
             assert submissions == []
 
-    def test_simulate_fleet_from_distribution_answers_an_empty_battery_block_as_one_with_its_default_spelled_out(
+    def test_simulate_fleet_from_distribution_refuses_an_empty_battery_block_naming_its_missing_capacity(
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
-        """An empty battery block is a mapping its grammar reads, not an absent block: enabled by default, with no capacity distribution, it gets the 400 the block with enabled spelled out gets, and no fleet is queued."""
-        empty = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**valid_distribution_form(), "battery": {}},
-        )
-        enabled = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**valid_distribution_form(), "battery": {"enabled": True}},
-        )
+        """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it reaches config.py's grammar and is a 400 whose error is the grammar's refusal, naming battery.capacity_kwh; no fleet is queued."""
+        form = {**valid_distribution_form(), "battery": {}}
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(form_to_fleet_distribution_config(form))
 
-        assert empty.status_code == 400
-        assert (empty.status_code, empty.get_json()) == (enabled.status_code, enabled.get_json())
+        response = client.post("/api/simulate/fleet-from-distribution", json=form)
+
+        assert response.status_code == 400
+        assert response.get_json() == {"error": str(grammar_refusal.value)}
+        assert "battery.capacity_kwh" in response.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
 

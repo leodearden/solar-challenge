@@ -210,7 +210,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             :func:`read_fleet_size`), seed is not a whole number from -MAX_FLEET_SEED to
             MAX_FLEET_SEED (see :func:`read_fleet_seed`), a pv/battery/load block is
             neither null nor a dict (see :func:`_component_block`),
-            an enabled battery block sets a dispatch strategy (see
+            a battery block sets a dispatch strategy (see
             :func:`_refuse_battery_dispatch_strategy`), or
             :func:`_parse_component_distribution` refuses a block; each refusal names its
             field as a dot path from the form's root.
@@ -226,7 +226,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
 
     # Process Battery distribution
     battery_data = _component_block(form_data, "battery")
-    if battery_data is not None and battery_data.get("enabled", True):
+    if battery_data is not None:
         _refuse_battery_dispatch_strategy(battery_data)
         config["battery"] = _parse_component_distribution(battery_data, "battery", "capacity_kwh")
 
@@ -321,8 +321,7 @@ def _parse_component_distribution(
     which is any other value but null or a mapping, read by
     :func:`~solar_challenge.web.number_fields.as_finite_float`.  A mapping without a type
     passes as given, and an absent or null field as an empty mapping, for config.py's
-    grammar to refuse.  The block's other settings, but for ``enabled``, are read by
-    :func:`_other_setting`.
+    grammar to refuse.  The block's other settings are read by :func:`_other_setting`.
 
     Args:
         data: Component form data dict.
@@ -349,7 +348,7 @@ def _parse_component_distribution(
         result[primary_field] = {} if spec is None else spec
 
     for key, value in data.items():
-        if key not in (primary_field, "enabled"):
+        if key != primary_field:
             result[key] = _other_setting(value, f"{block}.{key}")
 
     return result

@@ -622,8 +622,8 @@ class TestFleetConfigHelpers:
             pytest.param(
                 "battery",
                 "capacity_kwh",
-                {"enabled": True, "type": "uniform", "min": 3.0, "max": 10.0},
-                id="enabled-battery-uniform-without-its-capacity",
+                {"type": "uniform", "min": 3.0, "max": 10.0},
+                id="battery-uniform-without-its-capacity",
             ),
             pytest.param(
                 "load",
@@ -1032,6 +1032,22 @@ class TestFleetConfigHelpers:
         form = valid_distribution_form()
         config = form_to_fleet_distribution_config({**form, block: {**form[block], key: value}})
         assert config[block][key] is value
+
+    @pytest.mark.parametrize(
+        "value",
+        [pytest.param(True, id="true"), pytest.param(False, id="false"), pytest.param(None, id="null")],
+    )
+    @pytest.mark.parametrize("block", FLEET_FORM_COMPONENT_BLOCKS)
+    def test_form_to_fleet_distribution_config_passes_a_blocks_enabled_on_as_given_dropping_no_block(
+        self, block: str, value: object
+    ) -> None:
+        """The fleet form has no toggle for a block: a pv/battery/load block's enabled, true, false or null, is a setting like any other, passed on to config.py's grammar as given beside the block's conversion, and no value of it drops the block."""
+        form = valid_distribution_form()
+        config = form_to_fleet_distribution_config({**form, block: {**form[block], "enabled": value}})
+        assert config.get(block) == {
+            **form_to_fleet_distribution_config(form)[block],
+            "enabled": value,
+        }
 
     @pytest.mark.parametrize(
         ("block", "key", "spec", "converted"),
