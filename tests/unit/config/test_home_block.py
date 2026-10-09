@@ -360,6 +360,12 @@ class TestOmittedAndNullKeys:
 
     An omitted key takes the dataclass's declared default; a null is a value set, handed on and
     never read as the default.
+
+    The null cases characterize a known gap and endorse none of it: no block checks a value, so a
+    null in a field the dataclass does not check is held as None (a null use_stochastic is falsy,
+    which selects the deterministic load profile), and a null the dataclass compares is refused by
+    its own TypeError, which names neither the key nor the block. Refusing a null at the block
+    changes these cases.
     """
 
     def test_omitted_home_keys_take_the_declared_defaults(self) -> None:
@@ -420,19 +426,19 @@ class TestOmittedAndNullKeys:
             ),
         ],
     )
-    def test_a_null_the_dataclass_accepts_reaches_it_as_none(
+    def test_a_null_in_a_field_the_dataclass_does_not_check_is_held_as_none(
         self,
         blocks: dict[str, Any],
         attribute: str,
         dataclass: Callable[..., object],
         fields: dict[str, Any],
     ) -> None:
-        """A null the dataclass accepts is held as None, not replaced by the declared default."""
+        """Known gap: a null name or use_stochastic is held as None, not replaced by the declared default."""
         assert getattr(_parsed_home(**blocks), attribute) == dataclass(**fields)
 
     @pytest.mark.parametrize("key", ["name", "dispatch_strategy"])
-    def test_a_null_home_scalar_reaches_homeconfig_as_none(self, key: str) -> None:
-        """A null home name or dispatch_strategy is held as None, not replaced by the declared default."""
+    def test_a_null_home_scalar_is_held_as_none(self, key: str) -> None:
+        """Known gap: HomeConfig checks no value, so a null name or dispatch_strategy is held as None, not defaulted."""
         assert getattr(_parsed_home(**{key: None}), key) is None
 
     @pytest.mark.parametrize(
@@ -482,7 +488,7 @@ class TestOmittedAndNullKeys:
         dataclass: Callable[..., object],
         fields: dict[str, Any],
     ) -> None:
-        """A null is not the declared default: it reaches the dataclass, which refuses it by itself."""
+        """A null is not the declared default: the dataclass refuses it, with an error naming neither key nor block."""
         assert _refusal(lambda: _parsed_home(**blocks)) == _refusal(lambda: dataclass(**fields))
 
     def test_a_bad_dispatch_strategy_is_reported_before_a_bad_grid_charging_block(self) -> None:
