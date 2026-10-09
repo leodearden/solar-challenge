@@ -3,6 +3,7 @@
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
 {% from "components/macros.html" import toggle_switch, range_input %}
 {% from "components/distribution-editor.html" import distribution_editor %}
+{% from "components/fixed-ranges.html" import fixed_ranges %}
 
 {% block title %}Fleet Simulation{% endblock %}
 
@@ -101,7 +102,7 @@
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of PV system sizes (kW)</p>
             </div>
             <div class="p-6">
-                {{ distribution_editor('pvDist', 4.0, subject=subject, fixed_range=(0.5, 20)) }}
+                {{ distribution_editor('pvDist', 4.0, subject=subject, fixed_range=fixed_ranges.pv) }}
             </div>
         </div>
         {% endwith %}
@@ -122,7 +123,7 @@
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of battery sizes (kWh); use 0 for no battery</p>
             </div>
             <div class="p-6" x-show="batteryEnabled" x-transition>
-                {{ distribution_editor('batteryDist', 5.0, subject=subject, fixed_range=(0, 100)) }}
+                {{ distribution_editor('batteryDist', 5.0, subject=subject, fixed_range=fixed_ranges.battery) }}
             </div>
             <div class="p-6 text-sm text-slate-500 dark:text-slate-400" x-show="!batteryEnabled" x-cloak>
                 Battery storage is disabled for this fleet.
@@ -141,7 +142,7 @@
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of annual consumption (kWh/year)</p>
             </div>
             <div class="p-6">
-                {{ distribution_editor('loadDist', 3500, subject=subject, fixed_range=(500, 20000)) }}
+                {{ distribution_editor('loadDist', 3500, subject=subject, fixed_range=fixed_ranges.load) }}
             </div>
         </div>
         {% endwith %}

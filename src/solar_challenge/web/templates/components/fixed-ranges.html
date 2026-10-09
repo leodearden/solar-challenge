@@ -1,0 +1,6 @@
+{#
+    fixed_ranges is the (min, max) of a Fixed Value for each fleet component, by key: pv, battery and load.
+    simulate/fleet.html and scenarios/builder.html both pass a component's range to distribution_editor
+    (components/distribution-editor.html) as its fixed_range, so both pages bound a component's Fixed Value alike.
+#}
+{% set fixed_ranges = {'pv': (0.5, 20), 'battery': (0, 100), 'load': (500, 20000)} %}
