@@ -86,14 +86,14 @@ def named_classes(obj: object) -> set[type]:
     """The classes the forms that pin *obj* name: surface_form(obj)'s and, for a class, member_forms(obj)'s.
 
     Only annotations name classes, never a default value. A generic names its origin and
-    its arguments' classes, a union its members' alone, and Literal's values and
-    Annotated's metadata none. A string annotation or a forward reference names the class
-    its name is bound to in the module that spells it, read as a type checker reads it:
-    its globals, with the imports of its top-level `if TYPE_CHECKING:` blocks bound over
-    them. A name bound in neither raises NameError. A class's constructor is spelled in
-    the module of the class in its MRO whose own body defines __init__ or __new__, which
-    may be a base defined in another module. A constant names its type, and an Enum's
-    members name nothing.
+    its arguments' classes, a union its members' alone, an InitVar its type's alone, and
+    Literal's values and Annotated's metadata none. A string annotation or a forward
+    reference names the class its name is bound to in the module that spells it, read as
+    a type checker reads it: its globals, with the imports of its top-level
+    `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises NameError.
+    A class's constructor is spelled in the module of the class in its MRO whose own body
+    defines __init__ or __new__, which may be a base defined in another module. A
+    constant names its type, and an Enum's members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -252,6 +252,8 @@ def _annotation_classes(annotation: object, module: str) -> set[type]:
         return _annotation_classes(annotation.__forward_arg__, module)
     if isinstance(annotation, list):
         return _annotations_classes(annotation, module)
+    if isinstance(annotation, dataclasses.InitVar):
+        return _annotation_classes(annotation.type, module)
     if typing.get_origin(annotation) is not None:
         return _subscripted_classes(annotation, module)
     if inspect.isclass(annotation):
