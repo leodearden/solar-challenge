@@ -1950,7 +1950,8 @@ def _parse_grid_services_events_config(
 ) -> Optional[GridServicesEventsConfig]:
     """Parse a finance block's grid_services_events block; absent or null is no events config.
 
-    A key the block omits takes GridServicesEventsConfig's declared default.
+    A key the block omits takes GridServicesEventsConfig's declared default, so an omitted
+    event_windows is the default schedule, DEFAULT_EVENT_WINDOWS.
     """
     if data is None:
         return None

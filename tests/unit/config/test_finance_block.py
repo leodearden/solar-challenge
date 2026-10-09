@@ -875,11 +875,19 @@ class TestFinanceConfigParsingGridServices:
         ) == FinanceConfig(**self._BASE)
 
     @pytest.mark.parametrize(
-        "key", ["band", "event_windows", "aggregator_share", "utilisation_factor"]
+        ("key", "refusal"),
+        [
+            pytest.param("band", "band must be one of", id="band"),
+            pytest.param(
+                "event_windows", "event_windows must be a list of window dicts", id="event_windows"
+            ),
+            pytest.param("aggregator_share", "non-numeric", id="aggregator_share"),
+            pytest.param("utilisation_factor", "non-numeric", id="utilisation_factor"),
+        ],
     )
-    def test_null_events_value_is_refused(self, key: str) -> None:
-        """A null for an events key whose declared default is not None is refused, not read as that default."""
-        with pytest.raises(ConfigurationError):
+    def test_null_events_value_is_refused(self, key: str, refusal: str) -> None:
+        """A null for an events key whose declared default is not None is refused for that key, not read as that default."""
+        with pytest.raises(ConfigurationError, match=refusal):
             self._parse_events_block({**self._EVENTS_BLOCK, key: None})
 
     @pytest.mark.parametrize(
@@ -965,8 +973,7 @@ class TestFinanceConfigParsingGridServices:
     def test_omitted_events_key_takes_its_declared_default(self, omitted: str) -> None:
         """A key the grid_services_events block omits takes GridServicesEventsConfig's declared default.
 
-        An omitted event_windows is the default schedule, DEFAULT_EVENT_WINDOWS (PRD
-        enhanced-grid-services-capacity-at-events, open question 4), not an error.
+        An omitted event_windows is the default schedule, DEFAULT_EVENT_WINDOWS, not an error.
         """
         block = {key: value for key, value in self._EVENTS_BLOCK.items() if key != omitted}
         fields = {key: value for key, value in self._EVENTS_FIELDS.items() if key != omitted}
