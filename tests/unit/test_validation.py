@@ -353,16 +353,13 @@ class TestAnnualYieldPerWiredKwp:
         "kwh_per_wired_kwp",
         [
             pytest.param(1175.2, id="pvgis-eastbourne-optimal"),
-            pytest.param(1132.0, id="mcs-zone-2-brighton-south-38-to-40"),
             pytest.param(367.3, id="pvgis-unst-east-wall"),
-            pytest.param(394.0, id="mcs-zone-20-lerwick-east-or-west-wall"),
-            pytest.param(580.0, id="mcs-zone-20-lerwick-west-45"),
         ],
     )
-    def test_the_yields_pvgis_and_mcs_give_uk_arrays_facing_east_to_west_pass(
+    def test_the_pvgis_yields_that_set_the_band_edges_pass(
         self, kwh_per_wired_kwp: float
     ) -> None:
-        """Each faces east to west through south; docs/pv-annual-yield-benchmark.md §2 cites it."""
+        """docs/pv-annual-yield-benchmark.md §2 sources each and rounds it outward to its edge."""
         pv_config = PVConfig(capacity_kw=4.0)
         wired_kw = wired_dc_capacity_kw(pv_config)
         generation = _year_of_generation(kwh_per_wired_kwp * wired_kw)

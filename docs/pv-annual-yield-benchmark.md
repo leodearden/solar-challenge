@@ -54,6 +54,8 @@ against a `PVConfig` of the default module at that capacity.
 | Ceiling | Eastbourne, optimal: 1175.2 | Zone 2 Brighton, south, 38–40°: 1132 | 1200 |
 | Floor | Unst, east wall: 367.3 | Zone 20 Lerwick, east or west wall: 394 | 300 |
 
+- `tests/unit/test_validation.py` copies the two PVGIS figures as yields that must
+  pass; a re-query that moves them moves the copies too.
 - The band is not derived from the model. Fitting it to the model's output would make
   the benchmark circular, unable to catch the model it checks.
 - **What a FAIL means:** a yield outside what the references give any in-scope UK
