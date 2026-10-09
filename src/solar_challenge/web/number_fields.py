@@ -2,8 +2,9 @@
 """Readers of a web request's number fields: each takes the value sent and the field's name, and refuses with a ValueError naming that field and the value sent, the error every web caller answers with HTTP 400.
 
 The integer readers differ on a fraction and on a boolean: as_int, and so as_int_within,
-reads them as int() does, truncating 2.5 to 2 and reading true as 1, while as_whole_number
-refuses both, as as_finite_float refuses a boolean. Read a count through as_whole_number.
+reads them as int() does, truncating 2.5 to 2 and reading true as 1, while as_whole_number,
+and so as_whole_number_within, refuses both, as as_finite_float refuses a boolean. Read a
+count through as_whole_number, or through as_whole_number_within for a count with bounds.
 """
 
 import math
@@ -30,10 +31,7 @@ def as_int_within(value: Any, field: str, low: int, high: int) -> int:
         ValueError: If :func:`as_int` refuses *value*, or it is outside *low* to *high*;
             the range error names *field*, the range and the value sent.
     """
-    number = as_int(value, field)
-    if not low <= number <= high:
-        raise ValueError(f"{field} must be between {low} and {high}, got {value!r}")
-    return number
+    return _within(as_int(value, field), value, field, low, high)
 
 
 def as_finite_float(value: Any, field: str) -> float:
@@ -65,3 +63,25 @@ def as_whole_number(value: Any, field: str) -> int:
     if not number.is_integer():
         raise ValueError(f"{field} must be a whole number, got {value!r}")
     return int(number)
+
+
+def as_whole_number_within(value: Any, field: str, low: int, high: int) -> int:
+    """Return *value* read by :func:`as_whole_number`, refusing one outside *low* to *high* inclusive.
+
+    Raises:
+        ValueError: If :func:`as_whole_number` refuses *value*, or it is outside *low* to
+            *high*; the range error names *field*, the range and the value sent.
+    """
+    return _within(as_whole_number(value, field), value, field, low, high)
+
+
+def _within(number: int, value: Any, field: str, low: int, high: int) -> int:
+    """Return *number*, the *field* value read from *value*, refusing one outside *low* to *high* inclusive.
+
+    Raises:
+        ValueError: If *number* is outside *low* to *high*; the error names *field*, the
+            range and *value*, the value as sent.
+    """
+    if not low <= number <= high:
+        raise ValueError(f"{field} must be between {low} and {high}, got {value!r}")
+    return number

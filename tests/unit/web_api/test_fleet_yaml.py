@@ -232,6 +232,41 @@ class TestImportFleetYAML:
         assert answer["not_loaded"] == ["fleet_distribution.random_order"]
 
     @pytest.mark.parametrize(
+        ("settings", "message"),
+        [
+            pytest.param(
+                {"n_homes": float("inf")},
+                "fleet_distribution.n_homes must be a finite number, got inf",
+                id="infinite-fleet-size",
+            ),
+            pytest.param(
+                {"seed": 1.5},
+                "fleet_distribution.seed must be a whole number, got 1.5",
+                id="fractional-seed",
+            ),
+        ],
+    )
+    def test_a_fleet_size_or_seed_that_is_not_a_whole_number_is_refused_naming_the_scenarios_setting(
+        self, client: FlaskClient, settings: dict, message: str
+    ) -> None:
+        """A scenario file whose n_homes or seed is not a whole number gets a 400 the fleet page shows, naming the scenario's setting and the value as written."""
+        fleet = {
+            "n_homes": 25,
+            "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
+            "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2500, "max": 4500}},
+            **settings,
+        }
+
+        resp = client.post(
+            "/api/fleet/import-yaml",
+            data=yaml.safe_dump({"fleet_distribution": fleet}),
+            content_type="text/yaml",
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": message}
+
+    @pytest.mark.parametrize(
         ("text", "reason"),
         [
             pytest.param("", "Empty request body", id="empty-body"),

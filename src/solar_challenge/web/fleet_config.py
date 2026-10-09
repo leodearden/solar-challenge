@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 
 
 from solar_challenge.home import HomeConfig
-from solar_challenge.web.number_fields import as_finite_float, as_int, as_int_within
+from solar_challenge.web.number_fields import (
+    as_finite_float,
+    as_int_within,
+    as_whole_number_within,
+)
 
 if TYPE_CHECKING:
     from solar_challenge.config import DispatchStrategyConfig
@@ -26,6 +30,31 @@ if TYPE_CHECKING:
 #: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, a
 #: shuffled pool that holds values for more homes, and a preview that draws more values.
 MAX_FLEET_HOMES = 10_000
+
+
+def read_fleet_size(value: Any, field: str) -> int:
+    """Read *value*, the setting named *field*, as a dashboard fleet's number of homes, a whole number from 1 to :data:`MAX_FLEET_HOMES`.
+
+    Raises:
+        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+            naming *field* and the value sent.
+    """
+    return as_whole_number_within(value, field, 1, MAX_FLEET_HOMES)
+
+
+#: The largest seed, positive or negative, a dashboard fleet holds: Number.MAX_SAFE_INTEGER,
+#: past which the JavaScript number the fleet page holds its seed in rounds some whole numbers.
+MAX_FLEET_SEED = 2**53 - 1
+
+
+def read_fleet_seed(value: Any, field: str) -> int:
+    """Read *value*, the setting named *field*, as a dashboard fleet's seed, a whole number from -:data:`MAX_FLEET_SEED` to :data:`MAX_FLEET_SEED`.
+
+    Raises:
+        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+            naming *field* and the value sent.
+    """
+    return as_whole_number_within(value, field, -MAX_FLEET_SEED, MAX_FLEET_SEED)
 
 
 def apply_fleet_overlay(
@@ -177,18 +206,18 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
         Fleet distribution config dict.
 
     Raises:
-        ValueError: If n_homes is one int() cannot read or outside 1 to MAX_FLEET_HOMES
-            (see :func:`~solar_challenge.web.number_fields.as_int_within`), seed is one
-            int() cannot read (see :func:`~solar_challenge.web.number_fields.as_int`), a
-            pv/battery/load block is neither null nor a dict (see :func:`_component_block`),
+        ValueError: If n_homes is not a whole number from 1 to MAX_FLEET_HOMES (see
+            :func:`read_fleet_size`), seed is not a whole number from -MAX_FLEET_SEED to
+            MAX_FLEET_SEED (see :func:`read_fleet_seed`), a pv/battery/load block is
+            neither null nor a dict (see :func:`_component_block`),
             an enabled battery block sets a dispatch strategy (see
             :func:`_refuse_battery_dispatch_strategy`), or
             :func:`_parse_component_distribution` refuses a block; each refusal names its
             field as a dot path from the form's root.
     """
     config: dict[str, Any] = {
-        "n_homes": as_int_within(form_data.get("n_homes", 100), "n_homes", 1, MAX_FLEET_HOMES),
-        "seed": as_int(form_data.get("seed", 42), "seed"),
+        "n_homes": read_fleet_size(form_data.get("n_homes", 100), "n_homes"),
+        "seed": read_fleet_seed(form_data.get("seed", 42), "seed"),
     }
 
     # Process PV distribution

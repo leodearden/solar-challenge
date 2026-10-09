@@ -13,7 +13,7 @@ pytest.importorskip("flask")
 from solar_challenge.config import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
     fleet_form_from_scenario,
@@ -21,6 +21,7 @@ from solar_challenge.web.fleet_scenario import (
 )
 from solar_challenge.web.shared import resolve_location
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FLEET_FORM: dict[str, Any] = {
     "name": "Round Trip Fleet",
@@ -370,6 +371,88 @@ class TestFleetFormFromScenario:
             fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
         assert str(exc_info.value) == message
 
+    @pytest.mark.parametrize("key", ["n_homes", "seed"])
+    @pytest.mark.parametrize(
+        "value", [*UNUSABLE_NUMBERS, pytest.param("x", id="non-numeric-string")]
+    )
+    def test_a_fleet_size_or_seed_that_is_not_a_finite_number_is_refused_naming_it(
+        self, key: str, value: object
+    ) -> None:
+        """An n_homes or seed that is not a finite number, a boolean included, is refused with a ValueError naming it as fleet_distribution.<key> and the value as written."""
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(**{key: value}))
+        assert str(exc_info.value) == f"fleet_distribution.{key} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("key", ["n_homes", "seed"])
+    def test_a_fleet_size_or_seed_with_a_fractional_part_is_refused_naming_it(self, key: str) -> None:
+        """An n_homes or seed with a fractional part is refused with a ValueError naming it as fleet_distribution.<key> and the value as written.
+
+        Loading it would run a different fleet: the page runs a whole number of homes, and a seed
+        of 2.5 samples another fleet than a seed of 2, since random.Random(2.5) is not
+        random.Random(2), while the page has no seed field to show it.
+        """
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(**{key: 2.5}))
+        assert str(exc_info.value) == f"fleet_distribution.{key} must be a whole number, got 2.5"
+
+    def test_a_seed_the_fleet_page_cannot_hold_exactly_is_refused_naming_it(self) -> None:
+        """A seed beyond MAX_FLEET_SEED is refused with a ValueError naming fleet_distribution.seed, the range and the value as written.
+
+        The fleet page holds the seed as a JavaScript number, which reads 2**53 + 1 as 2**53, so
+        loading it would run another fleet than the scenario's.
+        """
+        seed = MAX_FLEET_SEED + 2
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(seed=seed))
+        assert str(exc_info.value) == (
+            f"fleet_distribution.seed must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, "
+            f"got {seed!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "n_homes",
+        [
+            pytest.param(0, id="no-homes"),
+            pytest.param(MAX_FLEET_HOMES + 1, id="more-homes-than-the-page-runs"),
+        ],
+    )
+    def test_a_fleet_size_outside_1_to_max_fleet_homes_is_refused_naming_it(self, n_homes: int) -> None:
+        """An n_homes outside 1 to the dashboard's fleet limit is refused with a ValueError naming fleet_distribution.n_homes, the range and the value as written."""
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(n_homes=n_homes))
+        assert str(exc_info.value) == (
+            f"fleet_distribution.n_homes must be between 1 and {MAX_FLEET_HOMES}, got {n_homes!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param(
+                {
+                    **_FLEET_SCENARIO,
+                    "fleet_distribution": _without(_FLEET_SCENARIO["fleet_distribution"], "n_homes"),
+                },
+                id="absent",
+            ),
+            pytest.param(_with_fleet_distribution(n_homes=None), id="null"),
+        ],
+    )
+    def test_a_fleet_without_a_size_is_refused_naming_fleet_distribution_n_homes(
+        self, document: dict[str, Any]
+    ) -> None:
+        """A fleet_distribution that leaves n_homes out or sets it null is refused with a ValueError naming fleet_distribution.n_homes: a missing size reads as None, as a missing period date does."""
+        with pytest.raises(ValueError) as exc_info:
+            fleet_form_from_scenario(document)
+        assert str(exc_info.value) == "fleet_distribution.n_homes must be a finite number, got None"
+
+    def test_a_fleet_size_and_seed_written_as_whole_floats_load_as_the_ints_they_equal(self) -> None:
+        """An n_homes of 3.0 and a seed of 7.0 load as the ints 3 and 7, the fleet they run: random.Random(7.0) draws as random.Random(7) does."""
+        imported = fleet_form_from_scenario(_with_fleet_distribution(n_homes=3.0, seed=7.0))
+
+        assert imported == ImportedFleetForm(form=_FLEET_FORM, not_loaded=())
+        assert type(imported.form["n_homes"]) is int
+        assert type(imported.form["seed"]) is int
+
     def test_a_tariff_key_the_form_has_no_field_for_is_not_loaded(self) -> None:
         """An Economy 7 tariff loads its type and rates, and names the off-peak start the page has no field for."""
         tariff = {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1, "off_peak_start": "01:00"}
@@ -386,6 +469,16 @@ class TestFleetFormFromScenario:
                 {"name": "One Home", "home": {"pv": {"capacity_kw": 4.0}}},
                 "fleet_distribution",
                 id="home-scenario",
+            ),
+            pytest.param(
+                {**_FLEET_SCENARIO, "fleet_distribution": [_FLEET_SCENARIO["fleet_distribution"]]},
+                "fleet_distribution must be a mapping, got list",
+                id="list-fleet-distribution",
+            ),
+            pytest.param(
+                {**_FLEET_SCENARIO, "fleet_distribution": None},
+                "fleet_distribution must be a mapping, got NoneType",
+                id="null-fleet-distribution",
             ),
             pytest.param(
                 _with_fleet_distribution(pv={"capacity_kw": 5.5}),
@@ -440,11 +533,6 @@ class TestFleetFormFromScenario:
                 ),
                 "fleet_distribution.battery.dispatch_strategy.peak_hours",
                 id="two-peak-windows",
-            ),
-            pytest.param(
-                _with_fleet_distribution(n_homes=MAX_FLEET_HOMES + 1),
-                f"n_homes must be between 1 and {MAX_FLEET_HOMES}",
-                id="more-homes-than-the-page-runs",
             ),
             pytest.param(
                 {
