@@ -167,6 +167,27 @@ class TestPVConfigValidation:
         PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.005) # default rate
 
 
+class TestSystemLossesConfig:
+    """PVConfig.system_losses is the fraction of each array's DC power lost before the inverter."""
+
+    def test_the_default_is_pvwatts_v5s_loss_budget(self) -> None:
+        assert PVConfig(capacity_kw=4.0).system_losses == pytest.approx(
+            pvlib.pvsystem.pvwatts_losses() / 100
+        )
+
+    @pytest.mark.parametrize("value", [-0.01, 1.0, 14.0, math.nan, math.inf, -math.inf])
+    def test_a_loss_outside_zero_to_one_is_refused(self, value: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"System losses must be a fraction in [0, 1), got {value}"),
+        ):
+            dataclasses.replace(PVConfig(capacity_kw=4.0), system_losses=value)
+
+    @pytest.mark.parametrize("value", [0.0, 0.05, 0.99])
+    def test_a_loss_in_zero_to_one_is_kept(self, value: float) -> None:
+        assert PVConfig(capacity_kw=4.0, system_losses=value).system_losses == value
+
+
 class TestCreatePVSystem:
     """Test PV-002: pvlib PVSystem creation from config."""
 
