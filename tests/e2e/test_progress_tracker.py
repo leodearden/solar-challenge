@@ -1,14 +1,14 @@
 """End-to-end tests for the progress tracker that /simulate/home and /simulate/fleet share.
 
-Verifies, on each page, that the tracker follows the latest run: a run started
-while an earlier one still runs is the run it follows, whether the earlier run
-then completes or fails, and a run started after a completed one starts its
-tracker afresh.
+Verifies, on each page, that the tracker follows the latest run. A run started
+while an earlier one still runs is the run it follows: the page drops the
+earlier run's progress stream, so the earlier run's end, completed or failed,
+does not show. A run started after a completed one starts its tracker afresh.
 """
 
 import itertools
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -62,6 +62,11 @@ def _wait_until_received_or_dropped(request: Request) -> None:
     response = request.response()
     if response is not None:
         response.body()
+
+
+def _is_progress_stream_of(job_id: str) -> Callable[[Request], bool]:
+    """Whether a request is the progress stream of the job job_id."""
+    return lambda request: urlsplit(request.url).path == f"/api/jobs/{job_id}/progress"
 
 
 class _RunningJobs:
@@ -136,12 +141,16 @@ def test_a_run_started_while_another_runs_is_the_run_the_tracker_follows(
     data: dict[str, Any],
     outcome_text: str,
 ) -> None:
-    """Run, then Run again while job-1 still runs: job-1's later end, completed or failed, does not show on the tracker, and job-2's completion shows run-2's results link."""
+    """Run, then Run again while job-1 still runs: the page drops job-1's progress stream, so job-1's later end, completed or failed, does not show on the tracker, and job-2's completion shows run-2's results link."""
     page.goto(live_server + simulate_page.path)
     run = page.get_by_role("button", name=simulate_page.run_button, exact=True)
-    for job_id in ("job-1", "job-2"):
-        with page.expect_request(f"**/api/jobs/{job_id}/progress"):
-            run.click()
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        run.click()
+    with (
+        page.expect_request("**/api/jobs/job-2/progress"),
+        page.expect_event("requestfailed", predicate=_is_progress_stream_of("job-1")),
+    ):
+        run.click()
 
     running_jobs.end("job-1", event, data)
     expect(page.get_by_text(outcome_text, exact=True)).to_have_count(0)
