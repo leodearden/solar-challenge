@@ -167,7 +167,6 @@ def _load_scenario_presets() -> list[str]:
     Returns:
         Sorted list of scenario file names (without extension).
     """
-
     presets: list[str] = []
 
     # Try the project-level scenarios/ directory
