@@ -287,6 +287,17 @@ because the loss is taken before the inverter
 output without system losses. Consumers re-baseline every figure that depends
 on PV generation when they re-pin, bills and the cost-recovery rate included.
 
+**Unreleased on main** (task 469): `SimulationResults`, reached through
+`FleetResults.per_home_results`, gains a last field, `grid_charge`, defaulting
+to `None`: the power the battery stores from the grid, in kW, a part of both
+`battery_charge` and `grid_import`. `simulate_home` sets it for tariffed runs,
+as it does `grid_charge_cost`. `to_dataframe()` gains a trailing
+`grid_charge_kw` column for those runs, so the CSV that `home run` writes and
+the web CSV export of tariffed home runs carry one more column, and
+`per_minute_amounts()` and `total_amounts()` gain `grid_charge_kwh`. The 0.5.0
+tag has none of these. Consumers that read the frame by position rather than by
+name re-check it when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
