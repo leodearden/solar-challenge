@@ -1,33 +1,32 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Guards two invariants of the dashboard's theme colours: no template and no hand-written
 stylesheet writes out a hex colour that tailwind.config.js defines, and no template or
-script draws a focus indicator in Tailwind's built-in amber, whose shades the theme's
-primary copies.
+script applies Tailwind's built-in amber, whose shades the theme's primary copies, except
+as one of the status and category roles _AMBER_ROLES lists.
 
 An element reaches a theme colour through a Tailwind utility: bg-primary-500, or on a
 pseudo-element an arbitrary variant such as [&::-webkit-slider-thumb]:bg-primary-500.
 A written-out value is a second home that a theme edit does not reach, and so is a
 utility naming a built-in palette whose shades the theme copies, such as
-focus:ring-amber-500 written for focus:ring-primary-500.
+bg-amber-500 written for bg-primary-500.
 
 A colour is a six-digit hex literal, matched case-insensitively anywhere in a source,
 comments included. The compiled dist/style.css derives from the theme and is not
 checked. The hex checks skip scripts, which hand colour strings to chart libraries.
 
-A focus indicator is a class, as tests/_css_classes.py reads it, under a focus,
-focus-visible or focus-within variant, alone or as group- or peer-, named or not, such as
-group-focus/item:. An arbitrary variant that selects focus, such as [&:focus]:, is not
-read. Amber utilities outside focus indicators are not checked: amber also marks status
-and category roles that are independent of the accent, such as the 'running' status
-badge and the PV distribution card, and no rule over class names tells those from accent
-uses.
+Amber also draws a few status and category roles that are independent of the accent, such
+as the 'running' run-status badge and the PV distribution card, and no rule over class
+names tells those from accent uses. So _AMBER_ROLES lists each role's amber classes and
+the templates that apply them, and an amber class passes only in a template whose role
+lists it. An accent use written in such a class, in that template, is not caught. Every
+listed class must still be applied where it is listed, so no allowance outlives its role.
 
-The focus check holds only while primary copies amber, so it first checks that premise
+The amber check holds only while primary copies amber, so it first checks that premise
 through one shade: tailwind.config.js's primary-500 must be amber-500's value.
 """
 
 import re
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
 import pytest
@@ -49,7 +48,6 @@ _BUILT_IN_500_SHADE_PRIMARY_COPIES = "#f59e0b"
 _PRIMARY_500_ENTRY = re.compile(
     r"""\bprimary\s*:\s*\{[^{}]*?\b500\s*:\s*['"](#[0-9a-fA-F]{6})['"]"""
 )
-_FOCUS_VARIANT = re.compile(r"(?:^|:)(?:(?:group|peer)-)?focus(?:-visible|-within)?(?:/[\w-]+)?:")
 
 
 def _hex_colours(source: str) -> set[str]:
@@ -95,7 +93,39 @@ def _amber_role(name: str, classes: str, *sources: str) -> _AmberRole:
     return _AmberRole(name, frozenset(classes.split()), frozenset(sources))
 
 
-_AMBER_ROLES: tuple[_AmberRole, ...] = ()
+_AMBER_ROLES = (
+    _amber_role(
+        "the 'AI assistant not configured' warning banner",
+        "border-amber-300 bg-amber-50 text-amber-800 "
+        "dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300",
+        "templates/assistant/chat.html",
+    ),
+    _amber_role(
+        "the 'running' run-status badge",
+        "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
+        "templates/dashboard.html",
+        "templates/history/runs.html",
+    ),
+    _amber_role(
+        "the progress bar of a run that has not completed",
+        "bg-amber-500",
+        "templates/simulate/partials/progress-tracker.html",
+    ),
+    _amber_role(
+        "the Run Single Home quick-action card",
+        "hover:border-amber-300 dark:hover:border-amber-600 "
+        "bg-amber-50 dark:bg-amber-900/30 "
+        "group-hover:bg-amber-100 dark:group-hover:bg-amber-900/50 "
+        "text-amber-600 dark:text-amber-400 "
+        "group-hover:text-amber-600 dark:group-hover:text-amber-400",
+        "templates/dashboard.html",
+    ),
+    _amber_role(
+        "the PV distribution card",
+        "bg-amber-50 dark:bg-amber-900/20 bg-amber-500",
+        "templates/simulate/fleet.html",
+    ),
+)
 
 
 def _amber_classes(applied: set[str]) -> set[str]:
@@ -129,11 +159,6 @@ def _unapplied_role_classes(
         for source in sorted(role.sources)
         if (unapplied := role.classes - applied_by_source.get(source, set()))
     }
-
-
-def _focus_indicators_naming(palette: str, applied: Iterable[str]) -> list[str]:
-    """The focus indicators among the *applied* classes that name a shade of *palette*."""
-    return sorted(c for c in applied if _FOCUS_VARIANT.search(c) and names_palette(c, palette))
 
 
 def _listing(written: Mapping[str, list[str]]) -> str:
@@ -201,59 +226,6 @@ def test_a_role_class_a_listed_source_does_not_apply_is_reported() -> None:
         ("badge", "templates/restyled.html"): ["text-amber-800"],
         ("badge", "templates/deleted.html"): ["bg-amber-100", "text-amber-800"],
     }
-
-
-@pytest.mark.parametrize(
-    ("css_class", "is_indicator"),
-    [
-        pytest.param("focus:ring-amber-500", True, id="focus"),
-        pytest.param("dark:focus:ring-amber-500", True, id="focus after another variant"),
-        pytest.param("focus-visible:ring-amber-500", True, id="focus-visible"),
-        pytest.param("group-focus-within:text-amber-500", True, id="group-focus-within"),
-        pytest.param("peer-focus:border-amber-500", True, id="peer-focus"),
-        pytest.param("group-focus/item:ring-amber-500", True, id="named group"),
-        pytest.param("hover:bg-amber-500", False, id="another variant"),
-        pytest.param("focus:ring-sky-500", False, id="another palette"),
-    ],
-)
-def test_a_focus_indicator_is_a_shade_of_the_palette_under_any_focus_variant(
-    css_class: str, is_indicator: bool
-) -> None:
-    expected = [css_class] if is_indicator else []
-
-    assert _focus_indicators_naming("amber", [css_class]) == expected
-
-
-def test_no_template_or_script_draws_a_focus_indicator_in_amber() -> None:
-    assert _primary_500() == _BUILT_IN_500_SHADE_PRIMARY_COPIES, (
-        f"{TAILWIND_CONFIG_KEY}'s primary-500 is not Tailwind's built-in "
-        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES}-500, so primary no longer copies "
-        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} and a focus indicator in "
-        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} would be a colour of its own, not a second home "
-        "of a theme colour. Point _BUILT_IN_PALETTE_PRIMARY_COPIES and "
-        "_BUILT_IN_500_SHADE_PRIMARY_COPIES at the built-in palette primary now copies, or "
-        "delete this test if it copies none."
-    )
-    applied = dashboard_applied_classes_by_source()
-    assert _focus_indicators_naming("primary", set().union(*applied.values())), (
-        "read no focus indicator naming primary from the dashboard's templates and scripts, "
-        "so this guard's reader may be broken and pass vacuously"
-    )
-    drawn = {
-        path: found
-        for path, classes in applied.items()
-        if (found := _focus_indicators_naming(_BUILT_IN_PALETTE_PRIMARY_COPIES, classes))
-    }
-
-    assert drawn == {}, (
-        "These templates and scripts draw focus indicators in Tailwind's built-in "
-        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES}, whose shades tailwind.config.js's primary "
-        f"copies, so a theme edit does not reach them:{_listing(drawn)}\n"
-        "Name primary instead, the same colour: focus:ring-primary-500 for "
-        f"focus:ring-{_BUILT_IN_PALETTE_PRIMARY_COPIES}-500. Then rebuild with "
-        "`cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
-        "static/dist/style.css."
-    )
 
 
 def test_no_template_or_script_applies_amber_outside_a_listed_status_or_category_role() -> None:
