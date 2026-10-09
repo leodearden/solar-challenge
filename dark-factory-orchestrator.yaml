@@ -55,6 +55,14 @@ lint_command: "true"
 # `--extra web` so web/* modules type-check against their real deps (flask).
 type_check_command: "uv run --locked --extra dev --extra web mypy src/solar_challenge"
 
+# 2026-10-09 (dark-factory plans/verify-rate-improvement-2026-10-09/MEMO.md §3
+# item 14): run verify legs in `df-verify-<project>-*.scope` systemd units with
+# CPUWeight merge 100 / task 33 / background 10, as dark-factory and reify do.
+# Without it this project's task verifies share the service unit's weight 100
+# with its agents and out-weigh other projects' task legs. Restart tier: takes
+# effect at the next orchestrator restart, not on hot reload.
+verify_use_cgroup_scope: true
+
 git:
   main_branch: "main"
   branch_prefix: "task/"
