@@ -142,12 +142,12 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
 
     A body sets its window in one of two ways, never both:
 
-    - ``days``: 365 is the sentinel for the full 2024 calendar year,
-      ``("2024-01-01", "2024-12-31")``, 366 days since 2024 is a leap year;
-      any other integer from 1 to :data:`MAX_WINDOW_DAYS`, read as int()
-      reads it, runs that many days from 2024-06-01.
+    - ``days``: :data:`FULL_YEAR_DAYS_SENTINEL` is the sentinel for the full
+      year, :data:`FULL_YEAR_START` to :data:`FULL_YEAR_END`; any other
+      integer from 1 to :data:`MAX_WINDOW_DAYS`, read as int() reads it, runs
+      that many days from :data:`DAYS_WINDOW_START`.
     - ``start`` / ``end``: ISO 8601 dates (``YYYY-MM-DD``); one not sent reads
-      as ``"2024-01-01"`` / ``"2024-12-31"``.
+      as :data:`FULL_YEAR_START` / :data:`FULL_YEAR_END`.
 
     A null ``days``, and an empty or null ``start`` or ``end``, read as not sent.
 

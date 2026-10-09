@@ -642,7 +642,9 @@ def run_fleet_simulation(
     Args:
         params:      Flat parameter dict including ``n_homes`` plus the per-home
                      fields accepted by ``parse_home_config``
-                     (pv_kw, battery_kwh, location, days, …).
+                     (pv_kw, battery_kwh, location, days or start/end, …).
+                     Params that send no window run
+                     _TRIGGER_TOOL_DEFAULT_DAYS days.
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
         data_dir:    Root directory for storing run artefacts.
