@@ -23,13 +23,22 @@ from solar_challenge.seg import SEGTariff
 from solar_challenge.web.number_fields import as_finite_float, as_int, as_int_within
 from solar_challenge.web.shared import require_json_object, resolve_location
 
-_FULL_YEAR_START = date(2024, 1, 1)
-_FULL_YEAR_END = date(2024, 12, 31)
-_DAYS_WINDOW_START = date(2024, 6, 1)
+#: The first day of the full year that days=FULL_YEAR_DAYS_SENTINEL runs, and the date a start
+#: that is not sent reads as.
+FULL_YEAR_START = date(2024, 1, 1)
+#: The last day of the full year that days=FULL_YEAR_DAYS_SENTINEL runs, and the date an end
+#: that is not sent reads as.
+FULL_YEAR_END = date(2024, 12, 31)
+#: The days value that runs FULL_YEAR_START to FULL_YEAR_END, all MAX_WINDOW_DAYS days of the
+#: year, rather than that many days from DAYS_WINDOW_START.
+FULL_YEAR_DAYS_SENTINEL: int = 365
+#: The first day of the window a days value other than FULL_YEAR_DAYS_SENTINEL runs.
+DAYS_WINDOW_START = date(2024, 6, 1)
 
-#: The most days a simulation window may span: the full 2024 calendar year that days=365 and a request
-#: without dates run; rationale in docs/web-ui-design.md (Period).
-MAX_WINDOW_DAYS: int = (_FULL_YEAR_END - _FULL_YEAR_START).days + 1
+#: The most days a simulation window may span: the full 2024 calendar year that
+#: days=FULL_YEAR_DAYS_SENTINEL and a request without dates run; rationale in
+#: docs/web-ui-design.md (Period).
+MAX_WINDOW_DAYS: int = (FULL_YEAR_END - FULL_YEAR_START).days + 1
 
 # Each parser's recognised top-level keys, and the value each reads as when absent.
 _DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
@@ -86,10 +95,10 @@ def _read_date(value: Any, field: str, default: date) -> date:
 
 
 def _days_window(days: int) -> tuple[date, date]:
-    """The window a ``days`` request runs: the full 2024 calendar year for 365, else *days* days from 2024-06-01."""
-    if days == 365:
-        return _FULL_YEAR_START, _FULL_YEAR_END
-    return _DAYS_WINDOW_START, _DAYS_WINDOW_START + timedelta(days=days - 1)
+    """The window a ``days`` request runs: FULL_YEAR_START to FULL_YEAR_END for FULL_YEAR_DAYS_SENTINEL, else *days* days from DAYS_WINDOW_START."""
+    if days == FULL_YEAR_DAYS_SENTINEL:
+        return FULL_YEAR_START, FULL_YEAR_END
+    return DAYS_WINDOW_START, DAYS_WINDOW_START + timedelta(days=days - 1)
 
 
 def refuse_reversed_or_overlong_window(
@@ -165,8 +174,8 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     if days is not None:
         start, end = _days_window(as_int_within(days, "days", 1, MAX_WINDOW_DAYS))
     else:
-        start = _read_date(sent.get("start"), "start", _FULL_YEAR_START)
-        end = _read_date(sent.get("end"), "end", _FULL_YEAR_END)
+        start = _read_date(sent.get("start"), "start", FULL_YEAR_START)
+        end = _read_date(sent.get("end"), "end", FULL_YEAR_END)
     refuse_reversed_or_overlong_window(start, end, start_field="start", end_field="end")
     return start.isoformat(), end.isoformat()
 
