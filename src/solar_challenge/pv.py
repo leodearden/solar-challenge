@@ -626,8 +626,13 @@ def _dc_after_losses(
 
 
 def _deduct_system_losses(model_chain: ModelChain, system_losses: float) -> ModelChain:
-    """pvlib's losses-model step: each array's DC output less system_losses, for the inverter model to read."""
+    """pvlib's losses-model step: each array's DC output less system_losses, for the inverter model to read.
+
+    Like pvlib's own losses models, it records the fraction of DC power kept in
+    results.losses.
+    """
     kept_fraction = 1 - system_losses
+    model_chain.results.losses = kept_fraction
     dc = model_chain.results.dc
     if isinstance(dc, tuple):
         model_chain.results.dc = tuple(_dc_after_losses(array_dc, kept_fraction) for array_dc in dc)

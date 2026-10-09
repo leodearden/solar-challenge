@@ -1202,6 +1202,24 @@ class TestSystemLossesReachTheInverterAsDCPower:
             np.testing.assert_allclose(lossy_dc["i_mp"], lossless_dc["i_mp"] * kept)
             pd.testing.assert_series_equal(lossy_dc["v_mp"], lossless_dc["v_mp"])
 
+    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(PVConfig(capacity_kw=4.0), id="default-losses"),
+            pytest.param(PVConfig(capacity_kw=4.0, system_losses=0.0), id="no-losses"),
+        ],
+    )
+    def test_a_run_chain_records_the_fraction_of_dc_power_it_kept(
+        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+    ) -> None:
+        """results.losses holds the kept fraction, as pvlib's own losses models record it: 1 with no loss."""
+        chain = create_model_chain(config, Location.bristol())
+
+        chain.run_model(clear_june_daytime)
+
+        assert chain.results.losses == pytest.approx(1 - config.system_losses)
+
     @pytest.mark.parametrize(
         "config",
         [
