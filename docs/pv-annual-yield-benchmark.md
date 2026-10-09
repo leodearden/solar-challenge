@@ -1,6 +1,6 @@
 # PV Annual-Yield Benchmark: kWh per Wired kWp
 
-**Task:** #239 (follow-up from #203), #324
+**Task:** #239 (follow-up from #203), #324, #282
 **Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `_UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`)
 
 ---
@@ -19,23 +19,53 @@ DC that `create_pv_system` wires, `pv.wired_dc_capacity_kw`, not by the configur
 | 5.9 kW | 15 | 6.01 kWp | 1101.6 | 1082.1 |
 
 The yields are §3's Bristol measurements. Divided by the nameplate, these correct
-simulations failed the band; divided by the wired DC, they were inside it.
+simulations failed the band as it then was, 700–1100; divided by the wired DC, they
+were inside it.
 `validate_pv_generation` and `validate_simulation` take the `PVConfig` that produced the
 generation, so the wired DC is that of the config's own module, `custom_module_params`
 included. The `validate results` CLI holds only a capacity, `--pv-kw`, so it validates
 against a `PVConfig` of the default module at that capacity.
 
-## 2. The Band Is a Real-World Benchmark
+## 2. The Band Is Sourced from PVGIS and MCS
 
-- 700–1100 kWh/kWp is VAL-001's expected UK domestic range, 800–1000 kWh/kWp, widened
-  by 100 either side. VAL-001 is in the original feature list,
-  `git show 672cedb:feature_list.json`.
+- The band is 300–1200 kWh per wired kWp: the range two external references give an
+  unshaded UK array facing east, west or anywhere between them through south, at any
+  pitch, in a typical year, rounded outward to the next hundred.
 - `_UK_YIELD_BENCHMARK_KWH_PER_KWP` in `validation.py` is the single source of the
   numbers; this note transcribes them.
-- The band is not derived from the model. Widening it to fit the model's output would
-  make the benchmark circular, unable to catch the model it checks.
-- So a FAIL on a correctly wired system means the model, or the site, sits outside what
-  the benchmark expects of a UK roof. It does not mean validation is wrong.
+- **Scope.** The check knows neither the site nor, in `validate results`, the
+  orientation, so the band must hold every array it may be given. Facing within 90° of
+  south covers MCS's orientations up to east and west, and any pitch avoids an
+  arbitrary cut-off. A north-facing array is out of scope: a north wall in MCS's
+  Lerwick zone reads 204.
+- **References.**
+  - PVGIS, the European Commission Joint Research Centre's estimate for a point, at its
+    default 14% system loss.
+  - MCS's kWh/kWp (Kk) tables, from MIS 3002 Appendix B: a system's annual AC output is
+    kWp × Kk × SF, with Kk per postcode zone, pitch and orientation, and SF the shade
+    factor, 1.00 with a clear horizon. MCS notes that its Kk data "is drawn from the
+    Climate-SAF-PVGIS dataset and multiplied by 0.8".
+- The simulator models a point, not a postcode zone. PVGIS's point estimates are wider
+  than MCS's zone tables at both ends, so PVGIS sets both edges; MCS's envelope for the
+  same scope, 394–1132, lies inside. §5 has every figure.
+
+| Edge | PVGIS-14% | MCS Kk | Band |
+|---|---|---|---|
+| Ceiling | Eastbourne, optimal: 1175.2 | Zone 2 Brighton, south, 38–40°: 1132 | 1200 |
+| Floor | Unst, east wall: 367.3 | Zone 20 Lerwick, east or west wall: 394 | 300 |
+
+- The band is not derived from the model. Fitting it to the model's output would make
+  the benchmark circular, unable to catch the model it checks.
+- **What a FAIL means:** a yield outside what the references give any in-scope UK
+  array. That is a gross error (a year at zero, a unit or minute/hour slip, losses left
+  out at a sunny site) or an array outside the scope. The band cannot catch an error of
+  a few percent; `tests/integration/test_pv_performance_ratio.py` guards the model's
+  losses ([pv-system-losses.md](pv-system-losses.md) §5).
+- **History.** Until task 282 the band was 700–1100, VAL-001's unsourced 800–1000
+  (`git show 672cedb:feature_list.json`) widened by 100 either side. Both references
+  put the sunniest south-coast optimal systems above 1100 (PVGIS 1175.2, MCS 1132), and
+  east- or west-facing arrays in the north below 700 (Lerwick, west at 45°: MCS 580,
+  PVGIS 588.5).
 
 ## 3. Where the Model Sat
 
@@ -70,6 +100,11 @@ This is a dated record. Re-measure with the method below before relying on it.
   below is lossless and unscaled; [pv-system-losses.md](pv-system-losses.md) §5 has the
   sites with the losses on their scaled TMYs, three of which still read above 1100
   (task 282).]**
+  **[Amended 2026-10-09, task 282: the band is now 300–1200 (§2). In this section,
+  "the band", 700 and 1100 mean the band as it was, 700–1100. With the losses,
+  Bristol's 248 capacities (890.7–1016.8) and the fourteen UK sites of
+  [pv-system-losses.md](pv-system-losses.md) §5 (746.0–1138.9) all read inside the new
+  band.]**
 - **Model.** `pv.create_model_chain` applied no soiling, wiring, mismatch or
   availability losses. From task 252 every model chain deducts PVWatts v5's default
   system losses from each array's DC power ([pv-system-losses.md](pv-system-losses.md)).
@@ -136,3 +171,87 @@ This is a dated record. Re-measure before relying on it.
 - **Per configured capacity.** 10% over it failed two of them:
   - 0.7 kW behind a 1.0 kW inverter peaked at 0.804 kW (limit 0.77) on 0.80 kWp;
   - 0.3 kW behind a 0.5 kW inverter peaked at 0.408 kW (limit 0.33) on 0.40 kWp.
+
+## 5. The References' Figures
+
+This is a dated record. Re-query before relying on it.
+
+- **Provenance.** Queried 2026-10-09.
+  - PVGIS: v5_3's PVcalc, the release `weather.PVGIS_API_URL` pins, over PVGIS-SARAH3
+    2005–2023, with `peakpower=1` and `loss=14`, free-standing, with the horizon.
+  - MCS: MIS 3002 Issue 6.0 (18/03/2026), Appendix B, Performance Estimation Method
+    (pp. 26–28), and the Kk workbook MCS publishes as Irradiance Datasets version 2.0.
+    MIS 3002:2025, the standard of MCS's redeveloped installer scheme, has no
+    performance estimation method.
+- **PVGIS method.** One query per point. The figure is `E_y` in the response's
+  `outputs.totals.fixed`, the mean yearly AC energy, here in kWh/kWp, as PVGIS returns
+  it:
+
+  ```
+  https://re.jrc.ec.europa.eu/api/v5_3/PVcalc?lat=..&lon=..&peakpower=1&loss=14&raddatabase=PVGIS-SARAH3&outputformat=json&...
+  ```
+
+  The last parameters are `optimalangles=1` for an optimal array and
+  `angle=..&aspect=..` for a fixed one. `angle` is the pitch; `aspect` 0 is south, −90
+  east and 90 west, so an east wall is `angle=90&aspect=-90`.
+- **MCS method.** The workbook,
+  <https://mcscertified.com/wp-content/uploads/2025/02/Irradiance-Datasets.xlsx>, has one
+  sheet per postcode zone, 25 from 'Zone 1 - London' to 'Zone 21 - Belfast'. In each,
+  row 2 holds the orientation from south, 0–175° in 5° steps, from column C, and column
+  B holds the pitch, 0–90° in 1° steps, from row 3. An orientation is the angle either
+  way from south, so 90° is an east or a west face.
+
+| Reference | Where | Array | kWh/kWp |
+|---|---|---|---|
+| PVGIS-14% | Eastbourne (50.77, 0.29) | optimal: pitch 40°, aspect 4 | 1175.15 |
+| PVGIS-14% | Ventnor (50.59, −1.21) | optimal: pitch 40°, aspect 4 | 1172.99 |
+| PVGIS-14% | Portland (50.55, −2.44) | optimal: pitch 39°, aspect 3 | 1168.91 |
+| PVGIS-14% | Selsey (50.73, −0.79) | optimal: pitch 40°, aspect 3 | 1161.98 |
+| PVGIS-14% | Brighton (50.82, −0.14) | optimal: pitch 40°, aspect 2 | 1159.40 |
+| PVGIS-14% | Hastings (50.85, 0.57) | optimal: pitch 40°, aspect 4 | 1158.07 |
+| PVGIS-14% | Worthing (50.81, −0.37) | optimal: pitch 40°, aspect 2 | 1157.78 |
+| PVGIS-14% | Bexhill (50.84, 0.47) | optimal: pitch 40°, aspect 3 | 1153.98 |
+| PVGIS-14% | Bognor Regis (50.78, −0.67) | optimal: pitch 40°, aspect 2 | 1150.32 |
+| PVGIS-14% | Folkestone (51.08, 1.17) | optimal: pitch 40°, aspect 4 | 1150.08 |
+| PVGIS-14% | Weymouth (50.61, −2.45) | optimal: pitch 39°, aspect 1 | 1150.02 |
+| PVGIS-14% | Shanklin, Isle of Wight (50.63, −1.18) | optimal: pitch 39°, aspect 3 | 1146.99 |
+| PVGIS-14% | St Mary's, Isles of Scilly (49.92, −6.30) | optimal: pitch 38°, aspect 5 | 1133.78 |
+| PVGIS-14% | Margate (51.39, 1.38) | optimal: pitch 40°, aspect 2 | 1124.90 |
+| PVGIS-14% | Lizard (49.97, −5.20) | optimal: pitch 38°, aspect 5 | 1100.02 |
+| PVGIS-14% | Bristol (51.45, −2.58) | optimal: pitch 39°, aspect 0 | 1024.99 |
+| PVGIS-14% | Lerwick (60.15, −1.15) | optimal: pitch 41°, aspect 2 | 764.70 |
+| PVGIS-14% | Eastbourne (50.77, 0.29) | pitch 35°, aspect 0 (south) | 1171.61 |
+| PVGIS-14% | Lerwick (60.15, −1.15) | pitch 35°, aspect 0 (south) | 762.25 |
+| PVGIS-14% | Lerwick (60.15, −1.15) | pitch 45°, aspect 90 (west) | 588.52 |
+| PVGIS-14% | Lerwick (60.15, −1.15) | pitch 45°, aspect −90 (east) | 577.37 |
+| PVGIS-14% | Lerwick (60.15, −1.15) | pitch 60°, aspect 90 (west) | 538.77 |
+| PVGIS-14% | Lerwick (60.15, −1.15) | pitch 90°, aspect 90 (west wall) | 391.43 |
+| PVGIS-14% | Lerwick (60.15, −1.15) | pitch 90°, aspect −90 (east wall) | 374.69 |
+| PVGIS-14% | Unst (60.75, −0.85) | pitch 90°, aspect 90 (west wall) | 383.89 |
+| PVGIS-14% | Unst (60.75, −0.85) | pitch 90°, aspect −90 (east wall) | 367.26 |
+| MCS Kk | Zone 2 - Brighton, C41:C43 | pitch 38–40°, south | 1132 |
+| MCS Kk | Zone 2 - Brighton, C38 | pitch 35°, south | 1130 |
+| MCS Kk | Zone 20 - Lerwick, C41:C43 | pitch 38–40°, south | 737 |
+| MCS Kk | Zone 20 - Lerwick, C38 | pitch 35°, south | 736 |
+| MCS Kk | Zone 20 - Lerwick, U48 | pitch 45°, 90° from south | 580 |
+| MCS Kk | Zone 20 - Lerwick, U93 | pitch 90°, 90° from south | 394 |
+| MCS Kk | Zone 20 - Lerwick, AL93 | pitch 90°, 175° from south | 204 |
+
+- MCS's tables run from 204 (Zone 20 - Lerwick, a wall 175° from south) to 1132
+  (Zone 2 - Brighton, south at 38–40°). Within 90° of south their minimum is Lerwick's
+  wall at 90° from south, 394, and Lerwick is the lowest of the 25 zones in every cell;
+  its own maximum is 737. At pitch 35° facing south, the zones run from Lerwick's 736 to
+  Brighton's 1130.
+- PVGIS gives Eastbourne's optimum a year-to-year standard deviation, `SD_y`, of 38.73,
+  so a sunny single year there can pass 1200. The band is for a typical year, the kind
+  of year `weather.get_tmy_data` gives the model.
+
+## 6. When to Revisit
+
+- PVGIS changes release or radiation database. `weather.PVGIS_API_URL` pins the
+  release the model's weather comes from, and §5's queries used the same one.
+- MCS publishes a new Irradiance Datasets version or MIS 3002 issue.
+- North-facing arrays become a supported case. MCS's north walls read down to 204.
+- Validation gains the in-plane irradiation. A performance-ratio check, a year's AC over
+  the in-plane irradiation times the wired kWp, against MCS's 0.8, would then judge a
+  run independently of its site and orientation.
