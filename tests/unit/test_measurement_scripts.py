@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Offline smoke tests of the measurement scripts the docs say to re-measure with.
 
-docs/pv-inverter-string-matching.md, docs/tmy-irradiation-scaling.md and
-review/briefing.yaml's key_decisions say to re-measure their figures with
-scripts/measure_mppt_window.py and scripts/measure_tmy_irradiation.py. scripts/ is
-not a package, so each script is loaded from its file.
+docs/pv-inverter-string-matching.md, docs/tmy-irradiation-scaling.md,
+docs/pv-system-losses.md and review/briefing.yaml's key_decisions say to
+re-measure their figures with scripts/measure_mppt_window.py,
+scripts/measure_tmy_irradiation.py and scripts/measure_pv_performance_ratio.py.
+scripts/ is not a package, so each script is loaded from its file.
 """
 
+import dataclasses
 import importlib.util
 import statistics
 from collections.abc import Mapping
@@ -22,9 +24,11 @@ from solar_challenge.location import Location
 from solar_challenge.pv import (
     PVConfig,
     candidate_cec_inverters,
+    create_model_chain,
     create_pv_system,
     simulate_pv_output,
     usable_cec_inverters,
+    wired_dc_capacity_kw,
 )
 from solar_challenge.weather import CLIMATE_YEARS, IRRADIANCE_COLUMNS, WeatherCache
 from tests._synthetic_weather import synthetic_june_weather
@@ -284,3 +288,70 @@ class TestMeasureTmyIrradiation:
         assert f"factor k {site.factor:.5f}" in site_lines
         assert site.name in summary_lines
         assert f"| {site.factor:.3f} |" in summary_lines
+
+
+@pytest.fixture(scope="module")
+def pv_performance_ratio() -> ModuleType:
+    """scripts/measure_pv_performance_ratio.py."""
+    return _load_script("measure_pv_performance_ratio")
+
+
+@pytest.fixture(scope="module")
+def performance_site(pv_performance_ratio: ModuleType, synthetic_tmy: pd.DataFrame) -> Any:
+    """measure_pv_performance_ratio's measurement of the default system over the synthetic TMY, at Bristol."""
+    return pv_performance_ratio.measure("Synthetic", Location.bristol(), synthetic_tmy)
+
+
+class TestMeasurePvPerformanceRatio:
+    """measure_pv_performance_ratio measures the default system's yield and performance ratio with and without its system losses (docs/pv-system-losses.md §1)."""
+
+    @_QUIET_DIODE_SOLVER
+    def test_its_ac_is_the_pv_models_with_and_without_the_system_losses(
+        self, performance_site: Any, synthetic_tmy: pd.DataFrame
+    ) -> None:
+        default = PVConfig.default_4kw()
+        lossless = dataclasses.replace(default, system_losses=0.0)
+
+        assert performance_site.with_losses.ac_kwh == pytest.approx(
+            simulate_pv_output(default, Location.bristol(), synthetic_tmy).sum()
+        )
+        assert performance_site.lossless.ac_kwh == pytest.approx(
+            simulate_pv_output(lossless, Location.bristol(), synthetic_tmy).sum()
+        )
+
+    @_QUIET_DIODE_SOLVER
+    def test_its_yields_are_per_wired_kwp_and_per_in_plane_irradiation(
+        self, performance_site: Any, synthetic_tmy: pd.DataFrame
+    ) -> None:
+        chain = create_model_chain(PVConfig.default_4kw(), Location.bristol())
+        chain.run_model(synthetic_tmy)
+        in_plane = chain.results.total_irrad
+        first_array = in_plane[0] if isinstance(in_plane, tuple) else in_plane
+
+        assert performance_site.wired_kwp == pytest.approx(wired_dc_capacity_kw(PVConfig.default_4kw()))
+        assert performance_site.ghi_kwh_per_m2 == pytest.approx(synthetic_tmy["ghi"].sum() / 1000)
+        assert performance_site.poa_kwh_per_m2 == pytest.approx(
+            first_array["poa_global"].sum() / 1000
+        )
+        for year in (performance_site.lossless, performance_site.with_losses):
+            assert year.kwh_per_kwp == pytest.approx(year.ac_kwh / performance_site.wired_kwp)
+            assert year.performance_ratio == pytest.approx(
+                year.kwh_per_kwp / performance_site.poa_kwh_per_m2
+            )
+
+    @_QUIET_DIODE_SOLVER
+    def test_a_measured_site_prints_its_name_and_performance_ratios(
+        self,
+        pv_performance_ratio: ModuleType,
+        performance_site: Any,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        estimate = pv_performance_ratio.PvgisEstimate(kwh_per_kwp=1000.0, poa_kwh_per_m2=1250.0)
+
+        pv_performance_ratio.print_table([(performance_site, estimate)])
+        table = capsys.readouterr().out
+
+        assert performance_site.name in table
+        assert f"{performance_site.with_losses.performance_ratio:.3f}" in table
+        assert f"{performance_site.lossless.performance_ratio:.3f}" in table
+        assert "0.800" in table
