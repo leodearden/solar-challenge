@@ -1139,6 +1139,7 @@ class TestFleetConfigHelpers:
     @pytest.mark.parametrize(
         "spec",
         [
+            pytest.param(5.5, id="fixed-value"),
             pytest.param(
                 {"type": "normal", "mean": 4.0, "std": 1.0, "min": 2.0, "max": 8.0}, id="normal"
             ),
@@ -1159,8 +1160,10 @@ class TestFleetConfigHelpers:
             ),
         ],
     )
-    def test_distribution_form_spec_is_the_inverse_of_the_forms_conversion(self, spec: dict) -> None:
-        """A distribution the fleet page's editor sends converts to config.py's grammar and reads back as itself."""
+    def test_distribution_form_spec_is_the_inverse_of_the_forms_conversion(
+        self, spec: float | dict
+    ) -> None:
+        """A distribution the fleet page's editor sends, its Fixed Value's number included, converts to config.py's grammar and reads back as itself."""
         config = form_to_fleet_distribution_config(
             {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
         )
@@ -1171,9 +1174,27 @@ class TestFleetConfigHelpers:
         )
 
     @pytest.mark.parametrize(
+        ("spec", "number"),
+        [
+            pytest.param(5.5, 5.5, id="number"),
+            pytest.param(3400, 3400.0, id="whole-number"),
+            pytest.param({"type": "fixed", "value": 5.5}, 5.5, id="fixed-distribution"),
+            pytest.param(
+                {"type": "fixed", "value": "5.5"}, 5.5, id="fixed-distribution-numeric-string"
+            ),
+        ],
+    )
+    def test_distribution_form_spec_reads_a_fixed_value_as_the_number_the_form_sends(
+        self, spec: object, number: float
+    ) -> None:
+        """A fixed value, which config.py's grammar spells as a number or a fixed distribution, reads as the float the editor's Fixed Value sends, as the form's conversion reads it."""
+        got = distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
+        assert (type(got), got) == (float, number)
+
+    @pytest.mark.parametrize(
         "spec",
         [
-            pytest.param(5.5, id="fixed-number"),
+            pytest.param(True, id="boolean"),
             pytest.param(
                 {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 2.0},
                 id="proportional-to",
@@ -1187,7 +1208,7 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_refuses_a_distribution_the_editor_cannot_hold(
         self, spec: object
     ) -> None:
-        """A fixed value, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
+        """A boolean, which config.py's grammar reads as 1 or 0 but the form's conversion refuses, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
         with pytest.raises(ValueError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
 

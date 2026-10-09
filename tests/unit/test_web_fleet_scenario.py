@@ -240,6 +240,15 @@ class TestFleetFormFromScenario:
                 },
                 id="uniform-normal-and-pool-editors",
             ),
+            pytest.param(
+                {
+                    **_FLEET_FORM,
+                    "pv": {"capacity_kw": 5.5},
+                    "battery": {"capacity_kwh": 5.0},
+                    "load": {"annual_consumption_kwh": 3400.0},
+                },
+                id="fixed-values",
+            ),
         ],
     )
     def test_an_exported_fleet_form_imports_back_to_the_same_scenario(
@@ -479,11 +488,6 @@ class TestFleetFormFromScenario:
                 {**_FLEET_SCENARIO, "fleet_distribution": None},
                 "fleet_distribution must be a mapping, got NoneType",
                 id="null-fleet-distribution",
-            ),
-            pytest.param(
-                _with_fleet_distribution(pv={"capacity_kw": 5.5}),
-                "fleet_distribution.pv.capacity_kw",
-                id="fixed-pv-capacity",
             ),
             pytest.param(
                 _with_fleet_distribution(
