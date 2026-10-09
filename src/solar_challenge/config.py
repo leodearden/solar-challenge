@@ -1901,7 +1901,7 @@ _FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
 
 # Rows follow GridServicesEventsConfig's field order, which decides the first bad value reported.
 _GRID_SERVICES_EVENTS_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "band": lambda band: band,
+    "band": str,
     "aggregator_share": float,
     "utilisation_factor": float,
     "availability_gbp_per_kw_per_event": _float_or_none,
@@ -1966,11 +1966,11 @@ def _parse_grid_services_events_config(
             for key, coerce in _GRID_SERVICES_EVENTS_SCALAR_COERCIONS.items()
             if key in gs_data
         )
-        return GridServicesEventsConfig(**fields)
     except (ValueError, TypeError) as exc:
         raise ConfigurationError(
             f"grid_services_events block contains a non-numeric value: {exc}"
         ) from exc
+    return GridServicesEventsConfig(**fields)
 
 
 def parse_finance_config(

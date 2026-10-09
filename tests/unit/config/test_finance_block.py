@@ -892,10 +892,14 @@ class TestFinanceConfigParsingGridServices:
             grid_services_events=GridServicesEventsConfig(**{**self._EVENTS_FIELDS, key: None}),
         )
 
-    def test_list_band_is_refused_as_a_configuration_error(self) -> None:
-        """A band that is a list, as malformed YAML can give, surfaces as ConfigurationError, not a raw TypeError."""
-        with pytest.raises(ConfigurationError):
-            self._parse_events_block({**self._EVENTS_BLOCK, "band": ["high"]})
+    @pytest.mark.parametrize(
+        "band",
+        [pytest.param(["high"], id="list"), pytest.param({"name": "high"}, id="mapping")],
+    )
+    def test_unhashable_band_is_refused_as_an_unknown_band(self, band: object) -> None:
+        """A list or mapping band, as malformed YAML can give, is refused by the band check, not as a raw TypeError or a non-numeric value."""
+        with pytest.raises(ConfigurationError, match="band must be one of"):
+            self._parse_events_block({**self._EVENTS_BLOCK, "band": band})
 
     @pytest.mark.parametrize(
         ("first", "second"), list(itertools.pairwise(_EVENTS_NUMERIC_KEYS))
