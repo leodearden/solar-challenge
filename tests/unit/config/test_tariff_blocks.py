@@ -62,16 +62,6 @@ class TestTariffConfigParsing:
             name="Two-rate",
         )
 
-    def test_missing_type_raises(self) -> None:
-        """A tariff block without 'type' raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="requires 'type'"):
-            parse_tariff_config({})
-
-    def test_unknown_type_raises(self) -> None:
-        """An unrecognised tariff type raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="Unknown tariff type"):
-            parse_tariff_config({"type": "bogus"})
-
 
 class TestScenarioSegBlock:
     """One grammar for the top-level ``seg:`` block and ``community.billing.seg``.

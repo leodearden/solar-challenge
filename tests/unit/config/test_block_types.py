@@ -26,6 +26,11 @@ def _custom_block_whose_only_period_lacks(key: str) -> dict[str, Any]:
     return {"type": "custom", "periods": [period]}
 
 
+_TARIFF_BLOCKS_NAMING_NO_TYPE = [
+    pytest.param({}, id="absent-type"),
+    pytest.param({"type": None}, id="null-type"),
+]
+
 _UNKNOWN_TARIFF_TYPES = [
     pytest.param("economy_8", id="unknown-name"),
     pytest.param(7, id="integer"),
@@ -105,6 +110,11 @@ def _parsed_distribution_spec(spec: object) -> DistributionSpec:
     return fleet.battery.capacity_kwh
 
 
+def _spec_lacking(spec: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return a copy of *spec* without *key*."""
+    return {name: value for name, value in spec.items() if name != key}
+
+
 _NON_MAPPING_DISTRIBUTION_SPECS = [
     pytest.param("5kWh", id="string"),
     pytest.param([5.0], id="list"),
@@ -121,37 +131,38 @@ _UNKNOWN_DISTRIBUTION_TYPES = [
     pytest.param(["normal"], id="list"),
 ]
 
-_DISTRIBUTION_SPECS_LACKING_A_REQUIRED_KEY = [
-    pytest.param(
-        {"type": "weighted_discrete", "values": [5.0]},
+_SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS: list[tuple[dict[str, Any], str]] = [
+    (
+        {"type": "weighted_discrete", "values": [5.0], "weights": [1.0]},
         f"weighted_discrete distribution for '{_SPEC_PATH}' requires 'values' and 'weights'",
-        id="weighted_discrete",
     ),
-    pytest.param(
-        {"type": "normal", "mean": 5.0},
+    (
+        {"type": "normal", "mean": 5.0, "std": 1.0},
         f"normal distribution for '{_SPEC_PATH}' requires 'mean' and 'std'",
-        id="normal",
     ),
-    pytest.param(
-        {"type": "uniform", "min": 5.0},
+    (
+        {"type": "uniform", "min": 5.0, "max": 6.0},
         f"uniform distribution for '{_SPEC_PATH}' requires 'min' and 'max'",
-        id="uniform",
     ),
-    pytest.param(
-        {"type": "fixed"},
+    (
+        {"type": "fixed", "value": 5.0},
         f"fixed distribution for '{_SPEC_PATH}' requires 'value'",
-        id="fixed",
     ),
-    pytest.param(
-        {"type": "shuffled_pool", "values": [5.0]},
+    (
+        {"type": "shuffled_pool", "values": [5.0], "counts": [1]},
         f"shuffled_pool distribution for '{_SPEC_PATH}' requires 'values' and 'counts'",
-        id="shuffled_pool",
     ),
-    pytest.param(
-        {"type": "proportional_to", "multiplier": 2.0},
+    (
+        {"type": "proportional_to", "source": "pv.capacity_kw"},
         f"proportional_to distribution for '{_SPEC_PATH}' requires 'source'",
-        id="proportional_to",
     ),
+]
+
+_DISTRIBUTION_SPECS_LACKING_A_REQUIRED_KEY = [
+    pytest.param(_spec_lacking(spec, key), message, id=f"{spec['type']}-absent-{key}")
+    for spec, message in _SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS
+    for key in spec
+    if key != "type"
 ]
 
 _MULTIPLIER_MAPPINGS_THAT_ARE_NO_SWEEP = [
@@ -167,6 +178,13 @@ _FIXED_SPEC_VALUES = [
 
 class TestTariffTypes:
     """Tests for the tariff types a tariff: block can name."""
+
+    @pytest.mark.parametrize("block", _TARIFF_BLOCKS_NAMING_NO_TYPE)
+    def test_block_naming_no_type_is_refused(self, block: dict[str, Any]) -> None:
+        """A block whose type is absent or null is refused for naming none."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_tariff_config(block)
+        assert str(refusal.value) == "Tariff configuration requires 'type' field"
 
     @pytest.mark.parametrize("tariff_type", _UNKNOWN_TARIFF_TYPES)
     def test_unknown_type_is_refused_naming_every_supported_type(
