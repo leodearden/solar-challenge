@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Callable
+from datetime import date, timedelta
 from operator import attrgetter
 
 import pytest
@@ -14,6 +15,9 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.shared import NotAJsonObject
 from solar_challenge.web.simulation_params import (
+    DAYS_WINDOW_START,
+    FULL_YEAR_END,
+    FULL_YEAR_START,
     MAX_WINDOW_DAYS,
     parse_date_range,
     parse_home_config,
@@ -122,6 +126,28 @@ class TestParseDateRange:
             "2024-06-01",
             "2024-06-01",
         )
+
+    @pytest.mark.parametrize(
+        ("data", "window"),
+        [
+            pytest.param(
+                {"days": 30},
+                (DAYS_WINDOW_START, DAYS_WINDOW_START + timedelta(days=29)),
+                id="days",
+            ),
+            pytest.param(
+                {"end": "2024-03-01"}, (FULL_YEAR_START, date(2024, 3, 1)), id="end-only"
+            ),
+            pytest.param(
+                {"start": "2024-03-01"}, (date(2024, 3, 1), FULL_YEAR_END), id="start-only"
+            ),
+        ],
+    )
+    def test_published_anchors_match_the_windows_parse_date_range_returns(
+        self, data: dict, window: tuple[date, date]
+    ) -> None:
+        """parse_date_range's windows start or end at the published anchors, which the assistant's tool descriptions state: days count from DAYS_WINDOW_START, a lone end starts at FULL_YEAR_START and a lone start ends at FULL_YEAR_END."""
+        assert parse_date_range(data) == (window[0].isoformat(), window[1].isoformat())
 
     @pytest.mark.parametrize(
         ("data", "message"),

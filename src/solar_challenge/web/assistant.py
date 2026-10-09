@@ -29,7 +29,15 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.web import database
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
-from solar_challenge.web.simulation_params import parse_home_config, with_default_days
+from solar_challenge.web.simulation_params import (
+    DAYS_WINDOW_START,
+    FULL_YEAR_DAYS_SENTINEL,
+    FULL_YEAR_END,
+    FULL_YEAR_START,
+    MAX_WINDOW_DAYS,
+    parse_home_config,
+    with_default_days,
+)
 from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("assistant", __name__)
@@ -270,6 +278,36 @@ def suggest_config(
 # The days a trigger tool's simulation spans when the model sends no window.
 _TRIGGER_TOOL_DEFAULT_DAYS = 7
 
+# The window both trigger tools take, days or a start and end, as parse_date_range reads it.
+_TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
+    "days": {
+        "type": "integer",
+        "description": (
+            f"Simulation duration in days (1–{MAX_WINDOW_DAYS}), counted from "
+            f"{DAYS_WINDOW_START}, except that {FULL_YEAR_DAYS_SENTINEL} runs the whole year "
+            f"{FULL_YEAR_START} to {FULL_YEAR_END}. Must not be sent with start or end; with "
+            f"none of the three sent, the run spans {_TRIGGER_TOOL_DEFAULT_DAYS} days."
+        ),
+    },
+    "start": {
+        "type": "string",
+        "format": "date",
+        "description": (
+            f"First simulated day, an ISO 8601 date (YYYY-MM-DD); {FULL_YEAR_START} when only "
+            "end is sent. Must not be sent with days."
+        ),
+    },
+    "end": {
+        "type": "string",
+        "format": "date",
+        "description": (
+            f"Last simulated day, inclusive, an ISO 8601 date (YYYY-MM-DD); {FULL_YEAR_END} "
+            "when only start is sent. Must not be sent with days. The window from start to "
+            f"end spans at most {MAX_WINDOW_DAYS} days."
+        ),
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Tool definitions — fixed order for prompt-cache stability.  The tools render
@@ -406,10 +444,7 @@ TOOLS: Sequence[Mapping[str, Any]] = (
                     "type": "string",
                     "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
                 },
-                "days": {
-                    "type": "integer",
-                    "description": f"Simulation duration in days (default {_TRIGGER_TOOL_DEFAULT_DAYS}).",
-                },
+                **_TRIGGER_TOOL_WINDOW_PROPERTIES,
             },
             "required": ["pv_kw"],
         },
@@ -440,10 +475,7 @@ TOOLS: Sequence[Mapping[str, Any]] = (
                     "type": "string",
                     "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
                 },
-                "days": {
-                    "type": "integer",
-                    "description": f"Simulation duration in days (default {_TRIGGER_TOOL_DEFAULT_DAYS}).",
-                },
+                **_TRIGGER_TOOL_WINDOW_PROPERTIES,
             },
             "required": ["n_homes"],
         },
@@ -560,10 +592,10 @@ def run_home_simulation(
 
     Args:
         params:      Flat parameter dict (pv_kw, battery_kwh, occupants,
-                     location, days, name, …) — same shape as the JSON body
-                     accepted by POST /api/simulate/home.  Params that send no
-                     window run _TRIGGER_TOOL_DEFAULT_DAYS days; an off-schema
-                     start/end is read as that endpoint reads it.
+                     location, days or start/end, name, …) — same shape as
+                     the JSON body accepted by POST /api/simulate/home, and
+                     its window is read as that endpoint reads it.  Params
+                     that send no window run _TRIGGER_TOOL_DEFAULT_DAYS days.
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
         data_dir:    Root directory for storing run artefacts.
@@ -610,7 +642,9 @@ def run_fleet_simulation(
     Args:
         params:      Flat parameter dict including ``n_homes`` plus the per-home
                      fields accepted by ``parse_home_config``
-                     (pv_kw, battery_kwh, location, days, …).
+                     (pv_kw, battery_kwh, location, days or start/end, …).
+                     Params that send no window run
+                     _TRIGGER_TOOL_DEFAULT_DAYS days.
         job_manager: The app's JobManager.
         db_path:     Path to the SQLite database.
         data_dir:    Root directory for storing run artefacts.
