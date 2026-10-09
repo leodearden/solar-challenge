@@ -1920,17 +1920,14 @@ _EVENT_WINDOW_KEYS: tuple[str, ...] = (
 def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow, ...]:
     """Parse the event_windows list at *block_path* into EventWindows."""
     if not isinstance(data, list):
-        raise ConfigurationError(
-            "grid_services_events.event_windows must be a list of window dicts"
-        )
+        raise ConfigurationError(f"{block_path} must be a list of window dicts")
     parsed_windows: list[EventWindow] = []
     for i, ew_dict in enumerate(data):
-        _refuse_unrecognised_keys(f"{block_path}[{i}]", ew_dict, _EVENT_WINDOW_KEYS)
+        window_path = f"{block_path}[{i}]"
+        _refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_KEYS)
         for req_key in _EVENT_WINDOW_KEYS:
             if req_key not in ew_dict:
-                raise ConfigurationError(
-                    f"grid_services_events.event_windows[{i}] requires '{req_key}' field"
-                )
+                raise ConfigurationError(f"{window_path} requires '{req_key}' field")
         try:
             parsed_windows.append(
                 EventWindow(
@@ -1943,8 +1940,7 @@ def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow,
             )
         except (ValueError, TypeError) as exc:
             raise ConfigurationError(
-                f"grid_services_events.event_windows[{i}] contains a "
-                f"non-numeric value: {exc}"
+                f"{window_path} contains a non-numeric value: {exc}"
             ) from exc
     return tuple(parsed_windows)
 

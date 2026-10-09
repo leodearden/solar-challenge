@@ -4,6 +4,7 @@
 import dataclasses
 import itertools
 import pickle
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -922,6 +923,39 @@ class TestFinanceConfigParsingGridServices:
         }
         with pytest.raises(ConfigurationError, match="'not-a-number:event_hours'"):
             self._parse_events_block(block)
+
+    @pytest.mark.parametrize(
+        ("windows", "message"),
+        [
+            pytest.param(
+                "winter",
+                "scenario.finance.grid_services_events.event_windows"
+                " must be a list of window dicts",
+                id="not-a-list",
+            ),
+            pytest.param(
+                [{"months": [12], "weekdays": [0], "events_per_year": 1, "event_hours": 1.0}],
+                "scenario.finance.grid_services_events.event_windows[0]"
+                " requires 'hours' field",
+                id="missing-key",
+            ),
+            pytest.param(
+                [{**_WINDOW, "event_hours": "abc"}],
+                "scenario.finance.grid_services_events.event_windows[0]"
+                " contains a non-numeric value",
+                id="non-numeric",
+            ),
+        ],
+    )
+    def test_malformed_event_windows_are_refused_naming_their_path_in_the_file(
+        self, windows: object, message: str
+    ) -> None:
+        """An event_windows refusal names the list's path, taken from the finance block's own path."""
+        with pytest.raises(ConfigurationError, match=re.escape(message)):
+            parse_finance_config(
+                {**self._BASE, "grid_services_events": {"event_windows": windows}},
+                block_path="scenario.finance",
+            )
 
     @pytest.mark.parametrize("omitted", list(_EVENTS_BLOCK))
     def test_omitted_events_key_takes_its_declared_default(self, omitted: str) -> None:
