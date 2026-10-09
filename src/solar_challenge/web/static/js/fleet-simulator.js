@@ -21,6 +21,7 @@ document.addEventListener('alpine:init', () => {
         /* ---- PV distribution state ---- */
         pvDist: {
             type: 'shuffled_pool',
+            fixed: 4.0,
             mean: 4.0, std: 1.0, min: 2.0, max: 8.0,
             values: [
                 { value: 3.0, weight: 20 },
@@ -54,6 +55,7 @@ document.addEventListener('alpine:init', () => {
         batteryEnabled: true,
         batteryDist: {
             type: 'shuffled_pool',
+            fixed: 5.0,
             mean: 5.0, std: 2.0, min: 0.0, max: 15.0,
             values: [
                 { value: 0, weight: 40 },
@@ -70,6 +72,7 @@ document.addEventListener('alpine:init', () => {
         /* ---- Load distribution state ---- */
         loadDist: {
             type: 'normal',
+            fixed: 3500,
             mean: 3400, std: 800, min: 2000, max: 6000,
             values: [
                 { value: 2900, weight: 30 },
@@ -151,6 +154,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         _buildDistPayload(dist) {
+            if (!dist.type) return dist.fixed;
             const d = { type: dist.type };
             if (dist.type === 'normal') {
                 d.mean = dist.mean;
@@ -280,8 +284,9 @@ document.addEventListener('alpine:init', () => {
             this._applyDispatch(form.dispatch_strategy);
         },
 
-        /* The inverse of _buildDistPayload: the spec's fields over the card's current distribution. */
+        /* The inverse of _buildDistPayload: a fixed value, a number, as the card's Fixed Value (type ''), and a distribution's fields over the card's current distribution. */
         _distFromConfig(spec, current) {
+            if (typeof spec === 'number') return { ...current, type: '', fixed: spec };
             return { ...current, ...spec };
         },
 

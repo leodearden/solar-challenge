@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
 {% from "components/distribution-editor.html" import distribution_editor %}
+{% from "components/fixed-ranges.html" import fixed_ranges %}
 
 {# One fleet component's distribution card: a group, named by its heading, editing scenarioBuilder's dists.<prefix> #}
 {% macro distribution_card(prefix, heading, fixed_range, step, new_row_value) %}
@@ -134,9 +135,9 @@
                 </div>
 
                 {# One card per entry of COMPONENTS in static/js/scenario-builder.js, passing the entry's prefix #}
-                {{ distribution_card('pv', 'PV Capacity (kW)', fixed_range=(0.5, 20), step='0.1', new_row_value=4.0) }}
-                {{ distribution_card('battery', 'Battery Capacity (kWh)', fixed_range=(0, 100), step='0.1', new_row_value=5.0) }}
-                {{ distribution_card('load', 'Annual Consumption (kWh)', fixed_range=(500, 20000), step='100', new_row_value=3500) }}
+                {{ distribution_card('pv', 'PV Capacity (kW)', fixed_range=fixed_ranges.pv, step='0.1', new_row_value=4.0) }}
+                {{ distribution_card('battery', 'Battery Capacity (kWh)', fixed_range=fixed_ranges.battery, step='0.1', new_row_value=5.0) }}
+                {{ distribution_card('load', 'Annual Consumption (kWh)', fixed_range=fixed_ranges.load, step='100', new_row_value=3500) }}
         {% endcall %}
 
         {% call accordion_section('tariff', 'Tariff') %}

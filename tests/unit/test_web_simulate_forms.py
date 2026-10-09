@@ -18,6 +18,7 @@ from solar_challenge.seg import SEG_PRESETS
 from tests._html_page import (
     counts_of,
     doctype,
+    element_attributes,
     element_count,
     element_ids,
     headings,
@@ -45,6 +46,20 @@ def _options_per_seg_preset_key(page: str) -> dict[str, int]:
     """
     assert SEG_PRESETS, "SEG_PRESETS is empty, so there is no preset option to look for"
     return {key: element_count(page, "option", {"value": key}) for key in SEG_PRESETS}
+
+
+def _fixed_value_bounds(page: str) -> list[tuple[str | None, str | None]]:
+    """The min and max of each Fixed Value input of *page*, an input bound to a distribution editor's dist.fixed, in page order.
+
+    Fails when *page* has none: two pages without one would compare equal, whatever their bounds.
+    """
+    bounds = [
+        (attributes.get("min"), attributes.get("max"))
+        for attributes in element_attributes(page, "input")
+        if attributes.get("x-model.number") == "dist.fixed"
+    ]
+    assert bounds, "the page has no input bound to dist.fixed, so there is no Fixed Value bound to compare"
+    return bounds
 
 
 class TestSimulateHomeRoute:
@@ -153,6 +168,17 @@ class TestFleetConfigRoute:
         page = response.get_data(as_text=True)
         assert element_count(page, "select", {"x-model": "dist.type"}) == 3
         assert "n_homes" in element_ids(page)
+
+    def test_fleet_page_offers_a_fixed_value_in_each_distribution_editor(self, client: FlaskClient) -> None:
+        """GET /simulate/fleet renders a Fixed Value number input in each of its three distribution editors, bound to the editor's dist.fixed."""
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+        assert element_count(page, "input", {"type": "number", "x-model.number": "dist.fixed"}) == 3
+
+    def test_fleet_page_bounds_each_fixed_value_as_the_scenario_builder_does(self, client: FlaskClient) -> None:
+        """GET /simulate/fleet bounds each card's Fixed Value with the min and max of the scenario builder's card for the same component: PV, battery, then load, the order both pages list them in."""
+        fleet_page = client.get("/simulate/fleet").get_data(as_text=True)
+        builder_page = client.get("/scenarios/builder").get_data(as_text=True)
+        assert _fixed_value_bounds(fleet_page) == _fixed_value_bounds(builder_page)
 
     def test_fleet_page_contains_pv_battery_load_sections(self, client: FlaskClient) -> None:
         """GET /simulate/fleet renders one heading per distribution card: PV Capacity, Battery Capacity and Annual Consumption."""

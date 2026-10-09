@@ -82,7 +82,7 @@
     </label>
 
     {% if fixed_range %}
-    <div x-show="!dist.type">
+    <div x-show="!dist.type" x-cloak>
         {{ _parameter(subject, 'Fixed Value', 'dist.fixed', step, min=fixed_range[0], max=fixed_range[1]) }}
     </div>
     {% endif %}

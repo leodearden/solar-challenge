@@ -345,6 +345,48 @@ class TestFleetPresetEndpoint:
         assert resp.status_code == 400
         assert "fleet_distribution" in resp.get_json()["error"]
 
+    @pytest.mark.parametrize(
+        ("name", "fixed_blocks", "named_not_loaded"),
+        [
+            pytest.param(
+                "bristol-fin-calibration",
+                {
+                    "pv": {"capacity_kw": 5.5},
+                    "battery": {"capacity_kwh": 5.0},
+                    "load": {"annual_consumption_kwh": 3400.0},
+                },
+                ("fleet_distribution.pv.azimuth", "fleet_distribution.pv.tilt", "finance"),
+                id="bristol-fin-calibration",
+            ),
+            pytest.param(
+                "bristol-phase1-flex",
+                {"battery": {"capacity_kwh": 5.0}},
+                (
+                    "fleet_distribution.battery.max_charge_kw",
+                    "fleet_distribution.battery.max_discharge_kw",
+                    "fleet_distribution.battery.grid_charging",
+                    "fleet_distribution.load.use_stochastic",
+                    "fleet_distribution.dispatch_strategy",
+                ),
+                id="bristol-phase1-flex",
+            ),
+        ],
+    )
+    def test_a_fleet_preset_with_a_fixed_capacity_loads_it_as_its_number(
+        self,
+        client: FlaskClient,
+        name: str,
+        fixed_blocks: dict,
+        named_not_loaded: tuple[str, ...],
+    ) -> None:
+        """A built-in fleet whose homes all take one capacity loads it as the number the fleet page's Fixed Value holds, and names the settings the form has no control for."""
+        resp = client.get(f"/api/fleet/presets/{name}")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        answer = resp.get_json()
+        assert {block: answer["form"][block] for block in fixed_blocks} == fixed_blocks
+        assert [path for path in named_not_loaded if path not in answer["not_loaded"]] == []
+
     @pytest.mark.parametrize("name", _BUILTIN_SCENARIO_STEMS)
     def test_every_builtin_scenario_loads_or_is_refused_with_a_reason(
         self, client: FlaskClient, name: str
