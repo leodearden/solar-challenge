@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the home preset endpoints: GET /api/presets, POST /api/presets and GET /api/presets/<name>."""
 
+import json
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +14,21 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
+
+from tests._config_preset_rows import insert_saved_home_preset, saved_preset_names
+
+_BUILTIN_PRESET_NAMES = ("Small Urban", "Medium Suburban", "Large with Battery")
+
+
+def _save_home_presets_one_of_them_under_a_builtin_name(app: Flask, client: FlaskClient) -> None:
+    """Save a home preset named 'Small Urban' straight into the database, and one named 'Mine' through POST /api/presets.
+
+    The 'Small Urban' row's values are unlike the built-in one's, so applying the wrong preset shows.
+    """
+    insert_saved_home_preset(
+        app.config["DATABASE"], "Small Urban", json.dumps({"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000})
+    )
+    assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
 
 
 def _answers_to_saves_sent_together(app: Flask, *saves: tuple[str, dict[str, object]]) -> list[TestResponse]:
@@ -55,6 +72,55 @@ class TestListPresets:
         for preset in data:
             if preset["name"] in ("Small Urban", "Medium Suburban", "Large with Battery"):
                 assert preset["source"] == "builtin"
+
+    def test_a_saved_home_preset_under_a_builtin_presets_name_is_not_listed(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each name is listed once: a saved home preset under a built-in preset's name is left out, and the built-in one is listed."""
+        _save_home_presets_one_of_them_under_a_builtin_name(app, client)
+
+        presets = client.get("/api/presets").get_json()
+
+        assert [p["name"] for p in presets] == ["Small Urban", "Medium Suburban", "Large with Battery", "Mine"]
+        assert {p["name"]: p for p in presets}["Small Urban"] == {
+            "name": "Small Urban",
+            "pv_kw": 3.0,
+            "battery_kwh": 0,
+            "consumption_kwh": 2900,
+            "source": "builtin",
+        }
+
+    @pytest.mark.parametrize(
+        "config_json",
+        [pytest.param("{not json", id="not-json"), pytest.param("[9.5]", id="not-an-object")],
+    )
+    def test_a_saved_home_preset_whose_config_is_not_a_json_object_is_left_out(
+        self, app: Flask, client: FlaskClient, config_json: str
+    ) -> None:
+        """A saved home preset whose config is not a JSON object is neither listed nor found, and the other saved presets are listed."""
+        insert_saved_home_preset(app.config["DATABASE"], "Broken", config_json)
+        assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
+
+        names = [p["name"] for p in client.get("/api/presets").get_json()]
+
+        assert names == ["Small Urban", "Medium Suburban", "Large with Battery", "Mine"]
+        assert client.get("/api/presets/Broken").status_code == 404
+
+    def test_the_builtin_presets_are_listed_alone_when_the_database_cannot_be_read(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A database that cannot be read leaves the list answering, with the built-in presets alone."""
+        assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
+        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+
+        resp = client.get("/api/presets")
+
+        assert resp.status_code == 200
+        assert [(p["name"], p["source"]) for p in resp.get_json()] == [
+            ("Small Urban", "builtin"),
+            ("Medium Suburban", "builtin"),
+            ("Large with Battery", "builtin"),
+        ]
 
 
 class TestSavePreset:
@@ -168,6 +234,17 @@ class TestSavePreset:
         assert client.get("/api/scenarios/presets/Taken").get_json()["config"] == {"n_homes": 9}
         assert "Taken" not in [p["name"] for p in client.get("/api/presets").get_json()]
 
+    @pytest.mark.parametrize("name", _BUILTIN_PRESET_NAMES)
+    def test_save_under_a_builtin_presets_name_returns_409_and_saves_nothing(
+        self, app: Flask, client: FlaskClient, name: str
+    ) -> None:
+        """A home save under a built-in home preset's name is a 409 naming that preset, and the database holds no saved preset after it."""
+        resp = client.post("/api/presets", json={"name": name, "pv_kw": 9.5})
+
+        assert resp.status_code == 409
+        assert resp.get_json() == {"error": f"A built-in home preset is already named {name!r}"}
+        assert saved_preset_names(app.config["DATABASE"]) == []
+
     def test_saving_a_name_again_replaces_its_config_and_keeps_its_id(self, client: FlaskClient) -> None:
         """A second save under a saved home preset's name updates that preset in place."""
         first = client.post("/api/presets", json={"name": "Again", "pv_kw": 1.0})
@@ -221,3 +298,33 @@ class TestGetPreset:
         resp = client.get("/api/presets/Does Not Exist")
         assert resp.status_code == 404
         assert "error" in resp.get_json()
+
+    def test_each_listed_name_answers_the_entry_the_list_holds_under_it(self, app: Flask, client: FlaskClient) -> None:
+        """The lookup agrees with the list the home page applies presets from, even for a built-in preset's name a saved home preset also holds."""
+        _save_home_presets_one_of_them_under_a_builtin_name(app, client)
+
+        for entry in client.get("/api/presets").get_json():
+            resp = client.get(f"/api/presets/{entry['name']}")
+            assert (resp.status_code, resp.get_json()) == (200, entry)
+
+    def test_a_name_only_a_saved_fleet_preset_holds_answers_404(self, app: Flask, client: FlaskClient) -> None:
+        """The lookup answers home presets only, as the list holds them: a saved fleet preset's name is not found."""
+        _save_home_presets_one_of_them_under_a_builtin_name(app, client)
+        assert client.post("/api/scenarios/save", json={"name": "Fleet only", "config": {"n_homes": 9}}).status_code == 201
+
+        resp = client.get("/api/presets/Fleet only")
+
+        assert (resp.status_code, resp.get_json()) == (404, {"error": "Preset 'Fleet only' not found"})
+        assert "Fleet only" not in [p["name"] for p in client.get("/api/presets").get_json()]
+
+    @pytest.mark.parametrize("name", _BUILTIN_PRESET_NAMES)
+    def test_a_fleet_save_may_take_a_builtin_presets_name_and_the_lookup_answers_the_builtin_one(
+        self, client: FlaskClient, name: str
+    ) -> None:
+        """Only home saves are refused a built-in home preset's name: a fleet preset may hold it, since the lookup answers home presets only."""
+        assert client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}}).status_code == 201
+        assert client.get(f"/api/scenarios/presets/{name}").get_json()["config"] == {"n_homes": 9}
+
+        resp = client.get(f"/api/presets/{name}")
+
+        assert (resp.status_code, resp.get_json()["source"]) == (200, "builtin")

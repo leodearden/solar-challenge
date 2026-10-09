@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Saving to config_presets, which holds one saved preset per name, a home or a fleet preset.
+"""The dashboard's presets by name: the built-in home presets, and the saved presets of config_presets.
 
-Home and fleet presets share that one namespace, as the table's UNIQUE name declares, so a
-save under a name a preset of the other type holds is refused.
+config_presets holds one saved preset per name, a home or a fleet preset, as the table's UNIQUE
+name declares, so a save under a name a saved preset of the other type holds is refused. A
+built-in home preset's name names that built-in preset only, so a home save under it is refused
+too, and the home presets list each name once.
 """
 
 import json
+import logging
+import sqlite3
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -14,14 +18,26 @@ from typing import Any, Literal
 
 from solar_challenge.web.database import get_db
 
+logger = logging.getLogger(__name__)
+
 PresetType = Literal["home", "fleet"]
+PresetSource = Literal["builtin", "saved"]
+
+_BUILTIN_HOME_PRESETS: tuple[Mapping[str, Any], ...] = (
+    {"name": "Small Urban", "pv_kw": 3.0, "battery_kwh": 0, "consumption_kwh": 2900},
+    {"name": "Medium Suburban", "pv_kw": 4.0, "battery_kwh": 5.0, "consumption_kwh": 3500},
+    {"name": "Large with Battery", "pv_kw": 6.0, "battery_kwh": 10.0, "consumption_kwh": 4500},
+)
+_BUILTIN_HOME_PRESET_NAMES: frozenset[str] = frozenset(preset["name"] for preset in _BUILTIN_HOME_PRESETS)
 
 
 class PresetNameTaken(ValueError):
-    """A save under a name a saved preset of the other type holds; the message names the name and that type."""
+    """A save under a name another preset holds; the message names the name and the holding preset's source and type."""
 
-    def __init__(self, name: str, holder_type: PresetType) -> None:
-        super().__init__(f"A saved {holder_type} preset is already named {name!r}")
+    def __init__(self, name: str, holder_source: PresetSource, holder_type: PresetType) -> None:
+        super().__init__(
+            f"A {'built-in' if holder_source == 'builtin' else 'saved'} {holder_type} preset is already named {name!r}"
+        )
 
 
 def save_config_preset(
@@ -34,8 +50,11 @@ def save_config_preset(
     one after the other.
 
     Raises:
-        PresetNameTaken: Writing nothing, when a saved preset of the other type holds *name*.
+        PresetNameTaken: Writing nothing, when a saved preset of the other type holds *name*,
+            or when a home save is named like a built-in home preset.
     """
+    if preset_type == "home" and name in _BUILTIN_HOME_PRESET_NAMES:
+        raise PresetNameTaken(name, "builtin", "home")
     config_json = json.dumps(config)
     saved_at = datetime.now(timezone.utc).isoformat()
     with get_db(db_path) as conn:
@@ -49,9 +68,48 @@ def save_config_preset(
             )
             return preset_id
         if holder["type"] != preset_type:
-            raise PresetNameTaken(name, holder["type"])
+            raise PresetNameTaken(name, "saved", holder["type"])
         conn.execute(
             "UPDATE config_presets SET config_json = ?, created_at = ? WHERE id = ?",
             (config_json, saved_at, holder["id"]),
         )
         return str(holder["id"])
+
+
+def home_presets(db_path: str | Path) -> list[dict[str, Any]]:
+    """The home presets, each name once: the built-in ones, then the saved ones by name.
+
+    Each preset is its config with its name and its ``source``, a PresetSource; a saved one
+    also has its ``created_at``. A saved home preset under a built-in preset's name is left
+    out, so that name names the built-in preset, and so is one whose config is not a JSON
+    object, with a logged warning naming it. When the database cannot be read, the fault is
+    logged and the built-in presets are listed alone.
+    """
+    builtin = [{**preset, "source": "builtin"} for preset in _BUILTIN_HOME_PRESETS]
+    try:
+        with get_db(db_path) as conn:
+            rows = conn.execute(
+                "SELECT name, config_json, created_at FROM config_presets WHERE type = 'home' ORDER BY name"
+            ).fetchall()
+    except sqlite3.Error:
+        logger.warning("Failed to load saved presets", exc_info=True)
+        return builtin
+    saved = (_saved_home_preset(row) for row in rows if row["name"] not in _BUILTIN_HOME_PRESET_NAMES)
+    return builtin + [preset for preset in saved if preset is not None]
+
+
+def _saved_home_preset(row: sqlite3.Row) -> dict[str, Any] | None:
+    """The preset a saved home preset's row holds; None, with a logged warning, when its config is not a JSON object."""
+    try:
+        config = json.loads(row["config_json"]) if row["config_json"] else {}
+    except ValueError:
+        config = None
+    if not isinstance(config, dict):
+        logger.warning("Saved home preset %r is not listed: its config is not a JSON object", row["name"])
+        return None
+    return {**config, "name": row["name"], "created_at": row["created_at"], "source": "saved"}
+
+
+def home_preset_named(db_path: str | Path, name: str) -> dict[str, Any] | None:
+    """The preset home_presets lists under *name*, or None when it lists none."""
+    return next((preset for preset in home_presets(db_path) if preset["name"] == name), None)

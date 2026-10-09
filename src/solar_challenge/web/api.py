@@ -28,7 +28,13 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
-from solar_challenge.web.presets import PresetNameTaken, PresetType, save_config_preset
+from solar_challenge.web.presets import (
+    PresetNameTaken,
+    PresetType,
+    home_preset_named,
+    home_presets,
+    save_config_preset,
+)
 from solar_challenge.web.shared import (
     NotAJsonObject,
     get_job_manager,
@@ -252,44 +258,19 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
 
 @api_bp.route("/presets", methods=["GET"])
 def list_presets() -> tuple[Response, int]:
-    """List all configuration presets (built-in + saved).
+    """List the home presets: the built-in presets, then the saved home presets by name, each name once.
 
     Returns:
         JSON array of preset objects, HTTP 200.
     """
-    from solar_challenge.web.shared import BUILTIN_PRESETS  # noqa: PLC0415
-
-    db_path = current_app.config["DATABASE"]
-    saved: list[dict[str, Any]] = []
-
-    try:
-        from solar_challenge.web.database import get_db  # noqa: PLC0415
-
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name, config_json, created_at FROM config_presets WHERE type = 'home' ORDER BY name"
-            )
-            for row in cursor.fetchall():
-                cfg = json.loads(row["config_json"]) if row["config_json"] else {}
-                cfg["name"] = row["name"]
-                cfg["created_at"] = row["created_at"]
-                cfg["source"] = "saved"
-                saved.append(cfg)
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to load saved presets", exc_info=True)
-
-    # Tag built-in presets
-    builtin = [{**p, "source": "builtin"} for p in BUILTIN_PRESETS]
-
-    return jsonify(builtin + saved), 200
+    return jsonify(home_presets(current_app.config["DATABASE"])), 200
 
 def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str, Any]) -> tuple[Response, int]:
     """Save *config* as the *preset_type* preset *name*, answering as both preset save endpoints do.
 
     Returns:
         JSON with the preset name and id, HTTP 201; or the ``error``: HTTP 409 for a
-        name a saved preset of the other type holds, HTTP 500 for a database fault.
+        name another preset holds, HTTP 500 for a database fault.
     """
     try:
         preset_id = save_config_preset(current_app.config["DATABASE"], name, preset_type, config)
@@ -308,8 +289,8 @@ def save_preset() -> tuple[Response, int]:
 
     Returns:
         JSON confirmation with the preset name and id, HTTP 201 on success; or the ``error``:
-        HTTP 400 for an empty name or a type other than 'home', HTTP 409 for a name a saved
-        fleet preset holds.
+        HTTP 400 for an empty name or a type other than 'home', HTTP 409 for a name a built-in
+        home preset or a saved fleet preset holds.
     """
     data = request_json_object()
     name = data.get("name", "").strip()
@@ -327,47 +308,21 @@ def save_preset() -> tuple[Response, int]:
 
 @api_bp.route("/presets/<name>", methods=["GET"])
 def get_preset(name: str) -> tuple[Response, int]:
-    """Get a specific configuration preset by name.
+    """Get the home preset GET /api/presets lists under *name*.
 
-    Checks saved presets first, then falls back to built-in presets.
+    A built-in preset's name therefore answers the built-in preset, and a name only a
+    saved fleet preset holds is not found.
 
     Args:
         name: The preset name to look up.
 
     Returns:
-        JSON preset object, or 404 if not found.
+        JSON preset object, HTTP 200; or the ``error``, HTTP 404, when GET /api/presets lists none under the name.
     """
-    from solar_challenge.web.shared import BUILTIN_PRESETS  # noqa: PLC0415
-
-    db_path = current_app.config["DATABASE"]
-
-    # Try database first
-    try:
-        from solar_challenge.web.database import get_db  # noqa: PLC0415
-
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name, config_json, created_at FROM config_presets WHERE name = ?",
-                (name,),
-            )
-            row = cursor.fetchone()
-
-        if row:
-            cfg = json.loads(row["config_json"]) if row["config_json"] else {}
-            cfg["name"] = row["name"]
-            cfg["created_at"] = row["created_at"]
-            cfg["source"] = "saved"
-            return jsonify(cfg), 200
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to load preset '%s' from database", name, exc_info=True)
-
-    # Fall back to built-in presets
-    for preset in BUILTIN_PRESETS:
-        if preset["name"] == name:
-            result = {**preset, "source": "builtin"}
-            return jsonify(result), 200
-    return jsonify({"error": f"Preset '{name}' not found"}), 404
+    preset = home_preset_named(current_app.config["DATABASE"], name)
+    if preset is None:
+        return jsonify({"error": f"Preset '{name}' not found"}), 404
+    return jsonify(preset), 200
 
 # ---------------------------------------------------------------------------
 # Fleet distribution endpoints
