@@ -404,6 +404,22 @@ def test_a_name_the_class_body_only_annotates_as_a_class_variable_is_not_a_membe
     assert member_forms(Meter) == {}
 
 
+def test_a_name_the_class_body_only_annotates_as_a_class_variable_in_a_string_is_not_a_member() -> None:
+    class Meter:
+        UNITS: "ClassVar[str]"
+        SCALE: "ClassVar"
+
+    assert member_forms(Meter) == {}
+
+
+def test_a_class_body_string_annotation_naming_a_name_its_module_does_not_bind_raises_a_name_error_naming_it() -> None:
+    class Meter:
+        site: "Nowhere"  # noqa: F821
+
+    with pytest.raises(NameError, match="Nowhere"):
+        member_forms(Meter)
+
+
 def test_private_and_dunder_names_are_not_members() -> None:
     class Meter:
         _cache: dict[str, float] = {}
@@ -536,6 +552,18 @@ def test_a_class_variable_is_a_member_even_when_a_hand_written_constructor_takes
     @dataclass(init=False)
     class Meter:
         UNITS: ClassVar[str] = "kWh"
+        site: str
+
+        def __init__(self, site: str, UNITS: str = "kWh") -> None:
+            self.site = site
+
+    assert member_forms(Meter) == {"UNITS": "str"}
+
+
+def test_a_class_variable_annotated_in_a_string_is_a_member_even_when_a_hand_written_constructor_takes_its_name() -> None:
+    @dataclass(init=False)
+    class Meter:
+        UNITS: "ClassVar[str]" = "kWh"
         site: str
 
         def __init__(self, site: str, UNITS: str = "kWh") -> None:
