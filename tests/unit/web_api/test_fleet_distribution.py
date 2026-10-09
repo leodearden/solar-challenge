@@ -873,13 +873,13 @@ class TestFleetFromDistribution:
     def test_a_battery_blocks_enabled_sent_as_the_string_false_returns_400_and_queues_nothing(
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
-        """A battery block's enabled sent as the string "false" toggles nothing: it is a 400 naming enabled, and no fleet is queued."""
+        """A battery block's enabled sent as the string "false" toggles nothing: it is a 400 naming battery.enabled, and no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, "battery": {"capacity_kwh": 5.0, "enabled": "false"}},
         )
         assert resp.status_code == 400
-        assert "enabled" in resp.get_json()["error"]
+        assert "battery.enabled" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
