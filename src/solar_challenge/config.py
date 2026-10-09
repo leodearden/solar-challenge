@@ -746,23 +746,23 @@ def _parse_battery_config(
     """Parse battery configuration from config data.
 
     A null block is no battery. A key the block omits takes BatteryConfig's declared default, and
-    an omitted capacity_kwh is _BATTERY_CAPACITY_KWH_WHEN_OMITTED kWh. Its dispatch_strategy and
-    grid_charging blocks are read, in that order, by their own parsers.
+    an omitted capacity_kwh is _BATTERY_CAPACITY_KWH_WHEN_OMITTED kWh.
     """
     if data is None:
         return None
     battery = _refuse_unrecognised_keys(block_path, data, _BATTERY_BLOCK_KEYS)
+    dispatch_strategy = parse_dispatch_strategy_config(
+        battery.get("dispatch_strategy"), block_path=_child_path(block_path, "dispatch_strategy")
+    )
+    grid_charging = _parse_grid_charge_config(
+        battery.get("grid_charging"), block_path=_child_path(block_path, "grid_charging")
+    )
     return BatteryConfig(
         **{
             "capacity_kwh": _BATTERY_CAPACITY_KWH_WHEN_OMITTED,
             **battery,
-            "dispatch_strategy": parse_dispatch_strategy_config(
-                battery.get("dispatch_strategy"),
-                block_path=_child_path(block_path, "dispatch_strategy"),
-            ),
-            "grid_charging": _parse_grid_charge_config(
-                battery.get("grid_charging"), block_path=_child_path(block_path, "grid_charging")
-            ),
+            "dispatch_strategy": dispatch_strategy,
+            "grid_charging": grid_charging,
         }
     )
 
