@@ -692,23 +692,17 @@ _PV_BLOCK_KEYS: frozenset[str] = frozenset({
     "capacity_kw", "azimuth", "tilt", "name", "module_efficiency", "temperature_coefficient",
     "inverter_efficiency", "inverter_capacity_kw", "system_age_years", "degradation_rate_per_year",
 })
+_PV_CAPACITY_KW_WHEN_OMITTED: float = 4.0
 
 
 def _parse_pv_config(data: dict[str, Any], *, block_path: str) -> PVConfig:
-    """Parse PV configuration from config data."""
-    _refuse_unrecognised_keys(block_path, data, _PV_BLOCK_KEYS)
-    return PVConfig(
-        capacity_kw=data.get("capacity_kw", 4.0),
-        azimuth=data.get("azimuth", 180.0),
-        tilt=data.get("tilt", 35.0),
-        name=data.get("name", ""),
-        module_efficiency=data.get("module_efficiency", 0.20),
-        temperature_coefficient=data.get("temperature_coefficient", -0.004),
-        inverter_efficiency=data.get("inverter_efficiency", 0.96),
-        inverter_capacity_kw=data.get("inverter_capacity_kw"),
-        system_age_years=data.get("system_age_years", 0.0),
-        degradation_rate_per_year=data.get("degradation_rate_per_year", 0.005),
-    )
+    """Parse PV configuration from config data.
+
+    A key the block omits takes PVConfig's declared default. PVConfig declares no capacity, so a
+    block omitting capacity_kw is a _PV_CAPACITY_KW_WHEN_OMITTED kW array.
+    """
+    pv = _refuse_unrecognised_keys(block_path, data, _PV_BLOCK_KEYS)
+    return PVConfig(**{"capacity_kw": _PV_CAPACITY_KW_WHEN_OMITTED, **pv})
 
 
 _GRID_CHARGING_BLOCK_KEYS: frozenset[str] = frozenset({"target_soc_fraction"})
@@ -718,6 +712,8 @@ def _parse_grid_charge_config(
     data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[GridChargeConfig]:
     """Parse grid-charging configuration from a dict or None.
+
+    An omitted ``target_soc_fraction`` takes GridChargeConfig's declared default.
 
     Args:
         data: grid_charging mapping (e.g. ``{'target_soc_fraction': 0.9}``) or None.
@@ -732,8 +728,7 @@ def _parse_grid_charge_config(
     """
     if data is None:
         return None
-    _refuse_unrecognised_keys(block_path, data, _GRID_CHARGING_BLOCK_KEYS)
-    return GridChargeConfig(target_soc_fraction=data.get("target_soc_fraction", 0.9))
+    return GridChargeConfig(**_refuse_unrecognised_keys(block_path, data, _GRID_CHARGING_BLOCK_KEYS))
 
 
 _BATTERY_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -742,47 +737,33 @@ _BATTERY_BLOCK_KEYS: frozenset[str] = frozenset({
     "discharge_efficiency", "efficiency", "system_age_years", "calendar_fade_rate_per_year",
     "cycle_fade_per_equivalent_full_cycle", "soh_floor", "soh",
 })
+_BATTERY_CAPACITY_KWH_WHEN_OMITTED: float = 5.0
 
 
 def _parse_battery_config(
     data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[BatteryConfig]:
-    """Parse battery configuration from config data."""
+    """Parse battery configuration from config data.
+
+    A null block is no battery. A key the block omits takes BatteryConfig's declared default, and
+    an omitted capacity_kwh is _BATTERY_CAPACITY_KWH_WHEN_OMITTED kWh. Its dispatch_strategy and
+    grid_charging blocks are read, in that order, by their own parsers.
+    """
     if data is None:
         return None
-    _refuse_unrecognised_keys(block_path, data, _BATTERY_BLOCK_KEYS)
-
-    # Parse dispatch strategy if present
-    dispatch_strategy = None
-    if "dispatch_strategy" in data:
-        dispatch_strategy = parse_dispatch_strategy_config(
-            data["dispatch_strategy"], block_path=_child_path(block_path, "dispatch_strategy")
-        )
-
-    # Parse grid-charging config if present
-    grid_charging = _parse_grid_charge_config(
-        data.get("grid_charging"), block_path=_child_path(block_path, "grid_charging")
-    )
-
+    battery = _refuse_unrecognised_keys(block_path, data, _BATTERY_BLOCK_KEYS)
     return BatteryConfig(
-        capacity_kwh=data.get("capacity_kwh", 5.0),
-        max_charge_kw=data.get("max_charge_kw", 2.5),
-        max_discharge_kw=data.get("max_discharge_kw", 2.5),
-        name=data.get("name", ""),
-        dispatch_strategy=dispatch_strategy,
-        grid_charging=grid_charging,
-        min_soc_fraction=data.get("min_soc_fraction", 0.1),
-        max_soc_fraction=data.get("max_soc_fraction", 0.9),
-        charge_efficiency=data.get("charge_efficiency", 0.975),
-        discharge_efficiency=data.get("discharge_efficiency", 0.975),
-        efficiency=data.get("efficiency"),
-        system_age_years=data.get("system_age_years", 0.0),
-        calendar_fade_rate_per_year=data.get("calendar_fade_rate_per_year", 0.02),
-        cycle_fade_per_equivalent_full_cycle=data.get(
-            "cycle_fade_per_equivalent_full_cycle", 5e-5
-        ),
-        soh_floor=data.get("soh_floor", 0.5),
-        soh=data.get("soh"),
+        **{
+            "capacity_kwh": _BATTERY_CAPACITY_KWH_WHEN_OMITTED,
+            **battery,
+            "dispatch_strategy": parse_dispatch_strategy_config(
+                battery.get("dispatch_strategy"),
+                block_path=_child_path(block_path, "dispatch_strategy"),
+            ),
+            "grid_charging": _parse_grid_charge_config(
+                battery.get("grid_charging"), block_path=_child_path(block_path, "grid_charging")
+            ),
+        }
     )
 
 
@@ -792,15 +773,11 @@ _LOAD_BLOCK_KEYS: frozenset[str] = frozenset({
 
 
 def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:
-    """Parse load configuration from config data."""
-    _refuse_unrecognised_keys(block_path, data, _LOAD_BLOCK_KEYS)
-    return LoadConfig(
-        annual_consumption_kwh=data.get("annual_consumption_kwh"),
-        household_occupants=data.get("household_occupants", 3),
-        name=data.get("name", ""),
-        use_stochastic=data.get("use_stochastic", True),
-        seed=data.get("seed"),
-    )
+    """Parse load configuration from config data.
+
+    A key the block omits takes LoadConfig's declared default.
+    """
+    return LoadConfig(**_refuse_unrecognised_keys(block_path, data, _LOAD_BLOCK_KEYS))
 
 
 _DISPATCH_STRATEGY_BLOCK_KEYS: frozenset[str] = frozenset({
