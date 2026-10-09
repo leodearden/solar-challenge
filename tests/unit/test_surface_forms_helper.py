@@ -592,6 +592,16 @@ def test_a_union_names_its_members_classes_alone() -> None:
     assert named_classes(f) == {Preset, type(None), int, str, float}
 
 
+def test_an_init_only_variable_names_its_type_classes_alone() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+        ratio: InitVar[Optional[fractions.Fraction]]
+        preset: "InitVar[Preset]"
+
+    assert named_classes(Reading) == {float, fractions.Fraction, type(None), Preset}
+
+
 def test_literal_values_and_annotated_metadata_name_no_class() -> None:
     def f(a: Literal["Preset"], b: Annotated[float, Preset]) -> None: ...
 
