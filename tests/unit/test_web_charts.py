@@ -12,7 +12,19 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("plotly")
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import GridChargeConfig
+from solar_challenge.home import (
+    HomeConfig,
+    SimulationResults,
+    SummaryStatistics,
+    calculate_summary,
+    simulate_home,
+)
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.charts import (
     battery_soc_chart,
     daily_energy_balance,
@@ -25,6 +37,7 @@ from solar_challenge.web.charts import (
 )
 from tests._finance_builders import make_sim_results
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
+from tests._synthetic_weather import sunless_weather
 
 
 def _steady_run(
@@ -61,6 +74,40 @@ def _steady_run(
     )
 
 
+def _one_day_summary(**totals: float) -> SummaryStatistics:
+    """A one-day run's summary with the totals given, so a test writes every total the Sankey reads."""
+    return dataclasses.replace(calculate_summary(make_sim_results(days=1)), **totals)
+
+
+def _sankey_links(figure: str) -> dict[tuple[str, str], float]:
+    """The Sankey figure's links, each keyed by its source and target node labels: its kWh."""
+    sankey = json.loads(figure)["data"][0]
+    labels = sankey["node"]["label"]
+    return {
+        (labels[source], labels[target]): kwh
+        for source, target, kwh in zip(
+            sankey["link"]["source"], sankey["link"]["target"], sankey["link"]["value"], strict=True
+        )
+    }
+
+
+def _bristol_arbitrage_home() -> HomeConfig:
+    """The home of scenarios/bristol-arbitrage.yaml: on Economy 7 it charges its battery from the grid to 90% overnight."""
+    return HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
+        battery_config=BatteryConfig(
+            capacity_kwh=5.0,
+            max_charge_kw=2.5,
+            max_discharge_kw=2.5,
+            grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+        ),
+        tariff_config=TariffConfig.economy_7(),
+        dispatch_strategy="tou_optimized",
+        seg_tariff=SEGTariff("Scenario SEG", 15.0),
+    )
+
+
 class TestChartFunctions:
     """Tests for the centralized chart functions in charts.py."""
 
@@ -85,16 +132,7 @@ class TestChartFunctions:
             total_battery_charge_kwh=10.0,
         )
 
-        sankey = json.loads(sankey_diagram(summary))["data"][0]
-        labels = sankey["node"]["label"]
-        links = {
-            (labels[source], labels[target]): kwh
-            for source, target, kwh in zip(
-                sankey["link"]["source"], sankey["link"]["target"], sankey["link"]["value"], strict=True
-            )
-        }
-
-        assert links == {
+        assert _sankey_links(sankey_diagram(summary)) == {
             ("PV Generation", "Demand"): 42.0,
             ("PV Generation", "Battery"): 10.0,
             ("PV Generation", "Export"): 40.0,
@@ -143,6 +181,71 @@ class TestChartFunctions:
         results = make_sinusoidal_sim_results(days=2)
         output = heat_pump_analysis(results)
         assert output is None
+
+
+class TestSankeyBatteryCharge:
+    """The battery charges from PV and, on a grid-charging tariff, from the grid, and the Sankey draws each source's part as its own link."""
+
+    def test_a_sunless_grid_charging_day_charges_the_battery_from_the_grid(self) -> None:
+        """With no sun, the grid supplies the battery's charge as well as the demand the battery does not meet."""
+        summary = _one_day_summary(
+            total_generation_kwh=0.0,
+            total_demand_kwh=11.75,
+            total_self_consumption_kwh=4.0,
+            total_grid_import_kwh=9.75,
+            total_grid_export_kwh=0.0,
+            total_battery_charge_kwh=2.0,
+            total_battery_discharge_kwh=4.0,
+            total_grid_charge_kwh=2.0,
+        )
+
+        assert _sankey_links(sankey_diagram(summary)) == {
+            ("Grid", "Battery"): 2.0,
+            ("Grid", "Demand"): 7.75,
+            ("Battery", "Demand"): 4.0,
+        }
+
+    def test_a_day_charging_from_pv_and_the_grid_draws_each_sources_part(self) -> None:
+        """Every node balances: PV sends its 10 kWh, the grid its 8, the battery takes 5, and demand receives its 12."""
+        summary = _one_day_summary(
+            total_generation_kwh=10.0,
+            total_demand_kwh=12.0,
+            total_self_consumption_kwh=6.0,
+            total_grid_import_kwh=8.0,
+            total_grid_export_kwh=3.0,
+            total_battery_charge_kwh=5.0,
+            total_battery_discharge_kwh=2.0,
+            total_grid_charge_kwh=2.0,
+        )
+
+        assert _sankey_links(sankey_diagram(summary)) == {
+            ("PV Generation", "Demand"): 4.0,
+            ("PV Generation", "Battery"): 3.0,
+            ("PV Generation", "Export"): 3.0,
+            ("Grid", "Demand"): 6.0,
+            ("Grid", "Battery"): 2.0,
+            ("Battery", "Demand"): 2.0,
+        }
+
+    def test_a_simulated_sunless_grid_charging_day_draws_nothing_from_pv(self) -> None:
+        """The arbitrage home on a sunless January day: all of the battery's charge comes from the grid.
+
+        The summary is calculate_summary's of simulate_home's results, the summary /results/home loads and draws.
+        """
+        results = simulate_home(
+            _bristol_arbitrage_home(),
+            start_date=pd.Timestamp("2024-01-15"),
+            end_date=pd.Timestamp("2024-01-15"),
+            weather_data=sunless_weather("2024-01-15", temp_air=8.0),
+        )
+        summary = calculate_summary(results)
+
+        links = _sankey_links(sankey_diagram(summary))
+
+        assert set(links) == {("Grid", "Demand"), ("Grid", "Battery"), ("Battery", "Demand")}
+        assert links[("Grid", "Battery")] == round(summary.total_battery_charge_kwh, 2)
+        received_by_demand = sum(kwh for (_, target), kwh in links.items() if target == "Demand")
+        assert received_by_demand == pytest.approx(summary.total_demand_kwh, abs=0.01)
 
 
 class TestChartTotals:
