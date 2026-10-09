@@ -399,7 +399,7 @@ def _is_distribution(value: object) -> TypeGuard[dict[str, Any]]:
 
 def _is_fixed_value(value: object) -> bool:
     """Whether *value* is a fleet form block's fixed value: any value but null or a mapping."""
-    return value is not None and not isinstance(value, Mapping)
+    return value is not None and not isinstance(value, dict)
 
 
 def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:
@@ -480,9 +480,9 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
     """
     if _is_fixed_value(spec):
         return as_finite_float(spec, path)
-    if isinstance(spec, Mapping) and spec.get("type") == "fixed":
+    if _is_distribution(spec) and spec["type"] == "fixed":
         return as_finite_float(spec.get("value"), f"{path}.value")
-    if not isinstance(spec, Mapping) or spec.get("type") not in _EDITOR_DISTRIBUTION_TYPES:
+    if not _is_distribution(spec) or spec["type"] not in _EDITOR_DISTRIBUTION_TYPES:
         raise ValueError(
             f"{path} must be a fixed value or one of the fleet page's distributions "
             f"({', '.join(_EDITOR_DISTRIBUTION_TYPES)}), got {spec!r}"

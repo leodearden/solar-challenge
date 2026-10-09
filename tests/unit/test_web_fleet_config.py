@@ -1213,6 +1213,26 @@ class TestFleetConfigHelpers:
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
 
     @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param({"type": "fixed"}, id="no-value"),
+            pytest.param({"type": "fixed", "value": True}, id="boolean-value"),
+            pytest.param({"type": "fixed", "value": float("inf")}, id="infinite-value"),
+            pytest.param({"type": "fixed", "value": "five"}, id="non-numeric-value"),
+        ],
+    )
+    def test_distribution_form_spec_refuses_a_fixed_distribution_without_a_finite_value_naming_its_value(
+        self, spec: dict
+    ) -> None:
+        """A fixed distribution without a value, or whose value is a boolean or not a finite number, is refused naming its value's path and the value sent, not read as some default."""
+        with pytest.raises(ValueError) as exc_info:
+            distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
+        assert str(exc_info.value) == (
+            "fleet_distribution.battery.capacity_kwh.value must be a finite number, "
+            f"got {spec.get('value')!r}"
+        )
+
+    @pytest.mark.parametrize(
         ("spec", "form_spec"),
         [
             pytest.param(
