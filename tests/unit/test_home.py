@@ -54,6 +54,15 @@ class TestHomeConfigBasics:
         )
         assert config.battery_config is None
 
+    def test_name_and_dispatch_strategy_take_the_declared_defaults(self):
+        """An unnamed home has an empty name and the greedy dispatch strategy."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+        )
+        assert config.name == ""
+        assert config.dispatch_strategy == "greedy"
+
     def test_default_location_is_bristol(self):
         """Default location is Bristol."""
         config = HomeConfig(
