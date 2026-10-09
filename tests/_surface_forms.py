@@ -77,7 +77,9 @@ def member_forms(cls: type) -> dict[str, str]:
     surface_form(cls) already pins: the dataclass fields and init-only variables its
     constructor's signature takes, and an Enum's members. The attributes the body
     declares come first, in annotation order, then the other names it defines, in
-    class-body order.
+    class-body order. A ClassVar annotation declares a class variable, not an instance
+    attribute; a string annotation is read as named_classes reads one, so a name its
+    module does not bind raises NameError.
     """
     return {name: _member_form(member) for name, member in _public_members(cls).items()}
 
@@ -347,7 +349,7 @@ def _init_only_variables(cls: type) -> set[str]:
     annotated = {
         name
         for name, annotation in inspect.get_annotations(cls).items()
-        if not _is_class_var(annotation)
+        if not _is_class_var(annotation, cls.__module__)
     }
     return (annotated & _constructor_parameters(cls)) - _fields(cls).keys()
 
@@ -394,12 +396,14 @@ def _declared_attributes(cls: type) -> dict[str, object]:
     return {
         name: annotation
         for name, annotation in inspect.get_annotations(cls).items()
-        if name not in class_values and not _is_class_var(annotation)
+        if name not in class_values and not _is_class_var(annotation, cls.__module__)
     }
 
 
-def _is_class_var(annotation: object) -> bool:
-    """Whether *annotation* is ClassVar, bare or subscripted, which declares a class variable, not an instance attribute."""
+def _is_class_var(annotation: object, module: str) -> bool:
+    """Whether *annotation* is ClassVar, bare or subscripted, which declares a class variable, not an instance attribute; a string annotation is evaluated as named_classes evaluates one, in *module*."""
+    if isinstance(annotation, str):
+        return _is_class_var(_evaluated(annotation, module), module)
     return annotation is typing.ClassVar or typing.get_origin(annotation) is typing.ClassVar
 
 
