@@ -1025,38 +1025,39 @@ def _parse_ev_config(data: Optional[dict[str, Any]], *, block_path: str) -> Opti
     )
 
 
+_HOME_SCALAR_KEYS: tuple[str, ...] = ("name", "dispatch_strategy")
+
 _HOME_BLOCK_KEYS: frozenset[str] = frozenset({
-    "name", "pv", "battery", "load", "tariff", "dispatch_strategy", "heat_pump", "ev",
+    *_HOME_SCALAR_KEYS, "pv", "battery", "load", "tariff", "heat_pump", "ev",
 })
 
 
 def parse_home_block(
     data: dict[str, Any], location: Location, *, block_path: str = "home"
 ) -> HomeConfig:
-    """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*."""
-    _refuse_unrecognised_keys(block_path, data, _HOME_BLOCK_KEYS)
-    pv_data = data.get("pv", {})
-    battery_data = data.get("battery")
-    load_data = data.get("load", {})
-    tariff_data = data.get("tariff")
-    dispatch_strategy = data.get("dispatch_strategy", "greedy")
+    """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*.
 
+    A key the block omits takes HomeConfig's declared default, and an omitted pv or load block
+    reads as an empty one.
+    """
+    home = _refuse_unrecognised_keys(block_path, data, _HOME_BLOCK_KEYS)
     return HomeConfig(
-        pv_config=_parse_pv_config(pv_data, block_path=_child_path(block_path, "pv")),
+        pv_config=_parse_pv_config(home.get("pv", {}), block_path=_child_path(block_path, "pv")),
         battery_config=_parse_battery_config(
-            battery_data, block_path=_child_path(block_path, "battery")
+            home.get("battery"), block_path=_child_path(block_path, "battery")
         ),
-        load_config=_parse_load_config(load_data, block_path=_child_path(block_path, "load")),
+        load_config=_parse_load_config(
+            home.get("load", {}), block_path=_child_path(block_path, "load")
+        ),
         location=location,
-        name=data.get("name", ""),
         tariff_config=parse_tariff_config(
-            tariff_data, block_path=_child_path(block_path, "tariff")
+            home.get("tariff"), block_path=_child_path(block_path, "tariff")
         ),
-        dispatch_strategy=dispatch_strategy,
         heat_pump_config=_parse_heat_pump_config(
-            data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
+            home.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
         ),
-        ev_config=_parse_ev_config(data.get("ev"), block_path=_child_path(block_path, "ev")),
+        ev_config=_parse_ev_config(home.get("ev"), block_path=_child_path(block_path, "ev")),
+        **{key: home[key] for key in _HOME_SCALAR_KEYS if key in home},
     )
 
 
