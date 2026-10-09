@@ -21,6 +21,7 @@ import functools
 import importlib.util
 import pathlib
 import sys
+import typing
 from dataclasses import InitVar, dataclass, field
 from typing import (
     TYPE_CHECKING,
@@ -112,6 +113,19 @@ class Tap:
 
 class Tally:
     def feeder(self) -> Feeder: ...
+
+
+class Wrapper:
+    """A wrapper of a type that, like dataclasses.InitVar, subscripts to an instance with no typing origin."""
+
+    def __init__(self, inner: type) -> None:
+        self.inner = inner
+
+    def __class_getitem__(cls, inner: type) -> "Wrapper":
+        return cls(inner)
+
+    def __repr__(self) -> str:
+        return f"Wrapper[{self.inner.__qualname__}]"
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -698,6 +712,29 @@ def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> No
     def f(a: "Nowhere") -> None: ...  # noqa: F821
 
     with pytest.raises(NameError, match="Nowhere"):
+        named_classes(f)
+
+
+def test_an_annotation_no_construct_reads_raises_a_type_error_naming_it_and_its_type() -> None:
+    def f(preset: Wrapper[Preset]) -> None: ...
+
+    naming_it_and_its_type = r"Wrapper\[Preset\].*\btests\.unit\.test_surface_forms_helper\.Wrapper\b"
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
+        surface_form(f)
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
+        named_classes(f)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="typing.TypeAliasType is new in Python 3.12")
+def test_a_type_alias_raises_a_type_error_since_it_means_its_value_which_no_construct_reads() -> None:
+    Readings = typing.TypeAliasType("Readings", list[Preset])
+
+    def f(readings: Readings) -> None: ...
+
+    naming_it_and_its_type = r"Readings.*\btyping\.TypeAliasType\b"
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
+        surface_form(f)
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
         named_classes(f)
 
 
