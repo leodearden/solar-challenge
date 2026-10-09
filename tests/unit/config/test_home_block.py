@@ -356,11 +356,19 @@ home:
 
 
 class TestOmittedAndNullKeys:
-    """A block gives its dataclass only the keys it sets.
+    """A block gives its dataclass only the keys it sets, and so does the home block, to HomeConfig.
 
     An omitted key takes the dataclass's declared default; a null is a value set, handed on and
     never read as the default.
     """
+
+    def test_omitted_home_keys_take_the_declared_defaults(self) -> None:
+        """An empty home block is HomeConfig's declared defaults, its absent pv and load read as empty blocks."""
+        assert _parsed_home() == HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(),
+            location=Location.bristol(),
+        )
 
     def test_omitted_pv_keys_take_the_declared_defaults(self) -> None:
         """PVConfig declares no capacity, so a pv block omitting capacity_kw is a 4 kW array."""
@@ -421,6 +429,11 @@ class TestOmittedAndNullKeys:
     ) -> None:
         """A null the dataclass accepts is held as None, not replaced by the declared default."""
         assert getattr(_parsed_home(**blocks), attribute) == dataclass(**fields)
+
+    @pytest.mark.parametrize("key", ["name", "dispatch_strategy"])
+    def test_a_null_home_scalar_reaches_homeconfig_as_none(self, key: str) -> None:
+        """A null home name or dispatch_strategy is held as None, not replaced by the declared default."""
+        assert getattr(_parsed_home(**{key: None}), key) is None
 
     @pytest.mark.parametrize(
         ("blocks", "dataclass", "fields"),
