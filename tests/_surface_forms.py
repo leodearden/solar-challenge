@@ -88,8 +88,9 @@ def named_classes(obj: object) -> set[type]:
     """The classes the forms that pin *obj* name: surface_form(obj)'s and, for a class, member_forms(obj)'s.
 
     Only annotations name classes, never a default value. A generic names its origin and
-    its arguments' classes, a union its members' alone, an InitVar its type's alone, and
-    Literal's values and Annotated's metadata none. A string annotation or a forward
+    its arguments' classes, a bare alias its origin, a union its members' alone, an
+    InitVar its type's alone, and Literal's values, Annotated's metadata and a
+    ParamSpec's args and kwargs none. A string annotation or a forward
     reference names the class its name is bound to in the module that spells it, read as
     a type checker reads it: its globals, with the imports of its top-level
     `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises NameError.
