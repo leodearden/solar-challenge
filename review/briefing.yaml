@@ -247,7 +247,7 @@ subprojects:
 
     what_working_means:
       - "Energy balance closes at every timestep, including the community composition (no ValueError from the flow / community validators)."
-      - "validation.py sanity checks pass: non-negative generation capped near capacity, ~zero night generation, UK annual yield ~700-1100 kWh/kWp, self-consumption within published UK benchmark bands."
+      - "validation.py sanity checks pass: non-negative generation capped near capacity, ~zero night generation, annual yield per wired kWp within 300-1200 kWh/kWp (the range PVGIS and MCS give UK arrays facing east to west through south), self-consumption within published UK benchmark bands."
       - "Fleet aggregate totals equal the sum of per-home results."
       - "The same seed reproduces the identical fleet and per-home stochastic profiles regardless of parallel execution order."
 
@@ -270,6 +270,8 @@ subprojects:
         why: "Their MPPT window is a battery bus's voltage range, which PV reaches only through a charge controller, so modules wired straight to one ran below its floor. Measured by task 240 on the scaled Bristol TMY: leaving them out re-picked 23 of the 992 census configs, the floor's worst remaining error is about 0.12% of annual AC, and hot-cell floors move AC by more than the error they remove. docs/pv-inverter-string-matching.md §7 has the figures and scripts/measure_mppt_window.py re-measures them; re-measure before re-flagging."
       - decision: "PV generation carries PVWatts v5's default 14.08% system-loss budget on each array's DC power, before the inverter, at unchanged voltage."
         why: "It covers the losses the model does not otherwise compute, and puts the annual performance ratio at MCS's 0.8 (Bristol 0.81). Do not stack PVGIS's 14%, which includes the inverter and ageing the model already computes, and do not move it to the AC, which would stop inverter-limited arrays clipping at their rating. docs/pv-system-losses.md has the measurements and scripts/measure_pv_performance_ratio.py re-measures them; re-measure before re-flagging."
+      - decision: "validation's annual-yield band is 300-1200 kWh per wired kWp: the range PVGIS (at its 14% loss) and MCS's Kk tables give an unshaded UK array facing east, west or between them through south, at any pitch, rounded outward to the next hundred."
+        why: "The check knows neither the site nor, in `validate results`, the orientation, so the band must hold every in-scope UK array: it catches gross errors, not a few percent, and tests/integration/test_pv_performance_ratio.py guards the model's losses. VAL-001's 800-1000 had no source, and its widened 700-1100 failed real systems (PVGIS: Eastbourne optimal 1175; MCS: Lerwick west at 45°, 580). Never fit the edges to the model's output. docs/pv-annual-yield-benchmark.md §2 has the references and §5 their figures; re-query them before re-flagging."
 
     # (RESOLVED — no live gap) The former CommunityMetrics.sharing_mode HEURISTIC
     # ('community_battery' if the battery was active, else 'p2p') was retired by

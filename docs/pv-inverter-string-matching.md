@@ -185,8 +185,9 @@ left" is the most hours any config in the column still spends above the ceiling.
 ## 6. Annual-Yield Band Re-Check (Task Item 5)
 
 - Per wired DC kWp (modules × 400.428 W), the 248 default-rated capacities give
-  969.4–1098.5 kWh/kWp (median 1078.6). That is inside `validation.py`'s coded 700–1100
-  and the review briefing's "~700-1100".
+  969.4–1098.5 kWh/kWp (median 1078.6). That was inside `validation.py`'s 700–1100 of
+  the time and the review briefing's "~700-1100"; task 282 re-sourced the band as
+  300–1200 ([pv-annual-yield-benchmark.md](pv-annual-yield-benchmark.md) §2).
 - The headline 3, 4, 5 and 6 kWp at default rating read 995.7–1082.0 kWh per nameplate
   kWp.
 - At this measurement `validate_pv_generation` divided by the nameplate `capacity_kw`,

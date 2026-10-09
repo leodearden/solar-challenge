@@ -183,8 +183,9 @@ power, deducted before the inverter ([pv-system-losses.md](pv-system-losses.md))
   ([pv-annual-yield-benchmark.md](pv-annual-yield-benchmark.md) §3): +6% against PVGIS's
   1021 kWh/kWp at its default 14% system loss (quoted by tasks 252 and 285), because the
   dark TMY partly cancelled the missing losses.
-- With this task alone it read about +14% (1164.7, that doc's §3 amendment), above
-  validation's 1100 band.
+- With this task alone it read about +14% (1164.7, that doc's §3 amendment), above the
+  1100 ceiling validation's band then had; task 282 moved it to 1200
+  ([pv-annual-yield-benchmark.md](pv-annual-yield-benchmark.md) §2).
 - The two corrections are independent physics and compose. With task 252's loss,
   Bristol's 4 kW was expected near 1000 kWh/kWp (1164.7 × 0.86), and it reads 999.9
   (2026-10-09). PVGIS's own estimate at its 14% loss is 1001.1 for the same 2005–2020
