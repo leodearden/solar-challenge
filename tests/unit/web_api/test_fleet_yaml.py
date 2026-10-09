@@ -173,6 +173,11 @@ class TestExportFleetYAML:
                 "battery.dispatch_strategy must be absent or null",
                 id="battery-dispatch-strategy",
             ),
+            pytest.param(
+                {"battery": {**_FLEET_FORM_BODY["battery"], "enabled": False}},
+                "Unrecognised keys in fleet_distribution.battery: 'enabled'",
+                id="battery-enabled-false",
+            ),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(

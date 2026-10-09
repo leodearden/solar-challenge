@@ -471,21 +471,17 @@ class TestFleetApiEndpoints:
         else:
             assert submissions == []
 
-    def test_simulate_fleet_from_distribution_answers_an_empty_battery_block_as_one_with_its_default_spelled_out(
+    def test_simulate_fleet_from_distribution_refuses_an_empty_battery_block_naming_its_missing_capacity(
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
-        """An empty battery block is a mapping its grammar reads, not an absent block: enabled by default, with no capacity distribution, it gets the 400 the block with enabled spelled out gets, and no fleet is queued."""
-        empty = client.post(
+        """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it is a 400 naming battery.capacity_kwh, and no fleet is queued."""
+        response = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**valid_distribution_form(), "battery": {}},
         )
-        enabled = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**valid_distribution_form(), "battery": {"enabled": True}},
-        )
 
-        assert empty.status_code == 400
-        assert (empty.status_code, empty.get_json()) == (enabled.status_code, enabled.get_json())
+        assert response.status_code == 400
+        assert "battery.capacity_kwh" in response.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
 
