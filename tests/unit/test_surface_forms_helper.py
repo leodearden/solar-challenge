@@ -614,6 +614,12 @@ def test_a_generic_names_its_origin_and_its_arguments_classes() -> None:
     }
 
 
+def test_a_bare_typing_alias_names_its_origin() -> None:
+    def f(a: List, b: Callable, c: Type) -> None: ...
+
+    assert named_classes(f) == {list, collections.abc.Callable, type}
+
+
 def test_a_union_names_its_members_classes_alone() -> None:
     def f(a: Optional[Preset], b: Union[int, str], c: float | None) -> None: ...
 
@@ -634,6 +640,14 @@ def test_literal_values_and_annotated_metadata_name_no_class() -> None:
     def f(a: Literal["Preset"], b: Annotated[float, Preset]) -> None: ...
 
     assert named_classes(f) == {float}
+
+
+def test_a_param_spec_args_and_kwargs_name_no_class() -> None:
+    P = ParamSpec("P")
+
+    def f(*args: P.args, **kwargs: P.kwargs) -> None: ...
+
+    assert named_classes(f) == set()
 
 
 def test_a_string_annotation_or_a_forward_reference_names_the_class_its_module_binds_the_name_to() -> None:

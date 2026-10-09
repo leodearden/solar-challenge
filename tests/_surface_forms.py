@@ -34,6 +34,7 @@ Usage::
     assert undeclared_attributes(Meter) == {"label"}
 """
 
+import abc
 import ast
 import dataclasses
 import enum
@@ -88,8 +89,9 @@ def named_classes(obj: object) -> set[type]:
     """The classes the forms that pin *obj* name: surface_form(obj)'s and, for a class, member_forms(obj)'s.
 
     Only annotations name classes, never a default value. A generic names its origin and
-    its arguments' classes, a union its members' alone, an InitVar its type's alone, and
-    Literal's values and Annotated's metadata none. A string annotation or a forward
+    its arguments' classes, a bare alias its origin, a union its members' alone, an
+    InitVar its type's alone, and Literal's values, Annotated's metadata and a
+    ParamSpec's args and kwargs none. A string annotation or a forward
     reference names the class its name is bound to in the module that spells it, read as
     a type checker reads it: its globals, with the imports of its top-level
     `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises NameError.
@@ -161,31 +163,122 @@ class _Spelling(str):
 def _spelled(annotation: object) -> object:
     if annotation is inspect.Parameter.empty:
         return annotation
-    return _Spelling(_annotation_text(annotation))
+    return _Spelling(_parsed(annotation).text())
 
 
-def _annotation_text(annotation: object) -> str:
+class _Construct(abc.ABC):
+    """An annotation parsed as the construct it is, the annotations inside it parsed in turn: the one grammar both its spelling and the classes it names are read by."""
+
+    @abc.abstractmethod
+    def text(self) -> str:
+        """The spelling, alike on every admitted minor."""
+
+    @abc.abstractmethod
+    def classes(self, module: str) -> set[type]:
+        """The classes it names, a name in it resolved in *module*."""
+
+
+@dataclasses.dataclass(frozen=True)
+class _Unevaluated(_Construct):
+    """A string annotation or a forward reference: spelled as written, naming the classes of the annotation it evaluates to."""
+
+    source: str
+
+    def text(self) -> str:
+        return self.source
+
+    def classes(self, module: str) -> set[type]:
+        return _parsed(_evaluated(self.source, module)).classes(module)
+
+
+@dataclasses.dataclass(frozen=True)
+class _Leaf(_Construct):
+    """A part read whole, an annotation or a value inside one: spelled as given, naming the classes it carries."""
+
+    spelling: str
+    named: frozenset[type] = frozenset()
+
+    def text(self) -> str:
+        return self.spelling
+
+    def classes(self, module: str) -> set[type]:
+        return set(self.named)
+
+
+@dataclasses.dataclass(frozen=True)
+class _Union(_Construct):
+    """A union: spelled by its members with bars, naming its members' classes alone."""
+
+    members: tuple[_Construct, ...]
+
+    def text(self) -> str:
+        return " | ".join(member.text() for member in self.members)
+
+    def classes(self, module: str) -> set[type]:
+        return _classes_of(self.members, module)
+
+
+@dataclasses.dataclass(frozen=True)
+class _Subscripted(_Construct):
+    """An origin and its arguments: spelled origin[arguments], origin[()] with none, naming the classes of both."""
+
+    origin: _Construct
+    arguments: tuple[_Construct, ...]
+
+    def text(self) -> str:
+        inside = _texts_of(self.arguments) if self.arguments else "()"
+        return f"{self.origin.text()}[{inside}]"
+
+    def classes(self, module: str) -> set[type]:
+        return self.origin.classes(module) | _classes_of(self.arguments, module)
+
+
+@dataclasses.dataclass(frozen=True)
+class _ParameterTypes(_Construct):
+    """A Callable's list of parameter types: spelled in brackets, naming its members' classes."""
+
+    members: tuple[_Construct, ...]
+
+    def text(self) -> str:
+        return f"[{_texts_of(self.members)}]"
+
+    def classes(self, module: str) -> set[type]:
+        return _classes_of(self.members, module)
+
+
+def _texts_of(constructs: Iterable[_Construct]) -> str:
+    return ", ".join(construct.text() for construct in constructs)
+
+
+def _classes_of(constructs: Iterable[_Construct], module: str) -> set[type]:
+    return set().union(*(construct.classes(module) for construct in constructs))
+
+
+def _parsed(annotation: object) -> _Construct:
+    """The construct *annotation* is: a bare alias reads as its origin, and an annotation no case reads inside, such as a TypeVar, as a leaf spelled by its repr."""
     if isinstance(annotation, str):
-        return annotation
+        return _Unevaluated(annotation)
     if isinstance(annotation, typing.ForwardRef):
-        return annotation.__forward_arg__
-    if annotation is None or annotation is type(None):
-        return "None"
+        return _Unevaluated(annotation.__forward_arg__)
+    if annotation is None:
+        return _Leaf("None")
+    if annotation is type(None):
+        return _Leaf("None", frozenset({type(None)}))
     if annotation is Ellipsis:
-        return "..."
+        return _Leaf("...")
     if isinstance(annotation, list):
-        return f"[{_annotations_text(annotation)}]"
+        return _ParameterTypes(_each_parsed(annotation))
     if isinstance(annotation, dataclasses.InitVar):
-        return f"InitVar[{_annotation_text(annotation.type)}]"
+        return _Subscripted(_Leaf("InitVar"), (_parsed(annotation.type),))
     if _is_bare_alias(annotation):
-        return _annotation_text(typing.get_origin(annotation))
+        return _parsed(typing.get_origin(annotation))
     if isinstance(annotation, (typing.ParamSpecArgs, typing.ParamSpecKwargs)):
-        return repr(annotation)
+        return _Leaf(repr(annotation))
     if typing.get_origin(annotation) is not None:
-        return _subscripted_text(annotation)
+        return _parsed_subscription(annotation)
     if inspect.isclass(annotation):
-        return annotation.__qualname__
-    return repr(annotation)
+        return _Leaf(annotation.__qualname__, frozenset({annotation}))
+    return _Leaf(repr(annotation))
 
 
 def _is_bare_alias(annotation: object) -> bool:
@@ -197,27 +290,28 @@ def _is_bare_alias(annotation: object) -> bool:
     return has_class_origin and not hasattr(annotation, "__args__")
 
 
-def _subscripted_text(annotation: object) -> str:
+def _parsed_subscription(annotation: object) -> _Construct:
     origin = typing.get_origin(annotation)
     arguments = typing.get_args(annotation)
     if origin in (typing.Union, types.UnionType):
-        return " | ".join(_annotation_text(argument) for argument in arguments)
+        return _Union(_each_parsed(arguments))
     if origin is typing.Literal:
-        return f"Literal[{_values_text(arguments)}]"
+        return _Subscripted(_Leaf("Literal"), _value_leaves(arguments))
     if origin is typing.Annotated:
         annotated, *metadata = arguments
-        return f"Annotated[{_annotation_text(annotated)}, {_values_text(metadata)}]"
-    if not arguments:
-        return f"{_annotation_text(origin)}[()]"
-    return f"{_annotation_text(origin)}[{_annotations_text(arguments)}]"
+        return _Subscripted(
+            _Leaf("Annotated"), (_parsed(annotated), *_value_leaves(metadata))
+        )
+    return _Subscripted(_parsed(origin), _each_parsed(arguments))
 
 
-def _annotations_text(annotations: Iterable[object]) -> str:
-    return ", ".join(_annotation_text(annotation) for annotation in annotations)
+def _each_parsed(annotations: Iterable[object]) -> tuple[_Construct, ...]:
+    return tuple(_parsed(annotation) for annotation in annotations)
 
 
-def _values_text(values: Iterable[object]) -> str:
-    return ", ".join(repr(value) for value in values)
+def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
+    """The values inside an annotation, a Literal's values and an Annotated's metadata: each spelled by its repr, naming no class."""
+    return tuple(_Leaf(repr(value)) for value in values)
 
 
 def _form_classes(obj: object) -> set[type]:
@@ -229,7 +323,12 @@ def _form_classes(obj: object) -> set[type]:
     signature = inspect.signature(obj)
     annotations = [parameter.annotation for parameter in signature.parameters.values()]
     annotations.append(signature.return_annotation)
-    return _annotations_classes(annotations, _signature_module(obj))
+    annotated = (
+        annotation
+        for annotation in annotations
+        if annotation is not inspect.Parameter.empty
+    )
+    return _classes_of(_each_parsed(annotated), _signature_module(obj))
 
 
 def _signature_module(obj: object) -> str:
@@ -246,46 +345,9 @@ def _signature_module(obj: object) -> str:
 def _member_form_classes(member: object, cls: type) -> set[type]:
     """The classes the form of *member*, one of *cls*'s, names."""
     if isinstance(member, _AnnotatedAttribute):
-        return _annotation_classes(member.annotation, cls.__module__)
+        return _parsed(member.annotation).classes(cls.__module__)
     function = _spelled_function(member)
     return _form_classes(member if function is None else function)
-
-
-def _annotation_classes(annotation: object, module: str) -> set[type]:
-    """The classes *annotation* names, by the cases _annotation_text spells it in, a name in it resolved in *module*."""
-    if annotation is inspect.Parameter.empty:
-        return set()
-    if isinstance(annotation, str):
-        return _annotation_classes(_evaluated(annotation, module), module)
-    if isinstance(annotation, typing.ForwardRef):
-        return _annotation_classes(annotation.__forward_arg__, module)
-    if isinstance(annotation, list):
-        return _annotations_classes(annotation, module)
-    if isinstance(annotation, dataclasses.InitVar):
-        return _annotation_classes(annotation.type, module)
-    if typing.get_origin(annotation) is not None:
-        return _subscripted_classes(annotation, module)
-    if inspect.isclass(annotation):
-        return {annotation}
-    return set()
-
-
-def _subscripted_classes(annotation: object, module: str) -> set[type]:
-    origin = typing.get_origin(annotation)
-    arguments = typing.get_args(annotation)
-    if origin in (typing.Union, types.UnionType):
-        return _annotations_classes(arguments, module)
-    if origin is typing.Literal:
-        return set()
-    if origin is typing.Annotated:
-        return _annotation_classes(arguments[0], module)
-    named_origin = {origin} if inspect.isclass(origin) else set()
-    return named_origin | _annotations_classes(arguments, module)
-
-
-def _annotations_classes(annotations: Iterable[object], module: str) -> set[type]:
-    named = (_annotation_classes(annotation, module) for annotation in annotations)
-    return set().union(*named)
 
 
 def _evaluated(annotation: str, module: str) -> object:
@@ -423,7 +485,7 @@ def _member_form(member: object) -> str:
 
 def _form_by_kind(member: object) -> str:
     if isinstance(member, _AnnotatedAttribute):
-        return f"attribute {_annotation_text(member.annotation)}"
+        return f"attribute {_parsed(member.annotation).text()}"
     function = _spelled_function(member)
     if function is None:
         return surface_form(member)
