@@ -30,6 +30,9 @@ def _require_valid_degradation_inputs(
         raise ValueError(f"Degradation rate must be 0-1, got {degradation_rate_per_year}")
 
 
+_PVWATTS_DEFAULT_SYSTEM_LOSSES = float(pvlib.pvsystem.pvwatts_losses()) / 100
+
+
 @dataclass(frozen=True)
 class PVConfig:
     """Configuration for a photovoltaic system.
@@ -54,6 +57,11 @@ class PVConfig:
         system_age_years: Age of the PV system in years (default 0.0 = new system)
         degradation_rate_per_year: Annual capacity degradation as a fraction
             (default 0.005 = 0.5%/year, typical for crystalline silicon panels)
+
+        # System losses
+        system_losses: Fraction of each array's DC power lost before the inverter to soiling,
+            shading, mismatch, wiring, connections, light-induced degradation, nameplate rating
+            and availability (default PVWatts v5's 14.08%; docs/pv-system-losses.md)
     """
 
     capacity_kw: float
@@ -74,6 +82,9 @@ class PVConfig:
     # Degradation parameters (PV-DGR)
     system_age_years: float = 0.0  # New system (no degradation)
     degradation_rate_per_year: float = 0.005  # 0.5%/year (typical crystalline silicon)
+
+    # System losses
+    system_losses: float = _PVWATTS_DEFAULT_SYSTEM_LOSSES
 
     def __post_init__(self) -> None:
         """Validate PV configuration parameters."""
@@ -100,6 +111,10 @@ class PVConfig:
                 f"Inverter capacity must be positive and finite, got {self.inverter_capacity_kw} kW"
             )
         _require_valid_degradation_inputs(self.system_age_years, self.degradation_rate_per_year)
+        if not 0 <= self.system_losses < 1:
+            raise ValueError(
+                f"System losses must be a fraction in [0, 1), got {self.system_losses}"
+            )
 
     @property
     def effective_inverter_capacity_kw(self) -> float:
@@ -597,6 +612,35 @@ def _require_compatible_dc_and_ac_models(model_chain: ModelChain) -> None:
         )
 
 
+def _dc_after_losses(
+    dc: pd.DataFrame | pd.Series, kept_fraction: float
+) -> pd.DataFrame | pd.Series:
+    """One array's DC output with its maximum-power-point power and current scaled by kept_fraction, at unchanged voltage.
+
+    PVWatts DC output is a power series; a voltage model's is a frame whose
+    p_mp and v_mp the Sandia and ADR inverters read.
+    """
+    if isinstance(dc, pd.Series):
+        return dc * kept_fraction
+    return dc.assign(i_mp=dc["i_mp"] * kept_fraction, p_mp=dc["p_mp"] * kept_fraction)
+
+
+def _deduct_system_losses(model_chain: ModelChain, system_losses: float) -> ModelChain:
+    """pvlib's losses-model step: each array's DC output less system_losses, for the inverter model to read.
+
+    Like pvlib's own losses models, it records the fraction of DC power kept in
+    results.losses.
+    """
+    kept_fraction = 1 - system_losses
+    model_chain.results.losses = kept_fraction
+    dc = model_chain.results.dc
+    if isinstance(dc, tuple):
+        model_chain.results.dc = tuple(_dc_after_losses(array_dc, kept_fraction) for array_dc in dc)
+    else:
+        model_chain.results.dc = _dc_after_losses(dc, kept_fraction)
+    return model_chain
+
+
 def create_model_chain_picking_from(
     config: PVConfig,
     location: "Location",
@@ -608,6 +652,9 @@ def create_model_chain_picking_from(
     takes the picked inverter's own parameters from pvlib's CEC library by
     name, which is why a CecInverter must name a row there. Custom inverter
     parameters and PVWatts modules ignore the candidates.
+
+    Each array's DC power falls by config.system_losses before the inverter
+    model reads it, at unchanged voltage (docs/pv-system-losses.md).
 
     Args:
         config: PV system configuration
@@ -641,6 +688,7 @@ def create_model_chain_picking_from(
         location=pvlib_location,
         aoi_model="physical",
         spectral_model="no_loss",
+        losses_model=functools.partial(_deduct_system_losses, system_losses=config.system_losses),
     )
     _require_compatible_dc_and_ac_models(model_chain)
 

@@ -3,6 +3,7 @@
 import dataclasses
 import math
 import re
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -165,6 +166,27 @@ class TestPVConfigValidation:
         PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.0)   # no degradation
         PVConfig(capacity_kw=4.0, degradation_rate_per_year=1.0)   # max rate
         PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.005) # default rate
+
+
+class TestSystemLossesConfig:
+    """PVConfig.system_losses is the fraction of each array's DC power lost before the inverter."""
+
+    def test_the_default_is_pvwatts_v5s_loss_budget(self) -> None:
+        assert PVConfig(capacity_kw=4.0).system_losses == pytest.approx(
+            pvlib.pvsystem.pvwatts_losses() / 100
+        )
+
+    @pytest.mark.parametrize("value", [-0.01, 1.0, 14.0, math.nan, math.inf, -math.inf])
+    def test_a_loss_outside_zero_to_one_is_refused(self, value: float) -> None:
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"System losses must be a fraction in [0, 1), got {value}"),
+        ):
+            dataclasses.replace(PVConfig(capacity_kw=4.0), system_losses=value)
+
+    @pytest.mark.parametrize("value", [0.0, 0.05, 0.99])
+    def test_a_loss_in_zero_to_one_is_kept(self, value: float) -> None:
+        assert PVConfig(capacity_kw=4.0, system_losses=value).system_losses == value
 
 
 class TestCreatePVSystem:
@@ -1100,3 +1122,135 @@ class TestWiredDcCapacity:
         )
 
         assert wired_dc_capacity_kw(config) == pytest.approx(expected_kw)
+
+
+LINEAR_INVERTER_CONFIG = PVConfig(
+    capacity_kw=4.0,
+    custom_inverter_params=create_simple_inverter_params(efficiency=0.96, capacity_w=8000.0),
+)
+
+CHAIN_BUILDERS = [
+    pytest.param(
+        lambda config: create_model_chain(config, Location.bristol()),
+        id="create_model_chain",
+    ),
+    pytest.param(
+        lambda config: create_model_chain_picking_from(
+            config, Location.bristol(), candidate_cec_inverters()
+        ),
+        id="create_model_chain_picking_from",
+    ),
+]
+
+
+class TestSystemLossesReachTheInverterAsDCPower:
+    """Each array's DC power falls by PVConfig.system_losses before the inverter, at unchanged voltage."""
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(LINEAR_INVERTER_CONFIG, id="default-losses"),
+            pytest.param(
+                dataclasses.replace(LINEAR_INVERTER_CONFIG, system_losses=0.05), id="5%-losses"
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("day", ["clear_june_daytime", "overcast_january_daytime"])
+    def test_a_linear_inverter_passes_on_exactly_the_kept_fraction(
+        self, request: pytest.FixtureRequest, config: PVConfig, day: str
+    ) -> None:
+        """The simple inverter's AC is (Paco / Pdco) x DC power whatever the voltage, and 4 kW of modules never reach its 8 kW rating."""
+        weather = request.getfixturevalue(day)
+        lossless = dataclasses.replace(config, system_losses=0.0)
+
+        lossless_kwh = simulate_pv_output(lossless, Location.bristol(), weather).sum()
+        kwh = simulate_pv_output(config, Location.bristol(), weather).sum()
+
+        assert lossless_kwh > 0
+        assert kwh / lossless_kwh == pytest.approx(1 - config.system_losses, rel=1e-9), (
+            f"{config.system_losses:.4%} system losses on the {day} kept {kwh:.4f} kWh "
+            f"of the lossless {lossless_kwh:.4f} kWh"
+        )
+
+    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    @pytest.mark.parametrize("build", CHAIN_BUILDERS)
+    @pytest.mark.parametrize(
+        ("capacity_kw", "array_count"), [(4.0, 1), (7.6, 2)], ids=["one-array", "two-arrays"]
+    )
+    def test_every_chain_builder_lowers_dc_power_not_voltage(
+        self,
+        build: Callable[[PVConfig], pvlib.modelchain.ModelChain],
+        capacity_kw: float,
+        array_count: int,
+        clear_june_daytime: pd.DataFrame,
+    ) -> None:
+        """The Sandia and ADR inverters read v_mp, and create_pv_system matches the strings' voltage to the inverter's MPPT window."""
+        config = PVConfig(capacity_kw=capacity_kw)
+        lossy = build(config)
+        lossless = build(dataclasses.replace(config, system_losses=0.0))
+        assert len(lossy.system.arrays) == array_count, (
+            f"{capacity_kw} kW was wired as {_wiring(lossy.system)} (modules per string, "
+            f"strings), not as the {array_count} array(s) this case covers"
+        )
+
+        lossy.run_model(clear_june_daytime)
+        lossless.run_model(clear_june_daytime)
+
+        kept = 1 - config.system_losses
+        for lossy_dc, lossless_dc in zip(_dc_per_array(lossy), _dc_per_array(lossless), strict=True):
+            np.testing.assert_allclose(lossy_dc["p_mp"], lossless_dc["p_mp"] * kept)
+            np.testing.assert_allclose(lossy_dc["i_mp"], lossless_dc["i_mp"] * kept)
+            pd.testing.assert_series_equal(lossy_dc["v_mp"], lossless_dc["v_mp"])
+
+    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(PVConfig(capacity_kw=4.0), id="default-losses"),
+            pytest.param(PVConfig(capacity_kw=4.0, system_losses=0.0), id="no-losses"),
+        ],
+    )
+    def test_a_run_chain_records_the_fraction_of_dc_power_it_kept(
+        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+    ) -> None:
+        """results.losses holds the kept fraction, as pvlib's own losses models record it: 1 with no loss."""
+        chain = create_model_chain(config, Location.bristol())
+
+        chain.run_model(clear_june_daytime)
+
+        assert chain.results.losses == pytest.approx(1 - config.system_losses)
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(
+                PVConfig(
+                    capacity_kw=6.0,
+                    inverter_capacity_kw=3.0,
+                    custom_module_params=create_simple_module_params(),
+                ),
+                id="pvwatts-6kw-on-3kw",
+            ),
+            pytest.param(PVConfig(capacity_kw=8.0, inverter_capacity_kw=3.68), id="cec-8kw-on-3.68kw"),
+        ],
+    )
+    def test_an_inverter_limited_array_still_reaches_its_rating(
+        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+    ) -> None:
+        """A derate of the AC instead would cap the peak below the rating and take the whole fraction of the energy."""
+        lossy = simulate_pv_output(config, Location.bristol(), clear_june_daytime)
+        lossless = simulate_pv_output(
+            dataclasses.replace(config, system_losses=0.0), Location.bristol(), clear_june_daytime
+        )
+        system = f"{config.capacity_kw} kW on a {config.effective_inverter_capacity_kw} kW inverter"
+
+        assert lossy.max() == pytest.approx(lossless.max()), (
+            f"{system} peaked at {lossy.max():.3f} kW with system losses "
+            f"and at {lossless.max():.3f} kW without"
+        )
+        kept = 1 - config.system_losses
+        assert kept * lossless.sum() < lossy.sum() < lossless.sum(), (
+            f"{system} kept {lossy.sum() / lossless.sum():.4f} of its lossless energy on the clear "
+            f"June day; with the inverter clipping, it should keep more than its DC's {kept:.4f} "
+            "and less than all of it"
+        )

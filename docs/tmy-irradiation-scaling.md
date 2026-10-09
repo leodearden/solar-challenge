@@ -84,6 +84,16 @@ not part of the test suite. In outline:
 
 This is a dated record. Re-measure with §3's script before relying on it.
 
+**[Amended 2026-10-09, task 252: the PV model now deducts PVWatts v5's default 14.08%
+system losses from each array's DC power ([pv-system-losses.md](pv-system-losses.md)),
+and the AC figures here and in §2, §5 and §6 were measured without them. Re-run with
+them by §3's script on task 252's branch from main 5325093 (same interpreter and
+libraries), the AC deviations move by at most 0.3 pp: Bristol's annual scale reads
+−0.2% and its monthly −1.1%, Penzance's monthly −1.0%, Eastbourne's monthly −1.7%,
+Belfast's monthly +0.0%, Glasgow's raw TMY +7.4% and Plymouth's monthly +0.2%. Every
+other figure in the tables is unchanged. Bristol's AC with the losses, in kWh: real
+years 3866–4281 (mean 4014); raw TMY 3714; annual-scaled 4004; monthly-scaled 3968.]**
+
 **Seven sites.** AC against the mean of the real years; peak hourly GHI in W/m².
 
 | Site (lat, lon) | k | raw TMY | annual scale | monthly scale | peak GHI raw / annual / monthly / record |
@@ -165,18 +175,21 @@ GHI totals in kWh/m²:
 
 ## 7. Task 252: System Losses
 
-Task 252, which gives the PV model system losses, is pending.
+Task 252 gave the PV model system losses: PVWatts v5's default 14.08% of each array's DC
+power, deducted before the inverter ([pv-system-losses.md](pv-system-losses.md)).
 
-- The model applies no soiling, wiring, mismatch or availability losses yet. Before this
-  task, Bristol's 4 kW read 1080.9 kWh per wired kWp
+- Until then the model applied no soiling, wiring, mismatch or availability losses.
+  Before this task, Bristol's 4 kW read 1080.9 kWh per wired kWp
   ([pv-annual-yield-benchmark.md](pv-annual-yield-benchmark.md) §3): +6% against PVGIS's
   1021 kWh/kWp at its default 14% system loss (quoted by tasks 252 and 285), because the
   dark TMY partly cancelled the missing losses.
-- With this task alone it reads about +14% (1164.7, that doc's §3 amendment), above
+- With this task alone it read about +14% (1164.7, that doc's §3 amendment), above
   validation's 1100 band.
-- The two corrections are independent physics and compose. With task 252's ~14% loss,
-  Bristol's 4 kW is expected near 1000 kWh/kWp (1164.7 × 0.86): an expectation to
-  re-measure with §3's script once task 252 lands.
+- The two corrections are independent physics and compose. With task 252's loss,
+  Bristol's 4 kW was expected near 1000 kWh/kWp (1164.7 × 0.86), and it reads 999.9
+  (2026-10-09). PVGIS's own estimate at its 14% loss is 1001.1 for the same 2005–2020
+  years; on 2026-10-03 its PVcalc gave 1022.8 over 2005–2023
+  ([pv-system-losses.md](pv-system-losses.md) §5).
 
 ## 8. When to Revisit
 
@@ -187,5 +200,3 @@ Task 252, which gives the PV model system losses, is pending.
   covers seven UK points.
 - Results that turn on the brightest hours, which annual scaling raises with the rest
   (§6).
-- Task 252 landing: re-measure §4 here, and §3–§4 of
-  [pv-annual-yield-benchmark.md](pv-annual-yield-benchmark.md).

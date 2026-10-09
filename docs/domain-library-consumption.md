@@ -275,6 +275,18 @@ and every weather cache entry written before the change is ignored
 PV generation when they re-pin, bills and the cost-recovery rate included, and
 rebuild any pre-built cache with `WeatherCache.put`.
 
+**Unreleased on main** (task 252): `PVConfig` gains a last keyword,
+`system_losses`, the fraction of each array's DC power lost before the
+inverter. Its default is PVWatts v5's 14.08%
+(`pvlib.pvsystem.pvwatts_losses() / 100`), and a value outside [0, 1) raises
+`ValueError`. On the same weather, every PV output is lower than the 0.5.0
+tag's. AC falls by about 14% where the inverter does not clip (Bristol's
+default 4 kW on its scaled TMY: 4664 to 4004 kWh), and by less where it clips,
+because the loss is taken before the inverter
+([pv-system-losses.md](pv-system-losses.md)). `system_losses=0.0` gives the
+output without system losses. Consumers re-baseline every figure that depends
+on PV generation when they re-pin, bills and the cost-recovery rate included.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

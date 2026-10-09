@@ -126,7 +126,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "simulate_community": "(fleet_results: 'FleetResults', config: CommunityConfig, *, validate_balance: bool = True) -> CommunityResults",
     "validate_community_balance": "(fleet_results: 'FleetResults', community_results: CommunityResults, tolerance: float = 0.001) -> bool",
     # --- pv (pv.py) ---
-    "PVConfig": "(capacity_kw: float, azimuth: float = 180.0, tilt: float = 35.0, name: str = '', module_efficiency: float = 0.2, temperature_coefficient: float = -0.004, custom_module_params: dict[str, float] | None = None, inverter_efficiency: float = 0.96, inverter_capacity_kw: float | None = None, custom_inverter_params: dict[str, float] | None = None, system_age_years: float = 0.0, degradation_rate_per_year: float = 0.005) -> None",
+    "PVConfig": "(capacity_kw: float, azimuth: float = 180.0, tilt: float = 35.0, name: str = '', module_efficiency: float = 0.2, temperature_coefficient: float = -0.004, custom_module_params: dict[str, float] | None = None, inverter_efficiency: float = 0.96, inverter_capacity_kw: float | None = None, custom_inverter_params: dict[str, float] | None = None, system_age_years: float = 0.0, degradation_rate_per_year: float = 0.005, system_losses: float = 0.14075660688264469) -> None",
     "simulate_pv_output": "(config: PVConfig, location: Location, weather_data: DataFrame) -> Series",
     "create_model_chain": "(config: PVConfig, location: Location) -> ModelChain",
     "create_pv_system": "(config: PVConfig) -> PVSystem",
