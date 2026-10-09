@@ -686,6 +686,12 @@ def test_a_param_spec_args_and_kwargs_name_no_class() -> None:
 
 
 def test_a_type_variable_a_new_type_or_a_special_form_names_no_class_not_even_a_bound_or_a_supertype() -> None:
+    """A deliberate limit: what a type variable or a NewType carries goes unread.
+
+    named_classes reads the classes from the forms, and the form of a type variable or a
+    NewType spells only its name. Following a bound, constraints, a default or a
+    supertype means spelling it in the form too; this test changes with that.
+    """
     T = TypeVar("T", bound=Preset)
     P = ParamSpec("P")
     Ts = TypeVarTuple("Ts")

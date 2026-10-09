@@ -270,7 +270,7 @@ _CLASSLESS_NAME_KINDS: tuple[type, ...] = (
 
 
 def _parsed(annotation: object) -> _Construct:
-    """The construct *annotation* is: a bare alias reads as its origin, a classless name, an instance of one of _CLASSLESS_NAME_KINDS such as a TypeVar or typing.Self, as a leaf spelled by its repr, and an annotation no case reads, such as a type alias, raises TypeError naming it and its type."""
+    """The construct *annotation* is; raises TypeError naming it and its type if no construct reads it."""
     if isinstance(annotation, str):
         return _Unevaluated(annotation)
     if isinstance(annotation, typing.ForwardRef):
