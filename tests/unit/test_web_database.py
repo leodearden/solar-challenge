@@ -642,13 +642,13 @@ class TestSavedRunRow:
             pytest.param("home", "fleet", id="home-then-fleet"),
         ],
     )
-    def test_a_resave_writes_the_row_a_first_save_would_but_keeps_created_at_and_notes(
+    def test_a_resave_writes_the_row_a_first_save_would_but_keeps_created_at_and_the_run_labels(
         self, storage, saves, first, resave
     ):
-        """A save under the id of a saved run writes the row a first save with its arguments would, except that the row keeps its created_at and notes.
+        """A save under the id of a saved run writes the row a first save with its arguments would, except that the row keeps its created_at and its labels, name and notes.
 
         The first save is of the other run type, was completed and created earlier, and its notes
-        are set, so it differs from the re-save in every column: each column of the re-saved row
+        and name are set, so it differs from the re-save in every column: each column of the re-saved row
         shows which save wrote it.
         """
         saves[first](
@@ -658,7 +658,7 @@ class TestSavedRunRow:
             duration_seconds=120.0,
             created_at="2026-01-01T00:00:00+00:00",
         )
-        storage.update_run_labels("resaved", {"notes": "Checked"})
+        storage.update_run_labels("resaved", {"name": "Renamed", "notes": "Checked"})
         first_record = storage.run_record("resaved")
         resave_arguments = dict(
             name="Second Name",
@@ -678,7 +678,7 @@ class TestSavedRunRow:
         ]
         assert columns_the_saves_share == []
         assert storage.run_record("resaved") == dataclasses.replace(
-            fresh_record, id="resaved", created_at="2026-01-01T00:00:00+00:00", notes="Checked"
+            fresh_record, id="resaved", created_at="2026-01-01T00:00:00+00:00", name="Renamed", notes="Checked"
         )
 
     @pytest.mark.parametrize("kind", ["home", "fleet"])

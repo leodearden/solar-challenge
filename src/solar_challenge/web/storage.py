@@ -218,7 +218,11 @@ def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     return None if row is None else RunRecord(**dict(row))
 
 
-_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", "notes")
+RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
+RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
+
+
+_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS)
 
 
 def _run_row_upsert() -> str:
@@ -278,10 +282,6 @@ def _saved_run_row(
         n_homes=n_homes,
         notes=None,
     )
-
-
-RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
-RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
 
 class RunStorage:
@@ -360,7 +360,9 @@ class RunStorage:
     def _upsert_run_row(self, row: RunRecord) -> None:
         """Write *row* as the runs row under row.id.
 
-        A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names.
+        A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names, among
+        them RUN_LABELS, the labels a user edits in Run History: a run renamed while its job
+        runs keeps the new name when the job's save rewrites its row.
         """
         with get_db(self.db_path) as conn:
             conn.execute(_RUN_ROW_UPSERT, asdict(row))
@@ -380,7 +382,9 @@ class RunStorage:
         """Save a home simulation run to storage.
 
         Creates directory structure, serializes config and summary to JSON,
-        saves time series to parquet, and upserts metadata into database.
+        saves time series to parquet, and upserts metadata into database. A run
+        already stored under run_id keeps the columns of its runs row that
+        _upsert_run_row keeps.
 
         Args:
             run_id: Unique run identifier
@@ -497,7 +501,9 @@ class RunStorage:
         """Save a fleet simulation run to storage.
 
         Creates directory structure with homes/ subdirectory, saves per-home
-        parquet files, fleet summary JSON, and fleet config JSON.
+        parquet files, fleet summary JSON, and fleet config JSON. A run already
+        stored under run_id keeps the columns of its runs row that _upsert_run_row
+        keeps.
 
         Args:
             run_id: Unique run identifier

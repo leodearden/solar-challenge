@@ -728,6 +728,32 @@ class TestJobManagerStatus:
         assert _job_state(_run_storage(tmp_path), job_id)["status"] == "completed"
 
 
+class TestRunLabelsEditedWhileItsJobRuns:
+    """A run renamed or annotated in Run History while its job runs keeps those labels when the job finishes."""
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_run_edited_while_its_job_runs_keeps_its_labels_when_the_job_completes(
+        self,
+        submit_job: Callable[[JobManager, Path], str],
+        blocking_simulation: _BlockingSimulation,
+        tmp_path: Path,
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_id = submit_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+        storage = _run_storage(tmp_path)
+        run_id = _run_of_job(manager, job_id, storage).id
+        storage.update_run_labels(run_id, {"name": "Renamed by user", "notes": "my note"})
+
+        blocking_simulation.release()
+
+        status = _wait_until_finished(manager, job_id)
+        assert status["status"] == "completed", status["message"]
+        run = storage.run_record(run_id)
+        assert run is not None
+        assert (run.status, run.name, run.notes) == ("completed", "Renamed by user", "my note")
+
+
 _A_MINUTE = 60.0
 _A_DAY = 24 * 60 * 60.0
 
