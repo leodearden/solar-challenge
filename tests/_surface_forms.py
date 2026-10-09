@@ -53,6 +53,8 @@ def surface_form(obj: object) -> str:
     An Enum's is its members, as NAME=value in definition order. A constant's, that of
     anything neither a class nor a routine, is its type's qualified name. Any other
     class's or routine's is its signature, a class's being its constructor's without self.
+    An annotation in that signature which it has no rule for, such as a type alias, raises
+    TypeError naming it and its type.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
@@ -96,9 +98,10 @@ def named_classes(obj: object) -> set[type]:
     reference names the class its name is bound to in the module that spells it, read as
     a type checker reads it: its globals, with the imports of its top-level
     `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises NameError.
-    A class's constructor is spelled in the module of the class in its MRO whose own body
-    defines __init__ or __new__, which may be a base defined in another module. A
-    constant names its type, and an Enum's members name nothing.
+    An annotation none of these rules reads, such as a type alias, raises TypeError
+    naming it and its type. A class's constructor is spelled in the module of the class
+    in its MRO whose own body defines __init__ or __new__, which may be a base defined in
+    another module. A constant names its type, and an Enum's members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -267,7 +270,7 @@ _CLASSLESS_NAME_KINDS: tuple[type, ...] = (
 
 
 def _parsed(annotation: object) -> _Construct:
-    """The construct *annotation* is: a bare alias reads as its origin, and a classless name, an instance of one of _CLASSLESS_NAME_KINDS such as a TypeVar or typing.Self, or an annotation no case reads inside, as a leaf spelled by its repr."""
+    """The construct *annotation* is: a bare alias reads as its origin, a classless name, an instance of one of _CLASSLESS_NAME_KINDS such as a TypeVar or typing.Self, as a leaf spelled by its repr, and an annotation no case reads, such as a type alias, raises TypeError naming it and its type."""
     if isinstance(annotation, str):
         return _Unevaluated(annotation)
     if isinstance(annotation, typing.ForwardRef):
@@ -290,7 +293,12 @@ def _parsed(annotation: object) -> _Construct:
         return _parsed_subscription(annotation)
     if inspect.isclass(annotation):
         return _Leaf(annotation.__qualname__, frozenset({annotation}))
-    return _Leaf(repr(annotation))
+    kind = f"{type(annotation).__module__}.{type(annotation).__qualname__}"
+    raise TypeError(
+        f"No construct reads the annotation {annotation!r}, of type {kind}: give it a "
+        "_Construct that spells it and names its classes, or, if it is a name and no "
+        "class, add its type to _CLASSLESS_NAME_KINDS"
+    )
 
 
 def _is_bare_alias(annotation: object) -> bool:
