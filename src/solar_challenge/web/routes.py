@@ -167,8 +167,6 @@ def _load_scenario_presets() -> list[str]:
     Returns:
         Sorted list of scenario file names (without extension).
     """
-    import importlib.resources  # noqa: PLC0415
-
     presets: list[str] = []
 
     # Try the project-level scenarios/ directory

@@ -10,7 +10,7 @@ from typing import Optional
 
 import pandas as pd
 
-from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.pv import PVConfig, wired_dc_capacity_kw
 from solar_challenge.timebase import HOURS_PER_MINUTE
 

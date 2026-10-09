@@ -18,7 +18,6 @@ unless whoever invokes the CLI passes another CliFleetSimulator as obj.
 """
 
 import dataclasses
-import sys
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar

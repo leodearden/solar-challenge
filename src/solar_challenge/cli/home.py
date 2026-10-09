@@ -15,7 +15,6 @@ from solar_challenge.cli.utils import (
     create_summary_table,
     handle_errors,
     load_config_with_overrides,
-    parse_location,
     print_info,
     print_report,
     print_success,

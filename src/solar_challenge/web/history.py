@@ -16,7 +16,6 @@ from flask import (
     Blueprint,
     Response,
     flash,
-    jsonify,
     redirect,
     render_template,
     request,

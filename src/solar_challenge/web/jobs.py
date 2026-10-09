@@ -8,7 +8,6 @@ tracking via SQLite and SSE event queues.
 
 import collections
 import functools
-import json
 import sqlite3
 import threading
 import time
@@ -26,13 +25,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
-from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.home import simulate_home as _default_simulate_home
-from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
-from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import RunStatus, RunType, get_db
 from solar_challenge.web.storage import RunStorage
 

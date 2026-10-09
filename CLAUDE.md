@@ -24,6 +24,10 @@ pytest tests/unit/test_battery.py::TestBatteryConfig::test_default_config -v
 # Type checking
 mypy src/solar_challenge
 
+# Lint: ruff with the rules pyproject.toml's [tool.ruff.lint] selects; the
+# verify runs it through tests/unit/test_lint.py
+uv run --locked --extra dev ruff check src/solar_challenge
+
 # Test coverage
 pytest --cov=src/solar_challenge
 

@@ -45,6 +45,7 @@ dev = [
     "mypy>=1.0.0",
     "packaging>=22.0",
     "pytest-rerunfailures>=16.7",
+    "ruff>=0.15.9",
 ]
 stochastic = []  # backward-compat alias; richardsonpy is now a core dependency
 web = [
@@ -99,3 +100,7 @@ ignore_missing_imports = true
 # (strict = true), as everywhere else in the package.
 module = ["solar_challenge.web.*"]
 disallow_untyped_decorators = false
+
+[tool.ruff.lint]
+# The rules tests/unit/test_lint.py holds the package to.
+select = ["F"]
