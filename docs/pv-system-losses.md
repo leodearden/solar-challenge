@@ -71,9 +71,9 @@ model's annual performance ratio lands on the two UK references (§5):
 
 This is a dated record. Re-measure with the script before relying on it.
 
-- **Provenance.** 2026-10-09, branch task/252 at 97f7550 (the model code is final from
-  785a0b5): CPython 3.12.3, pvlib 0.15.1, pandas 3.0.3, numpy 2.4.6. TMYs through
-  `get_tmy_data`, scaled to PVGIS v5_3's 2005–2020 mean GHI
+- **Provenance.** 2026-10-09, on task 252's branch from main cf6af55, and again from
+  main 5325093 with identical output: CPython 3.12.3, pvlib 0.15.1, pandas 3.0.3, numpy
+  2.4.6. TMYs through `get_tmy_data`, scaled to PVGIS v5_3's 2005–2020 mean GHI
   ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)). PVGIS-14% is pvlib's
   `get_pvgis_hourly(pvcalculation=True, peakpower=1, loss=14)` from the same release
   and years (PVGIS-SARAH3), at 35° facing south, free-standing, with the horizon.

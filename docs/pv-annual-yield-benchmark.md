@@ -59,8 +59,20 @@ This is a dated record. Re-measure with the method below before relying on it.
   ([pv-inverter-string-matching.md](pv-inverter-string-matching.md) §7). On the scaled
   TMY the median becomes 1163.3 and 231 read above 1100, 2.6 kW now among them
   (1121.1); the range, 4 kW and the AC peak's maximum are unchanged.]**
+  **[Amended 2026-10-09, task 252: the model now deducts PVWatts v5's default 14.08%
+  system losses from each array's DC power ([pv-system-losses.md](pv-system-losses.md)).
+  Re-measured on the scaled TMY by §3's and §4's methods, on task 252's branch from
+  main 5325093 (same interpreter and libraries; without the losses they reproduce the
+  figures as task 240 left them): the 248 capacities read 890.7–1016.8 kWh/kWp (median
+  997.9), none outside the band, and 4 kW reads 999.9. The AC peak reaches at most
+  0.961 × the wired DC (at 21.5–21.8 kW, which wire the same 54 modules), so none fails
+  the peak bound: 0.6 kW, which failed it by 0.007%, reads 0.945 ×. The UK-site table
+  below is lossless and unscaled; [pv-system-losses.md](pv-system-losses.md) §5 has the
+  sites with the losses on their scaled TMYs, three of which still read above 1100
+  (task 282).]**
 - **Model.** `pv.create_model_chain` applied no soiling, wiring, mismatch or
-  availability losses.
+  availability losses. From task 252 every model chain deducts PVWatts v5's default
+  system losses from each array's DC power ([pv-system-losses.md](pv-system-losses.md)).
 - **Method.** South-facing at 35° unless stated. The hourly AC in kW, summed, is kWh:
 
   ```python
