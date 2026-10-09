@@ -32,10 +32,17 @@ from typing import (
     Iterable,
     List,
     Literal,
+    LiteralString,
+    Never,
+    NewType,
+    NoReturn,
     Optional,
     ParamSpec,
+    Self,
     Tuple,
     Type,
+    TypeVar,
+    TypeVarTuple,
     Union,
 )
 
@@ -179,6 +186,20 @@ def test_a_param_spec_args_and_kwargs_are_spelled_by_their_reprs() -> None:
     def f(*args: P.args, **kwargs: P.kwargs) -> None: ...
 
     assert surface_form(f) == "(*args: P.args, **kwargs: P.kwargs) -> None"
+
+
+def test_a_type_variable_a_new_type_or_a_special_form_is_spelled_by_its_repr() -> None:
+    T = TypeVar("T")
+    P = ParamSpec("P")
+    Ts = TypeVarTuple("Ts")
+    Kwh = NewType("Kwh", float)
+
+    def f(a: T, b: P, c: Ts, d: Kwh, e: Self, g: LiteralString) -> Never: ...
+
+    assert (
+        surface_form(f)
+        == "(a: ~T, b: ~P, c: Ts, d: tests.unit.test_surface_forms_helper.Kwh, e: typing.Self, g: typing.LiteralString) -> typing.Never"
+    )
 
 
 def test_a_string_annotation_is_spelled_verbatim_and_unquoted() -> None:
@@ -646,6 +667,17 @@ def test_a_param_spec_args_and_kwargs_name_no_class() -> None:
     P = ParamSpec("P")
 
     def f(*args: P.args, **kwargs: P.kwargs) -> None: ...
+
+    assert named_classes(f) == set()
+
+
+def test_a_type_variable_a_new_type_or_a_special_form_names_no_class_not_even_a_bound_or_a_supertype() -> None:
+    T = TypeVar("T", bound=Preset)
+    P = ParamSpec("P")
+    Ts = TypeVarTuple("Ts")
+    PresetId = NewType("PresetId", Preset)
+
+    def f(a: T, b: P, c: Ts, d: PresetId, e: Self) -> NoReturn: ...
 
     assert named_classes(f) == set()
 
