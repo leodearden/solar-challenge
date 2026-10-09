@@ -612,6 +612,30 @@ def _require_compatible_dc_and_ac_models(model_chain: ModelChain) -> None:
         )
 
 
+def _dc_after_losses(
+    dc: pd.DataFrame | pd.Series, kept_fraction: float
+) -> pd.DataFrame | pd.Series:
+    """One array's DC output with its maximum-power-point power and current scaled by kept_fraction, at unchanged voltage.
+
+    PVWatts DC output is a power series; a voltage model's is a frame whose
+    p_mp and v_mp the Sandia and ADR inverters read.
+    """
+    if isinstance(dc, pd.Series):
+        return dc * kept_fraction
+    return dc.assign(i_mp=dc["i_mp"] * kept_fraction, p_mp=dc["p_mp"] * kept_fraction)
+
+
+def _deduct_system_losses(model_chain: ModelChain, system_losses: float) -> ModelChain:
+    """pvlib's losses-model step: each array's DC output less system_losses, for the inverter model to read."""
+    kept_fraction = 1 - system_losses
+    dc = model_chain.results.dc
+    if isinstance(dc, tuple):
+        model_chain.results.dc = tuple(_dc_after_losses(array_dc, kept_fraction) for array_dc in dc)
+    else:
+        model_chain.results.dc = _dc_after_losses(dc, kept_fraction)
+    return model_chain
+
+
 def create_model_chain_picking_from(
     config: PVConfig,
     location: "Location",
@@ -623,6 +647,9 @@ def create_model_chain_picking_from(
     takes the picked inverter's own parameters from pvlib's CEC library by
     name, which is why a CecInverter must name a row there. Custom inverter
     parameters and PVWatts modules ignore the candidates.
+
+    Each array's DC power falls by config.system_losses before the inverter
+    model reads it, at unchanged voltage (docs/pv-system-losses.md).
 
     Args:
         config: PV system configuration
@@ -656,6 +683,7 @@ def create_model_chain_picking_from(
         location=pvlib_location,
         aoi_model="physical",
         spectral_model="no_loss",
+        losses_model=functools.partial(_deduct_system_losses, system_losses=config.system_losses),
     )
     _require_compatible_dc_and_ac_models(model_chain)
 
