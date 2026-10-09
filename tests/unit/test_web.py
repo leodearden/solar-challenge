@@ -1,15 +1,11 @@
 """Tests for the Flask web dashboard module."""
 
-import dataclasses
-import json
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
-import numpy as np
-import pandas as pd
 from flask import Flask
 from flask.testing import FlaskClient
 
@@ -17,16 +13,6 @@ from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.charts import (
-    battery_soc_chart,
-    daily_energy_balance,
-    financial_breakdown,
-    heat_pump_analysis,
-    monthly_summary,
-    power_flow_timeline,
-    sankey_diagram,
-    seasonal_comparison,
-)
 from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
@@ -44,6 +30,7 @@ from tests._html_page import (
     texts,
     texts_after,
 )
+from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
 
 
@@ -210,7 +197,7 @@ class TestDashboardRoute:
         """GET / with saved runs renders the Recent Runs table, one row per run showing its name, and no empty-state message."""
         run_names = ("North Roof", "South Roof")
         for run_name in run_names:
-            _save_home_run(app, run_name, _make_sim_results(days=1))
+            _save_home_run(app, run_name, make_sinusoidal_sim_results(days=1))
         response = client.get("/")
         page = response.get_data(as_text=True)
         page_texts = texts(page)
@@ -222,7 +209,7 @@ class TestDashboardRoute:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """GET / lists the saved runs newest first by creation time in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's home or fleet results page."""
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         fleet_run_id = _save_fleet_run(
             app, "Community Fleet", [results, results], created_at="2024-06-02T09:00:00+00:00"
         )
@@ -249,7 +236,7 @@ class TestDashboardRoute:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """GET / reads Total Runs as the completed runs, Homes Simulated as their homes, each home of a fleet run counted, and Energy Modelled as those homes' total generation in MWh; a failed run adds to none of them."""
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         _save_home_run(app, "North Roof", results)
         _save_fleet_run(app, "Community Fleet", [results, results])
         _save_home_run(app, "South Roof", results, status="failed")
@@ -260,200 +247,6 @@ class TestDashboardRoute:
         assert texts_after(page, "Total Runs", 1) == ["2"]
         assert texts_after(page, "Homes Simulated", 1) == [str(completed_homes)]
         assert texts_after(page, "Energy Modelled", 2) == [str(round(completed_homes_generation_mwh, 2)), "MWh"]
-
-
-# ---------------------------------------------------------------------------
-# Helpers for chart / results tests
-# ---------------------------------------------------------------------------
-
-def _make_sim_results(days: int = 3) -> SimulationResults:
-    """Create a minimal SimulationResults object for testing.
-
-    Builds synthetic 1-minute resolution time series spanning the
-    requested number of days, suitable for exercising chart functions.
-
-    Args:
-        days: Number of simulation days.
-
-    Returns:
-        SimulationResults with simple but valid data.
-    """
-    freq = "min"
-    index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
-
-    # Simple synthetic profiles (sinusoidal generation, flat demand)
-    hours = np.arange(len(index)) / 60.0
-    generation = np.maximum(0, np.sin(hours * np.pi / 12) * 3.0)
-    demand = np.full(len(index), 0.5)
-    self_consumption = np.minimum(generation, demand)
-    grid_import = np.maximum(0, demand - generation)
-    grid_export = np.maximum(0, generation - demand)
-    battery_charge = np.zeros(len(index))
-    battery_discharge = np.zeros(len(index))
-    battery_soc = np.zeros(len(index))
-
-    def _series(values: np.ndarray, name: str) -> pd.Series:
-        return pd.Series(values, index=index, name=name)
-
-    return SimulationResults(
-        generation=_series(generation, "generation_kw"),
-        demand=_series(demand, "demand_kw"),
-        self_consumption=_series(self_consumption, "self_consumption_kw"),
-        battery_charge=_series(battery_charge, "battery_charge_kw"),
-        battery_discharge=_series(battery_discharge, "battery_discharge_kw"),
-        battery_soc=_series(battery_soc, "battery_soc_kwh"),
-        grid_import=_series(grid_import, "grid_import_kw"),
-        grid_export=_series(grid_export, "grid_export_kw"),
-        import_cost=_series(np.zeros(len(index)), "import_cost_gbp"),
-        export_revenue=_series(np.zeros(len(index)), "export_revenue_gbp"),
-        tariff_rate=_series(np.zeros(len(index)), "tariff_rate_per_kwh"),
-        strategy_name="self_consumption",
-    )
-
-
-def _steady_run(
-    days: int,
-    *,
-    demand_kw: float = 0.0,
-    heat_pump_kw: float | None = None,
-    import_cost_gbp: float = 0.0,
-    export_revenue_gbp: float = 0.0,
-) -> SimulationResults:
-    """A run of ``days`` days at one row a minute, every series steady.
-
-    Demand, heat pump, import cost and export revenue are at the levels given,
-    every other series is zero, and there is no heat pump unless heat_pump_kw is given.
-    """
-    index = pd.date_range("2024-06-01", periods=days * 1440, freq="min", tz="Europe/London")
-
-    def steady(level: float) -> pd.Series:
-        return pd.Series(level, index=index)
-
-    return SimulationResults(
-        generation=steady(0.0),
-        demand=steady(demand_kw),
-        self_consumption=steady(0.0),
-        battery_charge=steady(0.0),
-        battery_discharge=steady(0.0),
-        battery_soc=steady(0.0),
-        grid_import=steady(0.0),
-        grid_export=steady(0.0),
-        import_cost=steady(import_cost_gbp),
-        export_revenue=steady(export_revenue_gbp),
-        tariff_rate=steady(0.0),
-        heat_pump_load=None if heat_pump_kw is None else steady(heat_pump_kw),
-    )
-
-
-class TestChartFunctions:
-    """Tests for the centralized chart functions in charts.py."""
-
-    def test_daily_energy_balance_returns_json(self) -> None:
-        """Test daily_energy_balance returns a non-empty JSON string."""
-        results = _make_sim_results(days=3)
-        output = daily_energy_balance(results)
-        assert isinstance(output, str)
-        assert len(output) > 2  # more than just "{}"
-        parsed = json.loads(output)
-        assert "data" in parsed
-
-    def test_sankey_links_are_the_summarys_energy_flows(self) -> None:
-        """Each link is one of the summary's flows, PV used directly being self-consumption less battery discharge.
-
-        The summary is calculate_summary's, so renaming a field the sankey reads fails this test.
-        """
-        summary = dataclasses.replace(
-            calculate_summary(
-                make_sim_results(self_kwh=50.0, export_kwh=40.0, import_kwh=30.0, discharge_kwh=8.0, days=1)
-            ),
-            total_battery_charge_kwh=10.0,
-        )
-
-        sankey = json.loads(sankey_diagram(summary))["data"][0]
-        labels = sankey["node"]["label"]
-        links = {
-            (labels[source], labels[target]): kwh
-            for source, target, kwh in zip(
-                sankey["link"]["source"], sankey["link"]["target"], sankey["link"]["value"], strict=True
-            )
-        }
-
-        assert links == {
-            ("PV Generation", "Demand"): 42.0,
-            ("PV Generation", "Battery"): 10.0,
-            ("PV Generation", "Export"): 40.0,
-            ("Grid", "Demand"): 30.0,
-            ("Battery", "Demand"): 8.0,
-        }
-
-    def test_power_flow_timeline_returns_json(self) -> None:
-        """Test power_flow_timeline returns a non-empty JSON string."""
-        results = _make_sim_results(days=2)
-        output = power_flow_timeline(results)
-        assert isinstance(output, str)
-        parsed = json.loads(output)
-        assert "data" in parsed
-
-    def test_battery_soc_chart_returns_json(self) -> None:
-        """Test battery_soc_chart returns a non-empty JSON string."""
-        results = _make_sim_results(days=2)
-        output = battery_soc_chart(results, battery_capacity_kwh=10.0)
-        assert isinstance(output, str)
-        parsed = json.loads(output)
-        assert "data" in parsed
-
-    def test_financial_breakdown_returns_json(self) -> None:
-        """Test financial_breakdown returns a non-empty JSON string."""
-        results = _make_sim_results(days=3)
-        output = financial_breakdown(results)
-        assert isinstance(output, str)
-        parsed = json.loads(output)
-        assert "data" in parsed
-
-    def test_monthly_summary_returns_none_for_short_sim(self) -> None:
-        """Test monthly_summary returns None when simulation < 90 days."""
-        results = _make_sim_results(days=30)
-        output = monthly_summary(results)
-        assert output is None
-
-    def test_seasonal_comparison_returns_none_for_short_sim(self) -> None:
-        """Test seasonal_comparison returns None when simulation < 180 days."""
-        results = _make_sim_results(days=60)
-        output = seasonal_comparison(results)
-        assert output is None
-
-    def test_heat_pump_analysis_returns_none_without_hp(self) -> None:
-        """Test heat_pump_analysis returns None when no heat pump data."""
-        results = _make_sim_results(days=2)
-        output = heat_pump_analysis(results)
-        assert output is None
-
-
-class TestChartTotals:
-    """Each chart's totals are the run's per-minute amounts summed: kWh for power, £ as they are."""
-
-    def test_heat_pump_share_is_the_runs_heat_pump_and_other_kwh(self) -> None:
-        charts = heat_pump_analysis(_steady_run(1, heat_pump_kw=1.5, demand_kw=4.0))
-        assert charts is not None
-
-        pie = json.loads(charts["load_share_chart"])["data"][0]
-
-        # 1.5 kW × 24 h of heat pump, and 4 kW × 24 h of demand less that.
-        assert pie["labels"] == ["Heat Pump", "Other Demand"]
-        assert pie["values"] == [36.0, 60.0]
-
-    def test_financial_bars_are_each_days_pounds(self) -> None:
-        figure = json.loads(
-            financial_breakdown(_steady_run(2, import_cost_gbp=0.002, export_revenue_gbp=0.001))
-        )
-
-        traces = {trace["name"]: trace for trace in figure["data"]}
-
-        # £0.002 and £0.001 a minute, for 1440 minutes a day.
-        assert traces["Daily Cost"]["x"] == ["2024-06-01", "2024-06-02"]
-        assert traces["Daily Cost"]["y"] == [2.88, 2.88]
-        assert traces["Daily Revenue"]["y"] == [1.44, 1.44]
-        assert traces["Cumulative Net Savings"]["y"] == [-1.44, -2.88]
 
 
 class TestHomeResultsRoute:
@@ -482,7 +275,7 @@ class TestHomeResultsRoute:
         Both Overview chart containers are elements of the page, and the Total
         Generation and Total Demand cards read the saved summary's totals in kWh.
         """
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         run_id = _save_home_run(app, "Test Run", results)
         summary = calculate_summary(results)
 
@@ -534,7 +327,7 @@ class TestHomeResultsRoute:
 
         The run's home keeps the name it was saved with, so the page reads the run's name, not its home's.
         """
-        run_id = _save_home_run(app, "North Roof", _make_sim_results(days=1))
+        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
         rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "South Roof"})
         assert rename.status_code == 200
 
@@ -549,7 +342,7 @@ class TestHomeResultsRoute:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """A run whose files outlived its database row still has a title: the page's own, not its home's name."""
-        run_id = _save_home_run(app, "North Roof", _make_sim_results(days=1))
+        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
         with get_db(app.config["DATABASE"]) as conn:
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
