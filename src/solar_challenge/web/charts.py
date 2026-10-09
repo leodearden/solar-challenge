@@ -17,7 +17,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Final, TypeVar
+from typing import Any, Final, NamedTuple, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -241,8 +241,35 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
     return str(fig.to_json())
 
 
+class _SankeyNode(Enum):
+    """The energy-flow Sankey's nodes, in the order its figure lists them: each one's label and COLOUR_PALETTE role."""
+
+    PV_GENERATION = ("PV Generation", "pv_generation")
+    GRID = ("Grid", "grid_import")
+    BATTERY = ("Battery", "battery_charge")
+    DEMAND = ("Demand", "demand")
+    EXPORT = ("Export", "grid_export")
+
+    def __init__(self, label: str, colour_role: str) -> None:
+        self.label: Final = label
+        self.colour_role: Final = colour_role
+
+
+class _SankeyLink(NamedTuple):
+    """The kWh flowing from source to target, drawn in the colour of its COLOUR_PALETTE role."""
+
+    source: _SankeyNode
+    target: _SankeyNode
+    kwh: float
+    colour_role: str
+
+
 def sankey_diagram(summary: SummaryStatistics) -> str:
-    """Sankey diagram of energy flows from PV and Grid to end uses.
+    """Sankey diagram of the run's energy flows from PV, the grid and the battery to their uses.
+
+    PV feeds demand, the battery and export; the grid feeds demand and, on
+    grid-charging days, the battery; the battery feeds demand. A flow of
+    0.01 kWh or less is not drawn.
 
     Args:
         summary: The run's summary statistics, whose energy totals the links draw.
@@ -251,81 +278,38 @@ def sankey_diagram(summary: SummaryStatistics) -> str:
         Plotly figure JSON string, or ``"{}"`` if there is no energy flow
         to draw.
     """
-    total_self = summary.total_self_consumption_kwh
-    total_export = summary.total_grid_export_kwh
-    total_import = summary.total_grid_import_kwh
-    total_charge = summary.total_battery_charge_kwh
-    total_discharge = summary.total_battery_discharge_kwh
-
-    # Nodes: PV(0), Grid(1), Battery(2), Demand(3), Export(4)
-    node_labels = ["PV Generation", "Grid", "Battery", "Demand", "Export"]
-    node_colours = [
-        COLOUR_PALETTE["pv_generation"],
-        COLOUR_PALETTE["grid_import"],
-        COLOUR_PALETTE["battery_charge"],
-        COLOUR_PALETTE["demand"],
-        COLOUR_PALETTE["grid_export"],
+    grid_charge = summary.total_grid_charge_kwh
+    # Self-consumption counts the battery's discharge to demand as well as the PV used directly
+    pv_to_demand = summary.total_self_consumption_kwh - summary.total_battery_discharge_kwh
+    pv_to_battery = summary.total_battery_charge_kwh - grid_charge
+    grid_to_demand = summary.total_grid_import_kwh - grid_charge
+    flows = [
+        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.DEMAND, pv_to_demand, "self_consumption"),
+        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.BATTERY, pv_to_battery, "battery_charge"),
+        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.EXPORT, summary.total_grid_export_kwh, "grid_export"),
+        _SankeyLink(_SankeyNode.GRID, _SankeyNode.DEMAND, grid_to_demand, "grid_import"),
+        _SankeyLink(_SankeyNode.GRID, _SankeyNode.BATTERY, grid_charge, "battery_charge"),
+        _SankeyLink(_SankeyNode.BATTERY, _SankeyNode.DEMAND, summary.total_battery_discharge_kwh, "battery_charge"),
     ]
-
-    # Links
-    sources: list[int] = []
-    targets: list[int] = []
-    values: list[float] = []
-    link_colours: list[str] = []
-    link_opacity = 0.4
-
-    # PV -> Self-consumption (direct to demand)
-    pv_direct = max(0, total_self - total_discharge)
-    if pv_direct > 0.01:
-        sources.append(0)
-        targets.append(3)
-        values.append(round(pv_direct, 2))
-        link_colours.append(_with_alpha(COLOUR_PALETTE["self_consumption"], link_opacity))
-
-    # PV -> Battery
-    if total_charge > 0.01:
-        sources.append(0)
-        targets.append(2)
-        values.append(round(total_charge, 2))
-        link_colours.append(_with_alpha(COLOUR_PALETTE["battery_charge"], link_opacity))
-
-    # PV -> Export
-    if total_export > 0.01:
-        sources.append(0)
-        targets.append(4)
-        values.append(round(total_export, 2))
-        link_colours.append(_with_alpha(COLOUR_PALETTE["grid_export"], link_opacity))
-
-    # Grid -> Demand
-    if total_import > 0.01:
-        sources.append(1)
-        targets.append(3)
-        values.append(round(total_import, 2))
-        link_colours.append(_with_alpha(COLOUR_PALETTE["grid_import"], link_opacity))
-
-    # Battery -> Demand
-    if total_discharge > 0.01:
-        sources.append(2)
-        targets.append(3)
-        values.append(round(total_discharge, 2))
-        link_colours.append(_with_alpha(COLOUR_PALETTE["battery_charge"], link_opacity))
-
-    if not values:
+    drawn = [flow for flow in flows if flow.kwh > 0.01]
+    if not drawn:
         return "{}"
 
+    nodes = list(_SankeyNode)
+    link_opacity = 0.4
     fig = go.Figure(data=[go.Sankey(
         node=dict(
             pad=20,
             thickness=20,
             line=dict(color="black", width=0.5),
-            label=node_labels,
-            color=node_colours,
+            label=[node.label for node in nodes],
+            color=[COLOUR_PALETTE[node.colour_role] for node in nodes],
         ),
         link=dict(
-            source=sources,
-            target=targets,
-            value=values,
-            color=link_colours,
+            source=[nodes.index(link.source) for link in drawn],
+            target=[nodes.index(link.target) for link in drawn],
+            value=[round(link.kwh, 2) for link in drawn],
+            color=[_with_alpha(COLOUR_PALETTE[link.colour_role], link_opacity) for link in drawn],
         ),
     )])
 
