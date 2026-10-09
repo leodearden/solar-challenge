@@ -26,7 +26,7 @@ through one shade: tailwind.config.js's primary-500 must be amber-500's value.
 """
 
 import re
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 
 import pytest
@@ -79,14 +79,33 @@ def _primary_500() -> str:
     return entry[1].lower()
 
 
+def _amber_classes(classes: Iterable[str]) -> set[str]:
+    return {c for c in classes if names_palette(c, _BUILT_IN_PALETTE_PRIMARY_COPIES)}
+
+
 @dataclass(frozen=True)
 class _AmberRole:
     """A status or category the dashboard draws in amber, independently of the accent: the
-    amber classes it applies and the keys of the templates that apply them."""
+    amber classes it applies and the keys of the templates that apply them.
+
+    It lists at least one class and one template, and every class names an amber shade: a role
+    that does not allows nothing, and no guard would say so."""
 
     name: str
     classes: frozenset[str]
     sources: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not self.classes:
+            raise ValueError(f"{self.name} lists no classes, so it allows nothing")
+        if not self.sources:
+            raise ValueError(f"{self.name} lists no templates, so it allows nothing")
+        not_amber = self.classes - _amber_classes(self.classes)
+        if not_amber:
+            raise ValueError(
+                f"{self.name} lists classes that name no {_BUILT_IN_PALETTE_PRIMARY_COPIES} "
+                f"shade, so they allow nothing: {' '.join(sorted(not_amber))}"
+            )
 
 
 def _amber_role(name: str, classes: str, *sources: str) -> _AmberRole:
@@ -126,10 +145,6 @@ _AMBER_ROLES = (
         "templates/simulate/fleet.html",
     ),
 )
-
-
-def _amber_classes(applied: set[str]) -> set[str]:
-    return {c for c in applied if names_palette(c, _BUILT_IN_PALETTE_PRIMARY_COPIES)}
 
 
 def _classes_listed_for(source: str, roles: Collection[_AmberRole]) -> set[str]:
@@ -228,6 +243,32 @@ def test_a_role_class_a_listed_source_does_not_apply_is_reported() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("classes", "sources", "rejection"),
+    [
+        pytest.param("", ["templates/listed.html"], "badge lists no classes", id="no classes"),
+        pytest.param("bg-amber-50", [], "badge lists no templates", id="no templates"),
+    ],
+)
+def test_an_amber_role_listing_no_class_or_no_template_is_rejected(
+    classes: str, sources: list[str], rejection: str
+) -> None:
+    with pytest.raises(ValueError, match=rejection):
+        _amber_role("badge", classes, *sources)
+
+
+def test_an_amber_role_listing_a_class_naming_no_amber_shade_is_rejected_naming_it() -> None:
+    with pytest.raises(ValueError, match="badge") as rejected:
+        _amber_role(
+            "badge", "bg-amber-50 hover:bg-primary-500 text-slate-500", "templates/listed.html"
+        )
+
+    message = str(rejected.value)
+    assert "hover:bg-primary-500" in message
+    assert "text-slate-500" in message
+    assert "bg-amber-50" not in message
+
+
 def test_no_template_or_script_applies_amber_outside_a_listed_status_or_category_role() -> None:
     assert _primary_500() == _BUILT_IN_500_SHADE_PRIMARY_COPIES, (
         f"{TAILWIND_CONFIG_KEY}'s primary-500 is not Tailwind's built-in "
@@ -240,9 +281,9 @@ def test_no_template_or_script_applies_amber_outside_a_listed_status_or_category
         "and _AMBER_ROLES if it copies none."
     )
     applied = dashboard_applied_classes_by_source()
-    assert any(names_palette(c, "primary") for classes in applied.values() for c in classes), (
-        "read no class naming primary from the dashboard's templates and scripts, so this "
-        "guard's reader may be broken and pass vacuously"
+    assert any(applied.values()), (
+        "read no class from the dashboard's templates and scripts, so this guard would pass "
+        "vacuously"
     )
 
     unlisted = _unlisted_amber_classes(applied, _AMBER_ROLES)
