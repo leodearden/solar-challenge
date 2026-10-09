@@ -5,14 +5,11 @@ docs/pv-inverter-string-matching.md, docs/tmy-irradiation-scaling.md,
 docs/pv-system-losses.md and review/briefing.yaml's key_decisions say to
 re-measure their figures with scripts/measure_mppt_window.py,
 scripts/measure_tmy_irradiation.py and scripts/measure_pv_performance_ratio.py.
-scripts/ is not a package, so each script is loaded from its file.
 """
 
 import dataclasses
-import importlib.util
 import statistics
 from collections.abc import Mapping
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -31,9 +28,8 @@ from solar_challenge.pv import (
     wired_dc_capacity_kw,
 )
 from solar_challenge.weather import CLIMATE_YEARS, IRRADIANCE_COLUMNS, WeatherCache
+from tests._scripts import load_script
 from tests._synthetic_weather import synthetic_june_weather
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _QUIET_DIODE_SOLVER = pytest.mark.filterwarnings(
     "ignore:invalid value encountered:RuntimeWarning"
@@ -41,21 +37,10 @@ _QUIET_DIODE_SOLVER = pytest.mark.filterwarnings(
 """Silences the RuntimeWarnings pvlib's single-diode solver raises over the dark hours of a model chain's run."""
 
 
-def _load_script(name: str) -> ModuleType:
-    """Run scripts/<name>.py as a module called name, without registering it in sys.modules."""
-    path = _REPO_ROOT / "scripts" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        pytest.fail(f"{path} cannot be loaded as a module")
-    script = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(script)
-    return script
-
-
 @pytest.fixture(scope="module")
 def mppt_window() -> ModuleType:
     """scripts/measure_mppt_window.py."""
-    return _load_script("measure_mppt_window")
+    return load_script("measure_mppt_window")
 
 
 @pytest.fixture(scope="module")
@@ -176,7 +161,7 @@ class TestMeasureMpptWindow:
 @pytest.fixture(scope="module")
 def tmy_irradiation() -> ModuleType:
     """scripts/measure_tmy_irradiation.py."""
-    return _load_script("measure_tmy_irradiation")
+    return load_script("measure_tmy_irradiation")
 
 
 @pytest.fixture(scope="module")
@@ -293,7 +278,7 @@ class TestMeasureTmyIrradiation:
 @pytest.fixture(scope="module")
 def pv_performance_ratio() -> ModuleType:
     """scripts/measure_pv_performance_ratio.py."""
-    return _load_script("measure_pv_performance_ratio")
+    return load_script("measure_pv_performance_ratio")
 
 
 @pytest.fixture(scope="module")

@@ -81,7 +81,7 @@ This is a dated record. Re-measure with the script before relying on it.
   kWh/m²): without the losses 4663.95 kWh, 1164.74 kWh/kWp, ratio 0.9423; with them
   4003.91 kWh, 999.91 kWh/kWp, ratio 0.8089. PVGIS-14% reads 1001.1 kWh/kWp, ratio 0.798;
   MCS's ratio is 0.8. `tests/integration/test_pv_performance_ratio.py` reads the same
-  0.8089, inside its 0.76–0.84 band.
+  0.8089 through the script's `measure`, inside its 0.76–0.84 band.
 - **Earlier reading** (2026-10-03, main f3e05fb, by task 252's first plan): PVGIS v5_3's
   PVcalc at 14% over SARAH3 2005–2023 gave Bristol 1022.83 kWh/kWp, ratio 0.8124, and
   0.808–0.825 across the fourteen sites.
