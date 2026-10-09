@@ -218,7 +218,11 @@ def _record_of_row(row: sqlite3.Row | None) -> RunRecord | None:
     return None if row is None else RunRecord(**dict(row))
 
 
-_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", "notes")
+RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
+RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
+
+
+_COLUMNS_A_RESAVE_KEEPS = ("id", "created_at", *RUN_LABELS)
 
 
 def _run_row_upsert() -> str:
@@ -278,10 +282,6 @@ def _saved_run_row(
         n_homes=n_homes,
         notes=None,
     )
-
-
-RunLabel = Literal["name", "notes"]  # a label of a run that Run History lets a user edit
-RUN_LABELS: tuple[RunLabel, ...] = get_args(RunLabel)
 
 
 class RunStorage:
@@ -360,7 +360,9 @@ class RunStorage:
     def _upsert_run_row(self, row: RunRecord) -> None:
         """Write *row* as the runs row under row.id.
 
-        A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names.
+        A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names: its
+        id, its creation time and the labels a user edits in Run History (RUN_LABELS), so a
+        run renamed while its job runs keeps the new name when the job's save rewrites it.
         """
         with get_db(self.db_path) as conn:
             conn.execute(_RUN_ROW_UPSERT, asdict(row))
@@ -387,7 +389,8 @@ class RunStorage:
             config: Home configuration
             results: Simulation results with time series
             summary: Summary statistics
-            name: Optional run name (defaults to config.name)
+            name: Optional run name (defaults to config.name); the name of a run already
+                stored under run_id is kept
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
@@ -504,7 +507,7 @@ class RunStorage:
             fleet_results: Fleet simulation results with per-home data
             fleet_summary: Fleet-level summary statistics
             per_home_summaries: List of SummaryStatistics for each home
-            name: Optional run name
+            name: Optional run name; the name of a run already stored under run_id is kept
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
