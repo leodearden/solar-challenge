@@ -16,7 +16,6 @@ from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.shared import NotAJsonObject
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
-    FULL_YEAR_DAYS_SENTINEL,
     FULL_YEAR_END,
     FULL_YEAR_START,
     MAX_WINDOW_DAYS,
@@ -132,11 +131,6 @@ class TestParseDateRange:
         ("data", "window"),
         [
             pytest.param(
-                {"days": FULL_YEAR_DAYS_SENTINEL},
-                (FULL_YEAR_START, FULL_YEAR_END),
-                id="full-year-sentinel",
-            ),
-            pytest.param(
                 {"days": 30},
                 (DAYS_WINDOW_START, DAYS_WINDOW_START + timedelta(days=29)),
                 id="days",
@@ -149,10 +143,10 @@ class TestParseDateRange:
             ),
         ],
     )
-    def test_published_window_anchors_are_the_ones_it_reads_a_window_by(
+    def test_published_anchors_match_the_windows_parse_date_range_returns(
         self, data: dict, window: tuple[date, date]
     ) -> None:
-        """The published window anchors are the ones parse_date_range reads a window by, so a consumer that states them, as the assistant's trigger tools do, states its reading."""
+        """parse_date_range's windows start or end at the published anchors, which the assistant's tool descriptions state: days count from DAYS_WINDOW_START, a lone end starts at FULL_YEAR_START and a lone start ends at FULL_YEAR_END."""
         assert parse_date_range(data) == (window[0].isoformat(), window[1].isoformat())
 
     @pytest.mark.parametrize(
