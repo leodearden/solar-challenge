@@ -582,6 +582,37 @@ class TestSimulationToolSurface:
             f"run_fleet_simulation must require 'n_homes'; got {required}"
         )
 
+    @pytest.mark.parametrize("tool_name", ["run_home_simulation", "run_fleet_simulation"])
+    def test_trigger_tool_offers_start_and_end_as_optional_iso_dates(self, tool_name: str) -> None:
+        """A trigger tool lists start and end as ISO 8601 date strings and requires no window field, so a call that sends none keeps the default window."""
+        from solar_challenge.web.assistant import TOOLS
+
+        tool = next((t for t in TOOLS if t["name"] == tool_name), None)
+        assert tool is not None, f"{tool_name} missing from TOOLS"
+        schema = tool["input_schema"]
+        properties = schema["properties"]
+        for field in ("start", "end"):
+            assert field in properties, (
+                f"{tool_name} must list {field!r}; got {sorted(properties)}"
+            )
+            assert (properties[field]["type"], properties[field].get("format")) == (
+                "string",
+                "date",
+            )
+        assert not ({"days", "start", "end"} & set(schema["required"])), (
+            f"{tool_name} must require no window field; got {schema['required']}"
+        )
+
+    def test_trigger_tools_list_their_window_identically(self) -> None:
+        """Both trigger tools read their window with the same parse_date_range, so the model must be told one window grammar."""
+        from solar_challenge.web.assistant import TOOLS
+
+        props = {t["name"]: t["input_schema"]["properties"] for t in TOOLS}
+        window_fields = ("days", "start", "end")
+        assert [props["run_home_simulation"][f] for f in window_fields] == [
+            props["run_fleet_simulation"][f] for f in window_fields
+        ]
+
     def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
         """dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
         from solar_challenge.web.assistant import dispatch_tool, run_home_simulation
