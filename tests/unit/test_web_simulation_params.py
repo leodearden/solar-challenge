@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Callable
+from datetime import date, timedelta
 from operator import attrgetter
 
 import pytest
@@ -14,6 +15,10 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.shared import NotAJsonObject
 from solar_challenge.web.simulation_params import (
+    DAYS_WINDOW_START,
+    FULL_YEAR_DAYS_SENTINEL,
+    FULL_YEAR_END,
+    FULL_YEAR_START,
     MAX_WINDOW_DAYS,
     parse_date_range,
     parse_home_config,
@@ -122,6 +127,33 @@ class TestParseDateRange:
             "2024-06-01",
             "2024-06-01",
         )
+
+    @pytest.mark.parametrize(
+        ("data", "window"),
+        [
+            pytest.param(
+                {"days": FULL_YEAR_DAYS_SENTINEL},
+                (FULL_YEAR_START, FULL_YEAR_END),
+                id="full-year-sentinel",
+            ),
+            pytest.param(
+                {"days": 30},
+                (DAYS_WINDOW_START, DAYS_WINDOW_START + timedelta(days=29)),
+                id="days",
+            ),
+            pytest.param(
+                {"end": "2024-03-01"}, (FULL_YEAR_START, date(2024, 3, 1)), id="end-only"
+            ),
+            pytest.param(
+                {"start": "2024-03-01"}, (date(2024, 3, 1), FULL_YEAR_END), id="start-only"
+            ),
+        ],
+    )
+    def test_published_window_anchors_are_the_ones_it_reads_a_window_by(
+        self, data: dict, window: tuple[date, date]
+    ) -> None:
+        """The published window anchors are the ones parse_date_range reads a window by, so a consumer that states them, as the assistant's trigger tools do, states its reading."""
+        assert parse_date_range(data) == (window[0].isoformat(), window[1].isoformat())
 
     @pytest.mark.parametrize(
         ("data", "message"),
