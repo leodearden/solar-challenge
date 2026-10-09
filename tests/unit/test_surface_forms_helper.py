@@ -21,6 +21,7 @@ import functools
 import importlib.util
 import pathlib
 import sys
+import typing
 from dataclasses import InitVar, dataclass, field
 from typing import (
     TYPE_CHECKING,
@@ -32,10 +33,17 @@ from typing import (
     Iterable,
     List,
     Literal,
+    LiteralString,
+    Never,
+    NewType,
+    NoReturn,
     Optional,
     ParamSpec,
+    Self,
     Tuple,
     Type,
+    TypeVar,
+    TypeVarTuple,
     Union,
 )
 
@@ -105,6 +113,19 @@ class Tap:
 
 class Tally:
     def feeder(self) -> Feeder: ...
+
+
+class Wrapper:
+    """A wrapper of a type that, like dataclasses.InitVar, subscripts to an instance with no typing origin."""
+
+    def __init__(self, inner: type) -> None:
+        self.inner = inner
+
+    def __class_getitem__(cls, inner: type) -> "Wrapper":
+        return cls(inner)
+
+    def __repr__(self) -> str:
+        return f"Wrapper[{self.inner.__qualname__}]"
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -179,6 +200,20 @@ def test_a_param_spec_args_and_kwargs_are_spelled_by_their_reprs() -> None:
     def f(*args: P.args, **kwargs: P.kwargs) -> None: ...
 
     assert surface_form(f) == "(*args: P.args, **kwargs: P.kwargs) -> None"
+
+
+def test_a_type_variable_a_new_type_or_a_special_form_is_spelled_by_its_repr() -> None:
+    T = TypeVar("T")
+    P = ParamSpec("P")
+    Ts = TypeVarTuple("Ts")
+    Kwh = NewType("Kwh", float)
+
+    def f(a: T, b: P, c: Ts, d: Kwh, e: Self, g: LiteralString) -> Never: ...
+
+    assert (
+        surface_form(f)
+        == "(a: ~T, b: ~P, c: Ts, d: tests.unit.test_surface_forms_helper.Kwh, e: typing.Self, g: typing.LiteralString) -> typing.Never"
+    )
 
 
 def test_a_string_annotation_is_spelled_verbatim_and_unquoted() -> None:
@@ -650,6 +685,23 @@ def test_a_param_spec_args_and_kwargs_name_no_class() -> None:
     assert named_classes(f) == set()
 
 
+def test_a_type_variable_a_new_type_or_a_special_form_names_no_class_not_even_a_bound_or_a_supertype() -> None:
+    """A deliberate limit: what a type variable or a NewType carries goes unread.
+
+    named_classes reads the classes from the forms, and the form of a type variable or a
+    NewType spells only its name. Following a bound, constraints, a default or a
+    supertype means spelling it in the form too; this test changes with that.
+    """
+    T = TypeVar("T", bound=Preset)
+    P = ParamSpec("P")
+    Ts = TypeVarTuple("Ts")
+    PresetId = NewType("PresetId", Preset)
+
+    def f(a: T, b: P, c: Ts, d: PresetId, e: Self) -> NoReturn: ...
+
+    assert named_classes(f) == set()
+
+
 def test_a_string_annotation_or_a_forward_reference_names_the_class_its_module_binds_the_name_to() -> None:
     def f(a: "Preset", b: Optional["Outer.Inner"]) -> "list[Preset]": ...
 
@@ -666,6 +718,29 @@ def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> No
     def f(a: "Nowhere") -> None: ...  # noqa: F821
 
     with pytest.raises(NameError, match="Nowhere"):
+        named_classes(f)
+
+
+def test_an_annotation_no_construct_reads_raises_a_type_error_naming_it_and_its_type() -> None:
+    def f(preset: Wrapper[Preset]) -> None: ...
+
+    naming_it_and_its_type = r"Wrapper\[Preset\].*\btests\.unit\.test_surface_forms_helper\.Wrapper\b"
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
+        surface_form(f)
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
+        named_classes(f)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="typing.TypeAliasType is new in Python 3.12")
+def test_a_type_alias_raises_a_type_error_since_it_means_its_value_which_no_construct_reads() -> None:
+    Readings = typing.TypeAliasType("Readings", list[Preset])
+
+    def f(readings: Readings) -> None: ...
+
+    naming_it_and_its_type = r"Readings.*\btyping\.TypeAliasType\b"
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
+        surface_form(f)
+    with pytest.raises(TypeError, match=naming_it_and_its_type):
         named_classes(f)
 
 
