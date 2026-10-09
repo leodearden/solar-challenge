@@ -2,9 +2,10 @@
 
 Verifies slider-input sync, that each distribution editor's controls are named
 for their card, that each card's row buttons change only its rows, that a
-card's last row has no remove button, that Import YAML, clicked or reached with
-Tab and pressed with Enter or Space, shows each distribution in its card, that
-a fleet exported as YAML imports back into the form, that Load Preset fills the
+card's last row has no remove button, that each card's row inputs show their
+whole value at desktop widths, that Import YAML, clicked or reached with Tab
+and pressed with Enter or Space, shows each distribution in its card, that a
+fleet exported as YAML imports back into the form, that Load Preset fills the
 form and names the preset's settings the form has no control for, that a preset
 without a period runs the page's default period, that the page shows why a
 preset cannot load or a fleet cannot export, that the simulation name reaches
@@ -42,6 +43,10 @@ def test_fleet_slider_input_sync(page: Page, live_server: str) -> None:
 CARD_SUBJECTS = ("PV Capacity", "Battery Capacity", "Annual Consumption")
 DISTRIBUTION_CARDS = [
     pytest.param(subject, id=subject.lower().replace(" ", "_")) for subject in CARD_SUBJECTS
+]
+ROW_LIST_TYPES = [
+    pytest.param("Weighted Discrete", "Weight", id="weighted_discrete"),
+    pytest.param("Shuffled Pool", "Count", id="shuffled_pool"),
 ]
 
 
@@ -132,13 +137,7 @@ def test_fleet_distribution_row_buttons_are_named_for_their_card(
 NEW_ROW_VALUES = {"PV Capacity": "4", "Battery Capacity": "5", "Annual Consumption": "3500"}
 
 
-@pytest.mark.parametrize(
-    ("distribution_type", "row_field"),
-    [
-        pytest.param("Weighted Discrete", "Weight", id="weighted_discrete"),
-        pytest.param("Shuffled Pool", "Count", id="shuffled_pool"),
-    ],
-)
+@pytest.mark.parametrize(("distribution_type", "row_field"), ROW_LIST_TYPES)
 @pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
 def test_fleet_distribution_row_buttons_change_only_their_cards_rows(
     page: Page, live_server: str, card: str, distribution_type: str, row_field: str
@@ -174,13 +173,7 @@ def test_fleet_distribution_row_buttons_change_only_their_cards_rows(
     )
 
 
-@pytest.mark.parametrize(
-    ("distribution_type", "row_field"),
-    [
-        pytest.param("Weighted Discrete", "Weight", id="weighted_discrete"),
-        pytest.param("Shuffled Pool", "Count", id="shuffled_pool"),
-    ],
-)
+@pytest.mark.parametrize(("distribution_type", "row_field"), ROW_LIST_TYPES)
 @pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
 def test_fleet_distribution_last_row_has_no_remove_button(
     page: Page, live_server: str, card: str, distribution_type: str, row_field: str
@@ -198,6 +191,62 @@ def test_fleet_distribution_last_row_has_no_remove_button(
         expect(_value_inputs(page, card)).to_have_count(remaining)
 
     expect(remove_buttons).to_have_count(0)
+
+
+# -- Distribution editor row inputs show their whole values ----------------
+
+
+def _wait_for_transitions_to_finish(page: Page) -> None:
+    """Wait until no CSS transition runs: base.html slides the main column aside for the sidebar over 300 ms once Alpine starts."""
+    page.wait_for_function(
+        "() => !document.getAnimations().some(animation => animation instanceof CSSTransition)"
+    )
+
+
+def _clipped_row_inputs(page: Page, subject: str, row_field: str) -> list[str]:
+    """The names of the card's row inputs too narrow to show their whole value."""
+    names = [
+        f"{subject} {field} {row}"
+        for row in range(1, _value_inputs(page, subject).count() + 1)
+        for field in ("Value", row_field)
+    ]
+    return [
+        name
+        for name in names
+        if page.get_by_role("spinbutton", name=name, exact=True).evaluate(
+            "input => input.scrollWidth > input.clientWidth"
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "width",
+    [
+        pytest.param(1024, id="1024px"),
+        pytest.param(1100, id="1100px"),
+        pytest.param(1280, id="1280px"),
+    ],
+)
+@pytest.mark.parametrize(("distribution_type", "row_field"), ROW_LIST_TYPES)
+def test_fleet_distribution_row_inputs_show_their_whole_values(
+    page: Page, live_server: str, width: int, distribution_type: str, row_field: str
+) -> None:
+    """Beside the open sidebar, every card's row inputs show their whole value at 1024, 1100 and 1280 px, e.g. 2900 in 'Annual Consumption Value 1'."""
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.goto(live_server + "/simulate/fleet")
+    expect(page.get_by_title("Collapse sidebar", exact=True)).to_be_visible()
+    for subject in CARD_SUBJECTS:
+        page.get_by_role(
+            "combobox", name=f"{subject} Distribution Type", exact=True
+        ).select_option(label=distribution_type)
+        _expect_only_row_list_shown(page, subject, row_field)
+    _wait_for_transitions_to_finish(page)
+
+    clipped = [
+        name for subject in CARD_SUBJECTS for name in _clipped_row_inputs(page, subject, row_field)
+    ]
+
+    assert clipped == [], f"at {width} px these row inputs cut off their value: {clipped}"
 
 
 # -- Import YAML ------------------------------------------------------------
