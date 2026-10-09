@@ -90,8 +90,9 @@ def named_classes(obj: object) -> set[type]:
 
     Only annotations name classes, never a default value. A generic names its origin and
     its arguments' classes, a bare alias its origin, a union its members' alone, an
-    InitVar its type's alone, and Literal's values, Annotated's metadata and a
-    ParamSpec's args and kwargs none. A string annotation or a forward
+    InitVar its type's alone, and Literal's values, Annotated's metadata, a type
+    variable, a NewType, a special form such as Self and a ParamSpec's args and kwargs
+    none. A string annotation or a forward
     reference names the class its name is bound to in the module that spells it, read as
     a type checker reads it: its globals, with the imports of its top-level
     `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises NameError.
@@ -254,8 +255,19 @@ def _classes_of(constructs: Iterable[_Construct], module: str) -> set[type]:
     return set().union(*(construct.classes(module) for construct in constructs))
 
 
+_CLASSLESS_NAME_KINDS: tuple[type, ...] = (
+    typing.TypeVar,
+    typing.ParamSpec,
+    typing.TypeVarTuple,
+    typing.ParamSpecArgs,
+    typing.ParamSpecKwargs,
+    typing.NewType,
+    typing._SpecialForm,
+)
+
+
 def _parsed(annotation: object) -> _Construct:
-    """The construct *annotation* is: a bare alias reads as its origin, and an annotation no case reads inside, such as a TypeVar, as a leaf spelled by its repr."""
+    """The construct *annotation* is: a bare alias reads as its origin, and a classless name, an instance of one of _CLASSLESS_NAME_KINDS such as a TypeVar or typing.Self, or an annotation no case reads inside, as a leaf spelled by its repr."""
     if isinstance(annotation, str):
         return _Unevaluated(annotation)
     if isinstance(annotation, typing.ForwardRef):
@@ -272,7 +284,7 @@ def _parsed(annotation: object) -> _Construct:
         return _Subscripted(_Leaf("InitVar"), (_parsed(annotation.type),))
     if _is_bare_alias(annotation):
         return _parsed(typing.get_origin(annotation))
-    if isinstance(annotation, (typing.ParamSpecArgs, typing.ParamSpecKwargs)):
+    if isinstance(annotation, _CLASSLESS_NAME_KINDS):
         return _Leaf(repr(annotation))
     if typing.get_origin(annotation) is not None:
         return _parsed_subscription(annotation)
