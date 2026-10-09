@@ -74,7 +74,7 @@ The simulation flows through these core modules:
 
 1. **`location.py`** — Frozen dataclass for geographic coordinates (Bristol default: 51.45°N, 2.58°W)
 2. **`weather.py`** — Fetches PVGIS's TMY (v5_3) via pvlib and scales its irradiance to PVGIS's 2005-2020 mean annual GHI (`docs/tmy-irradiation-scaling.md`); caches the result to disk (MD5-keyed by location)
-3. **`pv.py`** — Models PV generation using pvlib; interpolates hourly output to 1-minute resolution
+3. **`pv.py`** — Models PV generation using pvlib, less PVWatts v5's default system losses on each array's DC power (`docs/pv-system-losses.md`); interpolates hourly output to 1-minute resolution
 4. **`load.py`** — Generates household consumption profiles scaled to an annual total (Ofgem TDCV by household size, unless set explicitly); stochastic mode via richardsonpy (UK CREST model, a core dependency), with a defensive fallback to the deterministic Elexon Profile Class 1 shape
 5. **`battery.py`** — Tracks state of charge with configurable power limits, efficiency, and SOC constraints
 6. **`flow.py`** — Per-timestep energy dispatch: self-consumption → battery charge → grid export; grid import for shortfalls

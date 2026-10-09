@@ -282,7 +282,8 @@ inverter. Its default is PVWatts v5's 14.08%
 `ValueError`. On the same weather, every PV output is lower than the 0.5.0
 tag's. AC falls by about 14% where the inverter does not clip (Bristol's
 default 4 kW on its scaled TMY: 4664 to 4004 kWh), and by less where it clips,
-because the loss is taken before the inverter. `system_losses=0.0` gives the
+because the loss is taken before the inverter
+([pv-system-losses.md](pv-system-losses.md)). `system_losses=0.0` gives the
 output without system losses. Consumers re-baseline every figure that depends
 on PV generation when they re-pin, bills and the cost-recovery rate included.
 
