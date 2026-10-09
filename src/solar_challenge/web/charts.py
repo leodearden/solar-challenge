@@ -556,7 +556,7 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
         results: SimulationResults instance.
 
     Returns:
-        Dictionary with ``'cop_chart'`` and ``'load_share_chart'`` keys
+        Dictionary with ``'load_profile_chart'`` and ``'load_share_chart'`` keys
         containing Plotly JSON strings, or ``None`` if no heat pump data
         is present.
     """
@@ -604,7 +604,7 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
 
     return {
         "load_share_chart": str(pie_fig.to_json()),
-        "cop_chart": str(load_fig.to_json()),
+        "load_profile_chart": str(load_fig.to_json()),
     }
 
 

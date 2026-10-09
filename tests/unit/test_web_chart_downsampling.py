@@ -78,7 +78,7 @@ def test_every_chart_of_a_runs_time_series_draws_it_at_the_same_instants() -> No
     figures = {
         "power_flow_timeline": power_flow_timeline(year),
         "battery_soc_chart": battery_soc_chart(year, battery_capacity_kwh=10.0),
-        "heat_pump_load_profile": heat_pump_charts["cop_chart"],
+        "heat_pump_load_profile": heat_pump_charts["load_profile_chart"],
         "overlaid_power_flows": overlaid_power_flows([year], ["Run A"]),
         "fleet_aggregate_timeline": fleet_aggregate_timeline(fleet),
         "fleet_grid_impact": fleet_grid_impact(fleet),
