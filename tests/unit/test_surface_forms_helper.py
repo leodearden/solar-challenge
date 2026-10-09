@@ -811,6 +811,14 @@ def test_a_declared_attribute_member_forms_lists_that_the_source_never_sets_is_u
     assert unset_attributes(Reading) == set()
 
 
+def test_a_name_the_class_body_only_annotates_as_a_class_variable_in_a_string_is_never_unset() -> None:
+    class Meter:
+        UNITS: "ClassVar[str]"
+        reading: float
+
+    assert unset_attributes(Meter) == {"reading"}
+
+
 def test_a_dataclass_field_with_a_default_or_a_default_factory_is_never_unset() -> None:
     @dataclass(frozen=True)
     class Reading:
@@ -847,3 +855,17 @@ def test_a_default_factory_field_counts_as_supplied_even_when_a_hand_written_ini
         assert member_forms(cls) == {"history": "attribute list[float]"}
         assert not hasattr(cls("data"), "history")
         assert unset_attributes(cls) == set()
+
+
+def test_a_class_body_string_annotation_naming_a_name_its_module_does_not_bind_raises_a_name_error_from_undeclared_attributes_and_unset_attributes() -> None:
+    class Base:
+        site: "Nowhere"  # noqa: F821
+
+    class Meter(Base):
+        def __init__(self) -> None:
+            self.reading = 0.0
+
+    with pytest.raises(NameError, match="Nowhere"):
+        undeclared_attributes(Meter)
+    with pytest.raises(NameError, match="Nowhere"):
+        unset_attributes(Base)

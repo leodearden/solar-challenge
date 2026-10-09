@@ -129,13 +129,20 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 
 
 def undeclared_attributes(cls: type) -> set[str]:
-    """The public attributes *cls*'s own source sets on self that no class body in its MRO defines or declares."""
+    """The public attributes *cls*'s own source sets on self that no class body in its MRO defines or declares.
+
+    A string annotation in any of those class bodies is read as named_classes reads one,
+    so a name its module does not bind raises NameError.
+    """
     declared = {name for base in cls.__mro__ for name in _own_members(base)}
     return _attributes_set_on_self(cls) - declared
 
 
 def unset_attributes(cls: type) -> set[str]:
     """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own source never sets on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies.
+
+    A string annotation in *cls*'s own body is read as named_classes reads one, so a name
+    its module does not bind raises NameError.
 
     A known gap: a default factory counts as called by the generated __init__, so a field
     with one that a hand-written __init__ skips goes unreported, though instances lack it.
