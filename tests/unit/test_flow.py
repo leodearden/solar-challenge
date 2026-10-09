@@ -1,6 +1,8 @@
 """Tests for energy flow calculations."""
 
 import dataclasses
+import functools
+from collections.abc import Callable
 from datetime import datetime
 from typing import Optional
 
@@ -23,6 +25,7 @@ from solar_challenge.dispatch import (
     DispatchDecision,
     DispatchStrategy,
     GridChargeContext,
+    TOUOptimizedStrategy,
 )
 
 
@@ -1150,3 +1153,115 @@ class TestTouDispatchOnTieredTariff:
     ) -> None:
         result = _tou_shortfall_step(tariff, pd.Timestamp(f"2024-01-01 {time_of_day}"))
         assert result.battery_discharge > 0.0
+
+
+# ---------------------------------------------------------------------------
+# A battery whose SOC an assigned limit has moved past
+# ---------------------------------------------------------------------------
+
+# Both entries discharge for a shortfall and charge from a surplus.
+SELF_CONSUMING_STEPS = [
+    pytest.param(simulate_timestep, id="simulate_timestep"),
+    pytest.param(
+        functools.partial(
+            simulate_timestep_tou,
+            timestamp=pd.Timestamp("2024-01-01 18:00"),
+            tariff=TariffConfig.economy_7(),
+        ),
+        id="simulate_timestep_tou-peak",
+    ),
+]
+
+# Both entries top a grid-charging battery up from the grid at Economy 7's 03:00 off-peak rate.
+GRID_CHARGING_STEPS = [
+    pytest.param(
+        functools.partial(
+            simulate_timestep,
+            timestamp=datetime(2024, 1, 1, 3),
+            strategy=TOUOptimizedStrategy(peak_hours=[(7, 24)]),
+            tariff=TariffConfig.economy_7(),
+        ),
+        id="simulate_timestep-tou_optimized",
+    ),
+    pytest.param(
+        functools.partial(
+            simulate_timestep_tou,
+            timestamp=pd.Timestamp("2024-01-01 03:00"),
+            tariff=TariffConfig.economy_7(),
+        ),
+        id="simulate_timestep_tou-off_peak",
+    ),
+]
+
+
+class TestStepAgainstABatteryPastAnAssignedSocLimit:
+    """A battery whose SOC an assigned limit has moved past takes no part in a step's flows
+    further past it: the grid meets the whole shortfall or takes the whole surplus.
+    """
+
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_below_an_assigned_floor_the_grid_meets_the_whole_shortfall(
+        self, step: Callable[..., EnergyFlowResult]
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=1.0)
+        battery.min_soc_fraction = 0.4
+        result = step(generation_kw=0.0, demand_kw=2.0, battery=battery, timestep_minutes=60)
+        assert dataclasses.asdict(result) == {
+            "generation": 0.0,
+            "demand": 2.0,
+            "self_consumption": 0.0,
+            "battery_charge": 0.0,
+            "battery_discharge": 0.0,
+            "grid_export": 0.0,
+            "grid_import": 2.0,
+            "battery_soc": 1.0,
+            "grid_charge": 0.0,
+        }
+
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_above_an_assigned_ceiling_the_grid_takes_the_whole_surplus(
+        self, step: Callable[..., EnergyFlowResult]
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=4.0)
+        battery.max_soc_fraction = 0.5
+        result = step(generation_kw=3.0, demand_kw=0.5, battery=battery, timestep_minutes=60)
+        assert dataclasses.asdict(result) == {
+            "generation": 3.0,
+            "demand": 0.5,
+            "self_consumption": 0.5,
+            "battery_charge": 0.0,
+            "battery_discharge": 0.0,
+            "grid_export": 2.5,
+            "grid_import": 0.0,
+            "battery_soc": 4.0,
+            "grid_charge": 0.0,
+        }
+
+    @pytest.mark.parametrize("step", GRID_CHARGING_STEPS)
+    def test_above_an_assigned_ceiling_the_grid_meets_only_the_demand(
+        self, step: Callable[..., EnergyFlowResult]
+    ) -> None:
+        config = dataclasses.replace(
+            BatteryConfig.default_5kwh(), grid_charging=GridChargeConfig(target_soc_fraction=0.9)
+        )
+        within_its_ceiling = step(
+            generation_kw=0.0,
+            demand_kw=1.0,
+            battery=Battery(config, initial_soc_kwh=4.0),
+            timestep_minutes=60,
+        )
+        assert within_its_ceiling.grid_charge > 0.0
+        battery = Battery(config, initial_soc_kwh=4.0)
+        battery.max_soc_fraction = 0.5
+        result = step(generation_kw=0.0, demand_kw=1.0, battery=battery, timestep_minutes=60)
+        assert dataclasses.asdict(result) == {
+            "generation": 0.0,
+            "demand": 1.0,
+            "self_consumption": 0.0,
+            "battery_charge": 0.0,
+            "battery_discharge": 0.0,
+            "grid_export": 0.0,
+            "grid_import": 1.0,
+            "battery_soc": 4.0,
+            "grid_charge": 0.0,
+        }

@@ -154,6 +154,23 @@ is not checked against the current SOC and may move past it. Consumers that
 assign values within these bounds need no change when they re-pin, and a
 consumer's own check of these bounds before assigning can go.
 
+**Unreleased on main** (task 580): a `Battery` whose SOC an assigned SOC limit
+has moved past moves no energy further past it. While the SOC is below
+`min_soc_kwh`, `discharge` returns 0.0 and leaves the SOC unchanged, and
+`available_discharge_capacity_kwh` is 0.0; while it is above `max_soc_kwh`,
+`charge` and `available_charge_capacity_kwh` do the same. On the 0.5.0 tag
+these returned negative amounts: `discharge` raised the SOC to the floor and
+`charge` lowered it to the ceiling. So a `simulate_timestep` or
+`simulate_timestep_tou` step could report a negative battery discharge, with
+self-consumption lowered and grid import raised by as much. It could also
+report a negative battery charge, with grid export raised by as much, or grid
+import lowered by as much for a charge from the grid. `validate_energy_balance`
+accepted all of these. Charging up from below the floor, discharging down from
+above the ceiling, and a battery whose SOC is within its limits behave as on
+the tag. Consumers that move a SOC limit past the SOC, as a min-SOC register
+write can, need no change when they re-pin, and any correction they make for
+the negative amounts can go.
+
 **Unreleased on main** (task 436): `SimulationResults`, reached through
 `FleetResults.per_home_results`, is frozen, so that each of its series stays
 named the column `to_dataframe()` writes it under. Assigning to one of its
