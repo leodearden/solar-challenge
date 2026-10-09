@@ -360,9 +360,9 @@ class RunStorage:
     def _upsert_run_row(self, row: RunRecord) -> None:
         """Write *row* as the runs row under row.id.
 
-        A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names: its
-        id, its creation time and the labels a user edits in Run History (RUN_LABELS), so a
-        run renamed while its job runs keeps the new name when the job's save rewrites it.
+        A row already under that id keeps the columns _COLUMNS_A_RESAVE_KEEPS names, among
+        them RUN_LABELS, the labels a user edits in Run History: a run renamed while its job
+        runs keeps the new name when the job's save rewrites its row.
         """
         with get_db(self.db_path) as conn:
             conn.execute(_RUN_ROW_UPSERT, asdict(row))
@@ -382,15 +382,16 @@ class RunStorage:
         """Save a home simulation run to storage.
 
         Creates directory structure, serializes config and summary to JSON,
-        saves time series to parquet, and upserts metadata into database.
+        saves time series to parquet, and upserts metadata into database. A run
+        already stored under run_id keeps the columns of its runs row that
+        _upsert_run_row keeps.
 
         Args:
             run_id: Unique run identifier
             config: Home configuration
             results: Simulation results with time series
             summary: Summary statistics
-            name: Optional run name (defaults to config.name); the name of a run already
-                stored under run_id is kept
+            name: Optional run name (defaults to config.name)
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
@@ -500,14 +501,16 @@ class RunStorage:
         """Save a fleet simulation run to storage.
 
         Creates directory structure with homes/ subdirectory, saves per-home
-        parquet files, fleet summary JSON, and fleet config JSON.
+        parquet files, fleet summary JSON, and fleet config JSON. A run already
+        stored under run_id keeps the columns of its runs row that _upsert_run_row
+        keeps.
 
         Args:
             run_id: Unique run identifier
             fleet_results: Fleet simulation results with per-home data
             fleet_summary: Fleet-level summary statistics
             per_home_summaries: List of SummaryStatistics for each home
-            name: Optional run name; the name of a run already stored under run_id is kept
+            name: Optional run name
             status: Run status
             error_message: Optional error message for failed runs
             duration_seconds: Optional simulation duration
