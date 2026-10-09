@@ -5,13 +5,13 @@
 {% block title %}Simulate Home{% endblock %}
 
 {% block head %}
+<script src="{{ url_for('static', filename='js/progress-tracker.js') }}" defer></script>
 <script>
 document.addEventListener('alpine:init', () => {
     Alpine.data('homeSimulator', () => ({
         activeTab: 'pv',
         submitting: false,
         jobId: null,
-        runId: null,
         errorMsg: '',
         presets: [],
         formData: {
@@ -63,28 +63,8 @@ document.addEventListener('alpine:init', () => {
             { id: 'location', label: 'Location' },
             { id: 'period', label: 'Period' }
         ],
-        progress: 0,
-        step: 'Queued',
-        message: 'Waiting to start...',
-        status: 'idle',
-        elapsed: 0,
-        startTime: null,
-        timer: null,
-        error: '',
-        completedRunId: '',
-        evtSource: null,
         init() {
             this.fetchPresets();
-        },
-        destroy() {
-            if (this.evtSource) {
-                this.evtSource.close();
-                this.evtSource = null;
-            }
-            if (this.timer) {
-                clearInterval(this.timer);
-                this.timer = null;
-            }
         },
         validationErrors: {},
         validate() {
@@ -202,11 +182,6 @@ document.addEventListener('alpine:init', () => {
             this.submitting = true;
             this.errorMsg = '';
             this.jobId = null;
-            this.runId = null;
-            this.status = 'idle';
-            this.progress = 0;
-            this.error = '';
-            this.completedRunId = '';
             try {
                 const resp = await fetch('/api/simulate/home', {
                     method: 'POST',
@@ -216,8 +191,6 @@ document.addEventListener('alpine:init', () => {
                 const data = await resp.json();
                 if (resp.ok) {
                     this.jobId = data.job_id;
-                    this.runId = data.run_id;
-                    this.startProgressTracking();
                 } else {
                     this.errorMsg = data.error || 'Submission failed';
                 }
@@ -226,61 +199,6 @@ document.addEventListener('alpine:init', () => {
             } finally {
                 this.submitting = false;
             }
-        },
-        startProgressTracking() {
-            this.status = 'queued';
-            this.startTime = Date.now();
-            this.timer = setInterval(() => {
-                this.elapsed = Math.floor((Date.now() - this.startTime) / 1000);
-            }, 1000);
-
-            this.evtSource = new EventSource('/api/jobs/' + this.jobId + '/progress');
-
-            this.evtSource.addEventListener('progress', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    if (data.progress_pct !== undefined) this.progress = data.progress_pct;
-                    if (data.current_step) this.step = data.current_step;
-                    if (data.message) this.message = data.message;
-                    if (data.status) this.status = data.status;
-                } catch(err) {}
-            });
-
-            this.evtSource.addEventListener('complete', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    this.status = 'completed';
-                    this.progress = 100;
-                    this.step = 'Done';
-                    this.message = 'Simulation completed successfully';
-                    if (data.run_id) this.completedRunId = data.run_id;
-                } catch(err) {}
-                this.evtSource.close();
-                this.evtSource = null;
-                if (this.timer) clearInterval(this.timer);
-            });
-
-            this.evtSource.addEventListener('error', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    this.status = 'failed';
-                    this.error = data.message || 'An unexpected error occurred';
-                } catch(err) {
-                    // SSE connection error (not a simulation error)
-                    if (this.status !== 'completed') {
-                        this.status = 'failed';
-                        this.error = 'Lost connection to server';
-                    }
-                }
-                this.evtSource.close();
-                this.evtSource = null;
-                if (this.timer) clearInterval(this.timer);
-            });
-        },
-        formatTime(seconds) {
-            const m = Math.floor(seconds / 60);
-            const s = seconds % 60;
-            return m > 0 ? m + 'm ' + s + 's' : s + 's';
         }
     }));
 });
