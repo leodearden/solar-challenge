@@ -197,7 +197,7 @@ def test_fleet_distribution_last_row_has_no_remove_button(
 
 
 def _wait_for_transitions_to_finish(page: Page) -> None:
-    """Wait until no CSS transition runs: base.html slides the main column aside for the sidebar over 300 ms once Alpine starts."""
+    """Wait until no CSS transition is running, so layout measurements see the settled page."""
     page.wait_for_function(
         "() => !document.getAnimations().some(animation => animation instanceof CSSTransition)"
     )
@@ -231,7 +231,7 @@ def _clipped_row_inputs(page: Page, subject: str, row_field: str) -> list[str]:
 def test_fleet_distribution_row_inputs_show_their_whole_values(
     page: Page, live_server: str, width: int, distribution_type: str, row_field: str
 ) -> None:
-    """Beside the open sidebar, every card's row inputs show their whole value at 1024, 1100 and 1280 px, e.g. 2900 in 'Annual Consumption Value 1'."""
+    """Beside the open sidebar, every card's row inputs show their whole value at 1024, 1100 and 1280 px, including the 4-digit value 9999 typed into each card's Value 1."""
     page.set_viewport_size({"width": width, "height": 1000})
     page.goto(live_server + "/simulate/fleet")
     expect(page.get_by_title("Collapse sidebar", exact=True)).to_be_visible()
@@ -240,6 +240,7 @@ def test_fleet_distribution_row_inputs_show_their_whole_values(
             "combobox", name=f"{subject} Distribution Type", exact=True
         ).select_option(label=distribution_type)
         _expect_only_row_list_shown(page, subject, row_field)
+        page.get_by_role("spinbutton", name=f"{subject} Value 1", exact=True).fill("9999")
     _wait_for_transitions_to_finish(page)
 
     clipped = [
