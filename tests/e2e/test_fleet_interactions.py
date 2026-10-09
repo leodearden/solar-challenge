@@ -3,15 +3,17 @@
 Verifies slider-input sync, that each distribution editor's controls are named
 for their card, that each card's row buttons change only its rows, that a
 card's last row has no remove button, that each card's row inputs show their
-whole value at desktop widths, that Import YAML, clicked or reached with Tab
+whole value at desktop widths, that each card offers Fixed Value, which Run
+sends as the card's capacity, that Import YAML, clicked or reached with Tab
 and pressed with Enter or Space, shows each distribution in its card, that a
 fleet exported as YAML imports back into the form, that Load Preset fills the
-form and names the preset's settings the form has no control for, that a preset
-without a period runs the page's default period, that the page shows why a
-preset cannot load or a fleet cannot export, that the simulation name reaches
-the submitted run, that Run shows why the page refuses a form, submits nothing
-and leaves the results link of an earlier run in place, and that the period
-selector offers presets and a custom date range.
+form and names the preset's settings the form has no control for, that Load
+Preset of a fleet of identical homes shows each card at Fixed Value, that a
+preset without a period runs the page's default period, that the page shows
+why a preset cannot load or a fleet cannot export, that the simulation name
+reaches the submitted run, that Run shows why the page refuses a form, submits
+nothing and leaves the results link of an earlier run in place, and that the
+period selector offers presets and a custom date range.
 """
 
 import json
@@ -250,6 +252,39 @@ def test_fleet_distribution_row_inputs_show_their_whole_values(
     assert clipped == [], f"at {width} px these row inputs cut off their value: {clipped}"
 
 
+# -- Fixed Value -----------------------------------------------------------
+
+
+FIXED_VALUES = {"PV Capacity": 6.5, "Battery Capacity": 9.5, "Annual Consumption": 4200}
+CARD_DISTRIBUTIONS = {
+    "PV Capacity": ("pv", "capacity_kw"),
+    "Battery Capacity": ("battery", "capacity_kwh"),
+    "Annual Consumption": ("load", "annual_consumption_kwh"),
+}
+
+
+def test_fleet_run_sends_each_cards_fixed_value_as_its_capacity(page: Page, live_server: str) -> None:
+    """Each card offers Fixed Value, whose input starts at a value, and Run sends the value typed there as the card's capacity, the number alone, which every home takes."""
+    # Abort the submission so no fleet job ever reaches the server's JobManager.
+    page.route("**/api/simulate/fleet-from-distribution", lambda route: route.abort())
+    page.goto(live_server + "/simulate/fleet")
+    for subject, value in FIXED_VALUES.items():
+        type_select = page.get_by_role("combobox", name=f"{subject} Distribution Type", exact=True)
+        expect(type_select.get_by_role("option", name="Fixed Value", exact=True)).to_have_count(1)
+        type_select.select_option(label="Fixed Value")
+        fixed_value = page.get_by_role("spinbutton", name=f"{subject} Fixed Value", exact=True)
+        expect(fixed_value).not_to_have_value("")
+        fixed_value.fill(str(value))
+
+    with page.expect_request("**/api/simulate/fleet-from-distribution") as submission:
+        page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    payload = submission.value.post_data_json
+    assert {
+        subject: payload[block][key] for subject, (block, key) in CARD_DISTRIBUTIONS.items()
+    } == FIXED_VALUES
+
+
 # -- Import YAML ------------------------------------------------------------
 
 
@@ -479,6 +514,36 @@ def test_fleet_load_preset_fills_the_form_and_names_what_it_did_not_load(
         "finance",
     ):
         expect(page.get_by_role("status")).to_contain_text(not_loaded)
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+
+BRISTOL_FIN_CALIBRATION_FIXED_VALUES = {
+    "PV Capacity": "5.5",
+    "Battery Capacity": "5",
+    "Annual Consumption": "3400",
+}
+
+
+def test_fleet_load_preset_of_identical_homes_shows_each_capacity_at_fixed_value(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """Load Preset 'bristol-fin-calibration', whose homes all take one PV, battery and consumption, shows each card at Fixed Value with the preset's value, and a notice names its settings the form has no control for."""
+    page.goto(live_server + "/simulate/fleet")
+
+    with page.expect_response("**/api/fleet/presets/bristol-fin-calibration") as answer:
+        page.get_by_role("combobox", name="Load Preset", exact=True).select_option(
+            "bristol-fin-calibration"
+        )
+
+    assert answer.value.status == 200, answer.value.text()
+    for subject, value in BRISTOL_FIN_CALIBRATION_FIXED_VALUES.items():
+        expect(
+            page.get_by_role("combobox", name=f"{subject} Distribution Type", exact=True)
+        ).to_have_value("")
+        expect(
+            page.get_by_role("spinbutton", name=f"{subject} Fixed Value", exact=True)
+        ).to_have_value(value)
+    expect(page.get_by_role("status")).to_contain_text("fleet_distribution.pv.tilt")
     assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
 

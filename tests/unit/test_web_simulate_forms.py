@@ -154,6 +154,11 @@ class TestFleetConfigRoute:
         assert element_count(page, "select", {"x-model": "dist.type"}) == 3
         assert "n_homes" in element_ids(page)
 
+    def test_fleet_page_offers_a_fixed_value_in_each_distribution_editor(self, client: FlaskClient) -> None:
+        """GET /simulate/fleet renders a Fixed Value number input in each of its three distribution editors, bound to the editor's dist.fixed."""
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+        assert element_count(page, "input", {"type": "number", "x-model.number": "dist.fixed"}) == 3
+
     def test_fleet_page_contains_pv_battery_load_sections(self, client: FlaskClient) -> None:
         """GET /simulate/fleet renders one heading per distribution card: PV Capacity, Battery Capacity and Annual Consumption."""
         response = client.get("/simulate/fleet")
