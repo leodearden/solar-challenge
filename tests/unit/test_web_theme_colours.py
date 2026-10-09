@@ -118,6 +118,40 @@ def test_the_hand_written_stylesheet_writes_no_theme_colour() -> None:
     )
 
 
+def test_an_amber_class_passes_only_in_a_source_its_role_lists() -> None:
+    badge = _amber_role("badge", "bg-amber-100", "templates/listed.html")
+    applied = {
+        "templates/listed.html": {"bg-amber-100", "text-amber-600", "bg-primary-500"},
+        "templates/unlisted.html": {"bg-amber-100", "hover:bg-sky-500"},
+        "static/js/script.js": {"dark:focus:ring-amber-500/50"},
+    }
+
+    assert _unlisted_amber_classes(applied, [badge]) == {
+        "templates/listed.html": ["text-amber-600"],
+        "templates/unlisted.html": ["bg-amber-100"],
+        "static/js/script.js": ["dark:focus:ring-amber-500/50"],
+    }
+
+
+def test_a_role_class_a_listed_source_does_not_apply_is_reported() -> None:
+    badge = _amber_role(
+        "badge",
+        "bg-amber-100 text-amber-800",
+        "templates/drawn.html",
+        "templates/restyled.html",
+        "templates/deleted.html",
+    )
+    applied = {
+        "templates/drawn.html": {"bg-amber-100", "text-amber-800"},
+        "templates/restyled.html": {"bg-amber-100", "text-primary-800"},
+    }
+
+    assert _unapplied_role_classes(applied, [badge]) == {
+        ("badge", "templates/restyled.html"): ["text-amber-800"],
+        ("badge", "templates/deleted.html"): ["bg-amber-100", "text-amber-800"],
+    }
+
+
 @pytest.mark.parametrize(
     ("css_class", "is_indicator"),
     [
