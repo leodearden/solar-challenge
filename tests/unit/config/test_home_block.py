@@ -4,10 +4,11 @@
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ConfigurationError,
     DispatchStrategyConfig,
@@ -19,12 +20,21 @@ from solar_challenge.config import (
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
+from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
+from solar_challenge.pv import PVConfig
 
 
 def _parsed_home(**blocks: Any) -> HomeConfig:
     """Parse a ``home:`` block holding only *blocks*, at the Bristol default location."""
     return parse_home_block(blocks, Location.bristol())
+
+
+def _refusal(build: Callable[[], object]) -> tuple[type[BaseException], str]:
+    """The type and message of the exception *build* raises."""
+    with pytest.raises(Exception) as raised:
+        build()
+    return type(raised.value), str(raised.value)
 
 
 class TestDispatchStrategyConfig:
@@ -167,15 +177,6 @@ class TestBatteryGridChargeParsing:
         assert result is not None
         assert result.grid_charging is None
 
-    def test_parse_empty_grid_charging_uses_default(self) -> None:
-        """Empty grid_charging dict -> default target_soc_fraction == 0.9."""
-        result = _parsed_home(
-            battery={"capacity_kwh": 5.0, "grid_charging": {}}
-        ).battery_config
-        assert result is not None
-        assert result.grid_charging is not None
-        assert result.grid_charging.target_soc_fraction == 0.9
-
     def test_parse_out_of_range_raises(self) -> None:
         """Out-of-range target_soc_fraction propagates ConfigurationError."""
         with pytest.raises(ConfigurationError, match="target_soc_fraction"):
@@ -247,16 +248,6 @@ class TestBatterySOCEfficiencyParsing:
         assert result.max_soc_fraction == 0.85
         assert result.charge_efficiency == 0.96
         assert result.discharge_efficiency == 0.97
-
-    def test_absent_keys_use_defaults(self) -> None:
-        """Absent SOC/eff keys yield the correct defaults."""
-        result = _parsed_home(battery={"capacity_kwh": 5.0}).battery_config
-        assert result is not None
-        assert result.min_soc_fraction == 0.1
-        assert result.max_soc_fraction == 0.9
-        assert result.charge_efficiency == 0.975
-        assert result.discharge_efficiency == 0.975
-        assert result.efficiency is None
 
     def test_out_of_range_soc_raises_value_error(self) -> None:
         """Out-of-range SOC fractions propagate as ValueError."""
@@ -339,16 +330,6 @@ class TestBatterySOHParsing:
         assert result.soh_floor == 0.6
         assert result.soh == pytest.approx(0.85)
 
-    def test_absent_soh_keys_use_defaults(self) -> None:
-        """Absent SOH keys yield the correct BatteryConfig defaults."""
-        result = _parsed_home(battery={"capacity_kwh": 5.0}).battery_config
-        assert result is not None
-        assert result.system_age_years == 0.0
-        assert result.calendar_fade_rate_per_year == 0.02
-        assert result.cycle_fade_per_equivalent_full_cycle == 5e-5
-        assert result.soh_floor == 0.5
-        assert result.soh is None
-
     def test_yaml_round_trip_system_age_years(self, tmp_path: Path) -> None:
         """YAML with battery.system_age_years round-trips into battery_config.system_age_years."""
         yaml_content = """
@@ -372,6 +353,139 @@ home:
         """Negative system_age_years surfaces as ValueError."""
         with pytest.raises(ValueError, match="system_age_years"):
             _parsed_home(battery={"capacity_kwh": 5.0, "system_age_years": -1.0})
+
+
+class TestOmittedAndNullKeys:
+    """A block gives its dataclass only the keys it sets.
+
+    An omitted key takes the dataclass's declared default; a null is a value set, handed on and
+    never read as the default.
+    """
+
+    def test_omitted_pv_keys_take_the_declared_defaults(self) -> None:
+        """PVConfig declares no capacity, so a pv block omitting capacity_kw is a 4 kW array."""
+        assert _parsed_home(pv={}).pv_config == PVConfig(capacity_kw=4.0)
+
+    def test_omitted_battery_keys_take_the_declared_defaults(self) -> None:
+        """BatteryConfig declares no capacity, so a battery block omitting capacity_kwh is 5 kWh."""
+        assert _parsed_home(battery={}).battery_config == BatteryConfig(capacity_kwh=5.0)
+
+    def test_omitted_load_keys_take_the_declared_defaults(self) -> None:
+        """A load block omitting every key is LoadConfig's declared defaults."""
+        assert _parsed_home(load={}).load_config == LoadConfig()
+
+    def test_omitted_grid_charging_keys_take_the_declared_defaults(self) -> None:
+        """A grid_charging block omitting target_soc_fraction is GridChargeConfig's default."""
+        battery = _parsed_home(battery={"capacity_kwh": 5.0, "grid_charging": {}}).battery_config
+        assert battery == BatteryConfig(capacity_kwh=5.0, grid_charging=GridChargeConfig())
+
+    @pytest.mark.parametrize(
+        ("blocks", "attribute", "dataclass", "fields"),
+        [
+            pytest.param(
+                {"pv": {"name": None}},
+                "pv_config",
+                PVConfig,
+                {"capacity_kw": 4.0, "name": None},
+                id="pv-name",
+            ),
+            pytest.param(
+                {"battery": {"name": None}},
+                "battery_config",
+                BatteryConfig,
+                {"capacity_kwh": 5.0, "name": None},
+                id="battery-name",
+            ),
+            pytest.param(
+                {"load": {"name": None}},
+                "load_config",
+                LoadConfig,
+                {"name": None},
+                id="load-name",
+            ),
+            pytest.param(
+                {"load": {"use_stochastic": None}},
+                "load_config",
+                LoadConfig,
+                {"use_stochastic": None},
+                id="load-use_stochastic",
+            ),
+        ],
+    )
+    def test_a_null_the_dataclass_accepts_reaches_it_as_none(
+        self,
+        blocks: dict[str, Any],
+        attribute: str,
+        dataclass: Callable[..., object],
+        fields: dict[str, Any],
+    ) -> None:
+        """A null the dataclass accepts is held as None, not replaced by the declared default."""
+        assert getattr(_parsed_home(**blocks), attribute) == dataclass(**fields)
+
+    @pytest.mark.parametrize(
+        ("blocks", "dataclass", "fields"),
+        [
+            pytest.param(
+                {"pv": {"capacity_kw": None}},
+                PVConfig,
+                {"capacity_kw": None},
+                id="pv-capacity_kw",
+            ),
+            pytest.param(
+                {"pv": {"azimuth": None}},
+                PVConfig,
+                {"capacity_kw": 4.0, "azimuth": None},
+                id="pv-azimuth",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": None}},
+                BatteryConfig,
+                {"capacity_kwh": None},
+                id="battery-capacity_kwh",
+            ),
+            pytest.param(
+                {"battery": {"max_charge_kw": None}},
+                BatteryConfig,
+                {"capacity_kwh": 5.0, "max_charge_kw": None},
+                id="battery-max_charge_kw",
+            ),
+            pytest.param(
+                {"load": {"household_occupants": None}},
+                LoadConfig,
+                {"household_occupants": None},
+                id="load-household_occupants",
+            ),
+            pytest.param(
+                {"battery": {"grid_charging": {"target_soc_fraction": None}}},
+                GridChargeConfig,
+                {"target_soc_fraction": None},
+                id="grid_charging-target_soc_fraction",
+            ),
+        ],
+    )
+    def test_a_null_the_dataclass_refuses_is_refused_as_constructing_it_refuses_it(
+        self,
+        blocks: dict[str, Any],
+        dataclass: Callable[..., object],
+        fields: dict[str, Any],
+    ) -> None:
+        """A null is not the declared default: it reaches the dataclass, which refuses it by itself."""
+        assert _refusal(lambda: _parsed_home(**blocks)) == _refusal(lambda: dataclass(**fields))
+
+    def test_a_bad_dispatch_strategy_is_reported_before_a_bad_grid_charging_block(self) -> None:
+        """The battery block reads its dispatch_strategy before its grid_charging, in whatever order the file lists them."""
+        battery = {
+            "grid_charging": {"target_soc_fraction": 2},
+            "dispatch_strategy": {"strategy_type": "nope"},
+        }
+        with pytest.raises(ConfigurationError, match="strategy_type"):
+            _parsed_home(battery=battery)
+
+    def test_a_bad_grid_charging_block_is_reported_before_the_batterys_own_limits(self) -> None:
+        """BatteryConfig checks its own limits last: alone, a min_soc_fraction of 0.95 is refused as a ValueError."""
+        battery = {"min_soc_fraction": 0.95, "grid_charging": {"target_soc_fraction": 2}}
+        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
+            _parsed_home(battery=battery)
 
 
 class TestDispatchStrategyParsing:
@@ -550,10 +664,3 @@ class TestPVBlockParsing:
         pv = _parsed_home(pv=data).pv_config
         assert pv.system_age_years == 15.0
         assert pv.degradation_rate_per_year == 0.008
-
-    def test_missing_keys_yield_dataclass_defaults(self) -> None:
-        """Omitting both keys gives PVConfig defaults (age 0.0, rate 0.005)."""
-        data = {"capacity_kw": 4.0}
-        pv = _parsed_home(pv=data).pv_config
-        assert pv.system_age_years == 0.0
-        assert pv.degradation_rate_per_year == 0.005
