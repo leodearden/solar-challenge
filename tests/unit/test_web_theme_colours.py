@@ -95,6 +95,9 @@ def _amber_role(name: str, classes: str, *sources: str) -> _AmberRole:
     return _AmberRole(name, frozenset(classes.split()), frozenset(sources))
 
 
+_AMBER_ROLES: tuple[_AmberRole, ...] = ()
+
+
 def _amber_classes(applied: set[str]) -> set[str]:
     return {c for c in applied if names_palette(c, _BUILT_IN_PALETTE_PRIMARY_COPIES)}
 
@@ -250,4 +253,52 @@ def test_no_template_or_script_draws_a_focus_indicator_in_amber() -> None:
         f"focus:ring-{_BUILT_IN_PALETTE_PRIMARY_COPIES}-500. Then rebuild with "
         "`cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
         "static/dist/style.css."
+    )
+
+
+def test_no_template_or_script_applies_amber_outside_a_listed_status_or_category_role() -> None:
+    assert _primary_500() == _BUILT_IN_500_SHADE_PRIMARY_COPIES, (
+        f"{TAILWIND_CONFIG_KEY}'s primary-500 is not Tailwind's built-in "
+        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES}-500, so primary no longer copies "
+        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} and a class naming "
+        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} would be a colour of its own, not a second home "
+        "of a theme colour. Point _BUILT_IN_PALETTE_PRIMARY_COPIES and "
+        "_BUILT_IN_500_SHADE_PRIMARY_COPIES at the built-in palette primary now copies, and "
+        "list the status and category roles drawn in it in _AMBER_ROLES, or delete this test "
+        "and _AMBER_ROLES if it copies none."
+    )
+    applied = dashboard_applied_classes_by_source()
+    assert any(names_palette(c, "primary") for classes in applied.values() for c in classes), (
+        "read no class naming primary from the dashboard's templates and scripts, so this "
+        "guard's reader may be broken and pass vacuously"
+    )
+
+    unlisted = _unlisted_amber_classes(applied, _AMBER_ROLES)
+
+    assert unlisted == {}, (
+        "These templates and scripts apply classes naming Tailwind's built-in "
+        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES}, whose shades tailwind.config.js's primary copies, "
+        f"outside the status and category roles _AMBER_ROLES lists:{_listing(unlisted)}\n"
+        "An accent use (a button, tab, link, toggle, spinner or focus ring) names primary "
+        "instead, the same colour, so a theme edit reaches it: bg-primary-500 for "
+        f"bg-{_BUILT_IN_PALETTE_PRIMARY_COPIES}-500. Then rebuild with "
+        "`cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
+        "static/dist/style.css. A status or category that is independent of the accent, like "
+        "the roles _AMBER_ROLES lists, gets an entry there naming the role, its "
+        f"{_BUILT_IN_PALETTE_PRIMARY_COPIES} classes and the templates that apply them."
+    )
+
+
+def test_every_listed_amber_role_is_applied_where_it_is_listed() -> None:
+    undrawn = _unapplied_role_classes(dashboard_applied_classes_by_source(), _AMBER_ROLES)
+    classes_by_source_and_role = {
+        f"{source}, {role}": classes for (role, source), classes in undrawn.items()
+    }
+
+    assert undrawn == {}, (
+        "These status and category roles list classes that a template listed for them does "
+        f"not apply:{_listing(classes_by_source_and_role)}\n"
+        "An allowance nothing applies would let an accent use written in that class pass "
+        "unseen. If the role moved, for example into a macro, list the template it moved to; "
+        "if it was restyled or deleted, update or delete its entry."
     )
