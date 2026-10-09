@@ -30,6 +30,9 @@ def _require_valid_degradation_inputs(
         raise ValueError(f"Degradation rate must be 0-1, got {degradation_rate_per_year}")
 
 
+_PVWATTS_DEFAULT_SYSTEM_LOSSES = float(pvlib.pvsystem.pvwatts_losses()) / 100
+
+
 @dataclass(frozen=True)
 class PVConfig:
     """Configuration for a photovoltaic system.
@@ -54,6 +57,11 @@ class PVConfig:
         system_age_years: Age of the PV system in years (default 0.0 = new system)
         degradation_rate_per_year: Annual capacity degradation as a fraction
             (default 0.005 = 0.5%/year, typical for crystalline silicon panels)
+
+        # System losses
+        system_losses: Fraction of each array's DC power lost before the inverter to soiling,
+            shading, mismatch, wiring, connections, light-induced degradation, nameplate rating
+            and availability (default PVWatts v5's 14.08%; docs/pv-system-losses.md)
     """
 
     capacity_kw: float
@@ -74,6 +82,9 @@ class PVConfig:
     # Degradation parameters (PV-DGR)
     system_age_years: float = 0.0  # New system (no degradation)
     degradation_rate_per_year: float = 0.005  # 0.5%/year (typical crystalline silicon)
+
+    # System losses
+    system_losses: float = _PVWATTS_DEFAULT_SYSTEM_LOSSES
 
     def __post_init__(self) -> None:
         """Validate PV configuration parameters."""
@@ -100,6 +111,10 @@ class PVConfig:
                 f"Inverter capacity must be positive and finite, got {self.inverter_capacity_kw} kW"
             )
         _require_valid_degradation_inputs(self.system_age_years, self.degradation_rate_per_year)
+        if not 0 <= self.system_losses < 1:
+            raise ValueError(
+                f"System losses must be a fraction in [0, 1), got {self.system_losses}"
+            )
 
     @property
     def effective_inverter_capacity_kw(self) -> float:
