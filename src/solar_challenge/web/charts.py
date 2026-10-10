@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Centralized chart module for the Solar Challenge web dashboard.
 
-All functions return Plotly JSON strings via fig.to_json().
+Each chart builder returns Plotly figure JSON, made by fig.to_json(); heat_pump_analysis returns
+its two figures as one HeatPumpCharts.
 Charts share layout defaults. Every series colour is a COLOUR_PALETTE entry, or a translucent
 form of one made by _with_alpha, so a palette edit reaches it; a chart that writes a palette
 colour out by hand fails tests/unit/test_web_chart_colours.py. Every COLOUR_PALETTE role is one
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Final, NamedTuple, TypeVar
@@ -537,17 +539,16 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
     return str(fig.to_json())
 
 
-def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
-    """Charts for heat pump load analysis.
+@dataclass(frozen=True, kw_only=True)
+class HeatPumpCharts:
+    """A home run's two heat-pump figures, each Plotly figure JSON: the heat pump's share of the run's demand, and its load over time."""
 
-    Args:
-        results: SimulationResults instance.
+    load_share_chart: str
+    load_profile_chart: str
 
-    Returns:
-        Dictionary with ``'load_profile_chart'`` and ``'load_share_chart'`` keys
-        containing Plotly JSON strings, or ``None`` if no heat pump data
-        is present.
-    """
+
+def heat_pump_analysis(results: SimulationResults) -> HeatPumpCharts | None:
+    """The heat-pump charts of *results*, or None if it carries no heat-pump load."""
     if results.heat_pump_load is None:
         return None
 
@@ -590,10 +591,10 @@ def heat_pump_analysis(results: SimulationResults) -> dict[str, str] | None:
         height=400,
     )
 
-    return {
-        "load_share_chart": str(pie_fig.to_json()),
-        "load_profile_chart": str(load_fig.to_json()),
-    }
+    return HeatPumpCharts(
+        load_share_chart=str(pie_fig.to_json()),
+        load_profile_chart=str(load_fig.to_json()),
+    )
 
 
 # ---------------------------------------------------------------------------
