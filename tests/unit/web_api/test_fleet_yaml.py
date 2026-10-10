@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the fleet page's scenario-file endpoints: POST /api/fleet/export-yaml, POST /api/fleet/import-yaml and GET /api/fleet/presets/<name>."""
+"""Tests for the fleet page's scenario-file endpoints, POST /api/fleet/export-yaml, POST /api/fleet/import-yaml and GET /api/fleet/presets/<name>, and for its Load Preset menu, which offers the presets GET /api/fleet/presets/<name> loads."""
 
 import dataclasses
 from pathlib import Path
@@ -15,6 +15,7 @@ from flask.testing import FlaskClient
 from solar_challenge.config import DispatchStrategyConfig, load_fleet_config, parse_seg_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
+from tests._html_page import element_attributes
 
 
 #: A fleet page form with every value away from the form converter's defaults and every overlay set.
@@ -298,11 +299,13 @@ class TestImportFleetYAML:
         assert reason in resp.get_json()["error"]
 
 
-#: The built-in scenarios the fleet page's Load Preset offers: the scenarios/ directory's files.
+#: The name of each built-in scenario, once: the stems of the .yaml and .yml files in scenarios/, in name order.
 _BUILTIN_SCENARIO_STEMS = sorted(
-    path.stem
-    for path in (Path(__file__).resolve().parents[3] / "scenarios").iterdir()
-    if path.suffix in (".yaml", ".yml") and path.is_file()
+    {
+        path.stem
+        for path in (Path(__file__).resolve().parents[3] / "scenarios").iterdir()
+        if path.suffix in (".yaml", ".yml") and path.is_file()
+    }
 )
 
 
@@ -391,10 +394,33 @@ class TestFleetPresetEndpoint:
     def test_every_builtin_scenario_loads_or_is_refused_with_a_reason(
         self, client: FlaskClient, name: str
     ) -> None:
-        """Every preset the fleet page offers loads as a form, or is refused with an error the page shows; none fails the server."""
+        """Every built-in scenario file loads as a form, or is refused with an error the page shows; none fails the server."""
         answer_keys = {200: {"form", "not_loaded"}, 400: {"error"}}
 
         resp = client.get(f"/api/fleet/presets/{name}")
 
         assert resp.status_code in answer_keys, resp.get_data(as_text=True)
         assert set(resp.get_json()) == answer_keys[resp.status_code]
+
+
+class TestFleetPagePresetMenu:
+    """The Load Preset menu of GET /simulate/fleet offers the built-in scenario files GET /api/fleet/presets/<name> loads."""
+
+    def test_the_menu_offers_in_name_order_exactly_the_builtin_scenarios_that_load(
+        self, client: FlaskClient
+    ) -> None:
+        """The menu offers each built-in scenario file the preset endpoint answers 200 for, in name order, and none it refuses."""
+        loadable = [
+            name
+            for name in _BUILTIN_SCENARIO_STEMS
+            if client.get(f"/api/fleet/presets/{name}").status_code == 200
+        ]
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+        offered = [
+            attributes["value"]
+            for attributes in element_attributes(page, "option")
+            if attributes.get("value") in _BUILTIN_SCENARIO_STEMS
+        ]
+
+        assert loadable, "no built-in scenario file loads, so the menu's choice goes untested"
+        assert offered == loadable

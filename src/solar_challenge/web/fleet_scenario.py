@@ -12,8 +12,10 @@ from types import MappingProxyType
 from typing import Any
 
 import pandas as pd
+import yaml
 
 from solar_challenge.config import (
+    ConfigurationError,
     generate_homes_from_distribution,
     parse_dispatch_strategy_config,
     parse_fleet_distribution_config,
@@ -40,6 +42,9 @@ from solar_challenge.web.simulation_params import (
 )
 
 _NAMELESS_FLEET_NAME = "Fleet Distribution Simulation"
+
+#: The exceptions this module's readers raise for a fleet form or scenario they refuse, each naming why.
+FLEET_FORM_REFUSALS: tuple[type[Exception], ...] = (ValueError, TypeError, ConfigurationError)
 
 
 @dataclass(frozen=True)
@@ -211,6 +216,20 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     )
     parse_fleet_form(form)
     return ImportedFleetForm(form=form, not_loaded=not_loaded)
+
+
+def fleet_form_from_yaml(yaml_text: str) -> ImportedFleetForm:
+    """The fleet form the fleet scenario YAML *yaml_text* describes, as :func:`fleet_form_from_scenario` reads its document.
+
+    Raises:
+        ValueError: For text that does not parse as YAML, "Invalid YAML: " and the parser's error.
+        ValueError, TypeError, ConfigurationError: As fleet_form_from_scenario.
+    """
+    try:
+        document = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML: {exc}") from exc
+    return fleet_form_from_scenario(document)
 
 
 #: A scenario block read as its part of the fleet form, and the path of each setting in it

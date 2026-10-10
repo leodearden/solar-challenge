@@ -6,14 +6,15 @@ card's last row has no remove button, that each card's row inputs show their
 whole value at desktop widths, that each card offers Fixed Value, which Run
 sends as the card's capacity, that Import YAML, clicked or reached with Tab
 and pressed with Enter or Space, shows each distribution in its card, that a
-fleet exported as YAML imports back into the form, that Load Preset fills the
-form and names the preset's settings the form has no control for, that Load
-Preset of a fleet of identical homes shows each card at Fixed Value, that a
-preset without a period runs the page's default period, that the page shows
-why a preset cannot load or a fleet cannot export, that the simulation name
-reaches the submitted run, that Run shows why the page refuses a form, submits
-nothing and leaves the results link of an earlier run in place, and that the
-period selector offers presets and a custom date range.
+fleet exported as YAML imports back into the form, that Load Preset offers
+only presets that load, fills the form and names the preset's settings the
+form has no control for, that Load Preset of a fleet of identical homes shows
+each card at Fixed Value, that a preset without a period runs the page's
+default period, that the page shows why an imported file cannot load or a
+fleet cannot export, that the simulation name reaches the submitted run, that
+Run shows why the page refuses a form, submits nothing and leaves the results
+link of an earlier run in place, and that the period selector offers presets
+and a custom date range.
 """
 
 import json
@@ -351,6 +352,28 @@ def test_fleet_tabbing_to_import_yaml_and_pressing_key_opens_a_file_chooser_whos
     _expect_the_imported_fleet(page)
 
 
+HOME_SCENARIO = """\
+home:
+  pv:
+    capacity_kw: 4.0
+"""
+
+
+def test_fleet_import_yaml_shows_why_a_scenario_cannot_load(
+    page: Page, live_server: str, tmp_path: Path
+) -> None:
+    """Import YAML of a scenario of one home, which has no fleet_distribution block, shows the error naming that block."""
+    home_file = tmp_path / "home.yaml"
+    home_file.write_text(HOME_SCENARIO)
+    page.goto(live_server + "/simulate/fleet")
+
+    with page.expect_file_chooser() as chooser:
+        page.get_by_role("button", name="Import YAML", exact=True).click()
+    chooser.value.set_files(home_file)
+
+    expect(page.get_by_role("alert")).to_contain_text("fleet_distribution")
+
+
 # -- Export YAML, then import it -------------------------------------------
 
 
@@ -446,6 +469,36 @@ def test_fleet_export_shows_the_servers_refusal(page: Page, live_server: str) ->
 
 
 # -- Load Preset ------------------------------------------------------------
+
+
+def test_fleet_load_preset_offers_only_presets_that_fill_the_form(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """Load Preset offers presets, and choosing each one it offers fills the form: the fleet size typed before is replaced by the preset's, and no error shows."""
+    page.goto(live_server + "/simulate/fleet")
+    preset_select = page.get_by_role("combobox", name="Load Preset", exact=True)
+    n_homes = page.get_by_label("Number of Homes", exact=True)
+    offered = [
+        value
+        for value in (
+            option.get_attribute("value") for option in preset_select.get_by_role("option").all()
+        )
+        if value
+    ]
+    assert offered, "Load Preset offers no preset"
+
+    for name in offered:
+        n_homes.fill("7")
+        expect(n_homes).to_have_value("7")
+        with page.expect_response(f"**/api/fleet/presets/{name}") as answer:
+            preset_select.select_option(name)
+        assert answer.value.status == 200, (
+            f"Load Preset offers {name}, which the page cannot load: {answer.value.text()}"
+        )
+        expect(n_homes).to_have_value(str(answer.value.json()["form"]["n_homes"]))
+
+    expect(page.get_by_role("alert")).to_have_count(0)
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
 
 BRISTOL_PHASE1_ROWS = {
@@ -572,15 +625,6 @@ def test_fleet_load_preset_without_a_period_runs_the_pages_default_period(
         page.get_by_role("button", name="Run Fleet Simulation").click()
     payload = submission.value.post_data_json
     assert (payload.get("days"), payload.get("start"), payload.get("end")) == (30, None, None)
-
-
-def test_fleet_load_preset_shows_why_a_scenario_cannot_load(page: Page, live_server: str) -> None:
-    """Load Preset of a scenario of individual homes, which has no fleet_distribution block, shows the error naming that block."""
-    page.goto(live_server + "/simulate/fleet")
-
-    page.get_by_role("combobox", name="Load Preset", exact=True).select_option("bristol-arbitrage")
-
-    expect(page.get_by_role("alert")).to_contain_text("fleet_distribution")
 
 
 # -- Simulation name reaches the submitted run -----------------------------
