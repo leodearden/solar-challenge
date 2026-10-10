@@ -2,6 +2,7 @@
 """Tests for the job endpoints: GET /api/jobs/<id>, GET /api/jobs/<id>/progress (an SSE stream) and GET /api/jobs/<id>/results."""
 
 import json
+from dataclasses import asdict, replace
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,17 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.database import get_db
+from solar_challenge.web.jobs import JobState
+
+_A_RUNNING_JOB = JobState(
+    job_id="job-running",
+    run_id="run-running",
+    status="running",
+    progress_pct=50.0,
+    current_step="Simulating",
+    message="Running home simulation...",
+    created_at="2024-06-01T12:00:00+00:00",
+)
 
 
 class TestGetJobStatus:
@@ -19,14 +31,10 @@ class TestGetJobStatus:
     def test_known_job_returns_200(
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
-        """Known job returns 200 with correct status JSON."""
+        """Known job returns 200 with every field of the state its manager reports, as JSON."""
         resp = client.get("/api/jobs/job-home-001")
         assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["job_id"] == "job-home-001"
-        assert data["status"] == "running"
-        assert data["progress_pct"] == 42.0
-        assert data["current_step"] == "Simulating"
+        assert resp.get_json() == asdict(mock_job_manager.get_job_status.return_value)
         mock_job_manager.get_job_status.assert_called_with("job-home-001")
 
     def test_unknown_job_returns_404(
@@ -42,14 +50,15 @@ class TestGetJobStatus:
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
         """Completed job returns status='completed'."""
-        mock_job_manager.get_job_status.return_value = {
-            "job_id": "job-done",
-            "run_id": "run-done",
-            "status": "completed",
-            "progress_pct": 100.0,
-            "current_step": "Done",
-            "message": "Simulation completed successfully",
-        }
+        mock_job_manager.get_job_status.return_value = replace(
+            _A_RUNNING_JOB,
+            job_id="job-done",
+            run_id="run-done",
+            status="completed",
+            progress_pct=100.0,
+            current_step="Done",
+            message="Simulation completed successfully",
+        )
         resp = client.get("/api/jobs/job-done")
         assert resp.status_code == 200
         assert resp.get_json()["status"] == "completed"
@@ -58,14 +67,14 @@ class TestGetJobStatus:
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
         """Failed job returns status='failed' with message."""
-        mock_job_manager.get_job_status.return_value = {
-            "job_id": "job-fail",
-            "run_id": "run-fail",
-            "status": "failed",
-            "progress_pct": 20.0,
-            "current_step": "Simulating",
-            "message": "Something went wrong",
-        }
+        mock_job_manager.get_job_status.return_value = replace(
+            _A_RUNNING_JOB,
+            job_id="job-fail",
+            run_id="run-fail",
+            status="failed",
+            progress_pct=20.0,
+            message="Something went wrong",
+        )
         resp = client.get("/api/jobs/job-fail")
         assert resp.status_code == 200
         data = resp.get_json()
@@ -107,14 +116,15 @@ class TestGetJobProgress:
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
         """Completed job with no queued events sends a complete event."""
-        mock_job_manager.get_job_status.return_value = {
-            "job_id": "job-done",
-            "run_id": "run-done",
-            "status": "completed",
-            "progress_pct": 100.0,
-            "current_step": "Done",
-            "message": "Done",
-        }
+        mock_job_manager.get_job_status.return_value = replace(
+            _A_RUNNING_JOB,
+            job_id="job-done",
+            run_id="run-done",
+            status="completed",
+            progress_pct=100.0,
+            current_step="Done",
+            message="Done",
+        )
         # No events in queue
         mock_job_manager.get_events.return_value = iter([])
         resp = client.get("/api/jobs/job-done/progress")
@@ -157,12 +167,7 @@ class TestGetJobResults:
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
         """Running job returns 409 (conflict)."""
-        mock_job_manager.get_job_status.return_value = {
-            "job_id": "job-running",
-            "run_id": "run-running",
-            "status": "running",
-            "progress_pct": 50.0,
-        }
+        mock_job_manager.get_job_status.return_value = _A_RUNNING_JOB
         resp = client.get("/api/jobs/job-running/results")
         assert resp.status_code == 409
         data = resp.get_json()
@@ -174,12 +179,9 @@ class TestGetJobResults:
     ) -> None:
         """A completed job whose run has a row answers the run's id, name, type, creation time and decoded summary."""
         run_id = "run-complete-001"
-        mock_job_manager.get_job_status.return_value = {
-            "job_id": "job-complete",
-            "run_id": run_id,
-            "status": "completed",
-            "progress_pct": 100.0,
-        }
+        mock_job_manager.get_job_status.return_value = replace(
+            _A_RUNNING_JOB, job_id="job-complete", run_id=run_id, status="completed", progress_pct=100.0
+        )
         # Insert a run row into the test database so the results endpoint
         # can retrieve it.
         db_path = app.config["DATABASE"]
@@ -205,11 +207,8 @@ class TestGetJobResults:
         self, client: FlaskClient, mock_job_manager: MagicMock
     ) -> None:
         """Completed job with no matching run record returns 404."""
-        mock_job_manager.get_job_status.return_value = {
-            "job_id": "job-complete",
-            "run_id": "run-does-not-exist",
-            "status": "completed",
-            "progress_pct": 100.0,
-        }
+        mock_job_manager.get_job_status.return_value = replace(
+            _A_RUNNING_JOB, job_id="job-complete", run_id="run-does-not-exist", status="completed", progress_pct=100.0
+        )
         resp = client.get("/api/jobs/job-complete/results")
         assert resp.status_code == 404

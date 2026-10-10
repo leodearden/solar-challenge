@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from solar_challenge.web.jobs import JobState
 from tests._web_app import build_test_app
 
 if TYPE_CHECKING:
@@ -41,14 +42,15 @@ def mock_job_manager(app: Flask) -> MagicMock:
     jm = MagicMock()
     jm.submit_home_job.return_value = ("job-home-001", "run-home-001")
     jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
-    jm.get_job_status.return_value = {
-        "job_id": "job-home-001",
-        "run_id": "run-home-001",
-        "status": "running",
-        "progress_pct": 42.0,
-        "current_step": "Simulating",
-        "message": "Running home simulation...",
-    }
+    jm.get_job_status.return_value = JobState(
+        job_id="job-home-001",
+        run_id="run-home-001",
+        status="running",
+        progress_pct=42.0,
+        current_step="Simulating",
+        message="Running home simulation...",
+        created_at="2024-06-01T12:00:00+00:00",
+    )
     jm.get_events.return_value = iter([
         {
             "event": "complete",
