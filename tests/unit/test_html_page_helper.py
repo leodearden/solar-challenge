@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts and headings.
+"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings and script texts.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a page test that uses it pass vacuously.
@@ -14,6 +14,7 @@ from tests._html_page import (
     element_count,
     element_ids,
     headings,
+    script_texts,
     texts,
     texts_after,
 )
@@ -312,3 +313,19 @@ def test_counts_of_refuses_a_str_rather_than_count_each_key_as_its_substring() -
 
     with pytest.raises(ValueError, match="got a str of 20 characters"):
         counts_of(page, ("PV Capacity",))
+
+
+def test_script_texts_lists_the_text_of_each_script_in_document_order() -> None:
+    page = (
+        '<script src="/static/js/chart-renderer.js"></script>'
+        "<p>Overview</p>"
+        "<script>renderChart('chart-sankey', figure);</script>"
+    )
+
+    assert script_texts(page) == ["", "renderChart('chart-sankey', figure);"]
+
+
+def test_style_text_is_not_a_script_text() -> None:
+    page = "<script>draw();</script><style>.chart { min-height: 400px; }</style>"
+
+    assert script_texts(page) == ["draw();"]
