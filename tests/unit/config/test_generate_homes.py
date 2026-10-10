@@ -2,8 +2,11 @@
 """Tests for generate_homes_from_distribution, which samples a FleetDistributionConfig into the fleet's HomeConfigs."""
 
 import json
+import math
 from pathlib import Path
 from typing import Optional
+
+import pytest
 
 from solar_challenge.config import (
     BatteryDistributionConfig,
@@ -154,6 +157,44 @@ class TestGenerateHomesFromDistribution:
         without_battery = [h for h in homes if h.battery_config is None]
         assert len(with_battery) > 0
         assert len(without_battery) > 0
+
+    @pytest.mark.parametrize("capacity_kwh", [math.nan, math.inf, -1.0])
+    def test_a_battery_capacity_that_is_not_one_is_refused_naming_it(
+        self, capacity_kwh: float
+    ) -> None:
+        """A sampled battery capacity that is negative or not finite is refused naming battery.capacity_kwh, never read as no battery."""
+        config = FleetDistributionConfig(
+            n_homes=3,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            battery=BatteryDistributionConfig(capacity_kwh=capacity_kwh),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            generate_homes_from_distribution(config, Location.bristol())
+        assert str(exc_info.value) == (
+            f"battery.capacity_kwh must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
+        )
+
+    def test_a_null_or_zero_battery_capacity_is_no_battery(self) -> None:
+        """A null or 0 sampled battery capacity is no battery, and every other home has the battery it sampled."""
+        config = FleetDistributionConfig(
+            n_homes=30,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            battery=BatteryDistributionConfig(
+                capacity_kwh=ShuffledPoolDistribution(
+                    values=(None, 0.0, 5.0), counts=(10, 10, 10)
+                )
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+        batteries = [h.battery_config for h in generate_homes_from_distribution(config, Location.bristol())]
+
+        assert sum(battery is None for battery in batteries) == 20
+        assert [b.capacity_kwh for b in batteries if b is not None] == [5.0] * 10
 
     def test_generate_reproducibility_with_seed(self) -> None:
         """Test that same seed produces same results."""

@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for parameter sweeps: the values a ParameterSweepConfig yields and the scenarios run_parameter_sweep simulates."""
 
+import math
 from dataclasses import replace
 
 import pandas as pd
 import pytest
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ConfigurationError,
     ParameterSweepConfig,
@@ -135,3 +137,45 @@ class TestPVParameterSweepPreservesDegradation:
         assert point.parameter_value == value
         assert isinstance(point.results, SimulationResults)
         pd.testing.assert_series_equal(point.results.generation, expected.generation)
+
+
+class TestBatteryCapacitySweepRefusesAValueThatIsNotACapacity:
+    """A battery_capacity_kwh sweep refuses a value that is negative or not finite, naming the parameter, instead of simulating it as no battery."""
+
+    _DAY = "2024-06-21"
+
+    @pytest.fixture
+    def synthetic_tmy(self, weather_cache: WeatherCache) -> None:
+        """Serve a clear June day as Bristol's TMY, so a sweep that simulates a value as no battery fails its assertion instead of reaching PVGIS."""
+        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
+
+    @pytest.mark.usefixtures("synthetic_tmy")
+    @pytest.mark.parametrize(
+        "battery",
+        [
+            pytest.param(None, id="no-battery"),
+            pytest.param(BatteryConfig(capacity_kwh=5.0), id="battery"),
+        ],
+    )
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -1.0])
+    def test_a_value_that_is_not_a_capacity_is_refused_naming_the_parameter(
+        self, value: float, battery: BatteryConfig | None
+    ) -> None:
+        scenario = ScenarioConfig(
+            name="battery sweep",
+            period=SimulationPeriod(start_date=self._DAY, end_date=self._DAY),
+            home=HomeConfig(
+                pv_config=PVConfig(capacity_kw=4.0),
+                load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
+                battery_config=battery,
+            ),
+        )
+        sweep = run_parameter_sweep(
+            scenario, ParameterSweepConfig(parameter_name="battery_capacity_kwh", values=[value])
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            next(sweep)
+        assert str(exc_info.value) == (
+            f"battery_capacity_kwh must be >= 0 and finite (0 for no battery), got {value} kWh"
+        )
