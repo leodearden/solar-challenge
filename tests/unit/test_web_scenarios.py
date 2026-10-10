@@ -386,6 +386,20 @@ class TestScenarioAPI:
         assert data["name"] == "fetch-me"
         assert data["source"] == "saved"
 
+    def test_a_builtin_scenario_file_is_listed_and_served_by_its_name(self, client: FlaskClient) -> None:
+        """GET /api/scenarios/presets lists scenarios/bristol-phase1.yaml as the builtin preset bristol-phase1, and GET /api/scenarios/presets/bristol-phase1 answers that file's scenario."""
+        listed = client.get("/api/scenarios/presets").get_json()["presets"]
+        preset = client.get("/api/scenarios/presets/bristol-phase1")
+
+        assert {"name": "bristol-phase1", "source": "builtin", "filename": "bristol-phase1.yaml"} in listed
+        assert preset.status_code == 200
+        answer = preset.get_json()
+        assert (answer["name"], answer["source"], answer["config"]["name"]) == (
+            "bristol-phase1",
+            "builtin",
+            "Bristol Phase 1",
+        )
+
 
 def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:
     """The YAML text /api/scenarios/preview-yaml answers for the builder *form*, and the document it holds."""
