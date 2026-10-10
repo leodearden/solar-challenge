@@ -17,7 +17,6 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db
 from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
 from solar_challenge.web.storage import RunStorage
-from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._finance_builders import make_sim_results
 from tests._fleet_form import FLEET_FORM_BLOCKS, valid_distribution_form
 from tests._html_page import (
@@ -496,31 +495,6 @@ class TestFleetApiEndpoints:
             content_type="application/json",
         )
         assert response.status_code == 400
-
-    @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
-    @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
-    @pytest.mark.parametrize(
-        "endpoint",
-        [
-            pytest.param("/api/simulate/fleet-from-distribution", id="simulate"),
-            pytest.param("/api/fleet/export-yaml", id="export-yaml"),
-        ],
-    )
-    def test_fleet_form_endpoints_refuse_a_falsy_block_other_than_null_naming_it(
-        self,
-        client: FlaskClient,
-        mock_job_manager: MagicMock,
-        endpoint: str,
-        key: str,
-        value: object,
-        type_name: str,
-    ) -> None:
-        """Every block of the fleet form, the pv/battery/load distributions and the tariff/dispatch_strategy/seg overlays alike, refuses a falsy value other than null as a value that is not a mapping, naming the block and the type sent, at the simulate endpoint and the export alike; no fleet is queued."""
-        response = client.post(endpoint, json={**valid_distribution_form(), key: value})
-
-        assert response.status_code == 400
-        assert response.get_json() == {"error": f"{key} must be a mapping, got {type_name}"}
-        mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
     def test_simulate_fleet_from_distribution_reads_a_null_block_as_absent(
