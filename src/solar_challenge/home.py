@@ -246,6 +246,18 @@ class SummaryStatistics:
     # total_grid_import_kwh.
     total_grid_charge_kwh: float = 0.0
 
+    def __post_init__(self) -> None:
+        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import."""
+        grid_charge = self.total_grid_charge_kwh
+        if not (0.0 <= grid_charge <= self.total_battery_charge_kwh and grid_charge <= self.total_grid_import_kwh):
+            raise ValueError(
+                "SummaryStatistics' total_grid_charge_kwh is a part of both total_battery_charge_kwh and "
+                "total_grid_import_kwh, so it is at least 0 and at most each: "
+                f"got total_grid_charge_kwh={grid_charge!r}, "
+                f"total_battery_charge_kwh={self.total_battery_charge_kwh!r}, "
+                f"total_grid_import_kwh={self.total_grid_import_kwh!r}"
+            )
+
 
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
     """Create dispatch strategy from battery config.

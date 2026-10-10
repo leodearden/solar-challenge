@@ -297,10 +297,14 @@ the web CSV export of tariffed home runs carry one more column, and
 `per_minute_amounts()` and `total_amounts()` gain `grid_charge_kwh`.
 `SummaryStatistics` gains a last keyword, `total_grid_charge_kwh`, defaulting
 to `0.0`: the run's energy stored in the battery from the grid, in kWh, a part
-of both `total_battery_charge_kwh` and `total_grid_import_kwh`. Code that
-builds one needs no change, and a summary the web app stored before the field
-existed loads with it at `0.0`. The 0.5.0 tag has none of these. Consumers that
-read the frame by position rather than by name re-check it when they re-pin.
+of both `total_battery_charge_kwh` and `total_grid_import_kwh`. Building one
+raises `ValueError` unless `total_grid_charge_kwh` is at least 0 and at most
+each of those two totals, so it also refuses a negative or NaN battery charge
+or grid import total, which the 0.5.0 tag accepts. Code that builds one with a
+battery charge and a grid import of 0 or more needs no change, and a summary
+the web app stored before the field existed loads with it at `0.0`. The 0.5.0
+tag has none of these. Consumers that read the frame by position rather than by
+name re-check it when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

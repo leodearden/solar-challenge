@@ -8,13 +8,14 @@ import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._finance_builders import make_sim_results
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
 
@@ -324,6 +325,52 @@ class TestCalculateSummaryGridCharge:
         summary = calculate_summary(self._make_results(grid_charge=grid_charge))
 
         assert summary.total_grid_charge_kwh == pytest.approx(0.03)
+
+
+class TestSummaryStatisticsGridCharge:
+    """SummaryStatistics refuses a total_grid_charge_kwh that is not a part of both its battery charge and its grid import."""
+
+    @pytest.fixture
+    def summary(self) -> SummaryStatistics:
+        """A one-day run's summary, which a test gives the grid charge, battery charge and grid import it checks."""
+        return calculate_summary(make_sim_results(days=1))
+
+    @pytest.mark.parametrize(
+        ("grid_charge_kwh", "battery_charge_kwh", "grid_import_kwh"),
+        [
+            pytest.param(2.5, 2.0, 9.75, id="more-than-the-battery-stored"),
+            pytest.param(2.0, 2.0, 1.5, id="more-than-the-grid-supplied"),
+            pytest.param(-0.5, 2.0, 9.75, id="negative"),
+            pytest.param(float("nan"), 2.0, 9.75, id="not-a-number"),
+        ],
+    )
+    def test_a_grid_charge_outside_the_charge_or_the_import_raises_naming_the_three_totals(
+        self, summary: SummaryStatistics, grid_charge_kwh: float, battery_charge_kwh: float, grid_import_kwh: float
+    ) -> None:
+        """The error states the invariant and the totals that break it."""
+        with pytest.raises(ValueError) as refused:
+            dataclasses.replace(
+                summary,
+                total_grid_charge_kwh=grid_charge_kwh,
+                total_battery_charge_kwh=battery_charge_kwh,
+                total_grid_import_kwh=grid_import_kwh,
+            )
+
+        message = str(refused.value)
+        assert "a part of both total_battery_charge_kwh and total_grid_import_kwh" in message
+        assert f"total_grid_charge_kwh={grid_charge_kwh!r}" in message
+        assert f"total_battery_charge_kwh={battery_charge_kwh!r}" in message
+        assert f"total_grid_import_kwh={grid_import_kwh!r}" in message
+
+    def test_a_grid_charge_that_is_all_of_the_charge_and_all_of_the_import_is_accepted(
+        self, summary: SummaryStatistics
+    ) -> None:
+        """A sunless night on which the grid supplied only the battery: its grid charge is the whole of both."""
+        night = dataclasses.replace(
+            summary, total_grid_charge_kwh=2.0, total_battery_charge_kwh=2.0, total_grid_import_kwh=2.0
+        )
+
+        assert night.total_grid_charge_kwh == 2.0
 
 
 class TestSimulateHomeGridChargeCost:
