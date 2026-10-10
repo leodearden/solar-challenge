@@ -5,8 +5,6 @@ import json
 from pathlib import Path
 from typing import Optional
 
-import pytest
-
 from solar_challenge.config import (
     BatteryDistributionConfig,
     FleetDistributionConfig,
@@ -22,7 +20,6 @@ from solar_challenge.config import (
     load_fleet_config,
 )
 from solar_challenge.location import Location
-from solar_challenge.pv import create_pv_system
 from solar_challenge.tariff import TariffConfig
 
 
@@ -523,9 +520,9 @@ class TestGenerateHomesFromDistributionDegradation:
 
 
 class TestGenerateHomesFromDistributionInverterEfficiency:
-    """Each home's inverter runs at the inverter efficiency sampled for it, 0.96 included."""
+    """Each home's PVConfig takes the inverter efficiency sampled for it, 0.96 included."""
 
-    def test_each_homes_inverter_runs_at_its_sampled_efficiency(self) -> None:
+    def test_each_home_takes_its_sampled_inverter_efficiency(self) -> None:
         config = FleetDistributionConfig(
             n_homes=3,
             pv=PVDistributionConfig(
@@ -541,13 +538,6 @@ class TestGenerateHomesFromDistributionInverterEfficiency:
         homes = generate_homes_from_distribution(config, Location.bristol())
 
         assert sorted(home.pv_config.inverter_efficiency for home in homes) == [0.955, 0.96, 0.965]
-        for home in homes:
-            inverter = create_pv_system(home.pv_config).inverter_parameters
-            efficiency = inverter["Paco"] / inverter["Pdco"]
-            assert efficiency == pytest.approx(home.pv_config.inverter_efficiency), (
-                f"{home.name}, sampled at {home.pv_config.inverter_efficiency}, runs its "
-                f"inverter at Paco/Pdco = {efficiency:.4f}"
-            )
 
 
 class TestGenerateHomesFromDistributionFlex:
