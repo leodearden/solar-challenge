@@ -755,6 +755,44 @@ class TestErrorHandling:
         )
 
     @pytest.mark.parametrize(
+        "command",
+        [
+            pytest.param(("finance", "run"), id="finance-run"),
+            pytest.param(("optimize", "configs"), id="optimize-configs"),
+        ],
+    )
+    def test_a_finance_command_reports_an_infinite_loan_term_as_one_configuration_error_line(
+        self, command: tuple[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A finance command on a scenario whose loan term is YAML .inf exits 1, printing nothing on stdout and one configuration-error line on stderr. It raises nothing."""
+        monkeypatch.chdir(tmp_path)
+        Path("scenario.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "Bristol",
+                    "homes": [
+                        {
+                            "pv": {"capacity_kw": 4.0},
+                            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                        }
+                    ],
+                    "finance": {
+                        "standing_charge_pence_per_day": 28.0,
+                        "loan_term_years": float("inf"),
+                    },
+                }
+            )
+        )
+
+        result = runner.invoke(app, [*command, "scenario.yaml"], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert " ".join(result.stderr.split()) == (
+            "Configuration error: loan_term_years must be a finite whole number, got inf"
+        )
+
+    @pytest.mark.parametrize(
         ("error_type", "label"),
         [
             pytest.param(ConfigurationError, "Configuration error", id="ConfigurationError"),

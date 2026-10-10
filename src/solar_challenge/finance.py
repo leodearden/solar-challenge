@@ -28,6 +28,7 @@ import pandas as pd
 from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
 from solar_challenge.seg import SEGTariff
+from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
     from solar_challenge.config import ScenarioConfig
@@ -48,6 +49,7 @@ class FinanceConfig:
     Holds investor-spreadsheet defaults (§3.1 of the financial-layer PRD)
     used to compute project NPV, payback period, and per-home savings.
     All monetary values are in nominal GBP or pence; rates are fractional.
+    Every number must be finite.
 
     Attributes:
         standing_charge_pence_per_day: Retail grid standing charge (required).
@@ -66,10 +68,14 @@ class FinanceConfig:
             capacity (default 0.0; 0 permitted).
         grant_gbp: Total grant received by the project (default 250000.0; 0 allowed).
         equity_fraction: Fraction of project cost financed by equity (default 0.75).
-        loan_term_years: Loan repayment term in years (default 15).
+        loan_term_years: Loan repayment term, a whole number of years (default 15).
+            A whole-number float such as 20.0 is held as the int 20; a bool,
+            Python's or numpy's, is refused.
         loan_rate: Annual loan interest rate as a fraction (default 0.07).
         opex_per_home_per_year_gbp: Annual operating cost per home (default 131.0).
-        asset_life_years: Useful life of the asset in years (default 25).
+        asset_life_years: Useful life of the asset, a whole number of years
+            (default 25); like loan_term_years, a whole-number float is held as
+            the int it equals and a bool is refused.
         own_use_rate_pence_per_kwh: CBS transfer price for self-consumed CBS-owned solar
             (default 15.0 p/kWh; 0 permitted).
         retained_cash_floor_per_home_per_year_gbp: Board-set minimum retained CBS
@@ -111,6 +117,14 @@ class FinanceConfig:
         """Validate financial parameters, raising ConfigurationError on violation."""
         from solar_challenge.config import ConfigurationError  # lazy: avoids import cycle; sys.modules cache makes repeat lookups O(1)
 
+        for field_name in ("loan_term_years", "asset_life_years"):
+            years = getattr(self, field_name)
+            whole_years = whole_number(years)
+            if whole_years is None:
+                raise ConfigurationError(
+                    f"{field_name} must be a finite whole number, got {years}"
+                )
+            object.__setattr__(self, field_name, whole_years)
         if not (0.0 <= self.vat_rate <= 1.0):
             raise ConfigurationError(
                 f"vat_rate must be in [0, 1], got {self.vat_rate}"
@@ -129,16 +143,11 @@ class FinanceConfig:
             raise ConfigurationError(
                 f"loan_term_years must be > 0, got {self.loan_term_years}"
             )
-        if self.loan_rate < 0.0:
-            raise ConfigurationError(
-                f"loan_rate must be >= 0, got {self.loan_rate}"
-            )
         if self.asset_life_years < self.loan_term_years:
             raise ConfigurationError(
                 f"asset_life_years ({self.asset_life_years}) must be >= "
                 f"loan_term_years ({self.loan_term_years})"
             )
-        # Cost/rate fields must be strictly positive
         _positive_fields = {
             "standing_charge_pence_per_day": self.standing_charge_pence_per_day,
             "retail_baseline_rate_pence_per_kwh": self.retail_baseline_rate_pence_per_kwh,
@@ -148,35 +157,23 @@ class FinanceConfig:
             "opex_per_home_per_year_gbp": self.opex_per_home_per_year_gbp,
         }
         for field_name, value in _positive_fields.items():
-            if value <= 0.0:
+            if not 0.0 < value < math.inf:
                 raise ConfigurationError(
-                    f"{field_name} must be > 0, got {value}"
+                    f"{field_name} must be > 0 and finite, got {value}"
                 )
-        # Grant may be zero but not negative
-        if self.grant_gbp < 0.0:
-            raise ConfigurationError(
-                f"grant_gbp must be >= 0, got {self.grant_gbp}"
-            )
-        # Inverter cost may be zero (opt-in default) but not negative
-        if self.inverter_cost_per_kw_gbp < 0.0:
-            raise ConfigurationError(
-                f"inverter_cost_per_kw_gbp must be >= 0, got {self.inverter_cost_per_kw_gbp}"
-            )
-        # Cost-recovery fields: zero allowed, negative rejected
-        if self.own_use_rate_pence_per_kwh < 0.0:
-            raise ConfigurationError(
-                f"own_use_rate_pence_per_kwh must be >= 0, got {self.own_use_rate_pence_per_kwh}"
-            )
-        if self.retained_cash_floor_per_home_per_year_gbp < 0.0:
-            raise ConfigurationError(
-                "retained_cash_floor_per_home_per_year_gbp must be >= 0, "
-                f"got {self.retained_cash_floor_per_home_per_year_gbp}"
-            )
-        if self.grid_services_income_per_kw_per_year_gbp < 0.0:
-            raise ConfigurationError(
-                "grid_services_income_per_kw_per_year_gbp must be >= 0, "
-                f"got {self.grid_services_income_per_kw_per_year_gbp}"
-            )
+        _non_negative_fields = {
+            "loan_rate": self.loan_rate,
+            "grant_gbp": self.grant_gbp,
+            "inverter_cost_per_kw_gbp": self.inverter_cost_per_kw_gbp,
+            "own_use_rate_pence_per_kwh": self.own_use_rate_pence_per_kwh,
+            "retained_cash_floor_per_home_per_year_gbp": self.retained_cash_floor_per_home_per_year_gbp,
+            "grid_services_income_per_kw_per_year_gbp": self.grid_services_income_per_kw_per_year_gbp,
+        }
+        for field_name, value in _non_negative_fields.items():
+            if not 0.0 <= value < math.inf:
+                raise ConfigurationError(
+                    f"{field_name} must be >= 0 and finite, got {value}"
+                )
         _VALID_GS_MODELS = frozenset({"flat", "capacity_at_events"})
         if self.grid_services_model not in _VALID_GS_MODELS:
             raise ConfigurationError(
