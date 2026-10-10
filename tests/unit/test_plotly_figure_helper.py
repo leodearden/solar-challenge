@@ -133,21 +133,21 @@ def test_two_nodes_sharing_a_label_raise_rather_than_keeping_one_colour() -> Non
 
 
 @pytest.mark.parametrize(
-    ("reader", "part", "attribute"),
+    ("reader", "part", "attribute", "lengths"),
     [
-        pytest.param(sankey_link_values, "link", "value", id="link-value"),
-        pytest.param(sankey_link_colours, "link", "color", id="link-colour"),
-        pytest.param(sankey_link_values, "link", "target", id="link-target"),
-        pytest.param(sankey_node_colours, "node", "color", id="node-colour"),
+        pytest.param(sankey_link_values, "link", "value", {"source": 2, "target": 2, "value": 1}, id="link-value"),
+        pytest.param(sankey_link_colours, "link", "color", {"source": 2, "target": 2, "color": 1}, id="link-colour"),
+        pytest.param(sankey_link_values, "link", "target", {"source": 2, "target": 1, "value": 2}, id="link-target"),
+        pytest.param(sankey_node_colours, "node", "color", {"label": 3, "color": 2}, id="node-colour"),
     ],
 )
 def test_lists_of_unequal_length_raise_rather_than_dropping_an_entry(
-    reader: Callable[[str], object], part: str, attribute: str
+    reader: Callable[[str], object], part: str, attribute: str, lengths: dict[str, int]
 ) -> None:
     sankey = _pv_and_the_grid_feeding_demand()
     del sankey[part][attribute][-1]
 
-    with pytest.raises(ValueError, match="shorter"):
+    with pytest.raises(ValueError, match=re.escape(f"one entry per {part}; got lengths {lengths}") + "$"):
         reader(_figure(sankey))
 
 
