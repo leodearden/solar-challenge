@@ -25,6 +25,7 @@ from solar_challenge.web.charts import (
 )
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
+from tests._plotly_figure import sankey_link_values
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._synthetic_weather import sunless_weather
 
@@ -68,18 +69,6 @@ def _one_day_summary(**totals: float) -> SummaryStatistics:
     return dataclasses.replace(calculate_summary(make_sim_results(days=1)), **totals)
 
 
-def _sankey_links(figure: str) -> dict[tuple[str, str], float]:
-    """The Sankey figure's links, each keyed by its source and target node labels: its kWh."""
-    sankey = json.loads(figure)["data"][0]
-    labels = sankey["node"]["label"]
-    return {
-        (labels[source], labels[target]): kwh
-        for source, target, kwh in zip(
-            sankey["link"]["source"], sankey["link"]["target"], sankey["link"]["value"], strict=True
-        )
-    }
-
-
 class TestChartFunctions:
     """Tests for the centralized chart functions in charts.py."""
 
@@ -104,7 +93,7 @@ class TestChartFunctions:
             total_battery_charge_kwh=10.0,
         )
 
-        assert _sankey_links(sankey_diagram(summary)) == {
+        assert sankey_link_values(sankey_diagram(summary)) == {
             ("PV Generation", "Demand"): 42.0,
             ("PV Generation", "Battery"): 10.0,
             ("PV Generation", "Export"): 40.0,
@@ -171,7 +160,7 @@ class TestSankeyBatteryCharge:
             total_grid_charge_kwh=2.0,
         )
 
-        assert _sankey_links(sankey_diagram(summary)) == {
+        assert sankey_link_values(sankey_diagram(summary)) == {
             ("Grid", "Battery"): 2.0,
             ("Grid", "Demand"): 7.75,
             ("Battery", "Demand"): 4.0,
@@ -190,7 +179,7 @@ class TestSankeyBatteryCharge:
             total_grid_charge_kwh=2.0,
         )
 
-        assert _sankey_links(sankey_diagram(summary)) == {
+        assert sankey_link_values(sankey_diagram(summary)) == {
             ("PV Generation", "Demand"): 4.0,
             ("PV Generation", "Battery"): 3.0,
             ("PV Generation", "Export"): 3.0,
@@ -212,7 +201,7 @@ class TestSankeyBatteryCharge:
         )
         summary = calculate_summary(results)
 
-        links = _sankey_links(sankey_diagram(summary))
+        links = sankey_link_values(sankey_diagram(summary))
 
         assert set(links) == {("Grid", "Demand"), ("Grid", "Battery"), ("Battery", "Demand")}
         assert links[("Grid", "Battery")] == round(summary.total_battery_charge_kwh, 2)
