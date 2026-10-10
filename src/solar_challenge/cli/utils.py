@@ -39,6 +39,7 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
+from solar_challenge.battery import has_battery
 from solar_challenge.config import ConfigurationError, load_config
 from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.location import Location
@@ -158,6 +159,10 @@ def load_config_with_overrides(
 
     Returns:
         Config dict with overrides applied
+
+    Raises:
+        ValueError: From has_battery, naming --battery-kwh, if battery_kwh is
+            negative or not finite
     """
     if config_path is not None:
         config = load_config(config_path)
@@ -177,7 +182,7 @@ def load_config_with_overrides(
         config["home"]["pv"]["capacity_kw"] = pv_kw
 
     if battery_kwh is not None:
-        if battery_kwh > 0:
+        if has_battery(battery_kwh, "--battery-kwh"):
             config["home"]["battery"] = {"capacity_kwh": battery_kwh}
         else:
             config["home"].pop("battery", None)

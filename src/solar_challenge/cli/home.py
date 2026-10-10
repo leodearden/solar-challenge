@@ -8,7 +8,7 @@ from typing import Annotated, Optional
 import pandas as pd
 import typer
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import BatteryConfig, has_battery
 from solar_challenge.cli.utils import (
     console,
     create_progress,
@@ -226,7 +226,7 @@ def quick(
     pv_config = PVConfig(capacity_kw=pv_kw)
 
     battery_config = None
-    if battery_kwh is not None and battery_kwh > 0:
+    if battery_kwh is not None and has_battery(battery_kwh, "battery_kwh"):
         battery_config = BatteryConfig(capacity_kwh=battery_kwh)
 
     load_config = LoadConfig(annual_consumption_kwh=consumption_kwh)
