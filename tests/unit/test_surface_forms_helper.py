@@ -958,6 +958,39 @@ def test_a_type_parameter_inside_its_own_bound_is_spelled_there_by_its_name_alon
     assert named_classes(branching.link) == {branching.Node}
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="type parameter syntax is new in Python 3.12"
+)
+def test_a_forward_reference_a_type_parameter_declares_names_the_class_the_module_of_its_routine_binds_the_name_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scoping = _imported(
+        tmp_path,
+        monkeypatch,
+        "scoping",
+        "class Counter: ...\n\n\ndef tally[T: 'Counter'](counter: T) -> T: ...\n",
+    )
+
+    assert named_classes(scoping.tally) == {scoping.Counter}
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="type parameter syntax is new in Python 3.12"
+)
+def test_a_forward_reference_to_a_type_parameter_raises_a_name_error_naming_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bounding = _imported(
+        tmp_path,
+        monkeypatch,
+        "bounding",
+        "class Node[T]: ...\n\n\ndef link[T: 'Node[T]'](node: T) -> T: ...\n",
+    )
+
+    with pytest.raises(NameError, match="'T'"):
+        named_classes(bounding.link)
+
+
 def test_a_default_value_names_no_class() -> None:
     def f(at: object = Preset(rate=0.1)) -> None: ...
 

@@ -105,7 +105,11 @@ def named_classes(obj: object) -> set[type]:
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
     another module. What a type variable or a NewType carries is spelled in the module
     that declares it; inside its own declaration, as in TypeVar("T", bound="Node[T]"), it
-    names no class. A constant names its type, and an Enum's members name nothing.
+    names no class. A type parameter, as in def f[T: "Node"](x: T), reports no module of
+    its own: what it carries is spelled in the module that spells the signature holding
+    it. That module binds no type parameter, so a string that names one, as "Node[T]"
+    names T, raises NameError. A constant names its type, and an Enum's members name
+    nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -257,10 +261,10 @@ class _ParameterTypes(_Construct):
 
 @dataclasses.dataclass(frozen=True)
 class _Declared(_Construct):
-    """A type variable or a NewType: spelled by its name, then in parentheses the annotations its declaration passes, if any; naming their classes alone, a name in them resolved in the module that declares it."""
+    """A type variable or a NewType: spelled by its name, then in parentheses the annotations its declaration passes, if any; naming their classes alone, a name in them resolved in the module that declares it, or, where none is known, in the module that spells the signature holding it."""
 
     name: str
-    module: str
+    module: str | None
     arguments: tuple[_Construct, ...]
 
     def text(self) -> str:
@@ -269,7 +273,7 @@ class _Declared(_Construct):
         return f"{self.name}({_texts_of(self.arguments)})"
 
     def classes(self, module: str) -> set[type]:
-        return _classes_of(self.arguments, self.module)
+        return _classes_of(self.arguments, module if self.module is None else self.module)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -355,8 +359,9 @@ def _parsed_type_variable(
     enclosing: frozenset[object],
 ) -> _Declared:
     """*variable* as its declaration passes it: its repr, then its constraints, then its bound and its default by keyword, each only if declared and each read inside that declaration; its repr alone if that declaration encloses it."""
+    module = _declaring_module(variable)
     if variable in enclosing:
-        return _Declared(repr(variable), variable.__module__, ())
+        return _Declared(repr(variable), module, ())
     inside = enclosing | {variable}
     arguments = list(_each_parsed(getattr(variable, "__constraints__", ()), inside))
     bound = getattr(variable, "__bound__", None)
@@ -364,7 +369,14 @@ def _parsed_type_variable(
         arguments.append(_Keyword("bound", _parsed(bound, inside)))
     if getattr(variable, "has_default", lambda: False)():
         arguments.append(_Keyword("default", _parsed(variable.__default__, inside)))
-    return _Declared(repr(variable), variable.__module__, tuple(arguments))
+    return _Declared(repr(variable), module, tuple(arguments))
+
+
+def _declaring_module(
+    variable: typing.TypeVar | typing.ParamSpec | typing.TypeVarTuple,
+) -> str | None:
+    """The module *variable*'s __module__ names; None if that is typing, which a type parameter (`def f[T]`) reports in place of the module of the routine or class that declares it."""
+    return None if variable.__module__ == "typing" else variable.__module__
 
 
 def _parsed_new_type(new_type: typing.NewType, enclosing: frozenset[object]) -> _Declared:
