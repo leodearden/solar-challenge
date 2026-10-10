@@ -107,6 +107,12 @@ This is a dated record. Re-measure with the method below before relying on it.
   Bristol's 248 capacities (890.7–1016.8) and the fourteen UK sites of
   [pv-system-losses.md](pv-system-losses.md) §5 (746.0–1138.9) all read inside the new
   band.]**
+  **[Amended 2026-10-10, task 236: every default-rated CEC inverter now runs at the
+  configured 0.96 efficiency at rated output, not its catalogue efficiency
+  ([pv-inverter-efficiency.md](pv-inverter-efficiency.md)). Re-measured with the losses
+  on the scaled TMY by §3's and §4's methods, on task 236's commit be3e1de: the 248
+  capacities read 925.9–1007.7 kWh/kWp (median 989.1), all inside the band, old or new,
+  and 4 kW reads 993.1. The AC peak reaches at most 0.948 × the wired DC (at 0.4 kW).]**
 - **Model.** `pv.create_model_chain` applied no soiling, wiring, mismatch or
   availability losses. From task 252 every model chain deducts PVWatts v5's default
   system losses from each array's DC power ([pv-system-losses.md](pv-system-losses.md)).

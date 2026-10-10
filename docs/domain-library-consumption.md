@@ -228,6 +228,21 @@ for 0.3–1.0 kW arrays on 3.0, 3.68 and 5.0 kW inverters; and by −3.42% for
 ([pv-inverter-string-matching.md](pv-inverter-string-matching.md) §7). Consumers
 re-baseline the figures for those configs when they re-pin.
 
+**Unreleased on main** (task 236): `create_pv_system`, `create_model_chain` and
+`simulate_pv_output` run every voltage-matched CEC inverter at
+`PVConfig.inverter_efficiency` at rated output
+(`Pdco = Paco / inverter_efficiency`), the default 0.96 included; the 0.5.0 tag
+keeps the picked inverter's catalogue efficiency (0.892–0.983 across the
+default-rated capacities) whenever `inverter_efficiency` is exactly 0.96. With
+the system losses, on Bristol's scaled TMY, default-config annual AC moves by
+−2.3% to +6.9% per capacity: 3 kWp +0.5%, 3.68 kWp +2.0%, 4 kWp −0.7%, 5 kWp
+−1.1%, 6 kWp −1.3% ([pv-inverter-efficiency.md](pv-inverter-efficiency.md) §3).
+The `PVSystem` that `create_pv_system` returns, which is also the `system` of
+the model chain `create_model_chain` returns, names the picked CEC library row
+in its `inverter` attribute, where the tag leaves `None`; custom and PVWatts
+inverters still give `None`. Consumers re-baseline every figure that depends on
+PV generation at the default efficiency when they re-pin.
+
 **Unreleased on main** (tasks 384, 378, 332): `LoadConfig`, `BatteryConfig` and
 `PVConfig` refuse input the 0.5.0 tag accepts, and raise `ValueError`.
 `LoadConfig` refuses a `household_occupants` that is not a whole number or is a
