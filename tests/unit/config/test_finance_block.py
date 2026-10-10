@@ -263,7 +263,8 @@ class TestFinanceConfigValidation:
     ) -> None:
         """A fractional or boolean year count is refused, naming the field and the value."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{field} must be a whole number, got {value}")
+            ConfigurationError,
+            match=re.escape(f"{field} must be a finite whole number, got {value}"),
         ):
             FinanceConfig(**self._BASE, **{field: value})
 
@@ -588,7 +589,7 @@ class TestFinanceConfigParsing:
     def test_a_fractional_year_count_is_refused_not_truncated(self, field: str) -> None:
         """A fractional year count reaches FinanceConfig, which refuses it, rather than being truncated to a whole year."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{field} must be a whole number, got 20.7")
+            ConfigurationError, match=re.escape(f"{field} must be a finite whole number, got 20.7")
         ):
             parse_finance_config({"standing_charge_pence_per_day": 60.0, field: 20.7})
 

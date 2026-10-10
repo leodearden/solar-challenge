@@ -123,7 +123,9 @@ class FinanceConfig:
                 or not -math.inf < years < math.inf
                 or years != int(years)
             ):
-                raise ConfigurationError(f"{field_name} must be a whole number, got {years}")
+                raise ConfigurationError(
+                    f"{field_name} must be a finite whole number, got {years}"
+                )
             object.__setattr__(self, field_name, int(years))
         if not (0.0 <= self.vat_rate <= 1.0):
             raise ConfigurationError(

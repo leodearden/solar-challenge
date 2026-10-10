@@ -789,7 +789,7 @@ class TestErrorHandling:
         assert result.exit_code == 1
         assert result.stdout == ""
         assert " ".join(result.stderr.split()) == (
-            "Configuration error: loan_term_years must be a whole number, got inf"
+            "Configuration error: loan_term_years must be a finite whole number, got inf"
         )
 
     @pytest.mark.parametrize(
