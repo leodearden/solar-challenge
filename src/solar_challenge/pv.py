@@ -49,7 +49,9 @@ class PVConfig:
         custom_module_params: Optional custom pvlib module parameters dict
 
         # Inverter parameters (PV-005)
-        inverter_efficiency: Inverter efficiency as fraction (default 0.96 = 96%)
+        inverter_efficiency: Inverter efficiency at rated output (default 0.96 = 96%), as the
+            CEC inverter's Paco / Pdco and the PVWatts inverter's nominal efficiency;
+            custom_inverter_params carry their own (docs/pv-inverter-efficiency.md)
         inverter_capacity_kw: AC capacity in kW (default = DC capacity)
         custom_inverter_params: Optional custom pvlib inverter parameters dict
 
@@ -483,8 +485,9 @@ def _inverter_and_wiring(
     PVWatts inverter that a module with PVWatts parameters gets, because
     pvlib's PVWatts models ignore voltage. PVWatts parameters are the keys
     pvlib infers its PVWatts DC model from. A module with a V_mp_ref gets the
-    CEC inverter among candidates voltage-matched to its strings. Any other
-    module needs custom inverter parameters.
+    CEC inverter among candidates voltage-matched to its strings, running at
+    the configured inverter_efficiency at rated output. Any other module needs
+    custom inverter parameters.
     """
     one_string = (_StringGroup(module_count, 1),)
     if config.custom_inverter_params is not None:
@@ -500,8 +503,7 @@ def _inverter_and_wiring(
     name, inverter_params, wiring = _voltage_matched_cec_inverter(
         config.effective_inverter_capacity_kw, module_count, module_params["V_mp_ref"], candidates
     )
-    if config.inverter_efficiency != 0.96:
-        inverter_params["Pdco"] = inverter_params["Paco"] / config.inverter_efficiency
+    inverter_params["Pdco"] = inverter_params["Paco"] / config.inverter_efficiency
     return name, inverter_params, wiring
 
 
@@ -554,11 +556,12 @@ def create_pv_system(config: PVConfig) -> PVSystem:
 
     Creates a PVSystem using CEC module and inverter databases for realistic
     modelling parameters, or custom parameters if provided. The CEC inverter is
-    voltage-matched to the strings; see _ranking_key and _wiring_within_window
-    for how it is chosen from candidate_cec_inverters and how the modules are
-    wired to it. A module with PVWatts parameters (pdc0 and gamma_pdc, e.g. one
-    from create_simple_module_params) gets pvlib's PVWatts inverter at the
-    configured AC capacity and efficiency instead.
+    voltage-matched to the strings and runs at the configured
+    inverter_efficiency at rated output; see _ranking_key and
+    _wiring_within_window for how it is chosen from candidate_cec_inverters and
+    how the modules are wired to it. A module with PVWatts parameters (pdc0 and
+    gamma_pdc, e.g. one from create_simple_module_params) gets pvlib's PVWatts
+    inverter at the configured AC capacity and efficiency instead.
 
     Args:
         config: PV system configuration with capacity, azimuth, tilt, and
@@ -654,8 +657,9 @@ def create_model_chain_picking_from(
     """Create a pvlib ModelChain for AC power simulation, with any CEC inverter voltage-matched from candidates.
 
     A candidate's numbers decide only whether and how it is picked: the system
-    takes the picked inverter's own parameters from pvlib's CEC library by
-    name, and carries that name as PVSystem.inverter, which is why a
+    takes the picked inverter's parameters from pvlib's CEC library by name,
+    with Pdco set so that it runs at config.inverter_efficiency at rated
+    output, and carries that name as PVSystem.inverter, which is why a
     CecInverter must name a row there. Custom inverter parameters and PVWatts
     modules ignore the candidates, and their system's inverter is None.
 
