@@ -34,7 +34,10 @@ class _SimulatePage:
     params=[
         pytest.param(
             _SimulatePage(
-                "/simulate/home", "Run Simulation", "**/api/simulate/home", "/results/home/"
+                "/simulate/home",
+                "Run Simulation",
+                "**/api/simulate/home",
+                "/results/home/",
             ),
             id="home",
         ),
@@ -116,7 +119,9 @@ def test_a_run_started_while_another_runs_is_the_run_the_tracker_follows(
     running_jobs.answer("job-1", sse_event(event, data))
     expect(page.get_by_text(outcome_text, exact=True)).to_have_count(0)
 
-    running_jobs.answer("job-2", sse_event("complete", {"status": "completed", "run_id": "run-2"}))
+    running_jobs.answer(
+        "job-2", sse_event("complete", {"status": "completed", "run_id": "run-2"})
+    )
     expect(page.get_by_role("link", name="View Results", exact=True)).to_have_attribute(
         "href", simulate_page.results + "run-2"
     )
