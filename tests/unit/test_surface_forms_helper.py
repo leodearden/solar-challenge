@@ -210,17 +210,16 @@ def test_a_param_spec_args_and_kwargs_are_spelled_by_their_reprs() -> None:
     assert surface_form(f) == "(*args: P.args, **kwargs: P.kwargs) -> None"
 
 
-def test_a_type_variable_a_new_type_or_a_special_form_is_spelled_by_its_repr() -> None:
+def test_a_type_variable_declaring_nothing_or_a_special_form_is_spelled_by_its_repr() -> None:
     T = TypeVar("T")
     P = ParamSpec("P")
     Ts = TypeVarTuple("Ts")
-    Kwh = NewType("Kwh", float)
 
-    def f(a: T, b: P, c: Ts, d: Kwh, e: Self, g: LiteralString) -> Never: ...
+    def f(a: T, b: P, c: Ts, d: Self, e: LiteralString) -> Never: ...
 
     assert (
         surface_form(f)
-        == "(a: ~T, b: ~P, c: Ts, d: tests.unit.test_surface_forms_helper.Kwh, e: typing.Self, g: typing.LiteralString) -> typing.Never"
+        == "(a: ~T, b: ~P, c: Ts, d: typing.Self, e: typing.LiteralString) -> typing.Never"
     )
 
 
@@ -263,6 +262,19 @@ def test_a_type_variable_default_is_spelled_last_by_keyword() -> None:
     assert (
         surface_form(f)
         == "(a: ~Rated(bound=float, default=int), b: ~Absent(default=None), c: Callable[~Hook(default=[int, Preset]), None], d: tuple[typing.Unpack[Shape(default=typing.Unpack[tuple[int, Preset]])]]) -> None"
+    )
+
+
+def test_a_new_type_is_spelled_by_its_qualified_name_then_its_supertype() -> None:
+    Kwh = NewType("Kwh", float)
+    Wh = NewType("Wh", Kwh)
+    Readings = NewType("Readings", list[Optional[Preset]])
+
+    def f(a: Kwh, b: Wh, c: Readings) -> None: ...
+
+    assert (
+        surface_form(f)
+        == "(a: Kwh(float), b: Wh(Kwh(float)), c: Readings(list[Preset | None])) -> None"
     )
 
 
@@ -774,6 +786,15 @@ def test_a_type_variable_names_the_classes_its_default_names() -> None:
     }
 
 
+def test_a_new_type_names_its_supertype_classes_alone() -> None:
+    PresetId = NewType("PresetId", Preset)
+    Readings = NewType("Readings", list[Outer.Inner])
+
+    def f(a: PresetId, b: Readings) -> None: ...
+
+    assert named_classes(f) == {Preset, list, Outer.Inner}
+
+
 def test_none_and_type_none_name_no_class() -> None:
     def with_none(readings: list[None]) -> None: ...
 
@@ -919,6 +940,15 @@ def test_a_signature_closure_holds_only_classes_the_package_defines() -> None:
 
     assert signature_closure([supply], "tests.unit") == {Feeder, Tap, Tally}
     assert signature_closure([supply], "solar_challenge") == set()
+
+
+def test_a_signature_closure_follows_the_classes_a_type_variable_or_a_new_type_carries() -> None:
+    Supplied = TypeVar("Supplied", bound=Feeder)
+    PresetId = NewType("PresetId", Preset)
+
+    def supply(feeder: Supplied, preset: PresetId) -> Supplied: ...
+
+    assert signature_closure([supply], "tests") == {Feeder, Tap, Tally, Preset}
 
 
 def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:
