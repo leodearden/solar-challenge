@@ -22,7 +22,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import PresetType, get_db
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
     FLEET_FORM_REFUSALS,
@@ -33,7 +33,6 @@ from solar_challenge.web.fleet_scenario import (
 )
 from solar_challenge.web.presets import (
     PresetNameTaken,
-    PresetType,
     home_preset_named,
     home_presets,
     save_config_preset,
