@@ -246,22 +246,26 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
 
 
 class _SankeyNode(_ChartElement):
-    """The energy-flow Sankey's nodes, in the order its figure lists them: each one's label and COLOUR_PALETTE role."""
+    """The energy-flow Sankey's nodes, in the order its figure lists them: each one's label and COLOUR_PALETTE role.
 
-    PV_GENERATION = ("PV Generation", "pv_generation")
-    GRID = ("Grid", "grid_import")
+    Each node but the battery sends or receives one of the five energy flows in total, and is drawn in that flow's role.
+    The labels name places, not flows, so only Demand's is also a flow's label, and it comes from _EnergyFlow.
+    """
+
+    PV_GENERATION = ("PV Generation", _EnergyFlow.GENERATION.colour_role)
+    GRID = ("Grid", _EnergyFlow.GRID_IMPORT.colour_role)
     BATTERY = ("Battery", "battery_charge")
-    DEMAND = ("Demand", "demand")
-    EXPORT = ("Export", "grid_export")
+    DEMAND = (_EnergyFlow.DEMAND.label, _EnergyFlow.DEMAND.colour_role)
+    EXPORT = ("Export", _EnergyFlow.GRID_EXPORT.colour_role)
 
 
 class _SankeyLink(NamedTuple):
-    """The kWh flowing from source to target, drawn in the colour of its COLOUR_PALETTE role."""
+    """The kWh flowing from source to target, drawn in a translucent form of coloured_as's colour."""
 
     source: _SankeyNode
     target: _SankeyNode
     kwh: float
-    colour_role: str
+    coloured_as: _ChartElement
 
 
 def sankey_diagram(summary: SummaryStatistics) -> str:
@@ -284,12 +288,12 @@ def sankey_diagram(summary: SummaryStatistics) -> str:
     pv_to_battery = summary.total_battery_charge_kwh - grid_charge
     grid_to_demand = summary.total_grid_import_kwh - grid_charge
     flows = [
-        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.DEMAND, pv_to_demand, "self_consumption"),
-        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.BATTERY, pv_to_battery, "battery_charge"),
-        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.EXPORT, summary.total_grid_export_kwh, "grid_export"),
-        _SankeyLink(_SankeyNode.GRID, _SankeyNode.DEMAND, grid_to_demand, "grid_import"),
-        _SankeyLink(_SankeyNode.GRID, _SankeyNode.BATTERY, grid_charge, "battery_charge"),
-        _SankeyLink(_SankeyNode.BATTERY, _SankeyNode.DEMAND, summary.total_battery_discharge_kwh, "battery_charge"),
+        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.DEMAND, pv_to_demand, _EnergyFlow.SELF_CONSUMPTION),
+        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.BATTERY, pv_to_battery, _SankeyNode.BATTERY),
+        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.EXPORT, summary.total_grid_export_kwh, _EnergyFlow.GRID_EXPORT),
+        _SankeyLink(_SankeyNode.GRID, _SankeyNode.DEMAND, grid_to_demand, _EnergyFlow.GRID_IMPORT),
+        _SankeyLink(_SankeyNode.GRID, _SankeyNode.BATTERY, grid_charge, _SankeyNode.BATTERY),
+        _SankeyLink(_SankeyNode.BATTERY, _SankeyNode.DEMAND, summary.total_battery_discharge_kwh, _SankeyNode.BATTERY),
     ]
     drawn = [flow for flow in flows if flow.kwh > 0.01]
     if not drawn:
@@ -309,7 +313,7 @@ def sankey_diagram(summary: SummaryStatistics) -> str:
             source=[nodes.index(link.source) for link in drawn],
             target=[nodes.index(link.target) for link in drawn],
             value=[round(link.kwh, 2) for link in drawn],
-            color=[_with_alpha(COLOUR_PALETTE[link.colour_role], link_opacity) for link in drawn],
+            color=[_with_alpha(link.coloured_as.colour, link_opacity) for link in drawn],
         ),
     )])
 

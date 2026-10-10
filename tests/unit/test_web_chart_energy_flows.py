@@ -6,6 +6,7 @@ results page agree. A chart that colours by flow draws each flow in its own pale
 
 import dataclasses
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -123,3 +124,55 @@ def test_a_chart_coloured_otherwise_names_each_flow_by_its_label(
     names: Callable[[], list[str]], expected: list[str]
 ) -> None:
     assert names() == expected
+
+
+def _sankey() -> dict[str, Any]:
+    """The Sankey trace of a day on which PV and the grid both charge the battery, so that every link is drawn."""
+    summary = dataclasses.replace(
+        calculate_summary(make_sim_results(discharge_kwh=2.0, days=1)),
+        total_battery_charge_kwh=5.0,
+        total_grid_charge_kwh=2.0,
+    )
+    (sankey,) = _traces(charts.sankey_diagram(summary))
+    return sankey
+
+
+_RGBA = re.compile(r"rgba\((?P<red>\d+),(?P<green>\d+),(?P<blue>\d+),[\d.]+\)")
+
+
+def _opaque(colour: str) -> str:
+    """The #rrggbb colour of which *colour*, written rgba(), is a translucent form."""
+    rgba = _RGBA.fullmatch(colour)
+    assert rgba is not None, f"{colour!r} is not written rgba()"
+    return "#" + "".join(f"{int(rgba[channel]):02x}" for channel in ("red", "green", "blue"))
+
+
+def test_the_sankey_draws_each_node_in_the_colour_of_the_flow_it_sends_or_receives_and_the_battery_in_its_own(
+    flow_colours: dict[str, str],
+) -> None:
+    node = _sankey()["node"]
+    assert dict(zip(node["label"], node["color"], strict=True)) == {
+        "PV Generation": flow_colours["Generation"],
+        "Grid": flow_colours["Grid Import"],
+        "Battery": COLOUR_PALETTE["battery_charge"],
+        "Demand": flow_colours["Demand"],
+        "Export": flow_colours["Grid Export"],
+    }
+
+
+def test_the_sankey_draws_each_link_in_the_colour_of_the_flow_it_is_part_of_and_the_batterys_in_its_own(
+    flow_colours: dict[str, str],
+) -> None:
+    sankey = _sankey()
+    labels, link = sankey["node"]["label"], sankey["link"]
+    assert {
+        (labels[source], labels[target]): _opaque(colour)
+        for source, target, colour in zip(link["source"], link["target"], link["color"], strict=True)
+    } == {
+        ("PV Generation", "Demand"): flow_colours["Self-Consumption"],
+        ("PV Generation", "Battery"): COLOUR_PALETTE["battery_charge"],
+        ("PV Generation", "Export"): flow_colours["Grid Export"],
+        ("Grid", "Demand"): flow_colours["Grid Import"],
+        ("Grid", "Battery"): COLOUR_PALETTE["battery_charge"],
+        ("Battery", "Demand"): COLOUR_PALETTE["battery_charge"],
+    }
