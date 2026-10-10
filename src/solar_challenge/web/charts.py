@@ -78,14 +78,8 @@ def _with_alpha(colour: str, alpha: float) -> str:
     return f"rgba({red},{green},{blue},{alpha})"
 
 
-class _EnergyFlow(Enum):
-    """The five energy flows the charts draw, in the order every chart draws them: each one's label and COLOUR_PALETTE role."""
-
-    GENERATION = ("Generation", "pv_generation")
-    DEMAND = ("Demand", "demand")
-    SELF_CONSUMPTION = ("Self-Consumption", "self_consumption")
-    GRID_IMPORT = ("Grid Import", "grid_import")
-    GRID_EXPORT = ("Grid Export", "grid_export")
+class _ChartElement(Enum):
+    """Things a chart draws, each member with its label and the COLOUR_PALETTE role it is drawn in."""
 
     def __init__(self, label: str, colour_role: str) -> None:
         self.label: Final = label
@@ -93,8 +87,18 @@ class _EnergyFlow(Enum):
 
     @property
     def colour(self) -> str:
-        """The flow's COLOUR_PALETTE colour, read when called, so a palette edit reaches every chart of the flow."""
+        """The member's COLOUR_PALETTE colour, read when called, so a palette edit reaches every chart that draws it."""
         return COLOUR_PALETTE[self.colour_role]
+
+
+class _EnergyFlow(_ChartElement):
+    """The five energy flows the charts draw, in the order every chart draws them: each one's label and COLOUR_PALETTE role."""
+
+    GENERATION = ("Generation", "pv_generation")
+    DEMAND = ("Demand", "demand")
+    SELF_CONSUMPTION = ("Self-Consumption", "self_consumption")
+    GRID_IMPORT = ("Grid Import", "grid_import")
+    GRID_EXPORT = ("Grid Export", "grid_export")
 
 
 _FlowValue = TypeVar("_FlowValue")
@@ -241,7 +245,7 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
     return str(fig.to_json())
 
 
-class _SankeyNode(Enum):
+class _SankeyNode(_ChartElement):
     """The energy-flow Sankey's nodes, in the order its figure lists them: each one's label and COLOUR_PALETTE role."""
 
     PV_GENERATION = ("PV Generation", "pv_generation")
@@ -249,10 +253,6 @@ class _SankeyNode(Enum):
     BATTERY = ("Battery", "battery_charge")
     DEMAND = ("Demand", "demand")
     EXPORT = ("Export", "grid_export")
-
-    def __init__(self, label: str, colour_role: str) -> None:
-        self.label: Final = label
-        self.colour_role: Final = colour_role
 
 
 class _SankeyLink(NamedTuple):
@@ -303,7 +303,7 @@ def sankey_diagram(summary: SummaryStatistics) -> str:
             thickness=20,
             line=dict(color="black", width=0.5),
             label=[node.label for node in nodes],
-            color=[COLOUR_PALETTE[node.colour_role] for node in nodes],
+            color=[node.colour for node in nodes],
         ),
         link=dict(
             source=[nodes.index(link.source) for link in drawn],
