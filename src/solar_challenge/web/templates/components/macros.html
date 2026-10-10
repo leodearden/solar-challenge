@@ -124,9 +124,9 @@
 {% endmacro %}
 
 
-{# A badge showing the run status the Alpine expression status holds, recoloured as it changes #}
-{% macro bound_run_status_badge(status) %}
-<span class="{{ _badge_shape_classes }}" :class='{{ _run_status_badge_classes | tojson }}[{{ status }}] ?? {{ _neutral_badge_classes | tojson }}' x-text="{{ status }}"></span>
+{# A badge showing the run status the Alpine expression status_expression holds, recoloured as it changes #}
+{% macro bound_run_status_badge(status_expression) %}
+<span class="{{ _badge_shape_classes }}" :class='{{ _run_status_badge_classes | tojson }}[{{ status_expression }}] ?? {{ _neutral_badge_classes | tojson }}' x-text="{{ status_expression }}"></span>
 {% endmacro %}
 
 
@@ -136,7 +136,7 @@
 {% endmacro %}
 
 
-{# A badge showing the run type the Alpine expression type holds, recoloured as it changes #}
-{% macro bound_run_type_badge(type) %}
-<span class="{{ _badge_shape_classes }}" :class='{{ _run_type_badge_classes | tojson }}[{{ type }}] ?? {{ _neutral_badge_classes | tojson }}' x-text="{{ type }}"></span>
+{# A badge showing the run type the Alpine expression type_expression holds, recoloured as it changes #}
+{% macro bound_run_type_badge(type_expression) %}
+<span class="{{ _badge_shape_classes }}" :class='{{ _run_type_badge_classes | tojson }}[{{ type_expression }}] ?? {{ _neutral_badge_classes | tojson }}' x-text="{{ type_expression }}"></span>
 {% endmacro %}
