@@ -36,6 +36,7 @@ _NUMERIC_FIELDS = tuple(
     for f in dataclasses.fields(FinanceConfig)
     if f.name in {*_FLOAT_FIELDS, *_YEAR_FIELDS}
 )
+_TOO_LARGE_FOR_A_FLOAT = 10**400
 
 
 class TestFinanceConfig:
@@ -605,6 +606,16 @@ class TestFinanceConfigParsing:
         ):
             parse_finance_config({"standing_charge_pence_per_day": 60.0, key: value})
 
+    @pytest.mark.parametrize("key", _NUMERIC_FIELDS)
+    def test_a_number_too_large_for_a_float_is_refused_as_a_configuration_error(
+        self, key: str
+    ) -> None:
+        """An integer too large for a float, as YAML can hold, is refused as a ConfigurationError, not a raw OverflowError."""
+        with pytest.raises(ConfigurationError, match="non-numeric"):
+            parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, key: _TOO_LARGE_FOR_A_FLOAT}
+            )
+
 
 class TestScenarioFinance:
     """Tests for ScenarioConfig.finance field and _parse_scenario wiring."""
@@ -1065,3 +1076,30 @@ class TestFinanceConfigParsingGridServices:
         assert self._parse_events_block({}) == FinanceConfig(
             **self._BASE, grid_services_events=GridServicesEventsConfig()
         )
+
+    @pytest.mark.parametrize("key", _EVENTS_NUMERIC_KEYS)
+    def test_an_events_value_too_large_for_a_float_is_refused_as_a_configuration_error(
+        self, key: str
+    ) -> None:
+        """An events value too large for a float is refused as a ConfigurationError, not a raw OverflowError."""
+        with pytest.raises(ConfigurationError, match="non-numeric"):
+            self._parse_events_block({**self._EVENTS_BLOCK, key: _TOO_LARGE_FOR_A_FLOAT})
+
+    @pytest.mark.parametrize(
+        "window_values",
+        [
+            pytest.param(
+                {"event_hours": _TOO_LARGE_FOR_A_FLOAT}, id="event_hours-too-large-for-a-float"
+            ),
+            pytest.param({"events_per_year": math.inf}, id="infinite-events_per_year"),
+            pytest.param({"hours": [math.inf]}, id="infinite-hour"),
+        ],
+    )
+    def test_an_event_window_number_too_large_for_its_type_is_refused_as_a_configuration_error(
+        self, window_values: dict[str, object]
+    ) -> None:
+        """An event-window number too large for its type is refused as a ConfigurationError, not a raw OverflowError."""
+        with pytest.raises(ConfigurationError, match="non-numeric"):
+            self._parse_events_block(
+                {**self._EVENTS_BLOCK, "event_windows": [{**self._WINDOW, **window_values}]}
+            )
