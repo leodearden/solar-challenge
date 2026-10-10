@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to a rendered HTML page: the document type it declares, its
-elements with the attributes and ids they carry, the texts it shows and its headings, in
-document order, and how many times each of some given texts occurs among them.
+elements with the attributes and ids they carry, the texts it shows, its headings and the
+text of its scripts, in document order, and how many times each of some given texts
+occurs among them.
 
 A text is one run of character data between two tags, outside script and style elements,
 with character references decoded and whitespace collapsed. Blank runs are dropped, and an
@@ -11,7 +12,10 @@ repeats an attribute carries only its first value, as HTML reads it.
 
 Usage::
 
-    from tests._html_page import counts_of, doctype, element_attributes, element_count, element_ids, headings, texts, texts_after
+    from tests._html_page import (
+        counts_of, doctype, element_attributes, element_count, element_ids, headings,
+        script_texts, texts, texts_after,
+    )
 
     page = response.get_data(as_text=True)
     assert doctype(page) == "html"
@@ -23,6 +27,7 @@ Usage::
     assert texts_after(page, "Total Demand", 2) == ["12.0", "kWh"]
     subjects = ("PV Capacity", "Battery Capacity")
     assert counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
+    assert script_texts(page) == ["", "draw();"]
 """
 
 from collections import Counter
@@ -79,7 +84,11 @@ def element_attributes(page: str, tag: str) -> list[Mapping[str, str | None]]:
 
 def current_page_links(page: str) -> list[str | None]:
     """The href of each link *page* marks as the current page, with aria-current="page", in document order."""
-    return [link.get("href") for link in element_attributes(page, "a") if link.get("aria-current") == "page"]
+    return [
+        link.get("href")
+        for link in element_attributes(page, "a")
+        if link.get("aria-current") == "page"
+    ]
 
 
 def element_ids(page: str) -> set[str]:
@@ -161,6 +170,11 @@ def counts_of(items: Sequence[str], keys: tuple[str, ...]) -> dict[str, int]:
     return {key: items.count(key) for key in keys}
 
 
+def script_texts(page: str) -> list[str]:
+    """The text of each script element of *page*, in document order; an external script's text is ''."""
+    return _read(page).script_texts
+
+
 def _refuse_names_not_in_lower_case(*names: str) -> None:
     not_in_lower_case = [name for name in names if name != name.lower()]
     if not_in_lower_case:
@@ -171,7 +185,7 @@ def _refuse_names_not_in_lower_case(*names: str) -> None:
 
 
 class _PageReader(HTMLParser):
-    """Collects the doctypes, the elements with their attributes, the texts and the headings of one HTML page, in document order."""
+    """Collects the doctypes, the elements with their attributes, the texts, the headings and the script texts of one HTML page, in document order."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -180,7 +194,8 @@ class _PageReader(HTMLParser):
         self.texts: list[str] = []
         self.headings: list[str] = []
         self.headings_left_open = 0
-        self._in_raw_text = False
+        self.script_texts: list[str] = []
+        self._raw_text_element: str | None = None
         self._open_heading: list[str] | None = None
 
     def handle_decl(self, decl: str) -> None:
@@ -192,7 +207,9 @@ class _PageReader(HTMLParser):
             carried.setdefault(name, value)
         self.elements.append((tag, carried))
         if tag in _RAW_TEXT_ELEMENTS:
-            self._in_raw_text = True
+            self._raw_text_element = tag
+        if tag == "script":
+            self.script_texts.append("")
         if tag in _HEADING_ELEMENTS:
             if self._open_heading is not None:
                 self.headings_left_open += 1
@@ -200,13 +217,15 @@ class _PageReader(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _RAW_TEXT_ELEMENTS:
-            self._in_raw_text = False
+            self._raw_text_element = None
         if tag in _HEADING_ELEMENTS and self._open_heading is not None:
             self.headings.append(" ".join("".join(self._open_heading).split()))
             self._open_heading = None
 
     def handle_data(self, data: str) -> None:
-        if self._in_raw_text:
+        if self._raw_text_element == "script":
+            self.script_texts[-1] += data
+        if self._raw_text_element is not None:
             return
         if self._open_heading is not None:
             self._open_heading.append(data)
