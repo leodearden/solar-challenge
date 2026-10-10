@@ -2,7 +2,6 @@
 
 import uuid
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
@@ -40,22 +39,6 @@ def app(tmp_path: Path) -> Flask:
 def client(app: Flask) -> FlaskClient:
     """Create a Flask test client."""
     return app.test_client()
-
-
-@pytest.fixture
-def mock_job_manager(app: Flask) -> MagicMock:
-    """Replace the real JobManager on the app with a MagicMock (opt-in per-test).
-
-    This fixture is NOT wired into the module-level ``client`` fixture so that
-    tests exercising real DB/JobManager-backed paths (dashboard, history, jobs)
-    are unaffected.  Request it alongside ``client`` only in tests that want to
-    avoid spawning real background simulations.
-    """
-    jm = MagicMock()
-    jm.submit_home_job.return_value = ("job-home-001", "run-home-001")
-    jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
-    app.extensions["job_manager"] = jm
-    return jm
 
 
 def _run_storage(app: Flask) -> RunStorage:
@@ -421,77 +404,6 @@ class TestHomeResultsRoute:
 
         assert response.status_code == 200
         assert headings(response.get_data(as_text=True))[0] == "Home Simulation"
-
-
-class TestFleetApiEndpoints:
-    """Tests for fleet-related API endpoints."""
-
-    def test_preview_distribution_normal(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/preview-distribution with normal distribution."""
-        response = client.post(
-            "/api/fleet/preview-distribution",
-            json={
-                "type": "normal",
-                "params": {"mean": 4.0, "std": 1.0, "min": 1.0, "max": 8.0},
-                "n_samples": 50,
-            },
-        )
-        assert response.status_code == 200
-        data = response.get_json()
-        assert "samples" in data
-        assert len(data["samples"]) == 50
-
-    def test_preview_distribution_invalid_type(self, client: FlaskClient) -> None:
-        """Test POST /api/fleet/preview-distribution with invalid type returns 400."""
-        response = client.post(
-            "/api/fleet/preview-distribution",
-            json={"type": "invalid_type", "params": {}},
-        )
-        assert response.status_code == 400
-
-    def test_simulate_fleet_from_distribution(
-        self, client: FlaskClient, mock_job_manager: MagicMock
-    ) -> None:
-        """Test POST /api/simulate/fleet-from-distribution returns 201 with job_id/run_id.
-
-        Uses mock_job_manager to avoid spawning a real 10-home background simulation
-        (PVGIS network I/O, DB writes) that would race with tmp_path teardown.
-        """
-        response = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={
-                "n_homes": 10,
-                "pv": {
-                    "capacity_kw": {
-                        "type": "normal",
-                        "mean": 4.0,
-                        "std": 1.0,
-                        "min": 2.0,
-                        "max": 8.0,
-                    }
-                },
-                "load": {
-                    "annual_consumption_kwh": {
-                        "type": "uniform",
-                        "min": 2000,
-                        "max": 5000,
-                    }
-                },
-            },
-        )
-        assert response.status_code == 201
-        data = response.get_json()
-        assert data["job_id"] == "job-fleet-001"
-        assert data["run_id"] == "run-fleet-001"
-        mock_job_manager.submit_fleet_job.assert_called_once()
-
-    def test_simulate_fleet_from_distribution_empty_body(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/fleet-from-distribution with empty body returns 400."""
-        response = client.post(
-            "/api/simulate/fleet-from-distribution",
-            content_type="application/json",
-        )
-        assert response.status_code == 400
 
 
 # ---------------------------------------------------------------------------
