@@ -7,7 +7,6 @@ does not show. A run started after a completed one starts its tracker afresh.
 """
 
 import itertools
-import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -15,6 +14,8 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import Page, Request, Route, expect
+
+from tests.e2e._job_requests import HeldJobRequests, sse_event
 
 pytestmark = pytest.mark.e2e
 
@@ -53,55 +54,15 @@ def simulate_page(request: pytest.FixtureRequest) -> _SimulatePage:
     return request.param
 
 
-def _answer(route: Route, sse_body: str) -> None:
-    route.fulfill(content_type="text/event-stream", body=sse_body)
-
-
-def _wait_until_received_or_dropped(request: Request) -> None:
-    """Return once the page has received the whole answer to request, or at once if it dropped the request unanswered."""
-    response = request.response()
-    if response is not None:
-        response.body()
-
-
 def _is_progress_stream_of(job_id: str) -> Callable[[Request], bool]:
     """Whether a request is the progress stream of the job job_id."""
     return lambda request: urlsplit(request.url).path == f"/api/jobs/{job_id}/progress"
 
 
-class _RunningJobs:
-    """The jobs of the runs the page submits, each running until the test ends it: until then its progress stream stays open, unanswered."""
-
-    def __init__(self) -> None:
-        self._endings: dict[str, str] = {}
-        self._open_streams: dict[str, list[Route]] = {}
-
-    def stream(self, route: Route) -> None:
-        """Answer a job's progress stream with the job's ending if the test has ended the job, else hold it open."""
-        job_id = urlsplit(route.request.url).path.split("/")[-2]
-        if job_id in self._endings:
-            _answer(route, self._endings[job_id])
-        else:
-            self._open_streams.setdefault(job_id, []).append(route)
-
-    def end(self, job_id: str, event: str, data: dict[str, Any]) -> None:
-        """End the job with one event carrying data, answering its open streams; return once the page has received or dropped each."""
-        self._endings[job_id] = f"event: {event}\ndata: {json.dumps(data)}\n\n"
-        for route in self._open_streams.pop(job_id, []):
-            _answer(route, self._endings[job_id])
-            _wait_until_received_or_dropped(route.request)
-
-    def abort_open_streams(self) -> None:
-        """Abort every progress stream still held open."""
-        for routes in self._open_streams.values():
-            for route in routes:
-                route.abort()
-
-
 @pytest.fixture
-def running_jobs(page: Page, simulate_page: _SimulatePage) -> Iterator[_RunningJobs]:
-    """Accept the page's Nth run as job-N of run-N, so no run reaches the live server's JobManager, and keep each job running until the test ends it; abort the streams still open at teardown."""
-    jobs = _RunningJobs()
+def running_jobs(page: Page, simulate_page: _SimulatePage) -> Iterator[HeldJobRequests]:
+    """Accept the page's Nth run as job-N of run-N, so no run reaches the live server's JobManager, and hold each job's progress stream open until the test answers it with the job's end; abort the streams still held at teardown."""
+    jobs = HeldJobRequests("text/event-stream")
     run_numbers = itertools.count(1)
 
     def _accept(route: Route) -> None:
@@ -109,9 +70,9 @@ def running_jobs(page: Page, simulate_page: _SimulatePage) -> Iterator[_RunningJ
         route.fulfill(status=201, json={"job_id": f"job-{n}", "run_id": f"run-{n}"})
 
     page.route(simulate_page.submission, _accept)
-    page.route("**/api/jobs/*/progress", lambda route: jobs.stream(route))
+    page.route("**/api/jobs/*/progress", jobs.handle)
     yield jobs
-    jobs.abort_open_streams()
+    jobs.abort_held()
 
 
 @pytest.mark.parametrize(
@@ -135,7 +96,7 @@ def test_a_run_started_while_another_runs_is_the_run_the_tracker_follows(
     page: Page,
     live_server: str,
     simulate_page: _SimulatePage,
-    running_jobs: _RunningJobs,
+    running_jobs: HeldJobRequests,
     page_errors: list[str],
     event: str,
     data: dict[str, Any],
@@ -152,10 +113,10 @@ def test_a_run_started_while_another_runs_is_the_run_the_tracker_follows(
     ):
         run.click()
 
-    running_jobs.end("job-1", event, data)
+    running_jobs.answer("job-1", sse_event(event, data))
     expect(page.get_by_text(outcome_text, exact=True)).to_have_count(0)
 
-    running_jobs.end("job-2", "complete", {"status": "completed", "run_id": "run-2"})
+    running_jobs.answer("job-2", sse_event("complete", {"status": "completed", "run_id": "run-2"}))
     expect(page.get_by_role("link", name="View Results", exact=True)).to_have_attribute(
         "href", simulate_page.results + "run-2"
     )
@@ -166,20 +127,22 @@ def test_a_run_after_a_completed_run_starts_its_tracker_afresh(
     page: Page,
     live_server: str,
     simulate_page: _SimulatePage,
-    running_jobs: _RunningJobs,
+    running_jobs: HeldJobRequests,
     page_errors: list[str],
 ) -> None:
     """Run again after job-1 completed: while job-2 waits, the tracker shows 'Queued' and 'Waiting to start...', not job-1's last step and message, and no results link."""
-    running_jobs.end(
+    running_jobs.answer(
         "job-1",
-        "complete",
-        {
-            "status": "completed",
-            "progress_pct": 100.0,
-            "current_step": "Done",
-            "message": "Run 1 is done",
-            "run_id": "run-1",
-        },
+        sse_event(
+            "complete",
+            {
+                "status": "completed",
+                "progress_pct": 100.0,
+                "current_step": "Done",
+                "message": "Run 1 is done",
+                "run_id": "run-1",
+            },
+        ),
     )
     page.goto(live_server + simulate_page.path)
     run = page.get_by_role("button", name=simulate_page.run_button, exact=True)
