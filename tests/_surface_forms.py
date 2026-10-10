@@ -93,18 +93,18 @@ def named_classes(obj: object) -> set[type]:
     Only annotations name classes, never a default value. A generic names its origin and
     its arguments' classes, a bare alias its origin, a union its members' alone, an
     InitVar its type's alone, a type variable those of the constraints, bound and
-    default it declares, and Literal's values, Annotated's metadata, a NewType, a
-    special form such as Self and a ParamSpec's args and kwargs none. None, given as
-    None or as type(None), names no class either. A string annotation or a forward
-    reference names the class its name is bound to in the module that spells it, read as
-    a type checker reads it: its globals, with the imports of its top-level
-    `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
+    default it declares, a NewType its supertype's alone, and Literal's values,
+    Annotated's metadata, a special form such as Self and a ParamSpec's args and kwargs
+    none. None, given as None or as type(None), names no class either. A string
+    annotation or a forward reference names the class its name is bound to in the module
+    that spells it, read as a type checker reads it: its globals, with the imports of its
+    top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
     NameError.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
-    another module. What a type variable carries is spelled in the module that declares
-    it. A constant names its type, and an Enum's members name nothing.
+    another module. What a type variable or a NewType carries is spelled in the module
+    that declares it. A constant names its type, and an Enum's members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -295,7 +295,6 @@ def _classes_of(constructs: Iterable[_Construct], module: str) -> set[type]:
 _CLASSLESS_NAME_KINDS: tuple[type, ...] = (
     typing.ParamSpecArgs,
     typing.ParamSpecKwargs,
-    typing.NewType,
     typing._SpecialForm,
 )
 
@@ -324,6 +323,12 @@ def _parsed(annotation: object) -> _Construct:
         return _parsed(typing.get_origin(annotation))
     if isinstance(annotation, _TYPE_VARIABLE_KINDS):
         return _parsed_type_variable(annotation)
+    if isinstance(annotation, typing.NewType):
+        return _Declared(
+            annotation.__qualname__,
+            annotation.__module__,
+            (_parsed(annotation.__supertype__),),
+        )
     if isinstance(annotation, _CLASSLESS_NAME_KINDS):
         return _Leaf(repr(annotation))
     if typing.get_origin(annotation) is not None:
