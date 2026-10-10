@@ -62,12 +62,11 @@ document.addEventListener('alpine:init', () => {
             this.maxVal = param.defaultMax;
         },
 
-        // Active EventSource connections
-        _eventSources: [],
+        // Aborts the current sweep's requests: each point's progress stream and result fetch
+        _sweepRequests: new AbortController(),
 
         destroy() {
-            this._eventSources.forEach(es => es.close());
-            this._eventSources = [];
+            this._sweepRequests.abort();
         },
 
         // Submit sweep
@@ -107,10 +106,13 @@ document.addEventListener('alpine:init', () => {
                         grid_import: '-',
                         job_id: data.job_ids ? data.job_ids[i] : null,
                     }));
-                    // Start polling each job
-                    this.sweepResults.forEach((result, idx) => {
-                        if (result.job_id) {
-                            this._pollJob(result.job_id, idx);
+                    // Follow each point's job. Read each row back from this.sweepResults:
+                    // only Alpine's reactive proxy of a row passes the job's writes to the page.
+                    const sweepRequests = new AbortController();
+                    this._sweepRequests = sweepRequests;
+                    this.sweepResults.forEach(row => {
+                        if (row.job_id) {
+                            this._pollJob(row, sweepRequests.signal);
                         }
                     });
                 }
@@ -121,28 +123,25 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        // Poll a single sweep job via SSE
-        _pollJob(jobId, idx) {
-            const es = new EventSource('/api/jobs/' + jobId + '/progress');
-            this._eventSources.push(es);
+        // Follow one sweep point's job via SSE, writing its status and results into that point's row,
+        // until the job ends or signal aborts
+        _pollJob(row, signal) {
+            const es = new EventSource('/api/jobs/' + row.job_id + '/progress');
+            signal.addEventListener('abort', () => es.close());
 
             es.addEventListener('progress', (e) => {
                 try {
                     const data = JSON.parse(e.data);
-                    if (this.sweepResults[idx]) {
-                        this.sweepResults[idx].status = data.status || 'running';
-                    }
+                    row.status = data.status || 'running';
                 } catch(err) {}
             });
 
             es.addEventListener('complete', (e) => {
                 try {
                     const data = JSON.parse(e.data);
-                    if (this.sweepResults[idx]) {
-                        this.sweepResults[idx].status = 'completed';
-                        if (data.run_id) {
-                            this._fetchResult(data.run_id, idx);
-                        }
+                    row.status = 'completed';
+                    if (data.run_id) {
+                        this._fetchResult(row, signal);
                     }
                 } catch(err) {}
                 es.close();
@@ -152,12 +151,10 @@ document.addEventListener('alpine:init', () => {
             es.addEventListener('error', (e) => {
                 try {
                     const data = JSON.parse(e.data);
-                    if (this.sweepResults[idx]) {
-                        this.sweepResults[idx].status = 'failed';
-                    }
+                    row.status = 'failed';
                 } catch(err) {
-                    if (this.sweepResults[idx] && this.sweepResults[idx].status !== 'completed') {
-                        this.sweepResults[idx].status = 'failed';
+                    if (row.status !== 'completed') {
+                        row.status = 'failed';
                     }
                 }
                 es.close();
@@ -165,21 +162,19 @@ document.addEventListener('alpine:init', () => {
             });
         },
 
-        // Fetch completed result summary
-        async _fetchResult(runId, idx) {
+        // Fetch a completed point's result summary into that point's row, unless signal aborts first
+        async _fetchResult(row, signal) {
             try {
-                const resp = await fetch('/api/jobs/' + this.sweepResults[idx].job_id + '/results');
+                const resp = await fetch('/api/jobs/' + row.job_id + '/results', { signal });
                 if (resp.ok) {
                     const data = await resp.json();
                     const s = data.summary || {};
-                    if (this.sweepResults[idx]) {
-                        this.sweepResults[idx].generation = s.total_generation_kwh != null
-                            ? s.total_generation_kwh.toFixed(1) : '-';
-                        this.sweepResults[idx].self_consumption = s.self_consumption_ratio != null
-                            ? (s.self_consumption_ratio * 100).toFixed(1) + '%' : '-';
-                        this.sweepResults[idx].grid_import = s.total_grid_import_kwh != null
-                            ? s.total_grid_import_kwh.toFixed(1) : '-';
-                    }
+                    row.generation = s.total_generation_kwh != null
+                        ? s.total_generation_kwh.toFixed(1) : '-';
+                    row.self_consumption = s.self_consumption_ratio != null
+                        ? (s.self_consumption_ratio * 100).toFixed(1) + '%' : '-';
+                    row.grid_import = s.total_grid_import_kwh != null
+                        ? s.total_grid_import_kwh.toFixed(1) : '-';
                 }
             } catch(err) {}
         },
