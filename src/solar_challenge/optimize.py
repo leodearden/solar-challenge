@@ -24,10 +24,11 @@ sensitivity_panel     — OAT assumption sensitivity over the W3 cost-recovery r
 from __future__ import annotations
 
 import itertools
+import math
 from dataclasses import dataclass, fields as dc_fields, replace
 from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     FinanceConfig,
@@ -56,9 +57,9 @@ class ConfigPoint:
     """A single discrete install specification for the W3 sweep.
 
     Attributes:
-        pv_kwp: PV DC rated capacity in kWp (must be > 0).
+        pv_kwp: PV DC rated capacity in kWp (must be > 0 and finite).
         battery_kwh: Battery nameplate (total) energy capacity in kWh (must be
-            >= 0), set as ``BatteryConfig.capacity_kwh`` on every home.  The
+            >= 0 and finite), set as ``BatteryConfig.capacity_kwh`` on every home.  The
             energy a home can actually cycle is the usable window inside that
             capacity, bounded by its battery's ``min_soc_fraction`` and
             ``max_soc_fraction``.
@@ -69,7 +70,7 @@ class ConfigPoint:
             triggers battery fabrication or replacement; there is no epsilon
             tolerance.  Callers must pass ``0.0`` (not, e.g., ``1e-9``) to mean
             "no battery".
-        inverter_kw: AC inverter rated capacity in kW (must be > 0).
+        inverter_kw: AC inverter rated capacity in kW (must be > 0 and finite).
     """
 
     pv_kwp: float
@@ -78,17 +79,14 @@ class ConfigPoint:
 
     def __post_init__(self) -> None:
         """Validate install dimensions."""
-        if self.pv_kwp <= 0:
+        if not 0 < self.pv_kwp < math.inf:
             raise ValueError(
-                f"pv_kwp must be > 0, got {self.pv_kwp}"
+                f"pv_kwp must be > 0 and finite, got {self.pv_kwp}"
             )
-        if self.battery_kwh < 0:
+        require_valid_capacity_setting(self.battery_kwh, "battery_kwh")
+        if not 0 < self.inverter_kw < math.inf:
             raise ValueError(
-                f"battery_kwh must be >= 0, got {self.battery_kwh}"
-            )
-        if self.inverter_kw <= 0:
-            raise ValueError(
-                f"inverter_kw must be > 0, got {self.inverter_kw}"
+                f"inverter_kw must be > 0 and finite, got {self.inverter_kw}"
             )
 
 
@@ -848,7 +846,7 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
     )
 
     new_battery: Optional[BatteryConfig]
-    if point.battery_kwh == 0.0:
+    if not has_battery(point.battery_kwh, "battery_kwh"):
         new_battery = None
     elif home.battery_config is not None:
         new_battery = replace(home.battery_config, capacity_kwh=point.battery_kwh)
