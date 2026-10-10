@@ -104,7 +104,8 @@ def named_classes(obj: object) -> set[type]:
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
     another module. What a type variable or a NewType carries is spelled in the module
-    that declares it. A constant names its type, and an Enum's members name nothing.
+    that declares it; inside its own declaration, as in TypeVar("T", bound="Node[T]"), it
+    names no class. A constant names its type, and an Enum's members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -170,7 +171,7 @@ class _Spelling(str):
 def _spelled(annotation: object) -> object:
     if annotation is inspect.Parameter.empty:
         return annotation
-    return _Spelling(_parsed(annotation).text())
+    return _Spelling(_parsed(annotation, frozenset()).text())
 
 
 class _Construct(abc.ABC):
@@ -187,15 +188,16 @@ class _Construct(abc.ABC):
 
 @dataclasses.dataclass(frozen=True)
 class _Unevaluated(_Construct):
-    """A string annotation or a forward reference: spelled as written, naming the classes of the annotation it evaluates to."""
+    """A string annotation or a forward reference: spelled as written, naming the classes of the annotation it evaluates to, read inside the declarations that enclose it where it is written."""
 
     source: str
+    enclosing: frozenset[object]
 
     def text(self) -> str:
         return self.source
 
     def classes(self, module: str) -> set[type]:
-        return _parsed(_evaluated(self.source, module)).classes(module)
+        return _parsed(_evaluated(self.source, module), self.enclosing).classes(module)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -305,34 +307,30 @@ _TYPE_VARIABLE_KINDS: tuple[type, ...] = (
 )
 
 
-def _parsed(annotation: object) -> _Construct:
-    """The construct *annotation* is; raises TypeError naming it and its type if no construct reads it."""
+def _parsed(annotation: object, enclosing: frozenset[object]) -> _Construct:
+    """The construct *annotation* is, read inside the declarations of the type variables and NewTypes in *enclosing*; raises TypeError naming it and its type if no construct reads it."""
     if isinstance(annotation, str):
-        return _Unevaluated(annotation)
+        return _Unevaluated(annotation, enclosing)
     if isinstance(annotation, typing.ForwardRef):
-        return _Unevaluated(annotation.__forward_arg__)
+        return _Unevaluated(annotation.__forward_arg__, enclosing)
     if annotation is None or annotation is type(None):
         return _Leaf("None")
     if annotation is Ellipsis:
         return _Leaf("...")
     if isinstance(annotation, list):
-        return _ParameterTypes(_each_parsed(annotation))
+        return _ParameterTypes(_each_parsed(annotation, enclosing))
     if isinstance(annotation, dataclasses.InitVar):
-        return _Subscripted(_Leaf("InitVar"), (_parsed(annotation.type),))
+        return _Subscripted(_Leaf("InitVar"), (_parsed(annotation.type, enclosing),))
     if _is_bare_alias(annotation):
-        return _parsed(typing.get_origin(annotation))
+        return _parsed(typing.get_origin(annotation), enclosing)
     if isinstance(annotation, _TYPE_VARIABLE_KINDS):
-        return _parsed_type_variable(annotation)
+        return _parsed_type_variable(annotation, enclosing)
     if isinstance(annotation, typing.NewType):
-        return _Declared(
-            annotation.__qualname__,
-            annotation.__module__,
-            (_parsed(annotation.__supertype__),),
-        )
+        return _parsed_new_type(annotation, enclosing)
     if isinstance(annotation, _CLASSLESS_NAME_KINDS):
         return _Leaf(repr(annotation))
     if typing.get_origin(annotation) is not None:
-        return _parsed_subscription(annotation)
+        return _parsed_subscription(annotation, enclosing)
     if inspect.isclass(annotation):
         return _Leaf(annotation.__qualname__, frozenset({annotation}))
     kind = f"{type(annotation).__module__}.{type(annotation).__qualname__}"
@@ -354,34 +352,48 @@ def _is_bare_alias(annotation: object) -> bool:
 
 def _parsed_type_variable(
     variable: typing.TypeVar | typing.ParamSpec | typing.TypeVarTuple,
+    enclosing: frozenset[object],
 ) -> _Declared:
-    """*variable* as its declaration passes it: its repr, then its constraints, then its bound and its default by keyword, each only if declared."""
-    arguments = list(_each_parsed(getattr(variable, "__constraints__", ())))
+    """*variable* as its declaration passes it: its repr, then its constraints, then its bound and its default by keyword, each only if declared and each read inside that declaration; its repr alone if that declaration encloses it."""
+    if variable in enclosing:
+        return _Declared(repr(variable), variable.__module__, ())
+    inside = enclosing | {variable}
+    arguments = list(_each_parsed(getattr(variable, "__constraints__", ()), inside))
     bound = getattr(variable, "__bound__", None)
     if bound is not None and bound is not type(None):
-        arguments.append(_Keyword("bound", _parsed(bound)))
+        arguments.append(_Keyword("bound", _parsed(bound, inside)))
     if getattr(variable, "has_default", lambda: False)():
-        arguments.append(_Keyword("default", _parsed(variable.__default__)))
+        arguments.append(_Keyword("default", _parsed(variable.__default__, inside)))
     return _Declared(repr(variable), variable.__module__, tuple(arguments))
 
 
-def _parsed_subscription(annotation: object) -> _Construct:
+def _parsed_new_type(new_type: typing.NewType, enclosing: frozenset[object]) -> _Declared:
+    """*new_type* by its qualified name, as a class is spelled, then its supertype, read inside its declaration; its name alone if that declaration encloses it."""
+    if new_type in enclosing:
+        return _Declared(new_type.__qualname__, new_type.__module__, ())
+    supertype = _parsed(new_type.__supertype__, enclosing | {new_type})
+    return _Declared(new_type.__qualname__, new_type.__module__, (supertype,))
+
+
+def _parsed_subscription(annotation: object, enclosing: frozenset[object]) -> _Construct:
     origin = typing.get_origin(annotation)
     arguments = typing.get_args(annotation)
     if origin in (typing.Union, types.UnionType):
-        return _Union(_each_parsed(arguments))
+        return _Union(_each_parsed(arguments, enclosing))
     if origin is typing.Literal:
         return _Subscripted(_Leaf("Literal"), _value_leaves(arguments))
     if origin is typing.Annotated:
         annotated, *metadata = arguments
         return _Subscripted(
-            _Leaf("Annotated"), (_parsed(annotated), *_value_leaves(metadata))
+            _Leaf("Annotated"), (_parsed(annotated, enclosing), *_value_leaves(metadata))
         )
-    return _Subscripted(_parsed(origin), _each_parsed(arguments))
+    return _Subscripted(_parsed(origin, enclosing), _each_parsed(arguments, enclosing))
 
 
-def _each_parsed(annotations: Iterable[object]) -> tuple[_Construct, ...]:
-    return tuple(_parsed(annotation) for annotation in annotations)
+def _each_parsed(
+    annotations: Iterable[object], enclosing: frozenset[object]
+) -> tuple[_Construct, ...]:
+    return tuple(_parsed(annotation, enclosing) for annotation in annotations)
 
 
 def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
@@ -403,7 +415,7 @@ def _form_classes(obj: object) -> set[type]:
         for annotation in annotations
         if annotation is not inspect.Parameter.empty
     )
-    return _classes_of(_each_parsed(annotated), _signature_module(obj))
+    return _classes_of(_each_parsed(annotated, frozenset()), _signature_module(obj))
 
 
 def _signature_module(obj: object) -> str:
@@ -420,7 +432,7 @@ def _signature_module(obj: object) -> str:
 def _member_form_classes(member: object, cls: type) -> set[type]:
     """The classes the form of *member*, one of *cls*'s, names."""
     if isinstance(member, _AnnotatedAttribute):
-        return _parsed(member.annotation).classes(cls.__module__)
+        return _parsed(member.annotation, frozenset()).classes(cls.__module__)
     function = _spelled_function(member)
     return _form_classes(member if function is None else function)
 
@@ -560,7 +572,7 @@ def _member_form(member: object) -> str:
 
 def _form_by_kind(member: object) -> str:
     if isinstance(member, _AnnotatedAttribute):
-        return f"attribute {_parsed(member.annotation).text()}"
+        return f"attribute {_parsed(member.annotation, frozenset()).text()}"
     function = _spelled_function(member)
     if function is None:
         return surface_form(member)
