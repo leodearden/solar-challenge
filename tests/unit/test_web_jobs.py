@@ -231,6 +231,33 @@ class TestSimulateHomeEndpoint:
 _A_HOME_JOB_REQUEST = {"pv_kw": 4.0, "battery_kwh": 0, "occupants": 3, "location": "bristol", "days": 1}
 
 
+def _client_of_a_finished_job(app: Flask, simulation: HomeSimulator) -> FlaskClient:
+    """Return a client of *app* whose JobManager has run one home job through *simulation* to its end.
+
+    The job's id is "id-1" and its run's id is "id-2".
+    """
+    manager = JobManager(simulate_home=simulation, new_id=_CountingIds())
+    client = _client_using(app, manager)
+    assert client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).status_code == 201
+    assert manager.wait_until_idle(timeout=30)
+    return client
+
+
+def _sse(event: str, data: str) -> str:
+    """Return the SSE message a progress stream sends for *event* with the JSON text *data*."""
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+_STARTING = _sse(
+    "progress",
+    '{"progress_pct": 5.0, "current_step": "Starting", "message": "Initializing...", "status": "running"}',
+)
+_SIMULATING = _sse(
+    "progress",
+    '{"progress_pct": 20.0, "current_step": "Simulating", "message": "Running home simulation...", "status": "running"}',
+)
+
+
 class TestGetJobStatusEndpoint:
     """Tests for GET /api/jobs/<id>."""
 
@@ -281,6 +308,45 @@ class TestGetJobStatusEndpoint:
         assert response.status_code == 404
         assert _job_rows(after_restart.extensions["storage"]) == [(submitted["job_id"], submitted["run_id"])]
 
+    @pytest.mark.parametrize(
+        ("simulation", "last_state"),
+        [
+            (
+                _RecordingSimulation(),
+                {
+                    "status": "completed",
+                    "progress_pct": 100.0,
+                    "current_step": "Done",
+                    "message": "Simulation completed successfully",
+                },
+            ),
+            (
+                _a_failing_simulation,
+                {
+                    "status": "failed",
+                    "progress_pct": 20.0,
+                    "current_step": "Simulating",
+                    "message": "the simulation failed",
+                },
+            ),
+        ],
+        ids=["completed", "failed"],
+    )
+    def test_a_finished_jobs_status_answers_its_ids_its_last_state_and_its_rows_creation_time(
+        self, app: Flask, simulation: HomeSimulator, last_state: dict[str, Any]
+    ) -> None:
+        client = _client_of_a_finished_job(app, simulation)
+
+        response = client.get("/api/jobs/id-1")
+
+        assert response.status_code == 200
+        assert response.get_json() == {
+            "job_id": "id-1",
+            "run_id": "id-2",
+            **last_state,
+            "created_at": _job_state(app.extensions["storage"], "id-1")["created_at"],
+        }
+
 
 class TestJobProgressEndpoint:
     """Tests for GET /api/jobs/<id>/progress (SSE)."""
@@ -315,6 +381,60 @@ class TestJobProgressEndpoint:
         data = response.get_data(as_text=True)
         assert "error" in data
 
+    def test_the_stream_of_a_completed_job_sends_each_progress_event_then_its_completion(self, app: Flask) -> None:
+        client = _client_of_a_finished_job(app, _RecordingSimulation())
+
+        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        assert stream == "".join(
+            [
+                _STARTING,
+                _SIMULATING,
+                _sse(
+                    "progress",
+                    '{"progress_pct": 80.0, "current_step": "Summarizing",'
+                    ' "message": "Calculating summary statistics...", "status": "running"}',
+                ),
+                _sse(
+                    "progress",
+                    '{"progress_pct": 90.0, "current_step": "Saving",'
+                    ' "message": "Persisting results to storage...", "status": "running"}',
+                ),
+                _sse(
+                    "complete",
+                    '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
+                    ' "message": "Simulation completed successfully", "run_id": "id-2"}',
+                ),
+            ]
+        )
+
+    def test_the_stream_of_a_failed_job_sends_each_progress_event_then_its_error(self, app: Flask) -> None:
+        client = _client_of_a_finished_job(app, _a_failing_simulation)
+
+        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        assert stream == _STARTING + _SIMULATING + _sse(
+            "error", '{"status": "failed", "message": "the simulation failed"}'
+        )
+
+    @pytest.mark.parametrize(
+        ("simulation", "final_event"),
+        [
+            (_RecordingSimulation(), _sse("complete", '{"status": "completed", "run_id": "id-2"}')),
+            (_a_failing_simulation, _sse("error", '{"status": "failed", "message": "the simulation failed"}')),
+        ],
+        ids=["completed", "failed"],
+    )
+    def test_a_stream_opened_after_another_drained_the_events_sends_only_the_final_event(
+        self, app: Flask, simulation: HomeSimulator, final_event: str
+    ) -> None:
+        client = _client_of_a_finished_job(app, simulation)
+        client.get("/api/jobs/id-1/progress").get_data()
+
+        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        assert stream == final_event
+
 
 class TestJobResultsEndpoint:
     """Tests for GET /api/jobs/<id>/results."""
@@ -340,7 +460,15 @@ class TestJobResultsEndpoint:
         results_resp = blocking_client.get(f"/api/jobs/{job_id}/results")
 
         assert results_resp.status_code == 409
-        assert results_resp.get_json()["status"] == "running"
+        assert results_resp.get_json() == {"error": "Job not yet completed", "status": "running", "progress_pct": 20.0}
+
+    def test_a_failed_jobs_results_answer_409_with_its_status_and_its_last_progress(self, app: Flask) -> None:
+        client = _client_of_a_finished_job(app, _a_failing_simulation)
+
+        response = client.get("/api/jobs/id-1/results")
+
+        assert response.status_code == 409
+        assert response.get_json() == {"error": "Job not yet completed", "status": "failed", "progress_pct": 20.0}
 
     def test_results_returns_404_unknown_job(self, client: FlaskClient) -> None:
         """Test GET /api/jobs/<unknown_id>/results returns 404."""
