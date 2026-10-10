@@ -987,6 +987,48 @@ class TestPickingFromGivenCandidates:
         ):
             dataclasses.replace(other, name="Not a CEC inverter")
 
+    def test_the_system_names_the_inverter_it_picks(self, other: CecInverter) -> None:
+        chain = create_model_chain_picking_from(PVConfig.default_4kw(), Location.bristol(), [other])
+
+        assert chain.system.inverter == other.name
+
+
+class TestTheSystemNamesItsInverter:
+    """create_pv_system names, as PVSystem.inverter, the CEC library row its voltage-matched inverter comes from; custom and PVWatts inverters name none."""
+
+    def test_the_name_is_the_candidate_whose_numbers_the_inverter_carries(self) -> None:
+        system = create_pv_system(PVConfig.default_4kw())
+        named = {candidate.name: candidate for candidate in candidate_cec_inverters()}.get(
+            system.inverter
+        )
+
+        assert named is not None, (
+            f"create_pv_system named its inverter {system.inverter!r}, which is not a candidate"
+        )
+        picked = system.inverter_parameters
+        assert (picked["Paco"], picked["Vdco"], picked["Mppt_low"], picked["Mppt_high"]) == (
+            named.paco_w,
+            named.vdco_v,
+            named.mppt_low_v,
+            named.mppt_high_v,
+        )
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_inverter_params=create_simple_inverter_params()),
+                id="custom-inverter-parameters",
+            ),
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_module_params=create_simple_module_params()),
+                id="pvwatts-module",
+            ),
+        ],
+    )
+    def test_custom_and_pvwatts_inverters_name_no_cec_row(self, config: PVConfig) -> None:
+        assert create_pv_system(config).inverter is None
+
 
 class TestPVWattsModule:
     """A module without a voltage model runs on pvlib's PVWatts DC and inverter models."""
