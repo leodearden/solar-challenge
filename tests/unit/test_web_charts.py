@@ -143,6 +143,14 @@ class TestChartFunctions:
         output = heat_pump_analysis(results)
         assert output is None
 
+    def test_heat_pump_analysis_returns_its_charts_frozen(self) -> None:
+        """A reader of the heat-pump charts cannot rewrite a figure in them."""
+        charts = heat_pump_analysis(_steady_run(1, heat_pump_kw=1.5, demand_kw=4.0))
+        assert charts is not None
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            charts.load_share_chart = "{}"  # type: ignore[misc]
+
 
 class TestSankeyBatteryCharge:
     """The battery charges from PV and, on a grid-charging tariff, from the grid, and the Sankey draws each source's part as its own link."""
@@ -216,7 +224,7 @@ class TestChartTotals:
         charts = heat_pump_analysis(_steady_run(1, heat_pump_kw=1.5, demand_kw=4.0))
         assert charts is not None
 
-        pie = json.loads(charts["load_share_chart"])["data"][0]
+        pie = json.loads(charts.load_share_chart)["data"][0]
 
         # 1.5 kW × 24 h of heat pump, and 4 kW × 24 h of demand less that.
         assert pie["labels"] == ["Heat Pump", "Other Demand"]

@@ -201,10 +201,10 @@ _FIGURES: dict[str, _FigureCase] = {
     "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: build(_year())),
     "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: build(_year())),
     "heat_pump_load_profile": _FigureCase(
-        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())["load_profile_chart"]
+        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump()).load_profile_chart
     ),
     "heat_pump_share": _FigureCase(
-        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())["load_share_chart"]
+        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump()).load_share_chart
     ),
     "overlaid_power_flows": _FigureCase(
         charts.overlaid_power_flows, lambda build: build([_year()] * 5, _FIVE_RUNS)
