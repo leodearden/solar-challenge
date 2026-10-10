@@ -130,6 +130,24 @@ class Wrapper:
         return f"Wrapper[{self.inner.__qualname__}]"
 
 
+def _imported(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, source: str
+) -> types.ModuleType:
+    """The module *name*, written from *source* under *tmp_path* and imported, left in sys.modules until the test ends.
+
+    Give each test's module a name no other test uses: the helper under test reads a
+    module's `if TYPE_CHECKING:` imports once per name.
+    """
+    path = tmp_path / f"{name}.py"
+    path.write_text(source)
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
     def f(
         a: int, /, b: str = "x", *args: float, c: bool = True, **kwargs: int
@@ -863,18 +881,15 @@ def test_a_class_names_the_classes_its_constructor_and_each_public_member_name()
 def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = tmp_path / "metering.py"
-    source.write_text(
+    metering = _imported(
+        tmp_path,
+        monkeypatch,
+        "metering",
         "from fractions import Fraction\n"
         "\n"
         "class Meter:\n"
-        "    def __init__(self, ratio: 'Fraction') -> None: ...\n"
+        "    def __init__(self, ratio: 'Fraction') -> None: ...\n",
     )
-    spec = importlib.util.spec_from_file_location("metering", source)
-    assert spec is not None and spec.loader is not None
-    metering = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, "metering", metering)
-    spec.loader.exec_module(metering)
 
     class Submeter(metering.Meter):
         pass
@@ -885,18 +900,15 @@ def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds
 def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = tmp_path / "rating.py"
-    source.write_text(
+    rating = _imported(
+        tmp_path,
+        monkeypatch,
+        "rating",
         "from fractions import Fraction\n"
         "from typing import TypeVar\n"
         "\n"
-        "Ratio = TypeVar('Ratio', bound='Fraction')\n"
+        "Ratio = TypeVar('Ratio', bound='Fraction')\n",
     )
-    spec = importlib.util.spec_from_file_location("rating", source)
-    assert spec is not None and spec.loader is not None
-    rating = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, "rating", rating)
-    spec.loader.exec_module(rating)
 
     def f(ratio: rating.Ratio) -> None: ...
 
@@ -906,8 +918,10 @@ def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module
 def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class_there(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = tmp_path / "linking.py"
-    source.write_text(
+    linking = _imported(
+        tmp_path,
+        monkeypatch,
+        "linking",
         "from typing import Generic, NewType, TypeVar\n"
         "\n"
         "Linked = TypeVar('Linked', bound='Node[Linked]')\n"
@@ -915,13 +929,8 @@ def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class
         "Graded = TypeVar('Graded', bound='dict[str, Ranked]')\n"
         "Chain = NewType('Chain', 'list[Chain]')\n"
         "\n"
-        "class Node(Generic[Linked]): ...\n"
+        "class Node(Generic[Linked]): ...\n",
     )
-    spec = importlib.util.spec_from_file_location("linking", source)
-    assert spec is not None and spec.loader is not None
-    linking = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, "linking", linking)
-    spec.loader.exec_module(linking)
 
     def f(a: linking.Linked, b: linking.Ranked, c: linking.Chain) -> None: ...
 
@@ -938,13 +947,12 @@ def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class
 def test_a_type_parameter_inside_its_own_bound_is_spelled_there_by_its_name_alone(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = tmp_path / "branching.py"
-    source.write_text("class Node[T]: ...\n\n\ndef link[T: Node[T]](node: T) -> T: ...\n")
-    spec = importlib.util.spec_from_file_location("branching", source)
-    assert spec is not None and spec.loader is not None
-    branching = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, "branching", branching)
-    spec.loader.exec_module(branching)
+    branching = _imported(
+        tmp_path,
+        monkeypatch,
+        "branching",
+        "class Node[T]: ...\n\n\ndef link[T: Node[T]](node: T) -> T: ...\n",
+    )
 
     assert surface_form(branching.link) == "(node: T(bound=Node[T])) -> T(bound=Node[T])"
     assert named_classes(branching.link) == {branching.Node}
