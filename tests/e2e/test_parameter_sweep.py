@@ -8,9 +8,10 @@ lists its values in the list named "Sweep values"), that submitting a sweep
 filled into the form returns one background job per sweep point, and detects
 Bug B1 (Alpine race condition with external JS).
 
-Also verifies that each sweep point's row shows how its own job ended, and that
-an earlier sweep's results, arriving after a later sweep's rows show, fill none
-of them.
+Also verifies that each sweep point's row shows how its own job ended, that
+running a sweep drops the requests the sweep before it still has in flight,
+and that an earlier sweep's results, arriving after a later sweep's rows show,
+fill none of them.
 """
 
 import itertools
@@ -21,7 +22,7 @@ from dataclasses import dataclass
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
-from tests.e2e._job_requests import HeldJobRequests, sse_event
+from tests.e2e._job_requests import HeldJobRequests, is_job_request, sse_event
 
 pytestmark = pytest.mark.e2e
 
@@ -289,4 +290,29 @@ def test_an_earlier_sweeps_late_results_fill_no_row_of_the_sweep_run_after_it(
     expect(rows.nth(0).get_by_role("cell")).to_have_text(
         ["2", "-", "-", "-", "pending"]
     )
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+def test_a_sweep_run_after_another_drops_the_earlier_sweeps_requests(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
+) -> None:
+    """Run, then Run again while sweep-1's completed first point's results still load and its second point still runs: the page drops both requests, the first point's results request and the second point's progress stream, and goes on to follow sweep-2's jobs."""
+    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
+    page.goto(live_server + "/scenarios/sweep")
+    run = page.get_by_role("button", name="Run Parameter Sweep", exact=True)
+    with (
+        page.expect_request("**/api/jobs/sweep-1-point-1/results"),
+        page.expect_request("**/api/jobs/sweep-1-point-2/progress"),
+    ):
+        run.click()
+    with (
+        page.expect_event(
+            "requestfailed", predicate=is_job_request("sweep-1-point-1", "results")
+        ),
+        page.expect_event(
+            "requestfailed", predicate=is_job_request("sweep-1-point-2", "progress")
+        ),
+        page.expect_request("**/api/jobs/sweep-2-point-2/progress"),
+    ):
+        run.click()
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
