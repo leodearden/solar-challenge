@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import chart_container %}
+{% from "components/macros.html" import chart_container, run_type_badge %}
 
 {% block title %}Compare Runs - Solar Challenge{% endblock %}
 
@@ -14,11 +14,7 @@
         {% for run in runs %}
         <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-center">
             <h3 class="text-lg font-bold text-slate-900 dark:text-white truncate">{{ run.name or 'Unnamed Run' }}</h3>
-            <span class="inline-flex items-center mt-1 px-2.5 py-0.5 rounded-full text-xs font-medium
-                {% if run.type == 'home' %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400
-                {% elif run.type == 'fleet' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400
-                {% else %}bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400{% endif %}
-            ">{{ run.type }}</span>
+            <div class="mt-1">{{ run_type_badge(run.type) }}</div>
             <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">{{ run.created_at[:19] if run.created_at else '-' }}</p>
         </div>
         {% endfor %}

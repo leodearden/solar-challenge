@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import card, stat_card %}
+{% from "components/macros.html" import card, run_status_badge, stat_card %}
 
 {% block title %}Solar Challenge &mdash; Dashboard{% endblock %}
 
@@ -80,14 +80,7 @@
                     </td>
                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">{{ run.type }}</td>
                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">{{ run.date }}</td>
-                    <td class="px-4 py-3 text-sm whitespace-nowrap">
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-                            {% if run.status == 'completed' %}bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400
-                            {% elif run.status == 'failed' %}bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400
-                            {% elif run.status == 'running' %}bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-400
-                            {% else %}bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-300
-                            {% endif %}">{{ run.status }}</span>
-                    </td>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">{{ run_status_badge(run.status) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
