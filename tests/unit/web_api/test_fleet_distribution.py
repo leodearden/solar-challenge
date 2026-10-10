@@ -260,12 +260,19 @@ class TestFleetFromDistribution:
         pv_caps = {round(c.pv_config.capacity_kw, 3) for c in configs}
         assert len(pv_caps) > 1, f"Expected distinct PV capacities but got {pv_caps}"
 
-    def test_no_json_body_returns_400(self, client: FlaskClient) -> None:
-        """POST with no JSON returns 400."""
+    @pytest.mark.parametrize(
+        ("data", "content_type"),
+        [
+            pytest.param("not json", "text/plain", id="text-body"),
+            pytest.param(None, "application/json", id="empty-json-body"),
+        ],
+    )
+    def test_no_json_body_returns_400(
+        self, client: FlaskClient, data: str | None, content_type: str
+    ) -> None:
+        """A body that does not read as a JSON object, plain text or an empty JSON body, returns 400."""
         resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            data="not json",
-            content_type="text/plain",
+            "/api/simulate/fleet-from-distribution", data=data, content_type=content_type
         )
         assert resp.status_code == 400
 
