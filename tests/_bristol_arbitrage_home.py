@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The home of the committed scenarios/bristol-arbitrage.yaml, read from the file.
 
-On Economy 7 it charges its battery from the grid overnight, to 90% of capacity. A test
-that simulates it reads the file the way `home run` does, its SEG rate included, so the
-home it simulates is the scenario's own and cannot drift from it.
+On Economy 7 it charges its battery from the grid overnight. A test that simulates it
+reads the file the way `home run` does, its SEG rate included, so the home it simulates
+is the scenario's own and cannot drift from it.
 
 Usage::
 
