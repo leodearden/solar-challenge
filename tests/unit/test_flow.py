@@ -1284,19 +1284,30 @@ FLOWS = (
     "grid_charge",
 )
 
+NEGATIVE_OR_NAN = [pytest.param(-0.5, id="negative"), pytest.param(float("nan"), id="nan")]
+
 
 class TestEnergyFlowResultRefusesANegativeFlow:
     """Each flow is an energy the timestep moved, so construction refuses one below 0 or NaN."""
 
+    def test_every_field_but_battery_soc_is_a_flow(self) -> None:
+        names = tuple(field.name for field in dataclasses.fields(EnergyFlowResult))
+        assert tuple(name for name in names if name != "battery_soc") == FLOWS
+
     @pytest.mark.parametrize("flow", FLOWS)
-    @pytest.mark.parametrize(
-        "value", [pytest.param(-0.5, id="negative"), pytest.param(float("nan"), id="nan")]
-    )
+    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
     def test_a_negative_or_nan_flow_is_refused_naming_it_and_its_value(
         self, flow: str, value: float
     ) -> None:
         with pytest.raises(ValueError, match=re.escape(f"{flow}={value!r}")):
             EnergyFlowResult(**{**dict.fromkeys(FLOWS, 0.0), "battery_soc": 0.0, flow: value})
+
+    @pytest.mark.parametrize("soc", NEGATIVE_OR_NAN)
+    def test_battery_soc_is_a_level_not_a_flow_so_one_below_0_or_nan_is_accepted(
+        self, soc: float
+    ) -> None:
+        result = EnergyFlowResult(**dict.fromkeys(FLOWS, 0.0), battery_soc=soc)
+        assert result.battery_soc == pytest.approx(soc, nan_ok=True)
 
 
 class _BatteryReportingANegativeDischarge(Battery):
@@ -1325,9 +1336,7 @@ class TestStepRefusesANegativeFlow:
     @pytest.mark.parametrize(
         ("power", "flow"), [("generation_kw", "generation"), ("demand_kw", "demand")]
     )
-    @pytest.mark.parametrize(
-        "value", [pytest.param(-1.0, id="negative"), pytest.param(float("nan"), id="nan")]
-    )
+    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
     def test_a_negative_or_nan_power_makes_the_step_raise_naming_its_flow(
         self, step: Callable[..., EnergyFlowResult], power: str, flow: str, value: float
     ) -> None:
