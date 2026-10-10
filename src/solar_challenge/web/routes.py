@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
-from pathlib import Path
 from typing import Any
 
 from flask import (
@@ -13,6 +12,7 @@ from flask import (
 )
 
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.web.builtin_scenarios import builtin_scenario_files
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunStorage
 
@@ -158,35 +158,12 @@ def home_results(run_id: str) -> Any:
     )
 
 
-def _load_scenario_presets() -> list[str]:
-    """Scan the scenarios/ directory for YAML files and return preset names.
-
-    Searches in the project root ``scenarios/`` directory for files
-    ending in ``.yaml`` or ``.yml``.
-
-    Returns:
-        Sorted list of scenario file names (without extension).
-    """
-    presets: list[str] = []
-
-    # Try the project-level scenarios/ directory
-    project_root = Path(__file__).resolve().parents[3]
-    scenarios_dir = project_root / "scenarios"
-    if scenarios_dir.is_dir():
-        for path in sorted(scenarios_dir.iterdir()):
-            if path.suffix in (".yaml", ".yml") and path.is_file():
-                presets.append(path.stem)
-
-    return presets
-
-
 @bp.route("/simulate/fleet", methods=["GET"])
 def simulate_fleet_page() -> str:
     """Render the fleet simulation configuration page."""
-    presets = _load_scenario_presets()
     return str(render_template(
         "simulate/fleet.html",
-        presets=presets,
+        presets=tuple(builtin_scenario_files()),
         page="simulate-fleet",
         seg_presets=SEG_PRESETS,
     ))

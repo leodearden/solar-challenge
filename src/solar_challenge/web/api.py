@@ -11,7 +11,6 @@ import logging
 import time
 from collections.abc import Mapping
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any, Generator
 
 import yaml as _yaml
@@ -22,9 +21,11 @@ from solar_challenge.config import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
+from solar_challenge.web.builtin_scenarios import builtin_scenario_files
 from solar_challenge.web.database import get_db
 from solar_challenge.web.fleet_scenario import (
-    fleet_form_from_scenario,
+    FLEET_FORM_REFUSALS,
+    fleet_form_from_yaml,
     parse_fleet_form,
     scenario_from_fleet_form,
 )
@@ -370,7 +371,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
 
     try:
         fleet = parse_fleet_form(data)
-    except (ValueError, TypeError, ConfigurationError) as exc:
+    except FLEET_FORM_REFUSALS as exc:
         return jsonify({"error": str(exc)}), 400
 
     db_path = current_app.config["DATABASE"]
@@ -401,7 +402,7 @@ def export_fleet_yaml() -> Response | tuple[Response, int]:
     data = request_json_object()
     try:
         document = scenario_from_fleet_form(data)
-    except (ValueError, TypeError, ConfigurationError) as exc:
+    except FLEET_FORM_REFUSALS as exc:
         return jsonify({"error": str(exc)}), 400
     return Response(
         scenario_yaml(document),
@@ -434,7 +435,7 @@ def fleet_preset(name: str) -> tuple[Response, int]:
         The answer of :func:`_imported_fleet_form_answer` for the file's YAML; or the
         ``error``, HTTP 404, when no built-in scenario file is named *name*.
     """
-    path = _builtin_scenario_path(name)
+    path = builtin_scenario_files().get(name)
     if path is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
     return _imported_fleet_form_answer(path.read_text(encoding="utf-8"))
@@ -446,17 +447,13 @@ def _imported_fleet_form_answer(yaml_text: str) -> tuple[Response, int]:
     Returns:
         JSON ``{"form", "not_loaded"}``, HTTP 200: the form is the body the fleet page
         posts, and not_loaded the paths of the scenario's settings it has no control for
-        (see :func:`~solar_challenge.web.fleet_scenario.fleet_form_from_scenario`).  Or the
+        (see :func:`~solar_challenge.web.fleet_scenario.fleet_form_from_yaml`).  Or the
         ``error``, HTTP 400, for YAML that does not parse, or a scenario the fleet page
         cannot load.
     """
     try:
-        document = _yaml.safe_load(yaml_text)
-    except _yaml.YAMLError as exc:
-        return jsonify({"error": f"Invalid YAML: {exc}"}), 400
-    try:
-        imported = fleet_form_from_scenario(document)
-    except (ValueError, TypeError, ConfigurationError) as exc:
+        imported = fleet_form_from_yaml(yaml_text)
+    except FLEET_FORM_REFUSALS as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify({"form": dict(imported.form), "not_loaded": list(imported.not_loaded)}), 200
 
@@ -861,24 +858,6 @@ def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
 # ---------------------------------------------------------------------------
 
 
-def _scenarios_dir() -> Path:
-    """Return the path to the project-level scenarios/ directory.
-
-    Returns:
-        Path to the scenarios directory (may not exist).
-    """
-    return Path(__file__).resolve().parents[3] / "scenarios"
-
-
-def _builtin_scenario_path(name: str) -> Path | None:
-    """The built-in scenario file *name*, its .yaml file before its .yml one; None when there is neither."""
-    for suffix in (".yaml", ".yml"):
-        path = _scenarios_dir() / f"{name}{suffix}"
-        if path.is_file():
-            return path
-    return None
-
-
 @api_bp.route("/scenarios/preview-yaml", methods=["POST"])
 def scenarios_preview_yaml() -> tuple[Response, int]:
     """The YAML text of the fleet scenario a builder form describes.
@@ -941,16 +920,8 @@ def scenarios_list_presets() -> tuple[Response, int]:
     """
     presets: list[dict[str, Any]] = []
 
-    # Built-in presets from scenarios/ directory
-    scenarios_dir = _scenarios_dir()
-    if scenarios_dir.is_dir():
-        for path in sorted(scenarios_dir.iterdir()):
-            if path.suffix in (".yaml", ".yml") and path.is_file():
-                presets.append({
-                    "name": path.stem,
-                    "source": "builtin",
-                    "filename": path.name,
-                })
+    for name, path in builtin_scenario_files().items():
+        presets.append({"name": name, "source": "builtin", "filename": path.name})
 
     # Saved presets from database
     db_path = current_app.config["DATABASE"]
@@ -986,7 +957,7 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
         JSON preset object, or 404 if not found.
     """
     # Try built-in scenarios directory
-    path = _builtin_scenario_path(name)
+    path = builtin_scenario_files().get(name)
     if path is not None:
         try:
             content = _yaml.safe_load(path.read_text())
