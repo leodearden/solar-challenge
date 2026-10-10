@@ -371,6 +371,27 @@ class TestFinanceConfigValidation:
         fc = FinanceConfig(**self._BASE, grid_services_income_per_kw_per_year_gbp=0.0)
         assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
 
+    # ---- every number (finite) ----
+
+    @pytest.mark.parametrize("field", _NUMERIC_FIELDS)
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(math.nan, id="nan"),
+            pytest.param(math.inf, id="inf"),
+            pytest.param(-math.inf, id="-inf"),
+        ],
+    )
+    def test_a_number_that_is_not_finite_is_refused_naming_its_field(
+        self, field: str, value: float
+    ) -> None:
+        """A NaN or infinite value for any numeric field is refused, naming the field and the value."""
+        with pytest.raises(
+            ConfigurationError,
+            match=rf"^{re.escape(field)} must be .+, got {re.escape(str(value))}$",
+        ):
+            FinanceConfig(**{**self._BASE, field: value})
+
 
 class TestFinanceConfigParsing:
     """Tests for parse_finance_config parser function."""
