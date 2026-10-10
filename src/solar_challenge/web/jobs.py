@@ -28,17 +28,16 @@ import pandas as pd
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.home import simulate_home as _default_simulate_home
-from solar_challenge.web.database import JobStatus, RunStatus, RunType, get_db
+from solar_challenge.web.database import DEFAULT_JOB_STATUS, JobStatus, RunStatus, RunType, get_db
 from solar_challenge.web.storage import RunStorage
 
 HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], SimulationResults]
 
-_QUEUED_JOB_STATUS: JobStatus = "queued"
 _RUNNING_JOB_STATUS: JobStatus = "running"
 _COMPLETED_JOB_STATUS: JobStatus = "completed"
 _FAILED_JOB_STATUS: JobStatus = "failed"
 _QUEUED_JOB_STATE: Mapping[str, str | float] = MappingProxyType(
-    {"status": _QUEUED_JOB_STATUS, "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
+    {"status": DEFAULT_JOB_STATUS, "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
 )
 _FINISHED_JOB_TTL_SECONDS = 3600.0
 _UNFINISHED_RUN_STATUS: RunStatus = "running"
@@ -697,7 +696,7 @@ def recover_stale_jobs(db_path: str | Path) -> int:
                 completed_at = ?
             WHERE status IN (?, ?)
             """,
-            (_FAILED_JOB_STATUS, now, _RUNNING_JOB_STATUS, _QUEUED_JOB_STATUS),
+            (_FAILED_JOB_STATUS, now, _RUNNING_JOB_STATUS, DEFAULT_JOB_STATUS),
         )
         recovered_jobs = cursor.rowcount
         # Also mark corresponding runs as failed

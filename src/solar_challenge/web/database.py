@@ -28,7 +28,7 @@ _DEFAULT_RUN_STATUS: RunStatus = "running"
 
 JobStatus = Literal["queued", "running", "completed", "failed"]  # the status of a background job, held by the jobs table's status column
 JOB_STATUSES: tuple[JobStatus, ...] = get_args(JobStatus)
-_DEFAULT_JOB_STATUS: JobStatus = "queued"
+DEFAULT_JOB_STATUS: JobStatus = "queued"
 
 ChatRole = Literal["user", "assistant"]  # who wrote a chat message, held by the chat_messages table's role column
 CHAT_ROLES: tuple[ChatRole, ...] = get_args(ChatRole)
@@ -89,7 +89,7 @@ def init_db(db_path: str | Path) -> None:
         CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY,
             run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
-            status TEXT DEFAULT {_sql_string_literal(_DEFAULT_JOB_STATUS)} {_check_one_of("status", JOB_STATUSES)},
+            status TEXT DEFAULT {_sql_string_literal(DEFAULT_JOB_STATUS)} {_check_one_of("status", JOB_STATUSES)},
             progress_pct REAL DEFAULT 0,
             current_step TEXT,
             message TEXT,
