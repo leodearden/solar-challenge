@@ -253,6 +253,18 @@ class TestCECLibraryReuse:
         assert "gamma_pdc" not in later.arrays[0].module_parameters
         assert later.inverter_parameters["Pdco"] == baseline.inverter_parameters["Pdco"]
 
+    def test_each_system_keeps_its_own_inverter_efficiency(self) -> None:
+        configs = (PVConfig(capacity_kw=4.0), PVConfig(capacity_kw=4.0, inverter_efficiency=0.90))
+        systems = [create_pv_system(config) for config in configs]
+
+        for config, system in zip(configs, systems, strict=True):
+            inverter = system.inverter_parameters
+            efficiency = inverter["Paco"] / inverter["Pdco"]
+            assert efficiency == pytest.approx(config.inverter_efficiency), (
+                f"a system configured at {config.inverter_efficiency} runs its inverter "
+                f"at Paco/Pdco = {efficiency:.4f}"
+            )
+
 
 class TestCreateModelChain:
     """Test PV-003: pvlib ModelChain creation."""
@@ -987,6 +999,48 @@ class TestPickingFromGivenCandidates:
         ):
             dataclasses.replace(other, name="Not a CEC inverter")
 
+    def test_the_system_names_the_inverter_it_picks(self, other: CecInverter) -> None:
+        chain = create_model_chain_picking_from(PVConfig.default_4kw(), Location.bristol(), [other])
+
+        assert chain.system.inverter == other.name
+
+
+class TestTheSystemNamesItsInverter:
+    """create_pv_system names, as PVSystem.inverter, the CEC library row its voltage-matched inverter comes from; custom and PVWatts inverters name none."""
+
+    def test_the_name_is_the_candidate_whose_numbers_the_inverter_carries(self) -> None:
+        system = create_pv_system(PVConfig.default_4kw())
+        named = {candidate.name: candidate for candidate in candidate_cec_inverters()}.get(
+            system.inverter
+        )
+
+        assert named is not None, (
+            f"create_pv_system named its inverter {system.inverter!r}, which is not a candidate"
+        )
+        picked = system.inverter_parameters
+        assert (picked["Paco"], picked["Vdco"], picked["Mppt_low"], picked["Mppt_high"]) == (
+            named.paco_w,
+            named.vdco_v,
+            named.mppt_low_v,
+            named.mppt_high_v,
+        )
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_inverter_params=create_simple_inverter_params()),
+                id="custom-inverter-parameters",
+            ),
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_module_params=create_simple_module_params()),
+                id="pvwatts-module",
+            ),
+        ],
+    )
+    def test_custom_and_pvwatts_inverters_name_no_cec_row(self, config: PVConfig) -> None:
+        assert create_pv_system(config).inverter is None
+
 
 class TestPVWattsModule:
     """A module without a voltage model runs on pvlib's PVWatts DC and inverter models."""
@@ -1044,6 +1098,46 @@ class TestPVWattsModule:
         assert kwh_at_90_percent / kwh_at_96_percent == pytest.approx(0.90 / 0.96, rel=0.01), (
             f"a 90% inverter gave {kwh_at_90_percent:.3f} kWh against "
             f"{kwh_at_96_percent:.3f} kWh at 96%"
+        )
+
+
+class TestCecInverterEfficiency:
+    """The voltage-matched CEC inverter runs at PVConfig.inverter_efficiency at its rated output, not at its catalogue efficiency."""
+
+    @pytest.mark.parametrize("capacity_kw", [3.0, 3.68, 4.0, 5.0, 6.0])
+    @pytest.mark.parametrize(
+        "efficiency_kwargs",
+        [{}, {"inverter_efficiency": 0.96}, {"inverter_efficiency": 0.90}, {"inverter_efficiency": 0.98}],
+        ids=["default", "explicit-0.96", "0.90", "0.98"],
+    )
+    def test_rated_output_efficiency_is_the_configured_one(
+        self, capacity_kw: float, efficiency_kwargs: dict[str, float]
+    ) -> None:
+        config = PVConfig(capacity_kw=capacity_kw, **efficiency_kwargs)
+        inverter = create_pv_system(config).inverter_parameters
+        efficiency = inverter["Paco"] / inverter["Pdco"]
+
+        assert efficiency == pytest.approx(config.inverter_efficiency), (
+            f"{capacity_kw} kW configured at {config.inverter_efficiency} runs its inverter "
+            f"at Paco/Pdco = {efficiency:.4f}"
+        )
+
+    @pytest.mark.parametrize("capacity_kw", [3.68, 5.0])
+    def test_ac_energy_rises_with_the_configured_efficiency_through_the_default(
+        self, capacity_kw: float, clear_june_daytime: pd.DataFrame
+    ) -> None:
+        efficiencies = (0.95, 0.955, 0.96, 0.965, 0.97)
+        kwh = [
+            simulate_pv_output(
+                PVConfig(capacity_kw=capacity_kw, inverter_efficiency=efficiency),
+                Location.bristol(),
+                clear_june_daytime,
+            ).sum()
+            for efficiency in efficiencies
+        ]
+
+        assert all(lower < higher for lower, higher in zip(kwh, kwh[1:])), ", ".join(
+            f"{efficiency:.3f} -> {energy:.3f} kWh" for efficiency, energy in zip(efficiencies, kwh)
         )
 
 

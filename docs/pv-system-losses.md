@@ -58,7 +58,7 @@ model's annual performance ratio lands on the two UK references (§5):
   inverter-limited array still clips at its rating. On a clear June day
   (`tests/unit/test_pv.py`'s `clear_june_daytime`), 6 kW of PVWatts modules on a 3 kW
   inverter peaks at 3.000 kW with or without the losses and keeps 0.9546 of its energy;
-  8 kW of CEC modules on 3.68 kW peaks at 3.680 kW and keeps 0.9623. A derate of the AC
+  8 kW of CEC modules on 3.68 kW peaks at 3.680 kW and keeps 0.9636. A derate of the AC
   would cap both peaks at 0.859 of the rating and keep 0.859 of the energy.
 - At unchanged voltage. The Sandia and ADR inverters read `v_mp`, and `create_pv_system`
   matches the strings' voltage to the inverter's MPPT window
@@ -82,6 +82,13 @@ This is a dated record. Re-measure with the script before relying on it.
   4003.91 kWh, 999.91 kWh/kWp, ratio 0.8089. PVGIS-14% reads 1001.1 kWh/kWp, ratio 0.798;
   MCS's ratio is 0.8. `tests/integration/test_pv_performance_ratio.py` reads the same
   0.8089 through the script's `measure`, inside its 0.76–0.84 band.
+  **[Amended 2026-10-10, task 236: the default 4 kW's CEC inverter now runs at the
+  configured 0.96 at rated output, not its catalogue 0.9667
+  ([pv-inverter-efficiency.md](pv-inverter-efficiency.md)). Re-measured by the script's
+  `measure` on task 236's commit be3e1de: without the losses 4632.66 kWh, 1156.93
+  kWh/kWp, ratio 0.9359; with them 3976.80 kWh, 993.14 kWh/kWp, ratio 0.8034, which the
+  slow guard reads too. The site table below and §6's Bristol figures predate the
+  change.]**
 - **Earlier reading** (2026-10-03, main f3e05fb, by task 252's first plan): PVGIS v5_3's
   PVcalc at 14% over SARAH3 2005–2023 gave Bristol 1022.83 kWh/kWp, ratio 0.8124, and
   0.808–0.825 across the fourteen sites.

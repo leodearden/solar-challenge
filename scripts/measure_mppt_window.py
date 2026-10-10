@@ -145,31 +145,21 @@ class Pick:
         return max(modules for modules, _ in self.wiring)
 
 
-_ParamsKey = tuple[tuple[str, str], ...]
-
-
-def _params_key(params: Mapping[str, Any]) -> _ParamsKey:
-    return tuple(sorted((key, repr(value)) for key, value in params.items()))
-
-
 @functools.cache
 def _catalogue() -> pd.DataFrame:
     return pvlib.pvsystem.retrieve_sam("CECInverter")
 
 
-@functools.cache
-def _inverter_names() -> dict[_ParamsKey, str]:
-    """CEC inverter names by parameter set; identical sets keep the first name, as the ranking's tie-break does."""
-    return {
-        _params_key(_catalogue()[name].to_dict()): name
-        for name in sorted(_catalogue().columns, reverse=True)
-    }
-
-
-def _pick(chain: ModelChain) -> Pick:
+def _pick(chain: ModelChain, config: PVConfig) -> Pick:
+    """The CEC inverter and wiring that pv picked for config's chain."""
     system = chain.system
+    if system.inverter is None:
+        raise ValueError(
+            f"The system for {config!r} names no CEC inverter to measure; "
+            "pv names none for custom or PVWatts inverter parameters"
+        )
     return Pick(
-        _inverter_names()[_params_key(system.inverter_parameters)],
+        system.inverter,
         tuple((array.modules_per_string, array.strings) for array in system.arrays),
     )
 
@@ -310,7 +300,7 @@ def census(
         for inverter_kw, dc_kw in itertools.product(INVERTER_CAPACITIES_KW, dc_capacities_kw):
             config = PVConfig(capacity_kw=dc_kw, inverter_capacity_kw=inverter_kw)
             chain = create_model_chain_picking_from(config, location, candidates)
-            pick = _pick(chain)
+            pick = _pick(chain, config)
             if pick not in years:
                 years[pick] = measure_year(chain, weather)
             year = years[pick]
@@ -475,7 +465,8 @@ def operating_voltage(
     location: Location, weather: pd.DataFrame, module: Mapping[str, Any]
 ) -> tuple[pd.DataFrame, pd.Series]:
     """The default system's hours with module V_mp above COLD_RATIO x V_mp_ref, and its hours above V_mp_ref."""
-    chain = create_model_chain(PVConfig.default_4kw(), location)
+    config = PVConfig.default_4kw()
+    chain = create_model_chain(config, location)
     chain.run_model(weather)
     (strings,) = _strings(chain)
     ratio = strings.v_mp / strings.modules_per_string / module["V_mp_ref"]
@@ -490,7 +481,7 @@ def operating_voltage(
             "air C": weather["temp_air"],
         }
     )
-    pick = _pick(chain)
+    pick = _pick(chain, config)
     inverter = chain.system.inverter_parameters
     default = pd.Series(
         {

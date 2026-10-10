@@ -13,6 +13,7 @@ from solar_challenge.config import (
     LoadDistributionConfig,
     NormalDistribution,
     PVDistributionConfig,
+    ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
     generate_homes_from_distribution,
@@ -516,6 +517,27 @@ class TestGenerateHomesFromDistributionDegradation:
             "Scalar system_age_years must not consume RNG; "
             "capacity sequences should be identical regardless of scalar age value"
         )
+
+
+class TestGenerateHomesFromDistributionInverterEfficiency:
+    """Each home's PVConfig takes the inverter efficiency sampled for it, 0.96 included."""
+
+    def test_each_home_takes_its_sampled_inverter_efficiency(self) -> None:
+        config = FleetDistributionConfig(
+            n_homes=3,
+            pv=PVDistributionConfig(
+                capacity_kw=3.68,
+                inverter_efficiency=ShuffledPoolDistribution(
+                    values=(0.955, 0.96, 0.965), counts=(1, 1, 1)
+                ),
+            ),
+            load=LoadDistributionConfig(),
+            seed=42,
+        )
+
+        homes = generate_homes_from_distribution(config, Location.bristol())
+
+        assert sorted(home.pv_config.inverter_efficiency for home in homes) == [0.955, 0.96, 0.965]
 
 
 class TestGenerateHomesFromDistributionFlex:
