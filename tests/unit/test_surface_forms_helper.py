@@ -929,6 +929,56 @@ def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_
     assert named_classes(retapping.Submeter) == {fractions.Fraction, decimal.Decimal}
 
 
+def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _imported(
+        tmp_path,
+        monkeypatch,
+        "valving",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Valve\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    valve: 'Valve'\n",
+    )
+    revalving = _imported(
+        tmp_path,
+        monkeypatch,
+        "revalving",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Valve\n"
+        "from functools import wraps\n"
+        "\n"
+        "from valving import Meter\n"
+        "\n"
+        "def logged(init):\n"
+        "    @wraps(init)\n"
+        "    def wrapper(*args, **kwargs):\n"
+        "        return init(*args, **kwargs)\n"
+        "    return wrapper\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    def __init__(self, valve: 'Valve') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
+        "class LoggedSubmeter(Meter):\n"
+        "    @logged\n"
+        "    def __init__(self, valve: 'Valve') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
+        "class Resubmeter(Meter):\n"
+        "    def __new__(cls, valve: 'Valve'):\n"
+        "        return object.__new__(cls)\n",
+    )
+
+    assert named_classes(revalving.Submeter) == {decimal.Decimal}
+    assert named_classes(revalving.LoggedSubmeter) == {decimal.Decimal}
+    assert named_classes(revalving.Resubmeter) == {decimal.Decimal}
+
+
 def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
