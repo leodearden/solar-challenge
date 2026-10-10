@@ -99,7 +99,9 @@ def named_classes(obj: object) -> set[type]:
     annotation or a forward reference names the class its name is bound to in the module
     that spells it, read as a type checker reads it: its globals, with the imports of its
     top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
-    NameError.
+    NameError. Met again inside its own evaluation in the same module, as each "JSON" is
+    in JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
+    there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
@@ -192,7 +194,7 @@ class _Construct(abc.ABC):
 
 @dataclasses.dataclass(frozen=True)
 class _Unevaluated(_Construct):
-    """A string annotation or a forward reference: spelled as written, naming the classes of the annotation it evaluates to, read inside the declarations that enclose it where it is written."""
+    """A string annotation or a forward reference: spelled as written, naming the classes of the annotation it evaluates to, read inside the declarations and evaluations that enclose it where it is written; inside its own evaluation in the same module it names no class."""
 
     source: str
     enclosing: frozenset[object]
@@ -201,7 +203,11 @@ class _Unevaluated(_Construct):
         return self.source
 
     def classes(self, module: str) -> set[type]:
-        return _parsed(_evaluated(self.source, module), self.enclosing).classes(module)
+        evaluation = _Evaluation(self.source, module)
+        if evaluation in self.enclosing:
+            return set()
+        evaluated = _evaluated(self.source, module)
+        return _parsed(evaluated, self.enclosing | {evaluation}).classes(module)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -312,7 +318,7 @@ _TYPE_VARIABLE_KINDS: tuple[type, ...] = (
 
 
 def _parsed(annotation: object, enclosing: frozenset[object]) -> _Construct:
-    """The construct *annotation* is, read inside the declarations of the type variables and NewTypes in *enclosing*; raises TypeError naming it and its type if no construct reads it."""
+    """The construct *annotation* is, read inside the declarations of the type variables and NewTypes and the evaluations of the strings in *enclosing*; raises TypeError naming it and its type if no construct reads it."""
     if isinstance(annotation, str):
         return _Unevaluated(annotation, enclosing)
     if isinstance(annotation, typing.ForwardRef):
@@ -385,6 +391,14 @@ def _parsed_new_type(new_type: typing.NewType, enclosing: frozenset[object]) -> 
         return _Declared(new_type.__qualname__, new_type.__module__, ())
     supertype = _parsed(new_type.__supertype__, enclosing | {new_type})
     return _Declared(new_type.__qualname__, new_type.__module__, (supertype,))
+
+
+@dataclasses.dataclass(frozen=True)
+class _Evaluation:
+    """A string evaluated in a module, held in *enclosing* while what it evaluates to is read, so that the same string met again there, in the same module, names no class."""
+
+    source: str
+    module: str
 
 
 def _parsed_subscription(annotation: object, enclosing: frozenset[object]) -> _Construct:
