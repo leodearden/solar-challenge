@@ -66,6 +66,8 @@ from html.parser import HTMLParser
 import jinja2
 from jinja2 import nodes
 
+from tests._html_page import script_texts
+
 _JINJA = jinja2.Environment()
 
 _CLASS_LIST_ATTRIBUTES = frozenset(
@@ -106,10 +108,11 @@ _IMPORTANT = re.compile(r"!\s*important", re.IGNORECASE)
 
 def applied_classes_in_template(source: str) -> set[str]:
     """Classes the Jinja template *source* applies, through every channel the module docstring lists."""
+    literal_markup = _markup(source)
     markup = _TemplateMarkup()
-    markup.feed(_markup(source))
+    markup.feed(literal_markup)
     markup.close()
-    inline_scripts = [applied_classes_in_script(body) for body in markup.script_bodies]
+    inline_scripts = [applied_classes_in_script(text) for text in script_texts(literal_markup)]
     return _split([*markup.class_lists, *_jinja_class_arguments(source)]).union(*inline_scripts)
 
 
@@ -214,27 +217,14 @@ def names_palette(css_class: str, palette: str) -> bool:
 
 
 class _TemplateMarkup(HTMLParser):
-    """Collects the class lists and the inline script bodies of a template's literal markup."""
+    """Collects the class lists of a template's literal markup."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.class_lists: list[str] = []
-        self.script_bodies: list[str] = []
-        self._in_script = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.class_lists.extend(_element_class_lists(attrs))
-        if tag == "script":
-            self.script_bodies.append("")
-            self._in_script = True
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "script":
-            self._in_script = False
-
-    def handle_data(self, data: str) -> None:
-        if self._in_script:
-            self.script_bodies[-1] += data
 
 
 class _InlineStyledMarkup(HTMLParser):
