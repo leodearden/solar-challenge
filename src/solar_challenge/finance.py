@@ -48,6 +48,7 @@ class FinanceConfig:
     Holds investor-spreadsheet defaults (§3.1 of the financial-layer PRD)
     used to compute project NPV, payback period, and per-home savings.
     All monetary values are in nominal GBP or pence; rates are fractional.
+    Every number must be finite.
 
     Attributes:
         standing_charge_pence_per_day: Retail grid standing charge (required).
@@ -142,16 +143,11 @@ class FinanceConfig:
             raise ConfigurationError(
                 f"loan_term_years must be > 0, got {self.loan_term_years}"
             )
-        if self.loan_rate < 0.0:
-            raise ConfigurationError(
-                f"loan_rate must be >= 0, got {self.loan_rate}"
-            )
         if self.asset_life_years < self.loan_term_years:
             raise ConfigurationError(
                 f"asset_life_years ({self.asset_life_years}) must be >= "
                 f"loan_term_years ({self.loan_term_years})"
             )
-        # Cost/rate fields must be strictly positive
         _positive_fields = {
             "standing_charge_pence_per_day": self.standing_charge_pence_per_day,
             "retail_baseline_rate_pence_per_kwh": self.retail_baseline_rate_pence_per_kwh,
@@ -161,35 +157,23 @@ class FinanceConfig:
             "opex_per_home_per_year_gbp": self.opex_per_home_per_year_gbp,
         }
         for field_name, value in _positive_fields.items():
-            if value <= 0.0:
+            if not 0.0 < value < math.inf:
                 raise ConfigurationError(
-                    f"{field_name} must be > 0, got {value}"
+                    f"{field_name} must be > 0 and finite, got {value}"
                 )
-        # Grant may be zero but not negative
-        if self.grant_gbp < 0.0:
-            raise ConfigurationError(
-                f"grant_gbp must be >= 0, got {self.grant_gbp}"
-            )
-        # Inverter cost may be zero (opt-in default) but not negative
-        if self.inverter_cost_per_kw_gbp < 0.0:
-            raise ConfigurationError(
-                f"inverter_cost_per_kw_gbp must be >= 0, got {self.inverter_cost_per_kw_gbp}"
-            )
-        # Cost-recovery fields: zero allowed, negative rejected
-        if self.own_use_rate_pence_per_kwh < 0.0:
-            raise ConfigurationError(
-                f"own_use_rate_pence_per_kwh must be >= 0, got {self.own_use_rate_pence_per_kwh}"
-            )
-        if self.retained_cash_floor_per_home_per_year_gbp < 0.0:
-            raise ConfigurationError(
-                "retained_cash_floor_per_home_per_year_gbp must be >= 0, "
-                f"got {self.retained_cash_floor_per_home_per_year_gbp}"
-            )
-        if self.grid_services_income_per_kw_per_year_gbp < 0.0:
-            raise ConfigurationError(
-                "grid_services_income_per_kw_per_year_gbp must be >= 0, "
-                f"got {self.grid_services_income_per_kw_per_year_gbp}"
-            )
+        _non_negative_fields = {
+            "loan_rate": self.loan_rate,
+            "grant_gbp": self.grant_gbp,
+            "inverter_cost_per_kw_gbp": self.inverter_cost_per_kw_gbp,
+            "own_use_rate_pence_per_kwh": self.own_use_rate_pence_per_kwh,
+            "retained_cash_floor_per_home_per_year_gbp": self.retained_cash_floor_per_home_per_year_gbp,
+            "grid_services_income_per_kw_per_year_gbp": self.grid_services_income_per_kw_per_year_gbp,
+        }
+        for field_name, value in _non_negative_fields.items():
+            if not 0.0 <= value < math.inf:
+                raise ConfigurationError(
+                    f"{field_name} must be >= 0 and finite, got {value}"
+                )
         _VALID_GS_MODELS = frozenset({"flat", "capacity_at_events"})
         if self.grid_services_model not in _VALID_GS_MODELS:
             raise ConfigurationError(
