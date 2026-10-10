@@ -180,6 +180,9 @@ def _spelled(annotation: object) -> object:
     return _Spelling(_parsed(annotation, frozenset()).text())
 
 
+_TypeVariable: typing.TypeAlias = typing.TypeVar | typing.ParamSpec | typing.TypeVarTuple
+
+
 class _Construct(abc.ABC):
     """An annotation parsed as the construct it is, the annotations inside it parsed in turn: the one grammar both its spelling and the classes it names are read by."""
 
@@ -310,12 +313,6 @@ _CLASSLESS_NAME_KINDS: tuple[type, ...] = (
     typing._SpecialForm,
 )
 
-_TYPE_VARIABLE_KINDS: tuple[type, ...] = (
-    typing.TypeVar,
-    typing.ParamSpec,
-    typing.TypeVarTuple,
-)
-
 
 def _parsed(annotation: object, enclosing: frozenset[object]) -> _Construct:
     """The construct *annotation* is, read inside the declarations of the type variables and NewTypes and the evaluations of the strings in *enclosing*; raises TypeError naming it and its type if no construct reads it."""
@@ -333,7 +330,7 @@ def _parsed(annotation: object, enclosing: frozenset[object]) -> _Construct:
         return _Subscripted(_Leaf("InitVar"), (_parsed(annotation.type, enclosing),))
     if _is_bare_alias(annotation):
         return _parsed(typing.get_origin(annotation), enclosing)
-    if isinstance(annotation, _TYPE_VARIABLE_KINDS):
+    if isinstance(annotation, _TypeVariable):
         return _parsed_type_variable(annotation, enclosing)
     if isinstance(annotation, typing.NewType):
         return _parsed_new_type(annotation, enclosing)
@@ -361,7 +358,7 @@ def _is_bare_alias(annotation: object) -> bool:
 
 
 def _parsed_type_variable(
-    variable: typing.TypeVar | typing.ParamSpec | typing.TypeVarTuple,
+    variable: _TypeVariable,
     enclosing: frozenset[object],
 ) -> _Declared:
     """*variable* as its declaration passes it: its repr, then its constraints, then its bound and its default by keyword, each only if declared and each read inside that declaration; its repr alone if that declaration encloses it."""
@@ -378,9 +375,7 @@ def _parsed_type_variable(
     return _Declared(repr(variable), module, tuple(arguments))
 
 
-def _declaring_module(
-    variable: typing.TypeVar | typing.ParamSpec | typing.TypeVarTuple,
-) -> str | None:
+def _declaring_module(variable: _TypeVariable) -> str | None:
     """The module *variable*'s __module__ names; None if that is typing, which a type parameter (`def f[T]`) reports in place of the module of the routine or class that declares it."""
     return None if variable.__module__ == "typing" else variable.__module__
 
