@@ -2,9 +2,12 @@
 
 Uses seeded data fixtures (no live simulation needed) to verify
 page rendering, chart containers, tab switching, stat cards,
-download links and error handling, and that the daily balance
-chart agrees with the stat cards.
+download links and error handling, that the daily balance
+chart agrees with the stat cards, and how renderChart reports
+a figure it cannot draw.
 """
+
+import json
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
@@ -134,6 +137,71 @@ def test_results_daily_balance_bars_add_up_to_the_stat_cards(
         bars = daily_bars[flow]
         assert len(bars) > 1, f"a multi-day run has several daily {flow} bars to add up, but the chart shows {len(bars)}"
         expect(_stat_card_value(page, card_label)).to_have_text(f"{sum(bars):.1f}")
+
+
+# -- renderChart reports a figure it cannot draw ---------------------------
+
+_ID_NO_ELEMENT_CARRIES = "chart-no-element-carries"
+_FIGURE_TO_DRAW = json.dumps({"data": [{"type": "bar", "x": ["a"], "y": [1]}], "layout": {}})
+
+
+def _render_chart(page: Page, element_id: str, figure: str | None) -> None:
+    """Call the page's global renderChart; a page without it makes evaluate raise, so no test using this passes vacuously.
+
+    A None figure reaches the page as null, which `{{ charts.X | tojson }}` writes for a chart that is None.
+    """
+    page.evaluate("([elementId, figure]) => renderChart(elementId, figure)", [element_id, figure])
+
+
+def _errors_naming(page_errors: list[str], element_id: str) -> list[str]:
+    """The entries of page_errors that contain element_id, so an unrelated entry, such as a Plotly CDN failure, cannot change a verdict about renderChart."""
+    return [error for error in page_errors if element_id in error]
+
+
+def test_render_chart_logs_an_error_naming_a_target_id_no_element_carries(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Given a figure to draw and an id no element carries, renderChart logs one console error naming the id.
+
+    A page writes each chart's id twice, on its container and in its renderChart call, so the two can drift apart.
+    """
+    run_id, _ = seeded_home_run
+    page.goto(live_server + f"/results/home/{run_id}")
+    expect(page.locator(f"#{_ID_NO_ELEMENT_CARRIES}")).to_have_count(0)
+
+    _render_chart(page, _ID_NO_ELEMENT_CARRIES, _FIGURE_TO_DRAW)
+
+    errors_naming_the_id = _errors_naming(page_errors, _ID_NO_ELEMENT_CARRIES)
+    assert len(errors_naming_the_id) == 1, (
+        f"expected one console error naming {_ID_NO_ELEMENT_CARRIES!r}, but the page logged: {page_errors}"
+    )
+
+
+@pytest.mark.parametrize("empty_figure", ["{}", None], ids=["empty-object", "null"])
+def test_render_chart_logs_nothing_for_an_empty_figure_even_when_no_element_carries_its_id(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+    empty_figure: str | None,
+) -> None:
+    """An empty figure is nothing to draw, so renderChart logs nothing, whether or not an element carries the id.
+
+    sankey_diagram returns '{}' for a run with no energy flow, and results/home.html then still
+    calls renderChart('chart-sankey', '{}') with that chart's container left out.
+    """
+    run_id, _ = seeded_home_run
+    page.goto(live_server + f"/results/home/{run_id}")
+    expect(page.locator(f"#{_ID_NO_ELEMENT_CARRIES}")).to_have_count(0)
+
+    _render_chart(page, _ID_NO_ELEMENT_CARRIES, empty_figure)
+
+    assert _errors_naming(page_errors, _ID_NO_ELEMENT_CARRIES) == [], (
+        f"renderChart({_ID_NO_ELEMENT_CARRIES!r}, {empty_figure!r}) has nothing to draw, but the page logged: {page_errors}"
+    )
 
 
 # -- Download CSV returns 200 ----------------------------------------------
