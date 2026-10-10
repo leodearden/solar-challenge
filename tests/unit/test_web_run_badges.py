@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Guards the one home of the run badges: components/macros.html draws each run status and
-run type in that value's colours, and every page draws its badges through those macros.
+run type in that value's colours, gives every status and type a run can be stored with
+colours of its own, and every page draws its badges through those macros.
 
 A bound badge takes its colours only once Alpine evaluates it, so tests/e2e checks that
 each one, in a browser, carries the classes the server-drawn badge has for the same value.
@@ -17,7 +18,7 @@ from flask import Flask
 
 from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.home import calculate_summary
-from solar_challenge.web.database import RUN_STATUSES, RunStatus
+from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, RunType
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, texts
@@ -101,6 +102,16 @@ def test_a_run_status_badge_shows_the_status_in_its_colours(
     assert _classes(badge) == _BADGE | colours
 
 
+@pytest.mark.parametrize("status", RUN_STATUSES)
+def test_each_status_a_run_is_stored_with_has_colours_of_its_own(
+    macros: Any, status: RunStatus
+) -> None:
+    assert _classes(macros.run_status_badge(status)) != _BADGE | _NEUTRAL, (
+        f"run status {status!r} is drawn neutral; give it colours in"
+        " components/macros.html's _run_status_badge_classes"
+    )
+
+
 @pytest.mark.parametrize(
     ("run_type", "colours"),
     [
@@ -117,6 +128,16 @@ def test_a_run_type_badge_shows_the_type_in_its_colours(
 
     assert texts(str(badge)) == [run_type]
     assert _classes(badge) == _BADGE | colours
+
+
+@pytest.mark.parametrize("run_type", RUN_TYPES)
+def test_each_type_a_run_is_stored_with_has_colours_of_its_own(
+    macros: Any, run_type: RunType
+) -> None:
+    assert _classes(macros.run_type_badge(run_type)) != _BADGE | _NEUTRAL, (
+        f"run type {run_type!r} is drawn neutral; give it colours in"
+        " components/macros.html's _run_type_badge_classes"
+    )
 
 
 def test_the_dashboard_draws_each_recent_runs_status_with_run_status_badge(
