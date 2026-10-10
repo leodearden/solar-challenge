@@ -6,7 +6,6 @@ results page agree. A chart that colours by flow draws each flow in its own pale
 
 import dataclasses
 import json
-import re
 from collections.abc import Callable
 from typing import Any
 
@@ -18,6 +17,7 @@ from solar_challenge.home import SimulationResults, SummaryStatistics, calculate
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE
 from tests._finance_builders import make_fleet_results_of, make_sim_results
+from tests._plotly_figure import opaque, sankey_link_colours, sankey_node_colours
 
 # Each flow's label and palette role, in the order every chart draws the flows.
 _FLOW_ROLES = {
@@ -126,32 +126,20 @@ def test_a_chart_coloured_otherwise_names_each_flow_by_its_label(
     assert names() == expected
 
 
-def _sankey() -> dict[str, Any]:
-    """The Sankey trace of a day on which PV and the grid both charge the battery, so that every link is drawn."""
+def _sankey() -> str:
+    """The Sankey figure of a day on which PV and the grid both charge the battery, so that every link is drawn."""
     summary = dataclasses.replace(
         calculate_summary(make_sim_results(discharge_kwh=2.0, days=1)),
         total_battery_charge_kwh=5.0,
         total_grid_charge_kwh=2.0,
     )
-    (sankey,) = _traces(charts.sankey_diagram(summary))
-    return sankey
-
-
-_RGBA = re.compile(r"rgba\((?P<red>\d+),(?P<green>\d+),(?P<blue>\d+),[\d.]+\)")
-
-
-def _opaque(colour: str) -> str:
-    """The #rrggbb colour of which *colour*, written rgba(), is a translucent form."""
-    rgba = _RGBA.fullmatch(colour)
-    assert rgba is not None, f"{colour!r} is not written rgba()"
-    return "#" + "".join(f"{int(rgba[channel]):02x}" for channel in ("red", "green", "blue"))
+    return charts.sankey_diagram(summary)
 
 
 def test_the_sankey_draws_each_node_in_the_colour_of_the_flow_it_sends_or_receives_and_the_battery_in_its_own(
     flow_colours: dict[str, str],
 ) -> None:
-    node = _sankey()["node"]
-    assert dict(zip(node["label"], node["color"], strict=True)) == {
+    assert sankey_node_colours(_sankey()) == {
         "PV Generation": flow_colours["Generation"],
         "Grid": flow_colours["Grid Import"],
         "Battery": COLOUR_PALETTE["battery_charge"],
@@ -163,12 +151,7 @@ def test_the_sankey_draws_each_node_in_the_colour_of_the_flow_it_sends_or_receiv
 def test_the_sankey_draws_each_link_in_the_colour_of_the_flow_it_is_part_of_and_the_batterys_in_its_own(
     flow_colours: dict[str, str],
 ) -> None:
-    sankey = _sankey()
-    labels, link = sankey["node"]["label"], sankey["link"]
-    assert {
-        (labels[source], labels[target]): _opaque(colour)
-        for source, target, colour in zip(link["source"], link["target"], link["color"], strict=True)
-    } == {
+    assert {link: opaque(colour) for link, colour in sankey_link_colours(_sankey()).items()} == {
         ("PV Generation", "Demand"): flow_colours["Self-Consumption"],
         ("PV Generation", "Battery"): COLOUR_PALETTE["battery_charge"],
         ("PV Generation", "Export"): flow_colours["Grid Export"],
