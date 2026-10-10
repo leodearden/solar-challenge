@@ -23,8 +23,10 @@ from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scena
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
 from solar_challenge.web.database import get_db
+from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
     FLEET_FORM_REFUSALS,
+    ImportedFleetForm,
     fleet_form_from_yaml,
     parse_fleet_form,
     scenario_from_fleet_form,
@@ -418,13 +420,17 @@ def import_fleet_yaml() -> tuple[Response, int]:
     Accepts the raw YAML text as the request body (Content-Type: text/yaml).
 
     Returns:
-        The answer of :func:`_imported_fleet_form_answer`; or the ``error``, HTTP 400,
-        for an empty body.
+        The answer of :func:`_loaded_fleet_form_answer`; or the ``error``, HTTP 400, for an
+        empty body, YAML that does not parse, or a scenario the fleet page cannot load.
     """
     yaml_text = request.get_data(as_text=True)
     if not yaml_text:
         return jsonify({"error": "Empty request body"}), 400
-    return _imported_fleet_form_answer(yaml_text)
+    try:
+        imported = fleet_form_from_yaml(yaml_text)
+    except FLEET_FORM_REFUSALS as exc:
+        return jsonify({"error": str(exc)}), 400
+    return _loaded_fleet_form_answer(imported)
 
 
 @api_bp.route("/fleet/presets/<name>", methods=["GET"])
@@ -432,29 +438,29 @@ def fleet_preset(name: str) -> tuple[Response, int]:
     """Load the built-in scenario file *name* as the fleet page's form.
 
     Returns:
-        The answer of :func:`_imported_fleet_form_answer` for the file's YAML; or the
-        ``error``, HTTP 404, when no built-in scenario file is named *name*.
+        The answer of :func:`_loaded_fleet_form_answer` for the preset's form; or the
+        ``error``: HTTP 400 for a built-in scenario file the fleet form cannot load, which
+        the Load Preset menu does not offer
+        (:func:`~solar_challenge.web.fleet_presets.fleet_preset_names`); HTTP 404 when no
+        built-in scenario file is named *name*.
     """
-    path = builtin_scenario_files().get(name)
-    if path is None:
+    try:
+        imported = fleet_preset_form(name)
+    except FLEET_FORM_REFUSALS as exc:
+        return jsonify({"error": str(exc)}), 400
+    if imported is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
-    return _imported_fleet_form_answer(path.read_text(encoding="utf-8"))
+    return _loaded_fleet_form_answer(imported)
 
 
-def _imported_fleet_form_answer(yaml_text: str) -> tuple[Response, int]:
-    """The fleet page's answer for the fleet scenario *yaml_text* holds.
+def _loaded_fleet_form_answer(imported: ImportedFleetForm) -> tuple[Response, int]:
+    """The fleet page's answer for the fleet form *imported* from a scenario.
 
     Returns:
         JSON ``{"form", "not_loaded"}``, HTTP 200: the form is the body the fleet page
         posts, and not_loaded the paths of the scenario's settings it has no control for
-        (see :func:`~solar_challenge.web.fleet_scenario.fleet_form_from_yaml`).  Or the
-        ``error``, HTTP 400, for YAML that does not parse, or a scenario the fleet page
-        cannot load.
+        (see :func:`~solar_challenge.web.fleet_scenario.fleet_form_from_scenario`).
     """
-    try:
-        imported = fleet_form_from_yaml(yaml_text)
-    except FLEET_FORM_REFUSALS as exc:
-        return jsonify({"error": str(exc)}), 400
     return jsonify({"form": dict(imported.form), "not_loaded": list(imported.not_loaded)}), 200
 
 # ---------------------------------------------------------------------------

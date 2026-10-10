@@ -12,7 +12,7 @@ from flask import (
 )
 
 from solar_challenge.seg import SEG_PRESETS
-from solar_challenge.web.builtin_scenarios import builtin_scenario_files
+from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunStorage
 
@@ -160,10 +160,10 @@ def home_results(run_id: str) -> Any:
 
 @bp.route("/simulate/fleet", methods=["GET"])
 def simulate_fleet_page() -> str:
-    """Render the fleet simulation configuration page."""
+    """Render the fleet simulation configuration page, its Load Preset menu offering the presets its form loads."""
     return str(render_template(
         "simulate/fleet.html",
-        presets=tuple(builtin_scenario_files()),
+        presets=fleet_preset_names(),
         page="simulate-fleet",
         seg_presets=SEG_PRESETS,
     ))
