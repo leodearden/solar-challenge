@@ -915,6 +915,24 @@ def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module
     assert named_classes(f) == {fractions.Fraction}
 
 
+def test_a_forward_reference_a_new_type_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ratingnewtype = _imported(
+        tmp_path,
+        monkeypatch,
+        "ratingnewtype",
+        "from fractions import Fraction\n"
+        "from typing import NewType\n"
+        "\n"
+        "Ratio = NewType('Ratio', 'Fraction')\n",
+    )
+
+    def f(ratio: ratingnewtype.Ratio) -> None: ...
+
+    assert named_classes(f) == {fractions.Fraction}
+
+
 def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class_there(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
