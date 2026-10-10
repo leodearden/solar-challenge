@@ -5,6 +5,8 @@ Tests cover:
 - C4 regression: heat_pump_load survives home and fleet roundtrips
 - grid_charge_cost survives home and fleet roundtrips, and a run saved without it
   reloads it as None
+- total_grid_charge_kwh survives a home roundtrip, and a summary saved without it
+  loads it as 0.0
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
 - Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
@@ -387,6 +389,40 @@ class TestGridChargeCostRoundtrip:
         assert loaded_results.grid_charge_cost is None
 
 
+class TestGridChargeKwhRoundtrip:
+    """A home run's summary keeps total_grid_charge_kwh when reloaded, and a summary
+    saved before the field existed loads it as 0.0."""
+
+    def test_home_run_reloads_total_grid_charge_kwh(self, storage: RunStorage) -> None:
+        storage.save_home_run(
+            run_id="grid-charge-kwh-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=dataclasses.replace(_make_summary(), total_grid_charge_kwh=2.5),
+        )
+
+        _, _, loaded_summary = storage.load_home_run("grid-charge-kwh-001")
+
+        assert loaded_summary.total_grid_charge_kwh == 2.5
+
+    def test_summary_saved_without_total_grid_charge_kwh_loads_zero(self, storage: RunStorage) -> None:
+        """Every summary.json written before total_grid_charge_kwh existed lacks its key."""
+        storage.save_home_run(
+            run_id="no-grid-charge-kwh-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=dataclasses.replace(_make_summary(), total_grid_charge_kwh=2.5),
+        )
+        summary_path = stored_run_dir(storage, "no-grid-charge-kwh-001") / "summary.json"
+        stored = _read_json(summary_path)
+        del stored["total_grid_charge_kwh"]
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        _, _, loaded_summary = storage.load_home_run("no-grid-charge-kwh-001")
+
+        assert loaded_summary.total_grid_charge_kwh == 0.0
+
+
 class TestCompletedAtTimestamp:
     """completed_at should be a real timestamp, distinct from created_at."""
 
@@ -737,6 +773,7 @@ class TestStoredParquetColumns:
             "tariff_rate": "tariff_rate_per_kwh",
             "heat_pump_load": "heat_pump_load_kw",
             "grid_charge_cost": "grid_charge_cost_gbp",
+            "grid_charge": "grid_charge_kw",
         }
         storage.save_home_run(
             run_id="columns-home-001",

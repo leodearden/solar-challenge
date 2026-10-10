@@ -67,6 +67,7 @@ def _run_with_distinct_rising_series(
         tariff_rate=series(0.3),
         heat_pump_load=series(1.2) if with_optional_series else None,
         grid_charge_cost=series(0.0005) if with_optional_series else None,
+        grid_charge=series(0.4) if with_optional_series else None,
     )
 
 
@@ -358,7 +359,7 @@ class TestPeriodTotalsAndPeaks:
             "peak_demand_kw",
         ]
         if with_optional_series:
-            expected += ["heat_pump_load_kwh", "grid_charge_cost_gbp"]
+            expected += ["heat_pump_load_kwh", "grid_charge_cost_gbp", "grid_charge_kwh"]
         assert sorted(frame.columns) == sorted(expected)
 
     def test_totals_over_all_periods_equal_the_run_summary(self, aggregate):
@@ -379,6 +380,7 @@ class TestPeriodTotalsAndPeaks:
             "import_cost_gbp": summary.total_import_cost_gbp,
             "export_revenue_gbp": summary.total_export_revenue_gbp,
             "grid_charge_cost_gbp": summary.total_grid_charge_cost_gbp,
+            "grid_charge_kwh": summary.total_grid_charge_kwh,
         }
 
         frame = aggregate(results)

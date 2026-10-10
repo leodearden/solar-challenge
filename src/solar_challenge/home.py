@@ -118,6 +118,8 @@ class SimulationResults:
         tariff_rate: Tariff rate in £/kWh
         strategy_name: Name of the dispatch strategy used
         heat_pump_load: Optional heat pump electrical load in kW (None if no heat pump)
+        grid_charge: Optional power stored in the battery from the grid in kW, a part of
+            both battery_charge and grid_import (None when tariff_config is None)
     """
 
     generation: pd.Series = field(metadata=_power("generation_kw", "generation_kwh"))
@@ -136,6 +138,7 @@ class SimulationResults:
     # Per-timestep slice of import_cost spent charging the battery from the grid, in £
     # (None when tariff_config is None).
     grid_charge_cost: Optional[pd.Series] = field(default=None, metadata=_money("grid_charge_cost_gbp"))
+    grid_charge: Optional[pd.Series] = field(default=None, metadata=_power("grid_charge_kw", "grid_charge_kwh"))
 
     def __post_init__(self) -> None:
         """Name each set series after its column, without renaming the series it was built from."""
@@ -239,6 +242,21 @@ class SummaryStatistics:
     # Slice of total_import_cost_gbp spent charging the battery from the grid: householder
     # import, informational, in no CBS equation (docs/cost-recovery-finance-model.md §4).
     total_grid_charge_cost_gbp: float = 0.0
+    # Energy the battery stored from the grid: a part of both total_battery_charge_kwh and
+    # total_grid_import_kwh.
+    total_grid_charge_kwh: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import."""
+        grid_charge = self.total_grid_charge_kwh
+        if not (0.0 <= grid_charge <= self.total_battery_charge_kwh and grid_charge <= self.total_grid_import_kwh):
+            raise ValueError(
+                "SummaryStatistics' total_grid_charge_kwh is a part of both total_battery_charge_kwh and "
+                "total_grid_import_kwh, so it is at least 0 and at most each: "
+                f"got total_grid_charge_kwh={grid_charge!r}, "
+                f"total_battery_charge_kwh={self.total_battery_charge_kwh!r}, "
+                f"total_grid_import_kwh={self.total_grid_import_kwh!r}"
+            )
 
 
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
@@ -403,15 +421,19 @@ def simulate_home(
 
     minute_kwh_to_kw = 1 / HOURS_PER_MINUTE
 
-    # Calculate tariff costs if tariff is configured
+    # Calculate tariff costs if tariff is configured; only a tariffed run has grid-charge series
+    grid_charge_series: Optional[pd.Series] = None
+    grid_charge_cost_series: Optional[pd.Series] = None
     if config.tariff_config is not None:
         tariff_rates = [config.tariff_config.get_rate(ts) for ts in index]
         import_costs = [r.grid_import * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
-        grid_charge_costs: list[float] = [r.grid_charge * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
+        grid_charge_series = pd.Series([r.grid_charge * minute_kwh_to_kw for r in results_list], index=index)
+        grid_charge_cost_series = pd.Series(
+            [r.grid_charge * rate for r, rate in zip(results_list, tariff_rates, strict=True)], index=index
+        )
     else:
         tariff_rates = [0.0 for _ in results_list]
         import_costs = [0.0 for _ in results_list]
-        grid_charge_costs = [0.0 for _ in results_list]
 
     # Calculate export revenue.
     # Grid export is valued at the export/SEG rate, never the import tariff rate.
@@ -445,7 +467,8 @@ def simulate_home(
         export_revenue=pd.Series(export_revenues, index=index),
         tariff_rate=pd.Series(tariff_rates, index=index),
         heat_pump_load=heat_pump_load_series,
-        grid_charge_cost=pd.Series(grid_charge_costs, index=index) if config.tariff_config is not None else None,
+        grid_charge_cost=grid_charge_cost_series,
+        grid_charge=grid_charge_series,
     )
 
 
@@ -527,6 +550,7 @@ def calculate_summary(
 
     # Grid-charge cost: the slice of total_import_cost spent charging the battery from the grid
     total_grid_charge_cost = totals["grid_charge_cost_gbp"] if results.grid_charge_cost is not None else 0.0
+    total_grid_charge = totals["grid_charge_kwh"] if results.grid_charge is not None else 0.0
 
     # Calculate heat pump metrics if heat pump load is present
     total_heat_pump_kwh: Optional[float] = None
@@ -560,4 +584,5 @@ def calculate_summary(
         peak_heat_pump_load_kw=peak_heat_pump_kw,
         heat_pump_load_ratio=heat_pump_ratio,
         total_grid_charge_cost_gbp=total_grid_charge_cost,
+        total_grid_charge_kwh=total_grid_charge,
     )

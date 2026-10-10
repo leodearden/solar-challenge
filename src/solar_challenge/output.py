@@ -343,8 +343,9 @@ def aggregate_daily(results: SimulationResults) -> pd.DataFrame:
     Returns:
         DataFrame with a daily DatetimeIndex holding each day's energy totals in
         kWh, money totals in £ (sums of the per-minute £ amounts) and peak
-        generation and demand in kW. ``heat_pump_load_kwh`` and
-        ``grid_charge_cost_gbp`` appear only when the run has those series.
+        generation and demand in kW. ``heat_pump_load_kwh``,
+        ``grid_charge_cost_gbp`` and ``grid_charge_kwh`` appear only when the
+        run has those series.
     """
     return _aggregate_by_period(results, "D")
 

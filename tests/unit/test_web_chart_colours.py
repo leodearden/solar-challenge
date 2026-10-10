@@ -186,6 +186,7 @@ _SUMMARY = SummaryStatistics(
     total_import_cost_gbp=0.0,
     total_export_revenue_gbp=0.0,
     net_cost_gbp=0.0,
+    total_grid_charge_kwh=4.0,
 )
 _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
 
