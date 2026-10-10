@@ -17,6 +17,7 @@ from flask.testing import FlaskClient
 from solar_challenge.seg import SEG_PRESETS
 from tests._html_page import (
     counts_of,
+    current_page_links,
     doctype,
     element_attributes,
     element_count,
@@ -198,14 +199,11 @@ class TestFleetConfigRoute:
         assert element_count(page, "button", {"@click": "exportYaml()"}) == 1
         assert element_count(page, "button", {"@click": "submitFleet()"}) == 1
 
-    def test_fleet_page_has_correct_page_identifier(self, client: FlaskClient) -> None:
-        """GET /simulate/fleet renders the sidebar with the simulate-fleet page identifier, so the Simulate group's links show on this page."""
+    def test_fleet_page_marks_the_fleet_link_current_in_both_sidebars(self, client: FlaskClient) -> None:
+        """GET /simulate/fleet marks the Fleet link, and no other link, as the current page in each of its two sidebars, desktop and mobile."""
         response = client.get("/simulate/fleet")
         page = response.get_data(as_text=True)
-        simulate_links_condition = (
-            "(openGroup === 'simulate' || 'simulate-fleet'.startsWith('simulate')) && sidebarOpen"
-        )
-        assert element_count(page, "div", {"x-show": simulate_links_condition}) == 1
+        assert current_page_links(page) == ["/simulate/fleet", "/simulate/fleet"]
 
 
 class TestFleetFormRender:

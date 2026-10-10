@@ -1,10 +1,14 @@
 {#
     nav-sidebar.html — Sidebar navigation partial.
 
-    Uses Alpine.js for collapsible groups and active page highlighting.
+    The server marks the current page's link, with aria-current="page" and
+    its highlight, in both sidebars, desktop and mobile. Alpine.js opens and
+    closes the groups; on desktop, the group holding the current page is
+    always shown open while the sidebar is expanded.
     Expected variables:
-        page  str — current page identifier for active highlighting
-              (e.g. 'dashboard', 'simulate-home', 'simulate-fleet', etc.)
+        page  str — the current page's identifier (e.g. 'dashboard',
+              'simulate-home', 'simulate-fleet'); the nav item whose
+              "page" equals it is that page's link.
     The sidebar state (expanded/collapsed) is controlled by the parent
     Alpine.js x-data on the layout wrapper in base.html.
 #}
@@ -24,7 +28,6 @@
         "id": "simulate",
         "label": "Simulate",
         "icon": "simulate",
-        "page_prefix": "simulate",
         "children": [
             {"label": "Single Home", "url": url_for('main.simulate_home_page'), "page": "simulate-home"},
             {"label": "Fleet", "url": url_for('main.simulate_fleet_page'), "page": "simulate-fleet"}
@@ -34,7 +37,6 @@
         "id": "scenarios",
         "label": "Scenarios",
         "icon": "scenarios",
-        "page_prefix": "scenario",
         "children": [
             {"label": "Builder", "url": url_for('scenarios.builder'), "page": "scenarios-builder"},
             {"label": "Sweeps", "url": url_for('scenarios.sweep'), "page": "scenarios-sweep"}
@@ -44,7 +46,6 @@
         "id": "history",
         "label": "History",
         "icon": "history",
-        "page_prefix": "history",
         "children": [
             {"label": "Runs", "url": url_for('history.runs_page'), "page": "history-runs"},
             {"label": "Compare", "url": url_for('history.compare_page'), "page": "history-compare"}
@@ -69,35 +70,43 @@
 {% endif %}
 {% endmacro %}
 
+{# ── Helper: a nav entry's link, marked if it is the current page's ── #}
+{% macro nav_link(entry, classes, inactive_class) %}
+{% set is_current_page = entry.page == page %}
+<a
+    href="{{ entry.url }}"
+    class="flex items-center gap-3 rounded-lg transition-colors {{ classes }} {% if is_current_page %}bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400{% else %}{{ inactive_class }}{% endif %}"
+    {% if is_current_page %}aria-current="page"{% endif %}
+>{{ caller() }}</a>
+{% endmacro %}
+
 {# ── Shared macro: render all nav links ────────────────────────────── #}
 {% macro render_nav_links(items, is_mobile) %}
 {% for item in items %}
     {% if item.children is not defined %}
         {# ── Simple top-level link (e.g. Dashboard) ── #}
-        <a
-            href="{{ item.url }}"
-            class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors"
-            :class="{
-                'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400': '{{ page }}' === '{{ item.page }}',
-                'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700': '{{ page }}' !== '{{ item.page }}'
-            }"
-        >
+        {% call nav_link(
+            item,
+            classes="px-3 py-2.5 mb-1",
+            inactive_class="text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+        ) %}
             {{ nav_icon(item.icon, is_mobile) }}
             {% if is_mobile %}
             <span>{{ item.label }}</span>
             {% else %}
             <span class="whitespace-nowrap transition-opacity duration-200" :class="sidebarOpen ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'">{{ item.label }}</span>
             {% endif %}
-        </a>
+        {% endcall %}
     {% else %}
         {# ── Expandable group (e.g. Simulate, Scenarios, History) ── #}
+        {% set holds_current_page = page in item.children | map(attribute="page") | list %}
         <div class="mb-1">
             <button
                 @click="openGroup = openGroup === '{{ item.id }}' ? '' : '{{ item.id }}'"
                 class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
                 {% if not is_mobile %}
                 :class="{
-                    'bg-slate-100 dark:bg-slate-700': openGroup === '{{ item.id }}' || '{{ page }}'.startsWith('{{ item.page_prefix }}')
+                    'bg-slate-100 dark:bg-slate-700': openGroup === '{{ item.id }}' || {{ holds_current_page | tojson }}
                 }"
                 {% endif %}
             >
@@ -125,24 +134,14 @@
             {% if is_mobile %}
             <div x-show="openGroup === '{{ item.id }}'" x-cloak x-collapse>
             {% else %}
-            <div x-show="(openGroup === '{{ item.id }}' || '{{ page }}'.startsWith('{{ item.page_prefix }}')) && sidebarOpen" x-cloak x-collapse>
+            <div x-show="(openGroup === '{{ item.id }}' || {{ holds_current_page | tojson }}) && sidebarOpen" x-cloak x-collapse>
             {% endif %}
                 {% for child in item.children %}
-                {% if is_mobile %}
-                <a
-                    href="{{ child.url }}"
-                    class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700"
-                >{{ child.label }}</a>
-                {% else %}
-                <a
-                    href="{{ child.url }}"
-                    class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm transition-colors"
-                    :class="{
-                        'text-primary-700 bg-primary-50 dark:text-primary-400 dark:bg-primary-900/30': '{{ page }}' === '{{ child.page }}',
-                        'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700': '{{ page }}' !== '{{ child.page }}'
-                    }"
-                >{{ child.label }}</a>
-                {% endif %}
+                {% call nav_link(
+                    child,
+                    classes="pl-11 pr-3 py-2 text-sm",
+                    inactive_class="text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700"
+                ) %}{{ child.label }}{% endcall %}
                 {% endfor %}
             </div>
         </div>
