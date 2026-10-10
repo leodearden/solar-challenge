@@ -92,17 +92,19 @@ def named_classes(obj: object) -> set[type]:
 
     Only annotations name classes, never a default value. A generic names its origin and
     its arguments' classes, a bare alias its origin, a union its members' alone, an
-    InitVar its type's alone, and Literal's values, Annotated's metadata, a type
-    variable, a NewType, a special form such as Self and a ParamSpec's args and kwargs
-    none. None, given as None or as type(None), names no class either. A string
-    annotation or a forward reference names the class its name is bound to in the
-    module that spells it, read as a type checker reads it: its globals, with the
-    imports of its top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in
-    neither raises NameError.
+    InitVar its type's alone, a type variable those of the constraints, bound and
+    default it declares, and Literal's values, Annotated's metadata, a NewType, a
+    special form such as Self and a ParamSpec's args and kwargs none. None, given as
+    None or as type(None), names no class either. A string annotation or a forward
+    reference names the class its name is bound to in the module that spells it, read as
+    a type checker reads it: its globals, with the imports of its top-level
+    `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises
+    NameError.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
-    another module. A constant names its type, and an Enum's members name nothing.
+    another module. What a type variable carries is spelled in the module that declares
+    it. A constant names its type, and an Enum's members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -251,6 +253,37 @@ class _ParameterTypes(_Construct):
         return _classes_of(self.members, module)
 
 
+@dataclasses.dataclass(frozen=True)
+class _Declared(_Construct):
+    """A type variable or a NewType: spelled by its name, then in parentheses the annotations its declaration passes, if any; naming their classes alone, a name in them resolved in the module that declares it."""
+
+    name: str
+    module: str
+    arguments: tuple[_Construct, ...]
+
+    def text(self) -> str:
+        if not self.arguments:
+            return self.name
+        return f"{self.name}({_texts_of(self.arguments)})"
+
+    def classes(self, module: str) -> set[type]:
+        return _classes_of(self.arguments, self.module)
+
+
+@dataclasses.dataclass(frozen=True)
+class _Keyword(_Construct):
+    """An annotation a declaration passes by keyword: spelled keyword=annotation, naming its classes."""
+
+    keyword: str
+    annotation: _Construct
+
+    def text(self) -> str:
+        return f"{self.keyword}={self.annotation.text()}"
+
+    def classes(self, module: str) -> set[type]:
+        return self.annotation.classes(module)
+
+
 def _texts_of(constructs: Iterable[_Construct]) -> str:
     return ", ".join(construct.text() for construct in constructs)
 
@@ -260,13 +293,16 @@ def _classes_of(constructs: Iterable[_Construct], module: str) -> set[type]:
 
 
 _CLASSLESS_NAME_KINDS: tuple[type, ...] = (
-    typing.TypeVar,
-    typing.ParamSpec,
-    typing.TypeVarTuple,
     typing.ParamSpecArgs,
     typing.ParamSpecKwargs,
     typing.NewType,
     typing._SpecialForm,
+)
+
+_TYPE_VARIABLE_KINDS: tuple[type, ...] = (
+    typing.TypeVar,
+    typing.ParamSpec,
+    typing.TypeVarTuple,
 )
 
 
@@ -286,6 +322,8 @@ def _parsed(annotation: object) -> _Construct:
         return _Subscripted(_Leaf("InitVar"), (_parsed(annotation.type),))
     if _is_bare_alias(annotation):
         return _parsed(typing.get_origin(annotation))
+    if isinstance(annotation, _TYPE_VARIABLE_KINDS):
+        return _parsed_type_variable(annotation)
     if isinstance(annotation, _CLASSLESS_NAME_KINDS):
         return _Leaf(repr(annotation))
     if typing.get_origin(annotation) is not None:
@@ -307,6 +345,19 @@ def _is_bare_alias(annotation: object) -> bool:
     """
     has_class_origin = inspect.isclass(typing.get_origin(annotation))
     return has_class_origin and not hasattr(annotation, "__args__")
+
+
+def _parsed_type_variable(
+    variable: typing.TypeVar | typing.ParamSpec | typing.TypeVarTuple,
+) -> _Declared:
+    """*variable* as its declaration passes it: its repr, then its constraints, then its bound and its default by keyword, each only if declared."""
+    arguments = list(_each_parsed(getattr(variable, "__constraints__", ())))
+    bound = getattr(variable, "__bound__", None)
+    if bound is not None and bound is not type(None):
+        arguments.append(_Keyword("bound", _parsed(bound)))
+    if getattr(variable, "has_default", lambda: False)():
+        arguments.append(_Keyword("default", _parsed(variable.__default__)))
+    return _Declared(repr(variable), variable.__module__, tuple(arguments))
 
 
 def _parsed_subscription(annotation: object) -> _Construct:
