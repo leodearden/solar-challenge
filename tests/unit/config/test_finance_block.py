@@ -611,8 +611,8 @@ class TestFinanceConfigParsing:
     def test_a_number_too_large_for_a_float_is_refused_as_a_configuration_error(
         self, key: str
     ) -> None:
-        """An integer too large for a float, as YAML can hold, is refused as a ConfigurationError, not a raw OverflowError."""
-        with pytest.raises(ConfigurationError, match="non-numeric"):
+        """An integer too large for a float, as YAML can hold, is refused as a ConfigurationError carrying the overflow, not as a raw OverflowError."""
+        with pytest.raises(ConfigurationError, match="int too large to convert to float"):
             parse_finance_config(
                 {"standing_charge_pence_per_day": 60.0, key: _TOO_LARGE_FOR_A_FLOAT}
             )
@@ -1101,25 +1101,35 @@ class TestFinanceConfigParsingGridServices:
     def test_an_events_value_too_large_for_a_float_is_refused_as_a_configuration_error(
         self, key: str
     ) -> None:
-        """An events value too large for a float is refused as a ConfigurationError, not a raw OverflowError."""
-        with pytest.raises(ConfigurationError, match="non-numeric"):
+        """An events value too large for a float is refused as a ConfigurationError carrying the overflow, not as a raw OverflowError."""
+        with pytest.raises(ConfigurationError, match="int too large to convert to float"):
             self._parse_events_block({**self._EVENTS_BLOCK, key: _TOO_LARGE_FOR_A_FLOAT})
 
     @pytest.mark.parametrize(
-        "window_values",
+        ("window_values", "overflow"),
         [
             pytest.param(
-                {"event_hours": _TOO_LARGE_FOR_A_FLOAT}, id="event_hours-too-large-for-a-float"
+                {"event_hours": _TOO_LARGE_FOR_A_FLOAT},
+                "int too large to convert to float",
+                id="event_hours-too-large-for-a-float",
             ),
-            pytest.param({"events_per_year": math.inf}, id="infinite-events_per_year"),
-            pytest.param({"hours": [math.inf]}, id="infinite-hour"),
+            pytest.param(
+                {"events_per_year": math.inf},
+                "cannot convert float infinity to integer",
+                id="infinite-events_per_year",
+            ),
+            pytest.param(
+                {"hours": [math.inf]},
+                "cannot convert float infinity to integer",
+                id="infinite-hour",
+            ),
         ],
     )
     def test_an_event_window_number_too_large_for_its_type_is_refused_as_a_configuration_error(
-        self, window_values: dict[str, object]
+        self, window_values: dict[str, object], overflow: str
     ) -> None:
-        """An event-window number too large for its type is refused as a ConfigurationError, not a raw OverflowError."""
-        with pytest.raises(ConfigurationError, match="non-numeric"):
+        """An event-window number too large for its type is refused as a ConfigurationError carrying the overflow, not as a raw OverflowError."""
+        with pytest.raises(ConfigurationError, match=overflow):
             self._parse_events_block(
                 {**self._EVENTS_BLOCK, "event_windows": [{**self._WINDOW, **window_values}]}
             )
