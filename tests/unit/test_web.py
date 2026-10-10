@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 pytest.importorskip("flask")
-from flask import Flask
+from flask import Flask, render_template
 from flask.testing import FlaskClient
 
 from solar_challenge.config import ConfigurationError, parse_fleet_distribution_config
@@ -278,6 +278,14 @@ class TestSidebarCurrentPage:
         response = client.get(url)
         assert response.status_code == 200
         assert current_page_links(response.get_data(as_text=True)) == [url, url]
+
+    def test_the_layout_marks_the_link_of_the_endpoint_the_request_is_routed_to_with_nothing_from_the_view(
+        self, app: Flask
+    ) -> None:
+        """base.html, rendered with no context for a request routed to the fleet page, marks the Fleet link in both sidebars: the sidebar takes the current page from the request, needing no identifier from the view that renders it."""
+        with app.test_request_context("/simulate/fleet"):
+            page = render_template("base.html")
+        assert current_page_links(page) == ["/simulate/fleet", "/simulate/fleet"]
 
     def test_the_404_page_marks_no_link_current(self, client: FlaskClient) -> None:
         """GET of a URL no page is routed to answers the 404 page, which marks no sidebar link as the current page."""
