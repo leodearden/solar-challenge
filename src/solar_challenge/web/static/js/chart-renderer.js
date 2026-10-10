@@ -125,7 +125,7 @@ function renderChart(elementId, jsonStr) {
 
         _doRender(elementId, fig);
     } catch (e) {
-        console.error('Failed to render chart ' + elementId, e);
+        console.error('renderChart: failed to draw the figure for id "' + elementId + '"', e);
     }
 }
 
