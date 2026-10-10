@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings and script texts.
+"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings, script texts and renderChart targets.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a page test that uses it pass vacuously.
 """
+
+import re
 
 import pytest
 
@@ -14,6 +16,7 @@ from tests._html_page import (
     element_count,
     element_ids,
     headings,
+    render_chart_targets,
     script_texts,
     texts,
     texts_after,
@@ -329,3 +332,113 @@ def test_style_text_is_not_a_script_text() -> None:
     page = "<script>draw();</script><style>.chart { min-height: 400px; }</style>"
 
     assert script_texts(page) == ["draw();"]
+
+
+def test_render_chart_targets_lists_the_id_each_call_draws_into_in_document_order() -> (
+    None
+):
+    page = (
+        "<script>renderChart('chart-sankey', figure);\n"
+        '    renderChart ( "chart-daily-balance" , figure);</script>'
+        "<p>Overview</p>"
+        "<script>renderChart(\n        'chart-sankey', other);</script>"
+    )
+
+    assert render_chart_targets(page) == [
+        "chart-sankey",
+        "chart-daily-balance",
+        "chart-sankey",
+    ]
+
+
+def test_a_render_chart_call_outside_a_script_does_not_count() -> None:
+    page = (
+        "<p>renderChart('chart-sankey', figure)</p>"
+        "<button onclick=\"renderChart('chart-financial', figure)\">Draw</button>"
+    )
+
+    assert render_chart_targets(page) == []
+
+
+@pytest.mark.parametrize(
+    "commented_call",
+    [
+        pytest.param("// renderChart('chart-monthly', figure);\n", id="line-comment"),
+        pytest.param(
+            "/* renderChart('chart-monthly',\n    figure); */", id="block-comment"
+        ),
+    ],
+)
+def test_a_render_chart_call_in_a_comment_does_not_count(commented_call: str) -> None:
+    page = f"<script>{commented_call} renderChart('chart-financial', figure);</script>"
+
+    assert render_chart_targets(page) == ["chart-financial"]
+
+
+def test_a_render_chart_call_in_a_string_does_not_count() -> None:
+    page = (
+        "<script>var note = \"renderChart('chart-monthly', figure)\";"
+        " renderChart('chart-financial', figure);</script>"
+    )
+
+    assert render_chart_targets(page) == ["chart-financial"]
+
+
+@pytest.mark.parametrize(
+    "figure",
+    [
+        pytest.param("'https://re.jrc.ec.europa.eu/api'", id="line-comment-marker"),
+        pytest.param("'/* figure'", id="block-comment-marker"),
+        pytest.param(
+            r'"{\"title\": \"PV // Grid\"}"', id="marker-after-an-escaped-quote"
+        ),
+    ],
+)
+def test_a_comment_marker_in_a_string_starts_no_comment(figure: str) -> None:
+    page = (
+        f"<script>renderChart('chart-sankey', {figure});"
+        " renderChart('chart-financial', '*/');</script>"
+    )
+
+    assert render_chart_targets(page) == ["chart-sankey", "chart-financial"]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param("_renderChart('chart-sankey', figure)", id="longer-name"),
+        pytest.param("renderCharts('chart-sankey', figure)", id="name-with-suffix"),
+        pytest.param("this.renderChart('chart-sankey', figure)", id="method"),
+    ],
+)
+def test_a_call_of_another_function_does_not_count(call: str) -> None:
+    page = f"<script>{call};</script>"
+
+    assert render_chart_targets(page) == []
+
+
+@pytest.mark.parametrize(
+    ("call", "named"),
+    [
+        pytest.param(
+            "renderChart(chartId, figure)", "renderChart(chartId", id="identifier"
+        ),
+        pytest.param(
+            "renderChart('chart-' + kind, figure)",
+            "renderChart('chart-' + kind",
+            id="expression",
+        ),
+        pytest.param(
+            "renderChart(`chart-sankey`, figure)",
+            "renderChart(`chart-sankey`",
+            id="template-literal",
+        ),
+    ],
+)
+def test_a_call_whose_first_argument_is_not_one_quoted_id_raises_naming_it(
+    call: str, named: str
+) -> None:
+    page = f"<script>{call};</script>"
+
+    with pytest.raises(ValueError, match=r"quoted id.*" + re.escape(named)):
+        render_chart_targets(page)
