@@ -11,12 +11,19 @@ _SUFFIXES = (".yaml", ".yml")
 
 
 def builtin_scenario_files() -> Mapping[str, Path]:
-    """Each built-in scenario file by its name, in name order: a name with both a .yaml and a .yml file means its .yaml file. Empty when the scenarios/ directory is absent, as in an installed package."""
-    if not _SCENARIOS_DIR.is_dir():
+    """Each built-in scenario file by its name: :func:`scenario_files_in` the scenarios/ directory, which an installed package does not have."""
+    return scenario_files_in(_SCENARIOS_DIR)
+
+
+def scenario_files_in(directory: Path) -> Mapping[str, Path]:
+    """Each scenario file in *directory* by its name, in name order: a name with both a .yaml and a .yml file means its .yaml file. Empty when *directory* is absent."""
+    if not directory.is_dir():
         return {}
-    files: dict[str, Path] = {}
-    for suffix in _SUFFIXES:
-        for path in _SCENARIOS_DIR.iterdir():
-            if path.suffix == suffix and path.is_file():
-                files.setdefault(path.stem, path)
-    return dict(sorted(files.items()))
+    files_by_name: dict[str, list[Path]] = {}
+    for path in directory.iterdir():
+        if path.suffix in _SUFFIXES and path.is_file():
+            files_by_name.setdefault(path.stem, []).append(path)
+    return {
+        name: min(files, key=lambda path: _SUFFIXES.index(path.suffix))
+        for name, files in sorted(files_by_name.items())
+    }
