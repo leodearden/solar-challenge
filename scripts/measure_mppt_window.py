@@ -145,31 +145,15 @@ class Pick:
         return max(modules for modules, _ in self.wiring)
 
 
-_ParamsKey = tuple[tuple[str, str], ...]
-
-
-def _params_key(params: Mapping[str, Any]) -> _ParamsKey:
-    return tuple(sorted((key, repr(value)) for key, value in params.items()))
-
-
 @functools.cache
 def _catalogue() -> pd.DataFrame:
     return pvlib.pvsystem.retrieve_sam("CECInverter")
 
 
-@functools.cache
-def _inverter_names() -> dict[_ParamsKey, str]:
-    """CEC inverter names by parameter set; identical sets keep the first name, as the ranking's tie-break does."""
-    return {
-        _params_key(_catalogue()[name].to_dict()): name
-        for name in sorted(_catalogue().columns, reverse=True)
-    }
-
-
 def _pick(chain: ModelChain) -> Pick:
     system = chain.system
     return Pick(
-        _inverter_names()[_params_key(system.inverter_parameters)],
+        system.inverter,
         tuple((array.modules_per_string, array.strings) for array in system.arrays),
     )
 
