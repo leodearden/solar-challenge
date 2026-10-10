@@ -587,6 +587,19 @@ class TestFleetFromDistribution:
             assert missing_distribution in null_block.get_json()["error"]
             assert submissions == []
 
+    def test_empty_battery_block_returns_400_carrying_the_grammars_refusal_naming_its_capacity(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it reaches config.py's grammar and is a 400 whose error is the grammar's refusal, naming battery.capacity_kwh; no fleet is queued."""
+        body = {**self._VALID_BODY, "battery": {}}
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(form_to_fleet_distribution_config(body))
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(grammar_refusal.value)}
+        assert "battery.capacity_kwh" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
     @pytest.mark.parametrize(
         "pv",
         [
