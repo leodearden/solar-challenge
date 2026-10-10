@@ -45,6 +45,20 @@ def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge
         raise ValueError(f"Max {direction} power must be positive and finite, got {kw} kW")
 
 
+def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> None:
+    """Refuse *capacity_kwh*, the value of the battery capacity setting named *setting*, in which 0 means no battery, unless it is >= 0 and finite."""
+    if not 0 <= capacity_kwh < math.inf:
+        raise ValueError(
+            f"{setting} must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
+        )
+
+
+def has_battery(capacity_kwh: float, setting: str) -> bool:
+    """Whether *capacity_kwh*, the battery capacity setting named *setting*, asks for a battery: a positive capacity does, and 0 is no battery. Refuses one that require_valid_capacity_setting refuses."""
+    require_valid_capacity_setting(capacity_kwh, setting)
+    return capacity_kwh > 0
+
+
 def compute_soh(
     system_age_years: float,
     cumulative_throughput_kwh: float,
