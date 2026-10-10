@@ -941,6 +941,64 @@ def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class
     assert named_classes(f) == {linking.Node, list, dict, str}
 
 
+def test_a_forward_reference_inside_its_own_evaluation_names_no_class_there(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    documents = _imported(
+        tmp_path,
+        monkeypatch,
+        "documents",
+        "from typing import Union\n"
+        "\n"
+        "JSON = Union[dict[str, 'JSON'], list['JSON'], str, None]\n"
+        "Tree = tuple[int, 'Forest']\n"
+        "Forest = list['Tree']\n"
+        "\n"
+        "def store(document: JSON) -> None: ...\n"
+        "\n"
+        "def send(document: 'JSON') -> None: ...\n"
+        "\n"
+        "def plant(tree: Tree) -> None: ...\n",
+    )
+
+    assert (
+        surface_form(documents.store)
+        == "(document: dict[str, JSON] | list[JSON] | str | None) -> None"
+    )
+    assert surface_form(documents.send) == "(document: JSON) -> None"
+    assert named_classes(documents.store) == {dict, str, list}
+    assert named_classes(documents.send) == {dict, str, list}
+    assert named_classes(documents.plant) == {tuple, int, list}
+
+
+def test_a_forward_reference_inside_its_own_evaluation_names_the_class_another_module_evaluating_it_binds_it_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _imported(
+        tmp_path,
+        monkeypatch,
+        "sharing",
+        "from fractions import Fraction as Ratio\n"
+        "from typing import NewType\n"
+        "\n"
+        "Share = NewType('Share', 'Ratio')\n",
+    )
+    pooling = _imported(
+        tmp_path,
+        monkeypatch,
+        "pooling",
+        "from typing import Union\n"
+        "\n"
+        "import sharing\n"
+        "\n"
+        "Ratio = Union[sharing.Share, list['Ratio']]\n"
+        "\n"
+        "def pool(ratio: 'Ratio') -> None: ...\n",
+    )
+
+    assert named_classes(pooling.pool) == {fractions.Fraction, list}
+
+
 @pytest.mark.skipif(
     sys.version_info < (3, 12), reason="type parameter syntax is new in Python 3.12"
 )
