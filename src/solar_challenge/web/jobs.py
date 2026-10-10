@@ -28,13 +28,16 @@ import pandas as pd
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.home import simulate_home as _default_simulate_home
-from solar_challenge.web.database import RunStatus, RunType, get_db
+from solar_challenge.web.database import DEFAULT_JOB_STATUS, JobStatus, RunStatus, RunType, get_db
 from solar_challenge.web.storage import RunStorage
 
 HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], SimulationResults]
 
+_RUNNING_JOB_STATUS: JobStatus = "running"
+_COMPLETED_JOB_STATUS: JobStatus = "completed"
+_FAILED_JOB_STATUS: JobStatus = "failed"
 _QUEUED_JOB_STATE: Mapping[str, str | float] = MappingProxyType(
-    {"status": "queued", "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
+    {"status": DEFAULT_JOB_STATUS, "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
 )
 _FINISHED_JOB_TTL_SECONDS = 3600.0
 _UNFINISHED_RUN_STATUS: RunStatus = "running"
@@ -429,7 +432,7 @@ class JobManager:
         step: str,
         message: str,
         db_path: str,
-        status: str = "running",
+        status: JobStatus = _RUNNING_JOB_STATUS,
         conn: Any = None,
     ) -> None:
         """Update job progress in memory and SQLite, and append an SSE event.
@@ -440,7 +443,7 @@ class JobManager:
             step: Current step description.
             message: Human-readable progress message.
             db_path: Path to the SQLite database file.
-            status: Job status string.
+            status: The job's status.
             conn: Optional existing SQLite connection. When provided, uses
                 it directly instead of opening a new connection.
         """
@@ -516,9 +519,9 @@ class JobManager:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         try:
-            self._update_progress(job_id, 5.0, "Starting", "Initializing...", db_path, "running", conn=conn)
-            conn.execute("UPDATE jobs SET status='running', started_at=? WHERE id=?",
-                         (datetime.now(timezone.utc).isoformat(), job_id))
+            self._update_progress(job_id, 5.0, "Starting", "Initializing...", db_path, _RUNNING_JOB_STATUS, conn=conn)
+            conn.execute("UPDATE jobs SET status=?, started_at=? WHERE id=?",
+                         (_RUNNING_JOB_STATUS, datetime.now(timezone.utc).isoformat(), job_id))
             conn.commit()
 
             def progress(pct: float, step: str, msg: str) -> None:
@@ -527,25 +530,25 @@ class JobManager:
             work_fn(conn, progress)
 
             now = datetime.now(timezone.utc).isoformat()
-            conn.execute("UPDATE jobs SET status='completed', progress_pct=100.0, "
+            conn.execute("UPDATE jobs SET status=?, progress_pct=100.0, "
                          "current_step='Done', message=?, completed_at=? WHERE id=?",
-                         (success_message, now, job_id))
+                         (_COMPLETED_JOB_STATUS, success_message, now, job_id))
             conn.commit()
             self._emit_event(job_id, "complete", {
-                "status": "completed", "progress_pct": 100.0,
+                "status": _COMPLETED_JOB_STATUS, "progress_pct": 100.0,
                 "current_step": "Done", "message": success_message, "run_id": run_id,
             })
         except Exception as exc:
             error_msg, now = str(exc), datetime.now(timezone.utc).isoformat()
             try:
-                conn.execute("UPDATE jobs SET status='failed', message=?, error_traceback=?, completed_at=? WHERE id=?",
-                             (error_msg, traceback.format_exc(), now, job_id))
+                conn.execute("UPDATE jobs SET status=?, message=?, error_traceback=?, completed_at=? WHERE id=?",
+                             (_FAILED_JOB_STATUS, error_msg, traceback.format_exc(), now, job_id))
                 conn.execute("UPDATE runs SET status=?, error_message=?, completed_at=? WHERE id=?",
                              (_FAILED_RUN_STATUS, error_msg, now, run_id))
                 conn.commit()
             except Exception:
                 pass
-            self._emit_event(job_id, "error", {"status": "failed", "message": error_msg})
+            self._emit_event(job_id, "error", {"status": _FAILED_JOB_STATUS, "message": error_msg})
         finally:
             conn.close()
 
@@ -688,12 +691,12 @@ def recover_stale_jobs(db_path: str | Path) -> int:
         cursor.execute(
             """
             UPDATE jobs SET
-                status = 'failed',
+                status = ?,
                 message = 'Interrupted by server restart',
                 completed_at = ?
-            WHERE status IN ('running', 'queued')
+            WHERE status IN (?, ?)
             """,
-            (now,),
+            (_FAILED_JOB_STATUS, now, _RUNNING_JOB_STATUS, DEFAULT_JOB_STATUS),
         )
         recovered_jobs = cursor.rowcount
         # Also mark corresponding runs as failed

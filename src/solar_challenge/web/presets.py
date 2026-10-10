@@ -16,11 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from solar_challenge.web.database import get_db
+from solar_challenge.web.database import PresetType, get_db
 
 logger = logging.getLogger(__name__)
 
-PresetType = Literal["home", "fleet"]
 PresetSource = Literal["builtin", "saved"]
 
 _BUILTIN_HOME_PRESETS: tuple[Mapping[str, Any], ...] = (

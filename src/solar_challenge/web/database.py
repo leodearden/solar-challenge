@@ -26,6 +26,16 @@ RunStatus = Literal["running", "completed", "failed"]  # the status of a run, he
 RUN_STATUSES: tuple[RunStatus, ...] = get_args(RunStatus)
 _DEFAULT_RUN_STATUS: RunStatus = "running"
 
+JobStatus = Literal["queued", "running", "completed", "failed"]  # the status of a background job, held by the jobs table's status column
+JOB_STATUSES: tuple[JobStatus, ...] = get_args(JobStatus)
+DEFAULT_JOB_STATUS: JobStatus = "queued"
+
+ChatRole = Literal["user", "assistant"]  # who wrote a chat message, held by the chat_messages table's role column
+CHAT_ROLES: tuple[ChatRole, ...] = get_args(ChatRole)
+
+PresetType = Literal["home", "fleet"]  # the type of a saved preset, held by the config_presets table's type column
+PRESET_TYPES: tuple[PresetType, ...] = get_args(PresetType)
+
 
 def _sql_string_literal(text: str) -> str:
     """*text* as an SQL string literal, each single quote in it doubled."""
@@ -75,11 +85,11 @@ def init_db(db_path: str | Path) -> None:
     """)
 
     # Jobs table - tracks background processing jobs
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY,
             run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
-            status TEXT DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+            status TEXT DEFAULT {_sql_string_literal(DEFAULT_JOB_STATUS)} {_check_one_of("status", JOB_STATUSES)},
             progress_pct REAL DEFAULT 0,
             current_step TEXT,
             message TEXT,
@@ -91,11 +101,11 @@ def init_db(db_path: str | Path) -> None:
     """)
 
     # Chat messages table - stores AI assistant conversation history
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS chat_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT,
-            role TEXT CHECK(role IN ('user', 'assistant')),
+            role TEXT {_check_one_of("role", CHAT_ROLES)},
             content TEXT,
             created_at TEXT,
             metadata_json TEXT
@@ -103,11 +113,11 @@ def init_db(db_path: str | Path) -> None:
     """)
 
     # Config presets table - stores saved configuration templates
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS config_presets (
             id TEXT PRIMARY KEY,
             name TEXT UNIQUE,
-            type TEXT CHECK(type IN ('home', 'fleet')),
+            type TEXT {_check_one_of("type", PRESET_TYPES)},
             config_json TEXT,
             created_at TEXT
         )
@@ -138,7 +148,7 @@ def init_db(db_path: str | Path) -> None:
 def save_chat_message(
     db_path: str | Path,
     session_id: str,
-    role: str,
+    role: ChatRole,
     content: str,
     metadata: dict[str, Any] | None = None,
 ) -> int:
@@ -147,7 +157,7 @@ def save_chat_message(
     Args:
         db_path: Path to the SQLite database file.
         session_id: Browser-session identifier scoping the conversation.
-        role: Either ``'user'`` or ``'assistant'``.
+        role: Who wrote the message, one of CHAT_ROLES.
         content: Message text.
         metadata: Optional dict serialised as JSON (e.g. usage/cache stats).
 
