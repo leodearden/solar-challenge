@@ -4,9 +4,16 @@ import dataclasses
 import math
 import pickle
 import re
+from collections.abc import Callable
 
 import pytest
-from solar_challenge.battery import BatteryConfig, Battery, compute_soh
+from solar_challenge.battery import (
+    BatteryConfig,
+    Battery,
+    compute_soh,
+    has_battery,
+    require_valid_capacity_setting,
+)
 from solar_challenge.config import GridChargeConfig
 
 
@@ -84,6 +91,36 @@ class TestBatteryConfigValidation:
     ) -> None:
         with pytest.raises(ValueError, match=re.escape(f"{invariant}, got {value} {unit}")):
             dataclasses.replace(BatteryConfig(capacity_kwh=5.0), **{field: value})
+
+
+class TestBatteryCapacitySetting:
+    """A battery capacity setting is >= 0 and finite, and 0 is no battery."""
+
+    @pytest.mark.parametrize(
+        ("capacity_kwh", "expected"),
+        [(0.0, False), (0, False), (1e-9, True), (5.0, True)],
+    )
+    def test_a_positive_capacity_is_a_battery_and_zero_is_none(
+        self, capacity_kwh: float, expected: bool
+    ) -> None:
+        assert has_battery(capacity_kwh, "battery_kwh") is expected
+
+    @pytest.mark.parametrize("check", [has_battery, require_valid_capacity_setting])
+    @pytest.mark.parametrize("capacity_kwh", [math.nan, math.inf, -math.inf, -1.0, -1e-9])
+    def test_a_negative_or_non_finite_capacity_is_refused_naming_the_setting(
+        self, capacity_kwh: float, check: Callable[[float, str], object]
+    ) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            check(capacity_kwh, "--battery-kwh")
+        assert str(exc_info.value) == (
+            f"--battery-kwh must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
+        )
+
+    @pytest.mark.parametrize("capacity_kwh", [0.0, 5.0])
+    def test_require_valid_capacity_setting_accepts_zero_and_a_positive_finite_capacity(
+        self, capacity_kwh: float
+    ) -> None:
+        assert require_valid_capacity_setting(capacity_kwh, "battery_kwh") is None
 
 
 class TestBatteryConfigGridCharging:
