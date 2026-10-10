@@ -435,8 +435,8 @@ def _voltage_matched_cec_inverter(
     module_count: int,
     module_vmp_v: float,
     candidates: Iterable[CecInverter],
-) -> tuple[str, dict[str, float], _Wiring]:
-    """The candidate rated nearest the AC capacity whose MPPT window takes the strings, as its CEC library name and parameters, and that wiring."""
+) -> tuple[CecInverter, _Wiring]:
+    """The candidate rated nearest the AC capacity whose MPPT window takes the strings, and that wiring."""
     target_w = ac_capacity_kw * 1000
     admitted = list(_inverters_with_wiring(module_count, module_vmp_v, candidates))
     if not admitted:
@@ -444,12 +444,26 @@ def _voltage_matched_cec_inverter(
             f"No candidate CEC inverter's MPPT window admits a series string of {module_count} "
             f"modules at V_mp_ref={module_vmp_v} V"
         )
-    best, wiring = min(
+    return min(
         admitted,
         key=lambda pair: _ranking_key(target_w, module_count, module_vmp_v, *pair),
     )
-    _require_cec_library_row(best.name)
-    return best.name, dict(_sam_library("CECInverter")[best.name]), wiring
+
+
+@dataclass(frozen=True)
+class _Inverter:
+    """A PVSystem's inverter: its pvlib parameters, under the name of the CEC library row they come from, or None for custom or PVWatts parameters."""
+
+    name: Optional[str]
+    parameters: dict[str, float]
+
+
+def _cec_library_inverter(name: str, efficiency: float) -> _Inverter:
+    """The named row of pvlib's CEC inverter library, with Pdco set so that it runs at efficiency at rated output."""
+    _require_cec_library_row(name)
+    parameters = dict(_sam_library("CECInverter")[name])
+    parameters["Pdco"] = parameters["Paco"] / efficiency
+    return _Inverter(name, parameters)
 
 
 _PVWATTS_MODULE_KEYS = frozenset({"pdc0", "gamma_pdc"})
@@ -478,8 +492,8 @@ def _inverter_and_wiring(
     module_params: dict[str, float],
     module_count: int,
     candidates: Iterable[CecInverter],
-) -> tuple[Optional[str], dict[str, float], _Wiring]:
-    """The inverter's CEC library name (None for custom or PVWatts parameters), its parameters, and how to wire the modules to them.
+) -> tuple[_Inverter, _Wiring]:
+    """The inverter and how to wire the modules to it.
 
     Custom inverter parameters take one string of every module, as does the
     PVWatts inverter that a module with PVWatts parameters gets, because
@@ -491,20 +505,19 @@ def _inverter_and_wiring(
     """
     one_string = (_StringGroup(module_count, 1),)
     if config.custom_inverter_params is not None:
-        return None, config.custom_inverter_params, one_string
+        return _Inverter(name=None, parameters=config.custom_inverter_params), one_string
     if _PVWATTS_MODULE_KEYS <= module_params.keys():
-        return None, _pvwatts_inverter(config), one_string
+        return _Inverter(name=None, parameters=_pvwatts_inverter(config)), one_string
     if "V_mp_ref" not in module_params:
         raise ValueError(
             "Module parameters have neither pdc0 and gamma_pdc, for a PVWatts "
             "inverter, nor a V_mp_ref, to voltage-match a CEC inverter to the "
             "strings; supply PVConfig.custom_inverter_params"
         )
-    name, inverter_params, wiring = _voltage_matched_cec_inverter(
+    picked, wiring = _voltage_matched_cec_inverter(
         config.effective_inverter_capacity_kw, module_count, module_params["V_mp_ref"], candidates
     )
-    inverter_params["Pdco"] = inverter_params["Paco"] / config.inverter_efficiency
-    return name, inverter_params, wiring
+    return _cec_library_inverter(picked.name, config.inverter_efficiency), wiring
 
 
 def _arrays(
@@ -541,13 +554,11 @@ def _pv_system(config: PVConfig, candidates: Iterable[CecInverter]) -> PVSystem:
     """The PVSystem for config, any CEC inverter it takes voltage-matched from candidates."""
     module_params = _module_parameters(config)
     module_count = _module_count(config, module_params)
-    inverter_name, inverter_params, wiring = _inverter_and_wiring(
-        config, module_params, module_count, candidates
-    )
+    inverter, wiring = _inverter_and_wiring(config, module_params, module_count, candidates)
     return PVSystem(
         arrays=_arrays(config, module_params, wiring),
-        inverter=inverter_name,
-        inverter_parameters=inverter_params,
+        inverter=inverter.name,
+        inverter_parameters=inverter.parameters,
     )
 
 

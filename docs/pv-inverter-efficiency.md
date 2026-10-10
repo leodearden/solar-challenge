@@ -1,7 +1,7 @@
 # PV Inverter Efficiency: The Configured Efficiency at Rated Output
 
 **Task:** #236 (follow-up from #195; folds #479)
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig.inverter_efficiency`, `_inverter_and_wiring`, `create_model_chain_picking_from`)
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig.inverter_efficiency`, `_inverter_and_wiring`, `_cec_library_inverter`, `create_model_chain_picking_from`)
 **Tests:** [`tests/unit/test_pv.py`](../tests/unit/test_pv.py)'s `TestCecInverterEfficiency` and `TestTheSystemNamesItsInverter`; [`tests/unit/config/test_generate_homes.py`](../tests/unit/config/test_generate_homes.py)'s `TestGenerateHomesFromDistributionInverterEfficiency`
 
 ---
