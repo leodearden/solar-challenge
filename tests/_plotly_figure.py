@@ -39,8 +39,9 @@ def sankey_link_values(figure: str) -> dict[tuple[str, str], float]:
     """Each link's value in *figure*, keyed by the labels of its source and target nodes.
 
     Raises ValueError, rather than guess which trace to read, unless *figure* is one Sankey
-    trace; rather than keep one, when two links join the same source and target; and rather
-    than drop a link, when the link lists differ in length.
+    trace; rather than keep one, when two links join the same source and target; rather
+    than drop a link, when the link lists differ in length; and rather than count a negative
+    index back from the last node, when a link's source or target is not the index of a node.
     """
     return _by_link(figure, "value")
 
@@ -104,8 +105,9 @@ def _by_link(figure: str, attribute: str) -> dict[tuple[str, str], Any]:
     sankey = _sankey_trace(figure)
     labels = sankey["node"]["label"]
     sources, targets, attribute_values = _parallel_lists(sankey, "link", "source", "target", attribute)
-    endpoints: list[tuple[str, str]] = [
-        (labels[source], labels[target]) for source, target in zip(sources, targets, strict=True)
+    endpoints = [
+        (_node_label(labels, source), _node_label(labels, target))
+        for source, target in zip(sources, targets, strict=True)
     ]
     return _keyed(endpoints, attribute_values, expected="one link per source and target")
 
@@ -113,8 +115,18 @@ def _by_link(figure: str, attribute: str) -> dict[tuple[str, str], Any]:
 def _parallel_lists(sankey: dict[str, Any], part: str, *attributes: str) -> list[list[Any]]:
     lengths = {attribute: len(sankey[part][attribute]) for attribute in attributes}
     if len(set(lengths.values())) > 1:
-        raise ValueError(f"Expected each of the Sankey's {part} lists to hold one entry per {part}; got lengths {lengths}")
+        raise ValueError(
+            f"Expected each of the Sankey's {part} lists to hold one entry per {part}; got lengths {lengths}"
+        )
     return [sankey[part][attribute] for attribute in attributes]
+
+
+def _node_label(labels: Sequence[str], index: int) -> str:
+    if not 0 <= index < len(labels):
+        raise ValueError(
+            f"Expected each link's source and target to be the index of one of the {len(labels)} nodes; got {index}"
+        )
+    return labels[index]
 
 
 def _keyed(keys: Sequence[_Key], values: Sequence[_Value], *, expected: str) -> dict[_Key, _Value]:
