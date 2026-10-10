@@ -903,6 +903,53 @@ def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module
     assert named_classes(f) == {fractions.Fraction}
 
 
+def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class_there(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "linking.py"
+    source.write_text(
+        "from typing import Generic, NewType, TypeVar\n"
+        "\n"
+        "Linked = TypeVar('Linked', bound='Node[Linked]')\n"
+        "Ranked = TypeVar('Ranked', bound='list[Graded]')\n"
+        "Graded = TypeVar('Graded', bound='dict[str, Ranked]')\n"
+        "Chain = NewType('Chain', 'list[Chain]')\n"
+        "\n"
+        "class Node(Generic[Linked]): ...\n"
+    )
+    spec = importlib.util.spec_from_file_location("linking", source)
+    assert spec is not None and spec.loader is not None
+    linking = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "linking", linking)
+    spec.loader.exec_module(linking)
+
+    def f(a: linking.Linked, b: linking.Ranked, c: linking.Chain) -> None: ...
+
+    assert (
+        surface_form(f)
+        == "(a: ~Linked(bound=Node[Linked]), b: ~Ranked(bound=list[Graded]), c: Chain(list[Chain])) -> None"
+    )
+    assert named_classes(f) == {linking.Node, list, dict, str}
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="type parameter syntax is new in Python 3.12"
+)
+def test_a_type_parameter_inside_its_own_bound_is_spelled_there_by_its_name_alone(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "branching.py"
+    source.write_text("class Node[T]: ...\n\n\ndef link[T: Node[T]](node: T) -> T: ...\n")
+    spec = importlib.util.spec_from_file_location("branching", source)
+    assert spec is not None and spec.loader is not None
+    branching = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "branching", branching)
+    spec.loader.exec_module(branching)
+
+    assert surface_form(branching.link) == "(node: T(bound=Node[T])) -> T(bound=Node[T])"
+    assert named_classes(branching.link) == {branching.Node}
+
+
 def test_a_default_value_names_no_class() -> None:
     def f(at: object = Preset(rate=0.1)) -> None: ...
 
