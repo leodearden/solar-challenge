@@ -47,6 +47,12 @@ UNUSABLE_SHUFFLED_POOL_ENTRIES = [
     ),
 ]
 
+#: Each fleet form block a fleet cannot do without, with the distribution the 400 for its absence names.
+REQUIRED_BLOCK_DISTRIBUTIONS = {"pv": "pv.capacity_kw", "load": "load.annual_consumption_kwh"}
+
+#: The fleet form's other blocks, which a fleet can do without.
+OPTIONAL_BLOCKS = tuple(key for key in FLEET_FORM_BLOCKS if key not in REQUIRED_BLOCK_DISTRIBUTIONS)
+
 
 class TestPreviewDistribution:
     """Tests for POST /api/fleet/preview-distribution."""
@@ -563,15 +569,11 @@ class TestFleetFromDistribution:
         fleet_dispatch = DispatchStrategyConfig("peak_shaving", import_limit_kw=4.5)
         assert [config.battery_config.dispatch_strategy for config in configs] == [fleet_dispatch] * 2
 
-    @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
-    def test_null_block_reads_as_absent_and_a_null_pv_or_load_returns_400_naming_its_distribution(
+    @pytest.mark.parametrize("key", OPTIONAL_BLOCKS)
+    def test_null_optional_block_reads_as_absent_queueing_the_fleet_without_it(
         self, client: FlaskClient, mock_job_manager: MagicMock, key: str
     ) -> None:
-        """A null block, any of the six, gets the answer the body without it gets. A fleet cannot do without its pv and load distributions, so a null pv or load is a 400 naming the missing one and no fleet is queued; any other null block queues the fleet the body without it queues."""
-        missing_distribution = {
-            "pv": "pv.capacity_kw",
-            "load": "load.annual_consumption_kwh",
-        }.get(key)
+        """A null block a fleet can do without reads as absent: the body with it gets the 201 the body without it gets, queueing the same fleet."""
         without_block = {k: v for k, v in self._VALID_BODY.items() if k != key}
 
         null_block = client.post(
@@ -584,15 +586,31 @@ class TestFleetFromDistribution:
             absent_block.status_code,
             absent_block.get_json(),
         )
+        assert null_block.status_code == 201
         submissions = mock_job_manager.submit_fleet_job.call_args_list
-        if missing_distribution is None:
-            assert null_block.status_code == 201
-            assert len(submissions) == 2
-            assert submissions[0] == submissions[1]
-        else:
-            assert null_block.status_code == 400
-            assert missing_distribution in null_block.get_json()["error"]
-            assert submissions == []
+        assert len(submissions) == 2
+        assert submissions[0] == submissions[1]
+
+    @pytest.mark.parametrize(("key", "distribution"), REQUIRED_BLOCK_DISTRIBUTIONS.items())
+    def test_null_required_block_reads_as_absent_returning_400_naming_its_distribution(
+        self, client: FlaskClient, mock_job_manager: MagicMock, key: str, distribution: str
+    ) -> None:
+        """A null block a fleet cannot do without reads as absent: the body with it gets the 400 the body without it gets, naming the missing distribution, and no fleet is queued."""
+        without_block = {k: v for k, v in self._VALID_BODY.items() if k != key}
+
+        null_block = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, key: None},
+        )
+        absent_block = client.post("/api/simulate/fleet-from-distribution", json=without_block)
+
+        assert (null_block.status_code, null_block.get_json()) == (
+            absent_block.status_code,
+            absent_block.get_json(),
+        )
+        assert null_block.status_code == 400
+        assert distribution in null_block.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_empty_battery_block_returns_400_carrying_the_grammars_refusal_naming_its_capacity(
         self, client: FlaskClient, mock_job_manager: MagicMock
