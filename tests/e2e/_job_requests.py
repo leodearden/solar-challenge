@@ -64,7 +64,8 @@ class HeldJobRequests:
             _wait_until_received_or_dropped(route.request)
 
     def abort_held(self) -> None:
-        """Abort every request still held."""
-        for routes in self._held.values():
+        """Abort every request still held, including any the page makes while the others are aborted."""
+        while self._held:
+            _, routes = self._held.popitem()
             for route in routes:
                 route.abort()
