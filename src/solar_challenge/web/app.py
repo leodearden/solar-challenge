@@ -139,11 +139,11 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     # Register custom error handlers
     @app.errorhandler(404)
     def page_not_found(e: Exception) -> tuple[str, int]:
-        return render_template("errors/404.html", page="error"), 404
+        return render_template("errors/404.html"), 404
 
     @app.errorhandler(500)
     def internal_server_error(e: Exception) -> tuple[str, int]:
-        return render_template("errors/500.html", page="error"), 500
+        return render_template("errors/500.html"), 500
 
     return app
 

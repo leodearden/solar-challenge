@@ -45,7 +45,7 @@ def runs_page() -> str:
     Returns:
         Rendered HTML for the runs list page.
     """
-    return str(render_template("history/runs.html", page="history-runs"))
+    return str(render_template("history/runs.html"))
 
 
 @bp.route("/compare")
@@ -64,7 +64,6 @@ def compare_page() -> str | Response:
     if not ids_param:
         return str(render_template(
             "history/compare.html",
-            page="history-compare",
             runs=[],
             charts={},
         ))
@@ -103,7 +102,6 @@ def compare_page() -> str | Response:
 
     return str(render_template(
         "history/compare.html",
-        page="history-compare",
         runs=runs,
         charts=charts,
     ))

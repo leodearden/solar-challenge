@@ -756,8 +756,7 @@ def _session_id() -> str:
 def chat_page() -> str:
     """Render the AI assistant chat shell page."""
     api_key_configured = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    return str(render_template("assistant/chat.html", page="assistant",
-                               api_key_configured=api_key_configured))
+    return str(render_template("assistant/chat.html", api_key_configured=api_key_configured))
 
 
 @bp.route("/history", methods=["GET"])

@@ -85,7 +85,6 @@ def index() -> str:
         "dashboard.html",
         runs=runs,
         stats=stats,
-        page="dashboard",
     ))
 
 
@@ -94,7 +93,6 @@ def simulate_home_page() -> str:
     """Render the enhanced home simulation configuration page."""
     return str(render_template(
         "simulate/home.html",
-        page="simulate-home",
         seg_presets=SEG_PRESETS,
     ))
 
@@ -154,7 +152,6 @@ def home_results(run_id: str) -> Any:
         has_battery=has_battery,
         run_id=run_id,
         run_name=storage.run_name(run_id) or "Home Simulation",
-        page="results",
     )
 
 
@@ -164,7 +161,6 @@ def simulate_fleet_page() -> str:
     return str(render_template(
         "simulate/fleet.html",
         presets=fleet_preset_names(),
-        page="simulate-fleet",
         seg_presets=SEG_PRESETS,
     ))
 
@@ -212,5 +208,4 @@ def fleet_results(run_id: str) -> Any:
         charts=charts,
         run_id=run_id,
         run_name=storage.run_name(run_id) or "Fleet Simulation",
-        page="results",
     )
