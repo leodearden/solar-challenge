@@ -151,6 +151,25 @@ def test_lists_of_unequal_length_raise_rather_than_dropping_an_entry(
         reader(_figure(sankey))
 
 
+@pytest.mark.parametrize("reader", _LINK_READERS)
+@pytest.mark.parametrize(
+    ("end", "index"),
+    [
+        pytest.param("source", 3, id="source-past-the-last-node"),
+        pytest.param("target", -1, id="target-before-the-first-node"),
+    ],
+)
+def test_a_link_whose_source_or_target_is_not_the_index_of_a_node_raises(
+    reader: Callable[[str], object], end: str, index: int
+) -> None:
+    """Python would read the index -1 as the last node's."""
+    sankey = _pv_and_the_grid_feeding_demand()
+    sankey["link"][end][0] = index
+
+    with pytest.raises(ValueError, match=re.escape(f"one of the 3 nodes; got {index}") + "$"):
+        reader(_figure(sankey))
+
+
 @pytest.mark.parametrize(
     "written",
     [
