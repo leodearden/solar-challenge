@@ -10,6 +10,7 @@ from typing import Optional
 
 import pandas as pd
 
+from solar_challenge.battery import has_battery
 from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.pv import PVConfig, wired_dc_capacity_kw
 from solar_challenge.timebase import HOURS_PER_MINUTE
@@ -495,11 +496,15 @@ def validate_simulation(
         pv_config: The PVConfig that produced results. validate_pv_generation
             judges the generation against it; the self-consumption benchmarks
             use its configured capacity_kw.
-        battery_capacity_kwh: Battery capacity (None if no battery)
+        battery_capacity_kwh: Battery capacity (None or 0 if no battery)
         target_annual_consumption_kwh: Expected annual consumption
 
     Returns:
         ValidationReport with all check results
+
+    Raises:
+        ValueError: Naming battery_capacity_kwh, when the self-consumption
+            benchmark reads one that is negative or not finite
     """
     all_results: list[ValidationResult] = []
 
@@ -520,7 +525,9 @@ def validate_simulation(
 
     # Validate self-consumption benchmarks
     if target_annual_consumption_kwh is not None:
-        if battery_capacity_kwh is not None and battery_capacity_kwh > 0:
+        if battery_capacity_kwh is not None and has_battery(
+            battery_capacity_kwh, "battery_capacity_kwh"
+        ):
             sc_check = validate_self_consumption_with_battery(
                 results,
                 pv_config.capacity_kw,
