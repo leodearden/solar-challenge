@@ -1,7 +1,9 @@
 """Shared fixtures for Playwright e2e tests.
 
-Provides a live Flask server running in a background thread and
-configures Playwright's base_url so tests can use relative paths.
+Provides a live Flask server running in a background thread,
+configures Playwright's base_url so tests can use relative paths, and
+gives tests the server's dashboard macros, to compare a page with
+what a macro draws.
 
 Includes data-seeding fixtures, which save completed runs through the
 live server's own RunStorage, for tests that need pre-existing
@@ -10,7 +12,8 @@ compare page), and home_preset_saved_under_a_builtin_name, which writes
 a saved home preset under a built-in preset's name straight into the
 live server's database.
 Also stubs the Run History page's runs-list API for tests that need it
-empty or unanswered, and collects the errors a page reports.
+empty, unanswered or listing a run of each badge, and collects the
+errors a page reports.
 
 A test that fails after Chromium failed one of its requests with
 net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
@@ -135,6 +138,15 @@ def _jobs_finish_within_their_test(_e2e_job_manager: JobManager) -> Iterator[Non
 def base_url(live_server):
     """Override pytest-playwright's base_url with our live server."""
     return live_server
+
+
+@pytest.fixture(scope="session")
+def dashboard_macros(_e2e_app: Flask) -> Any:
+    """The public macros of the live server's components/macros.html, as callables that return their markup.
+
+    A test compares what a page shows with what a macro draws for the same value.
+    """
+    return _e2e_app.jinja_env.get_template("components/macros.html").module
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +285,37 @@ def runs_api_returns_no_runs(page, live_server: str) -> None:
         _is_runs_list_request,
         lambda route: route.fulfill(json=no_runs_response),
     )
+
+
+@pytest.fixture
+def runs_api_returns_a_run_of_each_badge(
+    page, live_server: str, seeded_home_run: tuple[str, str]
+) -> list[tuple[str, str]]:
+    """Answer the Run History page's runs-list requests with one run per (type, status) pair it returns, each a copy of the seeded home run as the live API lists it.
+
+    The pairs name every run type and every status a run is stored with, and 'queued', a status with no badge colours of its own.
+    """
+    badges = [("home", "running"), ("fleet", "completed"), ("sweep", "failed"), ("home", "queued")]
+    listed = page.request.get(
+        live_server + "/api/history/runs",
+        params={"q": seeded_home_run[1]},
+        fail_on_status_code=True,
+    ).json()
+    runs = [
+        {
+            **listed["runs"][0],
+            "id": f"badge-run-{n}",
+            "name": f"Badge Run {n}",
+            "type": run_type,
+            "status": status,
+        }
+        for n, (run_type, status) in enumerate(badges, start=1)
+    ]
+    page.route(
+        _is_runs_list_request,
+        lambda route: route.fulfill(json={**listed, "runs": runs}),
+    )
+    return badges
 
 
 @pytest.fixture

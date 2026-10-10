@@ -9,6 +9,7 @@ filled into the form returns one background job per sweep point, and detects
 Bug B1 (Alpine race condition with external JS).
 
 Also verifies that each sweep point's row shows how its own job ended, that
+its status badge takes the classes the server draws for that status, that
 running a sweep drops the requests the sweep before it still has in flight,
 and that an earlier sweep's results, arriving after a later sweep's rows show,
 fill none of them.
@@ -18,11 +19,13 @@ import itertools
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
 from tests.e2e._job_requests import HeldJobRequests, is_job_request, sse_event
+from tests.e2e._run_badges import classes_of_each, server_drawn_classes
 
 pytestmark = pytest.mark.e2e
 
@@ -261,6 +264,40 @@ def test_a_sweep_point_whose_job_fails_shows_failed_in_its_own_row(
         ["11", "-", "-", "-", "pending"]
     )
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+def _status_badge(row: Locator) -> Locator:
+    """The badge in a sweep row's last cell, which shows the status of its point's job."""
+    return row.get_by_role("cell").last.locator("span")
+
+
+def test_each_sweep_rows_status_badge_takes_the_classes_the_server_draws_for_its_status(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, dashboard_macros: Any
+) -> None:
+    """Run a sweep whose first point completes while its second is pending, then fail the second: each row's status badge carries exactly the classes run_status_badge draws on the server for its status.
+
+    'running' cannot be held on this page: a fulfilled progress stream closes, and the page then marks its row failed. The Run History badge test covers 'running' through the same macro.
+    """
+    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
+    page.goto(live_server + "/scenarios/sweep")
+    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    rows = _result_rows(page)
+
+    for row, status in ((rows.nth(0), "completed"), (rows.nth(1), "pending")):
+        expect(_status_badge(row)).to_have_text(status)
+        assert classes_of_each(_status_badge(row)) == [
+            server_drawn_classes(dashboard_macros.run_status_badge(status))
+        ], status
+
+    sweep_jobs.progress.answer(
+        "sweep-1-point-2",
+        sse_event("error", {"status": "failed", "message": "Point 2 failed"}),
+    )
+
+    expect(_status_badge(rows.nth(1))).to_have_text("failed")
+    assert classes_of_each(_status_badge(rows.nth(1))) == [
+        server_drawn_classes(dashboard_macros.run_status_badge("failed"))
+    ]
 
 
 def test_an_earlier_sweeps_late_results_fill_no_row_of_the_sweep_run_after_it(

@@ -1,11 +1,17 @@
 """End-to-end tests for the Run History page (/history/runs).
 
 Verifies page loading, table structure, loading and empty states, filter
-controls, type filter options, column sorting, and compare button visibility.
+controls, type filter options, column sorting, compare button visibility,
+and that each run's status and type badges take the classes the server
+draws for their values.
 """
+
+from typing import Any
 
 import pytest
 from playwright.sync_api import Page, expect
+
+from tests.e2e._run_badges import classes_of_each, server_drawn_classes
 
 pytestmark = pytest.mark.e2e
 
@@ -197,3 +203,27 @@ def test_compare_button_hidden_by_default(page: Page, live_server: str) -> None:
 
     # It should not be visible because selectedIds is empty
     expect(compare_btn).not_to_be_visible()
+
+
+# -- Run badges ------------------------------------------------------------
+
+
+def test_each_history_badge_takes_the_classes_the_server_draws_for_its_value(
+    page: Page,
+    live_server: str,
+    dashboard_macros: Any,
+    runs_api_returns_a_run_of_each_badge: list[tuple[str, str]],
+) -> None:
+    """Each run's status and type badges, in its table row and in its card, carry exactly the classes run_status_badge and run_type_badge draw on the server for the same value."""
+    page.goto(live_server + "/history/runs")
+    types, statuses = zip(*runs_api_returns_a_run_of_each_badge)
+
+    for values, badge in (
+        (statuses, dashboard_macros.run_status_badge),
+        (types, dashboard_macros.run_type_badge),
+    ):
+        for value in sorted(set(values)):
+            badges = page.get_by_text(value, exact=True)
+            listed = 2 * values.count(value)
+            expect(badges).to_have_count(listed)
+            assert classes_of_each(badges) == [server_drawn_classes(badge(value))] * listed, value
