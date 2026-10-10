@@ -574,6 +574,37 @@ class TestFinanceConfigParsing:
         with pytest.raises(ConfigurationError, match=f"'not-a-number:{first}'"):
             parse_finance_config(block)
 
+    @pytest.mark.parametrize("key", _NUMERIC_FIELDS)
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_numeric_value_is_refused(self, key: str, value: bool) -> None:
+        """A boolean for a numeric key is refused, not read as 1.0 or 0.0."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{value!r} is a boolean, not a number")
+        ):
+            parse_finance_config({"standing_charge_pence_per_day": 60.0, key: value})
+
+    @pytest.mark.parametrize("field", _YEAR_FIELDS)
+    def test_a_fractional_year_count_is_refused_not_truncated(self, field: str) -> None:
+        """A fractional year count reaches FinanceConfig, which refuses it, rather than being truncated to a whole year."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{field} must be a whole number, got 20.7")
+        ):
+            parse_finance_config({"standing_charge_pence_per_day": 60.0, field: 20.7})
+
+    @pytest.mark.parametrize("key", _NUMERIC_FIELDS)
+    @pytest.mark.parametrize(
+        "value", [pytest.param(math.nan, id="nan"), pytest.param(math.inf, id="inf")]
+    )
+    def test_a_value_that_is_not_finite_is_refused_naming_its_key(
+        self, key: str, value: float
+    ) -> None:
+        """A NaN or infinite value for any numeric key is refused, naming the key and the value."""
+        with pytest.raises(
+            ConfigurationError,
+            match=rf"^{re.escape(key)} must be .+, got {re.escape(str(value))}$",
+        ):
+            parse_finance_config({"standing_charge_pence_per_day": 60.0, key: value})
+
 
 class TestScenarioFinance:
     """Tests for ScenarioConfig.finance field and _parse_scenario wiring."""
