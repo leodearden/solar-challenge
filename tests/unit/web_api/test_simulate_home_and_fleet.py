@@ -85,13 +85,27 @@ class TestSimulateHomeAPI:
         assert "PV capacity" in resp.get_json()["error"]
 
     def test_negative_battery_returns_400(self, client: FlaskClient) -> None:
-        """Negative battery capacity triggers a 400."""
+        """A negative battery capacity is refused with a 400 naming battery_kwh and the value sent."""
         resp = client.post(
             "/api/simulate/home",
             json={**VALID_HOME_PAYLOAD, "battery_kwh": -1.0},
         )
         assert resp.status_code == 400
-        assert "Battery" in resp.get_json()["error"] or "negative" in resp.get_json()["error"]
+        assert resp.get_json()["error"] == (
+            "battery_kwh must be >= 0 and finite (0 for no battery), got -1.0 kWh"
+        )
+
+    def test_nan_battery_returns_400_naming_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """A NaN battery capacity is refused with a 400 naming battery_kwh, never read as no battery; nothing is submitted."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "battery_kwh": float("nan")},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "battery_kwh must be a finite number, got nan"
+        mock_job_manager.submit_home_job.assert_not_called()
 
     def test_days_365_sets_full_year(
         self, client: FlaskClient, mock_job_manager: MagicMock
