@@ -2,9 +2,6 @@
 """Every chart of the dashboard's five energy flows (generation, demand, self-consumption, grid
 import and grid export) names each flow alike and draws them in one order, so the legends of a
 results page agree. A chart that colours by flow draws each flow in its own palette role's colour.
-The Sankey's nodes are places, not flows: it draws each node in the colour of the flow it sends or
-receives in total, each link in the colour of the flow it is part of, and the battery, which sends
-and receives none of the five, in its own role's colour.
 """
 
 import dataclasses

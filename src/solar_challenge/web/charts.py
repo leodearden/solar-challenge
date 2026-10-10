@@ -249,6 +249,7 @@ class _SankeyNode(_ChartElement):
     """The energy-flow Sankey's nodes, in the order its figure lists them: each one's label and COLOUR_PALETTE role.
 
     Each node but the battery sends or receives one of the five energy flows in total, and is drawn in that flow's role.
+    The labels name places, not flows, so only Demand's is also a flow's label, and it comes from _EnergyFlow.
     """
 
     PV_GENERATION = ("PV Generation", _EnergyFlow.GENERATION.colour_role)
