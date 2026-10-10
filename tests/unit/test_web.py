@@ -255,6 +255,56 @@ class TestDashboardRoute:
         assert texts_after(page, "Energy Modelled", 2) == [str(round(completed_homes_generation_mwh, 2)), "MWh"]
 
 
+class TestSidebarCurrentPage:
+    """Which sidebar link each page marks as the current page, with aria-current="page", in each of its two sidebars, desktop and mobile."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param("/", id="dashboard"),
+            pytest.param("/simulate/home", id="single-home"),
+            pytest.param("/simulate/fleet", id="fleet"),
+            pytest.param("/scenarios/builder", id="builder"),
+            pytest.param("/scenarios/sweep", id="sweeps"),
+            pytest.param("/history/runs", id="runs"),
+            pytest.param("/history/compare", id="compare"),
+            pytest.param("/assistant/", id="ai-assistant"),
+        ],
+    )
+    def test_each_sidebar_page_marks_its_own_link_current_in_both_sidebars(
+        self, client: FlaskClient, url: str
+    ) -> None:
+        """GET of each page the sidebar links to marks that page's link, and no other link, as the current page in each of its two sidebars, desktop and mobile."""
+        response = client.get(url)
+        assert response.status_code == 200
+        assert current_page_links(response.get_data(as_text=True)) == [url, url]
+
+    def test_the_404_page_marks_no_link_current(self, client: FlaskClient) -> None:
+        """GET of a URL no page is routed to answers the 404 page, which marks no sidebar link as the current page."""
+        response = client.get("/nonexistent")
+        assert response.status_code == 404
+        assert current_page_links(response.get_data(as_text=True)) == []
+
+    def test_the_home_results_page_marks_no_link_current(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A saved home run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
+        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
+        response = client.get(f"/results/home/{run_id}")
+        assert response.status_code == 200
+        assert current_page_links(response.get_data(as_text=True)) == []
+
+    def test_the_fleet_results_page_marks_no_link_current(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A saved fleet run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
+        results = make_sinusoidal_sim_results(days=1)
+        run_id = _save_fleet_run(app, "Community Fleet", [results, results])
+        response = client.get(f"/results/fleet/{run_id}")
+        assert response.status_code == 200
+        assert current_page_links(response.get_data(as_text=True)) == []
+
+
 class TestHomeResultsRoute:
     """Tests for the GET /results/home/<run_id> route."""
 
