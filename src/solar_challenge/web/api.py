@@ -144,11 +144,11 @@ def get_job_status(job_id: str) -> tuple[Response, int]:
         JSON with job status fields, or 404 if not found.
     """
     job_manager = get_job_manager()
-    status = job_manager.get_job_status(job_id)
+    state = job_manager.get_job_status(job_id)
 
-    if status is None:
+    if state is None:
         return jsonify({"error": "Job not found"}), 404
-    return jsonify(status), 200
+    return jsonify(asdict(state)), 200
 
 @api_bp.route("/jobs/<job_id>/progress", methods=["GET"])
 def get_job_progress(job_id: str) -> Response:
@@ -173,8 +173,8 @@ def get_job_progress(job_id: str) -> Response:
                 yield "event: error\ndata: {\"error\": \"SSE stream timed out after 10 minutes\"}\n\n"
                 return
             # Check if job exists
-            status = job_manager.get_job_status(job_id)
-            if status is None:
+            state = job_manager.get_job_status(job_id)
+            if state is None:
                 yield "event: error\ndata: {\"error\": \"Job not found\"}\n\n"
                 return
 
@@ -190,17 +190,17 @@ def get_job_progress(job_id: str) -> Response:
 
             # Check if job is in a terminal state (might have finished
             # before we started listening)
-            if status.get("status") in ("completed", "failed"):
-                if status["status"] == "completed":
-                    yield (
-                        f"event: complete\n"
-                        f"data: {json.dumps({'status': 'completed', 'run_id': status.get('run_id', '')})}\n\n"
-                    )
-                else:
-                    yield (
-                        f"event: error\n"
-                        f"data: {json.dumps({'status': 'failed', 'message': status.get('message', 'Unknown error')})}\n\n"
-                    )
+            if state.status == "completed":
+                yield (
+                    f"event: complete\n"
+                    f"data: {json.dumps({'status': state.status, 'run_id': state.run_id})}\n\n"
+                )
+                return
+            if state.status == "failed":
+                yield (
+                    f"event: error\n"
+                    f"data: {json.dumps({'status': state.status, 'message': state.message})}\n\n"
+                )
                 return
 
             # Send heartbeat
@@ -228,18 +228,18 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         JSON with summary data, or 404/409 on error.
     """
     job_manager = get_job_manager()
-    status = job_manager.get_job_status(job_id)
+    state = job_manager.get_job_status(job_id)
 
-    if status is None:
+    if state is None:
         return jsonify({"error": "Job not found"}), 404
-    if status.get("status") != "completed":
+    if state.status != "completed":
         return jsonify({
             "error": "Job not yet completed",
-            "status": status.get("status"),
-            "progress_pct": status.get("progress_pct", 0),
+            "status": state.status,
+            "progress_pct": state.progress_pct,
         }), 409
     # Load run summary from database
-    run_id = status.get("run_id", "")
+    run_id = state.run_id
     run = get_storage().run_record(run_id)
 
     if run is None:
