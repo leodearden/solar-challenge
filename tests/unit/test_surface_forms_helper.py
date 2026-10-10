@@ -897,6 +897,38 @@ def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds
     assert named_classes(Submeter) == {fractions.Fraction}
 
 
+def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _imported(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n"
+        "    spare: 'Tap'\n",
+    )
+    retapping = _imported(
+        tmp_path,
+        monkeypatch,
+        "retapping",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    spare: 'Tap'\n",
+    )
+
+    assert named_classes(retapping.Submeter) == {fractions.Fraction, decimal.Decimal}
+
+
 def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
