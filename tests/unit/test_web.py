@@ -17,12 +17,9 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import get_db
 from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
 from solar_challenge.web.storage import RunStorage
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._finance_builders import make_sim_results
-from tests._fleet_form import (
-    FALSY_NON_NULL_VALUES,
-    FLEET_FORM_BLOCKS,
-    valid_distribution_form,
-)
+from tests._fleet_form import FLEET_FORM_BLOCKS, valid_distribution_form
 from tests._html_page import (
     counts_of,
     current_page_links,
