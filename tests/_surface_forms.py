@@ -180,6 +180,20 @@ def _spelled(annotation: object) -> object:
     return _Spelling(_parsed(annotation, frozenset()).text())
 
 
+_TypeVariable: typing.TypeAlias = typing.TypeVar | typing.ParamSpec | typing.TypeVarTuple
+
+
+@dataclasses.dataclass(frozen=True)
+class _Evaluation:
+    """A string evaluated in a module, held in *enclosing* while what it evaluates to is read, so that the same string met again there, in the same module, names no class."""
+
+    source: str
+    module: str
+
+
+_Enclosing: typing.TypeAlias = frozenset[_TypeVariable | typing.NewType | _Evaluation]
+
+
 class _Construct(abc.ABC):
     """An annotation parsed as the construct it is, the annotations inside it parsed in turn: the one grammar both its spelling and the classes it names are read by."""
 
@@ -197,7 +211,7 @@ class _Unevaluated(_Construct):
     """A string annotation or a forward reference: spelled as written, naming the classes of the annotation it evaluates to, read inside the declarations and evaluations that enclose it where it is written; inside its own evaluation in the same module it names no class."""
 
     source: str
-    enclosing: frozenset[object]
+    enclosing: _Enclosing
 
     def text(self) -> str:
         return self.source
@@ -310,14 +324,8 @@ _CLASSLESS_NAME_KINDS: tuple[type, ...] = (
     typing._SpecialForm,
 )
 
-_TYPE_VARIABLE_KINDS: tuple[type, ...] = (
-    typing.TypeVar,
-    typing.ParamSpec,
-    typing.TypeVarTuple,
-)
 
-
-def _parsed(annotation: object, enclosing: frozenset[object]) -> _Construct:
+def _parsed(annotation: object, enclosing: _Enclosing) -> _Construct:
     """The construct *annotation* is, read inside the declarations of the type variables and NewTypes and the evaluations of the strings in *enclosing*; raises TypeError naming it and its type if no construct reads it."""
     if isinstance(annotation, str):
         return _Unevaluated(annotation, enclosing)
@@ -333,7 +341,7 @@ def _parsed(annotation: object, enclosing: frozenset[object]) -> _Construct:
         return _Subscripted(_Leaf("InitVar"), (_parsed(annotation.type, enclosing),))
     if _is_bare_alias(annotation):
         return _parsed(typing.get_origin(annotation), enclosing)
-    if isinstance(annotation, _TYPE_VARIABLE_KINDS):
+    if isinstance(annotation, _TypeVariable):
         return _parsed_type_variable(annotation, enclosing)
     if isinstance(annotation, typing.NewType):
         return _parsed_new_type(annotation, enclosing)
@@ -360,10 +368,7 @@ def _is_bare_alias(annotation: object) -> bool:
     return has_class_origin and not hasattr(annotation, "__args__")
 
 
-def _parsed_type_variable(
-    variable: typing.TypeVar | typing.ParamSpec | typing.TypeVarTuple,
-    enclosing: frozenset[object],
-) -> _Declared:
+def _parsed_type_variable(variable: _TypeVariable, enclosing: _Enclosing) -> _Declared:
     """*variable* as its declaration passes it: its repr, then its constraints, then its bound and its default by keyword, each only if declared and each read inside that declaration; its repr alone if that declaration encloses it."""
     module = _declaring_module(variable)
     if variable in enclosing:
@@ -378,14 +383,12 @@ def _parsed_type_variable(
     return _Declared(repr(variable), module, tuple(arguments))
 
 
-def _declaring_module(
-    variable: typing.TypeVar | typing.ParamSpec | typing.TypeVarTuple,
-) -> str | None:
+def _declaring_module(variable: _TypeVariable) -> str | None:
     """The module *variable*'s __module__ names; None if that is typing, which a type parameter (`def f[T]`) reports in place of the module of the routine or class that declares it."""
     return None if variable.__module__ == "typing" else variable.__module__
 
 
-def _parsed_new_type(new_type: typing.NewType, enclosing: frozenset[object]) -> _Declared:
+def _parsed_new_type(new_type: typing.NewType, enclosing: _Enclosing) -> _Declared:
     """*new_type* by its qualified name, as a class is spelled, then its supertype, read inside its declaration; its name alone if that declaration encloses it."""
     if new_type in enclosing:
         return _Declared(new_type.__qualname__, new_type.__module__, ())
@@ -393,15 +396,7 @@ def _parsed_new_type(new_type: typing.NewType, enclosing: frozenset[object]) -> 
     return _Declared(new_type.__qualname__, new_type.__module__, (supertype,))
 
 
-@dataclasses.dataclass(frozen=True)
-class _Evaluation:
-    """A string evaluated in a module, held in *enclosing* while what it evaluates to is read, so that the same string met again there, in the same module, names no class."""
-
-    source: str
-    module: str
-
-
-def _parsed_subscription(annotation: object, enclosing: frozenset[object]) -> _Construct:
+def _parsed_subscription(annotation: object, enclosing: _Enclosing) -> _Construct:
     origin = typing.get_origin(annotation)
     arguments = typing.get_args(annotation)
     if origin in (typing.Union, types.UnionType):
@@ -417,7 +412,7 @@ def _parsed_subscription(annotation: object, enclosing: frozenset[object]) -> _C
 
 
 def _each_parsed(
-    annotations: Iterable[object], enclosing: frozenset[object]
+    annotations: Iterable[object], enclosing: _Enclosing
 ) -> tuple[_Construct, ...]:
     return tuple(_parsed(annotation, enclosing) for annotation in annotations)
 
