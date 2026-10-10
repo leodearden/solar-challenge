@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The results page of a home run that carries a heat-pump load has a container for each heat-pump chart.
 
-heat_pump_analysis returns each heat-pump figure under a key that results/home.html reads,
-and the page gives each figure a container of its own id. A key the template reads that
-heat_pump_analysis does not return is Undefined, which tojson refuses, so the page fails
-to render.
+heat_pump_analysis returns each heat-pump figure in a field of a HeatPumpCharts, which
+results/home.html reads by name, and the page gives each figure a container of its own id.
+A name the template reads that HeatPumpCharts has no field for is Undefined, which tojson
+refuses, so the page fails to render.
 """
 
 import dataclasses
