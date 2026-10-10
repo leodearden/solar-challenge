@@ -62,12 +62,11 @@ document.addEventListener('alpine:init', () => {
             this.maxVal = param.defaultMax;
         },
 
-        // Active EventSource connections
-        _eventSources: [],
+        // Aborts the current sweep's requests: each point's progress stream and result fetch
+        _sweepRequests: new AbortController(),
 
         destroy() {
-            this._eventSources.forEach(es => es.close());
-            this._eventSources = [];
+            this._sweepRequests.abort();
         },
 
         // Submit sweep
@@ -109,9 +108,11 @@ document.addEventListener('alpine:init', () => {
                     }));
                     // Follow each point's job. Read each row back from this.sweepResults:
                     // only Alpine's reactive proxy of a row passes the job's writes to the page.
+                    const sweepRequests = new AbortController();
+                    this._sweepRequests = sweepRequests;
                     this.sweepResults.forEach(row => {
                         if (row.job_id) {
-                            this._pollJob(row);
+                            this._pollJob(row, sweepRequests.signal);
                         }
                     });
                 }
@@ -122,10 +123,11 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        // Follow one sweep point's job via SSE, writing its status and results into that point's row
-        _pollJob(row) {
+        // Follow one sweep point's job via SSE, writing its status and results into that point's row,
+        // until the job ends or signal aborts
+        _pollJob(row, signal) {
             const es = new EventSource('/api/jobs/' + row.job_id + '/progress');
-            this._eventSources.push(es);
+            signal.addEventListener('abort', () => es.close());
 
             es.addEventListener('progress', (e) => {
                 try {
@@ -139,7 +141,7 @@ document.addEventListener('alpine:init', () => {
                     const data = JSON.parse(e.data);
                     row.status = 'completed';
                     if (data.run_id) {
-                        this._fetchResult(row);
+                        this._fetchResult(row, signal);
                     }
                 } catch(err) {}
                 es.close();
@@ -160,10 +162,10 @@ document.addEventListener('alpine:init', () => {
             });
         },
 
-        // Fetch a completed point's result summary into that point's row
-        async _fetchResult(row) {
+        // Fetch a completed point's result summary into that point's row, unless signal aborts first
+        async _fetchResult(row, signal) {
             try {
-                const resp = await fetch('/api/jobs/' + row.job_id + '/results');
+                const resp = await fetch('/api/jobs/' + row.job_id + '/results', { signal });
                 if (resp.ok) {
                     const data = await resp.json();
                     const s = data.summary || {};
