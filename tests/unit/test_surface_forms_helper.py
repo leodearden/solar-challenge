@@ -21,6 +21,7 @@ import functools
 import importlib.util
 import pathlib
 import sys
+import types
 import typing
 from dataclasses import InitVar, dataclass, field
 from typing import (
@@ -497,7 +498,7 @@ def test_a_dataclass_field_with_a_default_is_spelled_and_names_classes_by_its_an
         preset: Optional[Preset] = field(init=False, default=None)
 
     assert member_forms(Meter) == {"preset": "attribute Preset | None", "UNITS": "str"}
-    assert named_classes(Meter) == {Preset, type(None), str}
+    assert named_classes(Meter) == {Preset, str}
 
 
 def test_a_dataclass_field_its_constructor_takes_is_not_a_member_but_a_class_variable_is() -> None:
@@ -658,7 +659,7 @@ def test_a_bare_typing_alias_names_its_origin() -> None:
 def test_a_union_names_its_members_classes_alone() -> None:
     def f(a: Optional[Preset], b: Union[int, str], c: float | None) -> None: ...
 
-    assert named_classes(f) == {Preset, type(None), int, str, float}
+    assert named_classes(f) == {Preset, int, str, float}
 
 
 def test_an_init_only_variable_names_its_type_classes_alone() -> None:
@@ -668,7 +669,7 @@ def test_an_init_only_variable_names_its_type_classes_alone() -> None:
         ratio: InitVar[Optional[fractions.Fraction]]
         preset: "InitVar[Preset]"
 
-    assert named_classes(Reading) == {float, fractions.Fraction, type(None), Preset}
+    assert named_classes(Reading) == {float, fractions.Fraction, Preset}
 
 
 def test_literal_values_and_annotated_metadata_name_no_class() -> None:
@@ -702,10 +703,24 @@ def test_a_type_variable_a_new_type_or_a_special_form_names_no_class_not_even_a_
     assert named_classes(f) == set()
 
 
+def test_none_and_type_none_are_spelled_alike_and_name_no_class() -> None:
+    def with_none(readings: list[None]) -> None: ...
+
+    def with_type_none(readings: list[types.NoneType]) -> types.NoneType: ...
+
+    assert (
+        surface_form(with_none)
+        == surface_form(with_type_none)
+        == "(readings: list[None]) -> None"
+    )
+    assert named_classes(with_none) == {list}
+    assert named_classes(with_type_none) == {list}
+
+
 def test_a_string_annotation_or_a_forward_reference_names_the_class_its_module_binds_the_name_to() -> None:
     def f(a: "Preset", b: Optional["Outer.Inner"]) -> "list[Preset]": ...
 
-    assert named_classes(f) == {Preset, Outer.Inner, type(None), list}
+    assert named_classes(f) == {Preset, Outer.Inner, list}
 
 
 def test_a_name_its_module_imports_only_for_type_checking_names_the_class_that_import_binds() -> None:
@@ -780,7 +795,7 @@ def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds
     assert named_classes(Submeter) == {fractions.Fraction}
 
 
-def test_a_default_value_and_a_none_return_name_no_class() -> None:
+def test_a_default_value_names_no_class() -> None:
     def f(at: object = Preset(rate=0.1)) -> None: ...
 
     assert named_classes(f) == {object}
