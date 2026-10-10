@@ -103,10 +103,10 @@ def _sankey_trace(figure: str) -> dict[str, Any]:
 def _by_link(figure: str, attribute: str) -> dict[tuple[str, str], Any]:
     sankey = _sankey_trace(figure)
     labels, link = sankey["node"]["label"], sankey["link"]
-    nodes: list[tuple[str, str]] = [
+    endpoints: list[tuple[str, str]] = [
         (labels[source], labels[target]) for source, target in zip(link["source"], link["target"], strict=True)
     ]
-    return _keyed(nodes, link[attribute], expected="one link per source and target")
+    return _keyed(endpoints, link[attribute], expected="one link per source and target")
 
 
 def _keyed(keys: Sequence[_Key], values: Sequence[_Value], *, expected: str) -> dict[_Key, _Value]:
