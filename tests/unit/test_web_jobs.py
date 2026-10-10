@@ -563,13 +563,18 @@ def _job_rows(storage: RunStorage) -> list[tuple[str, str]]:
         return [(row["id"], row["run_id"]) for row in conn.execute("SELECT id, run_id FROM jobs")]
 
 
+def _job_row(storage: RunStorage, job_id: str) -> dict[str, Any]:
+    """Return every column of job *job_id*'s row in storage's jobs table, by name."""
+    with get_db(storage.db_path) as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    assert row is not None, f"storage's jobs table has no row for job {job_id}"
+    return dict(row)
+
+
 def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
     """Return the status, progress_pct, current_step, message and created_at of job *job_id*'s row in storage's jobs table."""
-    with get_db(storage.db_path) as conn:
-        row = conn.execute(
-            "SELECT status, progress_pct, current_step, message, created_at FROM jobs WHERE id = ?", (job_id,)
-        ).fetchone()
-    return dict(row)
+    row = _job_row(storage, job_id)
+    return {column: row[column] for column in ("status", "progress_pct", "current_step", "message", "created_at")}
 
 
 def _run_of_job(manager: JobManager, job_id: str, storage: RunStorage) -> RunRecord:
@@ -892,6 +897,42 @@ class TestJobManagerRuns:
         assert run.completed_at is not None
 
 
+class TestJobManagerJobRows:
+    """Tests for the row a JobManager writes for each job in the jobs table."""
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_jobs_row_is_running_with_a_start_time_while_its_simulation_runs(
+        self,
+        submit_job: Callable[[JobManager, Path], str],
+        blocking_simulation: _BlockingSimulation,
+        tmp_path: Path,
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_id = submit_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+
+        row = _job_row(storage, job_id)
+
+        assert (row["status"], row["completed_at"]) == ("running", None)
+        assert row["started_at"] is not None
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_failed_jobs_row_is_failed_with_the_jobs_error_its_traceback_and_a_completion_time(
+        self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        manager = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
+        job_id = submit_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+
+        row = _job_row(storage, job_id)
+
+        assert (row["status"], row["message"]) == ("failed", "the simulation failed")
+        assert "RuntimeError: the simulation failed" in row["error_traceback"]
+        assert row["completed_at"] is not None
+
+
 class TestJobManagerRefusedRows:
     """Tests for a submit whose run or job row the database refuses."""
 
@@ -1135,3 +1176,17 @@ class TestRecoverStaleJobs:
         recover_stale_jobs(storage.db_path)
 
         assert [_run_of_job(manager, job_id, storage) for manager, job_id in jobs] == before
+
+    def test_recovery_leaves_a_completed_job_and_a_failed_job_as_they_were(self, tmp_path: Path) -> None:
+        storage = _run_storage(tmp_path)
+        completing = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
+        failing = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
+        job_ids = [_submit_home_job(completing, tmp_path), _submit_home_job(failing, tmp_path)]
+        assert completing.wait_until_idle(timeout=30)
+        assert failing.wait_until_idle(timeout=30)
+        before = [_job_row(storage, job_id) for job_id in job_ids]
+        assert [row["status"] for row in before] == ["completed", "failed"]
+
+        recover_stale_jobs(storage.db_path)
+
+        assert [_job_row(storage, job_id) for job_id in job_ids] == before
