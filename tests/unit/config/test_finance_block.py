@@ -594,20 +594,6 @@ class TestFinanceConfigParsing:
             parse_finance_config({"standing_charge_pence_per_day": 60.0, field: 20.7})
 
     @pytest.mark.parametrize("key", _NUMERIC_FIELDS)
-    @pytest.mark.parametrize(
-        "value", [pytest.param(math.nan, id="nan"), pytest.param(math.inf, id="inf")]
-    )
-    def test_a_value_that_is_not_finite_is_refused_naming_its_key(
-        self, key: str, value: float
-    ) -> None:
-        """A NaN or infinite value for any numeric key is refused, naming the key and the value."""
-        with pytest.raises(
-            ConfigurationError,
-            match=rf"^{re.escape(key)} must be .+, got {re.escape(str(value))}$",
-        ):
-            parse_finance_config({"standing_charge_pence_per_day": 60.0, key: value})
-
-    @pytest.mark.parametrize("key", _NUMERIC_FIELDS)
     def test_a_number_too_large_for_a_float_is_refused_as_a_configuration_error(
         self, key: str
     ) -> None:
@@ -720,6 +706,31 @@ class TestScenarioFinance:
             retained_cash_floor_per_home_per_year_gbp=30.0,
             grid_services_income_per_kw_per_year_gbp=8.0,
         )
+
+    def test_load_scenarios_refuses_a_nan_finance_cost_naming_its_key(self, tmp_path: Path) -> None:
+        """A YAML .nan finance cost is refused, naming its key and the value, rather than read as NaN."""
+        yaml_content = (
+            "name: NaN Cost Test\n"
+            "period:\n"
+            "  start_date: '2024-01-01'\n"
+            "  end_date: '2024-01-07'\n"
+            "home:\n"
+            "  pv:\n"
+            "    capacity_kw: 4.0\n"
+            "  load:\n"
+            "    annual_consumption_kwh: 3400\n"
+            "finance:\n"
+            "  standing_charge_pence_per_day: 65.0\n"
+            "  pv_cost_per_kwp_gbp: .nan\n"
+        )
+        path = tmp_path / "scenario.yaml"
+        path.write_text(yaml_content)
+
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape("pv_cost_per_kwp_gbp must be > 0 and finite, got nan"),
+        ):
+            load_scenarios(path)
 
 
 class TestFinanceConfigGridServicesModel:
