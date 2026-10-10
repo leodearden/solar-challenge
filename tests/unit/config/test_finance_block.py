@@ -1078,6 +1078,25 @@ class TestFinanceConfigParsingGridServices:
         )
 
     @pytest.mark.parametrize("key", _EVENTS_NUMERIC_KEYS)
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_events_value_is_refused(self, key: str, value: bool) -> None:
+        """A boolean for a numeric events key is refused, not read as 1.0 or 0.0."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{value!r} is a boolean, not a number")
+        ):
+            self._parse_events_block({**self._EVENTS_BLOCK, key: value})
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_event_hours_is_refused(self, value: bool) -> None:
+        """A boolean event_hours is refused, not read as 1.0 or 0.0."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{value!r} is a boolean, not a number")
+        ):
+            self._parse_events_block(
+                {**self._EVENTS_BLOCK, "event_windows": [{**self._WINDOW, "event_hours": value}]}
+            )
+
+    @pytest.mark.parametrize("key", _EVENTS_NUMERIC_KEYS)
     def test_an_events_value_too_large_for_a_float_is_refused_as_a_configuration_error(
         self, key: str
     ) -> None:

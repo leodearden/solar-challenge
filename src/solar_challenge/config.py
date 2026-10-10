@@ -1892,10 +1892,10 @@ _FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
 # Rows follow GridServicesEventsConfig's field order, which decides the first bad value reported.
 _GRID_SERVICES_EVENTS_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
     "band": str,
-    "aggregator_share": float,
-    "utilisation_factor": float,
-    "availability_gbp_per_kw_per_event": _float_or_none,
-    "utilisation_gbp_per_mwh": _float_or_none,
+    "aggregator_share": _number,
+    "utilisation_factor": _number,
+    "availability_gbp_per_kw_per_event": _number_or_none,
+    "utilisation_gbp_per_mwh": _number_or_none,
 })
 
 _GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -1925,7 +1925,7 @@ def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow,
                     weekdays=tuple(int(d) for d in ew_dict["weekdays"]),
                     hours=tuple(int(h) for h in ew_dict["hours"]),
                     events_per_year=int(ew_dict["events_per_year"]),
-                    event_hours=float(ew_dict["event_hours"]),
+                    event_hours=_number(ew_dict["event_hours"]),
                 )
             )
         except (ValueError, TypeError, OverflowError) as exc:
