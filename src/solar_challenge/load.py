@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
     from solar_challenge.ev import EVConfig
@@ -66,11 +67,8 @@ class LoadConfig:
             raise ValueError(
                 f"Household occupants seems unrealistic: {self.household_occupants}"
             )
-        whole_occupants = int(self.household_occupants)
-        if (
-            isinstance(self.household_occupants, (bool, np.bool_))
-            or whole_occupants != self.household_occupants
-        ):
+        whole_occupants = whole_number(self.household_occupants)
+        if whole_occupants is None:
             raise ValueError(
                 f"Household occupants must be a whole number, got {self.household_occupants}"
             )
