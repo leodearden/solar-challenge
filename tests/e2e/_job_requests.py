@@ -3,7 +3,7 @@
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from urllib.parse import urlsplit
 
 from playwright.sync_api import Request, Route
@@ -14,6 +14,13 @@ _JOB_REQUEST_PATH = re.compile(r"/api/jobs/(?P<job_id>[^/]+)/[^/]+")
 def sse_event(event: str, data: Mapping[str, object]) -> str:
     """The text of one server-sent event named event, carrying data as JSON."""
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def is_job_request(job_id: str, endpoint: str) -> Callable[[Request], bool]:
+    """Whether a request is the job job_id's request to endpoint, /api/jobs/<job_id>/<endpoint>."""
+    return lambda request: (
+        urlsplit(request.url).path == f"/api/jobs/{job_id}/{endpoint}"
+    )
 
 
 def _wait_until_received_or_dropped(request: Request) -> None:

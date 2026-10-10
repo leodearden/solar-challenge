@@ -7,15 +7,14 @@ does not show. A run started after a completed one starts its tracker afresh.
 """
 
 import itertools
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import Page, Request, Route, expect
+from playwright.sync_api import Page, Route, expect
 
-from tests.e2e._job_requests import HeldJobRequests, sse_event
+from tests.e2e._job_requests import HeldJobRequests, is_job_request, sse_event
 
 pytestmark = pytest.mark.e2e
 
@@ -55,11 +54,6 @@ class _SimulatePage:
 def simulate_page(request: pytest.FixtureRequest) -> _SimulatePage:
     """Each simulate page that shows the shared progress tracker."""
     return request.param
-
-
-def _is_progress_stream_of(job_id: str) -> Callable[[Request], bool]:
-    """Whether a request is the progress stream of the job job_id."""
-    return lambda request: urlsplit(request.url).path == f"/api/jobs/{job_id}/progress"
 
 
 @pytest.fixture
@@ -112,7 +106,9 @@ def test_a_run_started_while_another_runs_is_the_run_the_tracker_follows(
         run.click()
     with (
         page.expect_request("**/api/jobs/job-2/progress"),
-        page.expect_event("requestfailed", predicate=_is_progress_stream_of("job-1")),
+        page.expect_event(
+            "requestfailed", predicate=is_job_request("job-1", "progress")
+        ),
     ):
         run.click()
 
