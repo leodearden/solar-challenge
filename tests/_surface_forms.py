@@ -211,14 +211,6 @@ class _Unevaluated(_Construct):
 
 
 @dataclasses.dataclass(frozen=True)
-class _Evaluation:
-    """A string evaluated in a module, held in *enclosing* while what it evaluates to is read, so that the same string met again there, in the same module, names no class."""
-
-    source: str
-    module: str
-
-
-@dataclasses.dataclass(frozen=True)
 class _Leaf(_Construct):
     """A part read whole, an annotation or a value inside one: spelled as given, naming the classes it carries."""
 
@@ -399,6 +391,14 @@ def _parsed_new_type(new_type: typing.NewType, enclosing: frozenset[object]) -> 
         return _Declared(new_type.__qualname__, new_type.__module__, ())
     supertype = _parsed(new_type.__supertype__, enclosing | {new_type})
     return _Declared(new_type.__qualname__, new_type.__module__, (supertype,))
+
+
+@dataclasses.dataclass(frozen=True)
+class _Evaluation:
+    """A string evaluated in a module, held in *enclosing* while what it evaluates to is read, so that the same string met again there, in the same module, names no class."""
+
+    source: str
+    module: str
 
 
 def _parsed_subscription(annotation: object, enclosing: frozenset[object]) -> _Construct:
