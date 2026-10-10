@@ -12,9 +12,9 @@ from solar_challenge.home import HomeConfig, SimulationResults, calculate_summar
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE
+from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
 
@@ -463,31 +463,23 @@ class TestSimulateHomeGridCharge:
     """simulate_home records the power the battery stores from the grid as grid_charge on every tariffed run."""
 
     @pytest.fixture
-    def arbitrage_home(self) -> HomeConfig:
-        """The home of scenarios/bristol-arbitrage.yaml, grid charging to 70%, so a sunny day leaves room for PV."""
-        return HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
-            battery_config=BatteryConfig(
-                capacity_kwh=5.0,
-                max_charge_kw=2.5,
-                max_discharge_kw=2.5,
-                grid_charging=GridChargeConfig(target_soc_fraction=0.7),
-            ),
-            tariff_config=TariffConfig.economy_7(),
-            dispatch_strategy="tou_optimized",
-            seg_tariff=SEGTariff("Scenario SEG", 15.0),
-        )
+    def arbitrage_home_grid_charging_to_70_percent(self) -> HomeConfig:
+        """The arbitrage home, grid charging to 70% instead of the scenario's 90%, so a sunny day leaves room for PV."""
+        home = bristol_arbitrage_home()
+        battery = home.battery_config
+        assert battery is not None and battery.grid_charging is not None
+        grid_charging = dataclasses.replace(battery.grid_charging, target_soc_fraction=0.7)
+        return dataclasses.replace(home, battery_config=dataclasses.replace(battery, grid_charging=grid_charging))
 
     def test_grid_charge_is_only_the_part_of_the_battery_charge_drawn_from_the_grid(
-        self, arbitrage_home: HomeConfig
+        self, arbitrage_home_grid_charging_to_70_percent: HomeConfig
     ) -> None:
         """On a sunny Economy 7 day the battery charges from the grid and from PV, and grid_charge is the grid's part.
 
         It is the power the grid-charge cost is priced on, and is part of both the battery charge and the grid import.
         """
         results = simulate_home(
-            arbitrage_home,
+            arbitrage_home_grid_charging_to_70_percent,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             weather_data=synthetic_june_weather("2024-06-21"),
@@ -504,12 +496,10 @@ class TestSimulateHomeGridCharge:
         assert (results.grid_charge <= results.battery_charge).all()
         assert (results.grid_charge <= results.grid_import).all()
 
-    def test_an_untariffed_run_has_no_grid_charge_series(
-        self, arbitrage_home: HomeConfig, night_weather_data: pd.DataFrame
-    ) -> None:
+    def test_an_untariffed_run_has_no_grid_charge_series(self, night_weather_data: pd.DataFrame) -> None:
         """A run without a tariff cannot grid charge, and has no grid_charge series, as it has no grid_charge_cost."""
         results = simulate_home(
-            dataclasses.replace(arbitrage_home, tariff_config=None),
+            dataclasses.replace(bristol_arbitrage_home(), tariff_config=None),
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
             weather_data=night_weather_data,

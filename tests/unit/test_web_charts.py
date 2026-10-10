@@ -12,19 +12,7 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("plotly")
-from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import GridChargeConfig
-from solar_challenge.home import (
-    HomeConfig,
-    SimulationResults,
-    SummaryStatistics,
-    calculate_summary,
-    simulate_home,
-)
-from solar_challenge.load import LoadConfig
-from solar_challenge.pv import PVConfig
-from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.web.charts import (
     battery_soc_chart,
     daily_energy_balance,
@@ -35,6 +23,7 @@ from solar_challenge.web.charts import (
     sankey_diagram,
     seasonal_comparison,
 )
+from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._synthetic_weather import sunless_weather
@@ -89,23 +78,6 @@ def _sankey_links(figure: str) -> dict[tuple[str, str], float]:
             sankey["link"]["source"], sankey["link"]["target"], sankey["link"]["value"], strict=True
         )
     }
-
-
-def _bristol_arbitrage_home() -> HomeConfig:
-    """The home of scenarios/bristol-arbitrage.yaml: on Economy 7 it charges its battery from the grid to 90% overnight."""
-    return HomeConfig(
-        pv_config=PVConfig(capacity_kw=4.0),
-        load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
-        battery_config=BatteryConfig(
-            capacity_kwh=5.0,
-            max_charge_kw=2.5,
-            max_discharge_kw=2.5,
-            grid_charging=GridChargeConfig(target_soc_fraction=0.9),
-        ),
-        tariff_config=TariffConfig.economy_7(),
-        dispatch_strategy="tou_optimized",
-        seg_tariff=SEGTariff("Scenario SEG", 15.0),
-    )
 
 
 class TestChartFunctions:
@@ -228,12 +200,12 @@ class TestSankeyBatteryCharge:
         }
 
     def test_a_simulated_sunless_grid_charging_day_draws_nothing_from_pv(self) -> None:
-        """The arbitrage home on a sunless January day: all of the battery's charge comes from the grid.
+        """The home of scenarios/bristol-arbitrage.yaml on a sunless January day: all of the battery's charge comes from the grid.
 
         The summary is calculate_summary's of simulate_home's results, the summary /results/home loads and draws.
         """
         results = simulate_home(
-            _bristol_arbitrage_home(),
+            bristol_arbitrage_home(),
             start_date=pd.Timestamp("2024-01-15"),
             end_date=pd.Timestamp("2024-01-15"),
             weather_data=sunless_weather("2024-01-15", temp_air=8.0),
