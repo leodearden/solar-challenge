@@ -94,10 +94,11 @@ def named_classes(obj: object) -> set[type]:
     its arguments' classes, a bare alias its origin, a union its members' alone, an
     InitVar its type's alone, and Literal's values, Annotated's metadata, a type
     variable, a NewType, a special form such as Self and a ParamSpec's args and kwargs
-    none. A string annotation or a forward
-    reference names the class its name is bound to in the module that spells it, read as
-    a type checker reads it: its globals, with the imports of its top-level
-    `if TYPE_CHECKING:` blocks bound over them. A name bound in neither raises NameError.
+    none. None, given as None or as type(None), names no class either. A string
+    annotation or a forward reference names the class its name is bound to in the
+    module that spells it, read as a type checker reads it: its globals, with the
+    imports of its top-level `if TYPE_CHECKING:` blocks bound over them. A name bound in
+    neither raises NameError.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
@@ -275,10 +276,8 @@ def _parsed(annotation: object) -> _Construct:
         return _Unevaluated(annotation)
     if isinstance(annotation, typing.ForwardRef):
         return _Unevaluated(annotation.__forward_arg__)
-    if annotation is None:
+    if annotation is None or annotation is type(None):
         return _Leaf("None")
-    if annotation is type(None):
-        return _Leaf("None", frozenset({type(None)}))
     if annotation is Ellipsis:
         return _Leaf("...")
     if isinstance(annotation, list):
