@@ -1928,7 +1928,7 @@ def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow,
                     event_hours=float(ew_dict["event_hours"]),
                 )
             )
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OverflowError) as exc:
             raise ConfigurationError(
                 f"{window_path} contains a non-numeric value: {exc}"
             ) from exc
@@ -1957,7 +1957,7 @@ def _parse_grid_services_events_config(
             for key, coerce in _GRID_SERVICES_EVENTS_SCALAR_COERCIONS.items()
             if key in gs_data
         )
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, OverflowError) as exc:
         raise ConfigurationError(
             f"grid_services_events block contains a non-numeric value: {exc}"
         ) from exc
@@ -2003,7 +2003,7 @@ def parse_finance_config(
             for key, coerce in _FINANCE_SCALAR_COERCIONS.items()
             if key in data
         }
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, OverflowError) as exc:
         raise ConfigurationError(f"finance block contains a non-numeric value: {exc}") from exc
     return FinanceConfig(**scalars, grid_services_events=grid_services_events)
 
