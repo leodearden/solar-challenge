@@ -208,9 +208,9 @@ class TestExportFleetYAML:
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
-        assert export.status_code == 400
-        assert export.get_json() == {"error": f"{key} must be a mapping, got {type_name}"}
-        assert (export.status_code, export.get_json()) == (simulate.status_code, simulate.get_json())
+        refusal = (400, {"error": f"{key} must be a mapping, got {type_name}"})
+        assert (export.status_code, export.get_json()) == refusal
+        assert (simulate.status_code, simulate.get_json()) == refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
 
 
