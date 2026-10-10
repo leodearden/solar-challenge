@@ -3,11 +3,13 @@
 
 import dataclasses
 import itertools
+import math
 import pickle
 import re
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pytest
 
 from solar_challenge.config import (
@@ -22,6 +24,18 @@ from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+
+_YEAR_FIELDS = ("loan_term_years", "asset_life_years")
+_FLOAT_FIELDS = tuple(
+    f.name
+    for f in dataclasses.fields(FinanceConfig)
+    if f.name not in {*_YEAR_FIELDS, "grid_services_model", "grid_services_events"}
+)
+_NUMERIC_FIELDS = tuple(
+    f.name
+    for f in dataclasses.fields(FinanceConfig)
+    if f.name in {*_FLOAT_FIELDS, *_YEAR_FIELDS}
+)
 
 
 class TestFinanceConfig:
@@ -239,6 +253,32 @@ class TestFinanceConfigValidation:
         fc = FinanceConfig(**self._BASE, asset_life_years=15, loan_term_years=15)
         assert fc.asset_life_years == 15
 
+    # ---- year counts (whole numbers) ----
+
+    @pytest.mark.parametrize("field", _YEAR_FIELDS)
+    @pytest.mark.parametrize("value", [20.5, True, pytest.param(np.True_, id="numpy-bool")])
+    def test_a_year_count_that_is_not_a_whole_number_is_refused(
+        self, field: str, value: object
+    ) -> None:
+        """A fractional or boolean year count is refused, naming the field and the value."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{field} must be a whole number, got {value}")
+        ):
+            FinanceConfig(**self._BASE, **{field: value})
+
+    @pytest.mark.parametrize("field", _YEAR_FIELDS)
+    @pytest.mark.parametrize(
+        "value", [pytest.param(20.0, id="float"), pytest.param(np.int64(20), id="numpy-int64")]
+    )
+    def test_a_whole_number_year_count_of_another_numeric_type_is_held_as_an_int(
+        self, field: str, value: object
+    ) -> None:
+        """A whole-number float or numpy integer year count is held as the int it equals."""
+        config = FinanceConfig(**self._BASE, **{field: value})
+
+        assert getattr(config, field) == 20
+        assert type(getattr(config, field)) is int
+
     # ---- cost fields (must be > 0) ----
 
     def test_standing_charge_zero_raises(self) -> None:
@@ -330,19 +370,6 @@ class TestFinanceConfigValidation:
         """grid_services_income_per_kw_per_year_gbp == 0.0 is valid (theta-safe default)."""
         fc = FinanceConfig(**self._BASE, grid_services_income_per_kw_per_year_gbp=0.0)
         assert fc.grid_services_income_per_kw_per_year_gbp == 0.0
-
-
-_YEAR_FIELDS = ("loan_term_years", "asset_life_years")
-_FLOAT_FIELDS = tuple(
-    f.name
-    for f in dataclasses.fields(FinanceConfig)
-    if f.name not in {*_YEAR_FIELDS, "grid_services_model", "grid_services_events"}
-)
-_NUMERIC_FIELDS = tuple(
-    f.name
-    for f in dataclasses.fields(FinanceConfig)
-    if f.name in {*_FLOAT_FIELDS, *_YEAR_FIELDS}
-)
 
 
 class TestFinanceConfigParsing:
