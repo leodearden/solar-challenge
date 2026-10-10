@@ -666,6 +666,18 @@ def _float_or_none(value: Any) -> Optional[float]:
     return None if value is None else float(value)
 
 
+def _number(value: Any) -> float:
+    """Coerce *value* to a float as float() does, refusing a boolean, which float() would read as 1.0 or 0.0."""
+    if isinstance(value, bool):
+        raise TypeError(f"{value!r} is a boolean, not a number")
+    return float(value)
+
+
+def _number_or_none(value: Any) -> Optional[float]:
+    """Coerce *value* as :func:`_number` does, keeping a null as None."""
+    return None if value is None else _number(value)
+
+
 _LOCATION_BLOCK_KEYS: frozenset[str] = frozenset({
     "latitude", "longitude", "timezone", "altitude", "name",
 })
@@ -1853,23 +1865,23 @@ def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
 
 # Rows follow FinanceConfig's field order, which decides the first bad value reported.
 _FINANCE_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "standing_charge_pence_per_day": float,
-    "vat_rate": float,
-    "retail_baseline_rate_pence_per_kwh": float,
-    "self_consumption_override": _float_or_none,
-    "pv_cost_per_kwp_gbp": float,
-    "roof_fit_cost_gbp": float,
-    "battery_cost_per_kwh_gbp": float,
-    "inverter_cost_per_kw_gbp": float,
-    "grant_gbp": float,
-    "equity_fraction": float,
-    "loan_term_years": int,
-    "loan_rate": float,
-    "opex_per_home_per_year_gbp": float,
-    "asset_life_years": int,
-    "own_use_rate_pence_per_kwh": float,
-    "retained_cash_floor_per_home_per_year_gbp": float,
-    "grid_services_income_per_kw_per_year_gbp": float,
+    "standing_charge_pence_per_day": _number,
+    "vat_rate": _number,
+    "retail_baseline_rate_pence_per_kwh": _number,
+    "self_consumption_override": _number_or_none,
+    "pv_cost_per_kwp_gbp": _number,
+    "roof_fit_cost_gbp": _number,
+    "battery_cost_per_kwh_gbp": _number,
+    "inverter_cost_per_kw_gbp": _number,
+    "grant_gbp": _number,
+    "equity_fraction": _number,
+    "loan_term_years": _number,
+    "loan_rate": _number,
+    "opex_per_home_per_year_gbp": _number,
+    "asset_life_years": _number,
+    "own_use_rate_pence_per_kwh": _number,
+    "retained_cash_floor_per_home_per_year_gbp": _number,
+    "grid_services_income_per_kw_per_year_gbp": _number,
     "grid_services_model": str,
 })
 
@@ -1968,7 +1980,8 @@ def parse_finance_config(
 
     Raises:
         ConfigurationError: If any field value is out of its allowed range
-            (propagated from FinanceConfig.__post_init__), or if the block, its
+            (propagated from FinanceConfig.__post_init__), if a numeric value
+            is a boolean or a value float() cannot read, or if the block, its
             grid_services_events block or an event window is not a mapping or
             carries a key it does not read
     """
