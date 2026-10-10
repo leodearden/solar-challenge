@@ -283,7 +283,7 @@ class TestAnnualYieldPerWiredKwp:
 
     @pytest.mark.parametrize(
         ("capacity_kw", "kwh_per_wired_kwp"),
-        [(0.5, 1300.0), (0.3, 600.0), (4.0, 1300.0), (4.0, 500.0)],
+        [(0.5, 1300.0), (0.3, 250.0), (4.0, 1300.0), (4.0, 200.0), (4.0, 0.0)],
     )
     def test_a_yield_outside_the_uk_benchmark_fails(
         self, capacity_kw: float, kwh_per_wired_kwp: float
@@ -312,15 +312,15 @@ class TestAnnualYieldPerWiredKwp:
 
     @pytest.mark.parametrize(
         ("kwh_per_wired_kwp", "passed"),
-        [(800.0, True), (1200.0, False)],
+        [(350.0, True), (1300.0, False)],
     )
     def test_a_custom_module_is_judged_per_the_dc_its_modules_wire(
         self, kwh_per_wired_kwp: float, passed: bool
     ) -> None:
         """1.0 kWp is the four 250 W modules _PVWATTS_250_W_AT_1_1_KW wires.
 
-        Per the default module's 1.2 kWp, 800 would read 666 and fail, and 1200
-        would read 999 and pass.
+        Per the default module's 1.2 kWp, 350 would read 291 and fail, and 1300
+        would read 1082 and pass.
         """
         assert wired_dc_capacity_kw(PVConfig(capacity_kw=1.1)) != pytest.approx(1.0)
         generation = _year_of_generation(kwh_per_wired_kwp * 1.0)
@@ -334,9 +334,9 @@ class TestAnnualYieldPerWiredKwp:
 
     @pytest.mark.parametrize(
         ("kwh_per_wired_kwp", "passed"),
-        [(699.99, False), (700.01, True), (1099.99, True), (1100.01, False)],
+        [(299.99, False), (300.01, True), (1199.99, True), (1200.01, False)],
     )
-    def test_the_uk_benchmark_band_runs_from_700_to_1100(
+    def test_the_uk_benchmark_band_runs_from_300_to_1200(
         self, kwh_per_wired_kwp: float, passed: bool
     ) -> None:
         pv_config = PVConfig(capacity_kw=4.0)
@@ -348,6 +348,28 @@ class TestAnnualYieldPerWiredKwp:
         )
 
         assert result.passed is passed
+
+    @pytest.mark.parametrize(
+        "kwh_per_wired_kwp",
+        [
+            pytest.param(1175.2, id="pvgis-eastbourne-optimal"),
+            pytest.param(367.3, id="pvgis-unst-east-wall"),
+        ],
+    )
+    def test_the_pvgis_yields_that_set_the_band_edges_pass(
+        self, kwh_per_wired_kwp: float
+    ) -> None:
+        """docs/pv-annual-yield-benchmark.md §2 sources each and rounds it outward to its edge."""
+        pv_config = PVConfig(capacity_kw=4.0)
+        wired_kw = wired_dc_capacity_kw(pv_config)
+        generation = _year_of_generation(kwh_per_wired_kwp * wired_kw)
+
+        result = _annual_yield_check(
+            validate_pv_generation(generation, pv_config, check_annual=True)
+        )
+
+        assert result.passed is True
+        assert result.value == pytest.approx(kwh_per_wired_kwp)
 
 
 class TestPeakWithinWiredCapacity:

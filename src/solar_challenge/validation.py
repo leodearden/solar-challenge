@@ -73,7 +73,7 @@ class ValidationReport:
         return "\n".join(lines)
 
 
-_UK_YIELD_BENCHMARK_KWH_PER_KWP = (700.0, 1100.0)
+_UK_YIELD_BENCHMARK_KWH_PER_KWP = (300.0, 1200.0)
 
 
 def _check_annual_yield(

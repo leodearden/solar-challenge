@@ -117,13 +117,14 @@ PVGIS-14% 0.793–0.815.
   [pv-annual-yield-benchmark.md](pv-annual-yield-benchmark.md) §3's task-252 amendment.
 - The finance calibration's specific yield and solved own-use rate:
   [finance-spreadsheet-reconciliation.md](finance-spreadsheet-reconciliation.md) §4.2.
-- With the losses, Weymouth (1137.2), Shanklin (1138.9) and Eastbourne (1120.6) still
-  read above validation's 1100 kWh/kWp; PVGIS-14% puts five of the fourteen sites above
-  it. Whether the ceiling should move is task 282's question.
+- With the losses, Weymouth (1137.2), Shanklin (1138.9) and Eastbourne (1120.6) read
+  above the 1100 kWh/kWp ceiling validation had until task 282, and PVGIS-14% put five
+  of the fourteen sites above it. Task 282 sourced the band from PVGIS and MCS as
+  300–1200 kWh/kWp, and all fourteen read inside it
+  ([pv-annual-yield-benchmark.md](pv-annual-yield-benchmark.md) §2).
 
 ## 7. Open Items
 
-- **Task 282:** validation's band edges.
 - **Task 283:** exposure in YAML, fleet distributions, sweeps and `scenario_writer`.
   Until then every YAML, web and CLI run gets the default, only Python callers set the
   field, and `config.py` refuses a YAML `system_losses` key.
