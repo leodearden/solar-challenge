@@ -23,11 +23,8 @@ from solar_challenge.web.fleet_config import (
     form_to_fleet_distribution_config,
     sample_distribution,
 )
-from tests._fleet_form import (
-    FALSY_NON_NULL_VALUES,
-    FLEET_FORM_COMPONENT_BLOCKS,
-    valid_distribution_form,
-)
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._fleet_form import FLEET_FORM_COMPONENT_BLOCKS, valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NON_BOOLEAN_NUMBERS, UNUSABLE_NUMBERS
 
 #: Fields of a fleet form block that hold one number: each block's fixed value, sent in its distribution's field, and another block setting.

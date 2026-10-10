@@ -24,6 +24,7 @@ from solar_challenge.web.simulation_params import (
     parse_seg_tariff,
     with_default_days,
 )
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
@@ -545,15 +546,7 @@ class TestParseHomeConfigNestedBlockPresence:
         home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
         assert parsed_block(home_config) is None
 
-    @pytest.mark.parametrize(
-        ("value", "type_name"),
-        [
-            pytest.param("", "str", id="empty-string"),
-            pytest.param(False, "bool", id="false"),
-            pytest.param(0, "int", id="zero"),
-            pytest.param([], "list", id="empty-array"),
-        ],
-    )
+    @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
     @pytest.mark.parametrize("key", list(NESTED_BLOCK_FIELDS))
     def test_falsy_block_is_refused_naming_it_and_its_type(
         self, key: str, value: object, type_name: str
