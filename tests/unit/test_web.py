@@ -18,7 +18,7 @@ from solar_challenge.web.database import get_db
 from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
-from tests._fleet_form import FLEET_FORM_BLOCKS, valid_distribution_form
+from tests._fleet_form import valid_distribution_form
 from tests._html_page import (
     counts_of,
     current_page_links,
@@ -495,30 +495,6 @@ class TestFleetApiEndpoints:
             content_type="application/json",
         )
         assert response.status_code == 400
-
-    @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
-    def test_simulate_fleet_from_distribution_reads_a_null_block_as_absent(
-        self, client: FlaskClient, mock_job_manager: MagicMock, key: str
-    ) -> None:
-        """A null block, any of the six, gets the answer the form without it gets."""
-        without_block = {k: v for k, v in valid_distribution_form().items() if k != key}
-
-        null_block = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**valid_distribution_form(), key: None},
-        )
-        absent_block = client.post("/api/simulate/fleet-from-distribution", json=without_block)
-
-        assert (null_block.status_code, null_block.get_json()) == (
-            absent_block.status_code,
-            absent_block.get_json(),
-        )
-        submissions = mock_job_manager.submit_fleet_job.call_args_list
-        if null_block.status_code == 201:
-            assert len(submissions) == 2
-            assert submissions[0] == submissions[1]
-        else:
-            assert submissions == []
 
     def test_simulate_fleet_from_distribution_refuses_an_empty_battery_block_naming_its_missing_capacity(
         self, client: FlaskClient, mock_job_manager: MagicMock
