@@ -51,6 +51,7 @@ from solar_challenge.web.storage import RunStorage
 
 from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._server_drawn_badges import dashboard_macros_of
 from tests._web_app import build_test_app
 
 
@@ -146,7 +147,7 @@ def dashboard_macros(_e2e_app: Flask) -> Any:
 
     A test compares what a page shows with what a macro draws for the same value.
     """
-    return _e2e_app.jinja_env.get_template("components/macros.html").module
+    return dashboard_macros_of(_e2e_app)
 
 
 # ---------------------------------------------------------------------------

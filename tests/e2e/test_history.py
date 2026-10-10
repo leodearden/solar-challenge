@@ -11,7 +11,8 @@ from typing import Any
 import pytest
 from playwright.sync_api import Page, expect
 
-from tests.e2e._run_badges import classes_of_each, server_drawn_classes
+from tests._server_drawn_badges import server_drawn_classes
+from tests.e2e._run_badges import classes_of_each
 
 pytestmark = pytest.mark.e2e
 

@@ -22,6 +22,7 @@ from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, Run
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, texts
+from tests._server_drawn_badges import dashboard_macros_of, server_drawn_badge, server_drawn_classes
 from tests._web_app import build_test_app
 
 _BADGE = {"inline-flex", "items-center", "px-2.5", "py-0.5", "rounded-full", "text-xs", "font-medium"}
@@ -47,19 +48,7 @@ def app(tmp_path: Path) -> Flask:
 @pytest.fixture
 def macros(app: Flask) -> Any:
     """The public macros of components/macros.html, as callables that return their markup."""
-    return app.jinja_env.get_template("components/macros.html").module
-
-
-def _badge(markup: object) -> Mapping[str, str | None]:
-    """The attributes of the one span *markup* draws."""
-    spans = element_attributes(str(markup), "span")
-    assert len(spans) == 1, f"expected one span, found {len(spans)} in {markup!s}"
-    return spans[0]
-
-
-def _classes(markup: object) -> set[str]:
-    """The classes of the one span *markup* draws."""
-    return set((_badge(markup)["class"] or "").split())
+    return dashboard_macros_of(app)
 
 
 def _spans(app: Flask, path: str) -> list[Mapping[str, str | None]]:
@@ -99,14 +88,14 @@ def test_a_run_status_badge_shows_the_status_in_its_colours(
     badge = macros.run_status_badge(status)
 
     assert texts(str(badge)) == [status]
-    assert _classes(badge) == _BADGE | colours
+    assert server_drawn_classes(badge) == _BADGE | colours
 
 
 @pytest.mark.parametrize("status", RUN_STATUSES)
 def test_each_status_a_run_is_stored_with_has_colours_of_its_own(
     macros: Any, status: RunStatus
 ) -> None:
-    assert _classes(macros.run_status_badge(status)) != _BADGE | _NEUTRAL, (
+    assert server_drawn_classes(macros.run_status_badge(status)) != _BADGE | _NEUTRAL, (
         f"run status {status!r} is drawn neutral; give it colours in"
         " components/macros.html's _run_status_badge_classes"
     )
@@ -127,14 +116,14 @@ def test_a_run_type_badge_shows_the_type_in_its_colours(
     badge = macros.run_type_badge(run_type)
 
     assert texts(str(badge)) == [run_type]
-    assert _classes(badge) == _BADGE | colours
+    assert server_drawn_classes(badge) == _BADGE | colours
 
 
 @pytest.mark.parametrize("run_type", RUN_TYPES)
 def test_each_type_a_run_is_stored_with_has_colours_of_its_own(
     macros: Any, run_type: RunType
 ) -> None:
-    assert _classes(macros.run_type_badge(run_type)) != _BADGE | _NEUTRAL, (
+    assert server_drawn_classes(macros.run_type_badge(run_type)) != _BADGE | _NEUTRAL, (
         f"run type {run_type!r} is drawn neutral; give it colours in"
         " components/macros.html's _run_type_badge_classes"
     )
@@ -149,7 +138,8 @@ def test_the_dashboard_draws_each_recent_runs_status_with_run_status_badge(
     spans = _spans(app, "/")
 
     assert {
-        status: spans.count(_badge(macros.run_status_badge(status))) for status in RUN_STATUSES
+        status: spans.count(server_drawn_badge(macros.run_status_badge(status)))
+        for status in RUN_STATUSES
     } == dict.fromkeys(RUN_STATUSES, 1)
 
 
@@ -168,7 +158,7 @@ def test_the_compare_page_draws_each_runs_type_with_run_type_badge(
     spans = _spans(app, "/history/compare?ids=cmp-home,cmp-fleet")
 
     assert {
-        run_type: spans.count(_badge(macros.run_type_badge(run_type)))
+        run_type: spans.count(server_drawn_badge(macros.run_type_badge(run_type)))
         for run_type in ("home", "fleet")
     } == {"home": 1, "fleet": 1}
 
@@ -179,8 +169,8 @@ def test_run_history_draws_each_runs_status_and_type_with_the_bound_badges_in_th
     spans = _spans(app, "/history/runs")
 
     assert {
-        "status": spans.count(_badge(macros.bound_run_status_badge("run.status"))),
-        "type": spans.count(_badge(macros.bound_run_type_badge("run.type"))),
+        "status": spans.count(server_drawn_badge(macros.bound_run_status_badge("run.status"))),
+        "type": spans.count(server_drawn_badge(macros.bound_run_type_badge("run.type"))),
     } == {"status": 2, "type": 2}
 
 
@@ -189,4 +179,4 @@ def test_the_sweep_page_draws_each_points_status_with_the_bound_run_status_badge
 ) -> None:
     spans = _spans(app, "/scenarios/sweep")
 
-    assert spans.count(_badge(macros.bound_run_status_badge("row.status"))) == 1
+    assert spans.count(server_drawn_badge(macros.bound_run_status_badge("row.status"))) == 1
