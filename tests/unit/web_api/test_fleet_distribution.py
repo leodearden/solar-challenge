@@ -23,6 +23,8 @@ from solar_challenge.web.fleet_config import (
     sample_distribution,
 )
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
 
@@ -445,37 +447,26 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
 
-    @pytest.mark.parametrize("key", ["pv", "battery", "load"])
-    def test_non_mapping_component_block_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock, key: str
-    ) -> None:
-        """A pv/battery/load block sent as a non-object is a 400 naming the block and the type sent; no fleet is queued."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**self._VALID_BODY, key: "x"},
-        )
-        assert resp.status_code == 400
-        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
-        mock_job_manager.submit_fleet_job.assert_not_called()
-
     @pytest.mark.parametrize(
-        ("key", "value"),
-        [
-            ("tariff", "flat_rate"),
-            ("dispatch_strategy", "self_consumption"),
-            ("seg", "Octopus"),
-        ],
+        ("value", "type_name"),
+        [pytest.param("x", "str", id="str"), *FALSY_NON_NULL_VALUES],
     )
-    def test_non_mapping_overlay_block_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock, key: str, value: str
+    @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
+    def test_non_mapping_block_returns_400_naming_it(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        key: str,
+        value: object,
+        type_name: str,
     ) -> None:
-        """A tariff/dispatch_strategy/seg block sent as a non-object is a 400 naming the block and the type sent; no fleet is queued."""
+        """Any of the six blocks, the pv/battery/load distributions and the tariff/dispatch_strategy/seg overlays, sent as a non-object, a falsy one other than null included, is a 400 naming the block and the type sent; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, key: value},
         )
         assert resp.status_code == 400
-        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
+        assert resp.get_json() == {"error": f"{key} must be a mapping, got {type_name}"}
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
