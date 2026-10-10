@@ -46,6 +46,7 @@ from typing import (
     TypeVar,
     TypeVarTuple,
     Union,
+    Unpack,
 )
 
 import pytest
@@ -220,6 +221,48 @@ def test_a_type_variable_a_new_type_or_a_special_form_is_spelled_by_its_repr() -
     assert (
         surface_form(f)
         == "(a: ~T, b: ~P, c: Ts, d: tests.unit.test_surface_forms_helper.Kwh, e: typing.Self, g: typing.LiteralString) -> typing.Never"
+    )
+
+
+def test_a_type_variable_is_spelled_by_its_repr_then_the_constraints_and_the_bound_it_declares() -> None:
+    Rated = TypeVar("Rated", bound=Preset)
+    Pending = TypeVar("Pending", bound="Preset")
+    Ratio = TypeVar("Ratio", bound=Optional[fractions.Fraction])
+    Number = TypeVar("Number", int, "Outer.Inner")
+    Source = TypeVar("Source", covariant=True, bound=Preset)
+    Hook = ParamSpec("Hook", bound=Callable[..., Preset])
+
+    def f(
+        a: Rated,
+        b: Pending,
+        c: Ratio,
+        d: Number,
+        e: typing.AnyStr,
+        g: Callable[Hook, None],
+    ) -> Source: ...
+
+    assert (
+        surface_form(f)
+        == "(a: ~Rated(bound=Preset), b: ~Pending(bound=Preset), c: ~Ratio(bound=Fraction | None), d: ~Number(int, Outer.Inner), e: ~AnyStr(bytes, str), g: Callable[~Hook(bound=Callable[..., Preset]), None]) -> +Source(bound=Preset)"
+    )
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 13), reason="a type variable's default is new in Python 3.13"
+)
+def test_a_type_variable_default_is_spelled_last_by_keyword() -> None:
+    Rated = TypeVar("Rated", bound=float, default=int)
+    Absent = TypeVar("Absent", default=None)
+    Hook = ParamSpec("Hook", default=[int, Preset])
+    Shape = TypeVarTuple("Shape", default=Unpack[tuple[int, Preset]])
+
+    def f(
+        a: Rated, b: Absent, c: Callable[Hook, None], d: tuple[Unpack[Shape]]
+    ) -> None: ...
+
+    assert (
+        surface_form(f)
+        == "(a: ~Rated(bound=float, default=int), b: ~Absent(default=None), c: Callable[~Hook(default=[int, Preset]), None], d: tuple[typing.Unpack[Shape(default=typing.Unpack[tuple[int, Preset]])]]) -> None"
     )
 
 
@@ -692,21 +735,43 @@ def test_a_param_spec_args_and_kwargs_name_no_class() -> None:
     assert named_classes(f) == set()
 
 
-def test_a_type_variable_a_new_type_or_a_special_form_names_no_class_not_even_a_bound_or_a_supertype() -> None:
-    """A deliberate limit: what a type variable or a NewType carries goes unread.
-
-    named_classes reads the classes from the forms, and the form of a type variable or a
-    NewType spells only its name. Following a bound, constraints, a default or a
-    supertype means spelling it in the form too; this test changes with that.
-    """
-    T = TypeVar("T", bound=Preset)
+def test_a_type_variable_declaring_nothing_or_a_special_form_names_no_class() -> None:
+    T = TypeVar("T")
     P = ParamSpec("P")
     Ts = TypeVarTuple("Ts")
-    PresetId = NewType("PresetId", Preset)
 
-    def f(a: T, b: P, c: Ts, d: PresetId, e: Self) -> NoReturn: ...
+    def f(a: T, b: P, c: Ts, d: Self) -> NoReturn: ...
 
     assert named_classes(f) == set()
+
+
+def test_a_type_variable_names_the_classes_its_constraints_and_its_bound_name() -> None:
+    Rated = TypeVar("Rated", bound=Optional[Preset])
+    Pending = TypeVar("Pending", bound="Outer.Inner")
+    Ratio = TypeVar("Ratio", int, fractions.Fraction)
+
+    def f(a: Rated, b: Pending) -> Ratio: ...
+
+    assert named_classes(f) == {Preset, Outer.Inner, int, fractions.Fraction}
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 13), reason="a type variable's default is new in Python 3.13"
+)
+def test_a_type_variable_names_the_classes_its_default_names() -> None:
+    Rated = TypeVar("Rated", default=Preset)
+    Hook = ParamSpec("Hook", default=[fractions.Fraction])
+    Shape = TypeVarTuple("Shape", default=Unpack[tuple[Outer.Inner]])
+
+    def f(a: Rated, b: Callable[Hook, None], c: tuple[Unpack[Shape]]) -> None: ...
+
+    assert named_classes(f) == {
+        Preset,
+        collections.abc.Callable,
+        fractions.Fraction,
+        tuple,
+        Outer.Inner,
+    }
 
 
 def test_none_and_type_none_name_no_class() -> None:
@@ -794,6 +859,27 @@ def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds
         pass
 
     assert named_classes(Submeter) == {fractions.Fraction}
+
+
+def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "rating.py"
+    source.write_text(
+        "from fractions import Fraction\n"
+        "from typing import TypeVar\n"
+        "\n"
+        "Ratio = TypeVar('Ratio', bound='Fraction')\n"
+    )
+    spec = importlib.util.spec_from_file_location("rating", source)
+    assert spec is not None and spec.loader is not None
+    rating = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "rating", rating)
+    spec.loader.exec_module(rating)
+
+    def f(ratio: rating.Ratio) -> None: ...
+
+    assert named_classes(f) == {fractions.Fraction}
 
 
 def test_a_default_value_names_no_class() -> None:
