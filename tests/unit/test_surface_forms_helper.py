@@ -152,6 +152,12 @@ def test_an_optional_or_a_union_is_spelled_with_bars() -> None:
     assert surface_form(f) == "(a: int | None, b: int | str, c: int | None) -> None"
 
 
+def test_none_and_type_none_are_spelled_none() -> None:
+    def f(a: list[None], b: List[None], c: types.NoneType) -> None: ...
+
+    assert surface_form(f) == "(a: list[None], b: list[None], c: None) -> None"
+
+
 def test_a_class_is_spelled_by_its_qualified_name_without_its_module() -> None:
     def f(path: pathlib.Path, when: datetime.datetime, inner: Outer.Inner) -> None: ...
 
@@ -703,16 +709,11 @@ def test_a_type_variable_a_new_type_or_a_special_form_names_no_class_not_even_a_
     assert named_classes(f) == set()
 
 
-def test_none_and_type_none_are_spelled_alike_and_name_no_class() -> None:
+def test_none_and_type_none_name_no_class() -> None:
     def with_none(readings: list[None]) -> None: ...
 
-    def with_type_none(readings: list[types.NoneType]) -> types.NoneType: ...
+    def with_type_none(readings: List[None]) -> types.NoneType: ...
 
-    assert (
-        surface_form(with_none)
-        == surface_form(with_type_none)
-        == "(readings: list[None]) -> None"
-    )
     assert named_classes(with_none) == {list}
     assert named_classes(with_type_none) == {list}
 
