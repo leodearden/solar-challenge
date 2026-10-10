@@ -299,11 +299,13 @@ class TestImportFleetYAML:
         assert reason in resp.get_json()["error"]
 
 
-#: The name of each built-in scenario file: the stem of each .yaml and .yml file in scenarios/, in name order.
+#: The name of each built-in scenario, once: the stems of the .yaml and .yml files in scenarios/, in name order.
 _BUILTIN_SCENARIO_STEMS = sorted(
-    path.stem
-    for path in (Path(__file__).resolve().parents[3] / "scenarios").iterdir()
-    if path.suffix in (".yaml", ".yml") and path.is_file()
+    {
+        path.stem
+        for path in (Path(__file__).resolve().parents[3] / "scenarios").iterdir()
+        if path.suffix in (".yaml", ".yml") and path.is_file()
+    }
 )
 
 
