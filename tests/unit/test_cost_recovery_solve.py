@@ -126,6 +126,24 @@ class TestCostRecoverySolution:
                 binding="floor",
             )
 
+    @pytest.mark.parametrize("bad_rate", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_own_use_rate_raises_value_error(self, bad_rate: float) -> None:
+        """__post_init__ rejects NaN, +inf and -inf own_use_rate_pence_per_kwh."""
+        from solar_challenge.finance import CostRecoverySolution
+
+        outlay = make_bill_distribution()
+        with pytest.raises(ValueError, match="own_use_rate.*finite"):
+            CostRecoverySolution(
+                own_use_rate_pence_per_kwh=bad_rate,
+                outlay=outlay,
+                representative_outlay_gbp=outlay.representative.total_outlay_gbp,
+                net_surplus_per_home_per_year_gbp=100.0,
+                saving_vs_baseline_gbp=100.0,
+                saving_pct=20.0,
+                feasible=True,
+                binding="floor",
+            )
+
     def test_all_fields_read_back(self) -> None:
         """All 8 fields read back correctly after construction."""
         from solar_challenge.finance import CostRecoverySolution

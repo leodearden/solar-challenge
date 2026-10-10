@@ -444,9 +444,9 @@ class CostRecoverySolution:
             raise ValueError(
                 f"binding must be one of {_BINDING_VALUES!r}, got {self.binding!r}"
             )
-        if self.own_use_rate_pence_per_kwh < 0.0:
+        if not 0.0 <= self.own_use_rate_pence_per_kwh < math.inf:
             raise ValueError(
-                f"own_use_rate_pence_per_kwh must be >= 0, "
+                f"own_use_rate_pence_per_kwh must be >= 0 and finite, "
                 f"got {self.own_use_rate_pence_per_kwh!r}"
             )
 
