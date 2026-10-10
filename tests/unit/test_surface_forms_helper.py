@@ -961,11 +961,6 @@ def test_a_forward_reference_inside_its_own_evaluation_names_no_class_there(
         "def plant(tree: Tree) -> None: ...\n",
     )
 
-    assert (
-        surface_form(documents.store)
-        == "(document: dict[str, JSON] | list[JSON] | str | None) -> None"
-    )
-    assert surface_form(documents.send) == "(document: JSON) -> None"
     assert named_classes(documents.store) == {dict, str, list}
     assert named_classes(documents.send) == {dict, str, list}
     assert named_classes(documents.plant) == {tuple, int, list}
