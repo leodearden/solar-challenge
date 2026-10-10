@@ -556,21 +556,36 @@ class TestFleetFromDistribution:
         fleet_dispatch = DispatchStrategyConfig("peak_shaving", import_limit_kw=4.5)
         assert [config.battery_config.dispatch_strategy for config in configs] == [fleet_dispatch] * 2
 
-    @pytest.mark.parametrize(
-        ("key", "distribution"),
-        [("pv", "pv.capacity_kw"), ("load", "load.annual_consumption_kwh")],
-    )
-    def test_null_pv_or_load_component_block_returns_400(
-        self, client: FlaskClient, mock_job_manager: MagicMock, key: str, distribution: str
+    @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
+    def test_null_block_reads_as_absent_and_a_null_pv_or_load_returns_400_naming_its_distribution(
+        self, client: FlaskClient, mock_job_manager: MagicMock, key: str
     ) -> None:
-        """A null pv/load block reads as absent, and the endpoint refuses the missing distribution with a 400 naming it; no fleet is queued."""
-        resp = client.post(
+        """A null block, any of the six, gets the answer the body without it gets. A fleet cannot do without its pv and load distributions, so a null pv or load is a 400 naming the missing one and no fleet is queued; any other null block queues the fleet the body without it queues."""
+        missing_distribution = {
+            "pv": "pv.capacity_kw",
+            "load": "load.annual_consumption_kwh",
+        }.get(key)
+        without_block = {k: v for k, v in self._VALID_BODY.items() if k != key}
+
+        null_block = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, key: None},
         )
-        assert resp.status_code == 400
-        assert distribution in resp.get_json()["error"]
-        mock_job_manager.submit_fleet_job.assert_not_called()
+        absent_block = client.post("/api/simulate/fleet-from-distribution", json=without_block)
+
+        assert (null_block.status_code, null_block.get_json()) == (
+            absent_block.status_code,
+            absent_block.get_json(),
+        )
+        submissions = mock_job_manager.submit_fleet_job.call_args_list
+        if missing_distribution is None:
+            assert null_block.status_code == 201
+            assert len(submissions) == 2
+            assert submissions[0] == submissions[1]
+        else:
+            assert null_block.status_code == 400
+            assert missing_distribution in null_block.get_json()["error"]
+            assert submissions == []
 
     @pytest.mark.parametrize(
         "pv",
