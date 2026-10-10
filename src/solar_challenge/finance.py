@@ -66,10 +66,14 @@ class FinanceConfig:
             capacity (default 0.0; 0 permitted).
         grant_gbp: Total grant received by the project (default 250000.0; 0 allowed).
         equity_fraction: Fraction of project cost financed by equity (default 0.75).
-        loan_term_years: Loan repayment term in years (default 15).
+        loan_term_years: Loan repayment term, a whole number of years (default 15).
+            A whole-number float such as 20.0 is held as the int 20; a bool,
+            Python's or numpy's, is refused.
         loan_rate: Annual loan interest rate as a fraction (default 0.07).
         opex_per_home_per_year_gbp: Annual operating cost per home (default 131.0).
-        asset_life_years: Useful life of the asset in years (default 25).
+        asset_life_years: Useful life of the asset, a whole number of years
+            (default 25); like loan_term_years, a whole-number float is held as
+            the int it equals and a bool is refused.
         own_use_rate_pence_per_kwh: CBS transfer price for self-consumed CBS-owned solar
             (default 15.0 p/kWh; 0 permitted).
         retained_cash_floor_per_home_per_year_gbp: Board-set minimum retained CBS
@@ -111,6 +115,15 @@ class FinanceConfig:
         """Validate financial parameters, raising ConfigurationError on violation."""
         from solar_challenge.config import ConfigurationError  # lazy: avoids import cycle; sys.modules cache makes repeat lookups O(1)
 
+        for field_name in ("loan_term_years", "asset_life_years"):
+            years = getattr(self, field_name)
+            if (
+                isinstance(years, (bool, np.bool_))
+                or not -math.inf < years < math.inf
+                or years != int(years)
+            ):
+                raise ConfigurationError(f"{field_name} must be a whole number, got {years}")
+            object.__setattr__(self, field_name, int(years))
         if not (0.0 <= self.vat_rate <= 1.0):
             raise ConfigurationError(
                 f"vat_rate must be in [0, 1], got {self.vat_rate}"
