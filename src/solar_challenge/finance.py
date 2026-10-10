@@ -28,6 +28,7 @@ import pandas as pd
 from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
 from solar_challenge.seg import SEGTariff
+from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
     from solar_challenge.config import ScenarioConfig
@@ -118,15 +119,12 @@ class FinanceConfig:
 
         for field_name in ("loan_term_years", "asset_life_years"):
             years = getattr(self, field_name)
-            if (
-                isinstance(years, (bool, np.bool_))
-                or not -math.inf < years < math.inf
-                or years != int(years)
-            ):
+            whole_years = whole_number(years)
+            if whole_years is None:
                 raise ConfigurationError(
                     f"{field_name} must be a finite whole number, got {years}"
                 )
-            object.__setattr__(self, field_name, int(years))
+            object.__setattr__(self, field_name, whole_years)
         if not (0.0 <= self.vat_rate <= 1.0):
             raise ConfigurationError(
                 f"vat_rate must be in [0, 1], got {self.vat_rate}"
