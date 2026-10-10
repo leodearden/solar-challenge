@@ -60,8 +60,8 @@ def sankey_node_colours(figure: str) -> dict[str, str]:
     trace; rather than keep one colour, when two nodes share a label; and rather than drop a
     node, when the node lists differ in length.
     """
-    node = _sankey_trace(figure)["node"]
-    return _keyed(node["label"], node["color"], expected="one node per label")
+    labels, colours = _parallel_lists(_sankey_trace(figure), "node", "label", "color")
+    return _keyed(labels, colours, expected="one node per label")
 
 
 def colour_literals(text: str) -> Iterator[tuple[str, Rgb]]:
@@ -102,11 +102,19 @@ def _sankey_trace(figure: str) -> dict[str, Any]:
 
 def _by_link(figure: str, attribute: str) -> dict[tuple[str, str], Any]:
     sankey = _sankey_trace(figure)
-    labels, link = sankey["node"]["label"], sankey["link"]
+    labels = sankey["node"]["label"]
+    sources, targets, attribute_values = _parallel_lists(sankey, "link", "source", "target", attribute)
     endpoints: list[tuple[str, str]] = [
-        (labels[source], labels[target]) for source, target in zip(link["source"], link["target"], strict=True)
+        (labels[source], labels[target]) for source, target in zip(sources, targets, strict=True)
     ]
-    return _keyed(endpoints, link[attribute], expected="one link per source and target")
+    return _keyed(endpoints, attribute_values, expected="one link per source and target")
+
+
+def _parallel_lists(sankey: dict[str, Any], part: str, *attributes: str) -> list[list[Any]]:
+    lengths = {attribute: len(sankey[part][attribute]) for attribute in attributes}
+    if len(set(lengths.values())) > 1:
+        raise ValueError(f"Expected each of the Sankey's {part} lists to hold one entry per {part}; got lengths {lengths}")
+    return [sankey[part][attribute] for attribute in attributes]
 
 
 def _keyed(keys: Sequence[_Key], values: Sequence[_Value], *, expected: str) -> dict[_Key, _Value]:
