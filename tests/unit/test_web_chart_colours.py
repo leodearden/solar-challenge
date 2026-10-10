@@ -56,6 +56,7 @@ from tests._dashboard_sources import (
     tailwind_config_source,
 )
 from tests._finance_builders import make_fleet_results, make_sim_results
+from tests._plotly_figure import Rgb, colour_literals
 
 _CHART_COLOURS = frozenset(colour.lower() for colour in COLOUR_PALETTE.values())
 
@@ -91,24 +92,6 @@ def test_no_dashboard_source_writes_out_a_chart_colour() -> None:
     )
 
 
-Rgb = tuple[int, int, int]
-_COLOUR_LITERAL = re.compile(
-    r"#(?P<hex>[0-9a-f]{6})"
-    r"|rgba?\(\s*(?P<red>\d+)\s*,\s*(?P<green>\d+)\s*,\s*(?P<blue>\d+)\s*(?:,\s*[\d.]+\s*)?\)",
-    re.IGNORECASE,
-)
-
-
-def _colour_literals(text: str) -> Iterator[tuple[str, Rgb]]:
-    """Each #rrggbb, rgb() or rgba() colour written in *text*, with its red, green and blue."""
-    for match in _COLOUR_LITERAL.finditer(text):
-        if match["hex"] is not None:
-            red, green, blue = bytes.fromhex(match["hex"])
-        else:
-            red, green, blue = (int(match[channel]) for channel in ("red", "green", "blue"))
-        yield match.group(), (red, green, blue)
-
-
 def _strings(node: object) -> Iterator[str]:
     """Every string leaf of the dicts and lists under *node*."""
     if isinstance(node, str):
@@ -125,7 +108,7 @@ def _drawn_colours(figure_json: str) -> dict[str, Rgb]:
     """Each colour *figure_json* draws, by how it is written; Plotly's default template is skipped."""
     figure = json.loads(figure_json)
     figure["layout"].pop("template", None)
-    return dict(literal for text in _strings(figure) for literal in _colour_literals(text))
+    return dict(literal for text in _strings(figure) for literal in colour_literals(text))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -144,11 +127,11 @@ def recolouring(monkeypatch: pytest.MonkeyPatch) -> _Recolouring:
     other role and equals no shipped colour. A figure that draws a substitute therefore
     names the one role it reads, even where several shipped roles share one hue.
     """
-    shipped = frozenset(rgb for colour in COLOUR_PALETTE.values() for _, rgb in _colour_literals(colour))
+    shipped = frozenset(rgb for colour in COLOUR_PALETTE.values() for _, rgb in colour_literals(colour))
     for index, role in enumerate(list(COLOUR_PALETTE), start=1):
         monkeypatch.setitem(COLOUR_PALETTE, role, f"#0000{index:02x}")
     substitutes = {
-        role: rgb for role, colour in COLOUR_PALETTE.items() for _, rgb in _colour_literals(colour)
+        role: rgb for role, colour in COLOUR_PALETTE.items() for _, rgb in colour_literals(colour)
     }
     assert shipped.isdisjoint(substitutes.values()), (
         "a substitute colour equals a shipped one, so the check is blind to it"
