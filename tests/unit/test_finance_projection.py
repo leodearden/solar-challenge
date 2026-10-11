@@ -150,6 +150,7 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
         ("totals", "refused"),
         [
             pytest.param({"self_kwh": math.inf}, "fleet_sc=inf, fleet_revenue=inf", id="infinite-self-consumption"),
+            pytest.param({"export_kwh": math.inf}, "fleet_exp=inf", id="infinite-export"),
             pytest.param(
                 {"import_kwh": math.inf},
                 "fleet_sc=nan, fleet_imp=inf, fleet_revenue=nan",
@@ -164,6 +165,8 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
 
         With demand and import both infinite, basis-C own-use (demand − import)
         is inf − inf = NaN, so the NaN arises in the projection's own arithmetic.
+        An infinite export leaves revenue finite: the scenario sets no SEG rate
+        and the fleet's export revenue is £0, so its SEG income is £0.
         """
         from solar_challenge.finance import project_multi_year
 
