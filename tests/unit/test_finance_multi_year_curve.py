@@ -126,6 +126,14 @@ class TestYearPoint:
                 fleet_revenue_gbp=0.0,
             )
 
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, 2.5, True])
+    def test_a_year_that_is_not_a_whole_number_is_refused_naming_it(self, value: float) -> None:
+        """A year that is NaN, infinite, fractional or a bool is refused, naming year and the value."""
+        with pytest.raises(ValueError) as exc_info:
+            dataclasses.replace(self._make_valid(), year=value)
+
+        assert str(exc_info.value) == f"year must be a whole number >= 0, got {value!r}"
+
     def test_negative_energy_raises(self) -> None:
         """Negative fleet energies raise ValueError."""
         from solar_challenge.finance import YearPoint
