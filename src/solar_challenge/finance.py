@@ -987,6 +987,7 @@ class YearPoint:
     installation).  SOH fractions are mean fleet values:
     ``pv_soh`` from :func:`pv.calculate_degradation_factor`; ``battery_soh``
     from :func:`battery.compute_soh` (1.0 when the fleet has no batteries).
+    Every number must be finite.
 
     Energy fields and ``fleet_revenue_gbp`` share one 365-day basis.  On a
     simulation window under 360 days, :func:`project_multi_year` scales each
@@ -1041,7 +1042,7 @@ class YearPoint:
     """Total grid import by the fleet that year (kWh, ≥ 0)."""
 
     fleet_revenue_gbp: float
-    """CBS revenue (own-use + SEG + grid-services topper) (£)."""
+    """CBS revenue (own-use + SEG + grid-services topper) (£); finite, and may have any sign."""
 
     def __post_init__(self) -> None:
         whole_year = whole_number(self.year)
@@ -1065,6 +1066,10 @@ class YearPoint:
                 raise ValueError(
                     f"{field_name} must be >= 0 and finite, got {kwh!r}"
                 )
+        if not -math.inf < self.fleet_revenue_gbp < math.inf:
+            raise ValueError(
+                f"fleet_revenue_gbp must be finite, got {self.fleet_revenue_gbp!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
