@@ -186,6 +186,28 @@ these cases. With a battery, `simulate_timestep`'s built-in dispatch strategies
 refuse a negative power, as on the tag. Consumers that build results with flows
 of 0 or more, and pass powers of 0 or more, need no change when they re-pin.
 
+**Unreleased on main** (task 633): `Battery.charge` and `Battery.discharge`
+raise `ValueError` before moving any energy, leaving the battery unchanged, for
+a NaN `power_kw` and for a `duration_minutes` that is not positive and finite:
+NaN, infinite, 0 or negative. The 0.5.0 tag refuses only a negative power. A
+power of `inf` is still accepted, at the battery's maximum rate. On the tag, a
+NaN power or duration returns NaN and makes the SOC NaN, where it stays through
+every later call; a negative duration returns a negative amount and moves the
+SOC the wrong way; an infinite duration fills or empties the battery, or makes
+the SOC NaN at a power of 0; and a duration of 0 moves no energy. The message
+for a negative power now ends in its unit, as in
+`Charge power must be non-negative, got -1.0 kW`. `simulate_timestep` passes
+its `timestep_minutes` to the battery, and its built-in dispatch strategies
+refuse only a timestep of 0 or less, so with a NaN or infinite timestep a step
+whose strategy charges or discharges now raises this `ValueError` with the SOC
+unchanged; the tag returns that step, with the SOC NaN or the battery filled or
+emptied. With a dispatch strategy of the consumer's own that does not refuse a
+timestep of 0 or less, such a step raises the same `ValueError`, where the tag
+returns it. While generation and demand are 0 or more, `simulate_timestep_tou`
+passes the battery such a duration only with a negative power, which the battery
+refuses as on the tag. Consumers that pass a power of 0 or more and a positive,
+finite duration need no change when they re-pin.
+
 **Unreleased on main** (task 436): `SimulationResults`, reached through
 `FleetResults.per_home_results`, is frozen, so that each of its series stays
 named the column `to_dataframe()` writes it under. Assigning to one of its

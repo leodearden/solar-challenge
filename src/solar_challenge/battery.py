@@ -45,6 +45,21 @@ def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge
         raise ValueError(f"Max {direction} power must be positive and finite, got {kw} kW")
 
 
+def _require_valid_request(
+    direction: Literal["charge", "discharge"], power_kw: float, duration_minutes: float
+) -> None:
+    """Refuse a *direction* request unless its power is >= 0 and its duration is positive and finite."""
+    if not power_kw >= 0:
+        raise ValueError(
+            f"{direction.capitalize()} power must be non-negative, got {power_kw} kW"
+        )
+    if not 0 < duration_minutes < math.inf:
+        raise ValueError(
+            f"{direction.capitalize()} duration must be positive and finite, "
+            f"got {duration_minutes} minutes"
+        )
+
+
 def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> None:
     """Refuse a battery capacity setting unless it is >= 0 and finite; 0 means no battery."""
     if not 0 <= capacity_kwh < math.inf:
@@ -416,14 +431,18 @@ class Battery:
         """Charge the battery.
 
         Args:
-            power_kw: Charging power in kW (before efficiency losses)
-            duration_minutes: Duration of charging in minutes
+            power_kw: Charging power in kW (before efficiency losses), at least 0;
+                inf asks for the maximum charge rate
+            duration_minutes: Duration of charging in minutes, positive and finite
 
         Returns:
             Actual energy charged in kWh (after efficiency losses)
+
+        Raises:
+            ValueError: If power_kw is below 0 or NaN, or duration_minutes is not
+                positive and finite; the battery is left unchanged.
         """
-        if power_kw < 0:
-            raise ValueError(f"Charge power must be non-negative, got {power_kw}")
+        _require_valid_request("charge", power_kw, duration_minutes)
 
         # Limit to max charge rate
         actual_power = min(power_kw, self.config.max_charge_kw)
@@ -447,14 +466,18 @@ class Battery:
         """Discharge the battery.
 
         Args:
-            power_kw: Requested discharge power in kW
-            duration_minutes: Duration of discharging in minutes
+            power_kw: Requested discharge power in kW, at least 0; inf asks for the
+                maximum discharge rate
+            duration_minutes: Duration of discharging in minutes, positive and finite
 
         Returns:
             Actual energy output in kWh (after efficiency losses)
+
+        Raises:
+            ValueError: If power_kw is below 0 or NaN, or duration_minutes is not
+                positive and finite; the battery is left unchanged.
         """
-        if power_kw < 0:
-            raise ValueError(f"Discharge power must be non-negative, got {power_kw}")
+        _require_valid_request("discharge", power_kw, duration_minutes)
 
         # Limit to max discharge rate
         actual_power = min(power_kw, self.config.max_discharge_kw)
