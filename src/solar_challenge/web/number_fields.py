@@ -10,6 +10,8 @@ count through as_whole_number, or through as_whole_number_within for a count wit
 import math
 from typing import Any
 
+from solar_challenge.whole_numbers import whole_number
+
 
 def as_int(value: Any, field: str) -> int:
     """Return *value* read as int() reads it.
@@ -59,10 +61,10 @@ def as_whole_number(value: Any, field: str) -> int:
         ValueError: If :func:`as_finite_float` refuses *value*, or it has a fractional part;
             the whole-number error names *field* and the value sent.
     """
-    number = as_finite_float(value, field)
-    if not number.is_integer():
+    whole = whole_number(as_finite_float(value, field))
+    if whole is None:
         raise ValueError(f"{field} must be a whole number, got {value!r}")
-    return int(number)
+    return whole
 
 
 def as_whole_number_within(value: Any, field: str, low: int, high: int) -> int:
