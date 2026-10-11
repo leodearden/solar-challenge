@@ -279,12 +279,13 @@ number: the tag accepts NaN and +inf for `standing_charge_pence_per_day`,
 NaN, an infinity or a fraction raises "must be a finite whole number", where the
 tag accepts e.g. `20.5` and stores it; a whole-number float or numpy integer is
 held as the plain int it equals. `parse_finance_config`, and so `load_scenarios`
-and the finance CLIs, also refuse a YAML boolean for any numeric `finance` or
-`grid_services_events` key, which the tag reads as 1.0 or 0.0, and a fractional
-year, which the tag truncates with `int()`; an integer too large for a float, or
-an infinite count, is a `ConfigurationError` where the tag raises a raw
-`OverflowError`. Consumers fix such inputs when they re-pin, and any `except
-OverflowError` around `parse_finance_config` can go.
+and the finance CLIs, also refuse a YAML boolean, which the tag reads as 1.0
+or 0.0, for any numeric scalar `finance` or `grid_services_events` key and for
+an event window's `event_hours`, and a fractional year, which the tag truncates
+with `int()`; an integer too large for a float, or an infinite count, is a
+`ConfigurationError` where the tag raises a raw `OverflowError`. Consumers fix
+such inputs when they re-pin, and any `except OverflowError` around
+`parse_finance_config` can go.
 
 **Unreleased on main** (task 318): `SimulationResults`, reached through
 `FleetResults.per_home_results`, gains the classmethod
