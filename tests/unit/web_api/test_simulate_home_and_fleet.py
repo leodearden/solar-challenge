@@ -1,14 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for POST /api/simulate/home and POST /api/simulate/fleet, and for how the simulate endpoints parse and refuse a home config."""
 
+import math
 from unittest.mock import MagicMock
 
 import pytest
 
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._html_page import element_attributes
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
 
 
@@ -83,6 +86,38 @@ class TestSimulateHomeAPI:
         )
         assert resp.status_code == 400
         assert "PV capacity" in resp.get_json()["error"]
+
+    def test_consumption_at_either_end_the_home_page_allows_is_accepted_and_one_step_beyond_is_refused_submitting_nothing(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """consumption_kwh at either end of the min and max the home page serves on its input returns 201, and one float step beyond either returns 400 naming it."""
+        page = client.get("/simulate/home").get_data(as_text=True)
+        [consumption_input] = [
+            attributes
+            for attributes in element_attributes(page, "input")
+            if attributes.get("id") == "consumption_kwh"
+        ]
+        low, high = float(consumption_input["min"]), float(consumption_input["max"])
+
+        def post_home_consuming(consumption_kwh: float) -> TestResponse:
+            return client.post(
+                "/api/simulate/home", json={**VALID_HOME_PAYLOAD, "consumption_kwh": consumption_kwh}
+            )
+
+        for value in (math.nextafter(low, -math.inf), math.nextafter(high, math.inf)):
+            response = post_home_consuming(value)
+            assert response.status_code == 400, (
+                f"consumption_kwh {value!r}, beyond what the page allows, was accepted"
+            )
+            error = response.get_json()["error"]
+            assert "consumption_kwh" in error, error
+            assert repr(value) in error, error
+        mock_job_manager.submit_home_job.assert_not_called()
+        for value in (low, high):
+            response = post_home_consuming(value)
+            assert response.status_code == 201, (
+                f"consumption_kwh {value!r}, which the page allows, was refused: {response.get_json()}"
+            )
 
     def test_negative_battery_returns_400(self, client: FlaskClient) -> None:
         """A negative battery capacity is refused with a 400 naming battery_kwh and the value sent."""
