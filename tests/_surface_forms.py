@@ -10,8 +10,6 @@ bodies, so undeclared_attributes and unset_attributes check the attributes a cla
 declares against those its own source sets on self.
 
 tests/unit/test_surface_forms_helper.py pins each function's rules, one rule per test.
-tests/unit/test_surface_forms_type_check.py holds the module to the project's type check,
-mypy with pyproject.toml's [tool.mypy].
 
 Usage::
 
