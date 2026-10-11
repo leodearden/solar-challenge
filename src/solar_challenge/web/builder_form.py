@@ -12,7 +12,7 @@ a scenario with no tariff, or no SEG.
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import Any, Optional
 
 from solar_challenge.config import (
     ConfigurationError,
@@ -21,6 +21,7 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.scenario_writer import location_block, scenario_yaml
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.number_fields import as_finite_float, as_whole_number
 from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
@@ -28,25 +29,10 @@ from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require
 _BUILDER_FORM = "Builder form"
 
 
-class _Component(NamedTuple):
-    """A fleet component the builder distributes: its form keys, and where its spec goes in the grammar."""
-
-    prefix: str
-    fixed_field: str
-    block: str
-    grammar_key: str
-
-
 def _prefixed(prefix: str, *keys: str) -> dict[str, str]:
     """Each of *keys*, mapped to the form field that carries it for the component with *prefix*."""
     return {key: f"{prefix}_{key}" for key in keys}
 
-
-_COMPONENTS = (
-    _Component("pv", "pv_capacity_kw", "pv", "capacity_kw"),
-    _Component("battery", "battery_capacity_kwh", "battery", "capacity_kwh"),
-    _Component("load", "annual_consumption_kwh", "load", "annual_consumption_kwh"),
-)
 
 _DISTRIBUTION_FIELDS = (
     "distribution_type",
@@ -74,11 +60,11 @@ _RECOGNISED_KEYS = frozenset(
         "import_rate",
         "seg_rate_pence_per_kwh",
     }
-    | {component.fixed_field for component in _COMPONENTS}
+    | {component.fixed_field for component in FLEET_COMPONENTS.values()}
     | {
         form_key
-        for component in _COMPONENTS
-        for form_key in _prefixed(component.prefix, *_DISTRIBUTION_FIELDS).values()
+        for component in FLEET_COMPONENTS.values()
+        for form_key in _prefixed(component.key, *_DISTRIBUTION_FIELDS).values()
     }
 )
 
@@ -141,7 +127,7 @@ def _present_fields(form: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
-    """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and a fixed PV size of 0.5-20 kW.
+    """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and each fleet component's fixed value within its fixed_range.
 
     A value its number reader refuses is left to scenario_from_builder_form to report.
     """
@@ -150,9 +136,14 @@ def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
         errors.append("Scenario name is required.")
     if not _home_count_allowed(_readable(fields, "n_homes", as_whole_number)):
         errors.append(f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}.")
-    pv_capacity_kw = _readable(fields, "pv_capacity_kw", as_finite_float)
-    if pv_capacity_kw is not None and not 0.5 <= pv_capacity_kw <= 20.0:
-        errors.append("PV capacity must be between 0.5 and 20 kW.")
+    for component in FLEET_COMPONENTS.values():
+        fixed_value = _readable(fields, component.fixed_field, as_finite_float)
+        if fixed_value is not None and not component.admits_fixed_value(fixed_value):
+            low, high = component.fixed_range
+            errors.append(
+                f"{component.heading} must be between {low:g} and {high:g}, "
+                f"got {fields[component.fixed_field]!r}."
+            )
     return errors
 
 
@@ -251,14 +242,14 @@ def _fleet_distribution_block(fields: Mapping[str, Any]) -> dict[str, Any]:
     block: dict[str, Any] = {}
     if "n_homes" in fields:
         block["n_homes"] = as_whole_number(fields["n_homes"], "n_homes")
-    for component in _COMPONENTS:
-        block[component.block] = _component_block(fields, component)
+    for component in FLEET_COMPONENTS.values():
+        block[component.key] = _component_block(fields, component)
     return block
 
 
-def _component_block(fields: Mapping[str, Any], component: _Component) -> dict[str, Any]:
+def _component_block(fields: Mapping[str, Any], component: FleetComponent) -> dict[str, Any]:
     """*component*'s block: the distribution the form sets a type for, else the form's fixed value."""
-    form_keys = _prefixed(component.prefix, *_DISTRIBUTION_FIELDS)
+    form_keys = _prefixed(component.key, *_DISTRIBUTION_FIELDS)
     if form_keys["distribution_type"] in fields:
         return {component.grammar_key: _distribution_spec(fields, form_keys)}
     return _present_numbers(fields, {component.grammar_key: component.fixed_field})
