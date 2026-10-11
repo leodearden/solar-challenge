@@ -94,6 +94,7 @@ def simulate_home_page() -> str:
     """Render the enhanced home simulation configuration page."""
     return str(render_template(
         "simulate/home.html",
+        fleet_components=FLEET_COMPONENTS,
         seg_presets=SEG_PRESETS,
     ))
 

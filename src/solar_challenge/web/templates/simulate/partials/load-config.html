@@ -1,11 +1,14 @@
 {# Load (consumption) configuration partial for the home simulation form.
-   Expected parent x-data must include formData object with load fields. #}
+   Expected parent x-data must include formData object with load fields.
+   The page's context holds fleet_components (FLEET_COMPONENTS in web/fleet_components.py), whose load
+   component bounds and steps the annual consumption input. #}
 
 <div class="space-y-6">
     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Household Load Profile</h3>
     <p class="text-sm text-slate-500 dark:text-slate-400">Configure the household energy consumption pattern.</p>
 
     <!-- Annual consumption -->
+    {% with load = fleet_components.load %}
     <div class="space-y-1.5">
         <label for="consumption_kwh" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Annual Consumption</label>
         <div class="relative">
@@ -13,9 +16,9 @@
                 type="number"
                 id="consumption_kwh"
                 name="consumption_kwh"
-                min="500"
-                max="20000"
-                step="100"
+                min="{{ load.fixed_range[0] }}"
+                max="{{ load.fixed_range[1] }}"
+                step="{{ load.step }}"
                 x-model.number="formData.consumption_kwh"
                 class="w-full px-3 py-2 pr-14 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
             >
@@ -23,6 +26,7 @@
         </div>
         <p class="text-xs text-slate-500 dark:text-slate-400">UK average is approximately 3,500 kWh/year (Ofgem TDCV medium)</p>
     </div>
+    {% endwith %}
 
     <!-- Occupants selector -->
     <div class="space-y-1.5">
