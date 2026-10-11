@@ -1,6 +1,7 @@
 """Tests for the background simulation API endpoints and job lifecycle."""
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -70,6 +71,16 @@ class _RecordingSimulation:
 def _a_failing_simulation(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
     """Stands in for simulate_home: every job it runs fails."""
     raise RuntimeError("the simulation failed")
+
+
+_A_MESSAGE_SQLITE_CANNOT_STORE = "the simulation failed on " + chr(0xDCFF)
+
+
+def _a_simulation_failing_with_a_message_sqlite_cannot_store(
+    config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
+) -> SimulationResults:
+    """Stands in for simulate_home: every job it runs fails with a message holding a lone surrogate, which sqlite3 cannot bind."""
+    raise RuntimeError(_A_MESSAGE_SQLITE_CANNOT_STORE)
 
 
 class _BlockingSimulation:
@@ -682,6 +693,22 @@ def _refuse_new_rows(storage: RunStorage, table: str) -> None:
         )
 
 
+def _refuse_failed_rows(storage: RunStorage, table: str) -> None:
+    """Make storage's database refuse every update that marks a row of *table* failed."""
+    with get_db(storage.db_path) as conn:
+        conn.execute(
+            f"CREATE TRIGGER refuse_failed_{table} BEFORE UPDATE ON {table} WHEN NEW.status = 'failed' "
+            f"BEGIN SELECT RAISE(ABORT, 'the database refuses failed {table} rows'); END"
+        )
+
+
+_JOBS_LOGGER = "solar_challenge.web.jobs"
+
+
+def _records_logged_by_jobs_py(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if record.name == _JOBS_LOGGER]
+
+
 def _ids_with_a_status(manager: JobManager, ids: list[str]) -> list[str]:
     return [job_id for job_id in ids if manager.get_job_status(job_id) is not None]
 
@@ -1127,6 +1154,100 @@ class TestJobManagerRefusedRows:
         assert ids.issued
         assert _ids_with_a_status(manager, ids.issued) == []
         assert storage.list_runs() == []
+
+
+class TestJobManagerUnrecordedFailures:
+    """Tests for a failed job whose failure the database does not record in its jobs row or in its run's row."""
+
+    @pytest.mark.parametrize("table", ["jobs", "runs"])
+    def test_a_failure_a_table_refuses_to_record_is_logged_naming_the_job_its_run_and_the_refusal(
+        self, table: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        _refuse_failed_rows(storage, table)
+        manager = JobManager(max_workers=1, simulate_home=_a_failing_simulation, new_id=_CountingIds())
+
+        with caplog.at_level(logging.ERROR, logger=_JOBS_LOGGER):
+            _submit_home_job(manager, tmp_path)
+            assert manager.wait_until_idle(timeout=30)
+
+        records = _records_logged_by_jobs_py(caplog)
+        assert [(record.levelno, record.getMessage()) for record in records] == [
+            (
+                logging.ERROR,
+                f"Could not record in the {table} table that job id-1 of run id-2 failed with 'the simulation failed'",
+            )
+        ]
+        assert records[0].exc_info is not None
+        refusal = records[0].exc_info[1]
+        assert (type(refusal), str(refusal)) == (sqlite3.IntegrityError, f"the database refuses failed {table} rows")
+        assert (type(refusal.__context__), str(refusal.__context__)) == (RuntimeError, "the simulation failed")
+
+    @pytest.mark.parametrize(
+        ("refused", "job_row_status", "run_status"),
+        [("jobs", "running", "failed"), ("runs", "failed", "running")],
+        ids=["jobs-refused", "runs-refused"],
+    )
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_failure_one_table_refuses_to_record_is_still_recorded_in_the_other(
+        self,
+        submit_job: Callable[[JobManager, Path], str],
+        refused: str,
+        job_row_status: str,
+        run_status: str,
+        tmp_path: Path,
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        _refuse_failed_rows(storage, refused)
+        manager = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
+        job_id = submit_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+
+        row = _job_row(storage, job_id)
+        run = _run_of_job(manager, job_id, storage)
+
+        assert (row["status"], run.status) == (job_row_status, run_status)
+
+    @pytest.mark.parametrize("table", ["jobs", "runs"])
+    def test_a_job_whose_failure_a_table_refuses_to_record_is_still_reported_failed_with_its_error_event(
+        self, table: str, tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        _refuse_failed_rows(storage, table)
+        manager = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
+        job_id = _submit_home_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+
+        state = manager.get_job_status(job_id)
+
+        assert state is not None
+        assert (state.status, state.message) == ("failed", "the simulation failed")
+        assert list(manager.get_events(job_id))[-1] == {
+            "event": "error",
+            "data": {"status": "failed", "message": "the simulation failed"},
+        }
+
+    def test_a_failure_whose_message_sqlite_cannot_store_is_logged_for_each_table_and_still_reported(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        manager = JobManager(
+            max_workers=1, simulate_home=_a_simulation_failing_with_a_message_sqlite_cannot_store, new_id=_CountingIds()
+        )
+
+        with caplog.at_level(logging.ERROR, logger=_JOBS_LOGGER):
+            job_id = _submit_home_job(manager, tmp_path)
+            assert manager.wait_until_idle(timeout=30)
+
+        records = _records_logged_by_jobs_py(caplog)
+        assert [(record.levelno, record.getMessage()) for record in records] == [
+            (
+                logging.ERROR,
+                f"Could not record in the {table} table that job id-1 of run id-2 failed with {_A_MESSAGE_SQLITE_CANNOT_STORE!r}",
+            )
+            for table in ("jobs", "runs")
+        ]
+        assert [type(record.exc_info[1]) for record in records if record.exc_info] == [UnicodeEncodeError] * 2
+        assert _status_of(manager, job_id) == "failed"
 
 
 class TestJobManagerShutdown:
