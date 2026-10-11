@@ -1183,30 +1183,38 @@ class TestJobManagerUnrecordedFailures:
         assert (type(refusal), str(refusal)) == (sqlite3.IntegrityError, f"the database refuses failed {table} rows")
         assert (type(refusal.__context__), str(refusal.__context__)) == (RuntimeError, "the simulation failed")
 
-    @pytest.mark.parametrize(
-        ("refused", "job_row_status", "run_status"),
-        [("jobs", "running", "failed"), ("runs", "failed", "running")],
-        ids=["jobs-refused", "runs-refused"],
-    )
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
-    def test_a_failure_one_table_refuses_to_record_is_still_recorded_in_the_other(
-        self,
-        submit_job: Callable[[JobManager, Path], str],
-        refused: str,
-        job_row_status: str,
-        run_status: str,
-        tmp_path: Path,
+    def test_a_failure_the_jobs_table_refuses_to_record_is_still_recorded_in_the_runs_table(
+        self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
     ) -> None:
         storage = _run_storage(tmp_path)
-        _refuse_failed_rows(storage, refused)
+        _refuse_failed_rows(storage, "jobs")
+        manager = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
+        job_id = submit_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+
+        run = _run_of_job(manager, job_id, storage)
+
+        assert _job_row(storage, job_id)["status"] == "running"
+        assert (run.status, run.error_message) == ("failed", "the simulation failed")
+        assert run.completed_at is not None
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_failure_the_runs_table_refuses_to_record_is_still_recorded_in_the_jobs_table(
+        self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        _refuse_failed_rows(storage, "runs")
         manager = JobManager(max_workers=1, simulate_home=_a_failing_simulation)
         job_id = submit_job(manager, tmp_path)
         assert manager.wait_until_idle(timeout=30)
 
         row = _job_row(storage, job_id)
-        run = _run_of_job(manager, job_id, storage)
 
-        assert (row["status"], run.status) == (job_row_status, run_status)
+        assert _run_of_job(manager, job_id, storage).status == "running"
+        assert (row["status"], row["message"]) == ("failed", "the simulation failed")
+        assert "RuntimeError: the simulation failed" in row["error_traceback"]
+        assert row["completed_at"] is not None
 
     @pytest.mark.parametrize("table", ["jobs", "runs"])
     def test_a_job_whose_failure_a_table_refuses_to_record_is_still_reported_failed_with_its_error_event(
