@@ -50,3 +50,21 @@ def test_results_have_no_battery_activity_no_heat_pump_and_no_prices() -> None:
     ):
         assert (series == 0.0).all(), series.name
     assert results.heat_pump_load is None
+
+
+@pytest.mark.parametrize(
+    ("shape", "peak_kw", "flat_kw"),
+    [
+        pytest.param({}, 3.0, 0.5, id="by-default"),
+        pytest.param({"peak_generation_kw": 4.0, "demand_kw": 0.7}, 4.0, 0.7, id="as-given"),
+    ],
+)
+def test_generation_peaks_and_demand_is_flat_at_the_kw_given(
+    shape: dict[str, float], peak_kw: float, flat_kw: float
+) -> None:
+    results = make_sinusoidal_sim_results(days=1, **shape)
+
+    assert results.generation.max() == pytest.approx(peak_kw)
+    assert (results.demand == flat_kw).all()
+    assert results.grid_import.max() == pytest.approx(flat_kw)
+    assert results.grid_export.max() == pytest.approx(peak_kw - flat_kw)
