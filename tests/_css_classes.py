@@ -22,8 +22,10 @@ A template applies classes through:
 - ``className`` assignments and ``classList`` add/remove/toggle/replace calls in
   inline ``<script>`` blocks, the same channel applied_classes_in_script reads
   in a standalone script;
-- Jinja string constants bound to macro parameters or call keywords named
-  ``classes`` or ending ``_class``.
+- Jinja string constants bound to a macro parameter, a call keyword or a
+  ``{% set %}`` variable named ``classes`` or ending ``_class`` or ``_classes``;
+  of a dict, only its values, since a key picks a class list rather than naming
+  one.
 
 Two gaps are known and unchecked: classes returned by Alpine methods or getters
 defined in JS, and classes composed inside other Jinja expressions. Both make
@@ -295,14 +297,19 @@ def _split(class_lists: Iterable[str]) -> set[str]:
 
 
 def _jinja_class_arguments(source: str) -> list[str]:
-    """String constants *source* binds to Jinja parameters named ``classes`` or ending ``_class``."""
+    """String constants *source* binds to Jinja names that name classes."""
     tree = _JINJA.parse(source)
     return [
         constant
-        for parameter, value in [*_call_keywords(tree), *_macro_defaults(tree)]
-        if parameter == "classes" or parameter.endswith("_class")
+        for name, value in [*_call_keywords(tree), *_macro_defaults(tree), *_set_variables(tree)]
+        if _names_classes(name)
         for constant in _string_constants(value)
     ]
+
+
+def _names_classes(name: str) -> bool:
+    """Whether a macro parameter, call keyword or ``{% set %}`` variable named *name* carries classes."""
+    return name == "classes" or name.endswith(("_class", "_classes"))
 
 
 def _call_keywords(tree: nodes.Template) -> list[tuple[str, nodes.Expr]]:
@@ -318,10 +325,28 @@ def _macro_defaults(tree: nodes.Template) -> list[tuple[str, nodes.Expr]]:
     ]
 
 
-def _string_constants(expression: nodes.Expr) -> list[str]:
-    """Every string constant in *expression*, itself included, so both branches of a conditional count."""
-    candidates = [expression, *expression.find_all(nodes.Const)]
-    return [value for node in candidates if (value := _string_value(node)) is not None]
+def _set_variables(tree: nodes.Template) -> list[tuple[str, nodes.Expr]]:
+    """(name, value) for every ``{% set name = value %}``; a tuple target and a
+    ``{% set %}...{% endset %}`` block are not read."""
+    return [
+        (assignment.target.name, assignment.node)
+        for assignment in tree.find_all(nodes.Assign)
+        if isinstance(assignment.target, nodes.Name)
+    ]
+
+
+def _string_constants(expression: nodes.Node) -> list[str]:
+    """Every string constant in *expression*, itself included, so both branches of a conditional
+    count; of a dict, only its values."""
+    value = _string_value(expression)
+    if value is not None:
+        return [value]
+    children: list[nodes.Node]
+    if isinstance(expression, nodes.Dict):
+        children = [pair.value for pair in expression.items]
+    else:
+        children = list(expression.iter_child_nodes())
+    return [constant for child in children for constant in _string_constants(child)]
 
 
 def _string_value(node: nodes.Node) -> str | None:

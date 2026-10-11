@@ -100,3 +100,43 @@
     class="{{ width_class }} h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-primary-500 [&::-webkit-slider-thumb]:bg-primary-500 dark:[&::-webkit-slider-thumb]:bg-primary-400 [&::-moz-range-thumb]:bg-primary-500 dark:[&::-moz-range-thumb]:bg-primary-400"
 >
 {% endmacro %}
+
+
+{# Run badges: a pill naming a run's status or type in that value's colours; a value with none of its own is drawn neutral #}
+{% set _badge_shape_classes = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium' %}
+{% set _neutral_badge_classes = 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300' %}
+{% set _run_status_badge_classes = {
+    'pending': _neutral_badge_classes,
+    'running': 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
+    'completed': 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+    'failed': 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+} %}
+{% set _run_type_badge_classes = {
+    'home': 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
+    'fleet': 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+    'sweep': 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
+} %}
+
+
+{# A run's status as a badge #}
+{% macro run_status_badge(status) %}
+<span class="{{ _badge_shape_classes }} {{ _run_status_badge_classes.get(status, _neutral_badge_classes) }}">{{ status }}</span>
+{% endmacro %}
+
+
+{# A badge showing the run status the Alpine expression status_expression holds, recoloured as it changes #}
+{% macro bound_run_status_badge(status_expression) %}
+<span class="{{ _badge_shape_classes }}" :class='{{ _run_status_badge_classes | tojson }}[{{ status_expression }}] ?? {{ _neutral_badge_classes | tojson }}' x-text="{{ status_expression }}"></span>
+{% endmacro %}
+
+
+{# A run's type as a badge #}
+{% macro run_type_badge(type) %}
+<span class="{{ _badge_shape_classes }} {{ _run_type_badge_classes.get(type, _neutral_badge_classes) }}">{{ type }}</span>
+{% endmacro %}
+
+
+{# A badge showing the run type the Alpine expression type_expression holds, recoloured as it changes #}
+{% macro bound_run_type_badge(type_expression) %}
+<span class="{{ _badge_shape_classes }}" :class='{{ _run_type_badge_classes | tojson }}[{{ type_expression }}] ?? {{ _neutral_badge_classes | tojson }}' x-text="{{ type_expression }}"></span>
+{% endmacro %}

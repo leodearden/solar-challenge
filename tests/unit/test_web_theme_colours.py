@@ -122,8 +122,7 @@ _AMBER_ROLES = (
     _amber_role(
         "the 'running' run-status badge",
         "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
-        "templates/dashboard.html",
-        "templates/history/runs.html",
+        "templates/components/macros.html",
     ),
     _amber_role(
         "the progress bar of a run that has not completed",

@@ -93,6 +93,28 @@ def test_jinja_class_parameters_count_macro_defaults_and_call_keywords_in_both_b
     }
 
 
+def test_jinja_set_variables_naming_classes_count_their_strings_and_their_dicts_values_not_keys() -> None:
+    """A ``{% set %}`` variable named ``classes`` or ending ``_class`` or ``_classes`` carries
+    classes, as a parameter does; ``title`` does not. A dict's keys pick a class list, so only
+    its values count: none of 'running', 'failed' or 'pending' is a class."""
+    source = (
+        "{% set _badge_classes = 'inline-flex rounded-full' %}"
+        "{% set status_classes = {'running': 'bg-amber-100',"
+        " 'failed': 'bg-red-100' if loud else 'bg-red-50', 'pending': _badge_classes} %}"
+        "{% set active_class = 'font-bold' %}"
+        "{% set title = 'Recent Runs' %}"
+    )
+
+    assert applied_classes_in_template(source) == {
+        "inline-flex",
+        "rounded-full",
+        "bg-amber-100",
+        "bg-red-100",
+        "bg-red-50",
+        "font-bold",
+    }
+
+
 def test_script_counts_class_name_assignments_and_class_list_mutations_but_not_reads() -> None:
     source = (
         "bubble.className = 'rounded-lg px-4 ' +\n"
