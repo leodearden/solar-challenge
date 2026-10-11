@@ -7,7 +7,6 @@ import tempfile
 import uuid
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 pytest.importorskip("flask")
@@ -28,6 +27,7 @@ from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
 from tests._html_page import texts_after
+from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
 
 
@@ -815,56 +815,11 @@ class TestComparisonCharts:
 # ---------------------------------------------------------------------------
 
 
-def _make_sim_results(days: int = 1, gen_scale: float = 3.0, demand_val: float = 0.5) -> "SimulationResults":
-    """Create a minimal SimulationResults object for testing.
-
-    Args:
-        days: Number of simulation days.
-        gen_scale: Peak generation scale (kW).
-        demand_val: Flat demand value (kW).
-
-    Returns:
-        SimulationResults with simple but valid data.
-    """
-    from solar_challenge.home import SimulationResults
-
-    freq = "min"
-    index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
-
-    hours = np.arange(len(index)) / 60.0
-    generation = np.maximum(0, np.sin(hours * np.pi / 12) * gen_scale)
-    demand = np.full(len(index), demand_val)
-    self_consumption = np.minimum(generation, demand)
-    grid_import = np.maximum(0, demand - generation)
-    grid_export = np.maximum(0, generation - demand)
-    battery_charge = np.zeros(len(index))
-    battery_discharge = np.zeros(len(index))
-    battery_soc = np.zeros(len(index))
-
-    def _series(values: np.ndarray, name: str) -> pd.Series:
-        return pd.Series(values, index=index, name=name)
-
-    return SimulationResults(
-        generation=_series(generation, "generation_kw"),
-        demand=_series(demand, "demand_kw"),
-        self_consumption=_series(self_consumption, "self_consumption_kw"),
-        battery_charge=_series(battery_charge, "battery_charge_kw"),
-        battery_discharge=_series(battery_discharge, "battery_discharge_kw"),
-        battery_soc=_series(battery_soc, "battery_soc_kwh"),
-        grid_import=_series(grid_import, "grid_import_kw"),
-        grid_export=_series(grid_export, "grid_export_kw"),
-        import_cost=_series(np.zeros(len(index)), "import_cost_gbp"),
-        export_revenue=_series(np.zeros(len(index)), "export_revenue_gbp"),
-        tariff_rate=_series(np.zeros(len(index)), "tariff_rate_per_kwh"),
-        strategy_name="self_consumption",
-    )
-
-
 def _store_home_run(
     storage: RunStorage, run_id: str, config: HomeConfig, name: str | None = None
 ) -> None:
     """Save a one-day home run of *config* through RunStorage, as a finished job does."""
-    results = _make_sim_results(days=1)
+    results = make_sinusoidal_sim_results(days=1)
     storage.save_home_run(
         run_id=run_id,
         config=config,
@@ -877,7 +832,7 @@ def _store_home_run(
 def _store_fleet_run(storage: RunStorage, run_id: str, home_configs: list[HomeConfig]) -> None:
     """Save a one-day fleet run of *home_configs* through RunStorage, as a finished job does."""
     fleet_results = FleetResults(
-        per_home_results=[_make_sim_results(days=1) for _ in home_configs],
+        per_home_results=[make_sinusoidal_sim_results(days=1) for _ in home_configs],
         home_configs=home_configs,
     )
     storage.save_fleet_run(
@@ -910,7 +865,7 @@ class TestFleetCSVExport:
             gen_scale = 2.0 + i * 1.0  # 2.0, 3.0, 4.0
             demand_val = 0.3 + i * 0.2  # 0.3, 0.5, 0.7
 
-            results = _make_sim_results(days=1, gen_scale=gen_scale, demand_val=demand_val)
+            results = make_sinusoidal_sim_results(days=1, peak_generation_kw=gen_scale, demand_kw=demand_val)
             per_home_results.append(results)
 
             config = HomeConfig(
@@ -1004,7 +959,7 @@ class TestContentDispositionHeader:
             load_config=LoadConfig(annual_consumption_kwh=3500),
             name="Quote Test",
         )
-        results = _make_sim_results(days=1)
+        results = make_sinusoidal_sim_results(days=1)
         summary = calculate_summary(results)
 
         with app.app_context():
