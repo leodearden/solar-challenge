@@ -21,15 +21,21 @@ import pandas as pd
 from solar_challenge.home import SimulationResults
 
 
-def make_sinusoidal_sim_results(days: int = 3) -> SimulationResults:
+def make_sinusoidal_sim_results(
+    days: int = 3,
+    *,
+    peak_generation_kw: float = 3.0,
+    demand_kw: float = 0.5,
+) -> SimulationResults:
     """*days* days from midnight on 1 June 2024 at one row a minute: generation a daily sine
-    clipped at zero, demand flat and met by PV first; no battery, heat pump or prices."""
+    peaking at *peak_generation_kw* and clipped at zero, demand flat at *demand_kw* and met by
+    PV first; no battery, heat pump or prices."""
     freq = "min"
     index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
 
     hours = np.arange(len(index)) / 60.0
-    generation = np.maximum(0, np.sin(hours * np.pi / 12) * 3.0)
-    demand = np.full(len(index), 0.5)
+    generation = np.maximum(0, np.sin(hours * np.pi / 12) * peak_generation_kw)
+    demand = np.full(len(index), demand_kw)
     self_consumption = np.minimum(generation, demand)
     grid_import = np.maximum(0, demand - generation)
     grid_export = np.maximum(0, generation - demand)
