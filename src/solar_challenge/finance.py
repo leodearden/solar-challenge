@@ -1054,19 +1054,16 @@ class YearPoint:
             raise ValueError(
                 f"battery_soh must be in [0, 1], got {self.battery_soh!r}"
             )
-        if self.fleet_self_consumption_kwh < 0.0:
-            raise ValueError(
-                f"fleet_self_consumption_kwh must be ≥ 0, got "
-                f"{self.fleet_self_consumption_kwh!r}"
-            )
-        if self.fleet_export_kwh < 0.0:
-            raise ValueError(
-                f"fleet_export_kwh must be ≥ 0, got {self.fleet_export_kwh!r}"
-            )
-        if self.fleet_import_kwh < 0.0:
-            raise ValueError(
-                f"fleet_import_kwh must be ≥ 0, got {self.fleet_import_kwh!r}"
-            )
+        fleet_energies_kwh = {
+            "fleet_self_consumption_kwh": self.fleet_self_consumption_kwh,
+            "fleet_export_kwh": self.fleet_export_kwh,
+            "fleet_import_kwh": self.fleet_import_kwh,
+        }
+        for field_name, kwh in fleet_energies_kwh.items():
+            if not 0.0 <= kwh < math.inf:
+                raise ValueError(
+                    f"{field_name} must be >= 0 and finite, got {kwh!r}"
+                )
 
 
 # ---------------------------------------------------------------------------
