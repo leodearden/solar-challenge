@@ -21,6 +21,7 @@ import dataclasses
 import math
 import warnings
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Callable, Iterator, List, Mapping, NamedTuple, Optional, Sequence
 
 import numpy as np
@@ -1324,43 +1325,56 @@ def bill_distribution(
 MAX_NODES: int = 12
 
 
+class _AggregateShape(Enum):
+    """Whether a :class:`_NodeData` aggregate holds one value for the fleet or one per home, in fleet order."""
+
+    FLEET = auto()
+    PER_HOME = auto()
+
+
+_AGGREGATE_SHAPE = "aggregate_shape"
+_FLEET_AGGREGATE: Mapping[str, _AggregateShape] = {_AGGREGATE_SHAPE: _AggregateShape.FLEET}
+_PER_HOME_AGGREGATE: Mapping[str, _AggregateShape] = {_AGGREGATE_SHAPE: _AggregateShape.PER_HOME}
+
+
 @dataclass(frozen=True)
 class _NodeData:
     """Aggregates from one simulated fleet age in the forward-march.
 
     Collected once per :func:`_simulate_age` call and stored in ``sampled_data``
-    (keyed by age).  Construction refuses an aggregate that is NaN or infinite,
+    (keyed by age).  Each float aggregate gives its :class:`_AggregateShape` in
+    its field metadata, and construction refuses one that is NaN or infinite,
     naming the age and each such aggregate with its value.
     """
 
     age: int
     """System age in calendar years at which the fleet was simulated."""
 
-    fleet_sc: float
+    fleet_sc: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet billed own-use (Σ :func:`_billed_energy` own-use), annualised to a 365-day year (kWh/yr)."""
 
-    fleet_exp: float
+    fleet_exp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet grid export, annualised to a 365-day year (kWh/yr)."""
 
-    fleet_imp: float
+    fleet_imp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet grid import, annualised to a 365-day year (kWh/yr)."""
 
-    per_home_discharge: List[float]
+    per_home_discharge: tuple[float, ...] = dataclasses.field(metadata=_PER_HOME_AGGREGATE)
     """Per-home battery discharge, annualised to a 365-day year (kWh/yr)."""
 
-    mean_pv_soh: float
+    mean_pv_soh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Mean PV state-of-health across the fleet (fraction, 0–1)."""
 
-    mean_battery_soh: float
+    mean_battery_soh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Mean battery state-of-health across the fleet (fraction, 0–1)."""
 
-    fleet_revenue: float
+    fleet_revenue: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """CBS fleet revenue: own-use + SEG + grid-services (£)."""
 
     annualised_from_days: int
     """Shortest per-home simulated window (days) the energy totals were annualised from."""
 
-    per_home_throughput: List[float]
+    per_home_throughput: tuple[float, ...] = dataclasses.field(metadata=_PER_HOME_AGGREGATE)
     """Per-home cumulative battery throughput (kWh) from installation to this age, which its battery SOH counts."""
 
     def __post_init__(self) -> None:
@@ -1372,16 +1386,14 @@ class _NodeData:
             )
 
     def _aggregates(self) -> Iterator[tuple[str, float]]:
-        """Each aggregate's name and value in field order, a per-home list's entries as name[i] in fleet order."""
+        """Each aggregate's name and value in field order, a per-home aggregate's value for home i as name[i]."""
         for attribute in dataclasses.fields(self):
-            if attribute.name == "age":
-                continue
-            value = getattr(self, attribute.name)
-            if isinstance(value, list):
-                for i, entry in enumerate(value):
-                    yield f"{attribute.name}[{i}]", entry
-            else:
-                yield attribute.name, value
+            shape = attribute.metadata.get(_AGGREGATE_SHAPE)
+            if shape is _AggregateShape.FLEET:
+                yield attribute.name, getattr(self, attribute.name)
+            elif shape is _AggregateShape.PER_HOME:
+                for i, value in enumerate(getattr(self, attribute.name)):
+                    yield f"{attribute.name}[{i}]", value
 
 
 def _aged_homes(
@@ -1571,7 +1583,7 @@ def project_multi_year(
         )
         fleet_exp = sum(phys.export_kwh for _, phys in annualised_homes)
         fleet_imp = sum(phys.import_kwh for _, phys in annualised_homes)
-        per_home_discharge = [phys.battery_discharge_kwh for _, phys in annualised_homes]
+        per_home_discharge = tuple(phys.battery_discharge_kwh for _, phys in annualised_homes)
 
         # CBS fleet revenue (PRD §3.2), every term per 365-day year:
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_sc / 100
@@ -1624,7 +1636,7 @@ def project_multi_year(
             mean_battery_soh=mean_battery_soh,
             fleet_revenue=fleet_revenue,
             annualised_from_days=min(s.simulation_days for s in per_home_summaries),
-            per_home_throughput=list(cum_tp),
+            per_home_throughput=tuple(cum_tp),
         )
 
     # ---- Seed forward-march: ascending ages, each aged by _throughput_at ----
