@@ -6,7 +6,6 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
 
@@ -861,16 +860,24 @@ class TestJobManagerStatus:
             created_at=_job_row(storage, job_id)["created_at"],
         )
 
-    def test_a_reader_cannot_change_the_state_a_manager_reports(self, tmp_path: Path) -> None:
-        manager = JobManager(max_workers=1, simulate_home=_RecordingSimulation())
+    def test_a_state_the_manager_reported_stays_as_it_was_after_the_job_moves_on(
+        self, blocking_simulation: _BlockingSimulation, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
         job_id = _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+        running = manager.get_job_status(job_id)
+        assert running is not None
+
+        blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
-        state = manager.get_job_status(job_id)
-        assert state is not None
 
-        with pytest.raises(FrozenInstanceError):
-            state.status = "failed"  # type: ignore[misc]
-
+        assert (running.status, running.progress_pct, running.current_step, running.message) == (
+            "running",
+            20.0,
+            "Simulating",
+            "Running home simulation...",
+        )
         assert _status_of(manager, job_id) == "completed"
 
     def test_a_manager_does_not_know_a_job_another_manager_ran_although_its_rows_remain(
