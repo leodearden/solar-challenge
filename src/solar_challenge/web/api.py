@@ -223,10 +223,7 @@ def get_job_progress(job_id: str) -> Response:
                 )
                 return
             if state.status == "failed":
-                yield (
-                    f"event: error\n"
-                    f"data: {json.dumps({'status': state.status, 'message': state.message})}\n\n"
-                )
+                yield _job_event_frame(JobEvent("error", state))
                 return
 
             # Send heartbeat
