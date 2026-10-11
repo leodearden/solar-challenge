@@ -242,3 +242,20 @@ class TestChartTotals:
         assert traces["Daily Cost"]["y"] == [2.88, 2.88]
         assert traces["Daily Revenue"]["y"] == [1.44, 1.44]
         assert traces["Cumulative Net Savings"]["y"] == [-1.44, -2.88]
+
+
+class TestFinancialBreakdownPricing:
+    """Tests that financial_breakdown uses engine-priced series, not hardcoded rates."""
+
+    def test_uses_engine_priced_series(self) -> None:
+        """financial_breakdown must aggregate import_cost/export_revenue series directly."""
+        results = make_sinusoidal_sim_results(
+            days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
+        )
+
+        figure = json.loads(financial_breakdown(results))
+
+        traces = {trace["name"]: trace for trace in figure["data"]}
+
+        assert traces["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
+        assert traces["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
