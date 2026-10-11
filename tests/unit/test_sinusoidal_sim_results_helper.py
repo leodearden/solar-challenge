@@ -68,3 +68,18 @@ def test_generation_peaks_and_demand_is_flat_at_the_kw_given(
     assert (results.demand == flat_kw).all()
     assert results.grid_import.max() == pytest.approx(flat_kw)
     assert results.grid_export.max() == pytest.approx(peak_kw - flat_kw)
+
+
+def test_grid_import_and_export_are_priced_at_the_flat_rates_given() -> None:
+    results = make_sinusoidal_sim_results(
+        days=1, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
+    )
+
+    amounts = results.per_minute_amounts()
+    pd.testing.assert_series_equal(
+        amounts["import_cost_gbp"], amounts["grid_import_kwh"] * 0.30, check_names=False
+    )
+    pd.testing.assert_series_equal(
+        amounts["export_revenue_gbp"], amounts["grid_export_kwh"] * 0.05, check_names=False
+    )
+    assert (results.tariff_rate == 0.30).all()
