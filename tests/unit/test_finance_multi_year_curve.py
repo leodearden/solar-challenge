@@ -141,6 +141,19 @@ class TestYearPoint:
                 fleet_revenue_gbp=0.0,
             )
 
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    @pytest.mark.parametrize(
+        "field", ["fleet_self_consumption_kwh", "fleet_export_kwh", "fleet_import_kwh"]
+    )
+    def test_a_fleet_energy_that_is_not_finite_is_refused_naming_it(
+        self, field: str, value: float
+    ) -> None:
+        """A NaN or infinite fleet energy is refused, naming the field, that it must be >= 0 and finite, and the value."""
+        with pytest.raises(ValueError) as exc_info:
+            dataclasses.replace(self._make_valid(), **{field: value})
+
+        assert str(exc_info.value) == f"{field} must be >= 0 and finite, got {value!r}"
+
     def test_boundary_soh_values_valid(self) -> None:
         """SOH == 0 or 1 is valid (exact boundary)."""
         from solar_challenge.finance import YearPoint
