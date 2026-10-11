@@ -5,6 +5,7 @@ import pytest
 
 from solar_challenge.web.number_fields import (
     as_finite_float,
+    as_finite_float_within,
     as_whole_number,
     as_whole_number_within,
 )
@@ -52,6 +53,55 @@ class TestAsFiniteFloat:
         """A boolean, a value float() cannot read, one too large for a float, and ±inf or NaN are refused alike."""
         with pytest.raises(ValueError) as exc_info:
             as_finite_float(value, "pv_kw")
+        assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
+
+
+class TestAsFiniteFloatWithin:
+    """as_finite_float_within reads a value as as_finite_float does, and refuses one outside its inclusive range."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [pytest.param(0.5, 0.5, id="low"), pytest.param(20, 20.0, id="high")],
+    )
+    def test_the_range_is_inclusive_and_a_value_is_read_as_a_float(
+        self, value: object, expected: float
+    ) -> None:
+        """Both ends of the range are accepted, each returned as a float, an integer sent included."""
+        number = as_finite_float_within(value, "pv_kw", 0.5, 20)
+        assert number == expected
+        assert isinstance(number, float)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(0.49, id="below"),
+            pytest.param(20.5, id="above"),
+            pytest.param("25", id="numeric-string-above"),
+        ],
+    )
+    def test_a_value_outside_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
+        self, value: object
+    ) -> None:
+        """The refusal shows the value as sent ('25' in quotes), not the float it converts to."""
+        with pytest.raises(ValueError) as exc_info:
+            as_finite_float_within(value, "pv_kw", 0.5, 20)
+        assert str(exc_info.value) == f"pv_kw must be between 0.5 and 20, got {value!r}"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(float("inf"), id="infinity"),
+            pytest.param("abc", id="non-numeric-string"),
+            pytest.param(True, id="true"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_value_that_is_not_a_finite_number_gets_the_as_finite_float_refusal(
+        self, value: object
+    ) -> None:
+        """A value as_finite_float refuses is refused as it refuses it, before any range check."""
+        with pytest.raises(ValueError) as exc_info:
+            as_finite_float_within(value, "pv_kw", 0.5, 20)
         assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
 
 
