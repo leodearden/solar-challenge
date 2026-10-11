@@ -1002,7 +1002,11 @@ class YearPoint:
     """
 
     year: int
-    """Calendar age of the system, a whole number of years (≥ 0)."""
+    """Calendar age of the system, a whole number of years (≥ 0).
+
+    A whole-number float such as 2.0 is held as the int 2; a bool, Python's or
+    numpy's, is refused.
+    """
 
     pv_soh: float
     """Mean PV state-of-health across the fleet (fraction, 0–1)."""
@@ -1048,6 +1052,7 @@ class YearPoint:
         whole_year = whole_number(self.year)
         if whole_year is None or whole_year < 0:
             raise ValueError(f"year must be a whole number >= 0, got {self.year!r}")
+        object.__setattr__(self, "year", whole_year)
         if not (0.0 <= self.pv_soh <= 1.0):
             raise ValueError(
                 f"pv_soh must be in [0, 1], got {self.pv_soh!r}"
