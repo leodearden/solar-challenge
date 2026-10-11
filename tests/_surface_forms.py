@@ -105,13 +105,16 @@ def named_classes(obj: object) -> set[type]:
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
-    another module. What a type variable or a NewType carries is spelled in the module
-    that declares it; inside its own declaration, as in TypeVar("T", bound="Node[T]"), it
-    names no class. A type parameter, as in def f[T: "Node"](x: T), reports no module of
-    its own: what it carries is spelled in the module that spells the signature holding
-    it. That module binds no type parameter, so a string that names one, as "Node[T]"
-    names T, raises NameError. A constant names its type, and an Enum's members name
-    nothing.
+    another module; a parameter of an __init__ the dataclass decorator generated, in the
+    module of the nearest class in that MRO the decorator processed whose own body
+    annotates it, so an inherited field in the base that declares it, however a mixin
+    annotates it. What a type variable or a NewType carries is spelled in the
+    module that declares it; inside its own declaration, as in
+    TypeVar("T", bound="Node[T]"), it names no class. A type parameter, as in
+    def f[T: "Node"](x: T), reports no module of its own: what it carries is spelled in
+    the module that spells the signature holding it. That module binds no type
+    parameter, so a string that names one, as "Node[T]" names T, raises NameError. A
+    constant names its type, and an Enum's members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -425,31 +428,63 @@ def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
 
 
 def _form_classes(obj: object) -> set[type]:
-    """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name."""
+    """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it."""
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return set()
     if not (inspect.isclass(obj) or inspect.isroutine(obj)):
         return {type(obj)}
     signature = inspect.signature(obj)
-    annotations = [parameter.annotation for parameter in signature.parameters.values()]
-    annotations.append(signature.return_annotation)
-    annotated = (
-        annotation
-        for annotation in annotations
-        if annotation is not inspect.Parameter.empty
+    annotations = {
+        name: parameter.annotation for name, parameter in signature.parameters.items()
+    }
+    annotations["return"] = signature.return_annotation
+    modules = _spelling_modules(obj, annotations)
+    return set().union(
+        *(
+            _parsed(annotation, frozenset()).classes(modules[name])
+            for name, annotation in annotations.items()
+            if annotation is not inspect.Parameter.empty
+        )
     )
-    return _classes_of(_each_parsed(annotated, frozenset()), _signature_module(obj))
 
 
-def _signature_module(obj: object) -> str:
-    """The module whose source spells inspect.signature(*obj*)'s annotations: a routine's own; for a class, that of the class in its MRO whose own body defines __init__ or __new__."""
+def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, str]:
+    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return": a routine's own. For a class, that of the class holding its constructor; but for a generated __init__, that of the nearest class in the holder's MRO that the dataclass decorator processed and whose own body annotates the name, or the holder's if none does."""
     if not inspect.isclass(obj):
-        return obj.__module__
+        return dict.fromkeys(names, obj.__module__)
+    holder = _constructor_holder(obj)
+    if not _holds_generated_init(holder):
+        return dict.fromkeys(names, holder.__module__)
+    decorated = tuple(base for base in holder.__mro__ if _is_decorated_dataclass(base))
+    return {
+        name: next(
+            (base.__module__ for base in decorated if name in inspect.get_annotations(base)),
+            holder.__module__,
+        )
+        for name in names
+    }
+
+
+def _constructor_holder(cls: type) -> type:
+    """The class in *cls*'s MRO whose own namespace holds __init__ or __new__, the constructor inspect.signature(*cls*) reads."""
     return next(
-        base.__module__
-        for base in obj.__mro__
-        if "__init__" in vars(base) or "__new__" in vars(base)
+        base for base in cls.__mro__ if "__init__" in vars(base) or "__new__" in vars(base)
     )
+
+
+def _holds_generated_init(cls: type) -> bool:
+    """Whether the constructor inspect.signature reads in *cls*'s own namespace is an __init__ the dataclass decorator generated.
+
+    The decorator compiles that __init__ outside the class body and renames it into the
+    class, so its code keeps another qualified name; one the body defines, wrapped or
+    not, keeps its own. What the body assigns that is no function, such as a callable
+    object, the decorator never generated. A __new__ the body defines is read first and
+    is never generated.
+    """
+    if not _is_decorated_dataclass(cls) or "__new__" in vars(cls):
+        return False
+    init: object = inspect.unwrap(vars(cls)["__init__"])
+    return isinstance(init, types.FunctionType) and init.__code__.co_qualname != init.__qualname__
 
 
 def _member_form_classes(member: object, cls: type) -> set[type]:
