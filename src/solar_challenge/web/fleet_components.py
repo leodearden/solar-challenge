@@ -52,6 +52,9 @@ class FleetComponent:
         key: Its fleet_distribution block, and the prefix of the builder form's fields for it.
         grammar_key: Its spec's key in that block.
         fixed_field: The builder form field carrying a fixed value.
+        subject: What its values measure, e.g. 'PV Capacity': the fleet page's card heading,
+            and the words that start each accessible name in that card's distribution editor.
+        unit: The unit of its values, e.g. 'kW', which heading appends to subject in parentheses.
         step: The step of every value input but a weight or count.
         fixed_range: The (min, max) of a fixed value, ends included.
         new_row_value: The value an added row starts at.
