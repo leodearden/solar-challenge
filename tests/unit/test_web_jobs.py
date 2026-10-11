@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import FrozenInstanceError, asdict
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
 
@@ -346,7 +346,7 @@ class TestGetJobStatusEndpoint:
             "job_id": "id-1",
             "run_id": "id-2",
             **last_state,
-            "created_at": _job_state(app.extensions["storage"], "id-1")["created_at"],
+            "created_at": _job_row(app.extensions["storage"], "id-1")["created_at"],
         }
 
 
@@ -715,37 +715,31 @@ def _state_recorded_in_job_row(storage: RunStorage, job_id: str) -> JobState:
     )
 
 
-def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
-    """Return the status, progress_pct, current_step, message and created_at of job *job_id*'s row in storage's jobs table."""
-    row = _job_row(storage, job_id)
-    return {column: row[column] for column in ("status", "progress_pct", "current_step", "message", "created_at")}
-
-
 def _run_of_job(manager: JobManager, job_id: str, storage: RunStorage) -> RunRecord:
     """Return the record storage holds for the run of job *job_id*, which *manager* tracks."""
-    status = manager.get_job_status(job_id)
-    assert status is not None, f"the manager does not track job {job_id}"
-    run = storage.run_record(status.run_id)
-    assert run is not None, f"no run has job {job_id}'s run id {status.run_id}"
+    state = manager.get_job_status(job_id)
+    assert state is not None, f"the manager does not track job {job_id}"
+    run = storage.run_record(state.run_id)
+    assert run is not None, f"no run has job {job_id}'s run id {state.run_id}"
     return run
 
 
 def _wait_until_finished(manager: JobManager, job_id: str) -> JobState:
     deadline = time.monotonic() + 30
     while True:
-        status = manager.get_job_status(job_id)
-        if status is None:
-            pytest.fail(f"the manager has no status for job {job_id}")
-        if status.status in ("completed", "failed"):
-            return status
+        state = manager.get_job_status(job_id)
+        if state is None:
+            pytest.fail(f"the manager does not track job {job_id}")
+        if state.status in ("completed", "failed"):
+            return state
         if time.monotonic() > deadline:
-            pytest.fail(f"job {job_id} did not finish within 30 s; its last status was {status}")
+            pytest.fail(f"job {job_id} did not finish within 30 s; its last state was {state}")
         time.sleep(0.01)
 
 
 def _status_of(manager: JobManager, job_id: str) -> str | None:
-    job = manager.get_job_status(job_id)
-    return None if job is None else job.status
+    state = manager.get_job_status(job_id)
+    return None if state is None else state.status
 
 
 def _submit_home_job(manager: JobManager, tmp_path: Path) -> str:
@@ -788,8 +782,8 @@ class TestJobManagerSimulation:
             data_dir=str(storage.data_dir),
         )
 
-        status = _wait_until_finished(manager, job_id)
-        assert status.status == "completed", status.message
+        state = _wait_until_finished(manager, job_id)
+        assert state.status == "completed", state.message
         assert simulation.calls == [(_A_HOME, _JUNE_1, _JUNE_2)]
         _, _, summary = storage.load_home_run(run_id)
         assert summary.total_generation_kwh == pytest.approx(4.0)
@@ -811,8 +805,8 @@ class TestJobManagerSimulation:
             data_dir=str(storage.data_dir),
         )
 
-        status = _wait_until_finished(manager, job_id)
-        assert status.status == "completed", status.message
+        state = _wait_until_finished(manager, job_id)
+        assert state.status == "completed", state.message
         assert simulation.calls == [(home, _JUNE_1, _JUNE_2) for home in homes]
         _, _, per_home_summaries = storage.load_fleet_run(run_id)
         assert [summary.total_generation_kwh for summary in per_home_summaries] == pytest.approx([4.0, 2.0])
@@ -830,9 +824,9 @@ class TestJobManagerIds:
 
         job_id = submit_job(manager, tmp_path)
 
-        status = manager.get_job_status(job_id)
-        assert status is not None
-        run_id = status.run_id
+        state = manager.get_job_status(job_id)
+        assert state is not None
+        run_id = state.run_id
         assert {job_id, run_id} == set(ids.issued)
         storage = _run_storage(tmp_path)
         assert [run["id"] for run in storage.list_runs()] == [run_id]
@@ -864,7 +858,7 @@ class TestJobManagerStatus:
             progress_pct=100.0,
             current_step="Done",
             message="Simulation completed successfully",
-            created_at=_job_state(storage, job_id)["created_at"],
+            created_at=_job_row(storage, job_id)["created_at"],
         )
 
     def test_a_reader_cannot_change_the_state_a_manager_reports(self, tmp_path: Path) -> None:
@@ -887,7 +881,7 @@ class TestJobManagerStatus:
         assert first.wait_until_idle(timeout=30)
 
         assert JobManager(max_workers=1).get_job_status(job_id) is None
-        assert _job_state(_run_storage(tmp_path), job_id)["status"] == "completed"
+        assert _job_row(_run_storage(tmp_path), job_id)["status"] == "completed"
 
 
 class TestRunLabelsEditedWhileItsJobRuns:
@@ -909,8 +903,8 @@ class TestRunLabelsEditedWhileItsJobRuns:
 
         blocking_simulation.release()
 
-        status = _wait_until_finished(manager, job_id)
-        assert status.status == "completed", status.message
+        state = _wait_until_finished(manager, job_id)
+        assert state.status == "completed", state.message
         run = storage.run_record(run_id)
         assert run is not None
         assert (run.status, run.name, run.notes) == ("completed", "Renamed by user", "my note")
@@ -1013,12 +1007,9 @@ class TestJobManagerQueuedJobs:
 
         queued_job_id = submit_job(manager, tmp_path)
 
-        in_memory = manager.get_job_status(queued_job_id)
-        assert in_memory is not None
-        stored = _job_state(_run_storage(tmp_path), queued_job_id)
-        assert stored["status"] == "queued"
-        reported = asdict(in_memory)
-        assert {column: reported[column] for column in stored} == stored
+        stored = _state_recorded_in_job_row(_run_storage(tmp_path), queued_job_id)
+        assert stored.status == "queued"
+        assert manager.get_job_status(queued_job_id) == stored
 
 
 class TestJobManagerRuns:
