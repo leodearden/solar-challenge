@@ -95,7 +95,8 @@ class JobState:
     created_at: str
 
 
-JobEventType = Literal["progress", "complete", "error"]  # the event a job's progress stream names: the job progressed, completed or failed
+# The event a job's progress stream names: the job progressed, completed or failed.
+JobEventType = Literal["progress", "complete", "error"]
 
 
 @dataclass(frozen=True)
