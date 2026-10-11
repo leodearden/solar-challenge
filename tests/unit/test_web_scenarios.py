@@ -80,6 +80,29 @@ class TestScenarioBuilderRoute:
         assert "Download YAML" in data
         assert "Save" in data
 
+    def test_the_builder_page_hands_its_script_each_components_keys_and_starting_distribution(
+        self, client: FlaskClient
+    ) -> None:
+        """The second argument is what static/js/scenario-builder.js reads of each component."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        scopes = [attributes.get("x-data") or "" for attributes in element_attributes(page, "div")]
+        (x_data,) = [scope for scope in scopes if scope.startswith("scenarioBuilder(")]
+        try:
+            arguments = json.loads("[" + x_data.removeprefix("scenarioBuilder(").removesuffix(")") + "]")
+        except json.JSONDecodeError as exc:
+            pytest.fail(f"x-data={x_data!r} does not pass scenarioBuilder JSON arguments: {exc}")
+        assert arguments[1:] == [
+            [
+                {
+                    "key": component.key,
+                    "fixed_field": component.fixed_field,
+                    "grammar_key": component.grammar_key,
+                    "dist": component.builder_default.editor_state(),
+                }
+                for component in FLEET_COMPONENTS.values()
+            ]
+        ]
+
 
 class TestSweepRoute:
     """Tests for the GET /scenarios/sweep route."""
