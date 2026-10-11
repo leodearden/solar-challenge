@@ -701,6 +701,20 @@ def _job_row(storage: RunStorage, job_id: str) -> dict[str, Any]:
     return dict(row)
 
 
+def _state_recorded_in_job_row(storage: RunStorage, job_id: str) -> JobState:
+    """Return the state job *job_id*'s row in storage's jobs table records: its ids, status, progress, step, message and creation time."""
+    row = _job_row(storage, job_id)
+    return JobState(
+        job_id=row["id"],
+        run_id=row["run_id"],
+        status=row["status"],
+        progress_pct=row["progress_pct"],
+        current_step=row["current_step"],
+        message=row["message"],
+        created_at=row["created_at"],
+    )
+
+
 def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
     """Return the status, progress_pct, current_step, message and created_at of job *job_id*'s row in storage's jobs table."""
     row = _job_row(storage, job_id)
@@ -1075,6 +1089,25 @@ class TestJobManagerJobRows:
         assert (row["status"], row["message"]) == ("failed", "the simulation failed")
         assert "RuntimeError: the simulation failed" in row["error_traceback"]
         assert row["completed_at"] is not None
+
+    @pytest.mark.parametrize(
+        ("simulation", "status"),
+        [(_RecordingSimulation(), "completed"), (_a_failing_simulation, "failed")],
+        ids=["completed", "failed"],
+    )
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_finished_jobs_row_records_the_state_its_manager_reports(
+        self, submit_job: Callable[[JobManager, Path], str], simulation: HomeSimulator, status: str, tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        manager = JobManager(max_workers=1, simulate_home=simulation)
+        job_id = submit_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+
+        stored = _state_recorded_in_job_row(storage, job_id)
+
+        assert stored.status == status
+        assert manager.get_job_status(job_id) == stored
 
 
 class TestJobManagerRefusedRows:
