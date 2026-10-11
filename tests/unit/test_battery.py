@@ -599,59 +599,67 @@ class TestBatteryPastAnAssignedSocLimit:
         assert battery.soc_kwh == pytest.approx(4.0 - 1.0 / 0.975)
 
 
-MOVES = [pytest.param(Battery.charge, id="charge"), pytest.param(Battery.discharge, id="discharge")]
+@dataclasses.dataclass(frozen=True)
+class _Move:
+    """One of a battery's two moves: its method, the direction its refusals open with, and the limit in a config that caps its rate."""
 
-# Each move with the direction its refusals open with.
-MOVES_AND_DIRECTIONS = [
-    pytest.param(Battery.charge, "Charge", id="charge"),
-    pytest.param(Battery.discharge, "Discharge", id="discharge"),
+    method: Callable[[Battery, float, float], float]
+    direction: str
+    max_rate_kw_in: Callable[[BatteryConfig], float]
+
+
+MOVES = [
+    pytest.param(_Move(Battery.charge, "Charge", lambda config: config.max_charge_kw), id="charge"),
+    pytest.param(
+        _Move(Battery.discharge, "Discharge", lambda config: config.max_discharge_kw),
+        id="discharge",
+    ),
 ]
 
 
 class TestBatteryRefusesARequestItCannotCarryOut:
     """charge() and discharge() refuse a power that is not >= 0, or a duration that is not positive and finite, naming the value, and leave the battery unchanged."""
 
-    @pytest.mark.parametrize(("move", "direction"), MOVES_AND_DIRECTIONS)
+    @pytest.mark.parametrize("move", MOVES)
     @pytest.mark.parametrize("power_kw", [math.nan, -math.inf, -1.0])
     def test_a_power_that_is_not_at_least_0_is_refused_and_moves_no_energy(
-        self, move: Callable[[Battery, float, float], float], direction: str, power_kw: float
+        self, move: _Move, power_kw: float
     ) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
-        message = f"{direction} power must be non-negative, got {power_kw} kW"
+        message = f"{move.direction} power must be non-negative, got {power_kw} kW"
         with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
-            move(battery, power_kw, 60.0)
+            move.method(battery, power_kw, 60.0)
         assert battery.soc_kwh == soc_kwh
 
-    @pytest.mark.parametrize(("move", "direction"), MOVES_AND_DIRECTIONS)
+    @pytest.mark.parametrize("move", MOVES)
     @pytest.mark.parametrize("duration_minutes", [math.nan, math.inf, -math.inf, 0.0, -60.0])
     def test_a_duration_that_is_not_positive_and_finite_is_refused_and_moves_no_energy(
-        self, move: Callable[[Battery, float, float], float], direction: str, duration_minutes: float
+        self, move: _Move, duration_minutes: float
     ) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
-        message = f"{direction} duration must be positive and finite, got {duration_minutes} minutes"
+        message = (
+            f"{move.direction} duration must be positive and finite, got {duration_minutes} minutes"
+        )
         with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
-            move(battery, 1.0, duration_minutes)
+            move.method(battery, 1.0, duration_minutes)
         assert battery.soc_kwh == soc_kwh
 
     @pytest.mark.parametrize("move", MOVES)
-    def test_a_power_of_0_is_accepted_and_moves_no_energy(
-        self, move: Callable[[Battery, float, float], float]
-    ) -> None:
+    def test_a_power_of_0_is_accepted_and_moves_no_energy(self, move: _Move) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
-        assert move(battery, 0.0, 60.0) == 0.0
+        assert move.method(battery, 0.0, 60.0) == 0.0
         assert battery.soc_kwh == soc_kwh
 
     @pytest.mark.parametrize("move", MOVES)
-    def test_an_infinite_power_moves_what_the_maximum_rate_moves(
-        self, move: Callable[[Battery, float, float], float]
-    ) -> None:
-        at_infinite_power = Battery(BatteryConfig.default_5kwh())
-        at_maximum_rate = Battery(BatteryConfig.default_5kwh())
-        moved = move(at_infinite_power, math.inf, 30.0)
-        assert moved == move(at_maximum_rate, 2.5, 30.0)
+    def test_an_infinite_power_moves_what_the_maximum_rate_moves(self, move: _Move) -> None:
+        config = BatteryConfig(capacity_kwh=10.0, max_charge_kw=2.0, max_discharge_kw=3.0)
+        at_infinite_power = Battery(config)
+        at_maximum_rate = Battery(config)
+        moved = move.method(at_infinite_power, math.inf, 30.0)
+        assert moved == move.method(at_maximum_rate, move.max_rate_kw_in(config), 30.0)
         assert moved > 0.0
         assert at_infinite_power.soc_kwh == at_maximum_rate.soc_kwh
 
