@@ -78,6 +78,11 @@ function _doRender(elementId, fig) {
 /**
  * Render a Plotly chart from a JSON string into a DOM element.
  *
+ * An empty figure ('{}' or a falsy jsonStr) draws nothing and logs nothing.
+ *
+ * A figure whose element is missing draws nothing and logs a console error
+ * naming elementId.
+ *
  * If the target element is hidden (e.g. in a non-active tab), rendering is
  * deferred until the element becomes visible via a ResizeObserver (AC3).
  *
@@ -87,7 +92,10 @@ function _doRender(elementId, fig) {
 function renderChart(elementId, jsonStr) {
     if (!jsonStr || jsonStr === '{}') return;
     var el = document.getElementById(elementId);
-    if (!el) return;
+    if (!el) {
+        console.error('renderChart: no element has the id "' + elementId + '", so its figure was not drawn');
+        return;
+    }
     try {
         var fig = JSON.parse(jsonStr);
 
@@ -117,7 +125,7 @@ function renderChart(elementId, jsonStr) {
 
         _doRender(elementId, fig);
     } catch (e) {
-        console.error('Failed to render chart ' + elementId, e);
+        console.error('renderChart: failed to draw the figure for id "' + elementId + '"', e);
     }
 }
 
