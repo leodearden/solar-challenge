@@ -1,18 +1,55 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests of solar_challenge.web.fleet_components, the one definition of the fleet components."""
+"""Tests of solar_challenge.web.fleet_components, the one definition of the fleet components, and of the two fleet pages that render each component's card from it."""
 
 import math
+from collections.abc import Mapping
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
+
+from flask import Flask
+from flask.testing import FlaskClient
 
 from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
     EditorDistribution,
     FleetComponent,
 )
+from tests._html_page import counts_of, element_attributes, headings
+from tests._web_app import build_test_app
+
+
+@pytest.fixture
+def app(tmp_path: Path) -> Flask:
+    """Create a test Flask application."""
+    return build_test_app(tmp_path)
+
+
+@pytest.fixture
+def client(app: Flask) -> FlaskClient:
+    """Create a Flask test client."""
+    return app.test_client()
+
+
+def _editor_scopes(page: str) -> list[str | None]:
+    """The x-data of each distribution editor of *page*, in page order."""
+    return [
+        attributes["x-data"]
+        for attributes in element_attributes(page, "div")
+        if (attributes.get("x-data") or "").startswith("distributionEditor(")
+    ]
+
+
+def _number_inputs(page: str, model: str) -> list[Mapping[str, str | None]]:
+    """The attributes of each input of *page* whose x-model.number is *model*, in page order."""
+    return [
+        attributes
+        for attributes in element_attributes(page, "input")
+        if attributes.get("x-model.number") == model
+    ]
 
 
 class TestFleetComponents:
@@ -76,3 +113,61 @@ class TestFleetComponents:
             "values": [{"value": 3.0, "weight": 20}, {"value": 5.0, "weight": 80}],
             "entries": [{"value": 3.0, "count": 60}, {"value": 5.0, "count": 40}],
         }
+
+
+@pytest.mark.parametrize(
+    ("path", "dists"),
+    [
+        pytest.param("/scenarios/builder", ("dists.pv", "dists.battery", "dists.load"), id="builder"),
+        pytest.param("/simulate/fleet", ("pvDist", "batteryDist", "loadDist"), id="fleet"),
+    ],
+)
+class TestPagesRenderEachComponentFromTheTable:
+    """Each fleet page renders one distribution editor per component, in FLEET_COMPONENTS order, as the table defines it.
+
+    *dists* are the page's Alpine expressions of its cards' distributions, in card order.
+    """
+
+    def test_each_editor_edits_its_cards_distribution_and_starts_an_added_row_at_its_components_new_row_value(
+        self, client: FlaskClient, path: str, dists: tuple[str, ...]
+    ) -> None:
+        page = client.get(path).get_data(as_text=True)
+        assert _editor_scopes(page) == [
+            f"distributionEditor(() => {dist}, {component.new_row_value})"
+            for component, dist in zip(FLEET_COMPONENTS.values(), dists, strict=True)
+        ]
+
+    def test_each_fixed_value_is_bounded_and_stepped_as_its_component(
+        self, client: FlaskClient, path: str, dists: tuple[str, ...]
+    ) -> None:
+        page = client.get(path).get_data(as_text=True)
+        assert [
+            (attributes.get("step"), attributes.get("min"), attributes.get("max"))
+            for attributes in _number_inputs(page, "dist.fixed")
+        ] == [
+            (str(component.step), str(component.fixed_range[0]), str(component.fixed_range[1]))
+            for component in FLEET_COMPONENTS.values()
+        ]
+
+    def test_each_row_value_steps_as_its_component(
+        self, client: FlaskClient, path: str, dists: tuple[str, ...]
+    ) -> None:
+        """Each editor has two row templates, Weighted Discrete's and Shuffled Pool's, each with one Value input."""
+        page = client.get(path).get_data(as_text=True)
+        assert [attributes.get("step") for attributes in _number_inputs(page, "row.value")] == [
+            str(component.step) for component in FLEET_COMPONENTS.values() for _ in range(2)
+        ]
+
+
+class TestPagesHeadEachCardFromTheTable:
+    """Each fleet page heads each component's card with the words FLEET_COMPONENTS gives it."""
+
+    def test_the_builder_heads_each_card_with_its_components_heading(self, client: FlaskClient) -> None:
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        card_headings = tuple(component.heading for component in FLEET_COMPONENTS.values())
+        assert counts_of(headings(page), card_headings) == dict.fromkeys(card_headings, 1)
+
+    def test_the_fleet_page_heads_each_card_with_its_components_subject(self, client: FlaskClient) -> None:
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+        subjects = tuple(component.subject for component in FLEET_COMPONENTS.values())
+        assert counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
