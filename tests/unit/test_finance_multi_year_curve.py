@@ -277,6 +277,16 @@ class TestMultiYearCurve:
                 interp_error_estimate=-0.1,
             )
 
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    def test_an_interp_error_estimate_that_is_not_finite_is_refused_naming_it(
+        self, value: float
+    ) -> None:
+        """A NaN or infinite interp_error_estimate is refused, naming the field, that it must be >= 0 and finite, and the value."""
+        with pytest.raises(ValueError) as exc_info:
+            dataclasses.replace(self._make_valid(), interp_error_estimate=value)
+
+        assert str(exc_info.value) == f"interp_error_estimate must be >= 0 and finite, got {value!r}"
+
     def test_empty_sampled_ages_raises(self) -> None:
         """Empty sampled_ages raises ValueError."""
         from solar_challenge.finance import MultiYearCurve
