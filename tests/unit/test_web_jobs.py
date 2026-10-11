@@ -24,6 +24,7 @@ from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.jobs import (
     HomeSimulator,
     JobManager,
+    JobState,
     live_managers,
     recover_stale_jobs,
     shutdown_all_managers,
@@ -231,6 +232,33 @@ class TestSimulateHomeEndpoint:
 _A_HOME_JOB_REQUEST = {"pv_kw": 4.0, "battery_kwh": 0, "occupants": 3, "location": "bristol", "days": 1}
 
 
+def _client_of_a_finished_job(app: Flask, simulation: HomeSimulator) -> FlaskClient:
+    """Return a client of *app* whose JobManager has run one home job through *simulation* to its end.
+
+    The job's id is "id-1" and its run's id is "id-2".
+    """
+    manager = JobManager(simulate_home=simulation, new_id=_CountingIds())
+    client = _client_using(app, manager)
+    assert client.post("/api/simulate/home", json=_A_HOME_JOB_REQUEST).status_code == 201
+    assert manager.wait_until_idle(timeout=30)
+    return client
+
+
+def _sse(event: str, data: str) -> str:
+    """Return the SSE message a progress stream sends for *event* with the JSON text *data*."""
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+_STARTING = _sse(
+    "progress",
+    '{"progress_pct": 5.0, "current_step": "Starting", "message": "Initializing...", "status": "running"}',
+)
+_SIMULATING = _sse(
+    "progress",
+    '{"progress_pct": 20.0, "current_step": "Simulating", "message": "Running home simulation...", "status": "running"}',
+)
+
+
 class TestGetJobStatusEndpoint:
     """Tests for GET /api/jobs/<id>."""
 
@@ -281,6 +309,45 @@ class TestGetJobStatusEndpoint:
         assert response.status_code == 404
         assert _job_rows(after_restart.extensions["storage"]) == [(submitted["job_id"], submitted["run_id"])]
 
+    @pytest.mark.parametrize(
+        ("simulation", "last_state"),
+        [
+            (
+                _RecordingSimulation(),
+                {
+                    "status": "completed",
+                    "progress_pct": 100.0,
+                    "current_step": "Done",
+                    "message": "Simulation completed successfully",
+                },
+            ),
+            (
+                _a_failing_simulation,
+                {
+                    "status": "failed",
+                    "progress_pct": 20.0,
+                    "current_step": "Simulating",
+                    "message": "the simulation failed",
+                },
+            ),
+        ],
+        ids=["completed", "failed"],
+    )
+    def test_a_finished_jobs_status_answers_its_ids_its_last_state_and_its_rows_creation_time(
+        self, app: Flask, simulation: HomeSimulator, last_state: dict[str, Any]
+    ) -> None:
+        client = _client_of_a_finished_job(app, simulation)
+
+        response = client.get("/api/jobs/id-1")
+
+        assert response.status_code == 200
+        assert response.get_json() == {
+            "job_id": "id-1",
+            "run_id": "id-2",
+            **last_state,
+            "created_at": _job_row(app.extensions["storage"], "id-1")["created_at"],
+        }
+
 
 class TestJobProgressEndpoint:
     """Tests for GET /api/jobs/<id>/progress (SSE)."""
@@ -315,6 +382,60 @@ class TestJobProgressEndpoint:
         data = response.get_data(as_text=True)
         assert "error" in data
 
+    def test_the_stream_of_a_completed_job_sends_each_progress_event_then_its_completion(self, app: Flask) -> None:
+        client = _client_of_a_finished_job(app, _RecordingSimulation())
+
+        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        assert stream == "".join(
+            [
+                _STARTING,
+                _SIMULATING,
+                _sse(
+                    "progress",
+                    '{"progress_pct": 80.0, "current_step": "Summarizing",'
+                    ' "message": "Calculating summary statistics...", "status": "running"}',
+                ),
+                _sse(
+                    "progress",
+                    '{"progress_pct": 90.0, "current_step": "Saving",'
+                    ' "message": "Persisting results to storage...", "status": "running"}',
+                ),
+                _sse(
+                    "complete",
+                    '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
+                    ' "message": "Simulation completed successfully", "run_id": "id-2"}',
+                ),
+            ]
+        )
+
+    def test_the_stream_of_a_failed_job_sends_each_progress_event_then_its_error(self, app: Flask) -> None:
+        client = _client_of_a_finished_job(app, _a_failing_simulation)
+
+        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        assert stream == _STARTING + _SIMULATING + _sse(
+            "error", '{"status": "failed", "message": "the simulation failed"}'
+        )
+
+    @pytest.mark.parametrize(
+        ("simulation", "final_event"),
+        [
+            (_RecordingSimulation(), _sse("complete", '{"status": "completed", "run_id": "id-2"}')),
+            (_a_failing_simulation, _sse("error", '{"status": "failed", "message": "the simulation failed"}')),
+        ],
+        ids=["completed", "failed"],
+    )
+    def test_a_stream_opened_after_another_drained_the_events_sends_only_the_final_event(
+        self, app: Flask, simulation: HomeSimulator, final_event: str
+    ) -> None:
+        client = _client_of_a_finished_job(app, simulation)
+        client.get("/api/jobs/id-1/progress").get_data()
+
+        stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        assert stream == final_event
+
 
 class TestJobResultsEndpoint:
     """Tests for GET /api/jobs/<id>/results."""
@@ -340,7 +461,15 @@ class TestJobResultsEndpoint:
         results_resp = blocking_client.get(f"/api/jobs/{job_id}/results")
 
         assert results_resp.status_code == 409
-        assert results_resp.get_json()["status"] == "running"
+        assert results_resp.get_json() == {"error": "Job not yet completed", "status": "running", "progress_pct": 20.0}
+
+    def test_a_failed_jobs_results_answer_409_with_its_status_and_its_last_progress(self, app: Flask) -> None:
+        client = _client_of_a_finished_job(app, _a_failing_simulation)
+
+        response = client.get("/api/jobs/id-1/results")
+
+        assert response.status_code == 409
+        assert response.get_json() == {"error": "Job not yet completed", "status": "failed", "progress_pct": 20.0}
 
     def test_results_returns_404_unknown_job(self, client: FlaskClient) -> None:
         """Test GET /api/jobs/<unknown_id>/results returns 404."""
@@ -571,37 +700,45 @@ def _job_row(storage: RunStorage, job_id: str) -> dict[str, Any]:
     return dict(row)
 
 
-def _job_state(storage: RunStorage, job_id: str) -> dict[str, Any]:
-    """Return the status, progress_pct, current_step, message and created_at of job *job_id*'s row in storage's jobs table."""
+def _state_recorded_in_job_row(storage: RunStorage, job_id: str) -> JobState:
+    """Return the state job *job_id*'s row in storage's jobs table records: its ids, status, progress, step, message and creation time."""
     row = _job_row(storage, job_id)
-    return {column: row[column] for column in ("status", "progress_pct", "current_step", "message", "created_at")}
+    return JobState(
+        job_id=row["id"],
+        run_id=row["run_id"],
+        status=row["status"],
+        progress_pct=row["progress_pct"],
+        current_step=row["current_step"],
+        message=row["message"],
+        created_at=row["created_at"],
+    )
 
 
 def _run_of_job(manager: JobManager, job_id: str, storage: RunStorage) -> RunRecord:
     """Return the record storage holds for the run of job *job_id*, which *manager* tracks."""
-    status = manager.get_job_status(job_id)
-    assert status is not None, f"the manager does not track job {job_id}"
-    run = storage.run_record(status["run_id"])
-    assert run is not None, f"no run has job {job_id}'s run id {status['run_id']}"
+    state = manager.get_job_status(job_id)
+    assert state is not None, f"the manager does not track job {job_id}"
+    run = storage.run_record(state.run_id)
+    assert run is not None, f"no run has job {job_id}'s run id {state.run_id}"
     return run
 
 
-def _wait_until_finished(manager: JobManager, job_id: str) -> dict[str, Any]:
+def _wait_until_finished(manager: JobManager, job_id: str) -> JobState:
     deadline = time.monotonic() + 30
     while True:
-        status = manager.get_job_status(job_id)
-        if status is None:
-            pytest.fail(f"the manager has no status for job {job_id}")
-        if status["status"] in ("completed", "failed"):
-            return status
+        state = manager.get_job_status(job_id)
+        if state is None:
+            pytest.fail(f"the manager does not track job {job_id}")
+        if state.status in ("completed", "failed"):
+            return state
         if time.monotonic() > deadline:
-            pytest.fail(f"job {job_id} did not finish within 30 s; its last status was {status}")
+            pytest.fail(f"job {job_id} did not finish within 30 s; its last state was {state}")
         time.sleep(0.01)
 
 
 def _status_of(manager: JobManager, job_id: str) -> str | None:
-    job = manager.get_job_status(job_id)
-    return None if job is None else str(job["status"])
+    state = manager.get_job_status(job_id)
+    return None if state is None else state.status
 
 
 def _submit_home_job(manager: JobManager, tmp_path: Path) -> str:
@@ -644,8 +781,8 @@ class TestJobManagerSimulation:
             data_dir=str(storage.data_dir),
         )
 
-        status = _wait_until_finished(manager, job_id)
-        assert status["status"] == "completed", status["message"]
+        state = _wait_until_finished(manager, job_id)
+        assert state.status == "completed", state.message
         assert simulation.calls == [(_A_HOME, _JUNE_1, _JUNE_2)]
         _, _, summary = storage.load_home_run(run_id)
         assert summary.total_generation_kwh == pytest.approx(4.0)
@@ -667,8 +804,8 @@ class TestJobManagerSimulation:
             data_dir=str(storage.data_dir),
         )
 
-        status = _wait_until_finished(manager, job_id)
-        assert status["status"] == "completed", status["message"]
+        state = _wait_until_finished(manager, job_id)
+        assert state.status == "completed", state.message
         assert simulation.calls == [(home, _JUNE_1, _JUNE_2) for home in homes]
         _, _, per_home_summaries = storage.load_fleet_run(run_id)
         assert [summary.total_generation_kwh for summary in per_home_summaries] == pytest.approx([4.0, 2.0])
@@ -686,9 +823,9 @@ class TestJobManagerIds:
 
         job_id = submit_job(manager, tmp_path)
 
-        status = manager.get_job_status(job_id)
-        assert status is not None
-        run_id = status["run_id"]
+        state = manager.get_job_status(job_id)
+        assert state is not None
+        run_id = state.run_id
         assert {job_id, run_id} == set(ids.issued)
         storage = _run_storage(tmp_path)
         assert [run["id"] for run in storage.list_runs()] == [run_id]
@@ -713,14 +850,35 @@ class TestJobManagerStatus:
         )
         assert manager.wait_until_idle(timeout=30)
 
-        status = manager.get_job_status(job_id)
+        assert manager.get_job_status(job_id) == JobState(
+            job_id=job_id,
+            run_id=run_id,
+            status="completed",
+            progress_pct=100.0,
+            current_step="Done",
+            message="Simulation completed successfully",
+            created_at=_job_row(storage, job_id)["created_at"],
+        )
 
-        assert status is not None
-        assert set(status) == {"job_id", "run_id", "status", "progress_pct", "current_step", "message", "created_at"}
-        assert (status["job_id"], status["run_id"]) == (job_id, run_id)
-        assert status["status"] == "completed", status["message"]
-        assert status["progress_pct"] == 100.0
-        assert status["created_at"] == _job_state(storage, job_id)["created_at"]
+    def test_a_state_the_manager_reported_stays_as_it_was_after_the_job_moves_on(
+        self, blocking_simulation: _BlockingSimulation, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_id = _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+        running = manager.get_job_status(job_id)
+        assert running is not None
+
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        assert (running.status, running.progress_pct, running.current_step, running.message) == (
+            "running",
+            20.0,
+            "Simulating",
+            "Running home simulation...",
+        )
+        assert _status_of(manager, job_id) == "completed"
 
     def test_a_manager_does_not_know_a_job_another_manager_ran_although_its_rows_remain(
         self, tmp_path: Path
@@ -730,7 +888,7 @@ class TestJobManagerStatus:
         assert first.wait_until_idle(timeout=30)
 
         assert JobManager(max_workers=1).get_job_status(job_id) is None
-        assert _job_state(_run_storage(tmp_path), job_id)["status"] == "completed"
+        assert _job_row(_run_storage(tmp_path), job_id)["status"] == "completed"
 
 
 class TestRunLabelsEditedWhileItsJobRuns:
@@ -752,8 +910,8 @@ class TestRunLabelsEditedWhileItsJobRuns:
 
         blocking_simulation.release()
 
-        status = _wait_until_finished(manager, job_id)
-        assert status["status"] == "completed", status["message"]
+        state = _wait_until_finished(manager, job_id)
+        assert state.status == "completed", state.message
         run = storage.run_record(run_id)
         assert run is not None
         assert (run.status, run.name, run.notes) == ("completed", "Renamed by user", "my note")
@@ -856,11 +1014,9 @@ class TestJobManagerQueuedJobs:
 
         queued_job_id = submit_job(manager, tmp_path)
 
-        in_memory = manager.get_job_status(queued_job_id)
-        assert in_memory is not None
-        stored = _job_state(_run_storage(tmp_path), queued_job_id)
-        assert stored["status"] == "queued"
-        assert {column: in_memory[column] for column in stored} == stored
+        stored = _state_recorded_in_job_row(_run_storage(tmp_path), queued_job_id)
+        assert stored.status == "queued"
+        assert manager.get_job_status(queued_job_id) == stored
 
 
 class TestJobManagerRuns:
@@ -931,6 +1087,25 @@ class TestJobManagerJobRows:
         assert (row["status"], row["message"]) == ("failed", "the simulation failed")
         assert "RuntimeError: the simulation failed" in row["error_traceback"]
         assert row["completed_at"] is not None
+
+    @pytest.mark.parametrize(
+        ("simulation", "status"),
+        [(_RecordingSimulation(), "completed"), (_a_failing_simulation, "failed")],
+        ids=["completed", "failed"],
+    )
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_finished_jobs_row_records_the_state_its_manager_reports(
+        self, submit_job: Callable[[JobManager, Path], str], simulation: HomeSimulator, status: str, tmp_path: Path
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        manager = JobManager(max_workers=1, simulate_home=simulation)
+        job_id = submit_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+
+        stored = _state_recorded_in_job_row(storage, job_id)
+
+        assert stored.status == status
+        assert manager.get_job_status(job_id) == stored
 
 
 class TestJobManagerRefusedRows:

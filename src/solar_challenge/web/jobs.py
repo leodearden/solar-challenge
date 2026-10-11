@@ -14,11 +14,10 @@ import time
 import traceback
 import uuid
 import weakref
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Callable, Mapping
-from types import MappingProxyType
+from collections.abc import Callable
 from typing import Any, Generator, TypeAlias
 
 from concurrent.futures import ThreadPoolExecutor
@@ -36,9 +35,6 @@ HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], Si
 _RUNNING_JOB_STATUS: JobStatus = "running"
 _COMPLETED_JOB_STATUS: JobStatus = "completed"
 _FAILED_JOB_STATUS: JobStatus = "failed"
-_QUEUED_JOB_STATE: Mapping[str, str | float] = MappingProxyType(
-    {"status": DEFAULT_JOB_STATUS, "progress_pct": 0.0, "current_step": "Queued", "message": "Waiting to start..."}
-)
 _FINISHED_JOB_TTL_SECONDS = 3600.0
 _UNFINISHED_RUN_STATUS: RunStatus = "running"
 _FAILED_RUN_STATUS: RunStatus = "failed"
@@ -82,15 +78,28 @@ class _NewJob:
     created_at: str
 
 
+@dataclass(frozen=True)
+class JobState:
+    """What a JobManager reports about a job it tracks: its ids, status and progress, and the ISO 8601 UTC time its rows were created."""
+
+    job_id: str
+    run_id: str
+    status: JobStatus
+    progress_pct: float
+    current_step: str
+    message: str
+    created_at: str
+
+
 @dataclass
 class _TrackedJob:
     """A job a JobManager tracks.
 
-    The status get_job_status reports, the SSE events get_events has not yet yielded, and the manager's
+    The state get_job_status reports, the SSE events get_events has not yet yielded, and the manager's
     clock reading when the job finished (None while it is queued or running).
     """
 
-    status: dict[str, Any]
+    state: JobState
     events: collections.deque[dict[str, Any]] = field(default_factory=lambda: collections.deque(maxlen=100))
     finished_at: float | None = None
 
@@ -258,8 +267,8 @@ class JobManager:
             ),
         )
 
-    def get_job_status(self, job_id: str) -> dict[str, Any] | None:
-        """Return a copy of the in-memory status of a job this manager tracks.
+    def get_job_status(self, job_id: str) -> JobState | None:
+        """Return the in-memory state of a job this manager tracks.
 
         A manager tracks only the jobs submitted to it.  It tracks each one
         until the job finishes, and stops at the first submit made once the
@@ -272,13 +281,14 @@ class JobManager:
             job_id: Unique job identifier.
 
         Returns:
-            Dict with job_id, run_id, status, progress_pct, current_step,
-            message and created_at, the ISO 8601 UTC time the job's rows were
-            created.  None if this manager does not track the job.
+            The job's frozen JobState: its job_id, run_id, status,
+            progress_pct, current_step, message and created_at, the ISO 8601
+            UTC time the job's rows were created.  None if this manager does
+            not track the job.
         """
         with self._lock:
             job = self._jobs.get(job_id)
-            return None if job is None else dict(job.status)
+            return None if job is None else job.state
 
     def get_events(self, job_id: str) -> Generator[dict[str, Any], None, None]:
         """Yield SSE events from the job's event queue.
@@ -337,6 +347,15 @@ class JobManager:
         job_id = self._new_id()
         run_id = self._new_id()
         created_at = datetime.now(timezone.utc).isoformat()
+        queued = JobState(
+            job_id=job_id,
+            run_id=run_id,
+            status=DEFAULT_JOB_STATUS,
+            progress_pct=0.0,
+            current_step="Queued",
+            message="Waiting to start...",
+            created_at=created_at,
+        )
 
         with get_db(db_path) as conn:
             conn.execute(
@@ -367,13 +386,11 @@ class JobManager:
                 INSERT INTO jobs (id, run_id, status, progress_pct, current_step, message, created_at)
                 VALUES (:job_id, :run_id, :status, :progress_pct, :current_step, :message, :created_at)
                 """,
-                {"job_id": job_id, "run_id": run_id, "created_at": created_at, **_QUEUED_JOB_STATE},
+                asdict(queued),
             )
 
         with self._lock:
-            self._jobs[job_id] = _TrackedJob(
-                status={"job_id": job_id, "run_id": run_id, **_QUEUED_JOB_STATE, "created_at": created_at}
-            )
+            self._jobs[job_id] = _TrackedJob(state=queued)
 
         return _NewJob(job_id=job_id, run_id=run_id, created_at=created_at)
 
@@ -451,7 +468,7 @@ class JobManager:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None:
-                job.status.update(progress_pct=pct, current_step=step, message=message, status=status)
+                job.state = replace(job.state, status=status, progress_pct=pct, current_step=step, message=message)
 
         # Update database
         if conn is not None:
@@ -498,18 +515,88 @@ class JobManager:
             if job is not None:
                 job.events.append(event)
 
-    def _emit_event(self, job_id: str, event_type: str, data: dict[str, Any]) -> None:
-        """Update in-memory job state and append an SSE event."""
+    def _state_of_running_job(self, job_id: str) -> JobState:
+        """Return the state of a job this manager is running, which it tracks until the job finishes."""
+        state = self.get_job_status(job_id)
+        if state is None:
+            raise RuntimeError(
+                f"job {job_id} is running, but its JobManager no longer tracks it; "
+                "a manager tracks each job until it finishes"
+            )
+        return state
+
+    def _report_state(self, state: JobState, event: dict[str, Any]) -> None:
+        """Make *state* the state get_job_status reports for its job and queue *event*, under one hold of the lock.
+
+        A reader who sees the new state therefore finds its event queued.
+        """
         with self._lock:
-            job = self._jobs.get(job_id)
-            if job is not None:
-                job.status.update(data)
-                job.events.append({"event": event_type, "data": data})
+            job = self._jobs[state.job_id]
+            job.state = state
+            job.events.append(event)
+
+    def _record_completed_job(self, job_id: str, message: str, conn: sqlite3.Connection) -> None:
+        """Write the jobs row of a job that completed with *message*, then report the same state with its SSE complete event."""
+        state = replace(
+            self._state_of_running_job(job_id),
+            status=_COMPLETED_JOB_STATUS,
+            progress_pct=100.0,
+            current_step="Done",
+            message=message,
+        )
+        conn.execute(
+            """
+            UPDATE jobs SET
+                status = :status,
+                progress_pct = :progress_pct,
+                current_step = :current_step,
+                message = :message,
+                completed_at = :completed_at
+            WHERE id = :job_id
+            """,
+            {**asdict(state), "completed_at": datetime.now(timezone.utc).isoformat()},
+        )
+        conn.commit()
+        self._report_state(
+            state,
+            {
+                "event": "complete",
+                "data": {
+                    "status": state.status,
+                    "progress_pct": state.progress_pct,
+                    "current_step": state.current_step,
+                    "message": state.message,
+                    "run_id": state.run_id,
+                },
+            },
+        )
+
+    def _record_failed_job(self, job_id: str, message: str, error_traceback: str, conn: sqlite3.Connection) -> None:
+        """Write the jobs and runs rows of a job that failed with *message*, then report the same state, at its last progress, with its SSE error event."""
+        state = replace(self._state_of_running_job(job_id), status=_FAILED_JOB_STATUS, message=message)
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            conn.execute(
+                """
+                UPDATE jobs SET
+                    status = :status,
+                    message = :message,
+                    error_traceback = :error_traceback,
+                    completed_at = :completed_at
+                WHERE id = :job_id
+                """,
+                {**asdict(state), "error_traceback": error_traceback, "completed_at": now},
+            )
+            conn.execute("UPDATE runs SET status=?, error_message=?, completed_at=? WHERE id=?",
+                         (_FAILED_RUN_STATUS, state.message, now, state.run_id))
+            conn.commit()
+        except Exception:
+            pass
+        self._report_state(state, {"event": "error", "data": {"status": state.status, "message": state.message}})
 
     def _run_job(
         self,
         job_id: str,
-        run_id: str,
         db_path: str,
         work_fn: Callable[[sqlite3.Connection, Callable[[float, str, str], None]], None],
         success_message: str = "Simulation completed successfully",
@@ -528,27 +615,9 @@ class JobManager:
                 self._update_progress(job_id, pct, step, msg, db_path, conn=conn)
 
             work_fn(conn, progress)
-
-            now = datetime.now(timezone.utc).isoformat()
-            conn.execute("UPDATE jobs SET status=?, progress_pct=100.0, "
-                         "current_step='Done', message=?, completed_at=? WHERE id=?",
-                         (_COMPLETED_JOB_STATUS, success_message, now, job_id))
-            conn.commit()
-            self._emit_event(job_id, "complete", {
-                "status": _COMPLETED_JOB_STATUS, "progress_pct": 100.0,
-                "current_step": "Done", "message": success_message, "run_id": run_id,
-            })
+            self._record_completed_job(job_id, success_message, conn)
         except Exception as exc:
-            error_msg, now = str(exc), datetime.now(timezone.utc).isoformat()
-            try:
-                conn.execute("UPDATE jobs SET status=?, message=?, error_traceback=?, completed_at=? WHERE id=?",
-                             (_FAILED_JOB_STATUS, error_msg, traceback.format_exc(), now, job_id))
-                conn.execute("UPDATE runs SET status=?, error_message=?, completed_at=? WHERE id=?",
-                             (_FAILED_RUN_STATUS, error_msg, now, run_id))
-                conn.commit()
-            except Exception:
-                pass
-            self._emit_event(job_id, "error", {"status": _FAILED_JOB_STATUS, "message": error_msg})
+            self._record_failed_job(job_id, str(exc), traceback.format_exc(), conn)
         finally:
             conn.close()
 
@@ -604,7 +673,7 @@ class JobManager:
                 created_at=created_at,
             )
 
-        self._run_job(job_id, run_id, db_path, work, "Simulation completed successfully")
+        self._run_job(job_id, db_path, work, "Simulation completed successfully")
 
     def _run_fleet_simulation(
         self,
@@ -671,7 +740,7 @@ class JobManager:
                 created_at=created_at,
             )
 
-        self._run_job(job_id, run_id, db_path, work, "Fleet simulation completed successfully")
+        self._run_job(job_id, db_path, work, "Fleet simulation completed successfully")
 
 
 def recover_stale_jobs(db_path: str | Path) -> int:
