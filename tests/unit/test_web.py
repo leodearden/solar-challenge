@@ -293,6 +293,17 @@ class TestSidebarCurrentPage:
         assert response.status_code == 404
         assert current_page_links(response.get_data(as_text=True)) == []
 
+    def test_the_500_page_marks_the_link_of_the_page_the_failed_request_was_routed_to(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """When the dashboard cannot read its runs, GET / answers the 500 page, which marks the Dashboard link as the current page in both sidebars: the request was routed to the dashboard, and the browser is still at its URL."""
+        with get_db(app.config["DATABASE"]) as conn:
+            conn.execute("DROP TABLE runs")
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+        response = client.get("/")
+        assert response.status_code == 500
+        assert current_page_links(response.get_data(as_text=True)) == ["/", "/"]
+
     def test_the_home_results_page_marks_no_link_current(
         self, app: Flask, client: FlaskClient
     ) -> None:
