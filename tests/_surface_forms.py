@@ -381,7 +381,8 @@ def _parsed_type_variable(variable: _TypeVariable, enclosing: _Enclosing) -> _De
     if bound is not None and bound is not type(None):
         arguments.append(_Keyword("bound", _parsed(bound, inside)))
     if getattr(variable, "has_default", lambda: False)():
-        arguments.append(_Keyword("default", _parsed(getattr(variable, "__default__"), inside)))
+        default = variable.__default__  # type: ignore[union-attr]  # typeshed declares __default__ only from 3.13
+        arguments.append(_Keyword("default", _parsed(default, inside)))
     return _Declared(repr(variable), module, tuple(arguments))
 
 
@@ -392,7 +393,7 @@ def _declaring_module(variable: _TypeVariable) -> str | None:
 
 def _parsed_new_type(new_type: typing.NewType, enclosing: _Enclosing) -> _Declared:
     """*new_type* by its qualified name, as a class is spelled, then its supertype, read inside its declaration; its name alone if that declaration encloses it."""
-    qualified_name: str = getattr(new_type, "__qualname__")
+    qualified_name = new_type.__qualname__  # type: ignore[attr-defined]  # typeshed's NewType omits the __qualname__ its __init__ sets
     if new_type in enclosing:
         return _Declared(qualified_name, new_type.__module__, ())
     supertype = _parsed(new_type.__supertype__, enclosing | {new_type})
