@@ -18,7 +18,7 @@ def builder() -> str:
     Returns:
         Rendered builder.html template.
     """
-    return str(render_template("scenarios/builder.html", page="scenarios-builder"))
+    return str(render_template("scenarios/builder.html"))
 
 
 @bp.route("/sweep")
@@ -30,6 +30,5 @@ def sweep() -> str:
     """
     return str(render_template(
         "scenarios/sweep.html",
-        page="scenarios-sweep",
         max_window_days=MAX_WINDOW_DAYS,
     ))
