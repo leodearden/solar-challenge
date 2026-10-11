@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Energy flow calculations for PV and battery systems."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Optional
 
@@ -125,7 +125,10 @@ def calculate_shortfall(
 class EnergyFlowResult:
     """Results of energy flow simulation for a single timestep.
 
-    All values in kWh for the timestep.
+    Every field but battery_soc is a flow: an energy the timestep moved, in kWh,
+    so never negative. Construction raises ValueError naming each flow below 0
+    or NaN, and its value. battery_soc is the state of charge after the
+    timestep, in kWh.
     """
 
     generation: float
@@ -137,6 +140,18 @@ class EnergyFlowResult:
     grid_import: float
     battery_soc: float  # SOC after this timestep
     grid_charge: float = 0.0  # informational: kWh stored in battery from grid (sub-set of battery_charge and grid_import)
+
+    def __post_init__(self) -> None:
+        """Refuse a flow that is negative or NaN, naming each such flow and its value."""
+        refused = [f"{flow}={value!r}" for flow in _FLOWS if not (value := getattr(self, flow)) >= 0.0]
+        if refused:
+            raise ValueError(
+                "EnergyFlowResult's flows are the energies its timestep moved, so each is at least 0: "
+                f"got {', '.join(refused)}"
+            )
+
+
+_FLOWS = tuple(field.name for field in fields(EnergyFlowResult) if field.name != "battery_soc")
 
 
 def _is_cheap_period(tariff: TariffConfig, current_rate: float) -> bool:

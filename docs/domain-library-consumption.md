@@ -171,6 +171,21 @@ the tag. Consumers that move a SOC limit past the SOC, as a min-SOC register
 write can, need no change when they re-pin, and any correction they make for
 the negative amounts can go.
 
+**Unreleased on main** (task 590): building an `EnergyFlowResult` with a flow
+below 0, or NaN, raises `ValueError` naming each such flow and its value. Its
+flows are `generation`, `demand`, `self_consumption`, `battery_charge`,
+`battery_discharge`, `grid_export`, `grid_import` and `grid_charge`;
+`battery_soc` is not checked. The 0.5.0 tag accepts such a result, and
+`validate_energy_balance` passes it whenever the six flows its balance equation
+reads balance, or one of them is NaN; it never reads `self_consumption` or
+`grid_charge`. So `simulate_timestep` and `simulate_timestep_tou` raise
+`ValueError` rather than return such a step. That covers a NaN `generation_kw`
+or `demand_kw`, and a negative one given to `simulate_timestep_tou`, or to
+`simulate_timestep` without a battery: the tag returns the step in each of
+these cases. With a battery, `simulate_timestep`'s built-in dispatch strategies
+refuse a negative power, as on the tag. Consumers that build results with flows
+of 0 or more, and pass powers of 0 or more, need no change when they re-pin.
+
 **Unreleased on main** (task 436): `SimulationResults`, reached through
 `FleetResults.per_home_results`, is frozen, so that each of its series stays
 named the column `to_dataframe()` writes it under. Assigning to one of its

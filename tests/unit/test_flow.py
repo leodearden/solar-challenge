@@ -2,6 +2,7 @@
 
 import dataclasses
 import functools
+import re
 from collections.abc import Callable
 from datetime import datetime
 from typing import Optional
@@ -1265,3 +1266,81 @@ class TestStepAgainstABatteryPastAnAssignedSocLimit:
             "battery_soc": 4.0,
             "grid_charge": 0.0,
         }
+
+
+# ---------------------------------------------------------------------------
+# A flow is an energy a step moved, so never negative
+# ---------------------------------------------------------------------------
+
+# EnergyFlowResult's flows, in field order; battery_soc is a level, not a flow.
+FLOWS = (
+    "generation",
+    "demand",
+    "self_consumption",
+    "battery_charge",
+    "battery_discharge",
+    "grid_export",
+    "grid_import",
+    "grid_charge",
+)
+
+NEGATIVE_OR_NAN = [pytest.param(-0.5, id="negative"), pytest.param(float("nan"), id="nan")]
+
+
+class TestEnergyFlowResultRefusesANegativeFlow:
+    """Each flow is an energy the timestep moved, so construction refuses one below 0 or NaN."""
+
+    def test_every_field_but_battery_soc_is_a_flow(self) -> None:
+        names = tuple(field.name for field in dataclasses.fields(EnergyFlowResult))
+        assert tuple(name for name in names if name != "battery_soc") == FLOWS
+
+    @pytest.mark.parametrize("flow", FLOWS)
+    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
+    def test_a_negative_or_nan_flow_is_refused_naming_it_and_its_value(
+        self, flow: str, value: float
+    ) -> None:
+        with pytest.raises(ValueError, match=re.escape(f"{flow}={value!r}")):
+            EnergyFlowResult(**{**dict.fromkeys(FLOWS, 0.0), "battery_soc": 0.0, flow: value})
+
+    @pytest.mark.parametrize("soc", NEGATIVE_OR_NAN)
+    def test_battery_soc_is_a_level_not_a_flow_so_one_below_0_or_nan_is_accepted(
+        self, soc: float
+    ) -> None:
+        result = EnergyFlowResult(**dict.fromkeys(FLOWS, 0.0), battery_soc=soc)
+        assert result.battery_soc == pytest.approx(soc, nan_ok=True)
+
+
+class _BatteryReportingANegativeDischarge(Battery):
+    """Test double: a Battery whose discharge() reports -0.975 kWh whatever it is asked, leaving its SOC alone."""
+
+    def discharge(self, power_kw: float, duration_minutes: float) -> float:
+        """Report a discharge of -0.975 kWh."""
+        return -0.975
+
+
+class TestStepRefusesANegativeFlow:
+    """A step raises rather than return a flow below 0 or NaN, whether a battery reports it or a power brings it."""
+
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_a_battery_reporting_a_negative_discharge_makes_the_step_raise(
+        self, step: Callable[..., EnergyFlowResult]
+    ) -> None:
+        battery = _BatteryReportingANegativeDischarge(BatteryConfig.default_5kwh())
+        with pytest.raises(ValueError) as refused:
+            step(generation_kw=0.0, demand_kw=2.0, battery=battery, timestep_minutes=60)
+        message = str(refused.value)
+        assert "self_consumption=-0.975" in message
+        assert "battery_discharge=-0.975" in message
+
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    @pytest.mark.parametrize(
+        ("power", "flow"), [("generation_kw", "generation"), ("demand_kw", "demand")]
+    )
+    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
+    def test_a_negative_or_nan_power_makes_the_step_raise_naming_its_flow(
+        self, step: Callable[..., EnergyFlowResult], power: str, flow: str, value: float
+    ) -> None:
+        """With no battery, no dispatch strategy checks the power first."""
+        powers = {"generation_kw": 0.0, "demand_kw": 0.0, power: value}
+        with pytest.raises(ValueError, match=re.escape(f"{flow}={value!r}")):
+            step(**powers, battery=None, timestep_minutes=60)
