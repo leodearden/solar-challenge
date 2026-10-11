@@ -1,17 +1,31 @@
 """End-to-end tests for the Results page (/results/home/<id>).
 
 Uses seeded data fixtures (no live simulation needed) to verify
-page rendering, chart containers, tab switching, stat cards,
-download links and error handling, that the daily balance
+page rendering, that each tab shows only its own charts, stat
+cards, download links and error handling, that the daily balance
 chart agrees with the stat cards, how a chart whose figure
-cannot be drawn is reported, and that a hidden tab's chart is
-drawn only once its tab is shown.
+cannot be drawn is reported, that a hidden tab's chart is drawn
+only once its tab is shown, and that showing every tab logs no
+errors.
 """
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
+from tests.e2e._results_page import show_chart_tab
+
 pytestmark = pytest.mark.e2e
+
+
+# -- The page's chart tabs --------------------------------------------------
+
+# The charts each tab shows for seeded_home_run.
+_CHART_IDS_BY_TAB = {
+    "Power Flow": ("chart-power-flow",),
+    "Battery & Finance": ("chart-battery-soc", "chart-financial"),
+    "Analysis": (),
+    "Overview": ("chart-sankey", "chart-daily-balance"),
+}
 
 
 # -- Results page loads with seeded data ------------------------------------
@@ -39,23 +53,23 @@ def test_results_chart_containers_exist(
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Overview tab shows both chart containers: #chart-sankey, #chart-daily-balance."""
+    """The Overview tab, selected on load, shows each of its charts' containers."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
 
-    for chart_id in ("#chart-sankey", "#chart-daily-balance"):
-        expect(page.locator(chart_id)).to_be_visible()
+    for chart_id in _CHART_IDS_BY_TAB["Overview"]:
+        expect(page.locator(f"#{chart_id}")).to_be_visible()
 
 
-# -- Tab switching ----------------------------------------------------------
+# -- Each tab shows only its own charts -------------------------------------
 
 
-def test_results_tab_switching(
+def test_results_tabs_each_show_only_their_own_charts(
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Clicking each chart tab makes it the only selected tab.
+    """Clicking each chart tab selects it alone and shows only its own charts, drawn by Plotly.
 
     Overview is selected on load, so it is clicked last: only then does
     its click have to move the selection.
@@ -63,9 +77,33 @@ def test_results_tab_switching(
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
 
-    for name in ("Power Flow", "Battery & Finance", "Analysis", "Overview"):
-        page.get_by_role("tab", name=name, exact=True).click()
-        expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(name)
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
+        expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(tab_name)
+        expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
+
+
+# -- Showing every tab logs no errors ---------------------------------------
+
+
+def test_results_page_shows_every_tab_without_errors(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Loading the page and showing each of its tabs logs no console error and throws no uncaught exception.
+
+    chart-renderer.js draws a hidden tab's charts only once the tab is shown, so every tab is shown.
+    """
+    run_id, _ = seeded_home_run
+    response = page.goto(live_server + f"/results/home/{run_id}")
+    assert response is not None
+    assert response.status == 200
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
+
+    assert page_errors == [], f"Errors on /results/home/{run_id}: {page_errors}"
 
 
 # -- Stat card labels not truncated ----------------------------------------
