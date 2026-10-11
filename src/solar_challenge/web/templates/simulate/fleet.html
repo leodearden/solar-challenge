@@ -3,7 +3,6 @@
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
 {% from "components/macros.html" import toggle_switch, range_input %}
 {% from "components/distribution-editor.html" import distribution_editor %}
-{% from "components/fixed-ranges.html" import fixed_ranges %}
 
 {% block title %}Fleet Simulation{% endblock %}
 
@@ -91,29 +90,29 @@
     <!-- Distribution cards grid -->
     <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 mb-6">
 
-        {% with subject = 'PV Capacity' %}
+        {% with component = fleet_components.pv %}
         <!-- PV Distribution Card (amber accent) -->
         <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
             <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700 bg-amber-50 dark:bg-amber-900/20">
                 <div class="flex items-center gap-2">
                     <div class="w-3 h-3 rounded-full bg-amber-500"></div>
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ subject }}</h3>
+                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ component.subject }}</h3>
                 </div>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of PV system sizes (kW)</p>
             </div>
             <div class="p-6">
-                {{ distribution_editor('pvDist', 4.0, subject=subject, fixed_range=fixed_ranges.pv) }}
+                {{ distribution_editor('pvDist', component, subject=component.subject) }}
             </div>
         </div>
         {% endwith %}
 
-        {% with subject = 'Battery Capacity' %}
+        {% with component = fleet_components.battery %}
         <!-- Battery Distribution Card (teal accent) -->
         <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
             <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700 bg-teal-50 dark:bg-teal-900/20">
                 <div class="flex items-center gap-2">
                     <div class="w-3 h-3 rounded-full bg-teal-500"></div>
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ subject }}</h3>
+                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ component.subject }}</h3>
                     <label class="ml-auto flex items-center gap-2 cursor-pointer">
                         <span class="text-xs text-slate-500 dark:text-slate-400">Enable Battery</span>
                         <input type="checkbox" x-model="batteryEnabled"
@@ -123,7 +122,7 @@
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of battery sizes (kWh); use 0 for no battery</p>
             </div>
             <div class="p-6" x-show="batteryEnabled" x-transition>
-                {{ distribution_editor('batteryDist', 5.0, subject=subject, fixed_range=fixed_ranges.battery) }}
+                {{ distribution_editor('batteryDist', component, subject=component.subject) }}
             </div>
             <div class="p-6 text-sm text-slate-500 dark:text-slate-400" x-show="!batteryEnabled" x-cloak>
                 Battery storage is disabled for this fleet.
@@ -131,18 +130,18 @@
         </div>
         {% endwith %}
 
-        {% with subject = 'Annual Consumption' %}
+        {% with component = fleet_components.load %}
         <!-- Load Distribution Card (red accent) -->
         <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
             <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700 bg-red-50 dark:bg-red-900/20">
                 <div class="flex items-center gap-2">
                     <div class="w-3 h-3 rounded-full bg-red-500"></div>
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ subject }}</h3>
+                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ component.subject }}</h3>
                 </div>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of annual consumption (kWh/year)</p>
             </div>
             <div class="p-6">
-                {{ distribution_editor('loadDist', 3500, subject=subject, fixed_range=fixed_ranges.load) }}
+                {{ distribution_editor('loadDist', component, subject=component.subject) }}
             </div>
         </div>
         {% endwith %}

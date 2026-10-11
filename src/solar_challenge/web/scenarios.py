@@ -6,6 +6,7 @@ The JSON endpoints these pages call live under /api/scenarios/, in api.py.
 
 from flask import Blueprint, render_template
 
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 
 bp = Blueprint("scenarios", __name__)
@@ -18,7 +19,10 @@ def builder() -> str:
     Returns:
         Rendered builder.html template.
     """
-    return str(render_template("scenarios/builder.html"))
+    return str(render_template(
+        "scenarios/builder.html",
+        fleet_components=FLEET_COMPONENTS,
+    ))
 
 
 @bp.route("/sweep")
