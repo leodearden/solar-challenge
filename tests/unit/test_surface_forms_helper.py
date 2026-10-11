@@ -1192,6 +1192,32 @@ def test_a_type_parameter_inside_its_own_bound_is_spelled_there_by_its_name_alon
 @pytest.mark.skipif(
     sys.version_info < (3, 12), reason="type parameter syntax is new in Python 3.12"
 )
+def test_a_new_type_inside_its_own_declaration_is_spelled_there_by_its_name_alone(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    grafting = _imported(
+        tmp_path,
+        monkeypatch,
+        "grafting",
+        "from typing import NewType\n"
+        "\n"
+        "\n"
+        "class Tree[T: Tree.Branch]:\n"
+        "    Branch = NewType('Branch', list[T])\n"
+        "\n"
+        "\n"
+        "def graft(branch: Tree.Branch) -> None: ...\n",
+    )
+
+    assert (
+        surface_form(grafting.graft)
+        == "(branch: Branch(list[T(bound=Branch)])) -> None"
+    )
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="type parameter syntax is new in Python 3.12"
+)
 def test_a_forward_reference_a_type_parameter_declares_names_the_class_the_module_of_its_routine_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
