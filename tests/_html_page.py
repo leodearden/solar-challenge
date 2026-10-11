@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to a rendered HTML page: the document type it declares, its
-elements with the attributes and ids they carry, the texts it shows and its headings, in
-document order, and how many times each of some given texts occurs among them.
+elements with the attributes and ids they carry, the texts it shows, its headings, the
+text of its scripts and the ids its renderChart calls draw into, in document order, and
+how many times each of some given texts occurs among them.
 
 A text is one run of character data between two tags, outside script and style elements,
 with character references decoded and whitespace collapsed. Blank runs are dropped, and an
@@ -11,7 +12,10 @@ repeats an attribute carries only its first value, as HTML reads it.
 
 Usage::
 
-    from tests._html_page import counts_of, doctype, element_attributes, element_count, element_ids, headings, texts, texts_after
+    from tests._html_page import (
+        counts_of, doctype, element_attributes, element_count, element_ids, headings,
+        render_chart_targets, script_texts, texts, texts_after,
+    )
 
     page = response.get_data(as_text=True)
     assert doctype(page) == "html"
@@ -23,14 +27,27 @@ Usage::
     assert texts_after(page, "Total Demand", 2) == ["12.0", "kWh"]
     subjects = ("PV Capacity", "Battery Capacity")
     assert counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
+    inline_scripts = [text for text in script_texts(page) if text]
+    assert "chart-sankey" in render_chart_targets(page)
 """
 
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from html.parser import HTMLParser
 
 _RAW_TEXT_ELEMENTS = frozenset({"script", "style"})
 _HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+
+_JS_COMMENT = r"//[^\n]*|/\*.*?\*/"
+_JS_STRING = r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`"""
+_RENDER_CHART_CALL = r"""(?<![\w$.])renderChart\s*\(\s*(?:(?:'(?P<single_quoted>[^'\\\n]*)'|"(?P<double_quoted>[^"\\\n]*)")\s*(?=[,)]))?"""
+_RENDER_CHART_DECLARATION = r"\bfunction\s+renderChart\b"
+_RENDER_CHART_CALL_DECLARATION_COMMENT_OR_STRING = re.compile(
+    rf"(?P<call>{_RENDER_CHART_CALL})|{_RENDER_CHART_DECLARATION}|{_JS_COMMENT}|{_JS_STRING}",
+    re.DOTALL,
+)
+_FIRST_ARGUMENT_SHOWN = 40
 
 
 def doctype(page: str) -> str | None:
@@ -161,6 +178,47 @@ def counts_of(items: Sequence[str], keys: tuple[str, ...]) -> dict[str, int]:
     return {key: items.count(key) for key in keys}
 
 
+def script_texts(page: str) -> list[str]:
+    """The text of each script element of *page*, in document order; an external script's text is ''."""
+    return _read(page).script_texts
+
+
+def render_chart_targets(page: str) -> list[str]:
+    """The id each renderChart call in a script of *page* draws into, in document order; an id more than one call draws into is listed each time.
+
+    A call counts only in script text, outside JavaScript comments and string literals,
+    and only as a call of renderChart itself, not of a longer name or of an object's
+    method; a function renderChart(...) declaration is not a call. Raises ValueError,
+    rather than skip the call, when its first argument is not one quoted string, naming
+    the call.
+
+    A JavaScript regular expression literal is not recognised as one: a quote or
+    comment marker inside it opens a string or a comment, so a call after it can be
+    missed, or a call inside a later string or comment counted.
+    """
+    return [
+        _render_chart_target(script, call)
+        for script in script_texts(page)
+        for call in _RENDER_CHART_CALL_DECLARATION_COMMENT_OR_STRING.finditer(script)
+        if call["call"] is not None
+    ]
+
+
+def _render_chart_target(script: str, call: re.Match[str]) -> str:
+    """The quoted first argument of *call*, a renderChart call in *script*."""
+    single_quoted, double_quoted = call.group("single_quoted", "double_quoted")
+    if single_quoted is not None:
+        return single_quoted
+    if double_quoted is not None:
+        return double_quoted
+    following = script[call.end() : call.end() + _FIRST_ARGUMENT_SHOWN]
+    through_first_argument = call[0] + re.split("[,)]", following, maxsplit=1)[0]
+    raise ValueError(
+        "Expected one quoted id as the first argument of each renderChart call;"
+        f" got {through_first_argument!r}"
+    )
+
+
 def _refuse_names_not_in_lower_case(*names: str) -> None:
     not_in_lower_case = [name for name in names if name != name.lower()]
     if not_in_lower_case:
@@ -171,7 +229,7 @@ def _refuse_names_not_in_lower_case(*names: str) -> None:
 
 
 class _PageReader(HTMLParser):
-    """Collects the doctypes, the elements with their attributes, the texts and the headings of one HTML page, in document order."""
+    """Collects the doctypes, the elements with their attributes, the texts, the headings and the script texts of one HTML page, in document order."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -180,7 +238,8 @@ class _PageReader(HTMLParser):
         self.texts: list[str] = []
         self.headings: list[str] = []
         self.headings_left_open = 0
-        self._in_raw_text = False
+        self.script_texts: list[str] = []
+        self._raw_text_element: str | None = None
         self._open_heading: list[str] | None = None
 
     def handle_decl(self, decl: str) -> None:
@@ -192,7 +251,9 @@ class _PageReader(HTMLParser):
             carried.setdefault(name, value)
         self.elements.append((tag, carried))
         if tag in _RAW_TEXT_ELEMENTS:
-            self._in_raw_text = True
+            self._raw_text_element = tag
+        if tag == "script":
+            self.script_texts.append("")
         if tag in _HEADING_ELEMENTS:
             if self._open_heading is not None:
                 self.headings_left_open += 1
@@ -200,13 +261,15 @@ class _PageReader(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _RAW_TEXT_ELEMENTS:
-            self._in_raw_text = False
+            self._raw_text_element = None
         if tag in _HEADING_ELEMENTS and self._open_heading is not None:
             self.headings.append(" ".join("".join(self._open_heading).split()))
             self._open_heading = None
 
     def handle_data(self, data: str) -> None:
-        if self._in_raw_text:
+        if self._raw_text_element == "script":
+            self.script_texts[-1] += data
+        if self._raw_text_element is not None:
             return
         if self._open_heading is not None:
             self._open_heading.append(data)
