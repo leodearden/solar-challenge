@@ -6,9 +6,11 @@ bounds, so a fraction or a boolean is refused, not truncated or read as 1.
 """
 
 import math
-from typing import Any
+from typing import Any, TypeVar
 
 from solar_challenge.whole_numbers import whole_number
+
+_Number = TypeVar("_Number", int, float)
 
 
 def as_finite_float(value: Any, field: str) -> float:
@@ -27,6 +29,16 @@ def as_finite_float(value: Any, field: str) -> float:
     if isinstance(value, bool) or not math.isfinite(number):
         raise ValueError(f"{field} must be a finite number, got {value!r}")
     return number
+
+
+def as_finite_float_within(value: Any, field: str, low: float, high: float) -> float:
+    """Return *value* read by :func:`as_finite_float`, refusing one outside *low* to *high* inclusive.
+
+    Raises:
+        ValueError: If :func:`as_finite_float` refuses *value*, or it is outside *low* to
+            *high*; the range error names *field*, the range and the value sent.
+    """
+    return _within(as_finite_float(value, field), value, field, low, high)
 
 
 def as_whole_number(value: Any, field: str) -> int:
@@ -52,7 +64,7 @@ def as_whole_number_within(value: Any, field: str, low: int, high: int) -> int:
     return _within(as_whole_number(value, field), value, field, low, high)
 
 
-def _within(number: int, value: Any, field: str, low: int, high: int) -> int:
+def _within(number: _Number, value: Any, field: str, low: float, high: float) -> _Number:
     """Return *number*, the *field* value read from *value*, refusing one outside *low* to *high* inclusive.
 
     Raises:
