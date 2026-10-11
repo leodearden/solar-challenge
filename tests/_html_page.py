@@ -42,8 +42,10 @@ _HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 _JS_COMMENT = r"//[^\n]*|/\*.*?\*/"
 _JS_STRING = r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`"""
 _RENDER_CHART_CALL = r"""(?<![\w$.])renderChart\s*\(\s*(?:(?:'(?P<single_quoted>[^'\\\n]*)'|"(?P<double_quoted>[^"\\\n]*)")\s*(?=[,)]))?"""
-_RENDER_CHART_CALL_COMMENT_OR_STRING = re.compile(
-    rf"(?P<call>{_RENDER_CHART_CALL})|{_JS_COMMENT}|{_JS_STRING}", re.DOTALL
+_RENDER_CHART_DECLARATION = r"\bfunction\s+renderChart\b"
+_RENDER_CHART_CALL_DECLARATION_COMMENT_OR_STRING = re.compile(
+    rf"(?P<call>{_RENDER_CHART_CALL})|{_RENDER_CHART_DECLARATION}|{_JS_COMMENT}|{_JS_STRING}",
+    re.DOTALL,
 )
 _FIRST_ARGUMENT_SHOWN = 40
 
@@ -190,14 +192,14 @@ def render_chart_targets(page: str) -> list[str]:
 
     A call counts only in script text, outside JavaScript comments and string literals,
     and only as a call of renderChart itself, not of a longer name or of an object's
-    method. A JavaScript regular expression literal is not recognised as one. Raises
-    ValueError, rather than skip the call, when its first argument is not one quoted
-    string, naming the call.
+    method; a function renderChart(...) declaration is not a call. A JavaScript regular
+    expression literal is not recognised as one. Raises ValueError, rather than skip the
+    call, when its first argument is not one quoted string, naming the call.
     """
     return [
         _render_chart_target(script, call)
         for script in script_texts(page)
-        for call in _RENDER_CHART_CALL_COMMENT_OR_STRING.finditer(script)
+        for call in _RENDER_CHART_CALL_DECLARATION_COMMENT_OR_STRING.finditer(script)
         if call["call"] is not None
     ]
 

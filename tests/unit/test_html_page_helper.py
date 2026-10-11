@@ -417,6 +417,16 @@ def test_a_call_of_another_function_does_not_count(call: str) -> None:
     assert render_chart_targets(page) == []
 
 
+def test_the_declaration_of_render_chart_is_not_a_call() -> None:
+    page = (
+        "<script>function renderChart(elementId, jsonStr) {"
+        " Plotly.newPlot(elementId, JSON.parse(jsonStr)); }"
+        " renderChart('chart-sankey', figure);</script>"
+    )
+
+    assert render_chart_targets(page) == ["chart-sankey"]
+
+
 @pytest.mark.parametrize(
     ("call", "named"),
     [
