@@ -249,39 +249,13 @@ class TestFinancialBreakdownPricing:
 
     def test_uses_engine_priced_series(self) -> None:
         """financial_breakdown must aggregate import_cost/export_revenue series directly."""
-        # Engine-priced series: DELIBERATELY inconsistent with hardcoded 0.245/0.15
-        # import: 0.30 GBP/kWh
-        # export: 0.05 GBP/kWh  (realistic SEG, ~3x smaller than hardcoded 0.15)
         results = make_sinusoidal_sim_results(
             days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
         )
 
-        output = financial_breakdown(results)
-        assert output and output != "{}"
-        parsed = json.loads(output)
-        traces = {t["name"]: t for t in parsed["data"]}
+        figure = json.loads(financial_breakdown(results))
 
-        # Expected daily totals from engine series (NO /60 division — already per-minute GBP)
-        expected_revenue = results.export_revenue.resample("D").sum().round(2)
-        expected_cost = results.import_cost.resample("D").sum().round(2)
+        traces = {trace["name"]: trace for trace in figure["data"]}
 
-        # (1) Chart totals must match engine series daily sums
-        assert sum(traces["Daily Revenue"]["y"]) == pytest.approx(
-            expected_revenue.sum(), abs=0.02
-        ), "Daily Revenue total must come from engine export_revenue series"
-        assert sum(traces["Daily Cost"]["y"]) == pytest.approx(
-            expected_cost.sum(), abs=0.02
-        ), "Daily Cost total must come from engine import_cost series"
-
-        # (2) Behavioral guard: chart follows the engine's 0.05 export rate, NOT
-        # the old hardcoded 0.15.  With the run's export revenue priced at 0.05 GBP/kWh,
-        # the chart total must be ~3x BELOW grid_export_kwh * 0.15.
-        total_grid_export_kwh = results.grid_export.sum() / 60
-        revenue_total = sum(traces["Daily Revenue"]["y"])
-        assert revenue_total != pytest.approx(
-            total_grid_export_kwh * 0.15, rel=0.1
-        ), "Daily Revenue must not match old hardcoded 0.15 export rate"
-        assert revenue_total < total_grid_export_kwh * 0.15 * 0.5, (
-            "Daily Revenue must be substantially below the old 0.15 rate "
-            "(engine uses 0.05 GBP/kWh, ~3x smaller)"
-        )
+        assert traces["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
+        assert traces["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
