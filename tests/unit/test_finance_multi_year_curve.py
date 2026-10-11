@@ -134,6 +134,14 @@ class TestYearPoint:
 
         assert str(exc_info.value) == f"year must be a whole number >= 0, got {value!r}"
 
+    @pytest.mark.parametrize("value", [2.0, np.int64(2)], ids=["float", "numpy_int64"])
+    def test_a_whole_number_year_is_held_as_the_int_it_equals(self, value: object) -> None:
+        """A whole-number float or a numpy integer year is held as the plain int it equals, as year's annotation says."""
+        year = dataclasses.replace(self._make_valid(), year=value).year
+
+        assert year == 2
+        assert type(year) is int
+
     def test_negative_energy_raises(self) -> None:
         """Negative fleet energies raise ValueError."""
         from solar_challenge.finance import YearPoint
