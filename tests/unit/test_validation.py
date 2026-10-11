@@ -1,6 +1,7 @@
 """Tests for validation and sanity checks."""
 
 import dataclasses
+import math
 
 import numpy as np
 import pandas as pd
@@ -595,6 +596,30 @@ class TestValidateSimulation:
         # Should include battery benchmark check
         check_names = [r.check_name for r in report.results]
         assert any("battery" in name for name in check_names)
+
+    @pytest.mark.parametrize("battery_capacity_kwh", [math.nan, math.inf, -1.0])
+    def test_a_battery_capacity_that_is_not_one_is_refused_naming_it(
+        self, battery_capacity_kwh: float
+    ) -> None:
+        """A battery capacity that is negative or not finite is refused naming battery_capacity_kwh, never benchmarked as no battery."""
+        results = _create_simulation_results(
+            _create_minute_index(30),
+            pv_capacity_kw=4.0,
+            self_consumption_ratio=0.30,
+            has_battery=False,
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_simulation(
+                results,
+                PVConfig(capacity_kw=4.0),
+                battery_capacity_kwh=battery_capacity_kwh,
+                target_annual_consumption_kwh=3400,
+            )
+        assert str(exc_info.value) == (
+            "battery_capacity_kwh must be >= 0 and finite (0 for no battery), "
+            f"got {battery_capacity_kwh} kWh"
+        )
 
     def test_the_pv_checks_use_the_wired_dc_of_the_pv_config_given(self) -> None:
         """Per the 1.0 kWp of four 250 W modules: 800 kWh/kWp, and a 1.1 kW peak limit."""

@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 import pandas as pd
 
-from solar_challenge.battery import BatteryConfig, require_valid_power_limit
+from solar_challenge.battery import BatteryConfig, has_battery, require_valid_power_limit
 from solar_challenge.config import (
     ConfigurationError,
     parse_dispatch_strategy_config,
@@ -234,7 +234,7 @@ def _read_efficiency(value: Any) -> float | None:
 
 
 def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryConfig | None:
-    """Read the battery a home body describes: none unless ``capacity_kwh`` is positive.
+    """Read the battery a home body describes: none when ``capacity_kwh`` is 0; a negative one is refused by has_battery, naming battery_kwh.
 
     Each setting is read whatever ``capacity_kwh`` is, so a value a battery refuses is
     refused without one too; a null setting is unset, leaving BatteryConfig's default.
@@ -250,7 +250,7 @@ def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryCon
         settings["dispatch_strategy"] = parse_dispatch_strategy_config(params["dispatch_strategy"])
     except ConfigurationError as exc:
         raise ValueError(str(exc)) from exc
-    if capacity_kwh > 0:
+    if has_battery(capacity_kwh, "battery_kwh"):
         return BatteryConfig(capacity_kwh=capacity_kwh, **settings)
     return None
 
@@ -307,10 +307,12 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             float() reads, or occupants is one int() cannot read (the error
             names the field, as heat_pump.<key> for a heat-pump number, and
             the value sent), if its days, start or end is one
-            parse_date_range refuses, or if required fields are missing or
-            invalid. The battery settings (max_charge_kw, max_discharge_kw,
-            efficiency_pct and dispatch_strategy) are read, and refused,
-            whatever battery_kwh is; a null setting reads as unset.
+            parse_date_range refuses, if battery_kwh is negative (the error
+            names battery_kwh and the value sent), or if required fields are
+            missing or invalid. The battery settings (max_charge_kw,
+            max_discharge_kw, efficiency_pct and dispatch_strategy) are read,
+            and refused, whatever battery_kwh is; a null setting reads as
+            unset.
     """
     data = require_json_object(data, "Home config")
     _refuse_unrecognised_keys(data)
@@ -339,8 +341,6 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     # Validate inputs
     if not (0.5 <= pv_kw <= 20.0):
         raise ValueError(f"PV capacity must be 0.5-20 kW, got {pv_kw}")
-    if battery_kwh_val < 0:
-        raise ValueError(f"Battery capacity cannot be negative, got {battery_kwh_val}")
 
     # Resolve location
     loc = resolve_location(location_preset)

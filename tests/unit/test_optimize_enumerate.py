@@ -2,6 +2,7 @@
 
 import dataclasses
 import itertools
+import math
 
 import pytest
 
@@ -90,6 +91,25 @@ class TestConfigPoint:
         """inverter_kw<0 raises ValueError."""
         with pytest.raises(ValueError, match="inverter_kw"):
             ConfigPoint(pv_kwp=4.0, battery_kwh=5.0, inverter_kw=-3.68)
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf])
+    @pytest.mark.parametrize("field", ["pv_kwp", "inverter_kw"])
+    def test_a_pv_or_inverter_capacity_that_is_not_finite_is_refused_naming_it(
+        self, field: str, value: float
+    ) -> None:
+        """A NaN or infinite pv_kwp or inverter_kw is refused naming the field."""
+        with pytest.raises(ValueError) as exc_info:
+            ConfigPoint(**{"pv_kwp": 4.0, "battery_kwh": 5.0, "inverter_kw": 3.68, field: value})
+        assert str(exc_info.value) == f"{field} must be > 0 and finite, got {value}"
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf])
+    def test_a_battery_kwh_that_is_not_a_capacity_is_refused_naming_it(self, value: float) -> None:
+        """A NaN or infinite battery_kwh is refused naming it, never read as a battery or as none."""
+        with pytest.raises(ValueError) as exc_info:
+            ConfigPoint(pv_kwp=4.0, battery_kwh=value, inverter_kw=3.68)
+        assert str(exc_info.value) == (
+            f"battery_kwh must be >= 0 and finite (0 for no battery), got {value} kWh"
+        )
 
 
 class TestEnumerateContract:
