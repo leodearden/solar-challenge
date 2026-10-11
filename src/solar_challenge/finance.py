@@ -1506,10 +1506,11 @@ def project_multi_year(
         metadata about the sampled ages and interpolation error.
 
     Raises:
-        ValueError: If a simulated age, seed or bisection trial, gives a fleet
-            aggregate that is NaN or infinite (own-use, export, import, revenue,
-            or a home's battery discharge).  The message names the age and each
-            such aggregate with its value.
+        ValueError: If a simulated age, seed or bisection trial, gives an
+            aggregate that is NaN or infinite: the fleet's own-use, export,
+            import or revenue, its mean PV or battery state of health, or a
+            home's battery discharge or cumulative battery throughput.  The
+            message names the age and each such aggregate with its value.
     """
     # ---- Lazy import for the real simulate_fleet ----------------------------
     if simulate is None:
