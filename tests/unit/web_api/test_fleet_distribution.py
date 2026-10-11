@@ -23,6 +23,8 @@ from solar_challenge.web.fleet_config import (
     sample_distribution,
 )
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
 
@@ -44,6 +46,12 @@ UNUSABLE_SHUFFLED_POOL_ENTRIES = [
         id="pool-total-one-above-the-fleet-limit",
     ),
 ]
+
+#: Each fleet form block a fleet cannot do without, with the distribution the 400 for its absence names.
+REQUIRED_BLOCK_DISTRIBUTIONS = {"pv": "pv.capacity_kw", "load": "load.annual_consumption_kwh"}
+
+#: The fleet form's other blocks, which a fleet can do without.
+OPTIONAL_BLOCKS = tuple(key for key in FLEET_FORM_BLOCKS if key not in REQUIRED_BLOCK_DISTRIBUTIONS)
 
 
 class TestPreviewDistribution:
@@ -258,12 +266,19 @@ class TestFleetFromDistribution:
         pv_caps = {round(c.pv_config.capacity_kw, 3) for c in configs}
         assert len(pv_caps) > 1, f"Expected distinct PV capacities but got {pv_caps}"
 
-    def test_no_json_body_returns_400(self, client: FlaskClient) -> None:
-        """POST with no JSON returns 400."""
+    @pytest.mark.parametrize(
+        ("data", "content_type"),
+        [
+            pytest.param("not json", "text/plain", id="text-body"),
+            pytest.param(None, "application/json", id="empty-json-body"),
+        ],
+    )
+    def test_no_json_body_returns_400(
+        self, client: FlaskClient, data: str | None, content_type: str
+    ) -> None:
+        """A body that does not read as a JSON object, plain text or an empty JSON body, returns 400."""
         resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            data="not json",
-            content_type="text/plain",
+            "/api/simulate/fleet-from-distribution", data=data, content_type=content_type
         )
         assert resp.status_code == 400
 
@@ -445,37 +460,26 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
 
-    @pytest.mark.parametrize("key", ["pv", "battery", "load"])
-    def test_non_mapping_component_block_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock, key: str
-    ) -> None:
-        """A pv/battery/load block sent as a non-object is a 400 naming the block and the type sent; no fleet is queued."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**self._VALID_BODY, key: "x"},
-        )
-        assert resp.status_code == 400
-        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
-        mock_job_manager.submit_fleet_job.assert_not_called()
-
     @pytest.mark.parametrize(
-        ("key", "value"),
-        [
-            ("tariff", "flat_rate"),
-            ("dispatch_strategy", "self_consumption"),
-            ("seg", "Octopus"),
-        ],
+        ("value", "type_name"),
+        [pytest.param("x", "str", id="str"), *FALSY_NON_NULL_VALUES],
     )
-    def test_non_mapping_overlay_block_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock, key: str, value: str
+    @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
+    def test_non_mapping_block_returns_400_naming_it(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        key: str,
+        value: object,
+        type_name: str,
     ) -> None:
-        """A tariff/dispatch_strategy/seg block sent as a non-object is a 400 naming the block and the type sent; no fleet is queued."""
+        """Any of the six blocks, the pv/battery/load distributions and the tariff/dispatch_strategy/seg overlays, sent as a non-object, a falsy one other than null included, is a 400 naming the block and the type sent; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, key: value},
         )
         assert resp.status_code == 400
-        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
+        assert resp.get_json() == {"error": f"{key} must be a mapping, got {type_name}"}
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -565,20 +569,60 @@ class TestFleetFromDistribution:
         fleet_dispatch = DispatchStrategyConfig("peak_shaving", import_limit_kw=4.5)
         assert [config.battery_config.dispatch_strategy for config in configs] == [fleet_dispatch] * 2
 
-    @pytest.mark.parametrize(
-        ("key", "distribution"),
-        [("pv", "pv.capacity_kw"), ("load", "load.annual_consumption_kwh")],
-    )
-    def test_null_pv_or_load_component_block_returns_400(
-        self, client: FlaskClient, mock_job_manager: MagicMock, key: str, distribution: str
+    @pytest.mark.parametrize("key", OPTIONAL_BLOCKS)
+    def test_null_optional_block_reads_as_absent_queueing_the_fleet_without_it(
+        self, client: FlaskClient, mock_job_manager: MagicMock, key: str
     ) -> None:
-        """A null pv/load block reads as absent, and the endpoint refuses the missing distribution with a 400 naming it; no fleet is queued."""
-        resp = client.post(
+        """A null block a fleet can do without reads as absent: the body with it gets the 201 the body without it gets, queueing the same fleet."""
+        without_block = {k: v for k, v in self._VALID_BODY.items() if k != key}
+
+        null_block = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, key: None},
         )
+        absent_block = client.post("/api/simulate/fleet-from-distribution", json=without_block)
+
+        assert (null_block.status_code, null_block.get_json()) == (
+            absent_block.status_code,
+            absent_block.get_json(),
+        )
+        assert null_block.status_code == 201
+        submissions = mock_job_manager.submit_fleet_job.call_args_list
+        assert len(submissions) == 2
+        assert submissions[0] == submissions[1]
+
+    @pytest.mark.parametrize(("key", "distribution"), REQUIRED_BLOCK_DISTRIBUTIONS.items())
+    def test_null_required_block_reads_as_absent_returning_400_naming_its_distribution(
+        self, client: FlaskClient, mock_job_manager: MagicMock, key: str, distribution: str
+    ) -> None:
+        """A null block a fleet cannot do without reads as absent: the body with it gets the 400 the body without it gets, naming the missing distribution, and no fleet is queued."""
+        without_block = {k: v for k, v in self._VALID_BODY.items() if k != key}
+
+        null_block = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, key: None},
+        )
+        absent_block = client.post("/api/simulate/fleet-from-distribution", json=without_block)
+
+        assert (null_block.status_code, null_block.get_json()) == (
+            absent_block.status_code,
+            absent_block.get_json(),
+        )
+        assert null_block.status_code == 400
+        assert distribution in null_block.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_empty_battery_block_returns_400_carrying_the_grammars_refusal_naming_its_capacity(
+        self, client: FlaskClient, mock_job_manager: MagicMock
+    ) -> None:
+        """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it reaches config.py's grammar and is a 400 whose error is the grammar's refusal, naming battery.capacity_kwh; no fleet is queued."""
+        body = {**self._VALID_BODY, "battery": {}}
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_fleet_distribution_config(form_to_fleet_distribution_config(body))
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
-        assert distribution in resp.get_json()["error"]
+        assert resp.get_json() == {"error": str(grammar_refusal.value)}
+        assert "battery.capacity_kwh" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(

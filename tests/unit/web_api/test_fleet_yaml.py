@@ -15,6 +15,8 @@ from flask.testing import FlaskClient
 from solar_challenge.config import DispatchStrategyConfig, load_fleet_config, parse_seg_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._html_page import element_attributes
 
 
@@ -150,11 +152,6 @@ class TestExportFleetYAML:
                 id="tariff-the-loaders-refuse",
             ),
             pytest.param(
-                {"dispatch_strategy": ""},
-                "dispatch_strategy must be a mapping",
-                id="empty-string-dispatch",
-            ),
-            pytest.param(
                 {"days": float("inf"), "start": None, "end": None},
                 "days must be an integer",
                 id="days-infinity",
@@ -184,10 +181,7 @@ class TestExportFleetYAML:
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(
         self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, reason: str
     ) -> None:
-        """A form the simulate endpoint refuses, for the reason each case names, gets the same 400 and error from the export, so no YAML is written for a fleet that cannot run; no job is queued.
-
-        The empty-string dispatch follows the nested blocks' presence rule: only null reads as absent.
-        """
+        """A form the simulate endpoint refuses, for the reason each case names, gets the same 400 and error from the export, so no YAML is written for a fleet that cannot run; no job is queued."""
         body = {**_FLEET_FORM_BODY, **patch}
 
         export = client.post("/api/fleet/export-yaml", json=body)
@@ -196,6 +190,27 @@ class TestExportFleetYAML:
         assert export.status_code == 400
         assert export.get_json()["error"].startswith(reason)
         assert (export.status_code, export.get_json()) == (simulate.status_code, simulate.get_json())
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
+    @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
+    def test_export_refuses_a_falsy_block_other_than_null_with_the_simulate_endpoints_answer(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        key: str,
+        value: object,
+        type_name: str,
+    ) -> None:
+        """A falsy block other than null, any of the six, gets from the export the 400 the simulate endpoint gives it, naming the block and the type sent: only null reads as absent. No YAML is written and no job is queued."""
+        body = {**_FLEET_FORM_BODY, key: value}
+
+        export = client.post("/api/fleet/export-yaml", json=body)
+        simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
+
+        refusal = (400, {"error": f"{key} must be a mapping, got {type_name}"})
+        assert (export.status_code, export.get_json()) == refusal
+        assert (simulate.status_code, simulate.get_json()) == refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
 
 
