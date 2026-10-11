@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
-from typing import Any, Generator, TypeAlias
+from typing import Any, Generator, Literal, TypeAlias
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -95,6 +95,17 @@ class JobState:
     created_at: str
 
 
+JobEventType = Literal["progress", "complete", "error"]  # the event a job's progress stream names: the job progressed, completed or failed
+
+
+@dataclass(frozen=True)
+class JobEvent:
+    """An event a JobManager queues for a job's progress stream: its type, and the state the job reported with it."""
+
+    type: JobEventType
+    state: JobState
+
+
 @contextmanager
 def _best_effort_failure_record(table: str, state: JobState, conn: sqlite3.Connection) -> Generator[None, None, None]:
     """Run the block in a transaction of its own on *conn*, to record in *table* that *state*'s job failed.
@@ -155,7 +166,7 @@ class _TrackedJob:
     """
 
     state: JobState
-    events: collections.deque[dict[str, Any]] = field(default_factory=lambda: collections.deque(maxlen=100))
+    events: collections.deque[JobEvent] = field(default_factory=lambda: collections.deque(maxlen=100))
     finished_at: float | None = None
 
 
@@ -345,8 +356,8 @@ class JobManager:
             job = self._jobs.get(job_id)
             return None if job is None else job.state
 
-    def get_events(self, job_id: str) -> Generator[dict[str, Any], None, None]:
-        """Yield SSE events from the job's event queue.
+    def get_events(self, job_id: str) -> Generator[JobEvent, None, None]:
+        """Yield the events queued for the job's progress stream since the last call, oldest first.
 
         Non-blocking: yields all currently queued events and returns.
 
@@ -354,7 +365,7 @@ class JobManager:
             job_id: Unique job identifier.
 
         Yields:
-            Dict with event data (type, data fields).
+            Each queued JobEvent: its type, and the state the job reported with it.
         """
         with self._lock:
             job = self._jobs.get(job_id)
@@ -507,7 +518,7 @@ class JobManager:
         status: JobStatus = _RUNNING_JOB_STATUS,
         conn: Any = None,
     ) -> None:
-        """Update job progress in memory and SQLite, and append an SSE event.
+        """Write the job's new progress to its jobs row, then report the new state with its SSE progress event.
 
         Args:
             job_id: Unique job identifier.
@@ -519,11 +530,13 @@ class JobManager:
             conn: Optional existing SQLite connection. When provided, uses
                 it directly instead of opening a new connection.
         """
-        # Update in-memory state
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if job is not None:
-                job.state = replace(job.state, status=status, progress_pct=pct, current_step=step, message=message)
+        state = replace(
+            self._state_of_running_job(job_id),
+            status=status,
+            progress_pct=pct,
+            current_step=step,
+            message=message,
+        )
 
         # Update database
         if conn is not None:
@@ -555,20 +568,7 @@ class JobManager:
                     (status, pct, step, message, job_id),
                 )
 
-        # Append SSE event
-        event = {
-            "event": "progress",
-            "data": {
-                "progress_pct": pct,
-                "current_step": step,
-                "message": message,
-                "status": status,
-            },
-        }
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if job is not None:
-                job.events.append(event)
+        self._report_state(JobEvent("progress", state))
 
     def _state_of_running_job(self, job_id: str) -> JobState:
         """Return the state of a job this manager is running, which it tracks until the job finishes."""
@@ -580,14 +580,14 @@ class JobManager:
             )
         return state
 
-    def _report_state(self, state: JobState, event: dict[str, Any]) -> None:
-        """Make *state* the state get_job_status reports for its job and queue *event*, under one hold of the lock.
+    def _report_state(self, event: JobEvent) -> None:
+        """Make the state *event* carries the state get_job_status reports for its job, and queue *event*, under one hold of the lock.
 
         A reader who sees the new state therefore finds its event queued.
         """
         with self._lock:
-            job = self._jobs[state.job_id]
-            job.state = state
+            job = self._jobs[event.state.job_id]
+            job.state = event.state
             job.events.append(event)
 
     def _record_completed_job(self, job_id: str, message: str, conn: sqlite3.Connection) -> None:
@@ -612,19 +612,7 @@ class JobManager:
             {**asdict(state), "completed_at": datetime.now(timezone.utc).isoformat()},
         )
         conn.commit()
-        self._report_state(
-            state,
-            {
-                "event": "complete",
-                "data": {
-                    "status": state.status,
-                    "progress_pct": state.progress_pct,
-                    "current_step": state.current_step,
-                    "message": state.message,
-                    "run_id": state.run_id,
-                },
-            },
-        )
+        self._report_state(JobEvent("complete", state))
 
     def _record_failed_job(self, job_id: str, message: str, error_traceback: str, conn: sqlite3.Connection) -> None:
         """Write the jobs and runs rows of a job that failed with *message*, then report the same state, at its last progress, with its SSE error event.
@@ -635,7 +623,7 @@ class JobManager:
         completed_at = datetime.now(timezone.utc).isoformat()
         _record_failed_job_row(state, error_traceback, completed_at, conn)
         _record_failed_run_row(state, completed_at, conn)
-        self._report_state(state, {"event": "error", "data": {"status": state.status, "message": state.message}})
+        self._report_state(JobEvent("error", state))
 
     def _run_job(
         self,
