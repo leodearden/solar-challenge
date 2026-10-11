@@ -4,16 +4,20 @@ Verifies form defaults, tab navigation, preset selector, submit button,
 detects Bug B4 (buildPayload missing form fields), and checks that the
 server accepts what the form submits with each optional setting on: the
 battery and its dispatch strategies, the heat pump, the import tariff and
-SEG export pricing.
+SEG export pricing. Also checks that the form lists an annual consumption
+outside the fleet load component's fixed range as an error, sending
+nothing, and sends either end of that range.
 """
 
 import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Locator, Page, Request, expect
 
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from tests.e2e._home_form import open_tab, submit_two_day_run
 
 pytestmark = pytest.mark.e2e
@@ -230,3 +234,53 @@ def test_form_validation_pv_range(page: Page, live_server: str) -> None:
     assert max_val is not None, "PV input should have a 'max' attribute"
     assert float(min_val) >= 0.5, f"PV min should be >= 0.5, got {min_val}"
     assert float(max_val) <= 20, f"PV max should be <= 20, got {max_val}"
+
+
+# ── Form validation (annual consumption range) ──────────────────────
+
+
+def _validation_errors(page: Page) -> Locator:
+    """The items of the list the page shows under "Please fix the following errors:"."""
+    heading = page.get_by_text("Please fix the following errors:", exact=True)
+    return heading.locator("xpath=..").get_by_role("listitem")
+
+
+@pytest.mark.parametrize("beyond", ["below", "above"])
+def test_consumption_beyond_the_load_range_is_listed_as_an_error_and_never_sent(
+    page: Page, live_server: str, beyond: str
+) -> None:
+    """A consumption one step beyond either end of the load component's fixed range is an error naming both ends, and Run Simulation sends nothing."""
+    load = FLEET_COMPONENTS["load"]
+    low, high = load.fixed_range
+    value = low - load.step if beyond == "below" else high + load.step
+    page.goto(live_server + "/simulate/home")
+    open_tab(page, "Load")
+    page.locator("#consumption_kwh").fill(f"{value:g}")
+    page_requests: list[Request] = []
+    page.on("request", lambda request: page_requests.append(request))
+
+    page.get_by_role("button", name="Run Simulation").click()
+
+    consumption_errors = _validation_errors(page).filter(has_text="consumption")
+    expect(consumption_errors).to_have_count(1)
+    expect(consumption_errors).to_contain_text(f"{low:g}")
+    expect(consumption_errors).to_contain_text(f"{high:g}")
+    assert [
+        request.url for request in page_requests if urlsplit(request.url).path == "/api/simulate/home"
+    ] == []
+
+
+@pytest.mark.parametrize("end", ["low", "high"])
+def test_consumption_at_either_end_of_the_load_range_is_sent_and_accepted(
+    page: Page, live_server: str, end: str
+) -> None:
+    """A consumption at either end of the load component's fixed range passes the page's check, and /api/simulate/home accepts what the form sends (201)."""
+    low, high = FLEET_COMPONENTS["load"].fixed_range
+    value = low if end == "low" else high
+    page.goto(live_server + "/simulate/home")
+    open_tab(page, "Load")
+    page.locator("#consumption_kwh").fill(f"{value:g}")
+    response = submit_two_day_run(page)
+
+    assert response.request.post_data_json["consumption_kwh"] == value
+    assert response.status == 201, response.text()
