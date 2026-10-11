@@ -15,10 +15,11 @@ import time
 import traceback
 import uuid
 import weakref
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Any, Generator, TypeAlias
 
 from concurrent.futures import ThreadPoolExecutor
@@ -94,17 +95,16 @@ class JobState:
     created_at: str
 
 
-def _record_failure_in_table(
-    table: str, state: JobState, conn: sqlite3.Connection, update: str, values: Mapping[str, object]
-) -> None:
-    """Run *update* with *values* in a transaction of its own, recording in *table* that *state*'s job failed.
+@contextmanager
+def _best_effort_failure_record(table: str, state: JobState, conn: sqlite3.Connection) -> Generator[None, None, None]:
+    """Run the block in a transaction of its own on *conn*, to record in *table* that *state*'s job failed.
 
     An error that stops it is logged, naming the job, its run and its failure, and not raised, so the job is still
     reported failed.
     """
     try:
         with conn:
-            conn.execute(update, values)
+            yield
     except Exception:
         logger.exception(
             "Could not record in the %s table that job %s of run %s failed with %r",
@@ -112,6 +112,37 @@ def _record_failure_in_table(
             state.job_id,
             state.run_id,
             state.message,
+        )
+
+
+def _record_failed_job_row(state: JobState, error_traceback: str, completed_at: str, conn: sqlite3.Connection) -> None:
+    """Record in the jobs table that *state*'s job failed, with its message and *error_traceback*, at *completed_at*."""
+    with _best_effort_failure_record("jobs", state, conn):
+        conn.execute(
+            """
+            UPDATE jobs SET
+                status = :status,
+                message = :message,
+                error_traceback = :error_traceback,
+                completed_at = :completed_at
+            WHERE id = :job_id
+            """,
+            {**asdict(state), "error_traceback": error_traceback, "completed_at": completed_at},
+        )
+
+
+def _record_failed_run_row(state: JobState, completed_at: str, conn: sqlite3.Connection) -> None:
+    """Record in the runs table that the run of *state*'s job failed, with the job's message, at *completed_at*."""
+    with _best_effort_failure_record("runs", state, conn):
+        conn.execute(
+            """
+            UPDATE runs SET
+                status = :status,
+                error_message = :message,
+                completed_at = :completed_at
+            WHERE id = :run_id
+            """,
+            {"status": _FAILED_RUN_STATUS, "message": state.message, "completed_at": completed_at, "run_id": state.run_id},
         )
 
 
@@ -602,27 +633,8 @@ class JobManager:
         """
         state = replace(self._state_of_running_job(job_id), status=_FAILED_JOB_STATUS, message=message)
         completed_at = datetime.now(timezone.utc).isoformat()
-        _record_failure_in_table(
-            "jobs",
-            state,
-            conn,
-            """
-            UPDATE jobs SET
-                status = :status,
-                message = :message,
-                error_traceback = :error_traceback,
-                completed_at = :completed_at
-            WHERE id = :job_id
-            """,
-            {**asdict(state), "error_traceback": error_traceback, "completed_at": completed_at},
-        )
-        _record_failure_in_table(
-            "runs",
-            state,
-            conn,
-            "UPDATE runs SET status = :status, error_message = :message, completed_at = :completed_at WHERE id = :run_id",
-            {"status": _FAILED_RUN_STATUS, "message": state.message, "completed_at": completed_at, "run_id": state.run_id},
-        )
+        _record_failed_job_row(state, error_traceback, completed_at, conn)
+        _record_failed_run_row(state, completed_at, conn)
         self._report_state(state, {"event": "error", "data": {"status": state.status, "message": state.message}})
 
     def _run_job(
