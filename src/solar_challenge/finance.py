@@ -21,7 +21,7 @@ import dataclasses
 import math
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, List, Mapping, NamedTuple, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterator, List, Mapping, NamedTuple, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -1324,12 +1324,17 @@ def bill_distribution(
 MAX_NODES: int = 12
 
 
-class _NodeData(NamedTuple):
+@dataclass(frozen=True)
+class _NodeData:
     """Aggregates from one simulated fleet age in the forward-march.
 
     Collected once per :func:`_simulate_age` call and stored in ``sampled_data``
-    (keyed by age).  Named fields replace magic-index access throughout the driver.
+    (keyed by age).  Construction refuses an aggregate that is NaN or infinite,
+    naming the age and each such aggregate with its value.
     """
+
+    age: int
+    """System age in calendar years at which the fleet was simulated."""
 
     fleet_sc: float
     """Fleet billed own-use (Σ :func:`_billed_energy` own-use), annualised to a 365-day year (kWh/yr)."""
@@ -1357,6 +1362,26 @@ class _NodeData(NamedTuple):
 
     per_home_throughput: List[float]
     """Per-home cumulative battery throughput (kWh) from installation to this age, which its battery SOH counts."""
+
+    def __post_init__(self) -> None:
+        """Refuse an aggregate that is NaN or infinite, naming the age and each such aggregate and its value."""
+        refused = [f"{name}={value!r}" for name, value in self._aggregates() if not math.isfinite(value)]
+        if refused:
+            raise ValueError(
+                f"every aggregate of the fleet simulated at age {self.age} must be finite: got {', '.join(refused)}"
+            )
+
+    def _aggregates(self) -> Iterator[tuple[str, float]]:
+        """Each aggregate's name and value in field order, a per-home list's entries as name[i] in fleet order."""
+        for attribute in dataclasses.fields(self):
+            if attribute.name == "age":
+                continue
+            value = getattr(self, attribute.name)
+            if isinstance(value, list):
+                for i, entry in enumerate(value):
+                    yield f"{attribute.name}[{i}]", entry
+            else:
+                yield attribute.name, value
 
 
 def _aged_homes(
@@ -1467,6 +1492,12 @@ def project_multi_year(
     Returns:
         :class:`MultiYearCurve` with one :class:`YearPoint` per year and
         metadata about the sampled ages and interpolation error.
+
+    Raises:
+        ValueError: If a simulated age, seed or bisection trial, gives a fleet
+            aggregate that is NaN or infinite (own-use, export, import, revenue,
+            or a home's battery discharge).  The message names the age and each
+            such aggregate with its value.
     """
     # ---- Lazy import for the real simulate_fleet ----------------------------
     if simulate is None:
@@ -1584,6 +1615,7 @@ def project_multi_year(
         mean_battery_soh = sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0
 
         return _NodeData(
+            age=age,
             fleet_sc=fleet_sc,
             fleet_exp=fleet_exp,
             fleet_imp=fleet_imp,
