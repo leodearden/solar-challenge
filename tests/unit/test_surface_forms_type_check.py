@@ -27,8 +27,8 @@ class _Error:
     message: str
 
     def __str__(self) -> str:
-        code = f"  [{self.code}]" if self.code else ""
-        return f"{self.path}:{self.line}: error: {self.message}{code}"
+        code_suffix = f"  [{self.code}]" if self.code else ""
+        return f"{self.path}:{self.line}: error: {self.message}{code_suffix}"
 
 
 def _type_check(project_root: Path, *mypy_args: str) -> list[_Error]:
@@ -61,10 +61,39 @@ def _type_check(project_root: Path, *mypy_args: str) -> list[_Error]:
     return errors
 
 
+def _type_check_probe(project_root: Path, source: str, tmp_path: Path) -> list[_Error]:
+    """Type-check *source* in place of the helper, under the helper's path and module name, tests._surface_forms.
+
+    mypy's --shadow-file makes the settings the helper gets, per-module overrides
+    included, apply to the probe. The helper's file is neither read nor written.
+    """
+    probe = tmp_path / "probe.py"
+    probe.write_text(source, encoding="utf-8")
+    return _type_check(project_root, "--shadow-file", _HELPER, str(probe), _HELPER)
+
+
+def test_the_type_check_flags_an_untyped_function_in_the_helper(project_root: Path, tmp_path: Path) -> None:
+    """The type check reports a function without annotations in the helper.
+
+    Only strict mode, which pyproject.toml's [tool.mypy] turns on, reports one. So
+    this checks that the type check applies the project's settings to the helper
+    and still reports an error there once the helper has none. Without it, an
+    override that silences or relaxes tests.* would leave
+    test_the_surface_forms_helper_passes_the_type_check passing on a check that
+    reports nothing.
+    """
+    errors = _type_check_probe(project_root, "def probe(value):\n    return value\n", tmp_path)
+
+    assert [(error.path, error.line, error.code) for error in errors] == [(_HELPER, 1, "no-untyped-def")], (
+        "the type check must report the untyped function in the helper, and nothing else; it reported:\n"
+        + "\n".join(map(str, errors))
+    )
+
+
 def test_the_surface_forms_helper_passes_the_type_check(project_root: Path) -> None:
     """The helper has no error under the project's type check, so the verify fails a commit that adds one."""
     errors = _type_check(project_root, _HELPER)
 
-    assert not errors, f"{_HELPER} has type errors; clear each without hiding a real one:\n" + "\n".join(
-        map(str, errors)
+    assert not errors, (
+        f"{_HELPER} has type errors; clear each without hiding a real one:\n" + "\n".join(map(str, errors))
     )
