@@ -15,7 +15,7 @@ pytestmark = pytest.mark.e2e
 
 # -- The page's chart tabs --------------------------------------------------
 
-
+# The charts each tab shows for seeded_fleet_run, the tab selected on load last.
 _CHART_IDS_BY_TAB = {
     "Per-Home": ("chart-heatmap", "chart-box-plots"),
     "Distributions": ("chart-distribution-histograms",),
@@ -94,10 +94,16 @@ def test_fleet_results_tabs_each_show_only_their_own_charts(
     """
     run_id, _ = seeded_fleet_run
     page.goto(live_server + f"/results/fleet/{run_id}")
+    selected_tab = page.get_by_role("tab", selected=True)
+    last_listed_tab = list(_CHART_IDS_BY_TAB)[-1]
+    expect(
+        selected_tab,
+        f"expected the tab selected on load to be {last_listed_tab!r}, the last in _CHART_IDS_BY_TAB",
+    ).to_have_accessible_name(last_listed_tab)
 
     for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
         show_chart_tab(page, tab_name, chart_ids)
-        expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(tab_name)
+        expect(selected_tab).to_have_accessible_name(tab_name)
         expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
 
 

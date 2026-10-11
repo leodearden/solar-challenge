@@ -19,7 +19,7 @@ pytestmark = pytest.mark.e2e
 
 # -- The page's chart tabs --------------------------------------------------
 
-# The charts each tab shows for seeded_home_run.
+# The charts each tab shows for seeded_home_run, the tab selected on load last.
 _CHART_IDS_BY_TAB = {
     "Power Flow": ("chart-power-flow",),
     "Battery & Finance": ("chart-battery-soc", "chart-financial"),
@@ -45,22 +45,6 @@ def test_results_page_loads(
     expect(page.get_by_role("heading", level=1)).to_have_text(run_name)
 
 
-# -- Chart containers exist ------------------------------------------------
-
-
-def test_results_chart_containers_exist(
-    page: Page,
-    live_server: str,
-    seeded_home_run: tuple[str, str],
-) -> None:
-    """The Overview tab, selected on load, shows each of its charts' containers."""
-    run_id, _ = seeded_home_run
-    page.goto(live_server + f"/results/home/{run_id}")
-
-    for chart_id in _CHART_IDS_BY_TAB["Overview"]:
-        expect(page.locator(f"#{chart_id}")).to_be_visible()
-
-
 # -- Each tab shows only its own charts -------------------------------------
 
 
@@ -76,10 +60,16 @@ def test_results_tabs_each_show_only_their_own_charts(
     """
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
+    selected_tab = page.get_by_role("tab", selected=True)
+    last_listed_tab = list(_CHART_IDS_BY_TAB)[-1]
+    expect(
+        selected_tab,
+        f"expected the tab selected on load to be {last_listed_tab!r}, the last in _CHART_IDS_BY_TAB",
+    ).to_have_accessible_name(last_listed_tab)
 
     for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
         show_chart_tab(page, tab_name, chart_ids)
-        expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(tab_name)
+        expect(selected_tab).to_have_accessible_name(tab_name)
         expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
 
 
