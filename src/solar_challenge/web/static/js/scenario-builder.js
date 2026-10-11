@@ -4,25 +4,15 @@ document.addEventListener('alpine:init', () => {
         return value === undefined || value === null ? '' : value;
     }
 
-    // The fleet components the form distributes: the prefix of their form fields, which also keys their distribution in
-    // dists, the field the form sends a fixed value in, and their spec's key in the scenario grammar, at
-    // fleet_distribution.<prefix>.<grammarKey>. templates/scenarios/builder.html calls distribution_card once for each,
-    // with its prefix.
-    const COMPONENTS = [
-        { prefix: 'pv', fixedField: 'pv_capacity_kw', grammarKey: 'capacity_kw' },
-        { prefix: 'battery', fixedField: 'battery_capacity_kwh', grammarKey: 'capacity_kwh' },
-        { prefix: 'load', fixedField: 'annual_consumption_kwh', grammarKey: 'annual_consumption_kwh' },
-    ];
-
     // Whether `value` is a YAML mapping, as a scenario document and each of its blocks is
     function isMapping(value) {
         return value !== null && typeof value === 'object' && !Array.isArray(value);
     }
 
-    // The form fields whose preview is `scenario`, a document in the preview's grammar. Each component's distribution is
-    // the form's one in `dists` with what its spec sets laid over it.
+    // The form fields whose preview is `scenario`, a document in the preview's grammar. The distribution of each of
+    // `components` is the form's one in `dists` with what its spec sets laid over it.
     // Throws, saying why, for a document the form cannot hold.
-    function scenarioFormFields(scenario, dists) {
+    function scenarioFormFields(scenario, components, dists) {
         if (!isMapping(scenario)) {
             throw new Error('it does not hold a YAML mapping');
         }
@@ -40,8 +30,8 @@ document.addEventListener('alpine:init', () => {
             n_homes: inputValue(fleet.n_homes),
             import_rate: tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '',
             seg_rate_pence_per_kwh: inputValue((scenario.seg || {}).rate_pence_per_kwh),
-            dists: Object.fromEntries(COMPONENTS.map((component) => [
-                component.prefix, { ...dists[component.prefix], ...componentDistribution(fleet, component) },
+            dists: Object.fromEntries(components.map((component) => [
+                component.key, { ...dists[component.key], ...componentDistribution(fleet, component) },
             ])),
         };
         if (scenario.location) {
@@ -55,9 +45,9 @@ document.addEventListener('alpine:init', () => {
 
     // The fields of one component's distribution that its spec in `fleet` sets: a fixed number, or a distribution.
     // Throws, naming the spec, for one the form cannot hold.
-    function componentDistribution(fleet, { prefix, grammarKey }) {
-        const spec = (fleet[prefix] || {})[grammarKey];
-        const path = 'fleet_distribution.' + prefix + '.' + grammarKey;
+    function componentDistribution(fleet, { key, grammar_key }) {
+        const spec = (fleet[key] || {})[grammar_key];
+        const path = 'fleet_distribution.' + key + '.' + grammar_key;
         if (spec === undefined || spec === null || typeof spec === 'number') {
             return { type: '', fixed: inputValue(spec) };
         }
@@ -93,24 +83,27 @@ document.addEventListener('alpine:init', () => {
 
     // The fields of the form the builder sends that give one component's distribution `dist`: its fixed value, or its
     // type and the fields that type reads (all four parameters for normal and uniform alike)
-    function componentFormData(dist, { prefix, fixedField }) {
+    function componentFormData(dist, { key, fixed_field }) {
         if (!dist.type) {
-            return { [fixedField]: dist.fixed };
+            return { [fixed_field]: dist.fixed };
         }
-        const data = { [prefix + '_distribution_type']: dist.type };
+        const data = { [key + '_distribution_type']: dist.type };
         if (dist.type === 'weighted_discrete') {
-            data[prefix + '_wd_values'] = dist.values;
+            data[key + '_wd_values'] = dist.values;
         } else if (dist.type === 'shuffled_pool') {
-            data[prefix + '_sp_entries'] = dist.entries;
+            data[key + '_sp_entries'] = dist.entries;
         } else {
             for (const parameter of ['mean', 'std', 'min', 'max']) {
-                data[prefix + '_' + parameter] = dist[parameter];
+                data[key + '_' + parameter] = dist[parameter];
             }
         }
         return data;
     }
 
-    Alpine.data('scenarioBuilder', (initialSection) => ({
+    // components is what scenarios.py lists from web/fleet_components.py for each fleet component: its key (its
+    // fleet_distribution block and its form fields' prefix), the field a fixed value is sent in, its grammar key, and
+    // the distribution its card starts at.
+    Alpine.data('scenarioBuilder', (initialSection, components) => ({
         // Form state
         name: '',
         description: '',
@@ -124,24 +117,8 @@ document.addEventListener('alpine:init', () => {
         import_rate: 0.245,
         seg_rate_pence_per_kwh: 15.0,
 
-        // Each component's distribution, by its prefix in COMPONENTS: a fixed value while type is ''
-        dists: {
-            pv: {
-                type: '', fixed: 4.0, mean: 4.0, std: 1.0, min: 2.0, max: 8.0,
-                values: [{ value: 3.0, weight: 20 }, { value: 4.0, weight: 40 }, { value: 5.0, weight: 30 }],
-                entries: [{ value: 3.0, count: 20 }, { value: 4.0, count: 40 }, { value: 5.0, count: 30 }, { value: 6.0, count: 10 }],
-            },
-            battery: {
-                type: '', fixed: 5.0, mean: 5.0, std: 2.0, min: 0, max: 13.5,
-                values: [{ value: 0, weight: 40 }, { value: 5.0, weight: 40 }, { value: 10.0, weight: 20 }],
-                entries: [{ value: 0, count: 40 }, { value: 5.0, count: 40 }, { value: 10.0, count: 20 }],
-            },
-            load: {
-                type: '', fixed: 3500, mean: 3400, std: 800, min: 2000, max: 5000,
-                values: [{ value: 2900, weight: 30 }, { value: 3500, weight: 40 }, { value: 4500, weight: 30 }],
-                entries: [{ value: 2900, count: 30 }, { value: 3500, count: 40 }, { value: 4500, count: 30 }],
-            },
-        },
+        // Each component's distribution, by its key: a fixed value while type is ''
+        dists: Object.fromEntries(components.map((component) => [component.key, component.dist])),
 
         // UI state
         yamlPreview: '# Configure your scenario...',
@@ -258,7 +235,7 @@ document.addEventListener('alpine:init', () => {
             event.target.value = '';
             let fields;
             try {
-                fields = scenarioFormFields(jsyaml.load(text), this.dists);
+                fields = scenarioFormFields(jsyaml.load(text), components, this.dists);
             } catch (e) {
                 this.yamlPreview = '# ' + file.name + ' was not loaded: ' + e.message;
                 return;
@@ -316,8 +293,8 @@ document.addEventListener('alpine:init', () => {
                 data.longitude = this.longitude;
                 data.altitude = this.altitude;
             }
-            for (const component of COMPONENTS) {
-                Object.assign(data, componentFormData(this.dists[component.prefix], component));
+            for (const component of components) {
+                Object.assign(data, componentFormData(this.dists[component.key], component));
             }
             return data;
         },

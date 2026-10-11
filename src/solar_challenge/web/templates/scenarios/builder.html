@@ -54,7 +54,7 @@
 ) }}
 
 <div
-    x-data="scenarioBuilder('{{ initial_section }}')"
+    x-data='scenarioBuilder({{ initial_section|tojson }}, {{ script_components|tojson }})'
     class="grid grid-cols-1 lg:grid-cols-5 gap-6"
 >
     <!-- Left Pane: Structured Form (60%) -->
