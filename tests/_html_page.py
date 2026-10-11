@@ -96,11 +96,7 @@ def element_attributes(page: str, tag: str) -> list[Mapping[str, str | None]]:
 
 def current_page_links(page: str) -> list[str | None]:
     """The href of each link *page* marks as the current page, with aria-current="page", in document order."""
-    return [
-        link.get("href")
-        for link in element_attributes(page, "a")
-        if link.get("aria-current") == "page"
-    ]
+    return [link.get("href") for link in element_attributes(page, "a") if link.get("aria-current") == "page"]
 
 
 def element_ids(page: str) -> set[str]:
