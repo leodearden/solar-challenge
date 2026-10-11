@@ -818,15 +818,16 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
     *PV/inverter*: ``pv_config.capacity_kw`` and ``pv_config.inverter_capacity_kw``
     are set to *point.pv_kwp* and *point.inverter_kw* respectively.
 
-    *Battery*:
+    *Battery*: battery presence is
+    :func:`~solar_challenge.battery.has_battery` of ``point.battery_kwh``. There is
+    no epsilon tolerance; a small positive value fabricates a battery.
 
-    - ``point.battery_kwh == 0.0`` (exact) → ``battery_config = None`` (no battery).
-      There is no epsilon tolerance; a small positive value fabricates a battery.
-    - ``point.battery_kwh > 0`` and the home already has a battery →
+    - No battery → ``battery_config = None``.
+    - A battery, and the home already has one →
       ``dataclasses.replace(home.battery_config, capacity_kwh=point.battery_kwh)``
       preserving ``max_discharge_kw``, ``grid_charging``, ``dispatch_strategy``,
       ``efficiency``, and all other base fields (PRD §3.2 / design decision 2).
-    - ``point.battery_kwh > 0`` and the home has NO battery → a fresh
+    - A battery, and the home has NO battery → a fresh
       :class:`~solar_challenge.battery.BatteryConfig` is FABRICATED at defaults
       (``max_discharge_kw=2.5``, ``grid_charging=None``, ``dispatch_strategy=None``).
       This is the intentional divergence from ``apply_fleet_overlay`` (which

@@ -46,7 +46,7 @@ def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge
 
 
 def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> None:
-    """Refuse *capacity_kwh*, the value of the battery capacity setting named *setting*, in which 0 means no battery, unless it is >= 0 and finite."""
+    """Refuse a battery capacity setting unless it is >= 0 and finite; 0 means no battery."""
     if not 0 <= capacity_kwh < math.inf:
         raise ValueError(
             f"{setting} must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
@@ -54,7 +54,7 @@ def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> None:
 
 
 def has_battery(capacity_kwh: float, setting: str) -> bool:
-    """Whether *capacity_kwh*, the battery capacity setting named *setting*, asks for a battery: a positive capacity does, and 0 is no battery. Refuses one that require_valid_capacity_setting refuses."""
+    """Whether a battery capacity setting asks for a battery (> 0); an invalid one is refused."""
     require_valid_capacity_setting(capacity_kwh, setting)
     return capacity_kwh > 0
 
