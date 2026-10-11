@@ -266,6 +266,27 @@ bool (Python's or numpy's), and holds `3.0` as the int `3`; the tag accepts e.g.
 consumption, ageing inputs and system age; the tag accepts e.g.
 `capacity_kwh=float("inf")`. Consumers fix such inputs when they re-pin.
 
+**Unreleased on main** (task 374): `FinanceConfig` refuses input the 0.5.0 tag
+accepts, and raises `ConfigurationError`. It refuses NaN and ±inf for every
+number: the tag accepts NaN and +inf for `standing_charge_pence_per_day`,
+`retail_baseline_rate_pence_per_kwh`, `pv_cost_per_kwp_gbp`, `roof_fit_cost_gbp`,
+`battery_cost_per_kwh_gbp`, `inverter_cost_per_kw_gbp`, `grant_gbp`, `loan_rate`,
+`opex_per_home_per_year_gbp`, `own_use_rate_pence_per_kwh`,
+`retained_cash_floor_per_home_per_year_gbp` and
+`grid_services_income_per_kw_per_year_gbp`, and those messages now end
+"must be > 0 and finite" or "must be >= 0 and finite". `loan_term_years` and
+`asset_life_years` must be finite whole numbers: a bool (Python's or numpy's), a
+NaN, an infinity or a fraction raises "must be a finite whole number", where the
+tag accepts e.g. `20.5` and stores it; a whole-number float or numpy integer is
+held as the plain int it equals. `parse_finance_config`, and so `load_scenarios`
+and the finance CLIs, also refuse a YAML boolean, which the tag reads as 1.0
+or 0.0, for any numeric scalar `finance` or `grid_services_events` key and for
+an event window's `event_hours`, and a fractional year, which the tag truncates
+with `int()`; an integer too large for a float, or an infinite count, is a
+`ConfigurationError` where the tag raises a raw `OverflowError`. Consumers fix
+such inputs when they re-pin, and any `except OverflowError` around
+`parse_finance_config` can go.
+
 **Unreleased on main** (task 318): `SimulationResults`, reached through
 `FleetResults.per_home_results`, gains the classmethod
 `from_dataframe(frame, *, strategy_name)`, the inverse of `to_dataframe()`.
