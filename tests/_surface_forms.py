@@ -106,8 +106,9 @@ def named_classes(obj: object) -> set[type]:
     naming it and its type. A class's constructor is spelled in the module of the class
     in its MRO whose own body defines __init__ or __new__, which may be a base defined in
     another module; a parameter of an __init__ the dataclass decorator generated, in the
-    module of the nearest class in that MRO whose own body annotates it, so an inherited
-    field in its base's. What a type variable or a NewType carries is spelled in the
+    module of the nearest class in that MRO the decorator processed whose own body
+    annotates it, so an inherited field in the base that declares it, however a mixin
+    annotates it. What a type variable or a NewType carries is spelled in the
     module that declares it; inside its own declaration, as in
     TypeVar("T", bound="Node[T]"), it names no class. A type parameter, as in
     def f[T: "Node"](x: T), reports no module of its own: what it carries is spelled in
@@ -437,26 +438,31 @@ def _form_classes(obj: object) -> set[type]:
         name: parameter.annotation for name, parameter in signature.parameters.items()
     }
     annotations["return"] = signature.return_annotation
+    modules = _spelling_modules(obj, annotations)
     return set().union(
         *(
-            _parsed(annotation, frozenset()).classes(_spelling_module(obj, name))
+            _parsed(annotation, frozenset()).classes(modules[name])
             for name, annotation in annotations.items()
             if annotation is not inspect.Parameter.empty
         )
     )
 
 
-def _spelling_module(obj: object, name: str) -> str:
-    """The module whose source spells the annotation inspect.signature(*obj*) gives *name*, a parameter or "return": a routine's own. For a class, that of the class holding its constructor; but for a generated __init__, that of the first class in the holder's MRO whose own body annotates *name*, or the holder's if none does."""
+def _spelling_modules(obj: object, names: Iterable[str]) -> dict[str, str]:
+    """The module whose source spells the annotation inspect.signature(*obj*) gives each of *names*, parameter names or "return": a routine's own. For a class, that of the class holding its constructor; but for a generated __init__, that of the nearest class in the holder's MRO that the dataclass decorator processed and whose own body annotates the name, or the holder's if none does."""
     if not inspect.isclass(obj):
-        return obj.__module__
+        return dict.fromkeys(names, obj.__module__)
     holder = _constructor_holder(obj)
     if not _holds_generated_init(holder):
-        return holder.__module__
-    return next(
-        (base.__module__ for base in holder.__mro__ if name in inspect.get_annotations(base)),
-        holder.__module__,
-    )
+        return dict.fromkeys(names, holder.__module__)
+    decorated = tuple(base for base in holder.__mro__ if _is_decorated_dataclass(base))
+    return {
+        name: next(
+            (base.__module__ for base in decorated if name in inspect.get_annotations(base)),
+            holder.__module__,
+        )
+        for name in names
+    }
 
 
 def _constructor_holder(cls: type) -> type:
@@ -471,12 +477,14 @@ def _holds_generated_init(cls: type) -> bool:
 
     The decorator compiles that __init__ outside the class body and renames it into the
     class, so its code keeps another qualified name; one the body defines, wrapped or
-    not, keeps its own. A __new__ the body defines is read first and is never generated.
+    not, keeps its own. What the body assigns that is no function, such as a callable
+    object, the decorator never generated. A __new__ the body defines is read first and
+    is never generated.
     """
     if not _is_decorated_dataclass(cls) or "__new__" in vars(cls):
         return False
-    init: types.FunctionType = inspect.unwrap(vars(cls)["__init__"])
-    return init.__code__.co_qualname != init.__qualname__
+    init: object = inspect.unwrap(vars(cls)["__init__"])
+    return isinstance(init, types.FunctionType) and init.__code__.co_qualname != init.__qualname__
 
 
 def _member_form_classes(member: object, cls: type) -> set[type]:
