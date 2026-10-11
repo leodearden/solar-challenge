@@ -11,6 +11,7 @@
 **Unreleased on main** (task 295): each simulated age's battery SOH counts the battery throughput from installation to that age (§4, §7.6); the 0.5.0 tag ages each seed with the throughput up to the previous seed only, so a battery fleet's mid-life battery SOH and own-use read high there.
 **Unreleased on main** (task 307): on a home with no tariff configured, the override path prices its grid import at the retail baseline rate, with the physics path's `UserWarning` (§3); the 0.5.0 tag prices that import at £0.
 **Unreleased on main** (task 308): with `self_consumption_override` set, `project_multi_year`'s own-use revenue, and so the cost-recovery solve's rate base, is each home's capped override own-use, the own-use its bill charges (§2, §4, §5); the 0.5.0 tag keeps both on basis C.
+**Unreleased on main** (task 656): `project_multi_year`, and so `solve_cost_recovery_rate`, raises `ValueError` when a simulated age, seed or bisection trial, gives a fleet own-use, export, import or revenue, or a home's battery discharge, that is NaN or infinite, naming the age and each such aggregate with its value (§4); the 0.5.0 tag projects a NaN own-use or revenue on a one-year asset life as 0 kWh and £0 and passes an infinity through, drops a bisection trial whose aggregate is NaN, accepts a non-finite battery discharge, and stops on a non-finite seed of a longer life in scipy's PCHIP with "`y` must contain only finite values", which names no age.
 
 ---
 
@@ -333,6 +334,13 @@ non-increasing year on year
 (`tests/unit/test_finance_projection_ageing.py::TestBatterySohCountsThroughputToEachAge`).
 A faded battery stores less, which lowers later years' basis-C own-use and its
 revenue.
+
+**Finite aggregates.** Every simulated age's fleet own-use, export, import and
+revenue, and each home's battery discharge, must be finite.  `project_multi_year`
+refuses an age that breaks this, raising `ValueError` naming the age and each
+such aggregate with its value, so the PCHIP curves and each year's clip at 0 see
+only finite values
+(`tests/unit/test_finance_projection.py::TestProjectMultiYearRefusesNonFiniteAggregates`).
 
 **No-flex identity** (flat-rate fleet, grid_services = 0):
 
