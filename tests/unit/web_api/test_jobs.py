@@ -12,7 +12,8 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.database import get_db
-from solar_challenge.web.jobs import JobState
+from solar_challenge.web.jobs import JobEvent, JobState
+from tests._sse import SseFrame, parse_sse_events
 
 _A_RUNNING_JOB = JobState(
     job_id="job-running",
@@ -23,6 +24,14 @@ _A_RUNNING_JOB = JobState(
     message="Running home simulation...",
     created_at="2024-06-01T12:00:00+00:00",
 )
+_A_COMPLETED_JOB = replace(
+    _A_RUNNING_JOB,
+    status="completed",
+    progress_pct=100.0,
+    current_step="Done",
+    message="Simulation completed successfully",
+)
+_A_FAILED_JOB = replace(_A_RUNNING_JOB, status="failed", message="Something went wrong")
 
 
 class TestGetJobStatus:
@@ -131,25 +140,49 @@ class TestGetJobProgress:
         body = resp.get_data(as_text=True)
         assert "event: complete" in body
 
-    def test_queued_events_are_streamed(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+    @pytest.mark.parametrize(
+        ("final_event", "final_frame"),
+        [
+            (
+                JobEvent("complete", _A_COMPLETED_JOB),
+                SseFrame(
+                    "complete",
+                    {
+                        "status": "completed",
+                        "progress_pct": 100.0,
+                        "current_step": "Done",
+                        "message": "Simulation completed successfully",
+                        "run_id": "run-running",
+                    },
+                ),
+            ),
+            (
+                JobEvent("error", _A_FAILED_JOB),
+                SseFrame("error", {"status": "failed", "message": "Something went wrong"}),
+            ),
+        ],
+        ids=["completed", "failed"],
+    )
+    def test_each_queued_event_is_sent_named_by_its_type_with_the_fields_of_its_state_the_browser_reads(
+        self, client: FlaskClient, mock_job_manager: MagicMock, final_event: JobEvent, final_frame: SseFrame
     ) -> None:
-        """Events from job queue are streamed as SSE."""
-        mock_job_manager.get_events.return_value = iter([
-            {
-                "event": "progress",
-                "data": {"progress_pct": 50.0, "message": "Half done"},
-            },
-            {
-                "event": "complete",
-                "data": {"status": "completed", "run_id": "run-home-001"},
-            },
-        ])
-        resp = client.get("/api/jobs/job-home-001/progress")
-        body = resp.get_data(as_text=True)
-        assert "event: progress" in body
-        assert "Half done" in body
-        assert "event: complete" in body
+        mock_job_manager.get_job_status.return_value = final_event.state
+        mock_job_manager.get_events.return_value = iter([JobEvent("progress", _A_RUNNING_JOB), final_event])
+
+        frames = parse_sse_events(client.get("/api/jobs/job-running/progress").get_data(as_text=True))
+
+        assert frames == [
+            SseFrame(
+                "progress",
+                {
+                    "progress_pct": 50.0,
+                    "current_step": "Simulating",
+                    "message": "Running home simulation...",
+                    "status": "running",
+                },
+            ),
+            final_frame,
+        ]
 
 
 class TestGetJobResults:

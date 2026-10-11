@@ -12,13 +12,14 @@ an import error in this conftest would abort the run.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
 
-from solar_challenge.web.jobs import JobState
+from solar_challenge.web.jobs import JobEvent, JobState
 from tests._web_app import build_test_app
 
 if TYPE_CHECKING:
@@ -42,7 +43,7 @@ def mock_job_manager(app: Flask) -> MagicMock:
     jm = MagicMock()
     jm.submit_home_job.return_value = ("job-home-001", "run-home-001")
     jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
-    jm.get_job_status.return_value = JobState(
+    running = JobState(
         job_id="job-home-001",
         run_id="run-home-001",
         status="running",
@@ -51,11 +52,18 @@ def mock_job_manager(app: Flask) -> MagicMock:
         message="Running home simulation...",
         created_at="2024-06-01T12:00:00+00:00",
     )
+    jm.get_job_status.return_value = running
     jm.get_events.return_value = iter([
-        {
-            "event": "complete",
-            "data": {"status": "completed", "run_id": "run-home-001"},
-        }
+        JobEvent(
+            "complete",
+            replace(
+                running,
+                status="completed",
+                progress_pct=100.0,
+                current_step="Done",
+                message="Simulation completed successfully",
+            ),
+        )
     ])
     app.extensions["job_manager"] = jm
     return jm

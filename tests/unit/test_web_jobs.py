@@ -7,6 +7,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,8 @@ from solar_challenge.weather import WeatherCache
 from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.jobs import (
     HomeSimulator,
+    JobEvent,
+    JobEventType,
     JobManager,
     JobState,
     live_managers,
@@ -663,8 +666,43 @@ class TestJobManagerDirect:
 
         events = list(manager.get_events(job_id))
 
-        assert [event["data"]["current_step"] for event in events] == ["Starting", "Simulating"]
+        assert [event.state.current_step for event in events] == ["Starting", "Simulating"]
         assert list(manager.get_events(job_id)) == []
+
+    def test_each_progress_event_carries_the_state_the_job_reported_at_that_step(
+        self, blocking_simulation: _BlockingSimulation, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_id = _submit_home_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+        simulating = manager.get_job_status(job_id)
+        assert simulating is not None
+
+        events = list(manager.get_events(job_id))
+
+        assert events == [
+            JobEvent(
+                "progress",
+                replace(simulating, progress_pct=5.0, current_step="Starting", message="Initializing..."),
+            ),
+            JobEvent("progress", simulating),
+        ]
+
+    @pytest.mark.parametrize(
+        ("simulation", "event_type"),
+        [(_RecordingSimulation(), "complete"), (_a_failing_simulation, "error")],
+        ids=["completed", "failed"],
+    )
+    def test_a_finished_jobs_last_event_carries_the_state_its_manager_reports(
+        self, simulation: HomeSimulator, event_type: JobEventType, tmp_path: Path
+    ) -> None:
+        manager = JobManager(max_workers=1, simulate_home=simulation)
+        job_id = _submit_home_job(manager, tmp_path)
+        assert manager.wait_until_idle(timeout=30)
+        state = manager.get_job_status(job_id)
+        assert state is not None
+
+        assert list(manager.get_events(job_id))[-1] == JobEvent(event_type, state)
 
     def test_get_events_unknown_job_yields_nothing(self) -> None:
         """Test that get_events for an unknown job yields no events."""
@@ -1230,10 +1268,7 @@ class TestJobManagerUnrecordedFailures:
 
         assert state is not None
         assert (state.status, state.message) == ("failed", "the simulation failed")
-        assert list(manager.get_events(job_id))[-1] == {
-            "event": "error",
-            "data": {"status": "failed", "message": "the simulation failed"},
-        }
+        assert list(manager.get_events(job_id))[-1] == JobEvent("error", state)
 
     def test_a_failure_whose_message_sqlite_cannot_store_is_logged_for_each_table_and_still_reported(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
