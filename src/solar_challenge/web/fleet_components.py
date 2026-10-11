@@ -4,7 +4,10 @@
 Both fleet pages, simulate/fleet.html and scenarios/builder.html, render each one's
 distribution editor from it. The scenario builder's script, static/js/scenario-builder.js,
 receives the builder's part of it through scenarios.py, and builder_form.py reads the
-builder's form fields and each fixed value's bounds from it.
+builder's form fields and each fixed value's bounds from it. The single-home page,
+simulate/home.html, bounds and steps its annual consumption input with the load
+component's fixed_range and step, and simulation_params.parse_home_config refuses a
+home's consumption outside that range.
 """
 
 from collections.abc import Mapping

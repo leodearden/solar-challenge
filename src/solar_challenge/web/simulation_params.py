@@ -20,8 +20,10 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.number_fields import (
     as_finite_float,
+    as_finite_float_within,
     as_whole_number,
     as_whole_number_within,
 )
@@ -312,11 +314,13 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             included (the error names the field, as heat_pump.<key> for a
             heat-pump number, and the value sent), if its days, start or
             end is one parse_date_range refuses, if battery_kwh is negative
-            (the error names battery_kwh and the value sent), or if required
-            fields are missing or invalid. The battery settings (max_charge_kw,
-            max_discharge_kw, efficiency_pct and dispatch_strategy) are read,
-            and refused, whatever battery_kwh is; a null setting reads as
-            unset.
+            (the error names battery_kwh and the value sent), if a sent
+            consumption_kwh lies outside the fleet load component's fixed
+            range (the error names consumption_kwh, the range and the value
+            sent), or if required fields are missing or invalid. The battery
+            settings (max_charge_kw, max_discharge_kw, efficiency_pct and
+            dispatch_strategy) are read, and refused, whatever battery_kwh
+            is; a null setting reads as unset.
     """
     data = require_json_object(data, "Home config")
     _refuse_unrecognised_keys(data)
@@ -362,7 +366,9 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
 
     annual_consumption: float | None = None
     if consumption_kwh_raw is not None:
-        annual_consumption = as_finite_float(consumption_kwh_raw, "consumption_kwh")
+        annual_consumption = as_finite_float_within(
+            consumption_kwh_raw, "consumption_kwh", *FLEET_COMPONENTS["load"].fixed_range
+        )
 
     load_config = LoadConfig(
         annual_consumption_kwh=annual_consumption,
