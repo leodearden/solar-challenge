@@ -452,3 +452,36 @@ def test_a_call_whose_first_argument_is_not_one_quoted_id_raises_naming_it(
 
     with pytest.raises(ValueError, match=r"quoted id.*" + re.escape(named)):
         render_chart_targets(page)
+
+
+@pytest.mark.parametrize(
+    ("script", "targets"),
+    [
+        pytest.param(
+            "var quote = /'/; renderChart('chart-sankey', figure);",
+            [],
+            id="quote-hides-a-later-call",
+        ),
+        pytest.param(
+            r"var absolute = /^https?:\/\//; renderChart('chart-sankey', figure);",
+            [],
+            id="comment-marker-hides-a-later-call",
+        ),
+        pytest.param(
+            "var quote = /'/;"
+            " var note = \"it's renderChart('chart-monthly', figure)\";",
+            ["chart-monthly"],
+            id="quote-counts-a-call-in-a-later-string",
+        ),
+        pytest.param(
+            "var quote = /'/; draw(); // it's renderChart('chart-monthly', figure)",
+            ["chart-monthly"],
+            id="quote-counts-a-call-in-a-later-comment",
+        ),
+    ],
+)
+def test_a_regular_expression_literal_is_not_recognised_as_one(
+    script: str, targets: list[str]
+) -> None:
+    """A known gap, pinned so that a fix updates this test and render_chart_targets' docstring together."""
+    assert render_chart_targets(f"<script>{script}</script>") == targets

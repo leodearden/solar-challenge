@@ -192,9 +192,13 @@ def render_chart_targets(page: str) -> list[str]:
 
     A call counts only in script text, outside JavaScript comments and string literals,
     and only as a call of renderChart itself, not of a longer name or of an object's
-    method; a function renderChart(...) declaration is not a call. A JavaScript regular
-    expression literal is not recognised as one. Raises ValueError, rather than skip the
-    call, when its first argument is not one quoted string, naming the call.
+    method; a function renderChart(...) declaration is not a call. Raises ValueError,
+    rather than skip the call, when its first argument is not one quoted string, naming
+    the call.
+
+    A JavaScript regular expression literal is not recognised as one: a quote or
+    comment marker inside it opens a string or a comment, so a call after it can be
+    missed, or a call inside a later string or comment counted.
     """
     return [
         _render_chart_target(script, call)
