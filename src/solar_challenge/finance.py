@@ -1096,7 +1096,7 @@ class MultiYearCurve:
     """Ages at which full simulations were run (subset of 0..asset_life-1)."""
 
     interp_error_estimate: float
-    """Max remaining PCHIP midpoint deviation (%) across all driven metrics
+    """Max remaining PCHIP midpoint deviation (%, ≥ 0 and finite) across all driven metrics
     (fleet_self_consumption_kwh, fleet_export_kwh, fleet_import_kwh,
     fleet_revenue_gbp), convergence invariant of the adaptive loop."""
 
@@ -1105,10 +1105,10 @@ class MultiYearCurve:
             raise ValueError("points must be non-empty")
         if not self.sampled_ages:
             raise ValueError("sampled_ages must be non-empty")
-        if self.interp_error_estimate < 0.0:
+        if not 0.0 <= self.interp_error_estimate < math.inf:
             raise ValueError(
-                f"interp_error_estimate must be ≥ 0, got "
-                f"{self.interp_error_estimate!r}"
+                f"interp_error_estimate must be >= 0 and finite, "
+                f"got {self.interp_error_estimate!r}"
             )
 
 
