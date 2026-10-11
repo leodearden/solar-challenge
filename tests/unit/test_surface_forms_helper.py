@@ -929,6 +929,76 @@ def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_
     assert named_classes(retapping.Submeter) == {fractions.Fraction, decimal.Decimal}
 
 
+def test_a_generated_dataclass_constructor_does_not_read_a_field_in_the_module_of_a_class_the_dataclass_decorator_never_processed(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _imported(
+        tmp_path,
+        monkeypatch,
+        "gauging",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Gauge\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    gauge: 'Gauge'\n",
+    )
+    regauging = _imported(
+        tmp_path,
+        monkeypatch,
+        "regauging",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Gauge\n"
+        "\n"
+        "from gauging import Meter\n"
+        "\n"
+        "class Mixin:\n"
+        "    gauge: 'Gauge'\n"
+        "\n"
+        "class Plain(Meter):\n"
+        "    gauge: 'Gauge'\n"
+        "\n"
+        "@dataclass\n"
+        "class Mixed(Mixin, Meter): ...\n"
+        "\n"
+        "@dataclass\n"
+        "class Replaced(Plain): ...\n",
+    )
+
+    assert named_classes(regauging.Mixed) == {fractions.Fraction}
+    assert named_classes(regauging.Replaced) == {fractions.Fraction}
+
+
+def test_an_inherited_init_only_variable_names_the_classes_the_module_of_the_dataclass_declaring_it_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _imported(
+        tmp_path,
+        monkeypatch,
+        "priming",
+        "from dataclasses import InitVar, dataclass\n"
+        "from fractions import Fraction as Prime\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    prime: InitVar['Prime']\n",
+    )
+    repriming = _imported(
+        tmp_path,
+        monkeypatch,
+        "repriming",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Prime\n"
+        "\n"
+        "from priming import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter): ...\n",
+    )
+
+    assert named_classes(repriming.Submeter) == {fractions.Fraction}
+
+
 def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -971,12 +1041,20 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
         "@dataclass\n"
         "class Resubmeter(Meter):\n"
         "    def __new__(cls, valve: 'Valve'):\n"
-        "        return object.__new__(cls)\n",
+        "        return object.__new__(cls)\n"
+        "\n"
+        "class Caller:\n"
+        "    def __call__(self, valve: 'Valve') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
+        "class CalledSubmeter(Meter):\n"
+        "    __init__ = Caller()\n",
     )
 
     assert named_classes(revalving.Submeter) == {decimal.Decimal}
     assert named_classes(revalving.LoggedSubmeter) == {decimal.Decimal}
     assert named_classes(revalving.Resubmeter) == {decimal.Decimal}
+    assert named_classes(revalving.CalledSubmeter) == {decimal.Decimal}
 
 
 def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
