@@ -1,12 +1,13 @@
 {#
-    distribution_editor(dist, new_row_value, subject='', step='any', fixed_range=none) writes the controls that edit
-    one distribution, inside a distributionEditor scope (static/js/distribution-editor.js) of their own.
+    distribution_editor(dist, component, subject='') writes the controls that edit one distribution, inside a
+    distributionEditor scope (static/js/distribution-editor.js) of their own.
     simulate/fleet.html and scenarios/builder.html both call it.
 
     dist is the Alpine expression, in the caller's scope, of the distribution:
         { type, mean, std, min, max, values: [{value, weight}, ...], entries: [{value, count}, ...], fixed }
-    new_row_value is the value an added row starts at; step is the step of every value but a weight or count.
-    fixed_range, the (min, max) of a fixed value, makes the editor offer type '' = Fixed Value, editing dist.fixed.
+    component is the fleet component (FLEET_COMPONENTS in web/fleet_components.py) whose distribution it edits.
+    An added row starts at its new_row_value, and every value but a weight or count steps by its step.
+    Type '' (Fixed Value) edits dist.fixed within its fixed_range.
     subject starts every control's accessible name, e.g. 'PV Capacity Value 2'; without it a control is named by its
     caption alone, e.g. 'Value 2', for a page whose cards are fieldset groups.
 #}
@@ -66,14 +67,15 @@
 </div>
 {% endmacro %}
 
-{% macro distribution_editor(dist, new_row_value, subject='', step='any', fixed_range=none) %}
-<div x-data="distributionEditor(() => {{ dist }}, {{ new_row_value }})" class="space-y-4">
+{% macro distribution_editor(dist, component, subject='') %}
+{% set step = component.step %}
+<div x-data="distributionEditor(() => {{ dist }}, {{ component.new_row_value }})" class="space-y-4">
     <label class="block space-y-1.5">
         <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _caption(subject, 'Distribution Type') }}</span>
         <select x-model="dist.type"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
         >
-            {% if fixed_range %}<option value="">Fixed Value</option>{% endif %}
+            <option value="">Fixed Value</option>
             <option value="normal">Normal (Gaussian)</option>
             <option value="uniform">Uniform</option>
             <option value="weighted_discrete">Weighted Discrete</option>
@@ -81,11 +83,9 @@
         </select>
     </label>
 
-    {% if fixed_range %}
     <div x-show="!dist.type" x-cloak>
-        {{ _parameter(subject, 'Fixed Value', 'dist.fixed', step, min=fixed_range[0], max=fixed_range[1]) }}
+        {{ _parameter(subject, 'Fixed Value', 'dist.fixed', step, min=component.fixed_range[0], max=component.fixed_range[1]) }}
     </div>
-    {% endif %}
 
     <div x-show="dist.type === 'normal'" x-cloak class="grid grid-cols-2 gap-4">
         {{ _parameter(subject, 'Mean', 'dist.mean', step) }}

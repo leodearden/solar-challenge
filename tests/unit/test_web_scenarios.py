@@ -1,6 +1,7 @@
 """Tests for the scenario builder and parameter sweep web features."""
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._html_page import element_attributes, element_count, texts, texts_after
@@ -77,6 +79,29 @@ class TestScenarioBuilderRoute:
         assert "Validate" in data
         assert "Download YAML" in data
         assert "Save" in data
+
+    def test_the_builder_page_hands_its_script_each_components_keys_and_starting_distribution(
+        self, client: FlaskClient
+    ) -> None:
+        """The second argument is what static/js/scenario-builder.js reads of each component."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        scopes = [attributes.get("x-data") or "" for attributes in element_attributes(page, "div")]
+        (x_data,) = [scope for scope in scopes if scope.startswith("scenarioBuilder(")]
+        try:
+            arguments = json.loads("[" + x_data.removeprefix("scenarioBuilder(").removesuffix(")") + "]")
+        except json.JSONDecodeError as exc:
+            pytest.fail(f"x-data={x_data!r} does not pass scenarioBuilder JSON arguments: {exc}")
+        assert arguments[1:] == [
+            [
+                {
+                    "key": component.key,
+                    "fixed_field": component.fixed_field,
+                    "grammar_key": component.grammar_key,
+                    "dist": component.builder_default.editor_state(),
+                }
+                for component in FLEET_COMPONENTS.values()
+            ]
+        ]
 
 
 class TestSweepRoute:
@@ -304,6 +329,38 @@ class TestScenarioAPI:
             "valid": False,
             "errors": [f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."],
         }
+
+    def test_validate_accepts_each_fixed_value_the_builder_page_allows_and_refuses_one_beyond_it(
+        self, client: FlaskClient
+    ) -> None:
+        """Each component's Fixed Value validates at either end of the min and max the builder page serves for it, and not one float step beyond either."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        bounds = [
+            (attributes["min"], attributes["max"])
+            for attributes in element_attributes(page, "input")
+            if attributes.get("x-model.number") == "dist.fixed"
+        ]
+
+        def validation_with(field: str, value: float) -> Any:
+            response = client.post(
+                "/api/scenarios/validate",
+                json={**TestBuilderScenarioYaml._DEFAULT_FORM, field: value},
+            )
+            assert response.status_code == 200
+            return response.get_json()
+
+        for component, (served_min, served_max) in zip(FLEET_COMPONENTS.values(), bounds, strict=True):
+            low, high = float(served_min), float(served_max)
+            for value in (low, high):
+                answer = validation_with(component.fixed_field, value)
+                assert answer == {"valid": True, "errors": []}, (
+                    f"{component.fixed_field} {value!r}, which the page allows, was refused: {answer}"
+                )
+            for value in (math.nextafter(low, -math.inf), math.nextafter(high, math.inf)):
+                answer = validation_with(component.fixed_field, value)
+                assert answer["valid"] is False, (
+                    f"{component.fixed_field} {value!r}, beyond what the page allows, was accepted: {answer}"
+                )
 
     def test_list_presets(self, client: FlaskClient) -> None:
         """Test GET /api/scenarios/presets returns a list."""

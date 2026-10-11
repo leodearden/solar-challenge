@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for solar_challenge.web.builder_form, called directly with form values."""
 
+import math
 from collections.abc import Callable
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 pytest.importorskip("flask")
 
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
 from solar_challenge.web.shared import NotAJsonObject
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
@@ -177,3 +179,27 @@ class TestBuilderFormErrors:
         """
         assert builder_form_errors(_ACCEPTED_FORM) == [], "premise: the unchanged form is accepted"
         assert builder_form_errors({**_ACCEPTED_FORM, **changes}) == [reason]
+
+    @pytest.mark.parametrize("beyond", ["below", "above"])
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_fixed_value_beyond_its_components_fixed_range_is_refused_naming_the_range_and_the_value(
+        self, component: FleetComponent, beyond: str
+    ) -> None:
+        """The range's refusal is one of the form's reasons: a scenario reader may refuse the value as well."""
+        low, high = component.fixed_range
+        value = math.nextafter(low, -math.inf) if beyond == "below" else math.nextafter(high, math.inf)
+        assert builder_form_errors(_ACCEPTED_FORM) == [], "premise: the unchanged form is accepted"
+        errors = builder_form_errors({**_ACCEPTED_FORM, component.fixed_field: value})
+        assert f"{component.heading} must be between {low:g} and {high:g}, got {value!r}." in errors, errors
+
+    @pytest.mark.parametrize("end", ["low", "high"])
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_fixed_value_at_either_end_of_its_components_fixed_range_is_accepted(
+        self, component: FleetComponent, end: str
+    ) -> None:
+        value = component.fixed_range[0] if end == "low" else component.fixed_range[1]
+        assert builder_form_errors({**_ACCEPTED_FORM, component.fixed_field: value}) == []

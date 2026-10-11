@@ -12,6 +12,7 @@ from flask import (
 )
 
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunStorage
@@ -160,6 +161,7 @@ def simulate_fleet_page() -> str:
     """Render the fleet simulation configuration page, its Load Preset menu offering the presets its form loads."""
     return str(render_template(
         "simulate/fleet.html",
+        fleet_components=FLEET_COMPONENTS,
         presets=fleet_preset_names(),
         seg_presets=SEG_PRESETS,
     ))
