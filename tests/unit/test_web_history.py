@@ -861,15 +861,17 @@ class TestFleetCSVExport:
         per_home_summaries = []
 
         for i in range(n_homes):
-            # Each home has different generation scale to make aggregation testable
-            gen_scale = 2.0 + i * 1.0  # 2.0, 3.0, 4.0
-            demand_val = 0.3 + i * 0.2  # 0.3, 0.5, 0.7
+            # Each home has a different peak generation to make aggregation testable
+            peak_generation_kw = 2.0 + i * 1.0  # 2.0, 3.0, 4.0
+            demand_kw = 0.3 + i * 0.2  # 0.3, 0.5, 0.7
 
-            results = make_sinusoidal_sim_results(days=1, peak_generation_kw=gen_scale, demand_kw=demand_val)
+            results = make_sinusoidal_sim_results(
+                days=1, peak_generation_kw=peak_generation_kw, demand_kw=demand_kw
+            )
             per_home_results.append(results)
 
             config = HomeConfig(
-                pv_config=PVConfig(capacity_kw=gen_scale),
+                pv_config=PVConfig(capacity_kw=peak_generation_kw),
                 load_config=LoadConfig(annual_consumption_kwh=3000 + i * 500),
                 name=f"Home {i + 1}",
             )
@@ -914,9 +916,9 @@ class TestFleetCSVExport:
         assert "demand_kw" in df.columns
 
         # Aggregate generation should be the SUM of all homes.
-        # Each home has different gen_scale (2.0, 3.0, 4.0), so the aggregate
+        # Each home has a different peak_generation_kw (2.0, 3.0, 4.0), so the aggregate
         # maximum should be higher than any single home's max.
-        # A single home with gen_scale=4.0 would have max ~4.0 kW.
+        # A single home with peak_generation_kw=4.0 would have max ~4.0 kW.
         # The aggregate of 3 homes should have max ~(2+3+4) = ~9 kW.
         max_gen = df["generation_kw"].max()
         assert max_gen > 5.0, (
