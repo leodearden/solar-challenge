@@ -17,7 +17,7 @@ from typing import Any, Callable, Collection, Generic, Iterator, Literal, Mappin
 import pandas as pd
 import yaml
 
-from solar_challenge.battery import BatteryConfig, has_battery
+from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
@@ -292,6 +292,11 @@ class BatteryDistributionConfig:
     max_discharge_kw: DistributionSpec = 2.5
     grid_charging: Optional[GridChargeConfig] = None
     dispatch_strategy: Optional["DispatchStrategyConfig"] = None
+
+    def __post_init__(self) -> None:
+        """Refuse a fixed capacity_kwh that is not a valid battery capacity setting; samples are checked as drawn."""
+        if isinstance(self.capacity_kwh, (int, float)):
+            require_valid_capacity_setting(self.capacity_kwh, "battery.capacity_kwh")
 
 
 @dataclass
