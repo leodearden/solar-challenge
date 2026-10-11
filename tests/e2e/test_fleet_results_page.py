@@ -8,6 +8,8 @@ without errors.
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e._results_page import show_chart_tab
+
 pytestmark = pytest.mark.e2e
 
 
@@ -19,13 +21,6 @@ _CHART_IDS_BY_TAB = {
     "Distributions": ("chart-distribution-histograms",),
     "Aggregate": ("chart-aggregate-timeline", "chart-grid-impact"),
 }
-
-
-def _show_tab(page: Page, tab_name: str) -> None:
-    """Click tab_name's tab and wait until Plotly has drawn each of its charts, visible."""
-    page.get_by_role("tab", name=tab_name, exact=True).click()
-    for chart_id in _CHART_IDS_BY_TAB[tab_name]:
-        expect(page.locator(f"#{chart_id}.js-plotly-plot")).to_be_visible()
 
 
 # -- The page is titled with the run's name ---------------------------------
@@ -101,7 +96,7 @@ def test_fleet_results_tabs_each_show_only_their_own_charts(
     page.goto(live_server + f"/results/fleet/{run_id}")
 
     for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
-        _show_tab(page, tab_name)
+        show_chart_tab(page, tab_name, chart_ids)
         expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(tab_name)
         expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
 
@@ -123,7 +118,7 @@ def test_fleet_results_page_shows_every_tab_without_errors(
     response = page.goto(live_server + f"/results/fleet/{run_id}")
     assert response is not None
     assert response.status == 200
-    for tab_name in _CHART_IDS_BY_TAB:
-        _show_tab(page, tab_name)
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
 
     assert page_errors == [], f"Errors on /results/fleet/{run_id}: {page_errors}"
