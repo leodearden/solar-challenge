@@ -522,6 +522,7 @@ class TestSimulationResultsRefusesANaNAmount:
         [
             pytest.param(SimulationResults.total_amounts, id="total_amounts"),
             pytest.param(SimulationResults.per_minute_amounts, id="per_minute_amounts"),
+            pytest.param(SimulationResults.to_dataframe, id="to_dataframe"),
             pytest.param(calculate_summary, id="calculate_summary"),
         ],
     )
