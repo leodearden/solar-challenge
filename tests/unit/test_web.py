@@ -1,5 +1,6 @@
 """Tests for the Flask web dashboard module."""
 
+import json
 import uuid
 from pathlib import Path
 
@@ -8,6 +9,7 @@ pytest.importorskip("flask")
 from flask import Flask, render_template
 from flask.testing import FlaskClient
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
@@ -22,6 +24,7 @@ from tests._html_page import (
     element_count,
     element_ids,
     headings,
+    render_chart_figure,
     texts,
     texts_after,
 )
@@ -47,11 +50,12 @@ def _run_storage(app: Flask) -> RunStorage:
     return storage
 
 
-def _home_config(name: str) -> HomeConfig:
-    """The 4 kW PV, 3500 kWh home named *name* that the page tests save."""
+def _home_config(name: str, *, battery_config: BatteryConfig | None = None) -> HomeConfig:
+    """The 4 kW PV, 3500 kWh home named *name* that the page tests save, with *battery_config*'s battery, none by default."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3500),
+        battery_config=battery_config,
         name=name,
     )
 
@@ -63,16 +67,18 @@ def _save_home_run(
     *,
     created_at: str | None = None,
     status: str = "completed",
+    battery_config: BatteryConfig | None = None,
 ) -> str:
     """Save *results* to *app*'s store as a home run named *name*, as a finished job saves its run; return its run id.
 
+    The run's home is _home_config's, with *battery_config*'s battery, none by default.
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
     *status* is the status the run is recorded with; it defaults to completed.
     """
     run_id = str(uuid.uuid4())
     _run_storage(app).save_home_run(
         run_id=run_id,
-        config=_home_config(name),
+        config=_home_config(name, battery_config=battery_config),
         results=results,
         summary=calculate_summary(results),
         name=name,
@@ -398,6 +404,29 @@ class TestHomeResultsRoute:
 
         assert response.status_code == 200
         assert headings(response.get_data(as_text=True))[0] == "Home Simulation"
+
+    def test_home_results_battery_soc_chart_marks_the_saved_batterys_soc_limits(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """10% and 95% of an 8 kWh battery at 90% SoH are 0.72 and 6.84 kWh, where 10% and 90% of its nameplate would be 0.8 and 7.2."""
+        run_id = _save_home_run(
+            app,
+            "North Roof",
+            make_sinusoidal_sim_results(days=1),
+            battery_config=BatteryConfig(
+                capacity_kwh=8.0, min_soc_fraction=0.1, max_soc_fraction=0.95, soh=0.9
+            ),
+        )
+
+        response = client.get(f"/results/home/{run_id}")
+
+        assert response.status_code == 200
+        figure = render_chart_figure(response.get_data(as_text=True), "chart-battery-soc")
+        assert figure is not None
+        annotations = json.loads(figure)["layout"]["annotations"]
+        assert {annotation["text"]: annotation["y"] for annotation in annotations} == pytest.approx(
+            {"Min SOC": 0.72, "Max SOC": 6.84}
+        )
 
 
 # ---------------------------------------------------------------------------

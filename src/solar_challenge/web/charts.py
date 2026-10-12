@@ -26,6 +26,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.output import aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
@@ -190,17 +191,11 @@ def power_flow_timeline(results: SimulationResults) -> str:
     )
 
 
-def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -> str:
-    """Line chart with fill-to-zero for battery state of charge.
+def battery_soc_chart(results: SimulationResults, battery_config: BatteryConfig) -> str:
+    """Plotly JSON of the battery state of charge in *results*, filled to zero, with a dashed line at each SOC limit of the battery *battery_config* describes.
 
-    Adds horizontal threshold lines at 10% and 90% of capacity.
-
-    Args:
-        results: SimulationResults instance.
-        battery_capacity_kwh: Nominal battery capacity in kWh.
-
-    Returns:
-        Plotly figure JSON string.
+    The limits are Battery's min_soc_kwh and max_soc_kwh, its SOC fractions of its
+    SoH-derated capacity, which bound the SOC simulate_home tracks.
     """
     soc = _adaptive_downsample(results.battery_soc)
     dates = [d.isoformat() for d in soc.index]
@@ -218,22 +213,19 @@ def battery_soc_chart(results: SimulationResults, battery_capacity_kwh: float) -
 
     fig = go.Figure(data=[trace])
 
-    # Add threshold lines at 10% and 90%
-    low_threshold = battery_capacity_kwh * 0.10
-    high_threshold = battery_capacity_kwh * 0.90
-
+    battery = Battery(battery_config)
     fig.add_hline(
-        y=low_threshold,
+        y=battery.min_soc_kwh,
         line_dash="dash",
         line_color=COLOUR_PALETTE["soc_low_threshold"],
-        annotation_text="10%",
+        annotation_text="Min SOC",
         annotation_position="bottom right",
     )
     fig.add_hline(
-        y=high_threshold,
+        y=battery.max_soc_kwh,
         line_dash="dash",
         line_color=COLOUR_PALETTE["soc_high_threshold"],
-        annotation_text="90%",
+        annotation_text="Max SOC",
         annotation_position="top right",
     )
 
