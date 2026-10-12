@@ -643,6 +643,48 @@ class TestGenerateHomesHouseholdOccupants:
 
         assert [home.load_config.household_occupants for home in homes] == [3] * 20
 
+    @pytest.mark.parametrize(
+        ("household_occupants", "refusal"),
+        [
+            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fixed-fraction"),
+            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="fixed-zero"),
+            pytest.param(
+                WeightedDiscreteDistribution(values=(True,), weights=(1.0,)),
+                "Household occupants must be a whole number, got True",
+                id="weighted-discrete-boolean",
+            ),
+            pytest.param(
+                ShuffledPoolDistribution(values=(2, 0), counts=(1, 1)),
+                "Household occupants must be at least 1, got 0",
+                id="shuffled-pool-zero",
+            ),
+            pytest.param(
+                UniformDistribution(min=-1.7e308, max=1.7e308),
+                "Household occupants seems unrealistic: inf",
+                id="uniform-draws-overflowing-to-infinity",
+            ),
+        ],
+    )
+    def test_a_count_load_config_refuses_is_refused_as_it_refuses_it(
+        self, household_occupants: DistributionSpec, refusal: str
+    ) -> None:
+        """Each count is refused with LoadConfig's message: it is never truncated, read as 1, replaced by the default 3, or left to raise OverflowError.
+
+        The uniform spec's max - min overflows, so every draw from it is inf whatever the seed.
+        """
+        with pytest.raises(ValueError) as exc_info:
+            generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
+        assert str(exc_info.value) == refusal
+
+    def test_a_null_draw_takes_load_configs_default_and_a_whole_number_float_is_held_as_its_int(self) -> None:
+        """A null draw gives its home LoadConfig's default of 3 occupants, and a draw of 4.0 gives its home the int 4."""
+        homes = generate_homes_from_distribution(
+            self._fleet(ShuffledPoolDistribution(values=(None, 4.0), counts=(1, 1))), Location.bristol()
+        )
+
+        occupants = sorted(home.load_config.household_occupants for home in homes)
+        assert [(type(count), count) for count in occupants] == [(int, 3), (int, 4)]
+
 
 class TestGenerateHomesFromDistributionFlex:
     """How generate_homes_from_distribution gives every home the fleet's tariff and dispatch strategy, and every battery the fleet's grid charging."""
