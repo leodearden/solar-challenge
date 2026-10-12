@@ -10,9 +10,10 @@ Bug B1 (Alpine race condition with external JS).
 
 Also verifies that each sweep point's row shows how its own job ended, that
 its status badge takes the classes the server draws for that status, that
-running a sweep drops the requests the sweep before it still has in flight,
-and that an earlier sweep's results, arriving after a later sweep's rows show,
-fill none of them.
+running a sweep drops the requests the sweep before it still has in flight and
+opens no stream for the points that sweep had yet to follow, and that an
+earlier sweep's results, arriving after a later sweep's rows show, fill none
+of them.
 
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results.
@@ -25,7 +26,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from playwright.sync_api import BrowserContext, Locator, Page, Route, expect
+from playwright.sync_api import BrowserContext, Locator, Page, Request, Route, expect
 
 from tests._server_drawn_badges import server_drawn_classes
 from tests.e2e._job_requests import HeldJobRequests, is_job_request, sse_event
@@ -360,6 +361,24 @@ def test_a_sweep_run_after_another_drops_the_earlier_sweeps_requests(
         page.expect_request("**/api/jobs/sweep-2-point-1/progress"),
     ):
         run.click()
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+def test_a_sweep_run_after_another_opens_no_stream_for_the_earlier_sweeps_remaining_points(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
+) -> None:
+    """Run, then Run again while the page follows sweep-1's first point: the page goes on to follow sweep-2's first point, having opened no progress stream for sweep-1's second point."""
+    requests_made: list[Request] = []
+    page.on("request", lambda request: requests_made.append(request))
+    page.goto(live_server + "/scenarios/sweep")
+    run = page.get_by_role("button", name="Run Parameter Sweep", exact=True)
+    with page.expect_request("**/api/jobs/sweep-1-point-1/progress"):
+        run.click()
+    with page.expect_request("**/api/jobs/sweep-2-point-1/progress"):
+        run.click()
+
+    opens_sweep_1_point_2 = is_job_request("sweep-1-point-2", "progress")
+    assert [request.url for request in requests_made if opens_sweep_1_point_2(request)] == []
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
