@@ -466,6 +466,12 @@ class TestParseHomeConfigErrorPaths:
             ),
             pytest.param(
                 "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "occupants": 2.5},
+                "occupants must be a whole number, got 2.5",
+                id="home-occupants-fraction",
+            ),
+            pytest.param(
+                "/api/simulate/home",
                 {**VALID_HOME_PAYLOAD, "pv_kw": 10**400},
                 f"pv_kw must be a finite number, got {10**400!r}",
                 id="home-pv_kw-too-large-for-a-float",

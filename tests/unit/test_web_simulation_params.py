@@ -685,12 +685,13 @@ class TestParseHomeConfigNumberFields:
             "max_discharge_kw",
             "efficiency_pct",
             "consumption_kwh",
+            "occupants",
         ],
     )
     def test_top_level_field_that_is_not_a_finite_number_is_refused_naming_it(
         self, field: str, value: object
     ) -> None:
-        """A top-level float field holding a number too large for a float, an infinity, NaN or a boolean is refused naming the field."""
+        """A top-level number field holding a number too large for a float, an infinity, NaN or a boolean is refused naming the field."""
         with pytest.raises(ValueError) as exc_info:
             parse_home_config({**VALID_HOME_PAYLOAD, field: value})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
@@ -705,15 +706,11 @@ class TestParseHomeConfigNumberFields:
             parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": {key: value}})
         assert str(exc_info.value) == f"heat_pump.{key} must be a finite number, got {value!r}"
 
-    @pytest.mark.parametrize(
-        "value",
-        [pytest.param(float("inf"), id="infinity"), pytest.param(float("nan"), id="nan")],
-    )
-    def test_occupants_int_cannot_read_is_refused_naming_it(self, value: float) -> None:
-        """An occupants value int() cannot read is refused naming occupants and the value sent."""
+    def test_occupants_with_a_fractional_part_is_refused_naming_it(self) -> None:
+        """An occupants value with a fractional part is refused, not truncated, naming occupants and the value sent."""
         with pytest.raises(ValueError) as exc_info:
-            parse_home_config({**VALID_HOME_PAYLOAD, "occupants": value})
-        assert str(exc_info.value) == f"occupants must be an integer, got {value!r}"
+            parse_home_config({**VALID_HOME_PAYLOAD, "occupants": 2.5})
+        assert str(exc_info.value) == "occupants must be a whole number, got 2.5"
 
 
 class TestParseHomeConfigPVAge:
