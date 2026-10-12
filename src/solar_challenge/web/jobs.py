@@ -162,7 +162,7 @@ def _record_failed_run_row(state: JobState, completed_at: str, conn: sqlite3.Con
 class _TrackedJob:
     """A job a JobManager tracks.
 
-    The state get_job_status reports, the SSE events get_events has not yet yielded, and the manager's
+    The state job_state reports, the SSE events get_events has not yet yielded, and the manager's
     clock reading when the job finished (None while it is queued or running).
     """
 
@@ -334,7 +334,7 @@ class JobManager:
             ),
         )
 
-    def get_job_status(self, job_id: str) -> JobState | None:
+    def job_state(self, job_id: str) -> JobState | None:
         """Return the in-memory state of a job this manager tracks.
 
         A manager tracks only the jobs submitted to it.  It tracks each one
@@ -573,7 +573,7 @@ class JobManager:
 
     def _state_of_running_job(self, job_id: str) -> JobState:
         """Return the state of a job this manager is running, which it tracks until the job finishes."""
-        state = self.get_job_status(job_id)
+        state = self.job_state(job_id)
         if state is None:
             raise RuntimeError(
                 f"job {job_id} is running, but its JobManager no longer tracks it; "
@@ -582,7 +582,7 @@ class JobManager:
         return state
 
     def _report_state(self, event: JobEvent) -> None:
-        """Make the state *event* carries the state get_job_status reports for its job, and queue *event*, under one hold of the lock.
+        """Make the state *event* carries the state job_state reports for its job, and queue *event*, under one hold of the lock.
 
         A reader who sees the new state therefore finds its event queued.
         """
