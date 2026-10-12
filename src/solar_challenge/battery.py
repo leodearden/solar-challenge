@@ -16,7 +16,7 @@ from solar_challenge.number_fields import (
     as_finite_float,
     read_field,
 )
-from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.timebase import HOURS_PER_MINUTE, require_valid_duration
 
 
 def _read_soc_limits_and_efficiencies(instance: object) -> None:
@@ -66,11 +66,7 @@ def _require_valid_request(
         raise ValueError(
             f"{direction.capitalize()} power must be non-negative, got {power_kw} kW"
         )
-    if not 0 < duration_minutes < math.inf:
-        raise ValueError(
-            f"{direction.capitalize()} duration must be positive and finite, "
-            f"got {duration_minutes} minutes"
-        )
+    require_valid_duration(duration_minutes, f"{direction.capitalize()} duration")
 
 
 CAPACITY_SETTING_KWH: Final = NON_NEGATIVE

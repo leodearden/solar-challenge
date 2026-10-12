@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What a simulated window is: the calendar days a series covers, how long each of its rows lasts, its clock's zone, and the one rule that turns the window's totals into a year's; and the rows a window gives, over its local calendar days."""
+"""What a simulated window is: the calendar days a series covers, how long each of its rows lasts, its clock's zone, and the one rule that turns the window's totals into a year's; the rows a window gives, over its local calendar days; and the one bound on a duration in minutes: positive and finite."""
 
 import calendar
 import itertools
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -21,6 +22,12 @@ MINUTES_PER_DAY: int = 24 * MINUTES_PER_HOUR
 
 ONE_MINUTE: timedelta = timedelta(minutes=1)
 """One minute, as the standard library's timedelta. A simulated run's window has this cadence, and no setting changes it (ruling L9, docs/prds/load-composition-and-calendar-days.md)."""
+
+
+def require_valid_duration(minutes: float, quantity: str) -> None:
+    """Refuse a duration of *minutes* unless it is positive and finite, naming it *quantity* in the refusal."""
+    if not 0 < minutes < math.inf:
+        raise ValueError(f"{quantity} must be positive and finite, got {minutes} minutes")
 
 
 def covered_days(first_day: date, last_day: date) -> int:
