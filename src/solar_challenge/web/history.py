@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Flask Blueprint for run history browsing and comparison.
+"""Flask Blueprint for the run history pages: the run browser and the run comparison page.
 
-Provides routes for listing, filtering, searching, and comparing
-past simulation runs, plus API endpoints for CRUD operations and
-data export.
+The JSON endpoints the run browser calls, and each run's CSV and YAML exports,
+live under /api/history/, in api.py.
 """
 
 import logging
@@ -25,11 +24,6 @@ from flask import (
 from solar_challenge.web.shared import get_storage
 
 bp = Blueprint("history", __name__)
-
-
-# ---------------------------------------------------------------------------
-# Page routes
-# ---------------------------------------------------------------------------
 
 
 @bp.route("/")
@@ -105,44 +99,3 @@ def compare_page() -> str | Response:
         runs=runs,
         charts=charts,
     ))
-
-
-# ---------------------------------------------------------------------------
-# API routes (legacy redirects to /api/history/*)
-# ---------------------------------------------------------------------------
-
-
-@bp.route("/api/runs")
-def api_list_runs() -> Any:
-    """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.history_list_runs", **request.args.to_dict()), code=301)  # type: ignore[arg-type]
-
-
-@bp.route("/api/runs/<run_id>")
-def api_get_run(run_id: str) -> Any:
-    """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.history_get_run", run_id=run_id), code=301)
-
-
-@bp.route("/api/runs/<run_id>", methods=["DELETE"])
-def api_delete_run(run_id: str) -> Any:
-    """Redirect to consolidated API endpoint (preserves DELETE method)."""
-    return redirect(url_for("api.history_delete_run", run_id=run_id), code=307)
-
-
-@bp.route("/api/runs/<run_id>", methods=["PATCH"])
-def api_patch_run(run_id: str) -> Any:
-    """Redirect to consolidated API endpoint (preserves PATCH method)."""
-    return redirect(url_for("api.history_patch_run", run_id=run_id), code=307)
-
-
-@bp.route("/api/runs/<run_id>/export/csv")
-def api_export_csv(run_id: str) -> Any:
-    """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.history_export_csv", run_id=run_id), code=301)
-
-
-@bp.route("/api/runs/<run_id>/export/yaml")
-def api_export_yaml(run_id: str) -> Any:
-    """Redirect to consolidated API endpoint."""
-    return redirect(url_for("api.history_export_yaml", run_id=run_id), code=301)

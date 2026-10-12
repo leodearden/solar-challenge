@@ -5,6 +5,7 @@ import io
 import json
 import tempfile
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -26,9 +27,12 @@ from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
-from tests._html_page import texts_after
+from tests._html_page import element_count, texts_after
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
+
+
+_A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
 
 
 @pytest.fixture
@@ -134,6 +138,34 @@ class TestRunBrowserRoute:
         html = response.data.decode("utf-8")
         assert "filter-type" in html
         assert "filter-search" in html
+
+
+# ---------------------------------------------------------------------------
+# Old /history/api/* path tests
+# ---------------------------------------------------------------------------
+
+
+class TestOldHistoryApiPaths:
+    """The /history/api/* paths no longer resolve: the run history's JSON and export endpoints answer only under /api/history/."""
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            pytest.param("GET", "/history/api/runs", id="list-runs"),
+            pytest.param("GET", "/history/api/runs/stored-run", id="get-run"),
+            pytest.param("DELETE", "/history/api/runs/stored-run", id="delete-run"),
+            pytest.param("PATCH", "/history/api/runs/stored-run", id="patch-run"),
+            pytest.param("GET", "/history/api/runs/stored-run/export/csv", id="export-csv"),
+            pytest.param("GET", "/history/api/runs/stored-run/export/yaml", id="export-yaml"),
+        ],
+    )
+    def test_answers_404_instead_of_redirecting(
+        self, storage: RunStorage, client: FlaskClient, method: str, path: str
+    ) -> None:
+        """Each old path, requested with the method its redirect took, answers 404 for a stored run, which its /api/history/ twin serves."""
+        _store_home_run(storage, "stored-run", _A_HOME)
+
+        assert client.open(path, method=method).status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +478,7 @@ class TestExportAPI:
         _store_home_run(
             storage,
             "yaml-export",
-            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+            _A_HOME,
             name="YAML Run",
         )
 
@@ -463,7 +495,7 @@ class TestExportAPI:
         _store_home_run(
             storage,
             run_id,
-            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+            _A_HOME,
             name="North Roof",
         )
 
@@ -995,7 +1027,7 @@ class TestContentDispositionHeader:
         _store_home_run(
             storage,
             run_id,
-            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+            _A_HOME,
             name="YAML Quote Test",
         )
 
@@ -1007,6 +1039,50 @@ class TestContentDispositionHeader:
         assert 'filename="' in cd, (
             f"Content-Disposition filename is not properly quoted: {cd}"
         )
+
+
+def _store_home_run_and_return_its_results_page(storage: RunStorage, run_id: str) -> str:
+    """Save a home run of _A_HOME as *run_id*, and return the path of its results page."""
+    _store_home_run(storage, run_id, _A_HOME)
+    return f"/results/home/{run_id}"
+
+
+def _store_fleet_run_and_return_its_results_page(storage: RunStorage, run_id: str) -> str:
+    """Save a fleet run of two _A_HOMEs as *run_id*, and return the path of its results page."""
+    _store_fleet_run(storage, run_id, [_A_HOME, _A_HOME])
+    return f"/results/fleet/{run_id}"
+
+
+class TestResultsPageExportLinks:
+    """Each results page links to its run's CSV and YAML exports at /api/history/runs/<run_id>/export/*, the URLs that serve them."""
+
+    @pytest.mark.parametrize("export", ["csv", "yaml"])
+    @pytest.mark.parametrize(
+        "store_run_and_return_its_results_page",
+        [
+            pytest.param(_store_home_run_and_return_its_results_page, id="home"),
+            pytest.param(_store_fleet_run_and_return_its_results_page, id="fleet"),
+        ],
+    )
+    def test_the_results_page_links_to_each_export_of_its_run(
+        self,
+        storage: RunStorage,
+        client: FlaskClient,
+        store_run_and_return_its_results_page: Callable[[RunStorage, str], str],
+        export: str,
+    ) -> None:
+        """A stored run's results page, home or fleet, has exactly one link to that run's export at /api/history/runs/<run_id>/export/<export>."""
+        run_id = "stored-run"
+        results_page = store_run_and_return_its_results_page(storage, run_id)
+
+        response = client.get(results_page)
+
+        assert response.status_code == 200
+        assert element_count(
+            response.get_data(as_text=True),
+            "a",
+            {"href": f"/api/history/runs/{run_id}/export/{export}"},
+        ) == 1
 
 
 class TestCompareWithoutIDs:
