@@ -5,8 +5,6 @@ import pytest
 
 from solar_challenge.web.number_fields import (
     as_finite_float,
-    as_int,
-    as_int_within,
     as_whole_number,
     as_whole_number_within,
 )
@@ -55,71 +53,6 @@ class TestAsFiniteFloat:
         with pytest.raises(ValueError) as exc_info:
             as_finite_float(value, "pv_kw")
         assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
-
-
-class TestAsInt:
-    """as_int reads a value as int() reads it, and refuses one int() cannot read."""
-
-    @pytest.mark.parametrize(
-        ("value", "expected"),
-        [
-            pytest.param(7, 7, id="integer"),
-            pytest.param("7", 7, id="numeric-string"),
-            pytest.param(7.9, 7, id="float-truncated"),
-        ],
-    )
-    def test_a_value_int_reads_is_read_as_int_reads_it(self, value: object, expected: int) -> None:
-        """An integer, a string of one, or a finite float truncated toward zero, as int() reads them."""
-        assert as_int(value, "seed") == expected
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            pytest.param(float("inf"), id="infinity"),
-            pytest.param(float("-inf"), id="negative-infinity"),
-            pytest.param(float("nan"), id="nan"),
-            pytest.param("x", id="non-numeric-string"),
-            pytest.param(None, id="null"),
-        ],
-    )
-    def test_a_value_int_cannot_read_is_refused_naming_the_field_and_the_value(
-        self, value: object
-    ) -> None:
-        """A value int() cannot read is refused with a ValueError naming the field and the value sent."""
-        with pytest.raises(ValueError) as exc_info:
-            as_int(value, "seed")
-        assert str(exc_info.value) == f"seed must be an integer, got {value!r}"
-
-
-class TestAsIntWithin:
-    """as_int_within reads a value as as_int does, and refuses one outside its inclusive range."""
-
-    @pytest.mark.parametrize("value", [pytest.param(1, id="low"), pytest.param(10, id="high")])
-    def test_the_range_is_inclusive(self, value: int) -> None:
-        """Both ends of the range are accepted."""
-        assert as_int_within(value, "n_homes", 1, 10) == value
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            pytest.param(0, id="below"),
-            pytest.param(11, id="above"),
-            pytest.param(1e300, id="huge-float"),
-        ],
-    )
-    def test_a_value_outside_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
-        self, value: object
-    ) -> None:
-        """The refusal shows the value as sent (1e300 reads 1e+300), not the int it converts to."""
-        with pytest.raises(ValueError) as exc_info:
-            as_int_within(value, "n_homes", 1, 10)
-        assert str(exc_info.value) == f"n_homes must be between 1 and 10, got {value!r}"
-
-    def test_a_value_int_cannot_read_gets_the_as_int_refusal(self) -> None:
-        """A value int() cannot read is refused as as_int refuses it, before any range check."""
-        with pytest.raises(ValueError) as exc_info:
-            as_int_within(float("inf"), "n_homes", 1, 10)
-        assert str(exc_info.value) == "n_homes must be an integer, got inf"
 
 
 class TestAsWholeNumber:

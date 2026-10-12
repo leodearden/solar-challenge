@@ -26,6 +26,7 @@ from solar_challenge.web.simulation_params import (
 )
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._unusable_numbers import UNUSABLE_NUMBERS
+from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
 
 
 VALID_HOME_PAYLOAD: dict = {
@@ -234,15 +235,38 @@ class TestParseDateRange:
         """A null days, and an empty or null start or end, read as not sent, so the body runs the window it does send."""
         assert parse_date_range(data) == window
 
+    @pytest.mark.parametrize("days", WHOLE_NUMBER_FORMS)
+    def test_days_that_is_a_whole_number_in_another_form_runs_the_window_of_the_int_it_equals(
+        self, days: object
+    ) -> None:
+        """A days that is a whole number sent as a float or a numeric string runs the window of the int it equals."""
+        assert parse_date_range({"days": days}) == parse_date_range({"days": WHOLE_NUMBER})
+
+    @pytest.mark.parametrize(
+        "days", [*UNUSABLE_NUMBERS, pytest.param("seven", id="non-numeric-string")]
+    )
+    def test_days_that_is_not_a_finite_number_is_refused_naming_it(self, days: object) -> None:
+        """A days that is not a finite number, a boolean included, is refused with a ValueError naming days and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({"days": days})
+        assert str(exc_info.value) == f"days must be a finite number, got {days!r}"
+
+    @pytest.mark.parametrize(
+        "days",
+        [
+            pytest.param(2.5, id="in-range"),
+            pytest.param(0.5, id="a-fraction-int-reads-as-zero"),
+        ],
+    )
+    def test_days_with_a_fractional_part_is_refused_naming_it(self, days: float) -> None:
+        """A days with a fractional part is refused, not truncated, with a ValueError naming days and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({"days": days})
+        assert str(exc_info.value) == f"days must be a whole number, got {days!r}"
+
     @pytest.mark.parametrize(
         ("days", "message"),
         [
-            pytest.param(float("inf"), "days must be an integer, got inf", id="infinity"),
-            pytest.param(
-                float("-inf"), "days must be an integer, got -inf", id="negative-infinity"
-            ),
-            pytest.param(float("nan"), "days must be an integer, got nan", id="nan"),
-            pytest.param("seven", "days must be an integer, got 'seven'", id="non-numeric-string"),
             pytest.param(0, f"days must be between 1 and {MAX_WINDOW_DAYS}, got 0", id="zero"),
             pytest.param(
                 -7, f"days must be between 1 and {MAX_WINDOW_DAYS}, got -7", id="negative"
@@ -265,7 +289,7 @@ class TestParseDateRange:
     def test_days_it_cannot_use_is_refused_naming_days_and_the_value_sent(
         self, days: object, message: str
     ) -> None:
-        """A days that int() cannot read, or one outside 1 to MAX_WINDOW_DAYS, is refused with a ValueError naming days and the value as sent."""
+        """A days outside 1 to MAX_WINDOW_DAYS is refused with a ValueError naming days, the range and the value as sent."""
         with pytest.raises(ValueError) as exc_info:
             parse_date_range({"days": days})
         assert str(exc_info.value) == message
@@ -653,7 +677,7 @@ class TestParseHomeConfigBatterySettings:
 
 
 class TestParseHomeConfigNumberFields:
-    """Each number field parse_home_config reads is refused, naming the field and the value sent, when it is not a number the field can hold."""
+    """Each number field parse_home_config reads is refused, naming the field and the value sent, when it is not a number the field can hold; occupants reads a whole float or a numeric string as the int it equals."""
 
     @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
@@ -669,12 +693,13 @@ class TestParseHomeConfigNumberFields:
             "max_discharge_kw",
             "efficiency_pct",
             "consumption_kwh",
+            "occupants",
         ],
     )
     def test_top_level_field_that_is_not_a_finite_number_is_refused_naming_it(
         self, field: str, value: object
     ) -> None:
-        """A top-level float field holding a number too large for a float, an infinity, NaN or a boolean is refused naming the field."""
+        """A top-level number field holding a number too large for a float, an infinity, NaN or a boolean is refused naming the field."""
         with pytest.raises(ValueError) as exc_info:
             parse_home_config({**VALID_HOME_PAYLOAD, field: value})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
@@ -689,15 +714,20 @@ class TestParseHomeConfigNumberFields:
             parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": {key: value}})
         assert str(exc_info.value) == f"heat_pump.{key} must be a finite number, got {value!r}"
 
-    @pytest.mark.parametrize(
-        "value",
-        [pytest.param(float("inf"), id="infinity"), pytest.param(float("nan"), id="nan")],
-    )
-    def test_occupants_int_cannot_read_is_refused_naming_it(self, value: float) -> None:
-        """An occupants value int() cannot read is refused naming occupants and the value sent."""
+    def test_occupants_with_a_fractional_part_is_refused_naming_it(self) -> None:
+        """An occupants value with a fractional part is refused, not truncated, naming occupants and the value sent."""
         with pytest.raises(ValueError) as exc_info:
-            parse_home_config({**VALID_HOME_PAYLOAD, "occupants": value})
-        assert str(exc_info.value) == f"occupants must be an integer, got {value!r}"
+            parse_home_config({**VALID_HOME_PAYLOAD, "occupants": 2.5})
+        assert str(exc_info.value) == "occupants must be a whole number, got 2.5"
+
+    @pytest.mark.parametrize("occupants", WHOLE_NUMBER_FORMS)
+    def test_occupants_that_is_a_whole_number_in_another_form_builds_the_home_of_the_int_it_equals(
+        self, occupants: object
+    ) -> None:
+        """An occupants value that is a whole number sent as a float or a numeric string builds the home the int it equals builds."""
+        assert parse_home_config({**VALID_HOME_PAYLOAD, "occupants": occupants}) == (
+            parse_home_config({**VALID_HOME_PAYLOAD, "occupants": WHOLE_NUMBER})
+        )
 
 
 class TestParseHomeConfigPVAge:

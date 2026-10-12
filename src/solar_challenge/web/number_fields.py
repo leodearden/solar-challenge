@@ -1,39 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Readers of a web request's number fields: each takes the value sent and the field's name, and refuses with a ValueError naming that field and the value sent, the error every web caller answers with HTTP 400.
 
-The integer readers differ on a fraction and on a boolean: as_int, and so as_int_within,
-reads them as int() does, truncating 2.5 to 2 and reading true as 1, while as_whole_number,
-and so as_whole_number_within, refuses both, as as_finite_float refuses a boolean. Read a
-count through as_whole_number, or through as_whole_number_within for a count with bounds.
+An integer field reads through as_whole_number, or as_whole_number_within when it has
+bounds, so a fraction or a boolean is refused, not truncated or read as 1.
 """
 
 import math
 from typing import Any
 
 from solar_challenge.whole_numbers import whole_number
-
-
-def as_int(value: Any, field: str) -> int:
-    """Return *value* read as int() reads it.
-
-    Raises:
-        ValueError: If int() cannot read *value* (not a number or numeric string, NaN,
-            or infinite); the error names *field* and the value sent.
-    """
-    try:
-        return int(value)
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ValueError(f"{field} must be an integer, got {value!r}") from exc
-
-
-def as_int_within(value: Any, field: str, low: int, high: int) -> int:
-    """Return *value* read by :func:`as_int`, refusing one outside *low* to *high* inclusive.
-
-    Raises:
-        ValueError: If :func:`as_int` refuses *value*, or it is outside *low* to *high*;
-            the range error names *field*, the range and the value sent.
-    """
-    return _within(as_int(value, field), value, field, low, high)
 
 
 def as_finite_float(value: Any, field: str) -> float:

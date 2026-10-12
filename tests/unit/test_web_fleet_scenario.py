@@ -462,6 +462,19 @@ class TestFleetFormFromScenario:
         assert type(imported.form["n_homes"]) is int
         assert type(imported.form["seed"]) is int
 
+    def test_a_pools_counts_written_as_whole_floats_load_as_the_ints_they_equal(self) -> None:
+        """A battery pool's counts of 1.0 and 2.0 load as the ints 1 and 2, the counts the loaders read them as."""
+        battery = _FLEET_SCENARIO["fleet_distribution"]["battery"]
+        pool = {**battery["capacity_kwh"], "counts": [1.0, 2.0]}
+
+        imported = fleet_form_from_scenario(
+            _with_fleet_distribution(battery={**battery, "capacity_kwh": pool})
+        )
+
+        assert imported == ImportedFleetForm(form=_FLEET_FORM, not_loaded=())
+        entries = imported.form["battery"]["capacity_kwh"]["entries"]
+        assert [type(entry["count"]) for entry in entries] == [int, int]
+
     def test_a_tariff_key_the_form_has_no_field_for_is_not_loaded(self) -> None:
         """An Economy 7 tariff loads its type and rates, and names the off-peak start the page has no field for."""
         tariff = {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1, "off_peak_start": "01:00"}
@@ -508,6 +521,20 @@ class TestFleetFormFromScenario:
                 ),
                 "fleet_distribution.pv.capacity_kw",
                 id="null-in-a-pv-pool",
+            ),
+            pytest.param(
+                _with_fleet_distribution(
+                    battery={
+                        **_FLEET_SCENARIO["fleet_distribution"]["battery"],
+                        "capacity_kwh": {
+                            "type": "shuffled_pool",
+                            "values": [0.0, 5.0],
+                            "counts": [1, 2.5],
+                        },
+                    }
+                ),
+                "fleet_distribution.battery.capacity_kwh.counts[1] must be a whole number, got 2.5",
+                id="fractional-count-in-a-battery-pool",
             ),
             pytest.param(
                 {

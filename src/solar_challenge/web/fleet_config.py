@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.number_fields import (
     as_finite_float,
-    as_int_within,
+    as_whole_number,
     as_whole_number_within,
 )
 
@@ -113,22 +113,22 @@ def sample_distribution(
         params: Distribution parameters (varies by type), read the way
             :func:`_build_distribution_dict` reads a fleet form's spec, as the
             distribution named ``params``; must be a dict.
-        n_samples: Number of samples to generate, read as int() reads it; from 1
-            to :data:`MAX_FLEET_HOMES`.
+        n_samples: Number of samples to generate, a whole number from 1 to
+            :data:`MAX_FLEET_HOMES`.
 
     Returns:
         List of sampled values, each a finite float.
 
     Raises:
         ValueError: If dist_type or params are ones :func:`_draw_samples` cannot draw
-            from, n_samples is one int() cannot read or outside 1 to MAX_FLEET_HOMES (see
-            :func:`~solar_challenge.web.number_fields.as_int_within`), params are not a
-            dict (see :func:`_require_dict`), :func:`_build_distribution_dict` refuses
-            them, naming the field under ``params``, or params draw a sample that is not a
-            finite number, as finite params whose draws overflow a float can; that error
-            names params and the sample.
+            from, n_samples is not a whole number from 1 to MAX_FLEET_HOMES (see
+            :func:`~solar_challenge.web.number_fields.as_whole_number_within`), params are
+            not a dict (see :func:`_require_dict`), :func:`_build_distribution_dict`
+            refuses them, naming the field under ``params``, or params draw a sample that
+            is not a finite number, as finite params whose draws overflow a float can; that
+            error names params and the sample.
     """
-    n_samples = as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
+    n_samples = as_whole_number_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
     spec = _build_distribution_dict({**params, "type": dist_type}, "params")
     samples = _draw_samples(spec, n_samples)
@@ -470,13 +470,15 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
     *spec* is one the grammar accepts.  The form's distribution is the editor's: a fixed
     value, which the grammar spells as a number or as a fixed distribution, and which the
     form holds as its number; a normal with both clamps; a uniform; or weighted_discrete
-    or shuffled_pool rows.  Every number is read as the form's conversion reads it, by
-    :func:`~solar_challenge.web.number_fields.as_finite_float`.
+    or shuffled_pool rows.  Every number is read as the form's conversion reads it: a
+    shuffled_pool count by :func:`~solar_challenge.web.number_fields.as_whole_number`, and
+    any other number by :func:`~solar_challenge.web.number_fields.as_finite_float`.
 
     Raises:
         ValueError: For a *spec* the editor cannot hold, naming *path*: an absent
             distribution, a type the editor has no form for, a normal without both clamps,
-            or a value that is not a finite number, a boolean included.
+            a value that is not a finite number, a boolean included, or a shuffled_pool
+            count that is not a whole number.
     """
     if _is_fixed_value(spec):
         return as_finite_float(spec, path)
@@ -499,10 +501,10 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
             "type": dist_type,
             "values": [{"value": value, "weight": weight} for value, weight in zip(values, weights)],
         }
-    counts = _form_number_list(spec["counts"], f"{path}.counts")
+    counts = _form_count_list(spec["counts"], f"{path}.counts")
     return {
         "type": dist_type,
-        "entries": [{"value": value, "count": int(count)} for value, count in zip(values, counts)],
+        "entries": [{"value": value, "count": count} for value, count in zip(values, counts)],
     }
 
 
@@ -516,18 +518,23 @@ def _form_number_list(numbers: Iterable[Any], path: str) -> list[float]:
     return [as_finite_float(number, f"{path}[{index}]") for index, number in enumerate(numbers)]
 
 
+def _form_count_list(counts: Iterable[Any], path: str) -> list[int]:
+    """Each of *counts*, the *path* list of shuffled_pool counts, read by :func:`~solar_challenge.web.number_fields.as_whole_number`."""
+    return [as_whole_number(count, f"{path}[{index}]") for index, count in enumerate(counts)]
+
+
 def _pool_counts(rows: list[tuple[str, dict[str, Any]]], entries_field: str) -> list[int]:
     """Return the count of each shuffled_pool row in *rows*, the (field, row) pairs of the *entries_field* list, an absent count reading as 1.
 
     Raises:
-        ValueError: If a count is one int() cannot read or outside 0 to MAX_FLEET_HOMES
-            (see :func:`~solar_challenge.web.number_fields.as_int_within`; the count is
+        ValueError: If a count is not a whole number from 0 to MAX_FLEET_HOMES (see
+            :func:`~solar_challenge.web.number_fields.as_whole_number_within`; the count is
             named under its row's field), or the counts total more than MAX_FLEET_HOMES,
             more values than a dashboard fleet has homes to take; that error names
             *entries_field* and the total.
     """
     counts = [
-        as_int_within(row.get("count", 1), f"{field}.count", 0, MAX_FLEET_HOMES)
+        as_whole_number_within(row.get("count", 1), f"{field}.count", 0, MAX_FLEET_HOMES)
         for field, row in rows
     ]
     total = sum(counts)

@@ -32,8 +32,13 @@ from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_
 UNUSABLE_SHUFFLED_POOL_ENTRIES = [
     pytest.param(
         [{"value": 4.0, "count": float("inf")}],
-        "entries[0].count must be an integer, got inf",
+        "entries[0].count must be a finite number, got inf",
         id="infinity",
+    ),
+    pytest.param(
+        [{"value": 4.0, "count": 2.5}],
+        "entries[0].count must be a whole number, got 2.5",
+        id="fraction",
     ),
     pytest.param(
         [{"value": 4.0, "count": 1e300}],
@@ -135,9 +140,12 @@ class TestPreviewDistribution:
     @pytest.mark.parametrize(
         ("n_samples", "message"),
         [
-            pytest.param("x", "n_samples must be an integer, got 'x'", id="str"),
-            pytest.param(None, "n_samples must be an integer, got None", id="null"),
-            pytest.param(float("inf"), "n_samples must be an integer, got inf", id="infinity"),
+            pytest.param("x", "n_samples must be a finite number, got 'x'", id="str"),
+            pytest.param(None, "n_samples must be a finite number, got None", id="null"),
+            pytest.param(
+                float("inf"), "n_samples must be a finite number, got inf", id="infinity"
+            ),
+            pytest.param(2.5, "n_samples must be a whole number, got 2.5", id="fraction"),
             pytest.param(
                 MAX_FLEET_HOMES + 1,
                 f"n_samples must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
@@ -145,10 +153,10 @@ class TestPreviewDistribution:
             ),
         ],
     )
-    def test_n_samples_that_is_not_an_integer_in_range_returns_400_naming_it(
+    def test_n_samples_that_is_not_a_whole_number_in_range_returns_400_naming_it(
         self, client: FlaskClient, n_samples: object, message: str
     ) -> None:
-        """An n_samples that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming n_samples and the value sent."""
+        """An n_samples that is not a whole number, or one above the dashboard's fleet limit, is a 400 naming n_samples and the value sent; a fraction is refused, not truncated."""
         resp = client.post(
             "/api/fleet/preview-distribution",
             json={"type": "normal", "params": {"mean": 4.0, "std": 1.0}, "n_samples": n_samples},
@@ -160,7 +168,7 @@ class TestPreviewDistribution:
     def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
         self, client: FlaskClient, entries: list, message: str
     ) -> None:
-        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
+        """A shuffled_pool count that is not a whole number, a fraction included, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
         resp = client.post(
             "/api/fleet/preview-distribution",
             json={"type": "shuffled_pool", "params": {"entries": entries}},
@@ -318,14 +326,15 @@ class TestFleetFromDistribution:
                 id="n_homes-one-above-the-fleet-limit",
             ),
             pytest.param(
-                {"days": float("inf")}, "days must be an integer, got inf", id="days-infinity"
+                {"days": float("inf")}, "days must be a finite number, got inf", id="days-infinity"
             ),
+            pytest.param({"days": 2.5}, "days must be a whole number, got 2.5", id="days-fraction"),
         ],
     )
     def test_n_homes_seed_or_days_it_cannot_use_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, message: str
     ) -> None:
-        """An n_homes or seed that is not a whole number, a seed beyond MAX_FLEET_SEED, a days that int() cannot read, or a fleet above the dashboard's fleet limit, is a 400 naming it and the value sent; no fleet is queued."""
+        """An n_homes, seed or days that is not a whole number, a seed beyond MAX_FLEET_SEED, or a fleet above the dashboard's fleet limit, is a 400 naming it and the value sent; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, **patch},
@@ -697,7 +706,7 @@ class TestFleetFromDistribution:
     def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: MagicMock, entries: list, message: str
     ) -> None:
-        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total. No fleet is queued."""
+        """A shuffled_pool count that is not a whole number, a fraction included, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total. No fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={

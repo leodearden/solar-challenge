@@ -26,6 +26,7 @@ from solar_challenge.web.fleet_config import (
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_COMPONENT_BLOCKS, valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NON_BOOLEAN_NUMBERS, UNUSABLE_NUMBERS
+from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
 
 #: Fields of a fleet form block that hold one number: each block's fixed value, sent in its distribution's field, and another block setting.
 _SINGLE_NUMBER_FIELDS = [
@@ -215,30 +216,41 @@ class TestFleetConfigHelpers:
     @pytest.mark.parametrize(
         "n_samples",
         [
-            pytest.param("x", id="str"),
+            *UNUSABLE_NUMBERS,
+            pytest.param("x", id="non-numeric-string"),
             pytest.param(None, id="null"),
-            pytest.param(float("inf"), id="infinity"),
-            pytest.param(float("-inf"), id="negative-infinity"),
-            pytest.param(float("nan"), id="nan"),
             pytest.param([100], id="list"),
-            pytest.param("2.5", id="decimal-str"),
         ],
     )
-    def test_sample_distribution_refuses_an_n_samples_int_cannot_read(
+    def test_sample_distribution_refuses_an_n_samples_that_is_not_a_finite_number(
         self, n_samples: object
     ) -> None:
-        """An n_samples that int() cannot read is refused, naming n_samples and the value sent."""
-        with pytest.raises(
-            ValueError, match=re.escape(f"n_samples must be an integer, got {n_samples!r}")
-        ):
+        """An n_samples that is not a finite number, a boolean included, is refused, naming n_samples and the value sent."""
+        with pytest.raises(ValueError) as exc_info:
             sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
+        assert str(exc_info.value) == f"n_samples must be a finite number, got {n_samples!r}"
+
+    @pytest.mark.parametrize(
+        "n_samples",
+        [
+            pytest.param(2.5, id="in-range"),
+            pytest.param(0.5, id="a-fraction-int-reads-as-zero"),
+            pytest.param("2.5", id="numeric-string"),
+        ],
+    )
+    def test_sample_distribution_refuses_an_n_samples_with_a_fractional_part(
+        self, n_samples: object
+    ) -> None:
+        """An n_samples with a fractional part is refused, not truncated, naming n_samples and the value sent."""
+        with pytest.raises(ValueError) as exc_info:
+            sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
+        assert str(exc_info.value) == f"n_samples must be a whole number, got {n_samples!r}"
 
     @pytest.mark.parametrize(
         "n_samples",
         [
             pytest.param(0, id="zero"),
             pytest.param(-1, id="negative"),
-            pytest.param(0.5, id="fraction-read-as-zero"),
             pytest.param(1e300, id="huge-float"),
             pytest.param(MAX_FLEET_HOMES + 1, id="one-above-the-fleet-limit"),
         ],
@@ -264,12 +276,23 @@ class TestFleetConfigHelpers:
 
         assert len(result) == n_samples
 
+    @pytest.mark.parametrize("n_samples", WHOLE_NUMBER_FORMS)
+    def test_sample_distribution_reads_an_n_samples_that_is_a_whole_number_in_another_form_as_the_int_it_equals(
+        self, n_samples: object
+    ) -> None:
+        """An n_samples that is a whole number sent as a float or a numeric string draws the samples the int it equals draws."""
+        params = {"mean": 4.0, "std": 1.0}
+        assert sample_distribution("normal", params, n_samples) == (
+            sample_distribution("normal", params, WHOLE_NUMBER)
+        )
+
     @pytest.mark.parametrize(
         ("count", "message"),
         [
             pytest.param(
-                float("inf"), "entries[1].count must be an integer, got inf", id="infinity"
+                float("inf"), "entries[1].count must be a finite number, got inf", id="infinity"
             ),
+            pytest.param(2.5, "entries[1].count must be a whole number, got 2.5", id="fraction"),
             pytest.param(
                 1e300,
                 f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
@@ -290,7 +313,7 @@ class TestFleetConfigHelpers:
     def test_sample_distribution_refuses_a_shuffled_pool_count_it_cannot_use(
         self, count: float, message: str
     ) -> None:
-        """A preview refuses a shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, naming the row's count and the value sent; it refuses a count that takes the pool's total above that limit, naming the total."""
+        """A preview refuses a shuffled_pool count that is not a whole number, a fraction included, or one outside 0 to the dashboard's fleet limit, naming the row's count and the value sent; it refuses a count that takes the pool's total above that limit, naming the total."""
         with pytest.raises(ValueError, match=re.escape(message)):
             sample_distribution(
                 "shuffled_pool",
@@ -315,7 +338,7 @@ class TestFleetConfigHelpers:
             pytest.param(
                 "shuffled_pool",
                 {"entries": [{"value": 3.0, "count": float("inf")}]},
-                "params.entries[0].count must be an integer, got inf",
+                "params.entries[0].count must be a finite number, got inf",
                 id="shuffled-pool-infinite-count",
             ),
             pytest.param(
@@ -721,19 +744,55 @@ class TestFleetConfigHelpers:
             )
 
     @pytest.mark.parametrize(
+        "count",
+        [
+            *UNUSABLE_NUMBERS,
+            pytest.param("x", id="non-numeric-string"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_shuffled_pool_count_that_is_not_a_finite_number(
+        self, count: object
+    ) -> None:
+        """A shuffled_pool count that is not a finite number, a boolean included, is refused, naming the row's count and the value sent."""
+        spec = {
+            "type": "shuffled_pool",
+            "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}],
+        }
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config(
+                {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
+            )
+        assert str(exc_info.value) == (
+            f"pv.capacity_kw.entries[1].count must be a finite number, got {count!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "count",
+        [
+            pytest.param(2.5, id="in-range"),
+            pytest.param(0.5, id="a-fraction-int-reads-as-zero"),
+        ],
+    )
+    def test_form_to_fleet_distribution_config_refuses_a_shuffled_pool_count_with_a_fractional_part(
+        self, count: float
+    ) -> None:
+        """A shuffled_pool count with a fractional part is refused, not truncated, naming the row's count and the value sent."""
+        spec = {
+            "type": "shuffled_pool",
+            "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}],
+        }
+        with pytest.raises(ValueError) as exc_info:
+            form_to_fleet_distribution_config(
+                {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
+            )
+        assert str(exc_info.value) == (
+            f"pv.capacity_kw.entries[1].count must be a whole number, got {count!r}"
+        )
+
+    @pytest.mark.parametrize(
         ("count", "message"),
         [
-            pytest.param(
-                float("inf"), "entries[1].count must be an integer, got inf", id="infinity"
-            ),
-            pytest.param(
-                float("-inf"),
-                "entries[1].count must be an integer, got -inf",
-                id="negative-infinity",
-            ),
-            pytest.param(float("nan"), "entries[1].count must be an integer, got nan", id="nan"),
-            pytest.param("x", "entries[1].count must be an integer, got 'x'", id="str"),
-            pytest.param(None, "entries[1].count must be an integer, got None", id="null"),
             pytest.param(
                 -1,
                 f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got -1",
@@ -760,7 +819,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_refuses_a_shuffled_pool_count_it_cannot_use(
         self, count: object, message: str
     ) -> None:
-        """A shuffled_pool count that int() cannot read, or one outside 0 to the dashboard's fleet limit, is refused, naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
+        """A shuffled_pool count outside 0 to the dashboard's fleet limit is refused, naming the row's count, the range and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
         spec = {
             "type": "shuffled_pool",
             "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}],
@@ -783,6 +842,22 @@ class TestFleetConfigHelpers:
         )
 
         assert config["pv"]["capacity_kw"]["counts"] == [0, MAX_FLEET_HOMES]
+
+    @pytest.mark.parametrize("count", WHOLE_NUMBER_FORMS)
+    def test_form_to_fleet_distribution_config_reads_a_shuffled_pool_count_that_is_a_whole_number_in_another_form_as_the_int_it_equals(
+        self, count: object
+    ) -> None:
+        """A shuffled_pool count that is a whole number sent as a float or a numeric string converts to the int it equals, not to a float or a string."""
+        spec = {
+            "type": "shuffled_pool",
+            "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}],
+        }
+        config = form_to_fleet_distribution_config(
+            {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
+        )
+
+        counts = config["pv"]["capacity_kw"]["counts"]
+        assert [(type(read), read) for read in counts] == [(int, 2), (int, WHOLE_NUMBER)]
 
     @pytest.mark.parametrize(
         ("patch", "message"),
@@ -818,7 +893,7 @@ class TestFleetConfigHelpers:
                         }
                     }
                 },
-                "pv.capacity_kw.entries[0].count must be an integer, got 'x'",
+                "pv.capacity_kw.entries[0].count must be a finite number, got 'x'",
                 id="pv-shuffled-pool-str-count",
             ),
             pytest.param(
