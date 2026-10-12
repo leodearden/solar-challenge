@@ -11,9 +11,9 @@ Bug B1 (Alpine race condition with external JS).
 Also verifies that each sweep point's row shows how its own job ended, that
 its status badge takes the classes the server draws for that status, that
 running a sweep drops the requests the sweep before it still has in flight and
-opens no stream for the points that sweep had yet to follow, and that an
-earlier sweep's results, arriving after a later sweep's rows show, fill none
-of them.
+opens no stream for the points that sweep had yet to follow, that an earlier
+sweep's results, arriving after a later sweep's rows show, fill none of them,
+and that the page says why when it loses track of a sweep.
 
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results.
@@ -379,6 +379,25 @@ def test_a_sweep_run_after_another_opens_no_stream_for_the_earlier_sweeps_remain
 
     opens_sweep_1_point_2 = is_job_request("sweep-1-point-2", "progress")
     assert [request.url for request in requests_made if opens_sweep_1_point_2(request)] == []
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+def test_the_page_says_why_it_lost_track_of_a_sweep_it_cannot_follow(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
+) -> None:
+    """Run a sweep in a browser whose EventSource constructor throws, as a real one does for a URL it cannot parse: the page says why it lost track of the sweep, and leaves no error uncaught."""
+    page.add_init_script(
+        "window.EventSource = class {"
+        " constructor() { throw new Error('this browser opens no event streams'); } };"
+    )
+    page.goto(live_server + "/scenarios/sweep")
+    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+
+    expect(
+        page.get_by_text(
+            "Lost track of the sweep: this browser opens no event streams", exact=True
+        )
+    ).to_be_visible()
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
