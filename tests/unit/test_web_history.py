@@ -137,6 +137,38 @@ class TestRunBrowserRoute:
 
 
 # ---------------------------------------------------------------------------
+# Old /history/api/* path tests
+# ---------------------------------------------------------------------------
+
+
+class TestOldHistoryApiPaths:
+    """The /history/api/* paths no longer resolve: the run history's JSON and export endpoints answer only under /api/history/."""
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            pytest.param("GET", "/history/api/runs", id="list-runs"),
+            pytest.param("GET", "/history/api/runs/stored-run", id="get-run"),
+            pytest.param("DELETE", "/history/api/runs/stored-run", id="delete-run"),
+            pytest.param("PATCH", "/history/api/runs/stored-run", id="patch-run"),
+            pytest.param("GET", "/history/api/runs/stored-run/export/csv", id="export-csv"),
+            pytest.param("GET", "/history/api/runs/stored-run/export/yaml", id="export-yaml"),
+        ],
+    )
+    def test_answers_404_instead_of_redirecting(
+        self, storage: RunStorage, client: FlaskClient, method: str, path: str
+    ) -> None:
+        """Each old path, requested with the method its redirect took, answers 404 for a stored run, which its /api/history/ twin serves."""
+        _store_home_run(
+            storage,
+            "stored-run",
+            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+        )
+
+        assert client.open(path, method=method).status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # Runs API tests
 # ---------------------------------------------------------------------------
 
