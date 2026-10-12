@@ -112,7 +112,8 @@ document.addEventListener('alpine:init', () => {
                     // passes the job's writes to the page.
                     const sweepRequests = new AbortController();
                     this._sweepRequests = sweepRequests;
-                    this._followSweep(this.sweepResults.filter(row => row.job_id), sweepRequests.signal);
+                    this._followSweep(this.sweepResults.filter(row => row.job_id), sweepRequests.signal)
+                        .catch(e => { this.errorMsg = 'Lost track of the sweep: ' + e.message; });
                 }
             } catch (e) {
                 this.errorMsg = 'Network error: ' + e.message;
