@@ -511,6 +511,23 @@ def test_an_attribute_set_on_self_is_a_member_only_once_a_class_body_declares_it
     assert member_forms(Declared) == {"site": "attribute Path"}
 
 
+def test_the_attributes_a_class_body_declares_come_first_in_annotation_order_then_the_other_names_it_defines_in_class_body_order() -> None:
+    class Meter:
+        UNITS = "kWh"
+        site: pathlib.Path
+
+        @property
+        def tariff(self) -> str: ...
+
+        reading: float
+
+        def read(self) -> float: ...
+
+        label: str
+
+    assert list(member_forms(Meter)) == ["site", "reading", "label", "UNITS", "tariff", "read"]
+
+
 def test_a_name_the_class_body_only_annotates_as_a_class_variable_is_not_a_member() -> None:
     class Meter:
         UNITS: ClassVar[str]
