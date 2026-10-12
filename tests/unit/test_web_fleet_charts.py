@@ -24,6 +24,7 @@ from solar_challenge.web.storage import RunStorage
 
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
 from tests._html_page import headings, texts, texts_after
+from tests._plotly_figure import traces_by_name
 from tests._web_app import build_test_app
 
 
@@ -132,8 +133,8 @@ class TestFleetChartFunctions:
         homes = _one_day_homes(n_homes)
 
         drawn = {
-            trace["name"]: trace["y"]
-            for trace in json.loads(fleet_aggregate_timeline(make_fleet_results_of(homes)))["data"]
+            name: trace["y"]
+            for name, trace in traces_by_name(fleet_aggregate_timeline(make_fleet_results_of(homes))).items()
         }
 
         assert drawn == {
@@ -166,8 +167,8 @@ class TestFleetChartFunctions:
         net = sum(home.grid_import for home in homes) - sum(home.grid_export for home in homes)
 
         drawn = {
-            trace["name"]: trace["y"]
-            for trace in json.loads(fleet_grid_impact(make_fleet_results_of(homes)))["data"]
+            name: trace["y"]
+            for name, trace in traces_by_name(fleet_grid_impact(make_fleet_results_of(homes))).items()
         }
 
         assert drawn == {

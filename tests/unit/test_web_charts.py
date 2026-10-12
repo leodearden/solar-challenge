@@ -27,7 +27,7 @@ from solar_challenge.web.charts import (
 from solar_challenge.web.simulation_params import parse_home_config
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
-from tests._plotly_figure import sankey_link_values
+from tests._plotly_figure import sankey_link_values, traces_by_name
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
@@ -292,11 +292,9 @@ class TestChartTotals:
         assert pie["values"] == [36.0, 60.0]
 
     def test_financial_bars_are_each_days_pounds(self) -> None:
-        figure = json.loads(
+        traces = traces_by_name(
             financial_breakdown(_steady_run(2, import_cost_gbp=0.002, export_revenue_gbp=0.001))
         )
-
-        traces = {trace["name"]: trace for trace in figure["data"]}
 
         # £0.002 and £0.001 a minute, for 1440 minutes a day.
         assert traces["Daily Cost"]["x"] == ["2024-06-01", "2024-06-02"]
@@ -314,9 +312,7 @@ class TestFinancialBreakdownPricing:
             days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
         )
 
-        figure = json.loads(financial_breakdown(results))
-
-        traces = {trace["name"]: trace for trace in figure["data"]}
+        traces = traces_by_name(financial_breakdown(results))
 
         assert traces["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
         assert traces["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
@@ -328,9 +324,7 @@ class TestFinancialBreakdownPricing:
         assert peak_import_kw > 0
         assert peak_export_kw > 0
 
-        figure = json.loads(financial_breakdown(results))
-
-        traces = {trace["name"]: trace for trace in figure["data"]}
+        traces = traces_by_name(financial_breakdown(results))
 
         assert traces["Daily Cost"]["y"] == [0.0, 0.0]
         assert traces["Daily Revenue"]["y"] == [0.0, 0.0]
