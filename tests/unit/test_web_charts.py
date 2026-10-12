@@ -260,6 +260,14 @@ class TestFinancialBreakdownPricing:
         assert traces["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
         assert traces["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
 
+    def test_an_unpriced_run_is_drawn_at_zero_pounds_though_it_imports_and_exports(self) -> None:
+        figure = json.loads(financial_breakdown(make_sinusoidal_sim_results(days=2)))
+
+        traces = {trace["name"]: trace for trace in figure["data"]}
+
+        assert traces["Daily Cost"]["y"] == [0.0, 0.0]
+        assert traces["Daily Revenue"]["y"] == [0.0, 0.0]
+
 
 class TestFinancialBreakdownNoTariffAnnotation:
     """financial_breakdown annotates its chart to say no tariff is configured exactly when neither the run's import nor its export is priced."""
