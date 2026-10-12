@@ -1,0 +1,51 @@
+# Bristol Phase 1 (Aged 20yr) Scenario
+#
+# Identical to bristol-phase1.yaml except every home's PV system is modelled
+# as 20 years old. At the default 0.5 %/yr degradation rate this yields a
+# factor of (1 - 20 × 0.005) = 0.90, i.e. ≈10% lower aggregate generation
+# compared to the age-0 baseline — the expected observable signal for this
+# scenario.
+#
+# system_age_years is set as a scalar so the RNG sequence is unchanged and
+# bristol_legacy reproducibility is preserved.
+
+name: Bristol Phase 1 (Aged 20yr)
+
+location:
+  latitude: 51.45
+  longitude: -2.58
+  timezone: Europe/London
+  altitude: 11.0
+  name: Bristol, UK
+
+# Smart Export Guarantee (SEG) configuration
+seg:
+  rate_pence_per_kwh: 4.1  # Octopus Energy export rate (p/kWh)
+
+fleet_distribution:
+  n_homes: 100
+  seed: 42
+  random_order: bristol_legacy  # Match exact behavior of create_bristol_phase1_scenario()
+
+  pv:
+    capacity_kw:
+      type: shuffled_pool
+      values: [3.0, 4.0, 5.0, 6.0]
+      counts: [20, 40, 30, 10]
+    azimuth: 180
+    tilt: 35
+    system_age_years: 20  # 20-year-old install; ≈10% degradation vs age-0 baseline
+
+  battery:
+    capacity_kwh:
+      type: shuffled_pool
+      values: [null, 5.0, 10.0]
+      counts: [40, 40, 20]
+
+  load:
+    annual_consumption_kwh:
+      type: normal
+      mean: 3400
+      std: 800
+      min: 2000
+      max: 6000

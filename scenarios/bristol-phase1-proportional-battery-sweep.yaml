@@ -1,0 +1,55 @@
+# Bristol Phase 1 Scenario
+#
+# 100 homes in Bristol with a realistic mix of:
+# - PV sizes: 3-6 kW (20% 3kW, 40% 4kW, 30% 5kW, 10% 6kW)
+# - Batteries: 40% none, 40% 5kWh, 20% 10kWh
+# - Consumption: Normal distribution around 3400 kWh/year
+
+name: Bristol Phase 1
+
+location:
+  latitude: 51.45
+  longitude: -2.58
+  timezone: Europe/London
+  altitude: 11.0
+  name: Bristol, UK
+
+fleet_distribution:
+  n_homes: 100
+  seed: 42
+  random_order: default
+
+  pv:
+    capacity_kw:
+      type: shuffled_pool
+      values: [3.0, 4.0, 5.0, 6.0]
+      counts: [20, 40, 30, 10]
+    azimuth: 180
+    tilt: 35
+
+  battery:
+    capacity_kwh:
+      type: proportional_to
+      source: pv.capacity_kw
+      multiplier:
+        type: sweep
+        mode: geometric
+        min: 0.1
+        max: 8.0
+        steps: 16
+    max_charge_kw:
+      type: proportional_to
+      source: pv.capacity_kw
+      multiplier: 0.5
+    max_discharge_kw:
+      type: proportional_to
+      source: pv.capacity_kw
+      multiplier: 0.5
+
+  load:
+    annual_consumption_kwh:
+      type: normal
+      mean: 3400
+      std: 800
+      min: 2000
+      max: 6000

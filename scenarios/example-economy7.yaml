@@ -1,0 +1,48 @@
+# Economy 7 Tariff Example
+#
+# Demonstrates time-of-use tariff configuration with Economy 7
+# (7 hours off-peak overnight rate)
+#
+# This example shows a simple scenario with:
+# - Single home in Bristol with solar + battery
+# - Economy 7 tariff with off-peak 00:30-07:30
+# - Cheaper overnight electricity ideal for battery charging
+
+name: Economy 7 Example
+
+period:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+
+location:
+  latitude: 51.45
+  longitude: -2.58
+  timezone: Europe/London
+  altitude: 11.0
+  name: Bristol, UK
+
+# Single home configuration with PV, battery, and tariff
+home:
+  pv:
+    capacity_kw: 4.0
+    azimuth: 180
+    tilt: 35
+
+  battery:
+    capacity_kwh: 5.0
+    max_charge_kw: 2.5
+    max_discharge_kw: 2.5
+    efficiency: 0.95
+
+  load:
+    annual_consumption_kwh: 3400
+
+  # Economy 7 tariff configuration
+  # Off-peak: £0.09/kWh (00:30-07:30)
+  # Peak: £0.25/kWh (07:30-00:30)
+  tariff:
+    type: economy_7
+    off_peak_rate: 0.09
+    peak_rate: 0.25
+    off_peak_start: "00:30"
+    off_peak_end: "07:30"
