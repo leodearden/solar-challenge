@@ -145,7 +145,7 @@ def get_job_status(job_id: str) -> tuple[Response, int]:
         JSON with job status fields, or 404 if not found.
     """
     job_manager = get_job_manager()
-    state = job_manager.get_job_status(job_id)
+    state = job_manager.job_state(job_id)
 
     if state is None:
         return jsonify({"error": "Job not found"}), 404
@@ -203,7 +203,7 @@ def get_job_progress(job_id: str) -> Response:
                 yield "event: error\ndata: {\"error\": \"SSE stream timed out after 10 minutes\"}\n\n"
                 return
             # Check if job exists
-            state = job_manager.get_job_status(job_id)
+            state = job_manager.job_state(job_id)
             if state is None:
                 yield "event: error\ndata: {\"error\": \"Job not found\"}\n\n"
                 return
@@ -251,7 +251,7 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         JSON with summary data, or 404/409 on error.
     """
     job_manager = get_job_manager()
-    state = job_manager.get_job_status(job_id)
+    state = job_manager.job_state(job_id)
 
     if state is None:
         return jsonify({"error": "Job not found"}), 404
