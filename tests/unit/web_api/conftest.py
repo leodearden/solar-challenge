@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from solar_challenge.web.jobs import JobEvent, JobState
+from solar_challenge.web.jobs import JobEvent, JobManager, JobState
 from tests._web_app import build_test_app
 
 if TYPE_CHECKING:
@@ -37,10 +37,11 @@ def app(tmp_path: Path) -> Flask:
 def mock_job_manager(app: Flask) -> MagicMock:
     """Replace the real JobManager on the app with a MagicMock.
 
-    The mock is pre-configured with sensible return values so that
-    tests can focus on request/response behaviour.
+    The mock is specced to JobManager, so configuring or calling an attribute
+    JobManager lacks raises AttributeError. It is pre-configured with sensible
+    return values so that tests can focus on request/response behaviour.
     """
-    jm = MagicMock()
+    jm = MagicMock(spec=JobManager)
     jm.submit_home_job.return_value = ("job-home-001", "run-home-001")
     jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
     running = JobState(
