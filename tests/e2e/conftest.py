@@ -13,7 +13,8 @@ a saved home preset under a built-in preset's name straight into the
 live server's database.
 Also stubs the Run History page's runs-list API for tests that need it
 empty, unanswered or listing a run of each badge, and collects the
-errors a page reports.
+errors a page reports. release_held_simulations holds the live server's
+jobs inside their simulations until the test releases them.
 
 A test that fails after Chromium failed one of its requests with
 net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
@@ -30,13 +31,14 @@ import socket
 import sqlite3
 import threading
 import uuid
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import pandas as pd
 import pytest
 pytest.importorskip("werkzeug")
 from flask import Flask
@@ -44,7 +46,7 @@ from werkzeug.serving import make_server
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import calculate_fleet_summary
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager, get_storage
 from solar_challenge.web.storage import RunStorage
@@ -132,6 +134,35 @@ def _jobs_finish_within_their_test(_e2e_job_manager: JobManager) -> Iterator[Non
         pytest.fail(
             f"jobs submitted during this test were still running on the live server "
             f"{_JOBS_FINISH_TIMEOUT_S} s after it ended"
+        )
+
+
+@pytest.fixture
+def release_held_simulations(_e2e_app: Flask) -> Iterator[Callable[[], None]]:
+    """Hold each job the live server runs during the test inside its simulation until the test calls the function this yields.
+
+    The jobs run on a JobManager of their own, two at a time as on the session's.
+    Once released, each simulates a day in which its home self-consumes 24 kWh,
+    exports 48 kWh and imports 12 kWh. Teardown releases them, waits for them
+    and puts the session's JobManager back.
+    """
+    released = threading.Event()
+
+    def held_simulation(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        released.wait()
+        return make_sim_results(self_kwh=24.0, export_kwh=48.0, import_kwh=12.0, days=1)
+
+    session_job_manager = _e2e_app.extensions["job_manager"]
+    held_job_manager = JobManager(simulate_home=held_simulation)
+    _e2e_app.extensions["job_manager"] = held_job_manager
+    yield released.set
+    released.set()
+    finished = held_job_manager.wait_until_idle(timeout=_JOBS_FINISH_TIMEOUT_S)
+    _e2e_app.extensions["job_manager"] = session_job_manager
+    if not finished:
+        pytest.fail(
+            f"jobs held by release_held_simulations were still running on the live server "
+            f"{_JOBS_FINISH_TIMEOUT_S} s after it released them"
         )
 
 

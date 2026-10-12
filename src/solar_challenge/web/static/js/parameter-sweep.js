@@ -62,7 +62,8 @@ document.addEventListener('alpine:init', () => {
             this.maxVal = param.defaultMax;
         },
 
-        // Aborts the current sweep's requests: each point's progress stream and result fetch
+        // Aborts the current sweep's requests, each point's progress stream and result fetch,
+        // and stops the sweep following its remaining points
         _sweepRequests: new AbortController(),
 
         destroy() {
@@ -97,7 +98,7 @@ document.addEventListener('alpine:init', () => {
                 } else {
                     this.sweepId = data.sweep_id;
                     this.sweepValues = data.values || [];
-                    // Populate initial results as pending
+                    // A row shows 'pending' until _followSweep starts following its point, whose job may be running or done by then
                     this.sweepResults = this.sweepValues.map((v, i) => ({
                         value: v,
                         status: 'pending',
@@ -106,15 +107,13 @@ document.addEventListener('alpine:init', () => {
                         grid_import: '-',
                         job_id: data.job_ids ? data.job_ids[i] : null,
                     }));
-                    // Follow each point's job. Read each row back from this.sweepResults:
-                    // only Alpine's reactive proxy of a row passes the job's writes to the page.
+                    // Follow the points' jobs unawaited, so submitting ends once the sweep is accepted.
+                    // Read each row back from this.sweepResults: only Alpine's reactive proxy of a row
+                    // passes the job's writes to the page.
                     const sweepRequests = new AbortController();
                     this._sweepRequests = sweepRequests;
-                    this.sweepResults.forEach(row => {
-                        if (row.job_id) {
-                            this._pollJob(row, sweepRequests.signal);
-                        }
-                    });
+                    this._followSweep(this.sweepResults.filter(row => row.job_id), sweepRequests.signal)
+                        .catch(e => { this.errorMsg = 'Lost track of the sweep: ' + e.message; });
                 }
             } catch (e) {
                 this.errorMsg = 'Network error: ' + e.message;
@@ -123,42 +122,58 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        // Follow one sweep point's job via SSE, writing its status and results into that point's row,
-        // until the job ends or signal aborts
-        _pollJob(row, signal) {
-            const es = new EventSource('/api/jobs/' + row.job_id + '/progress');
-            signal.addEventListener('abort', () => es.close());
+        // Follow each point's job in turn until signal aborts, so the page holds one progress stream at a time;
+        // tests/e2e/test_parameter_sweep.py's test_another_tab_loads_run_history_while_an_eight_point_sweep_runs says why, and what it costs
+        async _followSweep(rows, signal) {
+            for (const row of rows) {
+                if (signal.aborted) return;
+                await this._followPoint(row, signal);
+            }
+        },
 
-            es.addEventListener('progress', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    row.status = data.status || 'running';
-                } catch(err) {}
-            });
+        // Follow one sweep point's job via SSE, writing its status and results into that point's row;
+        // resolves once the job ends or signal aborts
+        _followPoint(row, signal) {
+            return new Promise(resolve => {
+                const es = new EventSource('/api/jobs/' + row.job_id + '/progress');
+                const end = () => {
+                    es.close();
+                    signal.removeEventListener('abort', end);
+                    resolve();
+                };
+                signal.addEventListener('abort', end);
 
-            es.addEventListener('complete', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    row.status = 'completed';
-                    if (data.run_id) {
-                        this._fetchResult(row, signal);
-                    }
-                } catch(err) {}
-                es.close();
-                this._checkAllDone();
-            });
+                es.addEventListener('progress', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        row.status = data.status || 'running';
+                    } catch(err) {}
+                });
 
-            es.addEventListener('error', (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    row.status = 'failed';
-                } catch(err) {
-                    if (row.status !== 'completed') {
+                es.addEventListener('complete', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        row.status = 'completed';
+                        if (data.run_id) {
+                            this._fetchResult(row, signal);
+                        }
+                    } catch(err) {}
+                    end();
+                    this._checkAllDone();
+                });
+
+                es.addEventListener('error', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
                         row.status = 'failed';
+                    } catch(err) {
+                        if (row.status !== 'completed') {
+                            row.status = 'failed';
+                        }
                     }
-                }
-                es.close();
-                this._checkAllDone();
+                    end();
+                    this._checkAllDone();
+                });
             });
         },
 
