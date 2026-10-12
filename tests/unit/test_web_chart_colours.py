@@ -173,6 +173,7 @@ _SUMMARY = SummaryStatistics(
     total_grid_charge_kwh=4.0,
 )
 _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
+_TEN_KWH_BATTERY = BatteryConfig(capacity_kwh=10.0)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -194,8 +195,7 @@ class _FigureCase:
 _FIGURES: dict[str, _FigureCase] = {
     "power_flow_timeline": _FigureCase(charts.power_flow_timeline, lambda build: build(_year())),
     "battery_soc_chart": _FigureCase(
-        charts.battery_soc_chart,
-        lambda build: build(_year(), battery_config=BatteryConfig(capacity_kwh=10.0)),
+        charts.battery_soc_chart, lambda build: build(_year(), battery_config=_TEN_KWH_BATTERY)
     ),
     "sankey_diagram": _FigureCase(charts.sankey_diagram, lambda build: build(_SUMMARY)),
     "daily_energy_balance": _FigureCase(charts.daily_energy_balance, lambda build: build(_year())),
@@ -307,4 +307,4 @@ def test_a_translucent_chart_colour_refuses_a_palette_colour_not_written_rrggbb(
     monkeypatch.setitem(COLOUR_PALETTE, "battery_charge", "#5e3")
 
     with pytest.raises(ValueError, match="#5e3"):
-        charts.battery_soc_chart(_year(), battery_config=BatteryConfig(capacity_kwh=10.0))
+        charts.battery_soc_chart(_year(), battery_config=_TEN_KWH_BATTERY)
