@@ -16,11 +16,12 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import NonCallableMagicMock, create_autospec
+from unittest.mock import NonCallableMagicMock
 
 import pytest
 
-from solar_challenge.web.jobs import JobEvent, JobManager, JobState
+from solar_challenge.web.jobs import JobEvent, JobState
+from tests._job_manager_double import autospecced_job_manager
 from tests._web_app import build_test_app
 
 if TYPE_CHECKING:
@@ -36,14 +37,8 @@ def app(tmp_path: Path) -> Flask:
 
 @pytest.fixture
 def mock_job_manager(app: Flask) -> NonCallableMagicMock:
-    """Replace the real JobManager on the app with a mock autospecced to it.
-
-    The mock has JobManager's interface: configuring or calling an attribute
-    JobManager lacks raises AttributeError, and calling a method with arguments
-    its signature refuses raises TypeError. It is pre-configured with sensible
-    return values so that tests can focus on request/response behaviour.
-    """
-    jm = create_autospec(JobManager, instance=True)
+    """Replace the real JobManager on the app with autospecced_job_manager()'s mock, pre-configured with sensible return values so that tests can focus on request/response behaviour."""
+    jm = autospecced_job_manager()
     jm.submit_home_job.return_value = ("job-home-001", "run-home-001")
     jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
     running = JobState(
