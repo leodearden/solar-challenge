@@ -20,7 +20,11 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
-from solar_challenge.web.number_fields import as_finite_float, as_int, as_whole_number_within
+from solar_challenge.web.number_fields import (
+    as_finite_float,
+    as_whole_number,
+    as_whole_number_within,
+)
 from solar_challenge.web.shared import require_json_object, resolve_location
 
 #: The first day of the full year that days=FULL_YEAR_DAYS_SENTINEL runs, and the date a start
@@ -304,12 +308,12 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             seg, tariff or dispatch_strategy) is neither null, which reads as
             absent, nor a mapping (the error names the block and the type
             received), if a float field is a boolean or not a finite number
-            float() reads, or occupants is one int() cannot read (the error
-            names the field, as heat_pump.<key> for a heat-pump number, and
-            the value sent), if its days, start or end is one
-            parse_date_range refuses, if battery_kwh is negative (the error
-            names battery_kwh and the value sent), or if required fields are
-            missing or invalid. The battery settings (max_charge_kw,
+            float() reads, or occupants is not a whole number, a boolean
+            included (the error names the field, as heat_pump.<key> for a
+            heat-pump number, and the value sent), if its days, start or
+            end is one parse_date_range refuses, if battery_kwh is negative
+            (the error names battery_kwh and the value sent), or if required
+            fields are missing or invalid. The battery settings (max_charge_kw,
             max_discharge_kw, efficiency_pct and dispatch_strategy) are read,
             and refused, whatever battery_kwh is; a null setting reads as
             unset.
@@ -330,7 +334,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     )
     battery_kwh_val = as_finite_float(params["battery_kwh"], "battery_kwh")
     consumption_kwh_raw = params["consumption_kwh"]
-    occupants = as_int(params["occupants"], "occupants")
+    occupants = as_whole_number(params["occupants"], "occupants")
     stochastic = bool(params["stochastic"])
     location_preset = str(params["location"])
     name = params["name"]
