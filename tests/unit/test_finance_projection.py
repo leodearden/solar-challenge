@@ -1,14 +1,23 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Unit tests for project_multi_year's curve shape and fleet energy aggregation.
+"""Unit tests for project_multi_year's curve shape, fleet energy aggregation,
+and its refusal of a simulated age whose aggregates are not all finite.
 
 The projection runs on an injected synthetic simulate, with no PVGIS or network.
 """
 from __future__ import annotations
 
+import dataclasses
+import math
+
 import pytest
 
-from tests._finance_builders import make_fleet_results, make_scenario_and_finance
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_scenario_and_finance,
+    make_sim_results,
+)
 
 
 class TestProjectMultiYearShape:
@@ -129,3 +138,95 @@ class TestProjectMultiYearShape:
 
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         assert curve.points[0].fleet_import_kwh == pytest.approx(expected_import, rel=1e-4)
+
+
+class TestProjectMultiYearRefusesNonFiniteAggregates:
+    """A simulated age whose fleet aggregates are not all finite is refused,
+    naming the age and each such aggregate with its value.
+    """
+
+    @pytest.mark.parametrize("asset_life_years", [1, 25])
+    @pytest.mark.parametrize(
+        ("totals", "refused"),
+        [
+            pytest.param({"self_kwh": math.inf}, "fleet_sc=inf, fleet_revenue=inf", id="infinite-self-consumption"),
+            pytest.param({"export_kwh": math.inf}, "fleet_exp=inf", id="infinite-export"),
+            pytest.param(
+                {"import_kwh": math.inf},
+                "fleet_sc=nan, fleet_imp=inf, fleet_revenue=nan",
+                id="infinite-import-makes-own-use-nan",
+            ),
+        ],
+    )
+    def test_a_non_finite_aggregate_at_a_seed_age_is_refused_naming_the_age_and_each_aggregate(
+        self, asset_life_years: int, totals: dict[str, float], refused: str
+    ) -> None:
+        """A fleet whose totals are infinite at every age is refused at age 0, the first seed.
+
+        With demand and import both infinite, basis-C own-use (demand − import)
+        is inf − inf = NaN, so the NaN arises in the projection's own arithmetic.
+        An infinite export leaves revenue finite: the scenario sets no SEG rate
+        and the fleet's export revenue is £0, so its SEG income is £0.
+        """
+        from solar_challenge.finance import project_multi_year
+
+        scenario, finance = make_scenario_and_finance(asset_life_years=asset_life_years)
+
+        with pytest.raises(ValueError) as exc_info:
+            project_multi_year(
+                scenario, finance, simulate=lambda fc, s, e: make_fleet_results(homes=fc.homes, **totals)
+            )
+
+        assert str(exc_info.value) == (
+            f"every aggregate of the fleet simulated at age 0 must be finite: got {refused}"
+        )
+
+    def test_a_non_finite_aggregate_at_a_bisection_trial_age_is_refused_naming_that_age(self) -> None:
+        """A fleet that is finite at the seeds 0, 12 and 24 is refused at age 6, the adaptive loop's first trial.
+
+        A NaN trial's deviation is never above the error target, and max() drops
+        it from the error estimate, so unrefused it would vanish from the bisection
+        and the projection would return a curve built from the finite seeds.
+        """
+        import pandas as pd
+
+        from solar_challenge.finance import project_multi_year
+        from solar_challenge.fleet import FleetConfig, FleetResults
+
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
+
+        def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            age = fleet_config.homes[0].pv_config.system_age_years
+            return make_fleet_results(homes=fleet_config.homes, import_kwh=math.inf if age == 6.0 else 12.0)
+
+        with pytest.raises(ValueError) as exc_info:
+            project_multi_year(scenario, finance, simulate=simulate)
+
+        assert str(exc_info.value) == (
+            "every aggregate of the fleet simulated at age 6 must be finite: "
+            "got fleet_sc=nan, fleet_imp=inf, fleet_revenue=nan"
+        )
+
+    @pytest.mark.parametrize("asset_life_years", [1, 25])
+    def test_a_non_finite_battery_discharge_is_refused_naming_its_home(self, asset_life_years: int) -> None:
+        """A home whose battery discharge is infinite is refused at age 0, by its place in the fleet.
+
+        Only the discharge series changes, so demand, own-use and revenue stay
+        finite and no UserWarning fires.
+        """
+        from solar_challenge.finance import project_multi_year
+
+        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=asset_life_years)
+        finite = make_sim_results()
+        infinite_discharge = dataclasses.replace(finite, battery_discharge=finite.battery_discharge + math.inf)
+
+        with pytest.raises(ValueError) as exc_info:
+            project_multi_year(
+                scenario,
+                finance,
+                simulate=lambda fc, s, e: make_fleet_results_of([finite, infinite_discharge], homes=fc.homes),
+            )
+
+        assert str(exc_info.value) == (
+            "every aggregate of the fleet simulated at age 0 must be finite: got per_home_discharge[1]=inf"
+        )
