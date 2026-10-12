@@ -259,3 +259,32 @@ class TestFinancialBreakdownPricing:
 
         assert traces["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
         assert traces["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
+
+
+class TestFinancialBreakdownNoTariffAnnotation:
+    """financial_breakdown annotates its chart to say no tariff is configured exactly when neither the run's import nor its export is priced."""
+
+    @pytest.mark.parametrize(
+        ("import_rate", "export_rate", "annotation_texts"),
+        [
+            pytest.param(
+                0.0,
+                0.0,
+                ["No tariff configured — cost and revenue tracking unavailable"],
+                id="unpriced",
+            ),
+            pytest.param(0.30, 0.0, [], id="import-priced-only"),
+            pytest.param(0.0, 0.05, [], id="export-priced-only"),
+            pytest.param(0.30, 0.05, [], id="import-and-export-priced"),
+        ],
+    )
+    def test_is_drawn_only_when_neither_import_nor_export_is_priced(
+        self, import_rate: float, export_rate: float, annotation_texts: list[str]
+    ) -> None:
+        results = make_sinusoidal_sim_results(
+            days=2, import_rate_gbp_per_kwh=import_rate, export_rate_gbp_per_kwh=export_rate
+        )
+
+        layout = json.loads(financial_breakdown(results))["layout"]
+
+        assert [annotation["text"] for annotation in layout.get("annotations", [])] == annotation_texts
