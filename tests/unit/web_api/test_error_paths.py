@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the error handling every /api endpoint shares: malformed and non-object JSON bodies, and HTTP methods a route does not allow."""
 
-from unittest.mock import MagicMock
+from unittest.mock import NonCallableMagicMock
 
 import pytest
 
@@ -82,7 +82,7 @@ class TestErrorPaths:
         ],
     )
     def test_every_json_endpoint_answers_a_non_object_body_with_the_shared_400(
-        self, client: FlaskClient, mock_job_manager: MagicMock, method: str, path: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, method: str, path: str
     ) -> None:
         """The body is refused, naming its type, before any run lookup, save or job submission."""
         resp = client.open(path, method=method, json=[1])
@@ -103,7 +103,7 @@ class TestErrorPaths:
         ],
     )
     def test_an_absent_or_null_body_is_refused_as_nonetype(
-        self, client: FlaskClient, mock_job_manager: MagicMock, data: str | None, content_type: str | None
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, data: str | None, content_type: str | None
     ) -> None:
         """No body at all, and a JSON null, are both refused naming NoneType."""
         resp = client.post("/api/simulate/home", data=data, content_type=content_type)

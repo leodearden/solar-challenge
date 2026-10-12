@@ -3,7 +3,7 @@
 
 import dataclasses
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import NonCallableMagicMock
 
 import pandas as pd
 import pytest
@@ -53,7 +53,7 @@ class TestExportFleetYAML:
     """POST /api/fleet/export-yaml writes the fleet scenario the fleet page's form describes."""
 
     def test_export_loads_back_through_load_fleet_config_as_the_fleet_simulate_runs(
-        self, client: FlaskClient, mock_job_manager: MagicMock, tmp_path: Path
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, tmp_path: Path
     ) -> None:
         """The exported file, read as `finance run` reads it, is the fleet POST /api/simulate/fleet-from-distribution runs for the same form: its homes, name and dates.
 
@@ -99,7 +99,7 @@ class TestExportFleetYAML:
         ) == (submitted["start_date"], submitted["end_date"])
 
     def test_export_writes_a_blocks_other_settings_and_loads_back_as_the_fleet_simulate_runs(
-        self, client: FlaskClient, mock_job_manager: MagicMock, tmp_path: Path
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, tmp_path: Path
     ) -> None:
         """A block's settings other than its distribution, a pv.tilt distribution and battery.grid_charging, are exported in config.py's grammar, and the file loads back as the fleet the simulate endpoint runs.
 
@@ -129,7 +129,7 @@ class TestExportFleetYAML:
         assert load_fleet_config(path).homes == homes
 
     def test_export_names_a_nameless_fleet_as_simulate_runs_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """A form without a name is exported under the name its simulation runs as."""
         body = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "name"}
@@ -179,7 +179,7 @@ class TestExportFleetYAML:
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(
-        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, reason: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict, reason: str
     ) -> None:
         """A form the simulate endpoint refuses, for the reason each case names, gets the same 400 and error from the export, so no YAML is written for a fleet that cannot run; no job is queued."""
         body = {**_FLEET_FORM_BODY, **patch}
@@ -197,7 +197,7 @@ class TestExportFleetYAML:
     def test_export_refuses_a_falsy_block_other_than_null_with_the_simulate_endpoints_answer(
         self,
         client: FlaskClient,
-        mock_job_manager: MagicMock,
+        mock_job_manager: NonCallableMagicMock,
         key: str,
         value: object,
         type_name: str,

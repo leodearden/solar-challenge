@@ -53,7 +53,7 @@ def recording_job_manager(app: Flask) -> _RecordingJobManager:
 
 @pytest.fixture
 def client(app: Flask, recording_job_manager: _RecordingJobManager) -> FlaskClient:
-    """Create a Flask test client whose requests submit jobs to the recording double, not the package's MagicMock."""
+    """Create a Flask test client whose requests submit jobs to the recording double, not the package's mock_job_manager."""
     return app.test_client()
 
 
