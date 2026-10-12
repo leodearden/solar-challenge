@@ -12,7 +12,10 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("plotly")
-from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff
 from solar_challenge.web.charts import (
     battery_soc_chart,
     daily_energy_balance,
@@ -27,7 +30,7 @@ from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
 from tests._plotly_figure import sankey_link_values
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._synthetic_weather import sunless_weather
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
 
 def _steady_run(
@@ -281,7 +284,10 @@ class TestFinancialBreakdownPricing:
 
 
 class TestFinancialBreakdownNoTariffAnnotation:
-    """financial_breakdown annotates its chart to say no tariff is configured exactly when neither the run's import nor its export is priced."""
+    """financial_breakdown notes on its chart that cost tracking is unavailable exactly when the run's import is not priced.
+
+    It notes that revenue tracking is unavailable too when the run earns no export revenue.
+    """
 
     @pytest.mark.parametrize(
         ("import_rate", "export_rate", "annotation_texts"),
@@ -293,11 +299,16 @@ class TestFinancialBreakdownNoTariffAnnotation:
                 id="unpriced",
             ),
             pytest.param(0.30, 0.0, [], id="import-priced-only"),
-            pytest.param(0.0, 0.05, [], id="export-priced-only"),
+            pytest.param(
+                0.0,
+                0.05,
+                ["No import tariff configured — cost tracking unavailable"],
+                id="export-priced-only",
+            ),
             pytest.param(0.30, 0.05, [], id="import-and-export-priced"),
         ],
     )
-    def test_is_drawn_only_when_neither_import_nor_export_is_priced(
+    def test_is_drawn_exactly_when_import_is_not_priced_and_names_revenue_too_when_export_is_not_either(
         self, import_rate: float, export_rate: float, annotation_texts: list[str]
     ) -> None:
         results = make_sinusoidal_sim_results(
@@ -322,3 +333,29 @@ class TestFinancialBreakdownNoTariffAnnotation:
         assert results.grid_import.max() == 0
 
         assert _annotation_texts(financial_breakdown(results)) == []
+
+    def test_a_simulated_run_with_an_seg_rate_and_no_tariff_notes_that_no_import_tariff_is_configured(
+        self,
+    ) -> None:
+        """simulate_home prices such a run's export and leaves its import unpriced.
+
+        The home is the HomeConfig web/simulation_params.py builds for a home request with "seg" and no "tariff".
+        """
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
+            seg_tariff=SEGTariff(name="", rate_pence_per_kwh=15.0),
+        )
+
+        results = simulate_home(
+            config,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather_data=synthetic_june_weather("2024-06-21"),
+        )
+
+        assert results.grid_import.sum() > 0
+        assert results.export_revenue.sum() > 0
+        assert _annotation_texts(financial_breakdown(results)) == [
+            "No import tariff configured — cost tracking unavailable"
+        ]
