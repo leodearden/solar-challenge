@@ -214,13 +214,9 @@ def get_job_progress(job_id: str) -> Response:
                 if event.type == "complete" or event.type == "error":
                     return
 
-            # Check if job is in a terminal state (might have finished
-            # before we started listening)
+            # The job finished and another stream drained its events: send its final event as that stream did
             if state.status == "completed":
-                yield (
-                    f"event: complete\n"
-                    f"data: {json.dumps({'status': state.status, 'run_id': state.run_id})}\n\n"
-                )
+                yield _job_event_frame(JobEvent("complete", state))
                 return
             if state.status == "failed":
                 yield _job_event_frame(JobEvent("error", state))
