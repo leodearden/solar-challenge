@@ -10,6 +10,7 @@ import pytest
 
 from solar_challenge.config import (
     BatteryDistributionConfig,
+    DistributionSpec,
     FleetDistributionConfig,
     GridChargeConfig,
     HeatPumpDistributionConfig,
@@ -609,6 +610,38 @@ class TestGenerateHomesFromDistributionInverterEfficiency:
         homes = generate_homes_from_distribution(config, Location.bristol())
 
         assert sorted(home.pv_config.inverter_efficiency for home in homes) == [0.955, 0.96, 0.965]
+
+
+class TestGenerateHomesHouseholdOccupants:
+    """How generate_homes_from_distribution draws each home's household occupants for LoadConfig's rule to read."""
+
+    @staticmethod
+    def _fleet(household_occupants: DistributionSpec, n_homes: int = 2) -> FleetDistributionConfig:
+        """A seeded fleet of *n_homes* homes with deterministic loads, whose household occupants are drawn from *household_occupants*."""
+        return FleetDistributionConfig(
+            n_homes=n_homes,
+            pv=PVDistributionConfig(capacity_kw=4.0),
+            load=LoadDistributionConfig(household_occupants=household_occupants, use_stochastic=False),
+            seed=42,
+        )
+
+    @pytest.mark.parametrize(
+        "household_occupants",
+        [
+            pytest.param(NormalDistribution(mean=3.0, std=1.0, min=2.6, max=3.4), id="normal"),
+            pytest.param(UniformDistribution(min=2.6, max=3.4), id="uniform"),
+        ],
+    )
+    def test_a_finite_normal_or_uniform_draw_is_rounded_to_the_nearest_whole_number(
+        self, household_occupants: DistributionSpec
+    ) -> None:
+        """Every draw from 2.6 to 3.4 gives its home 3 occupants, the nearest whole number, where truncation gives 2 to every draw below 3.
+
+        The draws are real ones, not a degenerate spec: for any seed about half of them fall below 3.
+        """
+        homes = generate_homes_from_distribution(self._fleet(household_occupants, n_homes=20), Location.bristol())
+
+        assert [home.load_config.household_occupants for home in homes] == [3] * 20
 
 
 class TestGenerateHomesFromDistributionFlex:
