@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings, script texts, renderChart targets and the figure each call passes.
+"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings, script texts, renderChart targets, the figure each call passes and the figure each chart container carries.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a page test that uses it pass vacuously.
@@ -10,6 +10,7 @@ import re
 import pytest
 
 from tests._html_page import (
+    chart_figures,
     counts_of,
     doctype,
     element_attributes,
@@ -570,3 +571,43 @@ def test_render_chart_figure_finds_calls_as_render_chart_targets_does() -> None:
     )
 
     assert render_chart_figure(page, "chart-monthly") == '{"data": []}'
+
+
+def test_chart_figures_reads_the_figure_each_chart_container_carries_keyed_by_its_id() -> (
+    None
+):
+    page = (
+        '<div id="chart-sankey" class="w-full" data-chart-figure="{&#34;data&#34;: []}"></div>'
+        '<div id="chart-comparison-bar" class="w-full"></div>'
+        '<section id="chart-financial" data-chart-figure="{&#34;layout&#34;:'
+        ' {&#34;title&#34;: &#34;Import &amp; export: today&#39;s &lt;tariff&gt;&#34;}}"></section>'
+    )
+
+    assert chart_figures(page) == {
+        "chart-sankey": '{"data": []}',
+        "chart-financial": """{"layout": {"title": "Import & export: today's <tariff>"}}""",
+    }
+
+
+@pytest.mark.parametrize(
+    ("page", "named"),
+    [
+        pytest.param('<div data-chart-figure="{}"></div>', "carries no id", id="no-id"),
+        pytest.param(
+            '<div id="chart-sankey" data-chart-figure></div>',
+            "'chart-sankey' to carry a figure",
+            id="valueless-figure",
+        ),
+        pytest.param(
+            '<div id="chart-sankey" data-chart-figure="{}"></div>'
+            '<div id="chart-sankey" data-chart-figure="{}"></div>',
+            "'chart-sankey' is on more than one",
+            id="repeated-id",
+        ),
+    ],
+)
+def test_chart_figures_raises_rather_than_drop_or_overwrite_a_chart_container(
+    page: str, named: str
+) -> None:
+    with pytest.raises(ValueError, match=named):
+        chart_figures(page)
