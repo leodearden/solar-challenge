@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
-from typing import Any, Generator, Literal, TypeAlias
+from typing import Generator, Literal, TypeAlias
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -509,66 +509,27 @@ class JobManager:
             conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
 
-    def _update_progress(
-        self,
-        job_id: str,
-        pct: float,
-        step: str,
-        message: str,
-        db_path: str,
-        status: JobStatus = _RUNNING_JOB_STATUS,
-        conn: Any = None,
-    ) -> None:
-        """Write the job's new progress to its jobs row, then report the new state with its SSE progress event.
-
-        Args:
-            job_id: Unique job identifier.
-            pct: Progress percentage (0-100).
-            step: Current step description.
-            message: Human-readable progress message.
-            db_path: Path to the SQLite database file.
-            status: The job's status.
-            conn: Optional existing SQLite connection. When provided, uses
-                it directly instead of opening a new connection.
-        """
+    def _update_progress(self, job_id: str, pct: float, step: str, message: str, conn: sqlite3.Connection) -> None:
+        """Write the running job's progress to its jobs row, then report the same state with its SSE progress event."""
         state = replace(
             self._state_of_running_job(job_id),
-            status=status,
+            status=_RUNNING_JOB_STATUS,
             progress_pct=pct,
             current_step=step,
             message=message,
         )
-
-        # Update database
-        if conn is not None:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE jobs SET
-                    status = ?,
-                    progress_pct = ?,
-                    current_step = ?,
-                    message = ?
-                WHERE id = ?
-                """,
-                (status, pct, step, message, job_id),
-            )
-            conn.commit()
-        else:
-            with get_db(db_path) as fallback_conn:
-                cursor = fallback_conn.cursor()
-                cursor.execute(
-                    """
-                    UPDATE jobs SET
-                        status = ?,
-                        progress_pct = ?,
-                        current_step = ?,
-                        message = ?
-                    WHERE id = ?
-                    """,
-                    (status, pct, step, message, job_id),
-                )
-
+        conn.execute(
+            """
+            UPDATE jobs SET
+                status = :status,
+                progress_pct = :progress_pct,
+                current_step = :current_step,
+                message = :message
+            WHERE id = :job_id
+            """,
+            asdict(state),
+        )
+        conn.commit()
         self._report_state(JobEvent("progress", state))
 
     def _state_of_running_job(self, job_id: str) -> JobState:
@@ -638,13 +599,13 @@ class JobManager:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         try:
-            self._update_progress(job_id, 5.0, "Starting", "Initializing...", db_path, _RUNNING_JOB_STATUS, conn=conn)
+            self._update_progress(job_id, 5.0, "Starting", "Initializing...", conn)
             conn.execute("UPDATE jobs SET status=?, started_at=? WHERE id=?",
                          (_RUNNING_JOB_STATUS, datetime.now(timezone.utc).isoformat(), job_id))
             conn.commit()
 
             def progress(pct: float, step: str, msg: str) -> None:
-                self._update_progress(job_id, pct, step, msg, db_path, conn=conn)
+                self._update_progress(job_id, pct, step, msg, conn)
 
             work_fn(conn, progress)
             self._record_completed_job(job_id, success_message, conn)
