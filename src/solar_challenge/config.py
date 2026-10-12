@@ -2498,6 +2498,9 @@ def run_parameter_sweep(
 
     Raises:
         ConfigurationError: If parameter cannot be swept
+        ValueError: If the swept parameter's config refuses a value, e.g. a
+            battery_capacity_kwh that is negative or not finite, or a
+            household_occupants that is not a whole number from 1 to 10.
     """
     values = sweep_config.get_values()
     param_name = sweep_config.parameter_name
@@ -2676,13 +2679,7 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
             seed=config.seed,
         )
     elif param_name == "household_occupants":
-        return LoadConfig(
-            annual_consumption_kwh=config.annual_consumption_kwh,
-            household_occupants=int(value),
-            name=config.name,
-            use_stochastic=config.use_stochastic,
-            seed=config.seed,
-        )
+        return _with_household_occupants(config, value)
     return config
 
 
