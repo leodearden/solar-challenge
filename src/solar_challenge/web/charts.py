@@ -402,14 +402,16 @@ def monthly_summary(results: SimulationResults) -> str | None:
 
 
 def _unpriced_import_note(results: SimulationResults) -> str | None:
-    """The note *results*'s financial chart carries that cost and revenue tracking is unavailable, else None.
+    """The note *results*'s financial chart carries that its import is not priced, else None.
 
     A run's import is priced when its tariff rate is above zero at some minute:
     simulate_home writes a zero rate throughout a run without a tariff. The note
-    is for a run whose import is not priced and which earns no export revenue.
+    names revenue tracking too only when the run earns no export revenue.
     """
-    if results.tariff_rate.gt(0).any() or results.export_revenue.gt(0).any():
+    if results.tariff_rate.gt(0).any():
         return None
+    if results.export_revenue.gt(0).any():
+        return "No import tariff configured — cost tracking unavailable"
     return "No tariff configured — cost and revenue tracking unavailable"
 
 
@@ -421,12 +423,19 @@ def financial_breakdown(results: SimulationResults) -> str:
     engine-priced series ``results.import_cost`` and ``results.export_revenue``,
     which already reflect the tariff and SEG rate set at simulation time.
 
-    When the run's import is not priced (its tariff rate is zero throughout, as
-    for a run simulated without a tariff) and it earns no export revenue, an
-    annotation is added to the chart explaining that cost and revenue tracking
-    is unavailable, rather than displaying a misleadingly flat-zero plot. The
-    annotation does not depend on the bars totalling zero, so a priced run that
-    imports nothing carries none.
+    The chart carries a note exactly when the run's import is not priced: its
+    tariff rate is zero throughout, as for a run simulated without a tariff.
+    Its £0 cost bars would otherwise read as free import, and its Cumulative
+    Net Savings would count revenue only. The note does not depend on the bars
+    totalling £0, so a priced run that imports nothing carries none.
+
+    - "No import tariff configured — cost tracking unavailable" when the run
+      earns export revenue (an SEG rate and no tariff).
+    - "No tariff configured — cost and revenue tracking unavailable" when it
+      earns none.
+
+    A tariff with no SEG rate carries no note: its £0 revenue is the
+    economically correct value, and simulate_home warns about it.
 
     Args:
         results: SimulationResults instance.
