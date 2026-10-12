@@ -12,10 +12,7 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("plotly")
-from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
-from solar_challenge.load import LoadConfig
-from solar_challenge.pv import PVConfig
-from solar_challenge.seg import SEGTariff
+from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.web.charts import (
     battery_soc_chart,
     daily_energy_balance,
@@ -26,6 +23,7 @@ from solar_challenge.web.charts import (
     sankey_diagram,
     seasonal_comparison,
 )
+from solar_challenge.web.simulation_params import parse_home_config
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
 from tests._plotly_figure import sankey_link_values
@@ -75,6 +73,24 @@ def _one_day_summary(**totals: float) -> SummaryStatistics:
 def _annotation_texts(figure: str) -> list[str]:
     """The texts of *figure*'s layout annotations, in the order it draws them; [] when it has none."""
     return [annotation["text"] for annotation in json.loads(figure)["layout"].get("annotations", [])]
+
+
+def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResults:
+    """The run of a home requested with an SEG rate and no tariff, over the day *weather* starts on.
+
+    The home is the one parse_home_config reads from the request; *weather* stands in for PVGIS's.
+    """
+    day = weather.index[0].date().isoformat()
+    config, start_date, end_date, _name = parse_home_config(
+        {
+            "pv_kw": 4.0,
+            "consumption_kwh": 3400.0,
+            "seg": {"rate_pence_per_kwh": 15.0},
+            "start": day,
+            "end": day,
+        }
+    )
+    return simulate_home(config, start_date=start_date, end_date=end_date, weather_data=weather)
 
 
 class TestChartFunctions:
@@ -337,25 +353,27 @@ class TestFinancialBreakdownNoTariffAnnotation:
     def test_a_simulated_run_with_an_seg_rate_and_no_tariff_notes_that_no_import_tariff_is_configured(
         self,
     ) -> None:
-        """simulate_home prices such a run's export and leaves its import unpriced.
-
-        The home is the HomeConfig web/simulation_params.py builds for a home request with "seg" and no "tariff".
-        """
-        config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
-            seg_tariff=SEGTariff(name="", rate_pence_per_kwh=15.0),
-        )
-
-        results = simulate_home(
-            config,
-            start_date=pd.Timestamp("2024-06-21"),
-            end_date=pd.Timestamp("2024-06-21"),
-            weather_data=synthetic_june_weather("2024-06-21"),
-        )
+        """simulate_home prices such a run's export and leaves its import unpriced."""
+        results = _simulate_seg_rate_without_tariff(synthetic_june_weather("2024-06-21"))
 
         assert results.grid_import.sum() > 0
         assert results.export_revenue.sum() > 0
         assert _annotation_texts(financial_breakdown(results)) == [
             "No import tariff configured — cost tracking unavailable"
+        ]
+
+    def test_a_simulated_run_with_an_seg_rate_and_no_tariff_notes_revenue_tracking_unavailable_when_it_exports_nothing(
+        self,
+    ) -> None:
+        """The note's revenue half is false for this run: its SEG rate is set, and its £0 revenue is tracked.
+
+        SimulationResults records no export rate, so the chart cannot tell this run from one with no SEG rate.
+        A structured pricing fact on the results (task 667) would change this reading.
+        """
+        results = _simulate_seg_rate_without_tariff(sunless_weather("2024-01-15", temp_air=8.0))
+
+        assert results.grid_import.sum() > 0
+        assert results.grid_export.sum() == 0
+        assert _annotation_texts(financial_breakdown(results)) == [
+            "No tariff configured — cost and revenue tracking unavailable"
         ]

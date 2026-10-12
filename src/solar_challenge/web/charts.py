@@ -430,9 +430,11 @@ def financial_breakdown(results: SimulationResults) -> str:
     totalling £0, so a priced run that imports nothing carries none.
 
     - "No import tariff configured — cost tracking unavailable" when the run
-      earns export revenue (an SEG rate and no tariff).
+      earns export revenue, which only an SEG rate pays.
     - "No tariff configured — cost and revenue tracking unavailable" when it
-      earns none.
+      earns none. That includes a run with an SEG rate that exports nothing in
+      its window: SimulationResults records the import tariff's rate but no
+      export rate, so the chart cannot tell it from a run with neither.
 
     A tariff with no SEG rate carries no note: its £0 revenue is the
     economically correct value, and simulate_home warns about it.
