@@ -409,11 +409,10 @@ def financial_breakdown(results: SimulationResults) -> str:
     engine-priced series ``results.import_cost`` and ``results.export_revenue``,
     which already reflect the tariff and SEG rate set at simulation time.
 
-    When the simulation was run without a tariff configured, both series are
-    all-zero (home.py populates zeros when ``tariff_config`` is ``None``).
-    In that case an annotation is added to the chart explaining that cost and
-    revenue tracking is unavailable, rather than displaying a misleadingly
-    flat-zero plot.
+    When the daily cost and revenue both total zero, as for a run simulated
+    with neither a tariff nor an SEG rate, an annotation is added to the chart
+    explaining that cost and revenue tracking is unavailable, rather than
+    displaying a misleadingly flat-zero plot.
 
     Args:
         results: SimulationResults instance.
@@ -469,9 +468,6 @@ def financial_breakdown(results: SimulationResults) -> str:
     fig.update_yaxes(title_text="Daily (GBP)", secondary_y=False)
     fig.update_yaxes(title_text="Cumulative Net Savings (GBP)", secondary_y=True)
 
-    # If the simulation was run without a tariff, both cost and revenue series
-    # are all-zero.  Annotate the chart so the user understands the chart is
-    # empty due to missing tariff configuration, not because costs are zero.
     if daily_cost.sum() == 0 and daily_revenue.sum() == 0:
         fig.add_annotation(
             text="No tariff configured — cost and revenue tracking unavailable",
