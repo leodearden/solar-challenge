@@ -401,6 +401,20 @@ def monthly_summary(results: SimulationResults) -> str | None:
     return str(fig.to_json())
 
 
+def _unpriced_import_note(results: SimulationResults) -> str | None:
+    """The note *results*'s financial chart carries that its import is not priced, else None.
+
+    A run's import is priced when its tariff rate is above zero at some minute:
+    simulate_home writes a zero rate throughout a run without a tariff. The note
+    names revenue tracking too only when the run earns no export revenue.
+    """
+    if results.tariff_rate.gt(0).any():
+        return None
+    if results.export_revenue.gt(0).any():
+        return "No import tariff configured — cost tracking unavailable"
+    return "No tariff configured — cost and revenue tracking unavailable"
+
+
 def financial_breakdown(results: SimulationResults) -> str:
     """Dual-axis chart with daily cost bars and a cumulative savings line.
 
@@ -409,10 +423,21 @@ def financial_breakdown(results: SimulationResults) -> str:
     engine-priced series ``results.import_cost`` and ``results.export_revenue``,
     which already reflect the tariff and SEG rate set at simulation time.
 
-    When the daily cost and revenue both total zero, as for a run simulated
-    with neither a tariff nor an SEG rate, an annotation is added to the chart
-    explaining that cost and revenue tracking is unavailable, rather than
-    displaying a misleadingly flat-zero plot.
+    The chart carries a note exactly when the run's import is not priced: its
+    tariff rate is zero throughout, as for a run simulated without a tariff.
+    Its £0 cost bars would otherwise read as free import, and its Cumulative
+    Net Savings would count revenue only. The note does not depend on the bars
+    totalling £0, so a priced run that imports nothing carries none.
+
+    - "No import tariff configured — cost tracking unavailable" when the run
+      earns export revenue, which only an SEG rate pays.
+    - "No tariff configured — cost and revenue tracking unavailable" when it
+      earns none. That includes a run with an SEG rate that exports nothing in
+      its window: SimulationResults records the import tariff's rate but no
+      export rate, so the chart cannot tell it from a run with neither.
+
+    A tariff with no SEG rate carries no note: its £0 revenue is the
+    economically correct value, and simulate_home warns about it.
 
     Args:
         results: SimulationResults instance.
@@ -468,9 +493,10 @@ def financial_breakdown(results: SimulationResults) -> str:
     fig.update_yaxes(title_text="Daily (GBP)", secondary_y=False)
     fig.update_yaxes(title_text="Cumulative Net Savings (GBP)", secondary_y=True)
 
-    if daily_cost.sum() == 0 and daily_revenue.sum() == 0:
+    note = _unpriced_import_note(results)
+    if note is not None:
         fig.add_annotation(
-            text="No tariff configured — cost and revenue tracking unavailable",
+            text=note,
             xref="paper",
             yref="paper",
             x=0.5,

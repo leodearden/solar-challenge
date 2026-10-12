@@ -23,11 +23,12 @@ from solar_challenge.web.charts import (
     sankey_diagram,
     seasonal_comparison,
 )
+from solar_challenge.web.simulation_params import parse_home_config
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
 from tests._plotly_figure import sankey_link_values
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._synthetic_weather import sunless_weather
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
 
 def _steady_run(
@@ -67,6 +68,29 @@ def _steady_run(
 def _one_day_summary(**totals: float) -> SummaryStatistics:
     """A one-day run's summary with the totals given, so a test writes every total the Sankey reads."""
     return dataclasses.replace(calculate_summary(make_sim_results(days=1)), **totals)
+
+
+def _annotation_texts(figure: str) -> list[str]:
+    """The texts of *figure*'s layout annotations, in the order it draws them; [] when it has none."""
+    return [annotation["text"] for annotation in json.loads(figure)["layout"].get("annotations", [])]
+
+
+def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResults:
+    """The run of a home requested with an SEG rate and no tariff, over the day *weather* starts on.
+
+    The home is the one parse_home_config reads from the request; *weather* stands in for PVGIS's.
+    """
+    day = weather.index[0].date().isoformat()
+    config, start_date, end_date, _name = parse_home_config(
+        {
+            "pv_kw": 4.0,
+            "consumption_kwh": 3400.0,
+            "seg": {"rate_pence_per_kwh": 15.0},
+            "start": day,
+            "end": day,
+        }
+    )
+    return simulate_home(config, start_date=start_date, end_date=end_date, weather_data=weather)
 
 
 class TestChartFunctions:
@@ -276,7 +300,10 @@ class TestFinancialBreakdownPricing:
 
 
 class TestFinancialBreakdownNoTariffAnnotation:
-    """financial_breakdown annotates its chart to say no tariff is configured exactly when neither the run's import nor its export is priced."""
+    """financial_breakdown notes on its chart that cost tracking is unavailable exactly when the run's import is not priced.
+
+    It notes that revenue tracking is unavailable too when the run earns no export revenue.
+    """
 
     @pytest.mark.parametrize(
         ("import_rate", "export_rate", "annotation_texts"),
@@ -288,17 +315,65 @@ class TestFinancialBreakdownNoTariffAnnotation:
                 id="unpriced",
             ),
             pytest.param(0.30, 0.0, [], id="import-priced-only"),
-            pytest.param(0.0, 0.05, [], id="export-priced-only"),
+            pytest.param(
+                0.0,
+                0.05,
+                ["No import tariff configured — cost tracking unavailable"],
+                id="export-priced-only",
+            ),
             pytest.param(0.30, 0.05, [], id="import-and-export-priced"),
         ],
     )
-    def test_is_drawn_only_when_neither_import_nor_export_is_priced(
+    def test_is_drawn_exactly_when_import_is_not_priced_and_names_revenue_too_when_export_is_not_either(
         self, import_rate: float, export_rate: float, annotation_texts: list[str]
     ) -> None:
         results = make_sinusoidal_sim_results(
             days=2, import_rate_gbp_per_kwh=import_rate, export_rate_gbp_per_kwh=export_rate
         )
 
-        layout = json.loads(financial_breakdown(results))["layout"]
+        assert _annotation_texts(financial_breakdown(results)) == annotation_texts
 
-        assert [annotation["text"] for annotation in layout.get("annotations", [])] == annotation_texts
+    @pytest.mark.parametrize(
+        "export_rate",
+        [pytest.param(0.0, id="export-unpriced"), pytest.param(0.05, id="export-priced")],
+    )
+    def test_is_not_drawn_for_a_run_whose_import_is_priced_though_it_imports_nothing(
+        self, export_rate: float
+    ) -> None:
+        results = make_sinusoidal_sim_results(
+            days=2,
+            demand_kw=0.0,
+            import_rate_gbp_per_kwh=0.30,
+            export_rate_gbp_per_kwh=export_rate,
+        )
+        assert results.grid_import.max() == 0
+
+        assert _annotation_texts(financial_breakdown(results)) == []
+
+    def test_a_simulated_run_with_an_seg_rate_and_no_tariff_notes_that_no_import_tariff_is_configured(
+        self,
+    ) -> None:
+        """simulate_home prices such a run's export and leaves its import unpriced."""
+        results = _simulate_seg_rate_without_tariff(synthetic_june_weather("2024-06-21"))
+
+        assert results.grid_import.sum() > 0
+        assert results.export_revenue.sum() > 0
+        assert _annotation_texts(financial_breakdown(results)) == [
+            "No import tariff configured — cost tracking unavailable"
+        ]
+
+    def test_a_simulated_run_with_an_seg_rate_and_no_tariff_notes_revenue_tracking_unavailable_when_it_exports_nothing(
+        self,
+    ) -> None:
+        """The note's revenue half is false for this run: its SEG rate is set, and its £0 revenue is tracked.
+
+        SimulationResults records no export rate, so the chart cannot tell this run from one with no SEG rate.
+        A structured pricing fact on the results (task 667) would change this reading.
+        """
+        results = _simulate_seg_rate_without_tariff(sunless_weather("2024-01-15", temp_air=8.0))
+
+        assert results.grid_import.sum() > 0
+        assert results.grid_export.sum() == 0
+        assert _annotation_texts(financial_breakdown(results)) == [
+            "No tariff configured — cost and revenue tracking unavailable"
+        ]
