@@ -113,22 +113,22 @@ def sample_distribution(
         params: Distribution parameters (varies by type), read the way
             :func:`_build_distribution_dict` reads a fleet form's spec, as the
             distribution named ``params``; must be a dict.
-        n_samples: Number of samples to generate, read as int() reads it; from 1
-            to :data:`MAX_FLEET_HOMES`.
+        n_samples: Number of samples to generate, a whole number from 1 to
+            :data:`MAX_FLEET_HOMES`.
 
     Returns:
         List of sampled values, each a finite float.
 
     Raises:
         ValueError: If dist_type or params are ones :func:`_draw_samples` cannot draw
-            from, n_samples is one int() cannot read or outside 1 to MAX_FLEET_HOMES (see
-            :func:`~solar_challenge.web.number_fields.as_int_within`), params are not a
-            dict (see :func:`_require_dict`), :func:`_build_distribution_dict` refuses
-            them, naming the field under ``params``, or params draw a sample that is not a
-            finite number, as finite params whose draws overflow a float can; that error
-            names params and the sample.
+            from, n_samples is not a whole number from 1 to MAX_FLEET_HOMES (see
+            :func:`~solar_challenge.web.number_fields.as_whole_number_within`), params are
+            not a dict (see :func:`_require_dict`), :func:`_build_distribution_dict`
+            refuses them, naming the field under ``params``, or params draw a sample that
+            is not a finite number, as finite params whose draws overflow a float can; that
+            error names params and the sample.
     """
-    n_samples = as_int_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
+    n_samples = as_whole_number_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
     params = _require_dict(params, "params")
     spec = _build_distribution_dict({**params, "type": dist_type}, "params")
     samples = _draw_samples(spec, n_samples)
