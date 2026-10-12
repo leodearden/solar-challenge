@@ -153,7 +153,7 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"days": float("inf"), "start": None, "end": None},
-                "days must be an integer",
+                "days must be a finite number",
                 id="days-infinity",
             ),
             pytest.param(

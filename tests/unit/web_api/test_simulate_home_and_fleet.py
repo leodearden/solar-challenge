@@ -443,20 +443,26 @@ class TestParseHomeConfigErrorPaths:
             pytest.param(
                 "/api/simulate/home",
                 {**VALID_HOME_PAYLOAD, "days": float("inf")},
-                "days must be an integer, got inf",
+                "days must be a finite number, got inf",
                 id="home-days-infinity",
             ),
             pytest.param(
                 "/api/simulate/fleet",
                 {"homes": [{**VALID_HOME_PAYLOAD, "days": float("inf")}]},
-                "days must be an integer, got inf",
+                "days must be a finite number, got inf",
                 id="fleet-days-infinity",
             ),
             pytest.param(
                 "/api/simulate/sweep",
                 {"min": 1, "max": 5, "steps": 2, "base_config": {"days": float("inf")}},
-                "days must be an integer, got inf",
+                "days must be a finite number, got inf",
                 id="sweep-days-infinity",
+            ),
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "days": 2.5},
+                "days must be a whole number, got 2.5",
+                id="home-days-fraction",
             ),
             pytest.param(
                 "/api/simulate/home",

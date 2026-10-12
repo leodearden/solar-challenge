@@ -326,14 +326,15 @@ class TestFleetFromDistribution:
                 id="n_homes-one-above-the-fleet-limit",
             ),
             pytest.param(
-                {"days": float("inf")}, "days must be an integer, got inf", id="days-infinity"
+                {"days": float("inf")}, "days must be a finite number, got inf", id="days-infinity"
             ),
+            pytest.param({"days": 2.5}, "days must be a whole number, got 2.5", id="days-fraction"),
         ],
     )
     def test_n_homes_seed_or_days_it_cannot_use_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, message: str
     ) -> None:
-        """An n_homes or seed that is not a whole number, a seed beyond MAX_FLEET_SEED, a days that int() cannot read, or a fleet above the dashboard's fleet limit, is a 400 naming it and the value sent; no fleet is queued."""
+        """An n_homes, seed or days that is not a whole number, a seed beyond MAX_FLEET_SEED, or a fleet above the dashboard's fleet limit, is a 400 naming it and the value sent; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, **patch},

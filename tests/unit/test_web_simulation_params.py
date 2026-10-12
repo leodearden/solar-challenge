@@ -235,14 +235,30 @@ class TestParseDateRange:
         assert parse_date_range(data) == window
 
     @pytest.mark.parametrize(
+        "days", [*UNUSABLE_NUMBERS, pytest.param("seven", id="non-numeric-string")]
+    )
+    def test_days_that_is_not_a_finite_number_is_refused_naming_it(self, days: object) -> None:
+        """A days that is not a finite number, a boolean included, is refused with a ValueError naming days and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({"days": days})
+        assert str(exc_info.value) == f"days must be a finite number, got {days!r}"
+
+    @pytest.mark.parametrize(
+        "days",
+        [
+            pytest.param(2.5, id="in-range"),
+            pytest.param(0.5, id="a-fraction-int-reads-as-zero"),
+        ],
+    )
+    def test_days_with_a_fractional_part_is_refused_naming_it(self, days: float) -> None:
+        """A days with a fractional part is refused, not truncated, with a ValueError naming days and the value as sent."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_date_range({"days": days})
+        assert str(exc_info.value) == f"days must be a whole number, got {days!r}"
+
+    @pytest.mark.parametrize(
         ("days", "message"),
         [
-            pytest.param(float("inf"), "days must be an integer, got inf", id="infinity"),
-            pytest.param(
-                float("-inf"), "days must be an integer, got -inf", id="negative-infinity"
-            ),
-            pytest.param(float("nan"), "days must be an integer, got nan", id="nan"),
-            pytest.param("seven", "days must be an integer, got 'seven'", id="non-numeric-string"),
             pytest.param(0, f"days must be between 1 and {MAX_WINDOW_DAYS}, got 0", id="zero"),
             pytest.param(
                 -7, f"days must be between 1 and {MAX_WINDOW_DAYS}, got -7", id="negative"
@@ -265,7 +281,7 @@ class TestParseDateRange:
     def test_days_it_cannot_use_is_refused_naming_days_and_the_value_sent(
         self, days: object, message: str
     ) -> None:
-        """A days that int() cannot read, or one outside 1 to MAX_WINDOW_DAYS, is refused with a ValueError naming days and the value as sent."""
+        """A days outside 1 to MAX_WINDOW_DAYS is refused with a ValueError naming days, the range and the value as sent."""
         with pytest.raises(ValueError) as exc_info:
             parse_date_range({"days": days})
         assert str(exc_info.value) == message
