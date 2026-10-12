@@ -11,10 +11,10 @@ nothing, and sends either end of that range.
 
 import re
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from typing import Any
 
 import pytest
-from playwright.sync_api import Locator, Page, Request, expect
+from playwright.sync_api import Locator, Page, Route, expect
 
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
@@ -239,6 +239,19 @@ def test_form_validation_pv_range(page: Page, live_server: str) -> None:
 # ── Form validation (annual consumption range) ──────────────────────
 
 
+@pytest.fixture
+def home_run_submissions(page: Page) -> list[Any]:
+    """The body of each home run the page submits during the test, each aborted so no job reaches the live server's JobManager."""
+    submissions: list[Any] = []
+
+    def _record_and_abort(route: Route) -> None:
+        submissions.append(route.request.post_data_json)
+        route.abort()
+
+    page.route("**/api/simulate/home", _record_and_abort)
+    return submissions
+
+
 def _validation_errors(page: Page) -> Locator:
     """The items of the list the page shows under "Please fix the following errors:"."""
     heading = page.get_by_text("Please fix the following errors:", exact=True)
@@ -247,7 +260,7 @@ def _validation_errors(page: Page) -> Locator:
 
 @pytest.mark.parametrize("beyond", ["below", "above"])
 def test_consumption_beyond_the_load_range_is_listed_as_an_error_and_never_sent(
-    page: Page, live_server: str, beyond: str
+    page: Page, live_server: str, home_run_submissions: list[Any], beyond: str
 ) -> None:
     """A consumption one step beyond either end of the load component's fixed range is an error naming both ends, and Run Simulation sends nothing."""
     load = FLEET_COMPONENTS["load"]
@@ -256,8 +269,6 @@ def test_consumption_beyond_the_load_range_is_listed_as_an_error_and_never_sent(
     page.goto(live_server + "/simulate/home")
     open_tab(page, "Load")
     page.locator("#consumption_kwh").fill(f"{value:g}")
-    page_requests: list[Request] = []
-    page.on("request", lambda request: page_requests.append(request))
 
     page.get_by_role("button", name="Run Simulation").click()
 
@@ -265,9 +276,7 @@ def test_consumption_beyond_the_load_range_is_listed_as_an_error_and_never_sent(
     expect(consumption_errors).to_have_count(1)
     expect(consumption_errors).to_contain_text(f"{low:g}")
     expect(consumption_errors).to_contain_text(f"{high:g}")
-    assert [
-        request.url for request in page_requests if urlsplit(request.url).path == "/api/simulate/home"
-    ] == []
+    assert home_run_submissions == []
 
 
 @pytest.mark.parametrize("end", ["low", "high"])
