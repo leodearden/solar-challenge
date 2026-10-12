@@ -191,9 +191,8 @@ class SimulationResults:
 
     Each amount series, every series but the battery_soc and tariff_rate levels,
     holds a number at every minute, as the run's totals sum every minute's amount.
-    Construction raises ValueError naming each that holds a NaN, its first NaN's
-    timestamp and how many it holds, and per_minute_amounts and total_amounts raise
-    the same for one made NaN in place after construction; an infinite sample is kept.
+    A NaN in one raises ValueError at construction and in each method that reads
+    them, as a series can still be written in place; an infinite sample is kept.
 
     Attributes:
         generation: PV generation in kW
@@ -237,8 +236,7 @@ class SimulationResults:
         Raises:
             SeriesRefused: The first set series, in declaration order, whose dtype is no
                 integer's or float's; it names the series' column and its dtype.
-            ValueError: If an amount series holds a NaN, naming each such series' column, its first
-                NaN and when, and how many of its minutes are NaN.
+            ValueError: If an amount series holds a NaN (see the class docstring).
         """
         for name, column in self._series_columns():
             series = getattr(self, name)
@@ -290,10 +288,7 @@ class SimulationResults:
             )
 
     def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
-        """Each amount's column and each row's amount, in declaration order, for every series that is set.
-
-        Refuses a NaN amount first, as construction does, since a series can be written in place after it.
-        """
+        """Each amount's column and each row's amount, in declaration order, for every series that is set."""
         self._refuse_nan_amounts()
         window = self.window
         for _, series, amount in self._series_with_amounts():
@@ -307,7 +302,7 @@ class SimulationResults:
 
         Raises:
             ValueError: As window does, for an index no window describes; or if an amount series
-                holds a NaN written in place after construction, with the message construction raises.
+                holds a NaN (see the class docstring).
         """
         return pd.concat(dict(self._amount_series()), axis=1)
 
@@ -316,12 +311,17 @@ class SimulationResults:
 
         Raises:
             ValueError: As window does, for an index no window describes; or if an amount series
-                holds a NaN written in place after construction, with the message construction raises.
+                holds a NaN (see the class docstring).
         """
         return {column: float(amounts.sum()) for column, amounts in self._amount_series()}
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Convert results to a DataFrame with one column per series that is set."""
+        """Convert results to a DataFrame with one column per series that is set.
+
+        Raises:
+            ValueError: If an amount series holds a NaN (see the class docstring).
+        """
+        self._refuse_nan_amounts()
         return pd.DataFrame(
             {
                 column: series
@@ -338,7 +338,7 @@ class SimulationResults:
 
         Raises:
             ValueError: If frame lacks any required series' column, naming each one, or if an
-                amount column holds a NaN, which construction refuses.
+                amount column holds a NaN (see the class docstring).
             SeriesRefused: If a column is not numbers, as construction refuses its series; it
                 names the first such column and its dtype.
         """
