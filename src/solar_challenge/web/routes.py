@@ -136,7 +136,7 @@ def home_results(run_id: str) -> Any:
         "daily_balance": daily_energy_balance(sim_results),
         "power_flow": power_flow_timeline(sim_results),
         "battery_soc": (
-            battery_soc_chart(sim_results, config.battery_config.capacity_kwh)
+            battery_soc_chart(sim_results, config.battery_config)
             if has_battery and config.battery_config is not None
             else None
         ),

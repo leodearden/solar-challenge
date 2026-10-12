@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("plotly")
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import SimulationResults
 from solar_challenge.web.charts import (
     battery_soc_chart,
@@ -38,7 +39,7 @@ def _with_rising_soc(results: SimulationResults) -> SimulationResults:
 
 def _soc_trace(results: SimulationResults) -> dict[str, Any]:
     """The battery SOC trace that battery_soc_chart draws for *results*."""
-    return json.loads(battery_soc_chart(results, battery_capacity_kwh=10.0))["data"][0]
+    return json.loads(battery_soc_chart(results, battery_config=BatteryConfig(capacity_kwh=10.0)))["data"][0]
 
 
 @pytest.mark.parametrize("steps", [48, 2000])
@@ -77,7 +78,7 @@ def test_every_chart_of_a_runs_time_series_draws_it_at_the_same_instants() -> No
 
     figures = {
         "power_flow_timeline": power_flow_timeline(year),
-        "battery_soc_chart": battery_soc_chart(year, battery_capacity_kwh=10.0),
+        "battery_soc_chart": battery_soc_chart(year, battery_config=BatteryConfig(capacity_kwh=10.0)),
         "heat_pump_load_profile": heat_pump_charts.load_profile_chart,
         "overlaid_power_flows": overlaid_power_flows([year], ["Run A"]),
         "fleet_aggregate_timeline": fleet_aggregate_timeline(fleet),

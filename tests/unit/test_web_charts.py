@@ -137,7 +137,7 @@ class TestChartFunctions:
     def test_battery_soc_chart_returns_json(self) -> None:
         """Test battery_soc_chart returns a non-empty JSON string."""
         results = make_sinusoidal_sim_results(days=2)
-        output = battery_soc_chart(results, battery_capacity_kwh=10.0)
+        output = battery_soc_chart(results, battery_config=BatteryConfig(capacity_kwh=10.0))
         assert isinstance(output, str)
         parsed = json.loads(output)
         assert "data" in parsed
