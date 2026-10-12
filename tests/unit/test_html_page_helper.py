@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings, script texts and renderChart targets.
+"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings, script texts, renderChart targets and the figure each call passes.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a page test that uses it pass vacuously.
@@ -16,6 +16,7 @@ from tests._html_page import (
     element_count,
     element_ids,
     headings,
+    render_chart_figure,
     render_chart_targets,
     script_texts,
     texts,
@@ -485,3 +486,87 @@ def test_a_regular_expression_literal_is_not_recognised_as_one(
 ) -> None:
     """A known gap, pinned so that a fix updates this test and render_chart_targets' docstring together."""
     assert render_chart_targets(f"<script>{script}</script>") == targets
+
+
+def test_render_chart_figure_reads_the_figure_json_the_call_drawing_into_the_id_passes() -> (
+    None
+):
+    sankey = r'"{\"layout\": {\"title\": {\"text\": \"Energy Flows\"}}}"'
+    financial = r'"{\"layout\": {\"title\": {\"text\": \"Import \u0026 export: today\u0027s \u003ctariff\u003e\"}}}"'
+    page = (
+        f"<script>renderChart('chart-sankey', {sankey});\n"
+        f"    renderChart('chart-financial', {financial});</script>"
+    )
+
+    assert render_chart_figure(page, "chart-financial") == (
+        """{"layout": {"title": {"text": "Import & export: today's <tariff>"}}}"""
+    )
+    assert render_chart_figure(page, "chart-sankey") == (
+        '{"layout": {"title": {"text": "Energy Flows"}}}'
+    )
+
+
+def test_a_null_figure_reads_as_none() -> None:
+    page = "<script>renderChart('chart-monthly', null);</script>"
+
+    assert render_chart_figure(page, "chart-monthly") is None
+
+
+@pytest.mark.parametrize(
+    ("script", "found"),
+    [
+        pytest.param("renderChart('chart-sankey', null);", 0, id="no-call"),
+        pytest.param(
+            "renderChart('chart-financial', null);"
+            " renderChart('chart-financial', \"{}\");",
+            2,
+            id="two-calls",
+        ),
+    ],
+)
+def test_render_chart_figure_raises_unless_exactly_one_call_draws_into_the_id(
+    script: str, found: int
+) -> None:
+    page = f"<script>{script}</script>"
+
+    with pytest.raises(ValueError, match=f"'chart-financial'.*found {found}$"):
+        render_chart_figure(page, "chart-financial")
+
+
+@pytest.mark.parametrize(
+    ("call", "named"),
+    [
+        pytest.param(
+            "renderChart('chart-sankey', figure)",
+            "renderChart('chart-sankey', figure",
+            id="identifier",
+        ),
+        pytest.param(
+            "renderChart('chart-sankey', '{}')",
+            "renderChart('chart-sankey', '{}'",
+            id="single-quoted-string",
+        ),
+        pytest.param(
+            "renderChart('chart-sankey')",
+            "renderChart('chart-sankey')",
+            id="no-second-argument",
+        ),
+    ],
+)
+def test_a_figure_that_is_neither_a_json_string_nor_null_raises_naming_the_call(
+    call: str, named: str
+) -> None:
+    page = f"<script>{call};</script>"
+
+    with pytest.raises(ValueError, match=r"JSON string or null.*" + re.escape(named)):
+        render_chart_figure(page, "chart-sankey")
+
+
+def test_render_chart_figure_finds_calls_as_render_chart_targets_does() -> None:
+    page = (
+        "<script>// renderChart('chart-monthly', null);\n"
+        "var note = \"renderChart('chart-monthly', null)\";\n"
+        r"""renderChart('chart-monthly', "{\"data\": []}");</script>"""
+    )
+
+    assert render_chart_figure(page, "chart-monthly") == '{"data": []}'
