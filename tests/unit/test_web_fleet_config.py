@@ -26,6 +26,7 @@ from solar_challenge.web.fleet_config import (
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_COMPONENT_BLOCKS, valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NON_BOOLEAN_NUMBERS, UNUSABLE_NUMBERS
+from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
 
 #: Fields of a fleet form block that hold one number: each block's fixed value, sent in its distribution's field, and another block setting.
 _SINGLE_NUMBER_FIELDS = [
@@ -274,6 +275,16 @@ class TestFleetConfigHelpers:
         result = sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
 
         assert len(result) == n_samples
+
+    @pytest.mark.parametrize("n_samples", WHOLE_NUMBER_FORMS)
+    def test_sample_distribution_reads_an_n_samples_that_is_a_whole_number_in_another_form_as_the_int_it_equals(
+        self, n_samples: object
+    ) -> None:
+        """An n_samples that is a whole number sent as a float or a numeric string draws the samples the int it equals draws."""
+        params = {"mean": 4.0, "std": 1.0}
+        assert sample_distribution("normal", params, n_samples) == (
+            sample_distribution("normal", params, WHOLE_NUMBER)
+        )
 
     @pytest.mark.parametrize(
         ("count", "message"),
@@ -831,6 +842,22 @@ class TestFleetConfigHelpers:
         )
 
         assert config["pv"]["capacity_kw"]["counts"] == [0, MAX_FLEET_HOMES]
+
+    @pytest.mark.parametrize("count", WHOLE_NUMBER_FORMS)
+    def test_form_to_fleet_distribution_config_reads_a_shuffled_pool_count_that_is_a_whole_number_in_another_form_as_the_int_it_equals(
+        self, count: object
+    ) -> None:
+        """A shuffled_pool count that is a whole number sent as a float or a numeric string converts to the int it equals, not to a float or a string."""
+        spec = {
+            "type": "shuffled_pool",
+            "entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}],
+        }
+        config = form_to_fleet_distribution_config(
+            {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
+        )
+
+        counts = config["pv"]["capacity_kw"]["counts"]
+        assert [(type(read), read) for read in counts] == [(int, 2), (int, WHOLE_NUMBER)]
 
     @pytest.mark.parametrize(
         ("patch", "message"),

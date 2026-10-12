@@ -26,6 +26,7 @@ from solar_challenge.web.simulation_params import (
 )
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._unusable_numbers import UNUSABLE_NUMBERS
+from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
 
 
 VALID_HOME_PAYLOAD: dict = {
@@ -233,6 +234,13 @@ class TestParseDateRange:
     ) -> None:
         """A null days, and an empty or null start or end, read as not sent, so the body runs the window it does send."""
         assert parse_date_range(data) == window
+
+    @pytest.mark.parametrize("days", WHOLE_NUMBER_FORMS)
+    def test_days_that_is_a_whole_number_in_another_form_runs_the_window_of_the_int_it_equals(
+        self, days: object
+    ) -> None:
+        """A days that is a whole number sent as a float or a numeric string runs the window of the int it equals."""
+        assert parse_date_range({"days": days}) == parse_date_range({"days": WHOLE_NUMBER})
 
     @pytest.mark.parametrize(
         "days", [*UNUSABLE_NUMBERS, pytest.param("seven", id="non-numeric-string")]
@@ -669,7 +677,7 @@ class TestParseHomeConfigBatterySettings:
 
 
 class TestParseHomeConfigNumberFields:
-    """Each number field parse_home_config reads is refused, naming the field and the value sent, when it is not a number the field can hold."""
+    """Each number field parse_home_config reads is refused, naming the field and the value sent, when it is not a number the field can hold; occupants reads a whole float or a numeric string as the int it equals."""
 
     @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
@@ -711,6 +719,15 @@ class TestParseHomeConfigNumberFields:
         with pytest.raises(ValueError) as exc_info:
             parse_home_config({**VALID_HOME_PAYLOAD, "occupants": 2.5})
         assert str(exc_info.value) == "occupants must be a whole number, got 2.5"
+
+    @pytest.mark.parametrize("occupants", WHOLE_NUMBER_FORMS)
+    def test_occupants_that_is_a_whole_number_in_another_form_builds_the_home_of_the_int_it_equals(
+        self, occupants: object
+    ) -> None:
+        """An occupants value that is a whole number sent as a float or a numeric string builds the home the int it equals builds."""
+        assert parse_home_config({**VALID_HOME_PAYLOAD, "occupants": occupants}) == (
+            parse_home_config({**VALID_HOME_PAYLOAD, "occupants": WHOLE_NUMBER})
+        )
 
 
 class TestParseHomeConfigPVAge:
