@@ -616,10 +616,10 @@ class TestJobManagerIntegration:
         assert "job_manager" in app.extensions
         assert isinstance(app.extensions["job_manager"], JobManager)
 
-    def test_get_job_status_returns_none_for_unknown(self, app: Flask) -> None:
-        """Test that get_job_status returns None for unknown job IDs."""
+    def test_job_state_returns_none_for_unknown(self, app: Flask) -> None:
+        """Test that job_state returns None for unknown job IDs."""
         jm = app.extensions["job_manager"]
-        assert jm.get_job_status("nonexistent") is None
+        assert jm.job_state("nonexistent") is None
 
 
 # ---------------------------------------------------------------------------
@@ -631,7 +631,7 @@ class TestJobManagerDirect:
     """Unit tests for JobManager exercised directly without Flask."""
 
     def test_thread_safety_concurrent_access(self, blocking_simulation: _BlockingSimulation, tmp_path: Path) -> None:
-        """Test that concurrent get_job_status and get_events calls are thread-safe."""
+        """Test that concurrent job_state and get_events calls are thread-safe."""
         manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
         job_ids = [_submit_home_job(manager, tmp_path) for _ in range(10)]
         blocking_simulation.wait_until_started()
@@ -643,7 +643,7 @@ class TestJobManagerDirect:
             try:
                 barrier.wait()
                 for job_id in job_ids:
-                    assert manager.get_job_status(job_id) is not None
+                    assert manager.job_state(job_id) is not None
                     list(manager.get_events(job_id))
             except Exception as exc:
                 errors.append(exc)
@@ -675,7 +675,7 @@ class TestJobManagerDirect:
         manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
         job_id = _submit_home_job(manager, tmp_path)
         blocking_simulation.wait_until_started()
-        simulating = manager.get_job_status(job_id)
+        simulating = manager.job_state(job_id)
         assert simulating is not None
 
         events = list(manager.get_events(job_id))
@@ -699,7 +699,7 @@ class TestJobManagerDirect:
         manager = JobManager(max_workers=1, simulate_home=simulation)
         job_id = _submit_home_job(manager, tmp_path)
         assert manager.wait_until_idle(timeout=30)
-        state = manager.get_job_status(job_id)
+        state = manager.job_state(job_id)
         assert state is not None
 
         assert list(manager.get_events(job_id))[-1] == JobEvent(event_type, state)
@@ -747,8 +747,8 @@ def _records_logged_by_jobs_py(caplog: pytest.LogCaptureFixture) -> list[logging
     return [record for record in caplog.records if record.name == _JOBS_LOGGER]
 
 
-def _ids_with_a_status(manager: JobManager, ids: list[str]) -> list[str]:
-    return [job_id for job_id in ids if manager.get_job_status(job_id) is not None]
+def _ids_tracked_by(manager: JobManager, ids: list[str]) -> list[str]:
+    return [job_id for job_id in ids if manager.job_state(job_id) is not None]
 
 
 def _job_rows(storage: RunStorage) -> list[tuple[str, str]]:
@@ -781,7 +781,7 @@ def _state_recorded_in_job_row(storage: RunStorage, job_id: str) -> JobState:
 
 def _run_of_job(manager: JobManager, job_id: str, storage: RunStorage) -> RunRecord:
     """Return the record storage holds for the run of job *job_id*, which *manager* tracks."""
-    state = manager.get_job_status(job_id)
+    state = manager.job_state(job_id)
     assert state is not None, f"the manager does not track job {job_id}"
     run = storage.run_record(state.run_id)
     assert run is not None, f"no run has job {job_id}'s run id {state.run_id}"
@@ -791,7 +791,7 @@ def _run_of_job(manager: JobManager, job_id: str, storage: RunStorage) -> RunRec
 def _wait_until_finished(manager: JobManager, job_id: str) -> JobState:
     deadline = time.monotonic() + 30
     while True:
-        state = manager.get_job_status(job_id)
+        state = manager.job_state(job_id)
         if state is None:
             pytest.fail(f"the manager does not track job {job_id}")
         if state.status in ("completed", "failed"):
@@ -802,7 +802,7 @@ def _wait_until_finished(manager: JobManager, job_id: str) -> JobState:
 
 
 def _status_of(manager: JobManager, job_id: str) -> str | None:
-    state = manager.get_job_status(job_id)
+    state = manager.job_state(job_id)
     return None if state is None else state.status
 
 
@@ -888,7 +888,7 @@ class TestJobManagerIds:
 
         job_id = submit_job(manager, tmp_path)
 
-        state = manager.get_job_status(job_id)
+        state = manager.job_state(job_id)
         assert state is not None
         run_id = state.run_id
         assert {job_id, run_id} == set(ids.issued)
@@ -897,10 +897,10 @@ class TestJobManagerIds:
         assert _job_rows(storage) == [(job_id, run_id)]
 
 
-class TestJobManagerStatus:
-    """Tests for the status a JobManager reports for a job: only while it tracks the job in memory."""
+class TestJobManagerState:
+    """Tests for the state a JobManager reports for a job: only while it tracks the job in memory."""
 
-    def test_a_jobs_status_holds_its_ids_its_progress_and_its_rows_creation_time(
+    def test_a_jobs_state_holds_its_ids_its_progress_and_its_rows_creation_time(
         self, tmp_path: Path
     ) -> None:
         storage = _run_storage(tmp_path)
@@ -915,7 +915,7 @@ class TestJobManagerStatus:
         )
         assert manager.wait_until_idle(timeout=30)
 
-        assert manager.get_job_status(job_id) == JobState(
+        assert manager.job_state(job_id) == JobState(
             job_id=job_id,
             run_id=run_id,
             status="completed",
@@ -931,7 +931,7 @@ class TestJobManagerStatus:
         manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
         job_id = _submit_home_job(manager, tmp_path)
         blocking_simulation.wait_until_started()
-        running = manager.get_job_status(job_id)
+        running = manager.job_state(job_id)
         assert running is not None
 
         blocking_simulation.release()
@@ -952,7 +952,7 @@ class TestJobManagerStatus:
         job_id = _submit_home_job(first, tmp_path)
         assert first.wait_until_idle(timeout=30)
 
-        assert JobManager(max_workers=1).get_job_status(job_id) is None
+        assert JobManager(max_workers=1).job_state(job_id) is None
         assert _job_row(_run_storage(tmp_path), job_id)["status"] == "completed"
 
 
@@ -1009,7 +1009,7 @@ class TestJobManagerAgeLimit:
 
         _submit_home_job(manager, tmp_path)
 
-        assert manager.get_job_status(job_id) is None
+        assert manager.job_state(job_id) is None
 
     def test_a_job_that_finished_a_minute_ago_is_still_tracked_though_it_was_submitted_a_day_before(
         self, blocking_simulation: _BlockingSimulation, tmp_path: Path
@@ -1081,7 +1081,7 @@ class TestJobManagerQueuedJobs:
 
         stored = _state_recorded_in_job_row(_run_storage(tmp_path), queued_job_id)
         assert stored.status == "queued"
-        assert manager.get_job_status(queued_job_id) == stored
+        assert manager.job_state(queued_job_id) == stored
 
 
 class TestJobManagerRuns:
@@ -1170,7 +1170,7 @@ class TestJobManagerJobRows:
         stored = _state_recorded_in_job_row(storage, job_id)
 
         assert stored.status == status
-        assert manager.get_job_status(job_id) == stored
+        assert manager.job_state(job_id) == stored
 
 
 class TestJobManagerRefusedRows:
@@ -1190,7 +1190,7 @@ class TestJobManagerRefusedRows:
             submit_job(manager, tmp_path)
 
         assert ids.issued
-        assert _ids_with_a_status(manager, ids.issued) == []
+        assert _ids_tracked_by(manager, ids.issued) == []
         assert storage.list_runs() == []
 
 
@@ -1264,7 +1264,7 @@ class TestJobManagerUnrecordedFailures:
         job_id = _submit_home_job(manager, tmp_path)
         assert manager.wait_until_idle(timeout=30)
 
-        state = manager.get_job_status(job_id)
+        state = manager.job_state(job_id)
 
         assert state is not None
         assert (state.status, state.message) == ("failed", "the simulation failed")
@@ -1316,7 +1316,7 @@ class TestJobManagerShutdown:
             submit_job(manager, tmp_path)
 
         assert ids.issued
-        assert _ids_with_a_status(manager, ids.issued) == []
+        assert _ids_tracked_by(manager, ids.issued) == []
         assert _run_storage(tmp_path).list_runs() == []
 
     def test_shutdown_all_managers_shuts_down_every_live_manager(self, tmp_path: Path) -> None:

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fixtures for the Flask test app the /api endpoint test modules drive, with its JobManager mocked.
 
-mock_job_manager installs a MagicMock whose submit, status and event calls answer at once
+mock_job_manager installs a MagicMock whose submit, state and event calls answer at once
 with canned values, so no test starts a real simulation. client requests it, so a test
 that sends a request runs against the mock unless its module defines its own client.
 
@@ -53,7 +53,7 @@ def mock_job_manager(app: Flask) -> MagicMock:
         message="Running home simulation...",
         created_at="2024-06-01T12:00:00+00:00",
     )
-    jm.get_job_status.return_value = running
+    jm.job_state.return_value = running
     jm.get_events.return_value = iter([
         JobEvent(
             "complete",
