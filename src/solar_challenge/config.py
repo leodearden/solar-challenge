@@ -300,7 +300,11 @@ class LoadDistributionConfig:
 
     Attributes:
         annual_consumption_kwh: Distribution for annual consumption (optional)
-        household_occupants: Distribution for occupants (default: 3)
+        household_occupants: Distribution for occupants (default: 3). A finite
+            normal or uniform draw is rounded to the nearest whole number; any
+            other value reaches LoadConfig as drawn, for its rule to refuse a
+            count that is not a whole number from 1 to 10, and a null draw
+            takes LoadConfig's default.
         use_stochastic: Whether to use stochastic load profiles (default: True)
     """
 
@@ -1584,9 +1588,13 @@ class _DistributionSampler:
         return _sample_from_distribution(spec, self._rng)
 
     def sample_count(self, spec: DistributionSpec) -> Optional[float]:
-        """Sample a count from *spec*: a draw from a normal or uniform distribution is rounded to the nearest whole number, and any other value is returned as the spec gives it."""
+        """Sample a count from *spec*: a finite draw from a normal or uniform distribution is rounded to the nearest whole number, and any other value, a draw that is not finite included, is returned as drawn or as the spec gives it."""
         value = self.sample(spec)
-        if value is not None and isinstance(spec, (NormalDistribution, UniformDistribution)):
+        if (
+            value is not None
+            and isinstance(spec, (NormalDistribution, UniformDistribution))
+            and math.isfinite(value)
+        ):
             return round(value)
         return value
 
@@ -1620,6 +1628,12 @@ class _DistributionSampler:
         return self.sample(spec)
 
 
+def _with_household_occupants(config: LoadConfig, occupants: float) -> LoadConfig:
+    """Return *config* with *occupants* household occupants, passed as given: LoadConfig's rule reads a whole-number float as the int it equals and refuses any other count."""
+    changes: dict[str, Any] = {"household_occupants": occupants}
+    return replace(config, **changes)
+
+
 def generate_homes_from_distribution(
     config: FleetDistributionConfig,
     location: Location,
@@ -1640,7 +1654,9 @@ def generate_homes_from_distribution(
 
     Raises:
         ValueError: If a sampled battery capacity is negative or not finite,
-            naming battery.capacity_kwh; a null or 0 sample is no battery.
+            naming battery.capacity_kwh (a null or 0 sample is no battery), or
+            if LoadConfig refuses a home's household occupants (see
+            LoadDistributionConfig.household_occupants).
     """
     rng = random.Random(config.seed)
     sampler = _DistributionSampler(rng)
@@ -1757,10 +1773,11 @@ def generate_homes_from_distribution(
 
         load_config = LoadConfig(
             annual_consumption_kwh=annual_consumption,
-            household_occupants=int(household_occupants) if household_occupants else 3,
             use_stochastic=config.load.use_stochastic,
             seed=home_seed,
         )
+        if household_occupants is not None:
+            load_config = _with_household_occupants(load_config, household_occupants)
 
         # Sample heat pump parameters (may be None)
         heat_pump_config: Optional[HeatPumpConfig] = None
