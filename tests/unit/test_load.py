@@ -152,23 +152,20 @@ class TestHouseholdOccupantCount:
         assert count == 3
 
     @pytest.mark.parametrize(
-        "occupants",
+        ("occupants", "refusal"),
         [
-            pytest.param(0.0, id="below-one"),
-            pytest.param(11, id="above-ten"),
-            pytest.param(2.5, id="fraction"),
-            pytest.param(True, id="boolean"),
+            pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="below-one"),
+            pytest.param(11, "Household occupants seems unrealistic: 11", id="above-ten"),
+            pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fraction"),
+            pytest.param(True, "Household occupants must be a whole number, got True", id="boolean"),
         ],
     )
-    def test_a_count_load_config_refuses_is_refused_with_load_configs_message(
-        self, occupants: float
+    def test_a_count_that_is_not_a_whole_number_from_1_to_10_is_refused_naming_it(
+        self, occupants: float, refusal: str
     ) -> None:
-        with pytest.raises(ValueError) as load_config_refusal:
-            LoadConfig(household_occupants=occupants)
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ValueError) as exc_info:
             household_occupant_count(occupants)
-
-        assert str(refusal.value) == str(load_config_refusal.value)
+        assert str(exc_info.value) == refusal
 
 
 class TestGenerateLoadProfile:
