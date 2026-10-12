@@ -11,7 +11,7 @@ import logging
 import time
 from collections.abc import Mapping
 from dataclasses import asdict
-from typing import Any, Generator
+from typing import Any, Generator, assert_never
 
 import yaml as _yaml
 import pandas as pd
@@ -31,6 +31,7 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
+from solar_challenge.web.jobs import JobEvent
 from solar_challenge.web.presets import (
     PresetNameTaken,
     home_preset_named,
@@ -150,6 +151,35 @@ def get_job_status(job_id: str) -> tuple[Response, int]:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(asdict(state)), 200
 
+
+def _job_event_payload(event: JobEvent) -> dict[str, object]:
+    """The fields of *event*'s state that the browser reads for an event of its type, in the order the progress stream sends them."""
+    state = event.state
+    if event.type == "progress":
+        return {
+            "progress_pct": state.progress_pct,
+            "current_step": state.current_step,
+            "message": state.message,
+            "status": state.status,
+        }
+    if event.type == "complete":
+        return {
+            "status": state.status,
+            "progress_pct": state.progress_pct,
+            "current_step": state.current_step,
+            "message": state.message,
+            "run_id": state.run_id,
+        }
+    if event.type == "error":
+        return {"status": state.status, "message": state.message}
+    assert_never(event.type)
+
+
+def _job_event_frame(event: JobEvent) -> str:
+    """The SSE frame the progress stream sends for *event*: named by its type, with its payload as JSON."""
+    return f"event: {event.type}\ndata: {json.dumps(_job_event_payload(event))}\n\n"
+
+
 @api_bp.route("/jobs/<job_id>/progress", methods=["GET"])
 def get_job_progress(job_id: str) -> Response:
     """SSE endpoint for streaming job progress events.
@@ -180,12 +210,8 @@ def get_job_progress(job_id: str) -> Response:
 
             # Drain event queue
             for event in job_manager.get_events(job_id):
-                event_type = event.get("event", "message")
-                event_data = json.dumps(event.get("data", {}))
-                yield f"event: {event_type}\ndata: {event_data}\n\n"
-
-                # If this is a completion or error event, stop streaming
-                if event_type in ("complete", "error"):
+                yield _job_event_frame(event)
+                if event.type == "complete" or event.type == "error":
                     return
 
             # Check if job is in a terminal state (might have finished
@@ -197,10 +223,7 @@ def get_job_progress(job_id: str) -> Response:
                 )
                 return
             if state.status == "failed":
-                yield (
-                    f"event: error\n"
-                    f"data: {json.dumps({'status': state.status, 'message': state.message})}\n\n"
-                )
+                yield _job_event_frame(JobEvent("error", state))
                 return
 
             # Send heartbeat
