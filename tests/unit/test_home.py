@@ -1,6 +1,7 @@
 """Tests for HomeConfig, SimulationResults, calculate_summary and simulate_home's tariff and SEG pricing and the weather it runs on."""
 
 import dataclasses
+import math
 import pickle
 import re
 import typing
@@ -151,6 +152,11 @@ def _results_with_every_series_set() -> SimulationResults:
             for position, name in enumerate(_series_field_names())
         },
     )
+
+
+# The series that hold a level, which has no amount.
+LEVELS = ("battery_soc", "tariff_rate")
+AMOUNT_SERIES = tuple(name for name in _series_field_names() if name not in LEVELS)
 
 
 class TestSimulationResults:
@@ -473,6 +479,65 @@ class TestPerMinuteAmounts:
         results = dataclasses.replace(_results_with_every_series_set(), **unset)
 
         assert results.total_amounts() == pytest.approx(results.per_minute_amounts().sum().to_dict())
+
+
+class TestSimulationResultsRefusesANaNAmount:
+    """Each amount series is what a run's totals sum, so SimulationResults refuses one that holds a NaN, naming it."""
+
+    @pytest.mark.parametrize("name", AMOUNT_SERIES)
+    def test_a_nan_in_an_amount_series_is_refused_naming_its_column_first_nan_and_count(self, name):
+        """A NaN in any amount series is refused, naming its column, its first NaN and when, and how many minutes are NaN."""
+        built = _results_with_every_series_set()
+        series = getattr(built, name).copy()
+        series.iloc[[5, 9]] = math.nan
+
+        with pytest.raises(ValueError, match=re.escape(f"{series.name}=nan at {series.index[5]} (2 of 60 minutes)")):
+            dataclasses.replace(built, **{name: series})
+
+    def test_every_amount_series_holding_a_nan_is_named_in_field_order(self):
+        """Every amount series holding a NaN is named, in field declaration order, whatever order they were given in."""
+        built = _results_with_every_series_set()
+        index = built.demand.index
+        demand = built.demand.copy()
+        demand.iloc[3] = math.nan
+
+        with pytest.raises(ValueError) as refusal:
+            dataclasses.replace(built, import_cost=pd.Series(math.nan, index=index), demand=demand)
+
+        assert str(refusal.value) == (
+            "SimulationResults' amount series are what its totals sum, so each holds a number at every minute: "
+            f"got demand_kw=nan at {index[3]} (1 of 60 minutes), import_cost_gbp=nan at {index[0]} (60 of 60 minutes)"
+        )
+
+    def test_from_dataframe_refuses_a_frame_whose_amount_column_holds_a_nan(self):
+        """from_dataframe, which reloads a stored run, refuses a frame whose amount column holds a NaN, naming it."""
+        frame = _results_with_every_series_set().to_dataframe()
+        frame.loc[frame.index[7], "grid_export_kw"] = math.nan
+
+        with pytest.raises(ValueError, match=re.escape(f"grid_export_kw=nan at {frame.index[7]} (1 of 60 minutes)")):
+            SimulationResults.from_dataframe(frame, strategy_name="tou_optimized")
+
+    @pytest.mark.parametrize("name", LEVELS)
+    def test_a_nan_level_is_accepted_as_no_total_sums_it(self, name):
+        """Boundary guard, green with or without the refusal: an all-NaN level builds and leaves every total as it was."""
+        built = _results_with_every_series_set()
+
+        results = dataclasses.replace(built, **{name: pd.Series(math.nan, index=built.demand.index)})
+
+        assert results.total_amounts() == pytest.approx(built.total_amounts())
+
+    def test_an_infinite_amount_is_kept_so_its_total_is_infinite(self):
+        """Boundary guard, green with or without the refusal: only NaN is refused, so an infinite total still reaches task 656's check in project_multi_year."""
+        built = _results_with_every_series_set()
+        demand = built.demand.copy()
+        demand.iloc[2] = math.inf
+        import_cost = built.import_cost.copy()
+        import_cost.iloc[4] = -math.inf  # a negative price makes a negative cost
+
+        totals = dataclasses.replace(built, demand=demand, import_cost=import_cost).total_amounts()
+
+        assert totals["demand_kwh"] == math.inf
+        assert totals["import_cost_gbp"] == -math.inf
 
 
 def _steady_week(freq: str) -> SimulationResults:
