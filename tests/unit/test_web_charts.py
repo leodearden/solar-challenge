@@ -69,6 +69,11 @@ def _one_day_summary(**totals: float) -> SummaryStatistics:
     return dataclasses.replace(calculate_summary(make_sim_results(days=1)), **totals)
 
 
+def _annotation_texts(figure: str) -> list[str]:
+    """The texts of *figure*'s layout annotations, in the order it draws them; [] when it has none."""
+    return [annotation["text"] for annotation in json.loads(figure)["layout"].get("annotations", [])]
+
+
 class TestChartFunctions:
     """Tests for the centralized chart functions in charts.py."""
 
@@ -299,6 +304,21 @@ class TestFinancialBreakdownNoTariffAnnotation:
             days=2, import_rate_gbp_per_kwh=import_rate, export_rate_gbp_per_kwh=export_rate
         )
 
-        layout = json.loads(financial_breakdown(results))["layout"]
+        assert _annotation_texts(financial_breakdown(results)) == annotation_texts
 
-        assert [annotation["text"] for annotation in layout.get("annotations", [])] == annotation_texts
+    @pytest.mark.parametrize(
+        "export_rate",
+        [pytest.param(0.0, id="export-unpriced"), pytest.param(0.05, id="export-priced")],
+    )
+    def test_is_not_drawn_for_a_run_whose_import_is_priced_though_it_imports_nothing(
+        self, export_rate: float
+    ) -> None:
+        results = make_sinusoidal_sim_results(
+            days=2,
+            demand_kw=0.0,
+            import_rate_gbp_per_kwh=0.30,
+            export_rate_gbp_per_kwh=export_rate,
+        )
+        assert results.grid_import.max() == 0
+
+        assert _annotation_texts(financial_breakdown(results)) == []
