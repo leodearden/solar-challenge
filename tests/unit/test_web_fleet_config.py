@@ -521,12 +521,8 @@ class TestFleetConfigHelpers:
     ) -> None:
         """An n_homes or seed that is a whole number sent as a float or a numeric string converts to the int it equals, not to a float or a string."""
         config = form_to_fleet_distribution_config({**valid_distribution_form(), key: value})
-        expected = form_to_fleet_distribution_config(
-            {**valid_distribution_form(), key: WHOLE_NUMBER}
-        )
 
-        assert config[key] == expected[key] == WHOLE_NUMBER
-        assert type(config[key]) is int
+        assert (type(config[key]), config[key]) == (int, WHOLE_NUMBER)
 
     @pytest.mark.parametrize(
         "n_homes",
