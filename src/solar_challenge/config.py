@@ -1583,6 +1583,13 @@ class _DistributionSampler:
 
         return _sample_from_distribution(spec, self._rng)
 
+    def sample_count(self, spec: DistributionSpec) -> Optional[float]:
+        """Sample a count from *spec*: a draw from a normal or uniform distribution is rounded to the nearest whole number, and any other value is returned as the spec gives it."""
+        value = self.sample(spec)
+        if value is not None and isinstance(spec, (NormalDistribution, UniformDistribution)):
+            return round(value)
+        return value
+
     def sample_with_context(
         self, spec: DistributionSpec, context: dict[str, Optional[float]]
     ) -> Optional[float]:
@@ -1741,7 +1748,7 @@ def generate_homes_from_distribution(
 
         # Sample load parameters
         annual_consumption = sampler.sample(config.load.annual_consumption_kwh)
-        household_occupants = sampler.sample(config.load.household_occupants)
+        household_occupants = sampler.sample_count(config.load.household_occupants)
 
         # Derive per-home seed for reproducible stochastic load profiles
         home_seed: Optional[int] = None
