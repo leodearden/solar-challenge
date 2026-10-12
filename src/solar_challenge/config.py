@@ -1588,14 +1588,25 @@ class _DistributionSampler:
         return _sample_from_distribution(spec, self._rng)
 
     def sample_count(self, spec: DistributionSpec) -> Optional[float]:
-        """Sample a count from *spec*: a finite draw from a normal or uniform distribution is rounded to the nearest whole number, and any other value, a draw that is not finite included, is returned as drawn or as the spec gives it."""
+        """Sample a count from *spec*.
+
+        A finite draw from a normal or uniform distribution is rounded to the
+        nearest whole number, a half rounding up: a draw clamped to a min of 2.5
+        gives 3. The whole number can lie outside the spec's min and max, as 0
+        does for a draw of 0.45 under a min of 0.4. A fixed value is returned as
+        the spec gives it, and any other value as drawn, a draw that is not
+        finite included.
+        """
+        if isinstance(spec, (int, float)):
+            return spec
         value = self.sample(spec)
         if (
             value is not None
             and isinstance(spec, (NormalDistribution, UniformDistribution))
             and math.isfinite(value)
         ):
-            return round(value)
+            whole = math.floor(value)
+            return whole + 1 if value - whole >= 0.5 else whole
         return value
 
     def sample_with_context(
