@@ -3,7 +3,7 @@
 
 import json
 from dataclasses import asdict, replace
-from unittest.mock import MagicMock
+from unittest.mock import NonCallableMagicMock
 
 import pytest
 
@@ -38,7 +38,7 @@ class TestGetJobStatus:
     """Tests for GET /api/jobs/<id>."""
 
     def test_known_job_returns_200(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Known job returns 200 with every field of the state its manager reports, as JSON."""
         resp = client.get("/api/jobs/job-home-001")
@@ -47,7 +47,7 @@ class TestGetJobStatus:
         mock_job_manager.job_state.assert_called_with("job-home-001")
 
     def test_unknown_job_returns_404(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Unknown job_id returns 404."""
         mock_job_manager.job_state.return_value = None
@@ -56,7 +56,7 @@ class TestGetJobStatus:
         assert "error" in resp.get_json()
 
     def test_completed_job_status(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Completed job returns status='completed'."""
         mock_job_manager.job_state.return_value = replace(
@@ -73,7 +73,7 @@ class TestGetJobStatus:
         assert resp.get_json()["status"] == "completed"
 
     def test_failed_job_status(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Failed job returns status='failed' with message."""
         mock_job_manager.job_state.return_value = replace(
@@ -95,7 +95,7 @@ class TestGetJobProgress:
     """Tests for GET /api/jobs/<id>/progress (SSE endpoint)."""
 
     def test_returns_event_stream_content_type(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """SSE endpoint returns text/event-stream Content-Type."""
         resp = client.get("/api/jobs/job-home-001/progress")
@@ -103,14 +103,14 @@ class TestGetJobProgress:
         assert "text/event-stream" in resp.content_type
 
     def test_no_cache_header(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """SSE response includes Cache-Control: no-cache header."""
         resp = client.get("/api/jobs/job-home-001/progress")
         assert resp.headers.get("Cache-Control") == "no-cache"
 
     def test_unknown_job_sends_error_event(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Unknown job sends an SSE error event."""
         mock_job_manager.job_state.return_value = None
@@ -122,7 +122,7 @@ class TestGetJobProgress:
         assert "Job not found" in body
 
     def test_completed_job_sends_complete_event(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Completed job with no queued events sends a complete event."""
         mock_job_manager.job_state.return_value = replace(
@@ -164,7 +164,7 @@ class TestGetJobProgress:
         ids=["completed", "failed"],
     )
     def test_each_queued_event_is_sent_named_by_its_type_with_the_fields_of_its_state_the_browser_reads(
-        self, client: FlaskClient, mock_job_manager: MagicMock, final_event: JobEvent, final_frame: SseFrame
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, final_event: JobEvent, final_frame: SseFrame
     ) -> None:
         mock_job_manager.job_state.return_value = final_event.state
         mock_job_manager.get_events.return_value = iter([JobEvent("progress", _A_RUNNING_JOB), final_event])
@@ -189,7 +189,7 @@ class TestGetJobResults:
     """Tests for GET /api/jobs/<id>/results."""
 
     def test_unknown_job_returns_404(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Unknown job returns 404."""
         mock_job_manager.job_state.return_value = None
@@ -197,7 +197,7 @@ class TestGetJobResults:
         assert resp.status_code == 404
 
     def test_running_job_returns_409(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Running job returns 409 (conflict)."""
         mock_job_manager.job_state.return_value = _A_RUNNING_JOB
@@ -208,7 +208,7 @@ class TestGetJobResults:
         assert data["status"] == "running"
 
     def test_completed_job_answers_its_run_s_id_name_type_creation_time_and_summary(
-        self, app: Flask, client: FlaskClient, mock_job_manager: MagicMock
+        self, app: Flask, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """A completed job whose run has a row answers the run's id, name, type, creation time and decoded summary."""
         run_id = "run-complete-001"
@@ -237,7 +237,7 @@ class TestGetJobResults:
         }
 
     def test_completed_job_missing_run_returns_404(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Completed job with no matching run record returns 404."""
         mock_job_manager.job_state.return_value = replace(

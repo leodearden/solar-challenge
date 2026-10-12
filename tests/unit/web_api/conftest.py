@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fixtures for the Flask test app the /api endpoint test modules drive, with its JobManager mocked.
 
-mock_job_manager installs a MagicMock whose submit, state and event calls answer at once
-with canned values, so no test starts a real simulation. client requests it, so a test
-that sends a request runs against the mock unless its module defines its own client.
+mock_job_manager installs a mock autospecced to JobManager, whose submit, state and event
+calls answer at once with canned values, so no test starts a real simulation. client
+requests it, so a test that sends a request runs against the mock unless its module
+defines its own client.
 
 Nothing here imports Flask, the optional web extra, when the module loads: without
 it, each test module's ``pytest.importorskip("flask")`` skips that module, whereas
@@ -15,7 +16,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock
+from unittest.mock import NonCallableMagicMock, create_autospec
 
 import pytest
 
@@ -34,14 +35,15 @@ def app(tmp_path: Path) -> Flask:
 
 
 @pytest.fixture
-def mock_job_manager(app: Flask) -> MagicMock:
-    """Replace the real JobManager on the app with a MagicMock.
+def mock_job_manager(app: Flask) -> NonCallableMagicMock:
+    """Replace the real JobManager on the app with a mock autospecced to it.
 
-    The mock is specced to JobManager, so configuring or calling an attribute
-    JobManager lacks raises AttributeError. It is pre-configured with sensible
+    The mock has JobManager's interface: configuring or calling an attribute
+    JobManager lacks raises AttributeError, and calling a method with arguments
+    its signature refuses raises TypeError. It is pre-configured with sensible
     return values so that tests can focus on request/response behaviour.
     """
-    jm = MagicMock(spec=JobManager)
+    jm = create_autospec(JobManager, instance=True)
     jm.submit_home_job.return_value = ("job-home-001", "run-home-001")
     jm.submit_fleet_job.return_value = ("job-fleet-001", "run-fleet-001")
     running = JobState(
@@ -71,6 +73,6 @@ def mock_job_manager(app: Flask) -> MagicMock:
 
 
 @pytest.fixture
-def client(app: Flask, mock_job_manager: MagicMock) -> FlaskClient:
+def client(app: Flask, mock_job_manager: NonCallableMagicMock) -> FlaskClient:
     """Create a Flask test client with the mocked JobManager."""
     return app.test_client()
