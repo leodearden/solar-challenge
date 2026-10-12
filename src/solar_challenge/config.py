@@ -300,11 +300,9 @@ class LoadDistributionConfig:
 
     Attributes:
         annual_consumption_kwh: Distribution for annual consumption (optional)
-        household_occupants: Distribution for occupants (default: 3). A finite
-            normal or uniform draw is rounded to the nearest whole number; any
-            other value is held, as drawn, to LoadConfig's occupant rule,
-            load.household_occupant_count, which refuses a count that is not a
-            whole number from 1 to 10. A null draw takes LoadConfig's default.
+        household_occupants: Distribution for occupants (default: 3), drawn with
+            _DistributionSampler.sample_count and held to
+            load.household_occupant_count. A null draw takes LoadConfig's default.
         use_stochastic: Whether to use stochastic load profiles (default: True)
     """
 
@@ -1660,9 +1658,7 @@ def generate_homes_from_distribution(
     Raises:
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh (a null or 0 sample is no battery), or
-            if load.household_occupant_count, LoadConfig's occupant rule,
-            refuses a home's household occupants (see
-            LoadDistributionConfig.household_occupants).
+            if load.household_occupant_count refuses a home's household occupants.
     """
     rng = random.Random(config.seed)
     sampler = _DistributionSampler(rng)
@@ -1770,7 +1766,7 @@ def generate_homes_from_distribution(
 
         # Sample load parameters
         annual_consumption = sampler.sample(config.load.annual_consumption_kwh)
-        household_occupants = sampler.sample_count(config.load.household_occupants)
+        occupants_draw = sampler.sample_count(config.load.household_occupants)
 
         # Derive per-home seed for reproducible stochastic load profiles
         home_seed: Optional[int] = None
@@ -1779,13 +1775,14 @@ def generate_homes_from_distribution(
 
         load_config = LoadConfig(
             annual_consumption_kwh=annual_consumption,
+            household_occupants=(
+                LoadConfig.household_occupants
+                if occupants_draw is None
+                else household_occupant_count(occupants_draw)
+            ),
             use_stochastic=config.load.use_stochastic,
             seed=home_seed,
         )
-        if household_occupants is not None:
-            load_config = replace(
-                load_config, household_occupants=household_occupant_count(household_occupants)
-            )
 
         # Sample heat pump parameters (may be None)
         heat_pump_config: Optional[HeatPumpConfig] = None
@@ -2506,9 +2503,8 @@ def run_parameter_sweep(
 
     Raises:
         ConfigurationError: If parameter cannot be swept
-        ValueError: If the swept parameter's config refuses a value, e.g. a
-            battery_capacity_kwh that is negative or not finite, or a
-            household_occupants that is not a whole number from 1 to 10.
+        ValueError: If the swept parameter's config refuses a value (for
+            household_occupants, see load.household_occupant_count).
     """
     values = sweep_config.get_values()
     param_name = sweep_config.parameter_name

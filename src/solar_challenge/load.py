@@ -33,7 +33,10 @@ OFGEM_TDCV_BY_OCCUPANTS: dict[int, float] = {
 def household_occupant_count(occupants: float) -> int:
     """Return *occupants* as the household occupant count a LoadConfig holds, a whole number from 1 to 10.
 
-    A whole-number float such as 3.0, or a numpy integer, gives the plain int it equals.
+    LoadConfig holds every count it is given to this rule. A caller holding a count as a
+    float, such as a drawn or swept value, passes it through here to give LoadConfig the
+    int its field is typed as. A whole-number float such as 3.0, or a numpy integer,
+    gives the plain int it equals.
 
     Raises:
         ValueError: If *occupants* is below 1 or above 10, or is not a whole number; a
@@ -56,10 +59,8 @@ class LoadConfig:
     Attributes:
         annual_consumption_kwh: Target annual electricity consumption in kWh.
             If not specified and household_occupants is set, derived from Ofgem TDCV.
-        household_occupants: Number of household occupants, a whole number from
-            1 to 10. A whole-number float such as 3.0 is held as the int 3; a
-            bool, Python's or numpy's, is refused. Affects consumption and
-            profile shape. See household_occupant_count.
+        household_occupants: Number of household occupants, held to the rule
+            household_occupant_count states. Affects consumption and profile shape.
         name: Optional identifier for the load profile
         use_stochastic: Use the windowed richardsonpy stochastic model (default True).
             richardsonpy is a hard dependency so this path is always available.
