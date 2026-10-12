@@ -1139,6 +1139,23 @@ class TestJobManagerJobRows:
         assert row["started_at"] is not None
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    def test_a_running_jobs_row_records_the_state_its_manager_reports(
+        self,
+        submit_job: Callable[[JobManager, Path], str],
+        blocking_simulation: _BlockingSimulation,
+        tmp_path: Path,
+    ) -> None:
+        storage = _run_storage(tmp_path)
+        manager = JobManager(max_workers=1, simulate_home=blocking_simulation)
+        job_id = submit_job(manager, tmp_path)
+        blocking_simulation.wait_until_started()
+
+        stored = _state_recorded_in_job_row(storage, job_id)
+
+        assert stored.status == "running"
+        assert manager.job_state(job_id) == stored
+
+    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_failed_jobs_row_is_failed_with_the_jobs_error_its_traceback_and_a_completion_time(
         self, submit_job: Callable[[JobManager, Path], str], tmp_path: Path
     ) -> None:
