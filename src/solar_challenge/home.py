@@ -192,7 +192,8 @@ class SimulationResults:
     Each amount series, every series but the battery_soc and tariff_rate levels,
     holds a number at every minute, as the run's totals sum every minute's amount.
     Construction raises ValueError naming each that holds a NaN, its first NaN's
-    timestamp and how many it holds; an infinite sample is kept.
+    timestamp and how many it holds, and per_minute_amounts and total_amounts raise
+    the same for one made NaN in place after construction; an infinite sample is kept.
 
     Attributes:
         generation: PV generation in kW
@@ -289,7 +290,11 @@ class SimulationResults:
             )
 
     def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
-        """Each amount's column and each row's amount, in declaration order, for every series that is set."""
+        """Each amount's column and each row's amount, in declaration order, for every series that is set.
+
+        Refuses a NaN amount first, as construction does, since a series can be written in place after it.
+        """
+        self._refuse_nan_amounts()
         window = self.window
         for _, series, amount in self._series_with_amounts():
             yield amount.column, amount.row_amounts(series, window)
@@ -301,7 +306,8 @@ class SimulationResults:
         time, and nor has an optional series that is None.
 
         Raises:
-            ValueError: As window does, for an index no window describes.
+            ValueError: As window does, for an index no window describes; or if an amount series
+                holds a NaN written in place after construction, with the message construction raises.
         """
         return pd.concat(dict(self._amount_series()), axis=1)
 
@@ -309,7 +315,8 @@ class SimulationResults:
         """The run's total of each amount: per_minute_amounts' column sums, keyed by column.
 
         Raises:
-            ValueError: As window does, for an index no window describes.
+            ValueError: As window does, for an index no window describes; or if an amount series
+                holds a NaN written in place after construction, with the message construction raises.
         """
         return {column: float(amounts.sum()) for column, amounts in self._amount_series()}
 
