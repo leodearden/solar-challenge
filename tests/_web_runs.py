@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Save runs to the web dashboard's RunStorage as a finished simulation job saves them.
+
+A test seeds a stored run from results it built, without simulating. The summaries
+saved with a run are derived as JobManager's runners in src/solar_challenge/web/jobs.py
+derive them.
+
+Usage::
+
+    from tests._web_runs import store_fleet_run
+
+    store_fleet_run(storage, "fleet-1", make_fleet_results(n_homes=2, days=1), name="Community Fleet")
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from solar_challenge.fleet import calculate_fleet_summary
+from solar_challenge.home import calculate_summary
+
+if TYPE_CHECKING:
+    from solar_challenge.fleet import FleetResults
+    from solar_challenge.web.storage import RunStorage
+
+
+def store_fleet_run(
+    storage: RunStorage,
+    run_id: str,
+    fleet_results: FleetResults,
+    *,
+    name: str | None = None,
+    created_at: str | None = None,
+) -> None:
+    """Save *fleet_results* to *storage* as fleet run *run_id*, with the fleet and per-home summaries a finished fleet job saves."""
+    storage.save_fleet_run(
+        run_id=run_id,
+        fleet_results=fleet_results,
+        fleet_summary=calculate_fleet_summary(fleet_results),
+        per_home_summaries=[calculate_summary(results) for results in fleet_results.per_home_results],
+        name=name,
+        created_at=created_at,
+    )
