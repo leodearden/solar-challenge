@@ -33,6 +33,28 @@ _A_COMPLETED_JOB = replace(
 )
 _A_FAILED_JOB = replace(_A_RUNNING_JOB, status="failed", message="Something went wrong")
 
+_FINAL_EVENTS_AND_THEIR_FRAMES = [
+    pytest.param(
+        JobEvent("complete", _A_COMPLETED_JOB),
+        SseFrame(
+            "complete",
+            {
+                "status": "completed",
+                "progress_pct": 100.0,
+                "current_step": "Done",
+                "message": "Simulation completed successfully",
+                "run_id": "run-running",
+            },
+        ),
+        id="completed",
+    ),
+    pytest.param(
+        JobEvent("error", _A_FAILED_JOB),
+        SseFrame("error", {"status": "failed", "message": "Something went wrong"}),
+        id="failed",
+    ),
+]
+
 
 class TestGetJobStatus:
     """Tests for GET /api/jobs/<id>."""
@@ -121,48 +143,7 @@ class TestGetJobProgress:
         assert "event: error" in body
         assert "Job not found" in body
 
-    def test_completed_job_sends_complete_event(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
-    ) -> None:
-        """Completed job with no queued events sends a complete event."""
-        mock_job_manager.job_state.return_value = replace(
-            _A_RUNNING_JOB,
-            job_id="job-done",
-            run_id="run-done",
-            status="completed",
-            progress_pct=100.0,
-            current_step="Done",
-            message="Done",
-        )
-        # No events in queue
-        mock_job_manager.get_events.return_value = iter([])
-        resp = client.get("/api/jobs/job-done/progress")
-        body = resp.get_data(as_text=True)
-        assert "event: complete" in body
-
-    @pytest.mark.parametrize(
-        ("final_event", "final_frame"),
-        [
-            (
-                JobEvent("complete", _A_COMPLETED_JOB),
-                SseFrame(
-                    "complete",
-                    {
-                        "status": "completed",
-                        "progress_pct": 100.0,
-                        "current_step": "Done",
-                        "message": "Simulation completed successfully",
-                        "run_id": "run-running",
-                    },
-                ),
-            ),
-            (
-                JobEvent("error", _A_FAILED_JOB),
-                SseFrame("error", {"status": "failed", "message": "Something went wrong"}),
-            ),
-        ],
-        ids=["completed", "failed"],
-    )
+    @pytest.mark.parametrize(("final_event", "final_frame"), _FINAL_EVENTS_AND_THEIR_FRAMES)
     def test_each_queued_event_is_sent_named_by_its_type_with_the_fields_of_its_state_the_browser_reads(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, final_event: JobEvent, final_frame: SseFrame
     ) -> None:
@@ -183,6 +164,17 @@ class TestGetJobProgress:
             ),
             final_frame,
         ]
+
+    @pytest.mark.parametrize(("final_event", "final_frame"), _FINAL_EVENTS_AND_THEIR_FRAMES)
+    def test_a_finished_job_whose_events_another_stream_drained_is_sent_the_frame_of_its_final_event(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, final_event: JobEvent, final_frame: SseFrame
+    ) -> None:
+        mock_job_manager.job_state.return_value = final_event.state
+        mock_job_manager.get_events.return_value = iter([])
+
+        frames = parse_sse_events(client.get("/api/jobs/job-running/progress").get_data(as_text=True))
+
+        assert frames == [final_frame]
 
 
 class TestGetJobResults:

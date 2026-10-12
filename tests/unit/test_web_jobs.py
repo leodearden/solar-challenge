@@ -271,6 +271,12 @@ _SIMULATING = _sse(
     "progress",
     '{"progress_pct": 20.0, "current_step": "Simulating", "message": "Running home simulation...", "status": "running"}',
 )
+_COMPLETED = _sse(
+    "complete",
+    '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
+    ' "message": "Simulation completed successfully", "run_id": "id-2"}',
+)
+_FAILED = _sse("error", '{"status": "failed", "message": "the simulation failed"}')
 
 
 class TestGetJobStatusEndpoint:
@@ -415,11 +421,7 @@ class TestJobProgressEndpoint:
                     '{"progress_pct": 90.0, "current_step": "Saving",'
                     ' "message": "Persisting results to storage...", "status": "running"}',
                 ),
-                _sse(
-                    "complete",
-                    '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
-                    ' "message": "Simulation completed successfully", "run_id": "id-2"}',
-                ),
+                _COMPLETED,
             ]
         )
 
@@ -428,15 +430,13 @@ class TestJobProgressEndpoint:
 
         stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
 
-        assert stream == _STARTING + _SIMULATING + _sse(
-            "error", '{"status": "failed", "message": "the simulation failed"}'
-        )
+        assert stream == _STARTING + _SIMULATING + _FAILED
 
     @pytest.mark.parametrize(
         ("simulation", "final_event"),
         [
-            (_RecordingSimulation(), _sse("complete", '{"status": "completed", "run_id": "id-2"}')),
-            (_a_failing_simulation, _sse("error", '{"status": "failed", "message": "the simulation failed"}')),
+            (_RecordingSimulation(), _COMPLETED),
+            (_a_failing_simulation, _FAILED),
         ],
         ids=["completed", "failed"],
     )
@@ -449,6 +449,24 @@ class TestJobProgressEndpoint:
         stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
 
         assert stream == final_event
+
+    def test_a_stream_opened_after_another_drained_a_fleet_jobs_events_sends_the_fleet_jobs_own_completion(
+        self, app: Flask
+    ) -> None:
+        manager = JobManager(simulate_home=_RecordingSimulation(), new_id=_CountingIds())
+        client = _client_using(app, manager)
+        assert client.post("/api/simulate/fleet", json={"homes": [_A_HOME_JOB_REQUEST]}).status_code == 201
+        assert manager.wait_until_idle(timeout=30)
+        live_stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        late_stream = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
+
+        assert late_stream == _sse(
+            "complete",
+            '{"status": "completed", "progress_pct": 100.0, "current_step": "Done",'
+            ' "message": "Fleet simulation completed successfully", "run_id": "id-2"}',
+        )
+        assert live_stream.endswith(late_stream)
 
 
 class TestJobResultsEndpoint:
