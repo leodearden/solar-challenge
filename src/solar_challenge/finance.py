@@ -987,6 +987,7 @@ class YearPoint:
     installation).  SOH fractions are mean fleet values:
     ``pv_soh`` from :func:`pv.calculate_degradation_factor`; ``battery_soh``
     from :func:`battery.compute_soh` (1.0 when the fleet has no batteries).
+    Every number must be finite.
 
     Energy fields and ``fleet_revenue_gbp`` share one 365-day basis.  On a
     simulation window under 360 days, :func:`project_multi_year` scales each
@@ -1001,7 +1002,11 @@ class YearPoint:
     """
 
     year: int
-    """Calendar age of the system in years (≥ 0)."""
+    """Calendar age of the system, a whole number of years (≥ 0).
+
+    A whole-number float such as 2.0 is held as the int 2; a bool, Python's or
+    numpy's, is refused.
+    """
 
     pv_soh: float
     """Mean PV state-of-health across the fleet (fraction, 0–1)."""
@@ -1041,11 +1046,13 @@ class YearPoint:
     """Total grid import by the fleet that year (kWh, ≥ 0)."""
 
     fleet_revenue_gbp: float
-    """CBS revenue (own-use + SEG + grid-services topper) (£)."""
+    """CBS revenue (own-use + SEG + grid-services topper) (£); finite, and may have any sign."""
 
     def __post_init__(self) -> None:
-        if self.year < 0:
-            raise ValueError(f"year must be ≥ 0, got {self.year!r}")
+        whole_year = whole_number(self.year)
+        if whole_year is None or whole_year < 0:
+            raise ValueError(f"year must be a whole number >= 0, got {self.year!r}")
+        object.__setattr__(self, "year", whole_year)
         if not (0.0 <= self.pv_soh <= 1.0):
             raise ValueError(
                 f"pv_soh must be in [0, 1], got {self.pv_soh!r}"
@@ -1054,18 +1061,19 @@ class YearPoint:
             raise ValueError(
                 f"battery_soh must be in [0, 1], got {self.battery_soh!r}"
             )
-        if self.fleet_self_consumption_kwh < 0.0:
+        fleet_energies_kwh = {
+            "fleet_self_consumption_kwh": self.fleet_self_consumption_kwh,
+            "fleet_export_kwh": self.fleet_export_kwh,
+            "fleet_import_kwh": self.fleet_import_kwh,
+        }
+        for field_name, kwh in fleet_energies_kwh.items():
+            if not 0.0 <= kwh < math.inf:
+                raise ValueError(
+                    f"{field_name} must be >= 0 and finite, got {kwh!r}"
+                )
+        if not -math.inf < self.fleet_revenue_gbp < math.inf:
             raise ValueError(
-                f"fleet_self_consumption_kwh must be ≥ 0, got "
-                f"{self.fleet_self_consumption_kwh!r}"
-            )
-        if self.fleet_export_kwh < 0.0:
-            raise ValueError(
-                f"fleet_export_kwh must be ≥ 0, got {self.fleet_export_kwh!r}"
-            )
-        if self.fleet_import_kwh < 0.0:
-            raise ValueError(
-                f"fleet_import_kwh must be ≥ 0, got {self.fleet_import_kwh!r}"
+                f"fleet_revenue_gbp must be finite, got {self.fleet_revenue_gbp!r}"
             )
 
 
@@ -1093,7 +1101,7 @@ class MultiYearCurve:
     """Ages at which full simulations were run (subset of 0..asset_life-1)."""
 
     interp_error_estimate: float
-    """Max remaining PCHIP midpoint deviation (%) across all driven metrics
+    """Max remaining PCHIP midpoint deviation (%, ≥ 0 and finite) across all driven metrics
     (fleet_self_consumption_kwh, fleet_export_kwh, fleet_import_kwh,
     fleet_revenue_gbp), convergence invariant of the adaptive loop."""
 
@@ -1102,10 +1110,10 @@ class MultiYearCurve:
             raise ValueError("points must be non-empty")
         if not self.sampled_ages:
             raise ValueError("sampled_ages must be non-empty")
-        if self.interp_error_estimate < 0.0:
+        if not 0.0 <= self.interp_error_estimate < math.inf:
             raise ValueError(
-                f"interp_error_estimate must be ≥ 0, got "
-                f"{self.interp_error_estimate!r}"
+                f"interp_error_estimate must be >= 0 and finite, "
+                f"got {self.interp_error_estimate!r}"
             )
 
 
