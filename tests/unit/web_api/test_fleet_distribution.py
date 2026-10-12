@@ -135,9 +135,12 @@ class TestPreviewDistribution:
     @pytest.mark.parametrize(
         ("n_samples", "message"),
         [
-            pytest.param("x", "n_samples must be an integer, got 'x'", id="str"),
-            pytest.param(None, "n_samples must be an integer, got None", id="null"),
-            pytest.param(float("inf"), "n_samples must be an integer, got inf", id="infinity"),
+            pytest.param("x", "n_samples must be a finite number, got 'x'", id="str"),
+            pytest.param(None, "n_samples must be a finite number, got None", id="null"),
+            pytest.param(
+                float("inf"), "n_samples must be a finite number, got inf", id="infinity"
+            ),
+            pytest.param(2.5, "n_samples must be a whole number, got 2.5", id="fraction"),
             pytest.param(
                 MAX_FLEET_HOMES + 1,
                 f"n_samples must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
@@ -145,10 +148,10 @@ class TestPreviewDistribution:
             ),
         ],
     )
-    def test_n_samples_that_is_not_an_integer_in_range_returns_400_naming_it(
+    def test_n_samples_that_is_not_a_whole_number_in_range_returns_400_naming_it(
         self, client: FlaskClient, n_samples: object, message: str
     ) -> None:
-        """An n_samples that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming n_samples and the value sent."""
+        """An n_samples that is not a whole number, or one above the dashboard's fleet limit, is a 400 naming n_samples and the value sent; a fraction is refused, not truncated."""
         resp = client.post(
             "/api/fleet/preview-distribution",
             json={"type": "normal", "params": {"mean": 4.0, "std": 1.0}, "n_samples": n_samples},
