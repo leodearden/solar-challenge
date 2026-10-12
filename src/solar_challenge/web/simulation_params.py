@@ -20,7 +20,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
-from solar_challenge.web.number_fields import as_finite_float, as_int, as_int_within
+from solar_challenge.web.number_fields import as_finite_float, as_int, as_whole_number_within
 from solar_challenge.web.shared import require_json_object, resolve_location
 
 #: The first day of the full year that days=FULL_YEAR_DAYS_SENTINEL runs, and the date a start
@@ -144,8 +144,8 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
 
     - ``days``: :data:`FULL_YEAR_DAYS_SENTINEL` is the sentinel for the full
       year, :data:`FULL_YEAR_START` to :data:`FULL_YEAR_END`; any other
-      integer from 1 to :data:`MAX_WINDOW_DAYS`, read as int() reads it, runs
-      that many days from :data:`DAYS_WINDOW_START`.
+      whole number from 1 to :data:`MAX_WINDOW_DAYS` runs that many days from
+      :data:`DAYS_WINDOW_START`.
     - ``start`` / ``end``: ISO 8601 dates (``YYYY-MM-DD``); one not sent reads
       as :data:`FULL_YEAR_START` / :data:`FULL_YEAR_END`.
 
@@ -162,17 +162,17 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
 
     Raises:
         ValueError: If ``days`` is sent with a start or end, naming days and
-            each of them as sent; if ``days`` is one int() cannot read or is
-            outside 1 to MAX_WINDOW_DAYS, or if ``start`` or ``end`` is not an
-            ISO 8601 date, naming the field and the value sent; or if the
-            window ends before it starts or spans more than MAX_WINDOW_DAYS
-            days, naming start and end as read.
+            each of them as sent; if ``days`` is not a whole number from 1 to
+            MAX_WINDOW_DAYS, or if ``start`` or ``end`` is not an ISO 8601
+            date, naming the field and the value sent; or if the window ends
+            before it starts or spans more than MAX_WINDOW_DAYS days, naming
+            start and end as read.
     """
     sent = _window_sent(data)
     days = sent.pop("days", None)
     _refuse_days_with_dates(days, sent)
     if days is not None:
-        start, end = _days_window(as_int_within(days, "days", 1, MAX_WINDOW_DAYS))
+        start, end = _days_window(as_whole_number_within(days, "days", 1, MAX_WINDOW_DAYS))
     else:
         start = _read_date(sent.get("start"), "start", FULL_YEAR_START)
         end = _read_date(sent.get("end"), "end", FULL_YEAR_END)
