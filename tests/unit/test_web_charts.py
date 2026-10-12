@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("plotly")
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.web.charts import (
     battery_soc_chart,
@@ -174,6 +175,42 @@ class TestChartFunctions:
 
         with pytest.raises(dataclasses.FrozenInstanceError):
             charts.load_share_chart = "{}"  # type: ignore[misc]
+
+
+class TestBatterySocChartLimitLines:
+    """battery_soc_chart draws a dashed line at each SOC limit Battery holds the run's battery between, the config's min and max SOC fractions of its SoH-derated capacity."""
+
+    @pytest.mark.parametrize(
+        ("battery_config", "limits_kwh"),
+        [
+            pytest.param(
+                BatteryConfig(capacity_kwh=10.0),
+                {"Min SOC": 1.0, "Max SOC": 9.0},
+                id="defaults-at-full-health",
+            ),
+            pytest.param(
+                BatteryConfig(capacity_kwh=8.0, min_soc_fraction=0.1, max_soc_fraction=0.95, soh=0.9),
+                {"Min SOC": 0.72, "Max SOC": 6.84},
+                id="soh-override-and-raised-max",
+            ),
+            pytest.param(
+                BatteryConfig(capacity_kwh=10.0, min_soc_fraction=0.2, system_age_years=5.0),
+                {"Min SOC": 1.8, "Max SOC": 8.1},
+                id="calendar-faded-and-raised-min",
+            ),
+        ],
+    )
+    def test_each_dashed_line_marks_one_of_the_batterys_soc_limits(
+        self, battery_config: BatteryConfig, limits_kwh: dict[str, float]
+    ) -> None:
+        """Five years of calendar fade at the default 2% a year leave the last battery at 90% SoH, as the override sets the second's."""
+        layout = json.loads(battery_soc_chart(make_sinusoidal_sim_results(days=1), battery_config))["layout"]
+
+        assert {annotation["text"]: annotation["y"] for annotation in layout["annotations"]} == pytest.approx(
+            limits_kwh
+        )
+        assert sorted(shape["y0"] for shape in layout["shapes"]) == pytest.approx(sorted(limits_kwh.values()))
+        assert sorted(shape["y1"] for shape in layout["shapes"]) == pytest.approx(sorted(limits_kwh.values()))
 
 
 class TestSankeyBatteryCharge:
