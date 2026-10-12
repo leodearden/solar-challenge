@@ -517,6 +517,23 @@ class TestSimulationResultsRefusesANaNAmount:
         with pytest.raises(ValueError, match=re.escape(f"grid_export_kw=nan at {frame.index[7]} (1 of 60 minutes)")):
             SimulationResults.from_dataframe(frame, strategy_name="tou_optimized")
 
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(SimulationResults.total_amounts, id="total_amounts"),
+            pytest.param(SimulationResults.per_minute_amounts, id="per_minute_amounts"),
+            pytest.param(calculate_summary, id="calculate_summary"),
+        ],
+    )
+    def test_an_amount_made_nan_in_place_after_construction_is_refused_where_it_is_read(self, read):
+        """Freezing SimulationResults cannot stop an in-place write to one of its pandas series, so its amounts' readers refuse one too."""
+        # Left set, grid_charge's distinct values would exceed battery_charge, which calculate_summary refuses.
+        results = dataclasses.replace(_results_with_every_series_set(), grid_charge=None)
+        results.demand.iloc[5] = math.nan
+
+        with pytest.raises(ValueError, match=re.escape(f"demand_kw=nan at {results.demand.index[5]} (1 of 60 minutes)")):
+            read(results)
+
     @pytest.mark.parametrize("name", LEVELS)
     def test_a_nan_level_is_accepted_as_no_total_sums_it(self, name):
         """Boundary guard, green with or without the refusal: an all-NaN level builds and leaves every total as it was."""
