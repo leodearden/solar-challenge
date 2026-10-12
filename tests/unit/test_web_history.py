@@ -26,7 +26,7 @@ from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
 
-from tests._html_page import texts_after
+from tests._html_page import element_count, texts_after
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import build_test_app
 
@@ -1007,6 +1007,47 @@ class TestContentDispositionHeader:
         assert 'filename="' in cd, (
             f"Content-Disposition filename is not properly quoted: {cd}"
         )
+
+
+class TestResultsPageExportLinks:
+    """Each results page links to its run's CSV and YAML exports at /api/history/runs/<run_id>/export/*, the URLs that serve them."""
+
+    @pytest.mark.parametrize("export", ["csv", "yaml"])
+    def test_the_home_results_page_links_to_each_export_of_its_run(
+        self, storage: RunStorage, client: FlaskClient, export: str
+    ) -> None:
+        """A stored home run's results page has exactly one link to that run's export at /api/history/runs/<run_id>/export/<export>."""
+        _store_home_run(
+            storage,
+            "home-run",
+            HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+        )
+
+        response = client.get("/results/home/home-run")
+
+        assert response.status_code == 200
+        assert element_count(
+            response.get_data(as_text=True),
+            "a",
+            {"href": f"/api/history/runs/home-run/export/{export}"},
+        ) == 1
+
+    @pytest.mark.parametrize("export", ["csv", "yaml"])
+    def test_the_fleet_results_page_links_to_each_export_of_its_run(
+        self, storage: RunStorage, client: FlaskClient, export: str
+    ) -> None:
+        """A stored fleet run's results page has exactly one link to that run's export at /api/history/runs/<run_id>/export/<export>."""
+        home = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+        _store_fleet_run(storage, "fleet-run", [home, home])
+
+        response = client.get("/results/fleet/fleet-run")
+
+        assert response.status_code == 200
+        assert element_count(
+            response.get_data(as_text=True),
+            "a",
+            {"href": f"/api/history/runs/fleet-run/export/{export}"},
+        ) == 1
 
 
 class TestCompareWithoutIDs:
