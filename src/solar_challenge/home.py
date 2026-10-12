@@ -189,6 +189,11 @@ class SimulationResults:
     bool's, and NaN and the infinities are floats. Construction refuses any
     other series with SeriesRefused, naming its column and its dtype.
 
+    Each amount series, every series but the battery_soc and tariff_rate levels,
+    holds a number at every minute, as the run's totals sum every minute's amount.
+    Construction raises ValueError naming each that holds a NaN, its first NaN's
+    timestamp and how many it holds; an infinite sample is kept.
+
     Attributes:
         generation: PV generation in kW
         demand: Load demand in kW
@@ -226,17 +231,20 @@ class SimulationResults:
     grid_charge: Optional[pd.Series] = field(default=None, metadata=_power("grid_charge_kw", "grid_charge_kwh"))
 
     def __post_init__(self) -> None:
-        """Name each set series after its column, without renaming the series it was built from.
+        """Name each set series after its column, without renaming the series it was built from, and refuse a NaN amount.
 
         Raises:
             SeriesRefused: The first set series, in declaration order, whose dtype is no
                 integer's or float's; it names the series' column and its dtype.
+            ValueError: If an amount series holds a NaN, naming each such series' column, its first
+                NaN and when, and how many of its minutes are NaN.
         """
         for name, column in self._series_columns():
             series = getattr(self, name)
             if series is not None:
                 _refuse_unless_numbers(column, series)
                 object.__setattr__(self, name, series.rename(column))
+        self._refuse_nan_amounts()
 
     @classmethod
     def _series_columns(cls) -> Iterator[tuple[str, str]]:
@@ -256,14 +264,35 @@ class SimulationResults:
         """
         return SimulationWindow.of_index(self.generation.index)
 
-    def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
-        """Each amount's column and each row's amount, in declaration order, for every series that is set."""
-        window = self.window
+    def _series_with_amounts(self) -> Iterator[tuple[str, pd.Series, _StepAmount]]:
+        """Each set series that has an amount, in declaration order: its column, the series and how its samples become its rows' amounts."""
         for attribute in fields(self):
             amount = attribute.metadata.get(_AMOUNT)
             series = getattr(self, attribute.name)
             if isinstance(amount, _StepAmount) and series is not None:
-                yield amount.column, amount.row_amounts(series, window)
+                yield attribute.metadata[_COLUMN], series, amount
+
+    def _refuse_nan_amounts(self) -> None:
+        """Raise ValueError naming each amount series that holds a NaN: its column, its first NaN and when, and how many."""
+        refused: list[str] = []
+        for column, series, _ in self._series_with_amounts():
+            missing = series.isna().to_numpy()
+            if missing.any():
+                first = int(missing.argmax())
+                refused.append(
+                    f"{column}={series.iloc[first]} at {series.index[first]} ({missing.sum()} of {missing.size} minutes)"
+                )
+        if refused:
+            raise ValueError(
+                "SimulationResults' amount series are what its totals sum, so each holds a number at every minute: "
+                f"got {', '.join(refused)}"
+            )
+
+    def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
+        """Each amount's column and each row's amount, in declaration order, for every series that is set."""
+        window = self.window
+        for _, series, amount in self._series_with_amounts():
+            yield amount.column, amount.row_amounts(series, window)
 
     def per_minute_amounts(self) -> pd.DataFrame:
         """Each row's energy in kWh, window.row_energy_kwh of its kW, and money in £, one column per amount, so a period's totals are its column sums.
@@ -301,7 +330,8 @@ class SimulationResults:
         Optional series whose column is absent are None.
 
         Raises:
-            ValueError: If frame lacks any required series' column; the message names each one.
+            ValueError: If frame lacks any required series' column, naming each one, or if an
+                amount column holds a NaN, which construction refuses.
             SeriesRefused: If a column is not numbers, as construction refuses its series; it
                 names the first such column and its dtype.
         """
