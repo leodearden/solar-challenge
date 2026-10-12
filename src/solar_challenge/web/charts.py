@@ -401,6 +401,18 @@ def monthly_summary(results: SimulationResults) -> str | None:
     return str(fig.to_json())
 
 
+def _unpriced_import_note(results: SimulationResults) -> str | None:
+    """The note *results*'s financial chart carries that cost and revenue tracking is unavailable, else None.
+
+    A run's import is priced when its tariff rate is above zero at some minute:
+    simulate_home writes a zero rate throughout a run without a tariff. The note
+    is for a run whose import is not priced and which earns no export revenue.
+    """
+    if results.tariff_rate.gt(0).any() or results.export_revenue.gt(0).any():
+        return None
+    return "No tariff configured — cost and revenue tracking unavailable"
+
+
 def financial_breakdown(results: SimulationResults) -> str:
     """Dual-axis chart with daily cost bars and a cumulative savings line.
 
@@ -409,10 +421,12 @@ def financial_breakdown(results: SimulationResults) -> str:
     engine-priced series ``results.import_cost`` and ``results.export_revenue``,
     which already reflect the tariff and SEG rate set at simulation time.
 
-    When the daily cost and revenue both total zero, as for a run simulated
-    with neither a tariff nor an SEG rate, an annotation is added to the chart
-    explaining that cost and revenue tracking is unavailable, rather than
-    displaying a misleadingly flat-zero plot.
+    When the run's import is not priced (its tariff rate is zero throughout, as
+    for a run simulated without a tariff) and it earns no export revenue, an
+    annotation is added to the chart explaining that cost and revenue tracking
+    is unavailable, rather than displaying a misleadingly flat-zero plot. The
+    annotation does not depend on the bars totalling zero, so a priced run that
+    imports nothing carries none.
 
     Args:
         results: SimulationResults instance.
@@ -468,9 +482,10 @@ def financial_breakdown(results: SimulationResults) -> str:
     fig.update_yaxes(title_text="Daily (GBP)", secondary_y=False)
     fig.update_yaxes(title_text="Cumulative Net Savings (GBP)", secondary_y=True)
 
-    if daily_cost.sum() == 0 and daily_revenue.sum() == 0:
+    note = _unpriced_import_note(results)
+    if note is not None:
         fig.add_annotation(
-            text="No tariff configured — cost and revenue tracking unavailable",
+            text=note,
             xref="paper",
             yref="paper",
             x=0.5,
