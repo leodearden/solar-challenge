@@ -300,10 +300,10 @@ def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
 # A pinned class is an exported class or a FROZEN_CLOSURE class.  Keys are the
 # pinned classes' paths below solar_challenge, then member names: exported
 # classes first, in __all__ order, then closure classes in path order, and
-# members in class-body order, the order a failure lists drifted members in.
-# Each value is the member's form as member_forms spells it
-# (tests/_surface_forms.py).  A class with no public member has no entry.  Each
-# value stays on one line, so the current form a failure prints pastes in
+# members in the order member_forms lists them, the order a failure lists
+# drifted members in.  Each value is the member's form as member_forms spells
+# it (tests/_surface_forms.py).  A class with no public member has no entry.
+# Each value stays on one line, so the current form a failure prints pastes in
 # verbatim.
 # ---------------------------------------------------------------------------
 FROZEN_MEMBERS: dict[str, dict[str, str]] = {
@@ -458,9 +458,9 @@ def test_every_pinned_class_member_matches_frozen_members() -> None:
     """H2 member-lock: every pinned class's public members have the forms FROZEN_MEMBERS pins.
 
     Fails once, naming each added, changed or removed member with its frozen and current
-    forms, in pinned-class and class-body order, removed members last.  An added member's
-    current form is printed ready to paste; a removed member's current form reads
-    (removed).
+    forms, in pinned-class order and, within a class, the order member_forms lists its
+    members, removed members last.  An added member's current form is printed ready to
+    paste; a removed member's current form reads (removed).
     """
     frozen = _forms_by_member_path(FROZEN_MEMBERS)
     current = _forms_by_member_path(
