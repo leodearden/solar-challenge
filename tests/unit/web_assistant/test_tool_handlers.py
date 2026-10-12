@@ -5,7 +5,7 @@ import time
 from datetime import date
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import NonCallableMagicMock
 
 import pytest
 
@@ -24,6 +24,7 @@ from solar_challenge.web.assistant import (
 from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.storage import RunStorage
 
+from tests._job_manager_double import autospecced_job_manager
 from tests.unit.web_assistant._fakes import seed_run
 
 
@@ -525,9 +526,9 @@ class TestListRecentRuns:
 class TestRunHomeSimulation:
     """Tests for run_home_simulation(params, job_manager, db_path, data_dir) -> dict."""
 
-    def _make_jm(self) -> MagicMock:
-        """Return a MagicMock job_manager with submit_home_job stubbed."""
-        jm = MagicMock()
+    def _make_jm(self) -> NonCallableMagicMock:
+        """Return an autospecced JobManager double with submit_home_job stubbed."""
+        jm = autospecced_job_manager()
         jm.submit_home_job.return_value = ("job-h", "run-h")
         return jm
 
@@ -729,9 +730,9 @@ class TestRunHomeSimulation:
 class TestRunFleetSimulation:
     """Tests for run_fleet_simulation(params, job_manager, db_path, data_dir) -> dict."""
 
-    def _make_jm(self) -> MagicMock:
-        """Return a MagicMock job_manager with submit_fleet_job stubbed."""
-        jm = MagicMock()
+    def _make_jm(self) -> NonCallableMagicMock:
+        """Return an autospecced JobManager double with submit_fleet_job stubbed."""
+        jm = autospecced_job_manager()
         jm.submit_fleet_job.return_value = ("job-f", "run-f")
         return jm
 
