@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a figure's traces, keyed by name; a Sankey's nodes and links; and the colours a figure writes.
+"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a figure's traces, keyed by name, and the texts of its annotations; a Sankey's nodes and links; and the colours a figure writes.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a chart test that uses it pass vacuously.
@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from tests._plotly_figure import (
+    annotation_texts,
     colour_literals,
     opaque,
     sankey_link_colours,
@@ -89,6 +90,39 @@ def test_two_traces_sharing_a_name_raise_rather_than_keeping_one() -> None:
 
     with pytest.raises(ValueError, match=re.escape("['Grid Import']") + "$"):
         traces_by_name(figure)
+
+
+def test_annotation_texts_lists_each_annotations_text_in_the_order_the_figure_draws_them() -> None:
+    """The annotations are written as make_subplots writes its subplot titles, in an order neither sorted nor reverse-sorted."""
+    figure = json.dumps(
+        {
+            "data": [_BAR],
+            "layout": {
+                "annotations": [
+                    {"showarrow": False, "text": "Generation (kWh)", "x": 0.14, "xref": "paper", "y": 1.0},
+                    {"showarrow": False, "text": "Self-Consumption Ratio", "x": 0.5, "xref": "paper", "y": 1.0},
+                    {"showarrow": False, "text": "Grid Dependency Ratio", "x": 0.86, "xref": "paper", "y": 1.0},
+                ]
+            },
+        }
+    )
+
+    assert annotation_texts(figure) == ["Generation (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"]
+
+
+@pytest.mark.parametrize(
+    "figure",
+    [
+        pytest.param(_figure(_BAR), id="layout-without-annotations"),
+        pytest.param("{}", id="no-layout"),
+    ],
+)
+def test_a_figure_with_no_annotations_has_no_annotation_texts(figure: str) -> None:
+    """Figure.to_json writes no annotations key for a figure without any, and sankey_diagram returns "{}" when it draws no flow.
+
+    The first figure's title has a text, which is not an annotation's.
+    """
+    assert annotation_texts(figure) == []
 
 
 def test_sankey_link_values_keys_each_links_value_by_its_source_and_target_labels() -> None:
