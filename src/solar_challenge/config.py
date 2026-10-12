@@ -26,7 +26,7 @@ from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
-from solar_challenge.load import LoadConfig
+from solar_challenge.load import LoadConfig, household_occupant_count
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
@@ -302,9 +302,9 @@ class LoadDistributionConfig:
         annual_consumption_kwh: Distribution for annual consumption (optional)
         household_occupants: Distribution for occupants (default: 3). A finite
             normal or uniform draw is rounded to the nearest whole number; any
-            other value reaches LoadConfig as drawn, for its rule to refuse a
-            count that is not a whole number from 1 to 10, and a null draw
-            takes LoadConfig's default.
+            other value is held, as drawn, to LoadConfig's occupant rule,
+            load.household_occupant_count, which refuses a count that is not a
+            whole number from 1 to 10. A null draw takes LoadConfig's default.
         use_stochastic: Whether to use stochastic load profiles (default: True)
     """
 
@@ -1628,12 +1628,6 @@ class _DistributionSampler:
         return self.sample(spec)
 
 
-def _with_household_occupants(config: LoadConfig, occupants: float) -> LoadConfig:
-    """Return *config* with *occupants* household occupants, passed as given: LoadConfig's rule reads a whole-number float as the int it equals and refuses any other count."""
-    changes: dict[str, Any] = {"household_occupants": occupants}
-    return replace(config, **changes)
-
-
 def generate_homes_from_distribution(
     config: FleetDistributionConfig,
     location: Location,
@@ -1655,7 +1649,8 @@ def generate_homes_from_distribution(
     Raises:
         ValueError: If a sampled battery capacity is negative or not finite,
             naming battery.capacity_kwh (a null or 0 sample is no battery), or
-            if LoadConfig refuses a home's household occupants (see
+            if load.household_occupant_count, LoadConfig's occupant rule,
+            refuses a home's household occupants (see
             LoadDistributionConfig.household_occupants).
     """
     rng = random.Random(config.seed)
@@ -1777,7 +1772,9 @@ def generate_homes_from_distribution(
             seed=home_seed,
         )
         if household_occupants is not None:
-            load_config = _with_household_occupants(load_config, household_occupants)
+            load_config = replace(
+                load_config, household_occupants=household_occupant_count(household_occupants)
+            )
 
         # Sample heat pump parameters (may be None)
         heat_pump_config: Optional[HeatPumpConfig] = None
@@ -2679,7 +2676,7 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
             seed=config.seed,
         )
     elif param_name == "household_occupants":
-        return _with_household_occupants(config, value)
+        return replace(config, household_occupants=household_occupant_count(value))
     return config
 
 

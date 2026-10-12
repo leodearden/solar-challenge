@@ -183,8 +183,8 @@ class TestBatteryCapacitySweepRefusesAValueThatIsNotACapacity:
         )
 
 
-class TestHouseholdOccupantsSweepPassesEachValueToLoadConfig:
-    """A household_occupants sweep passes each value to LoadConfig as given: its rule refuses a fraction or a boolean, which the sweep truncated to an int, and reads a whole-number float as the int it equals."""
+class TestHouseholdOccupantsSweepHoldsEachValueToLoadConfigsRule:
+    """A household_occupants sweep holds each value, as given, to LoadConfig's occupant rule: it refuses a fraction or a boolean, which the sweep truncated to an int, and reads a whole-number float as the int it equals."""
 
     _DAY = "2024-06-21"
 

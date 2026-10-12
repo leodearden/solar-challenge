@@ -30,6 +30,25 @@ OFGEM_TDCV_BY_OCCUPANTS: dict[int, float] = {
 }
 
 
+def household_occupant_count(occupants: float) -> int:
+    """Return *occupants* as the household occupant count a LoadConfig holds, a whole number from 1 to 10.
+
+    A whole-number float such as 3.0, or a numpy integer, gives the plain int it equals.
+
+    Raises:
+        ValueError: If *occupants* is below 1 or above 10, or is not a whole number; a
+            bool, Python's or numpy's, is not one.
+    """
+    if not occupants >= 1:
+        raise ValueError(f"Household occupants must be at least 1, got {occupants}")
+    if occupants > 10:
+        raise ValueError(f"Household occupants seems unrealistic: {occupants}")
+    whole_occupants = whole_number(occupants)
+    if whole_occupants is None:
+        raise ValueError(f"Household occupants must be a whole number, got {occupants}")
+    return whole_occupants
+
+
 @dataclass(frozen=True)
 class LoadConfig:
     """Configuration for household load profile.
@@ -40,7 +59,7 @@ class LoadConfig:
         household_occupants: Number of household occupants, a whole number from
             1 to 10. A whole-number float such as 3.0 is held as the int 3; a
             bool, Python's or numpy's, is refused. Affects consumption and
-            profile shape.
+            profile shape. See household_occupant_count.
         name: Optional identifier for the load profile
         use_stochastic: Use the windowed richardsonpy stochastic model (default True).
             richardsonpy is a hard dependency so this path is always available.
@@ -58,21 +77,9 @@ class LoadConfig:
 
     def __post_init__(self) -> None:
         """Validate load configuration parameters."""
-        # Validate household_occupants
-        if not self.household_occupants >= 1:
-            raise ValueError(
-                f"Household occupants must be at least 1, got {self.household_occupants}"
-            )
-        if self.household_occupants > 10:
-            raise ValueError(
-                f"Household occupants seems unrealistic: {self.household_occupants}"
-            )
-        whole_occupants = whole_number(self.household_occupants)
-        if whole_occupants is None:
-            raise ValueError(
-                f"Household occupants must be a whole number, got {self.household_occupants}"
-            )
-        object.__setattr__(self, "household_occupants", whole_occupants)
+        object.__setattr__(
+            self, "household_occupants", household_occupant_count(self.household_occupants)
+        )
 
         # Validate annual_consumption if provided
         if self.annual_consumption_kwh is not None and not 0 < self.annual_consumption_kwh < math.inf:
