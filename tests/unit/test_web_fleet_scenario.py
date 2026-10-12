@@ -510,6 +510,20 @@ class TestFleetFormFromScenario:
                 id="null-in-a-pv-pool",
             ),
             pytest.param(
+                _with_fleet_distribution(
+                    battery={
+                        **_FLEET_SCENARIO["fleet_distribution"]["battery"],
+                        "capacity_kwh": {
+                            "type": "shuffled_pool",
+                            "values": [0.0, 5.0],
+                            "counts": [1, 2.5],
+                        },
+                    }
+                ),
+                "fleet_distribution.battery.capacity_kwh.counts[1] must be a whole number, got 2.5",
+                id="fractional-count-in-a-battery-pool",
+            ),
+            pytest.param(
                 {
                     **_FLEET_SCENARIO,
                     "tariff": {

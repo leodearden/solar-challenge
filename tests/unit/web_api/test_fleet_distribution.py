@@ -32,8 +32,13 @@ from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_
 UNUSABLE_SHUFFLED_POOL_ENTRIES = [
     pytest.param(
         [{"value": 4.0, "count": float("inf")}],
-        "entries[0].count must be an integer, got inf",
+        "entries[0].count must be a finite number, got inf",
         id="infinity",
+    ),
+    pytest.param(
+        [{"value": 4.0, "count": 2.5}],
+        "entries[0].count must be a whole number, got 2.5",
+        id="fraction",
     ),
     pytest.param(
         [{"value": 4.0, "count": 1e300}],
@@ -163,7 +168,7 @@ class TestPreviewDistribution:
     def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
         self, client: FlaskClient, entries: list, message: str
     ) -> None:
-        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
+        """A shuffled_pool count that is not a whole number, a fraction included, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
         resp = client.post(
             "/api/fleet/preview-distribution",
             json={"type": "shuffled_pool", "params": {"entries": entries}},
@@ -700,7 +705,7 @@ class TestFleetFromDistribution:
     def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: MagicMock, entries: list, message: str
     ) -> None:
-        """A shuffled_pool count that int() cannot read, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total. No fleet is queued."""
+        """A shuffled_pool count that is not a whole number, a fraction included, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total. No fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={
