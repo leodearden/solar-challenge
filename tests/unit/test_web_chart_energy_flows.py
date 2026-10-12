@@ -17,7 +17,7 @@ from solar_challenge.home import SimulationResults, SummaryStatistics, calculate
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE
 from tests._finance_builders import make_fleet_results_of, make_sim_results
-from tests._plotly_figure import opaque, sankey_link_colours, sankey_node_colours
+from tests._plotly_figure import annotation_texts, opaque, sankey_link_colours, sankey_node_colours
 
 # Each flow's label and palette role, in the order every chart draws the flows.
 _FLOW_ROLES = {
@@ -110,10 +110,7 @@ _NAMED: dict[str, tuple[Callable[[], list[str]], list[str]]] = {
     ),
     "fleet_distribution_histograms_subplot_title": (
         # make_subplots writes the subplot titles as layout annotations, in subplot order.
-        lambda: [
-            annotation["text"]
-            for annotation in json.loads(charts.fleet_distribution_histograms([_summary()] * 2))["layout"]["annotations"]
-        ][:1],
+        lambda: annotation_texts(charts.fleet_distribution_histograms([_summary()] * 2))[:1],
         ["Generation (kWh)"],
     ),
 }
