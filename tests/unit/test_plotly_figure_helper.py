@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a Sankey's nodes and links, and the colours a figure writes.
+"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a figure's traces, keyed by name; a Sankey's nodes and links; and the colours a figure writes.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a chart test that uses it pass vacuously.
@@ -18,6 +18,7 @@ from tests._plotly_figure import (
     sankey_link_colours,
     sankey_link_values,
     sankey_node_colours,
+    traces_by_name,
 )
 
 
@@ -58,6 +59,36 @@ _LINK_READERS = [
     pytest.param(sankey_link_colours, id="sankey_link_colours"),
 ]
 _READERS = [*_LINK_READERS, pytest.param(sankey_node_colours, id="sankey_node_colours")]
+
+
+def test_traces_by_name_keys_each_trace_as_written_by_its_name() -> None:
+    cost = {"type": "bar", "name": "Daily Cost", "x": ["2024-06-01"], "y": [2.88]}
+    revenue = {"type": "bar", "name": "Daily Revenue", "x": ["2024-06-01"], "y": [1.44]}
+    savings = {
+        "type": "scatter",
+        "name": "Cumulative Net Savings",
+        "mode": "lines",
+        "x": ["2024-06-01"],
+        "y": [-1.44],
+        "yaxis": "y2",
+    }
+
+    assert traces_by_name(_figure(cost, revenue, savings)) == {
+        "Daily Cost": cost,
+        "Daily Revenue": revenue,
+        "Cumulative Net Savings": savings,
+    }
+
+
+def test_two_traces_sharing_a_name_raise_rather_than_keeping_one() -> None:
+    figure = _figure(
+        {"type": "scatter", "name": "Grid Import", "y": [1.2, 0.0]},
+        {"type": "scatter", "name": "Grid Export", "y": [0.0, 0.8]},
+        {"type": "scatter", "name": "Grid Import", "y": [0.4, 0.0]},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("['Grid Import']") + "$"):
+        traces_by_name(figure)
 
 
 def test_sankey_link_values_keys_each_links_value_by_its_source_and_target_labels() -> None:
