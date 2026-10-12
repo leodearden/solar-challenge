@@ -414,6 +414,8 @@ def test_another_tab_loads_run_history_while_an_eight_point_sweep_runs(
     """Run an 8-point sweep whose jobs the live server holds running: another tab still loads Run History, and once the jobs are released each point's row shows its results.
 
     Over HTTP/1.1 Chromium keeps at most 6 connections per host, shared by all its tabs, and a progress stream holds one for as long as its job is queued or running.
+
+    So the page follows its points one at a time, in the order the server queues their jobs. The cost: a row shows 'pending' until the page follows its point, even if that point's job is running or done by then, and the rows after a point wait for its job to end.
     """
     page.goto(live_server + "/scenarios/sweep")
     page.get_by_label("Min Value", exact=True).fill("1")
