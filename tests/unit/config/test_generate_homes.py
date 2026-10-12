@@ -644,10 +644,29 @@ class TestGenerateHomesHouseholdOccupants:
         assert [home.load_config.household_occupants for home in homes] == [3] * 20
 
     @pytest.mark.parametrize(
+        "household_occupants",
+        [
+            pytest.param(NormalDistribution(mean=1.0, std=0.1, min=2.5), id="normal-clamped-to-its-min"),
+            pytest.param(UniformDistribution(min=2.5, max=2.5), id="uniform-between-equal-bounds"),
+        ],
+    )
+    def test_a_draw_halfway_between_two_whole_numbers_rounds_up(
+        self, household_occupants: DistributionSpec
+    ) -> None:
+        """Every draw is 2.5 and gives its home 3 occupants, where rounding a half to even gives 2.
+
+        The normal spec's mean lies 15 standard deviations below its min, so every draw is clamped to the min whatever the seed.
+        """
+        homes = generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
+
+        assert [home.load_config.household_occupants for home in homes] == [3, 3]
+
+    @pytest.mark.parametrize(
         ("household_occupants", "refusal"),
         [
             pytest.param(2.5, "Household occupants must be a whole number, got 2.5", id="fixed-fraction"),
             pytest.param(0.0, "Household occupants must be at least 1, got 0.0", id="fixed-zero"),
+            pytest.param(True, "Household occupants must be a whole number, got True", id="fixed-boolean"),
             pytest.param(
                 WeightedDiscreteDistribution(values=(True,), weights=(1.0,)),
                 "Household occupants must be a whole number, got True",
