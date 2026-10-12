@@ -261,7 +261,13 @@ class TestFinancialBreakdownPricing:
         assert traces["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
 
     def test_an_unpriced_run_is_drawn_at_zero_pounds_though_it_imports_and_exports(self) -> None:
-        figure = json.loads(financial_breakdown(make_sinusoidal_sim_results(days=2)))
+        results = make_sinusoidal_sim_results(days=2)
+        peak_import_kw = results.grid_import.max()
+        peak_export_kw = results.grid_export.max()
+        assert peak_import_kw > 0
+        assert peak_export_kw > 0
+
+        figure = json.loads(financial_breakdown(results))
 
         traces = {trace["name"]: trace for trace in figure["data"]}
 
