@@ -15,6 +15,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from tests._html_page import (
     counts_of,
     doctype,
@@ -76,6 +77,18 @@ class TestSimulateHomeRoute:
         page = response.get_data(as_text=True)
         assert {"pv_kw", "battery_kwh", "consumption_kwh"} <= element_ids(page)
         assert element_count(page, "button", {"type": "submit"}) == 1
+
+    def test_annual_consumption_input_is_bounded_and_stepped_as_the_fleet_load_component(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/home renders one annual consumption input, whose step, min and max are the load component's step and fixed range."""
+        page = client.get("/simulate/home").get_data(as_text=True)
+        load = FLEET_COMPONENTS["load"]
+        assert [
+            (attributes.get("step"), attributes.get("min"), attributes.get("max"))
+            for attributes in element_attributes(page, "input")
+            if attributes.get("id") == "consumption_kwh"
+        ] == [(str(load.step), str(load.fixed_range[0]), str(load.fixed_range[1]))]
 
     def test_simulate_home_page_contains_tabs(self, client: FlaskClient) -> None:
         """GET /simulate/home renders one tab list and, per tab, one panel shown while it is active."""

@@ -13,6 +13,7 @@ document.addEventListener('alpine:init', () => {
         jobId: null,
         errorMsg: '',
         presets: [],
+        consumptionRange: {{ fleet_components.load.fixed_range | tojson }},
         formData: {
             pv_kw: 4.0,
             azimuth: 180,
@@ -78,7 +79,10 @@ document.addEventListener('alpine:init', () => {
                 if (isNaN(eff) || eff <= 0 || eff > 100) errors.efficiency_pct = 'Efficiency must be 1–100%';
             }
             const cons = parseFloat(f.consumption_kwh);
-            if (isNaN(cons) || cons <= 0) errors.consumption_kwh = 'Consumption must be greater than 0';
+            const [consMin, consMax] = this.consumptionRange;
+            if (isNaN(cons) || cons < consMin || cons > consMax) {
+                errors.consumption_kwh = 'Annual consumption must be between ' + consMin + ' and ' + consMax + ' kWh';
+            }
             if (f.location === 'custom') {
                 const lat = parseFloat(f.custom_lat);
                 const lon = parseFloat(f.custom_lon);

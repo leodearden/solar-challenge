@@ -1,5 +1,6 @@
 """Tests for solar_challenge.web.simulation_params, called directly with parameter dicts."""
 
+import math
 import re
 from collections.abc import Callable
 from datetime import date, timedelta
@@ -13,6 +14,7 @@ from solar_challenge.config import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.shared import NotAJsonObject
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
@@ -728,6 +730,33 @@ class TestParseHomeConfigNumberFields:
         assert parse_home_config({**VALID_HOME_PAYLOAD, "occupants": occupants}) == (
             parse_home_config({**VALID_HOME_PAYLOAD, "occupants": WHOLE_NUMBER})
         )
+
+
+class TestParseHomeConfigConsumptionRange:
+    """A sent consumption_kwh is refused outside the fleet load component's fixed range, either end included."""
+
+    @pytest.mark.parametrize("beyond", ["below", "above"])
+    def test_consumption_beyond_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
+        self, beyond: str
+    ) -> None:
+        """One float step beyond either end is refused."""
+        low, high = FLEET_COMPONENTS["load"].fixed_range
+        value = math.nextafter(low, -math.inf) if beyond == "below" else math.nextafter(high, math.inf)
+        with pytest.raises(ValueError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "consumption_kwh": value})
+        assert str(exc_info.value) == f"consumption_kwh must be between {low} and {high}, got {value!r}"
+
+    @pytest.mark.parametrize("end", ["low", "high"])
+    def test_consumption_at_either_end_of_the_range_is_the_homes_annual_consumption(
+        self, end: str
+    ) -> None:
+        """Either end is accepted as the home's annual consumption."""
+        low, high = FLEET_COMPONENTS["load"].fixed_range
+        value = low if end == "low" else high
+        home_config, _start, _end, _name = parse_home_config(
+            {**VALID_HOME_PAYLOAD, "consumption_kwh": value}
+        )
+        assert home_config.load_config.annual_consumption_kwh == value
 
 
 class TestParseHomeConfigPVAge:

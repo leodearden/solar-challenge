@@ -27,6 +27,7 @@ from flask.helpers import stream_with_context
 from flask.typing import ResponseReturnValue
 
 from solar_challenge.web import database
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import NotAJsonObject, get_job_manager, get_storage, request_json_object
 from solar_challenge.web.simulation_params import (
@@ -434,7 +435,9 @@ TOOLS: Sequence[Mapping[str, Any]] = (
                 },
                 "consumption_kwh": {
                     "type": "number",
-                    "description": "Annual household electricity consumption in kWh.",
+                    "description": "Annual household electricity consumption in kWh ({:g}–{:g}).".format(
+                        *FLEET_COMPONENTS["load"].fixed_range
+                    ),
                 },
                 "occupants": {
                     "type": "integer",

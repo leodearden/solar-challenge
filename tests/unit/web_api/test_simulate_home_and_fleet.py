@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for POST /api/simulate/home and POST /api/simulate/fleet, and for how the simulate endpoints parse and refuse a home config."""
 
+import math
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +10,7 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from tests._html_page import element_attributes
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
 
 
@@ -31,6 +33,18 @@ VALID_FLEET_PAYLOAD: dict = {
         },
     ],
 }
+
+
+@pytest.fixture
+def home_page_consumption_bounds(client: FlaskClient) -> tuple[float, float]:
+    """The min and max GET /simulate/home serves on its annual consumption input."""
+    page = client.get("/simulate/home").get_data(as_text=True)
+    [consumption_input] = [
+        attributes
+        for attributes in element_attributes(page, "input")
+        if attributes.get("id") == "consumption_kwh"
+    ]
+    return float(consumption_input["min"]), float(consumption_input["max"])
 
 
 class TestSimulateHomeAPI:
@@ -83,6 +97,42 @@ class TestSimulateHomeAPI:
         )
         assert resp.status_code == 400
         assert "PV capacity" in resp.get_json()["error"]
+
+    @pytest.mark.parametrize("end", ["low", "high"])
+    def test_consumption_at_either_end_the_home_page_allows_is_accepted(
+        self, client: FlaskClient, home_page_consumption_bounds: tuple[float, float], end: str
+    ) -> None:
+        """consumption_kwh at the min or the max the home page serves on its input returns 201."""
+        low, high = home_page_consumption_bounds
+        value = low if end == "low" else high
+        response = client.post(
+            "/api/simulate/home", json={**VALID_HOME_PAYLOAD, "consumption_kwh": value}
+        )
+        assert response.status_code == 201, (
+            f"consumption_kwh {value!r}, which the page allows, was refused: {response.get_json()}"
+        )
+
+    @pytest.mark.parametrize("beyond", ["below", "above"])
+    def test_consumption_one_step_beyond_what_the_home_page_allows_is_refused_naming_it_and_submitting_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: MagicMock,
+        home_page_consumption_bounds: tuple[float, float],
+        beyond: str,
+    ) -> None:
+        """consumption_kwh one float step below the min or above the max the home page serves on its input returns 400 naming it and the value sent, and no job is submitted."""
+        low, high = home_page_consumption_bounds
+        value = math.nextafter(low, -math.inf) if beyond == "below" else math.nextafter(high, math.inf)
+        response = client.post(
+            "/api/simulate/home", json={**VALID_HOME_PAYLOAD, "consumption_kwh": value}
+        )
+        assert response.status_code == 400, (
+            f"consumption_kwh {value!r}, beyond what the page allows, was accepted"
+        )
+        error = response.get_json()["error"]
+        assert "consumption_kwh" in error, error
+        assert repr(value) in error, error
+        mock_job_manager.submit_home_job.assert_not_called()
 
     def test_negative_battery_returns_400(self, client: FlaskClient) -> None:
         """A negative battery capacity is refused with a 400 naming battery_kwh and the value sent."""
