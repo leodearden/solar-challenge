@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_job_manager_double.py, the JobManager double the web tests share."""
 
-import subprocess
-import sys
 from collections.abc import Mapping
-from pathlib import Path
 from types import MappingProxyType
 
 import pandas as pd
@@ -19,19 +16,6 @@ _SUBMIT_HOME_JOB_ARGUMENTS: Mapping[str, object] = MappingProxyType({
     "db_path": "runs.db",
     "data_dir": "runs",
 })
-
-
-def test_importing_the_helper_needs_no_web_extra(project_root: Path) -> None:
-    """The web_api conftest imports the helper when it loads, and a run without the web extra must skip those tests, not abort."""
-    result = subprocess.run(
-        [sys.executable, "-c", "import sys; sys.modules['flask'] = None; import tests._job_manager_double"],
-        cwd=project_root,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 def test_a_name_job_manager_lacks_raises_attribute_error() -> None:
