@@ -9,7 +9,6 @@ tool calls.
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -29,9 +28,9 @@ from solar_challenge.web.assistant import (
     run_home_simulation,
     suggest_config,
 )
-from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
 
+from tests._job_manager_double import autospecced_job_manager
 from tests._sse import parse_sse_events
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
@@ -56,7 +55,7 @@ def dispatch_dependencies(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
     """
     return {
         "db_path": tmp_path / "assistant.db",
-        "job_manager": MagicMock(spec=JobManager),
+        "job_manager": autospecced_job_manager(),
         "data_dir": tmp_path,
         **overrides,
     }
@@ -596,13 +595,13 @@ class TestSimulationToolSurface:
 
     def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
         """dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
         direct = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
-        jm2 = MagicMock()
+        jm2 = autospecced_job_manager()
         jm2.submit_home_job.return_value = ("job-h", "run-h")
         via_dispatch = dispatch_tool(
             "run_home_simulation",
@@ -620,11 +619,11 @@ class TestSimulationToolSurface:
         """dispatch_tool('run_fleet_simulation', {...}, job_manager=mock) returns handler result."""
         params = {"n_homes": 2, "pv_kw": 4, "location": "bristol", "days": 7}
 
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         jm.submit_fleet_job.return_value = ("job-f", "run-f")
         direct = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
-        jm2 = MagicMock()
+        jm2 = autospecced_job_manager()
         jm2.submit_fleet_job.return_value = ("job-f", "run-f")
         via_dispatch = dispatch_tool(
             "run_fleet_simulation",
@@ -655,7 +654,7 @@ class TestSimulationToolUseSignal:
         TOOL_ID = "toolu_rhs_e2e_001"
 
         # Install mock JobManager with submit_home_job return value
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         jm.submit_home_job.return_value = (JOB_ID, RUN_ID)
         app.extensions["job_manager"] = jm
 
@@ -732,7 +731,7 @@ class TestSimulationToolUseSignal:
         JOB_ID = "job-fleet-001"
         TOOL_ID = "toolu_rfs_e2e_001"
 
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         jm.submit_fleet_job.return_value = (JOB_ID, RUN_ID)
         app.extensions["job_manager"] = jm
 
@@ -808,7 +807,7 @@ class TestSimulationToolUseSignal:
     ) -> None:
         """A heat_pump the model sends as a non-object reaches it as a tool_result error naming
         the block, and the turn goes on to its reply; nothing is submitted."""
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         app.extensions["job_manager"] = jm
 
         anthropic_api.set_streams([

@@ -2,7 +2,7 @@
 """Tests for the fleet distribution endpoints: POST /api/fleet/preview-distribution and POST /api/simulate/fleet-from-distribution."""
 
 from collections.abc import Callable
-from unittest.mock import MagicMock
+from unittest.mock import NonCallableMagicMock
 
 import pytest
 
@@ -235,7 +235,7 @@ class TestFleetFromDistribution:
     }
 
     def test_valid_distribution_config_returns_201(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Valid 3-home distribution POST returns 201 with job_id/run_id.
 
@@ -332,7 +332,7 @@ class TestFleetFromDistribution:
         ],
     )
     def test_n_homes_seed_or_days_it_cannot_use_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, message: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict, message: str
     ) -> None:
         """An n_homes, seed or days that is not a whole number, a seed beyond MAX_FLEET_SEED, or a fleet above the dashboard's fleet limit, is a 400 naming it and the value sent; no fleet is queued."""
         resp = client.post(
@@ -360,7 +360,7 @@ class TestFleetFromDistribution:
         ],
     )
     def test_window_it_cannot_run_returns_400_naming_start_and_end_and_queues_nothing(
-        self, client: FlaskClient, mock_job_manager: MagicMock, window: dict, message: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, window: dict, message: str
     ) -> None:
         """A fleet window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is a 400 naming start and end; no fleet is queued."""
         body = {key: value for key, value in self._VALID_BODY.items() if key != "days"}
@@ -370,7 +370,7 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_days_sent_with_start_and_end_returns_400_naming_them_and_queues_nothing(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """A fleet window set by both days and start/end is a 400 naming days, start and end as sent; no fleet is queued."""
         resp = client.post(
@@ -385,7 +385,7 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """Fleet-wide overlay: tariff/dispatch/SEG are applied to every generated HomeConfig.
 
@@ -477,7 +477,7 @@ class TestFleetFromDistribution:
     def test_non_mapping_block_returns_400_naming_it(
         self,
         client: FlaskClient,
-        mock_job_manager: MagicMock,
+        mock_job_manager: NonCallableMagicMock,
         key: str,
         value: object,
         type_name: str,
@@ -509,7 +509,7 @@ class TestFleetFromDistribution:
     def test_empty_or_falsy_dispatch_strategy_gets_the_answer_simulate_home_gives(
         self,
         client: FlaskClient,
-        mock_job_manager: MagicMock,
+        mock_job_manager: NonCallableMagicMock,
         dispatch_strategy: object,
         battery_kwh: float,
     ) -> None:
@@ -542,7 +542,7 @@ class TestFleetFromDistribution:
         ],
     )
     def test_battery_dispatch_strategy_returns_400_naming_the_fleets_and_queues_nothing(
-        self, client: FlaskClient, mock_job_manager: MagicMock, fleet_dispatch: dict
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, fleet_dispatch: dict
     ) -> None:
         """A battery block's own dispatch_strategy is a 400 naming it and the fleet's dispatch_strategy, which every battery takes, whether or not the fleet's is set; no fleet is queued."""
         strategy = {"strategy_type": "self_consumption"}
@@ -562,7 +562,7 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_null_battery_dispatch_strategy_leaves_every_battery_the_fleets(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """A null battery dispatch_strategy reads as absent: every queued battery takes the fleet's dispatch_strategy."""
         resp = client.post(
@@ -580,7 +580,7 @@ class TestFleetFromDistribution:
 
     @pytest.mark.parametrize("key", OPTIONAL_BLOCKS)
     def test_null_optional_block_reads_as_absent_queueing_the_fleet_without_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock, key: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, key: str
     ) -> None:
         """A null block a fleet can do without reads as absent: the body with it gets the 201 the body without it gets, queueing the same fleet."""
         without_block = {k: v for k, v in self._VALID_BODY.items() if k != key}
@@ -602,7 +602,7 @@ class TestFleetFromDistribution:
 
     @pytest.mark.parametrize(("key", "distribution"), REQUIRED_BLOCK_DISTRIBUTIONS.items())
     def test_null_required_block_reads_as_absent_returning_400_naming_its_distribution(
-        self, client: FlaskClient, mock_job_manager: MagicMock, key: str, distribution: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, key: str, distribution: str
     ) -> None:
         """A null block a fleet cannot do without reads as absent: the body with it gets the 400 the body without it gets, naming the missing distribution, and no fleet is queued."""
         without_block = {k: v for k, v in self._VALID_BODY.items() if k != key}
@@ -622,7 +622,7 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_empty_battery_block_returns_400_carrying_the_grammars_refusal_naming_its_capacity(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it reaches config.py's grammar and is a 400 whose error is the grammar's refusal, naming battery.capacity_kwh; no fleet is queued."""
         body = {**self._VALID_BODY, "battery": {}}
@@ -645,7 +645,7 @@ class TestFleetFromDistribution:
         ],
     )
     def test_pv_block_that_is_itself_a_distribution_returns_400_naming_pv_type_and_pv_capacity_kw(
-        self, client: FlaskClient, mock_job_manager: MagicMock, pv: dict
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, pv: dict
     ) -> None:
         """A pv block sent as its distribution, instead of holding it in pv.capacity_kw, is a 400 carrying form_to_fleet_distribution_config's refusal, which names pv.type and pv.capacity_kw; no fleet is queued."""
         body = {**self._VALID_BODY, "pv": pv}
@@ -691,7 +691,7 @@ class TestFleetFromDistribution:
         ],
     )
     def test_malformed_distribution_rows_return_400_naming_the_field(
-        self, client: FlaskClient, mock_job_manager: MagicMock, block: dict, message: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, block: dict, message: str
     ) -> None:
         """A weighted_discrete/shuffled_pool row that is not an object, or a row list that is not an array, is a 400 naming it and the type sent; no fleet is queued."""
         resp = client.post(
@@ -704,7 +704,7 @@ class TestFleetFromDistribution:
 
     @pytest.mark.parametrize(("entries", "message"), UNUSABLE_SHUFFLED_POOL_ENTRIES)
     def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock, entries: list, message: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, entries: list, message: str
     ) -> None:
         """A shuffled_pool count that is not a whole number, a fraction included, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total. No fleet is queued."""
         resp = client.post(
@@ -742,7 +742,7 @@ class TestFleetFromDistribution:
         ],
     )
     def test_row_or_count_it_cannot_use_returns_400_naming_its_distribution(
-        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, message: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict, message: str
     ) -> None:
         """A malformed distribution row or count is a 400 naming its field under the distribution it belongs to; no fleet is queued."""
         resp = client.post(
@@ -784,7 +784,7 @@ class TestFleetFromDistribution:
     def test_distribution_number_that_is_not_finite_returns_400_naming_it(
         self,
         client: FlaskClient,
-        mock_job_manager: MagicMock,
+        mock_job_manager: NonCallableMagicMock,
         patch: Callable[[object], dict],
         field: str,
         value: object,
@@ -799,7 +799,7 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_block_setting_too_large_for_a_float_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """A block setting too large for a float is a 400 naming it and the value sent, not a 500; no fleet is queued."""
         resp = client.post(
@@ -811,7 +811,7 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_boolean_block_setting_reaches_the_queued_homes_as_given(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """A boolean block setting, load.use_stochastic, reaches every queued home as the boolean sent, not as a number."""
         resp = client.post(
@@ -829,7 +829,7 @@ class TestFleetFromDistribution:
         assert all(config.load_config.use_stochastic is False for config in configs)
 
     def test_a_block_settings_distribution_and_grid_charging_reach_the_queued_homes(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """A block setting sent as a distribution, pv.tilt, is sampled for every queued home, and the battery block's grid_charging reaches every queued battery."""
         resp = client.post(
@@ -872,7 +872,7 @@ class TestFleetFromDistribution:
         ],
     )
     def test_a_mapping_block_setting_the_grammar_refuses_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: MagicMock, patch: dict, named: str
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict, named: str
     ) -> None:
         """A block setting sent as a mapping that config.py's grammar refuses reaches the grammar unchanged, and is a 400 whose error is the grammar's own refusal, naming the setting; no fleet is queued."""
         body = {**self._VALID_BODY, **patch}
@@ -906,7 +906,7 @@ class TestFleetFromDistribution:
     def test_a_component_blocks_enabled_returns_400_carrying_the_grammars_refusal_and_queues_nothing(
         self,
         client: FlaskClient,
-        mock_job_manager: MagicMock,
+        mock_job_manager: NonCallableMagicMock,
         block: str,
         settings: dict,
         value: object,
@@ -924,7 +924,7 @@ class TestFleetFromDistribution:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_a_battery_blocks_enabled_sent_as_the_string_false_returns_400_and_queues_nothing(
-        self, client: FlaskClient, mock_job_manager: MagicMock
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
         """A battery block's enabled sent as the string "false" toggles nothing: it is a 400 naming battery.enabled, and no fleet is queued."""
         resp = client.post(
@@ -937,7 +937,7 @@ class TestFleetFromDistribution:
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)
     def test_malformed_fleet_seg_returns_400_and_submits_nothing(
-        self, client: FlaskClient, mock_job_manager: MagicMock, seg: object
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, seg: object
     ) -> None:
         """A malformed fleet-wide seg is a 400 naming seg, never a 500; no fleet is queued."""
         resp = client.post(
