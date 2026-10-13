@@ -71,9 +71,11 @@ def traces_by_name(figure: str) -> dict[str, dict[str, Any]]:
 
 
 def annotation_texts(figure: str) -> list[str]:
-    """The texts of *figure*'s layout annotations, in the order it draws them; [] when it has none."""
-    annotations: list[dict[str, Any]] = json.loads(figure).get("layout", {}).get("annotations", [])
-    return [annotation["text"] for annotation in annotations]
+    """The texts of *figure*'s layout annotations, in the order it draws them; [] when it has none.
+
+    Raises ValueError, rather than leave it out, when an annotation has no text.
+    """
+    return _texts(_annotations(figure))
 
 
 def sankey_link_values(figure: str) -> dict[tuple[str, str], float]:
@@ -132,6 +134,18 @@ def _rgb(match: re.Match[str]) -> Rgb:
     else:
         red, green, blue = (int(match[channel]) for channel in ("red", "green", "blue"))
     return red, green, blue
+
+
+def _annotations(figure: str) -> list[dict[str, Any]]:
+    drawn: list[dict[str, Any]] = json.loads(figure).get("layout", {}).get("annotations", [])
+    return drawn
+
+
+def _texts(annotations: Sequence[dict[str, Any]]) -> list[str]:
+    untexted = [annotation for annotation in annotations if "text" not in annotation]
+    if untexted:
+        raise ValueError(f"Expected each annotation to have a text; got annotations with no text {untexted}")
+    return [annotation["text"] for annotation in annotations]
 
 
 def _sankey_trace(figure: str) -> dict[str, Any]:
