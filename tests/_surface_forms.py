@@ -53,15 +53,17 @@ def surface_form(obj: object) -> str:
     An Enum's is its members, as NAME=value in definition order. A constant's, that of
     anything neither a class nor a routine, is its type's qualified name. Any other
     class's or routine's is its signature, a class's being its constructor's without self.
-    An annotation in that signature which it has no rule for, such as a type alias, raises
-    TypeError naming it and its type.
+    A dataclass's signature follows its kind: dataclass, then in brackets those of eq,
+    order, unsafe_hash and frozen that are on, whether set on the class or on the base it
+    inherits them from. An annotation in that signature which it has no rule for, such as
+    a type alias, raises TypeError naming it and its type.
     """
     if inspect.isclass(obj) and issubclass(obj, enum.Enum):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
     if not (inspect.isclass(obj) or inspect.isroutine(obj)):
         return type(obj).__qualname__
     signature = inspect.signature(obj)
-    return str(
+    text = str(
         signature.replace(
             parameters=[
                 parameter.replace(annotation=_spelled(parameter.annotation))
@@ -70,6 +72,9 @@ def surface_form(obj: object) -> str:
             return_annotation=_spelled(signature.return_annotation),
         )
     )
+    if inspect.isclass(obj) and dataclasses.is_dataclass(obj):
+        return f"{_dataclass_kind(obj)} {text}"
+    return text
 
 
 def member_forms(cls: type) -> dict[str, str]:
@@ -658,7 +663,23 @@ def _property_kind(member: property) -> str:
         for ability, accessor in (("settable", member.fset), ("deletable", member.fdel))
         if accessor is not None
     ]
-    return f"property[{', '.join(abilities)}]" if abilities else "property"
+    return _qualified_kind("property", abilities)
+
+
+_DATACLASS_KIND_PARAMETERS: tuple[str, ...] = ("eq", "order", "unsafe_hash", "frozen")
+
+
+def _dataclass_kind(cls: type) -> str:
+    """The kind of the dataclass *cls*: dataclass, qualified by those of _DATACLASS_KIND_PARAMETERS the decorator recorded as on, for *cls* or for the base *cls* inherits the record from."""
+    parameters = cls.__dataclass_params__  # type: ignore[attr-defined]  # typeshed declares no __dataclass_params__
+    return _qualified_kind(
+        "dataclass", [name for name in _DATACLASS_KIND_PARAMETERS if getattr(parameters, name)]
+    )
+
+
+def _qualified_kind(kind: str, qualifiers: list[str]) -> str:
+    """*kind*, then *qualifiers* in brackets if there are any, as in property[settable, deletable]."""
+    return f"{kind}[{', '.join(qualifiers)}]" if qualifiers else kind
 
 
 def _attributes_set_on_self(cls: type) -> set[str]:

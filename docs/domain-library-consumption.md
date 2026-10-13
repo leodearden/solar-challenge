@@ -135,6 +135,19 @@ import each from its module, as on the 0.5.0 tag, e.g.
 `from solar_challenge.home import HomeConfig`, and need no change when they
 re-pin.
 
+**Unreleased on main** (task 567): the frozen contract now covers, for each
+class it pins, whether it is a dataclass and which of the dataclass parameters
+`eq`, `order`, `unsafe_hash` and `frozen` it sets. These decide whether its
+instances compare equal field by field, support `<`, `<=`, `>` and `>=`, are
+hashable, and refuse a field assignment with `dataclasses.FrozenInstanceError`.
+All 34 pinned dataclasses set `eq`, and none sets `order` or `unsafe_hash`. All
+are frozen except `SummaryStatistics`, `ScenarioConfig`, `FleetConfig`,
+`FleetResults`, `EnergyFlowResult` and `CommunityResults`, and
+`DispatchStrategyConfig`, `OutputConfig` and `SimulationPeriod` in
+`solar_challenge.config`. Each sets the same parameters as on the 0.5.0 tag,
+except `SimulationResults`, which task 436 froze (below). Consumers need no
+change when they re-pin.
+
 **Unreleased on main** (task 426): `Battery` declares `config`,
 `min_soc_fraction`, `max_soc_fraction`, `charge_efficiency` and
 `discharge_efficiency` in its class body, and `WeatherCache` declares
