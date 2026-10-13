@@ -340,7 +340,7 @@ def test_an_annotated_is_spelled_with_its_metadata_reprs() -> None:
     assert surface_form(f) == "(power: Annotated[float | None, 'kW']) -> None"
 
 
-def test_a_class_form_is_its_constructor_signature() -> None:
+def test_a_class_form_ends_with_its_constructor_signature() -> None:
     @dataclass(frozen=True)
     class Point:
         x: float
@@ -352,9 +352,60 @@ def test_a_class_form_is_its_constructor_signature() -> None:
 
     assert (
         surface_form(Point)
-        == "(x: float, tags: list[str] = <factory>, label: str = '') -> None"
+        == "dataclass[eq, frozen] (x: float, tags: list[str] = <factory>, label: str = '') -> None"
     )
     assert surface_form(Plain) == "(a: int, b: str | None = None) -> None"
+
+
+def test_a_dataclass_form_begins_with_dataclass_then_in_brackets_those_of_eq_order_unsafe_hash_and_frozen_that_are_on() -> None:
+    @dataclass
+    class Register:
+        count: int
+
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+
+    @dataclass(order=True, unsafe_hash=True, frozen=True)
+    class Rank:
+        level: int
+
+    @dataclass(eq=False)
+    class Probe:
+        site: str
+
+    assert surface_form(Register) == "dataclass[eq] (count: int) -> None"
+    assert surface_form(Reading) == "dataclass[eq, frozen] (kwh: float) -> None"
+    assert (
+        surface_form(Rank) == "dataclass[eq, order, unsafe_hash, frozen] (level: int) -> None"
+    )
+    assert surface_form(Probe) == "dataclass (site: str) -> None"
+
+
+def test_a_dataclass_kind_lists_no_other_dataclass_parameter() -> None:
+    @dataclass(repr=False, match_args=False, kw_only=True, slots=True, weakref_slot=True)
+    class Quiet:
+        kwh: float
+
+    @dataclass(init=False)
+    class Meter:
+        site: str
+
+        def __init__(self, site: str) -> None: ...
+
+    assert surface_form(Quiet) == "dataclass[eq] (*, kwh: float) -> None"
+    assert surface_form(Meter) == "dataclass[eq] (site: str) -> None"
+
+
+def test_an_undecorated_subclass_of_a_dataclass_is_spelled_with_the_kind_it_inherits() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+
+    class Scaled(Reading):
+        def scaled(self, factor: float) -> float: ...
+
+    assert surface_form(Scaled) == "dataclass[eq, frozen] (kwh: float) -> None"
 
 
 def test_an_init_only_variable_is_spelled_init_var_then_its_type() -> None:
@@ -366,7 +417,7 @@ def test_an_init_only_variable_is_spelled_init_var_then_its_type() -> None:
 
     assert (
         surface_form(Reading)
-        == "(kwh: float, scale: InitVar[float | None], site: InitVar[Outer.Inner]) -> None"
+        == "dataclass[eq, frozen] (kwh: float, scale: InitVar[float | None], site: InitVar[Outer.Inner]) -> None"
     )
 
 
