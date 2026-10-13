@@ -321,9 +321,7 @@ def test_an_earlier_sweeps_late_results_fill_no_row_of_the_sweep_run_after_it(
     with page.expect_request("**/api/jobs/sweep-2-point-2/progress"):
         run.click()
     rows = _result_rows(page)
-    expect(rows.nth(0).get_by_role("cell")).to_have_text(
-        ["2", "-", "-", "-", "failed"]
-    )
+    expect(rows.nth(0).get_by_role("cell")).to_have_text(["2", "-", "-", "-", "failed"])
 
     sweep_jobs.results.answer("sweep-1-point-1", _results(111.1, 0.25, 11.1))
     with page.expect_request("**/api/jobs/sweep-2-point-2/results"):
@@ -333,9 +331,7 @@ def test_an_earlier_sweeps_late_results_fill_no_row_of_the_sweep_run_after_it(
     expect(rows.nth(1).get_by_role("cell")).to_have_text(
         ["12", "222.2", "50.0%", "22.2", "completed"]
     )
-    expect(rows.nth(0).get_by_role("cell")).to_have_text(
-        ["2", "-", "-", "-", "failed"]
-    )
+    expect(rows.nth(0).get_by_role("cell")).to_have_text(["2", "-", "-", "-", "failed"])
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
@@ -378,7 +374,9 @@ def test_a_sweep_run_after_another_opens_no_stream_for_the_earlier_sweeps_remain
         run.click()
 
     opens_sweep_1_point_2 = is_job_request("sweep-1-point-2", "progress")
-    assert [request.url for request in requests_made if opens_sweep_1_point_2(request)] == []
+    assert [
+        request.url for request in requests_made if opens_sweep_1_point_2(request)
+    ] == []
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
