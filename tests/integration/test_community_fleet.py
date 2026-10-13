@@ -852,10 +852,11 @@ class TestComputeCommunityMetricsSharingMode:
         The old heuristic (battery_charge.abs().sum() > 0 → 'community_battery') would
         wrongly report 'community_battery' here.  The authoritative field must win.
         """
+        assert isinstance(cr_p2p, CommunityResults)
         # Inject a non-zero battery_charge series to fool the heuristic.
         non_zero_charge = pd.Series(
             [1.0, 0.5, 0.5, 0.0],
-            index=cr_p2p.grid_import.index,  # type: ignore[union-attr]
+            index=cr_p2p.grid_import.index,
             dtype=float,
         )
         mislabeled = dataclasses.replace(cr_p2p, battery_charge=non_zero_charge)
@@ -872,10 +873,11 @@ class TestComputeCommunityMetricsSharingMode:
         'p2p' for a community_battery run whose battery never cycled during the window.
         The authoritative field must win.
         """
+        assert isinstance(cr_batt, CommunityResults)
         # Inject an all-zero battery_charge series to fool the heuristic in the other direction.
         zero_charge = pd.Series(
             [0.0, 0.0, 0.0, 0.0],
-            index=cr_batt.grid_import.index,  # type: ignore[union-attr]
+            index=cr_batt.grid_import.index,
             dtype=float,
         )
         mislabeled = dataclasses.replace(cr_batt, battery_charge=zero_charge)
