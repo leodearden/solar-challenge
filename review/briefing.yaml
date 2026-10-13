@@ -153,6 +153,10 @@ conventions:
       decorator generates these as dunders, which member forms leave out (task 404), so a
       dataclass's class form spells them as its kind, e.g. 'dataclass[eq, frozen] (...)'. init
       and kw_only already show in the constructor's signature, and repr is text no form pins.
+      match_args, slots and weakref_slot are not pinned yet, because CPython 3.11's
+      __dataclass_params__, which the kind is read from, does not record them. They too change
+      what a consumer can do (match_args=False breaks a positional class pattern, and slots=True
+      removes an instance's __dict__), and task 668 decides whether the contract covers them.
       The surface-lock tests are intentional gates, not redundant ceremony: the frozen-__all__
       freeze test; the three tables of tests/unit/test_public_api_surface.py, FROZEN_SURFACE (each
       name's signature, a dataclass's after its kind), FROZEN_CLOSURE (the signature, a
