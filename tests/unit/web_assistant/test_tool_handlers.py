@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the AI assistant's tool handlers, called directly rather than from a chat turn."""
 
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,16 @@ import pytest
 pytest.importorskip("flask")
 from flask import Flask
 
+from solar_challenge.web.assistant import (
+    METRIC_TABLE,
+    explain_metric,
+    get_run_results,
+    list_recent_runs,
+    run_fleet_simulation,
+    run_home_simulation,
+    suggest_config,
+)
+from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.storage import RunStorage
 
 from tests.unit.web_assistant._fakes import seed_run
@@ -21,8 +32,6 @@ class TestExplainMetric:
 
     def test_known_metric_self_consumption_ratio(self) -> None:
         """explain_metric('self_consumption_ratio') returns dict with non-empty definition and band."""
-        from solar_challenge.web.assistant import explain_metric
-
         result = explain_metric("self_consumption_ratio")
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "definition" in result, f"Missing 'definition' key: {result}"
@@ -36,8 +45,6 @@ class TestExplainMetric:
 
     def test_known_metric_self_sufficiency(self) -> None:
         """explain_metric('self_sufficiency') returns dict with non-empty definition and band."""
-        from solar_challenge.web.assistant import explain_metric
-
         result = explain_metric("self_sufficiency")
         assert "definition" in result
         assert "uk_benchmark_band" in result
@@ -46,8 +53,6 @@ class TestExplainMetric:
 
     def test_key_normalization_hyphen(self) -> None:
         """'self-consumption ratio' normalizes to same canonical entry as 'self_consumption_ratio'."""
-        from solar_challenge.web.assistant import explain_metric
-
         r1 = explain_metric("self_consumption_ratio")
         r2 = explain_metric("self-consumption ratio")
         assert r1 == r2, (
@@ -57,8 +62,6 @@ class TestExplainMetric:
 
     def test_key_normalization_case(self) -> None:
         """'Self_Consumption_Ratio' normalizes to same canonical entry."""
-        from solar_challenge.web.assistant import explain_metric
-
         r1 = explain_metric("self_consumption_ratio")
         r2 = explain_metric("Self_Consumption_Ratio")
         assert r1 == r2, (
@@ -67,8 +70,6 @@ class TestExplainMetric:
 
     def test_unknown_metric_returns_graceful_dict(self) -> None:
         """An unrecognized metric returns a dict with both keys present mentioning 'unknown'."""
-        from solar_challenge.web.assistant import explain_metric
-
         result = explain_metric("nonexistent_metric_xyz")
         assert isinstance(result, dict), "Must return a dict, not raise"
         assert "definition" in result, f"Missing 'definition' in graceful response: {result}"
@@ -83,8 +84,6 @@ class TestExplainMetric:
 
     def test_unknown_metric_does_not_raise(self) -> None:
         """explain_metric with an unknown name must NOT raise any exception."""
-        from solar_challenge.web.assistant import explain_metric
-
         try:
             explain_metric("totally_made_up_metric_12345")
         except Exception as exc:
@@ -94,8 +93,6 @@ class TestExplainMetric:
 
     def test_all_known_metrics_have_both_keys(self) -> None:
         """Every entry in METRIC_TABLE has non-empty definition and uk_benchmark_band."""
-        from solar_challenge.web.assistant import METRIC_TABLE
-
         assert METRIC_TABLE, "Expected METRIC_TABLE to be non-empty"
         for name, entry in METRIC_TABLE.items():
             assert "definition" in entry, f"Entry {name!r} missing 'definition'"
@@ -109,8 +106,6 @@ class TestSuggestConfig:
 
     def test_returns_dict_with_sizing_keys(self) -> None:
         """suggest_config returns a dict with recommended_pv_kwp and recommended_battery_kwh."""
-        from solar_challenge.web.assistant import suggest_config
-
         result = suggest_config(3100.0, "self_sufficiency")
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "recommended_pv_kwp" in result, f"Missing 'recommended_pv_kwp': {result}"
@@ -118,8 +113,6 @@ class TestSuggestConfig:
 
     def test_numeric_outputs_are_positive_floats(self) -> None:
         """recommended_pv_kwp and recommended_battery_kwh must be positive floats."""
-        from solar_challenge.web.assistant import suggest_config
-
         result = suggest_config(3100.0, "self_sufficiency")
         pv = result["recommended_pv_kwp"]
         batt = result["recommended_battery_kwh"]
@@ -132,8 +125,6 @@ class TestSuggestConfig:
 
     def test_higher_consumption_gives_larger_pv(self) -> None:
         """Higher annual consumption → larger recommended PV (scaling check)."""
-        from solar_challenge.web.assistant import suggest_config
-
         low_result = suggest_config(1900.0, "self_sufficiency")
         high_result = suggest_config(4200.0, "self_sufficiency")
         assert high_result["recommended_pv_kwp"] > low_result["recommended_pv_kwp"], (
@@ -143,8 +134,6 @@ class TestSuggestConfig:
 
     def test_caveat_contains_run_a_simulation(self) -> None:
         """Result dict must include a caveat/note string containing 'run a simulation'."""
-        from solar_challenge.web.assistant import suggest_config
-
         result = suggest_config(3100.0, "bill_savings")
         # Look for a string value that mentions "run a simulation"
         found = any(
@@ -157,30 +146,22 @@ class TestSuggestConfig:
 
     def test_note_cites_no_internal_document(self) -> None:
         """The model relays the note to the user, who cannot open the project's PRD or resolve its section numbers."""
-        from solar_challenge.web.assistant import suggest_config
-
         note = suggest_config(3100.0, "self_sufficiency")["note"]
         assert "PRD" not in note, f"note cites the internal PRD: {note!r}"
         assert "§" not in note, f"note cites a section of an internal document: {note!r}"
 
     def test_accepts_self_sufficiency_goal(self) -> None:
         """suggest_config with goal='self_sufficiency' must not raise."""
-        from solar_challenge.web.assistant import suggest_config
-
         result = suggest_config(3100.0, "self_sufficiency")
         assert isinstance(result, dict)
 
     def test_accepts_bill_savings_goal(self) -> None:
         """suggest_config with goal='bill_savings' must not raise."""
-        from solar_challenge.web.assistant import suggest_config
-
         result = suggest_config(3100.0, "bill_savings")
         assert isinstance(result, dict)
 
     def test_accepts_unknown_goal_without_raising(self) -> None:
         """suggest_config with an unrecognised goal must not raise."""
-        from solar_challenge.web.assistant import suggest_config
-
         try:
             result = suggest_config(3100.0, "mystery_goal")
             assert isinstance(result, dict)
@@ -191,8 +172,6 @@ class TestSuggestConfig:
 
     def test_battery_scales_with_consumption(self) -> None:
         """Higher annual consumption → larger recommended battery."""
-        from solar_challenge.web.assistant import suggest_config
-
         low = suggest_config(1900.0, "self_sufficiency")
         high = suggest_config(4200.0, "self_sufficiency")
         assert high["recommended_battery_kwh"] > low["recommended_battery_kwh"], (
@@ -202,8 +181,6 @@ class TestSuggestConfig:
 
     def test_self_sufficiency_goal_gives_larger_sizing_than_bill_savings(self) -> None:
         """suggest_config('self_sufficiency') yields strictly larger PV & battery than 'bill_savings'."""
-        from solar_challenge.web.assistant import suggest_config
-
         consumption = 3100.0
         ss = suggest_config(consumption, "self_sufficiency")
         bs = suggest_config(consumption, "bill_savings")
@@ -230,8 +207,6 @@ class TestGetRunResults:
 
         seed_run leaves n_homes at the schema's default, 1.
         """
-        from solar_challenge.web.assistant import get_run_results
-
         db_path = tmp_path / "grr_test.db"
         summary = {"total_generation_kwh": 1234.5, "self_consumption_ratio": 0.62}
         seed_run(
@@ -258,8 +233,6 @@ class TestGetRunResults:
 
     def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
         """get_run_results(name, storage) resolves to the same row as lookup by id."""
-        from solar_challenge.web.assistant import get_run_results
-
         db_path = tmp_path / "grr_name_test.db"
         summary = {"self_sufficiency": 0.45}
         seed_run(
@@ -286,8 +259,6 @@ class TestGetRunResults:
 
     def test_unknown_id_returns_graceful_dict(self, tmp_path: Path) -> None:
         """get_run_results with unknown id returns a graceful dict, does NOT raise."""
-        from solar_challenge.web.assistant import get_run_results
-
         db_path = tmp_path / "grr_unknown_test.db"
         seed_run(
             db_path,
@@ -314,8 +285,6 @@ class TestGetRunResults:
 
     def test_name_collision_returns_newest_run(self, tmp_path: Path) -> None:
         """When two rows share a name, get_run_results returns the one with the later created_at."""
-        from solar_challenge.web.assistant import get_run_results
-
         db_path = tmp_path / "grr_collision_test.db"
         # Older run seeded first
         seed_run(
@@ -345,9 +314,6 @@ class TestGetRunResults:
 
     def test_null_summary_json_returns_empty_dict(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json returns summary=={} and does not raise."""
-        from solar_challenge.web.assistant import get_run_results
-        from solar_challenge.web.database import get_db, init_db
-
         db_path = tmp_path / "grr_null_summary.db"
         init_db(db_path)
         with get_db(db_path) as conn:
@@ -371,8 +337,6 @@ class TestGetRunResults:
 
     def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
         """get_run_results over a storage whose database cannot be opened returns {'error':...}, no raise."""
-        from solar_challenge.web.assistant import get_run_results
-
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
@@ -393,8 +357,6 @@ class TestListRecentRuns:
 
     def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
         """list_recent_runs returns runs newest-first, count bounded by limit."""
-        from solar_challenge.web.assistant import list_recent_runs
-
         db_path = tmp_path / "lrr_test.db"
         # Seed 5 runs with distinct created_at timestamps
         for i in range(5):
@@ -425,8 +387,6 @@ class TestListRecentRuns:
 
     def test_each_row_has_identifying_fields(self, tmp_path: Path) -> None:
         """Each entry carries id/run_id, name, type, status, created_at."""
-        from solar_challenge.web.assistant import list_recent_runs
-
         db_path = tmp_path / "lrr_fields_test.db"
         seed_run(
             db_path,
@@ -453,9 +413,6 @@ class TestListRecentRuns:
 
     def test_empty_db_returns_empty_list(self, tmp_path: Path) -> None:
         """list_recent_runs on empty DB returns {'runs': []} without raising."""
-        from solar_challenge.web.assistant import list_recent_runs
-        from solar_challenge.web.database import init_db
-
         db_path = tmp_path / "lrr_empty_test.db"
         init_db(db_path)
 
@@ -474,8 +431,6 @@ class TestListRecentRuns:
 
     def test_limit_is_clamped_to_sane_max(self, tmp_path: Path) -> None:
         """A very large limit is clamped so returned count <= clamp ceiling."""
-        from solar_challenge.web.assistant import list_recent_runs
-
         db_path = tmp_path / "lrr_clamp_test.db"
         # Seed 60 rows — more than any sane clamp ceiling (50)
         for i in range(60):
@@ -497,8 +452,6 @@ class TestListRecentRuns:
 
     def test_non_positive_limit_returns_results(self, tmp_path: Path) -> None:
         """A non-positive limit is handled gracefully (clamped to default, no raise)."""
-        from solar_challenge.web.assistant import list_recent_runs
-
         db_path = tmp_path / "lrr_nonpos_test.db"
         seed_run(
             db_path,
@@ -525,9 +478,6 @@ class TestListRecentRuns:
 
     def test_null_summary_json_does_not_raise(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json is returned with None metrics, no crash."""
-        from solar_challenge.web.assistant import list_recent_runs
-        from solar_challenge.web.database import get_db, init_db
-
         db_path = tmp_path / "lrr_null_summary.db"
         init_db(db_path)
         with get_db(db_path) as conn:
@@ -555,8 +505,6 @@ class TestListRecentRuns:
 
     def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
         """list_recent_runs with a nonexistent db_path returns {'runs':[],'error':...}, no raise."""
-        from solar_challenge.web.assistant import list_recent_runs
-
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
@@ -585,8 +533,6 @@ class TestRunHomeSimulation:
 
     def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
         """run_home_simulation returns {run_id, results_url} with correct values."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
         result = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
@@ -601,8 +547,6 @@ class TestRunHomeSimulation:
 
     def test_submit_home_job_called_with_correct_config(self, tmp_path: Path) -> None:
         """submit_home_job called once; config has correct pv_kw and battery_kwh."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
         run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
@@ -625,8 +569,6 @@ class TestRunHomeSimulation:
 
     def test_days_drives_start_end_window(self, tmp_path: Path) -> None:
         """days parameter is reflected in the start/end dates passed to submit_home_job."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         params_7 = {"pv_kw": 4, "days": 7, "location": "bristol"}
         params_30 = {"pv_kw": 4, "days": 30, "location": "bristol"}
@@ -652,8 +594,6 @@ class TestRunHomeSimulation:
 
     def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
         """Invalid pv_kw (out of 0.5-20 range) returns error dict; submit not called; no raise."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         params = {"pv_kw": 999, "battery_kwh": 5, "days": 7, "location": "bristol"}
 
@@ -670,8 +610,6 @@ class TestRunHomeSimulation:
 
     def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
         """A submit_home_job that raises yields an error dict naming the failure, and no run link."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         submit_failure = "job queue unavailable"
         jm.submit_home_job.side_effect = RuntimeError(submit_failure)
@@ -688,8 +626,6 @@ class TestRunHomeSimulation:
 
     def test_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
         """When 'days' is absent the window passed to submit_home_job is 7 days, not the full year."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         # No 'days' key — handler must default to 7
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
@@ -711,8 +647,6 @@ class TestRunHomeSimulation:
 
     def test_explicit_days_honored_over_default(self, tmp_path: Path) -> None:
         """A caller-supplied 'days' value is not overwritten by the default."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         # Explicit days=30 must produce a 30-day window (span=29)
         params: dict[str, Any] = {"pv_kw": 4, "days": 30, "location": "bristol"}
@@ -731,8 +665,6 @@ class TestRunHomeSimulation:
 
     def test_home_days_none_defaults_to_7(self, tmp_path: Path) -> None:
         """Explicit days=None is treated as absent — handler falls back to 7-day window."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
@@ -754,8 +686,6 @@ class TestRunHomeSimulation:
 
     def test_start_and_end_sent_run_that_window_not_the_7_day_default(self, tmp_path: Path) -> None:
         """A start and end the model sends are run as POST /api/simulate/home runs them, not overridden by the 7-day default."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         result = run_home_simulation(
             {"pv_kw": 4, "location": "bristol", "start": "2024-03-01", "end": "2024-03-05"},
@@ -775,8 +705,6 @@ class TestRunHomeSimulation:
         self, tmp_path: Path
     ) -> None:
         """A days the model sends with a start and end is refused naming those values, never replaced by the default; nothing is submitted."""
-        from solar_challenge.web.assistant import run_home_simulation
-
         jm = self._make_jm()
         result = run_home_simulation(
             {
@@ -809,8 +737,6 @@ class TestRunFleetSimulation:
 
     def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
         """run_fleet_simulation returns {run_id, results_url} for fleet."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
         result = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
@@ -825,8 +751,6 @@ class TestRunFleetSimulation:
 
     def test_submit_fleet_job_called_with_correct_configs_list(self, tmp_path: Path) -> None:
         """submit_fleet_job called once; configs is list of length n_homes with correct pv."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
         run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
@@ -847,8 +771,6 @@ class TestRunFleetSimulation:
 
     def test_n_homes_clamped_to_max_100(self, tmp_path: Path) -> None:
         """n_homes=9999 results in configs list clamped to <= 100."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         params = {"n_homes": 9999, "pv_kw": 4, "location": "bristol", "days": 7}
         run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
@@ -862,8 +784,6 @@ class TestRunFleetSimulation:
 
     def test_n_homes_zero_clamped_to_at_least_1(self, tmp_path: Path) -> None:
         """n_homes=0 is clamped to at least 1 (no empty fleet)."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         params = {"n_homes": 0, "pv_kw": 4, "location": "bristol", "days": 7}
         run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
@@ -877,8 +797,6 @@ class TestRunFleetSimulation:
 
     def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
         """Invalid pv_kw returns error dict; submit_fleet_job NOT called; no raise."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         params = {"n_homes": 3, "pv_kw": 999, "location": "bristol", "days": 7}
 
@@ -895,8 +813,6 @@ class TestRunFleetSimulation:
 
     def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
         """A submit_fleet_job that raises yields an error dict naming the failure, and no run link."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         submit_failure = "job queue unavailable"
         jm.submit_fleet_job.side_effect = RuntimeError(submit_failure)
@@ -913,8 +829,6 @@ class TestRunFleetSimulation:
 
     def test_fleet_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
         """When 'days' is absent the fleet window passed to submit_fleet_job is 7 days, not the full year."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         # No 'days' key — handler must default to 7
         params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol"}
@@ -936,8 +850,6 @@ class TestRunFleetSimulation:
 
     def test_fleet_days_none_defaults_to_7(self, tmp_path: Path) -> None:
         """Explicit days=None in fleet params is treated as absent — handler falls back to 7."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
         params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": None}
@@ -961,8 +873,6 @@ class TestRunFleetSimulation:
         self, tmp_path: Path
     ) -> None:
         """A start and end the model sends are the window the fleet runs, not overridden by the 7-day default."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         result = run_fleet_simulation(
             {
@@ -997,10 +907,6 @@ class TestRunHomeSimulationWithRealJobManager:
         self, app: Flask, tmp_path: Path
     ) -> None:
         """run_home_simulation() with the real JobManager creates a completed run."""
-        import time as _time
-
-        from solar_challenge.web.assistant import get_run_results, run_home_simulation
-
         db_path: str = app.config["DATABASE"]
         data_dir: str = app.config["DATA_DIR"]
         job_manager = app.extensions["job_manager"]
@@ -1030,14 +936,14 @@ class TestRunHomeSimulationWithRealJobManager:
         )
 
         # Poll (monotonic deadline ≤ 120 s) until the real sim completes.
-        deadline = _time.monotonic() + 120
+        deadline = time.monotonic() + 120
         status = "running"
-        while _time.monotonic() < deadline:
+        while time.monotonic() < deadline:
             run_data = get_run_results(run_id, storage)
             status = run_data.get("status", "")
             if status in ("completed", "failed"):
                 break
-            _time.sleep(2)
+            time.sleep(2)
 
         assert status == "completed", (
             f"1-day Bristol sim did not reach 'completed' within 120 s; "

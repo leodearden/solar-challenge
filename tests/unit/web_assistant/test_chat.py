@@ -13,6 +13,8 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.web.assistant import MAX_HISTORY_TURNS
+from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
 from tests._sse import SseFrame, parse_sse_events
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
@@ -40,8 +42,6 @@ class TestChatMessagePersistence:
 
     def test_write_and_read_two_turns(self, tmp_path: Path) -> None:
         """Writing user+assistant rows for one session_id returns both in order."""
-        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
-
         db_path = tmp_path / "chat_test.db"
         init_db(db_path)
 
@@ -60,8 +60,6 @@ class TestChatMessagePersistence:
 
     def test_session_scoping(self, tmp_path: Path) -> None:
         """Rows for a different session_id are NOT returned."""
-        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
-
         db_path = tmp_path / "scope_test.db"
         init_db(db_path)
 
@@ -78,8 +76,6 @@ class TestChatMessagePersistence:
 
     def test_metadata_roundtrip(self, tmp_path: Path) -> None:
         """A metadata dict round-trips through metadata_json (dict in → dict out)."""
-        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
-
         db_path = tmp_path / "meta_test.db"
         init_db(db_path)
 
@@ -92,8 +88,6 @@ class TestChatMessagePersistence:
 
     def test_no_metadata_returns_none(self, tmp_path: Path) -> None:
         """A row written without metadata returns metadata=None."""
-        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
-
         db_path = tmp_path / "nometa_test.db"
         init_db(db_path)
 
@@ -104,8 +98,6 @@ class TestChatMessagePersistence:
 
     def test_empty_session_returns_empty_list(self, tmp_path: Path) -> None:
         """get_chat_history returns [] for a session with no messages."""
-        from solar_challenge.web.database import get_chat_history, init_db
-
         db_path = tmp_path / "empty_test.db"
         init_db(db_path)
 
@@ -114,8 +106,6 @@ class TestChatMessagePersistence:
 
     def test_insertion_order_preserved(self, tmp_path: Path) -> None:
         """Multiple messages are returned in insertion order (ORDER BY id ASC)."""
-        from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
-
         db_path = tmp_path / "order_test.db"
         init_db(db_path)
 
@@ -132,8 +122,6 @@ class TestAssistantHistory:
 
     def test_history_returns_seeded_messages(self, client: FlaskClient, app: Flask) -> None:
         """Seeding rows under a pinned session_id → GET /history returns them in order."""
-        from solar_challenge.web.database import save_chat_message
-
         db_path = app.config["DATABASE"]
 
         # Pin a session_id in the signed cookie
@@ -165,8 +153,6 @@ class TestAssistantHistory:
 
     def test_history_session_isolation(self, app: Flask) -> None:
         """Two clients with different session_ids see only their own messages."""
-        from solar_challenge.web.database import save_chat_message
-
         db_path = app.config["DATABASE"]
 
         client_a = app.test_client()
@@ -594,9 +580,6 @@ class TestHistoryWindowAlternation:
         app: Flask,
     ) -> None:
         """msgs[0]["role"] must be 'user' even when the tail starts on an assistant row."""
-        from solar_challenge.web.assistant import MAX_HISTORY_TURNS
-        from solar_challenge.web.database import save_chat_message
-
         db_path = app.config["DATABASE"]
 
         # Pin a session_id
