@@ -148,6 +148,16 @@ def test_annotation_texts_lists_each_annotations_text_in_the_order_the_figure_dr
     assert annotation_texts(figure) == ["Generation (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"]
 
 
+def test_annotation_texts_lists_a_shared_text_once_for_each_annotation() -> None:
+    """The annotations are written as make_subplots writes its subplot titles when two are the same, a repeat that annotation_texts, unlike annotations_by_text, does not refuse."""
+    figure = _annotated(
+        {"showarrow": False, "text": "Generation (kWh)", "x": 0.225, "xref": "paper", "y": 1.0},
+        {"showarrow": False, "text": "Generation (kWh)", "x": 0.775, "xref": "paper", "y": 1.0},
+    )
+
+    assert annotation_texts(figure) == ["Generation (kWh)", "Generation (kWh)"]
+
+
 @pytest.mark.parametrize(
     ("reader", "nothing"),
     [
