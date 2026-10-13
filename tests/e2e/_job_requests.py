@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Hold the requests a page makes about a background job, /api/jobs/<job_id>/<endpoint>, until the test answers that job or disconnects its requests.
 
-Also fast-forwards a page past the time it waits for a disconnected progress stream to reconnect.
+Also disconnects a single request, as a route handler, and fast-forwards a page by the time it waits for a broken progress stream to reconnect.
 """
 
 import json
@@ -13,11 +13,16 @@ from playwright.sync_api import Error, Page, Request, Route
 
 _JOB_REQUEST_PATH = re.compile(r"/api/jobs/(?P<job_id>[^/]+)/[^/]+")
 
-# How disconnect fails a request: a reset connection, net::ERR_CONNECTION_RESET, which Chromium logs as this console error
+# How disconnect_request fails a request: a reset connection, net::ERR_CONNECTION_RESET, which Chromium logs as this console error
 _DISCONNECT_ERROR_CODE = "connectionreset"
 DISCONNECTED_REQUEST_CONSOLE_ERROR = (
     "Failed to load resource: net::ERR_CONNECTION_RESET"
 )
+
+
+def disconnect_request(route: Route) -> None:
+    """Fail the route's request as a reset connection does, so Chromium logs DISCONNECTED_REQUEST_CONSOLE_ERROR for it."""
+    route.abort(_DISCONNECT_ERROR_CODE)
 
 
 def sse_event(event: str, data: Mapping[str, object]) -> str:
@@ -73,7 +78,7 @@ class HeldJobRequests:
         job_id = _job_id_of(route.request)
         if job_id in self._to_disconnect:
             self._to_disconnect.remove(job_id)
-            route.abort(_DISCONNECT_ERROR_CODE)
+            disconnect_request(route)
         elif job_id in self._answers:
             status, body = self._answers[job_id]
             route.fulfill(status=status, content_type=self._content_type, body=body)
@@ -93,7 +98,7 @@ class HeldJobRequests:
         if not routes:
             self._to_disconnect.add(job_id)
         for route in routes:
-            route.abort(_DISCONNECT_ERROR_CODE)
+            disconnect_request(route)
 
     def abort_held(self) -> None:
         """Abort every request still held, including any the page makes while the others are aborted."""

@@ -5,13 +5,13 @@ while an earlier one still runs is the run it follows: the page drops the
 earlier run's progress stream, so the earlier run's end, completed or failed,
 does not show. A run started after a completed one starts its tracker afresh.
 A run whose progress stream disconnects shows it is reconnecting until the
-reopened stream reports the run's end, and a reopened stream the server
-refuses fails the run, as does a stream that stays broken past the page's
-reconnect limit.
+stream the browser reopens reaches the server, which goes on to report the
+run's progress and end. A reopened stream the server refuses fails the run,
+as does a stream that stays broken past the page's reconnect limit.
 """
 
 import itertools
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +21,7 @@ from playwright.sync_api import Page, Route, expect
 from tests.e2e._job_requests import (
     DISCONNECTED_REQUEST_CONSOLE_ERROR,
     HeldJobRequests,
+    disconnect_request,
     fast_forward_by_the_reconnect_limit,
     is_job_request,
     sse_event,
@@ -197,6 +198,34 @@ def test_a_run_whose_progress_stream_disconnects_shows_it_reconnecting_then_comp
     expect(reconnecting).to_be_hidden()
     assert page_errors == [DISCONNECTED_REQUEST_CONSOLE_ERROR], (
         f"Errors on {simulate_page.path}: {page_errors}"
+    )
+
+
+def test_a_run_whose_reopened_progress_stream_reaches_the_server_no_longer_shows_it_reconnecting(
+    page: Page,
+    live_server: str,
+    release_held_simulations: Callable[[], None],
+    page_errors: list[str],
+) -> None:
+    """Run on /simulate/home while the live server holds the job running, its first progress stream disconnected: once the stream the browser reopens reaches the server, the tracker shows the job's progress and no longer 'Reconnecting to server...', and it still follows the job past the page's reconnect limit, so the job's completion, once released, shows the results link."""
+    page.clock.install()
+    page.route("**/api/jobs/*/progress", disconnect_request, times=1)
+    page.goto(live_server + "/simulate/home")
+    with page.expect_request("**/api/jobs/*/progress"):
+        page.get_by_role("button", name="Run Simulation", exact=True).click()
+    reconnecting = page.get_by_text("Reconnecting to server...", exact=True)
+    # The browser reopens the stream it lost, and the server answers it
+    with page.expect_response("**/api/jobs/*/progress"):
+        expect(reconnecting).to_be_visible()
+
+    expect(page.get_by_text("Running home simulation...", exact=True)).to_be_visible()
+    expect(reconnecting).to_be_hidden()
+    fast_forward_by_the_reconnect_limit(page)
+
+    release_held_simulations()
+    expect(page.get_by_role("link", name="View Results", exact=True)).to_be_visible()
+    assert page_errors == [DISCONNECTED_REQUEST_CONSOLE_ERROR], (
+        f"Errors on /simulate/home: {page_errors}"
     )
 
 
