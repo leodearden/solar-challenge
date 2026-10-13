@@ -122,67 +122,67 @@ class TestHouseholderBillPhysics:
         """
         summary = _make_summary()
         finance = _make_finance()  # own_use_rate=15.0 p/kWh
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
             simulation_days=summary.simulation_days,
         )
 
-        assert isinstance(bill, BillBreakdown)
+        assert isinstance(breakdown, BillBreakdown)
 
         # --- Removed W2 fields must NOT exist on BillBreakdown ---
-        assert not hasattr(bill, "gross_bill_gbp"), "gross_bill_gbp must be removed in CR3"
-        assert not hasattr(bill, "seg_export_income_gbp"), "seg_export_income_gbp must be removed in CR3"
-        assert not hasattr(bill, "net_annual_bill_gbp"), "net_annual_bill_gbp must be removed in CR3"
+        assert not hasattr(breakdown, "gross_bill_gbp"), "gross_bill_gbp must be removed in CR3"
+        assert not hasattr(breakdown, "seg_export_income_gbp"), "seg_export_income_gbp must be removed in CR3"
+        assert not hasattr(breakdown, "net_annual_bill_gbp"), "net_annual_bill_gbp must be removed in CR3"
 
         # --- import_cost from summary (unchanged) ---
-        assert bill.import_cost_gbp == pytest.approx(summary.total_import_cost_gbp)
+        assert breakdown.import_cost_gbp == pytest.approx(summary.total_import_cost_gbp)
 
         # --- Standing charge (unchanged) ---
         expected_standing = finance.standing_charge_pence_per_day * 365 / 100
-        assert bill.standing_charge_gbp == pytest.approx(expected_standing)
+        assert breakdown.standing_charge_gbp == pytest.approx(expected_standing)
 
         # --- Own-use payment (NEW): own_use_rate × sc_kwh / 100 ---
         sc_kwh = summary.total_self_consumption_kwh
         own_use_rate = finance.own_use_rate_pence_per_kwh
         expected_own_use = own_use_rate * sc_kwh / 100.0
-        assert bill.own_use_payment_gbp == pytest.approx(expected_own_use)
+        assert breakdown.own_use_payment_gbp == pytest.approx(expected_own_use)
 
         # --- VAT invariant (REDEFINED): vat_rate × (import + standing + own_use_payment) ---
         expected_vat = finance.vat_rate * (
-            bill.import_cost_gbp + bill.standing_charge_gbp + bill.own_use_payment_gbp
+            breakdown.import_cost_gbp + breakdown.standing_charge_gbp + breakdown.own_use_payment_gbp
         )
-        assert bill.vat_gbp == pytest.approx(expected_vat)
+        assert breakdown.vat_gbp == pytest.approx(expected_vat)
 
         # --- Total outlay (NEW HEADLINE): (import + standing + own_use_payment) × (1+vat) ---
         expected_outlay = (
-            bill.import_cost_gbp + bill.standing_charge_gbp + bill.own_use_payment_gbp
+            breakdown.import_cost_gbp + breakdown.standing_charge_gbp + breakdown.own_use_payment_gbp
         ) * (1.0 + finance.vat_rate)
-        assert bill.total_outlay_gbp == pytest.approx(expected_outlay)
+        assert breakdown.total_outlay_gbp == pytest.approx(expected_outlay)
 
         # --- CBS-collectable slice: own-use VAT, and the amount due that sums it ---
-        assert bill.own_use_vat_gbp == pytest.approx(
-            finance.vat_rate * bill.own_use_payment_gbp
+        assert breakdown.own_use_vat_gbp == pytest.approx(
+            finance.vat_rate * breakdown.own_use_payment_gbp
         )
-        assert bill.cbs_amount_due_gbp == pytest.approx(
-            bill.own_use_payment_gbp + bill.own_use_vat_gbp
+        assert breakdown.cbs_amount_due_gbp == pytest.approx(
+            breakdown.own_use_payment_gbp + breakdown.own_use_vat_gbp
         )
 
         # --- Self-consumption saving (REDEFINED): sc × (retail − own_use) × (1+vat)/100 ---
         retail = finance.retail_baseline_rate_pence_per_kwh
         expected_sc_saving = sc_kwh * (retail - own_use_rate) * (1.0 + finance.vat_rate) / 100.0
-        assert bill.self_consumption_saving_gbp == pytest.approx(expected_sc_saving)
+        assert breakdown.self_consumption_saving_gbp == pytest.approx(expected_sc_saving)
 
         # --- Self-consumption fraction (unchanged formula) ---
         expected_sc_fraction = sc_kwh / summary.total_generation_kwh
-        assert bill.self_consumption_fraction == pytest.approx(expected_sc_fraction)
+        assert breakdown.self_consumption_fraction == pytest.approx(expected_sc_fraction)
 
     def test_saving_fields(self) -> None:
         """Saving fields must be derived from baseline and total_outlay."""
         summary = _make_summary()
         finance = _make_finance()
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
@@ -190,13 +190,13 @@ class TestHouseholderBillPhysics:
         )
 
         # saving_vs_baseline = baseline - total_outlay (CR3 redefinition)
-        expected_saving = bill.baseline_bill_gbp - bill.total_outlay_gbp
-        assert bill.saving_vs_baseline_gbp == pytest.approx(expected_saving)
+        expected_saving = breakdown.baseline_bill_gbp - breakdown.total_outlay_gbp
+        assert breakdown.saving_vs_baseline_gbp == pytest.approx(expected_saving)
 
         # saving_pct = saving / baseline × 100 (formula unchanged)
-        if bill.baseline_bill_gbp != 0:
-            expected_pct = (bill.saving_vs_baseline_gbp / bill.baseline_bill_gbp) * 100
-            assert bill.saving_pct == pytest.approx(expected_pct)
+        if breakdown.baseline_bill_gbp != 0:
+            expected_pct = (breakdown.saving_vs_baseline_gbp / breakdown.baseline_bill_gbp) * 100
+            assert breakdown.saving_pct == pytest.approx(expected_pct)
 
     def test_h3_board_identity(self) -> None:
         """H3 board identity: saving_vs_baseline == sc × (retail − own_use) × (1+vat).
@@ -210,7 +210,7 @@ class TestHouseholderBillPhysics:
         """
         summary = _make_summary()
         finance = _make_finance(own_use_rate_pence_per_kwh=15.0)
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
@@ -224,7 +224,7 @@ class TestHouseholderBillPhysics:
 
         # H3 identity: saving == sc × (retail − own_use) × (1+vat) / 100
         expected = sc_kwh * (retail - own_use) * (1.0 + vat) / 100.0
-        assert bill.saving_vs_baseline_gbp == pytest.approx(expected, rel=1e-9)
+        assert breakdown.saving_vs_baseline_gbp == pytest.approx(expected, rel=1e-9)
 
         # Edge case: own_use == retail → saving == 0 and self_consumption_saving == 0
         finance_parity = _make_finance(own_use_rate_pence_per_kwh=retail)
@@ -255,7 +255,7 @@ class TestHouseholderBillPhysics:
         finance = _make_finance(retail_baseline_rate_pence_per_kwh=23.0)
 
         with pytest.warns(UserWarning, match="no tariff configured"):
-            bill = householder_bill(
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
@@ -264,9 +264,9 @@ class TestHouseholderBillPhysics:
 
         # import priced at retail baseline rate: 1200 kWh × 23 p/kWh = £276
         expected_import = summary.total_grid_import_kwh * 23.0 / 100.0
-        assert bill.import_cost_gbp == pytest.approx(expected_import)
+        assert breakdown.import_cost_gbp == pytest.approx(expected_import)
         # the headline bill must now exceed just standing + VAT
-        assert bill.import_cost_gbp > 0.0
+        assert breakdown.import_cost_gbp > 0.0
 
     def test_physics_no_import_no_fallback(self) -> None:
         """When import kWh is genuinely zero, no fallback and no warning fire."""
@@ -279,14 +279,14 @@ class TestHouseholderBillPhysics:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            bill = householder_bill(
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
                 simulation_days=summary.simulation_days,
             )
 
-        assert bill.import_cost_gbp == pytest.approx(0.0)
+        assert breakdown.import_cost_gbp == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -302,14 +302,14 @@ class TestHouseholderBillOverrideAndAnnualisation:
         summary = _make_summary()
         finance = _make_finance(self_consumption_override=0.70)
 
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
             simulation_days=summary.simulation_days,
         )
 
-        assert bill.self_consumption_fraction == pytest.approx(0.70)
+        assert breakdown.self_consumption_fraction == pytest.approx(0.70)
 
     def test_override_implied_self_consumption(self) -> None:
         """Implied self_consumption == override × total_generation.
@@ -320,7 +320,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
         summary = _make_summary()
         finance = _make_finance(self_consumption_override=0.70)
 
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
@@ -333,7 +333,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
         retail = finance.retail_baseline_rate_pence_per_kwh
         own_use = finance.own_use_rate_pence_per_kwh
         vat = finance.vat_rate
-        implied_sc = bill.self_consumption_saving_gbp / ((retail - own_use) * (1 + vat) / 100.0)
+        implied_sc = breakdown.self_consumption_saving_gbp / ((retail - own_use) * (1 + vat) / 100.0)
         assert implied_sc == pytest.approx(expected_sc, rel=1e-6)
 
     def test_override_differs_from_physics(self) -> None:
@@ -390,7 +390,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
         finance = _make_finance()
 
         with pytest.warns(UserWarning, match="30 days"):
-            bill = householder_bill(
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
@@ -399,7 +399,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
         # After annualisation to 365 days, standing charge must be the full annual value
         expected_standing = finance.standing_charge_pence_per_day * 365 / 100
-        assert bill.standing_charge_gbp == pytest.approx(expected_standing)
+        assert breakdown.standing_charge_gbp == pytest.approx(expected_standing)
 
     def test_full_year_no_warning(self) -> None:
         """simulation_days=365 must not emit any warning."""
@@ -408,7 +408,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            bill = householder_bill(
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
@@ -416,7 +416,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
             )
 
         # No exception means no warning was emitted
-        assert bill.total_outlay_gbp > 0
+        assert breakdown.total_outlay_gbp > 0
 
     def test_annualisation_scales_energy_quantities(self) -> None:
         """Short-period bill's net cost must be approximately (365/30)× the 30-day sim values."""
@@ -526,64 +526,64 @@ class TestOverrideExactValues:
 
     def test_override_own_use_capped_at_demand(self) -> None:
         """Own-use is billed on the 3,400 kWh demand, not the implied 4,042.5 kWh (£606.375)."""
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.own_use_payment_gbp == pytest.approx(510.0)
-        assert bill.cbs_amount_due_gbp == pytest.approx(535.5)
+        assert breakdown.own_use_payment_gbp == pytest.approx(510.0)
+        assert breakdown.cbs_amount_due_gbp == pytest.approx(535.5)
 
     def test_override_exact_import_cost(self) -> None:
         """The capped own-use meets the whole demand, so nothing is imported."""
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
+        assert breakdown.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
 
     def test_override_exact_total_outlay(self) -> None:
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.vat_gbp == pytest.approx(36.45)
-        assert bill.total_outlay_gbp == pytest.approx(765.45)
+        assert breakdown.vat_gbp == pytest.approx(36.45)
+        assert breakdown.total_outlay_gbp == pytest.approx(765.45)
 
     def test_override_cap_reports_effective_fraction(self) -> None:
         """The fraction reports billed own-use over generation, below the 0.70 override."""
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.self_consumption_fraction == pytest.approx(3400.0 / 5775.0)
+        assert breakdown.self_consumption_fraction == pytest.approx(3400.0 / 5775.0)
 
     def test_override_cap_keeps_h3_identity(self) -> None:
         """saving_vs_baseline == own-use × (retail − own-use rate) × (1 + VAT) / 100, exactly."""
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.baseline_bill_gbp == pytest.approx(1051.05)
-        assert bill.saving_vs_baseline_gbp == pytest.approx(3400.0 * (23.0 - 15.0) * 1.05 / 100.0)
+        assert breakdown.baseline_bill_gbp == pytest.approx(1051.05)
+        assert breakdown.saving_vs_baseline_gbp == pytest.approx(3400.0 * (23.0 - 15.0) * 1.05 / 100.0)
 
     def test_override_within_demand_does_not_warn(self) -> None:
         """0.70 × 4,000 = 2,800 kWh fits the 3,400 kWh demand, so it is billed as implied, silently."""
         summary = _make_summary()
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            bill = householder_bill(
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=_make_finance(self_consumption_override=0.70),
                 simulation_days=365,
             )
 
-        assert bill.own_use_payment_gbp == pytest.approx(420.0)
-        assert bill.import_cost_gbp == pytest.approx(138.0)  # 600 kWh × 23 p
+        assert breakdown.own_use_payment_gbp == pytest.approx(420.0)
+        assert breakdown.import_cost_gbp == pytest.approx(138.0)  # 600 kWh × 23 p
 
     def test_override_untariffed_import_priced_at_retail(self) -> None:
         """With no tariff, the override's 600 kWh import is priced at the 23 p retail rate, not £0."""
-        bill = self._untariffed_override_bill()
+        breakdown = self._untariffed_override_bill()
 
-        assert bill.import_cost_gbp == pytest.approx(138.0)
+        assert breakdown.import_cost_gbp == pytest.approx(138.0)
 
     def test_override_untariffed_exact_total_outlay(self) -> None:
         """The retail-priced import carries into VAT and outlay, and the H3 saving holds exactly."""
-        bill = self._untariffed_override_bill()
+        breakdown = self._untariffed_override_bill()
 
-        assert bill.vat_gbp == pytest.approx(38.85)
-        assert bill.total_outlay_gbp == pytest.approx(815.85)
-        assert bill.saving_vs_baseline_gbp == pytest.approx(2800.0 * (23.0 - 15.0) * 1.05 / 100.0)
+        assert breakdown.vat_gbp == pytest.approx(38.85)
+        assert breakdown.total_outlay_gbp == pytest.approx(815.85)
+        assert breakdown.saving_vs_baseline_gbp == pytest.approx(2800.0 * (23.0 - 15.0) * 1.05 / 100.0)
 
     def test_override_untariffed_bills_like_a_retail_tariffed_home(self) -> None:
         """A missing tariff bills every field as the same home on a 23 p (retail) tariff does."""
@@ -602,9 +602,9 @@ class TestOverrideExactValues:
     def test_override_untariffed_capped_home_bills_no_import_yet_warns_twice(self) -> None:
         """At 0.90 own-use is capped at the 3,400 kWh demand, so no import is billed, yet both warnings fire."""
         with pytest.warns(UserWarning, match="capped at demand"):
-            bill = self._untariffed_override_bill(override=0.90)
+            breakdown = self._untariffed_override_bill(override=0.90)
 
-        assert bill.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
+        assert breakdown.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
 
     def test_override_zero_import_kwh_fallback(self) -> None:
         """When total_grid_import_kwh==0, effective import rate falls back to retail_baseline_rate."""
@@ -618,7 +618,7 @@ class TestOverrideExactValues:
         )
         finance = _make_finance(self_consumption_override=0.50)  # will need some import
 
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary_no_import,
             annual_self_consumption_kwh=summary_no_import.total_self_consumption_kwh,
             finance=finance,
@@ -627,7 +627,7 @@ class TestOverrideExactValues:
         # With override=0.50: sc=2000kWh, import=max(3400-2000,0)=1400kWh
         # fallback import rate = retail_baseline_rate = 23.0 p/kWh
         expected_import_cost = 1400.0 * 23.0 / 100.0
-        assert bill.import_cost_gbp == pytest.approx(expected_import_cost, rel=1e-5)
+        assert breakdown.import_cost_gbp == pytest.approx(expected_import_cost, rel=1e-5)
 
     def test_override_zero_export_kwh_fallback(self) -> None:
         """Override path with zero physics export: total_outlay must still be positive.
@@ -647,15 +647,15 @@ class TestOverrideExactValues:
         )
         finance = _make_finance(self_consumption_override=0.30)  # leaves surplus
 
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary_no_export,
             annual_self_consumption_kwh=summary_no_export.total_self_consumption_kwh,
             finance=finance,
             simulation_days=365,
         )
         # CR3: no seg_export_income_gbp on the bill; total_outlay must be positive
-        assert bill.total_outlay_gbp > 0.0
-        assert not hasattr(bill, "seg_export_income_gbp")
+        assert breakdown.total_outlay_gbp > 0.0
+        assert not hasattr(breakdown, "seg_export_income_gbp")
 
 
 # ---------------------------------------------------------------------------
