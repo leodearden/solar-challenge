@@ -18,13 +18,13 @@ from solar_challenge.web.database import get_db
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_sim_results
 from tests._html_page import (
+    chart_figures,
     counts_of,
     current_page_links,
     doctype,
     element_count,
     element_ids,
     headings,
-    render_chart_figure,
     texts,
     texts_after,
 )
@@ -421,8 +421,7 @@ class TestHomeResultsRoute:
         response = client.get(f"/results/home/{run_id}")
 
         assert response.status_code == 200
-        figure = render_chart_figure(response.get_data(as_text=True), "chart-battery-soc")
-        assert figure is not None
+        figure = chart_figures(response.get_data(as_text=True))["chart-battery-soc"]
         annotations = json.loads(figure)["layout"]["annotations"]
         assert {annotation["text"]: annotation["y"] for annotation in annotations} == pytest.approx(
             {"Min SOC": 0.72, "Max SOC": 6.84}

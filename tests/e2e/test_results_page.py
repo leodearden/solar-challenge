@@ -3,11 +3,10 @@
 Uses seeded data fixtures (no live simulation needed) to verify
 page rendering, chart containers, tab switching, stat cards,
 download links and error handling, that the daily balance
-chart agrees with the stat cards, and how renderChart reports
-a figure it cannot draw.
+chart agrees with the stat cards, how a chart whose figure
+cannot be drawn is reported, and that a hidden tab's chart is
+drawn only once its tab is shown.
 """
-
-import json
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
@@ -139,69 +138,79 @@ def test_results_daily_balance_bars_add_up_to_the_stat_cards(
         expect(_stat_card_value(page, card_label)).to_have_text(f"{sum(bars):.1f}")
 
 
-# -- renderChart reports a figure it cannot draw ---------------------------
+# -- A chart whose figure cannot be drawn is reported ----------------------
 
-_ID_NO_ELEMENT_CARRIES = "chart-no-element-carries"
-_FIGURE_TO_DRAW = json.dumps({"data": [{"type": "bar", "x": ["a"], "y": [1]}], "layout": {}})
+_UNDRAWABLE_CHART_ID = "chart-undrawable"
+_POWER_FLOW_CONTAINER = '<div id="chart-power-flow"'
 
 
-def _render_chart(page: Page, element_id: str, figure: str | None) -> None:
-    """Call the page's global renderChart; a page without it makes evaluate raise, so no test using this passes vacuously.
-
-    A None figure reaches the page as null, which `{{ charts.X | tojson }}` writes for a chart that is None.
-    """
-    page.evaluate("([elementId, figure]) => renderChart(elementId, figure)", [element_id, figure])
+def _with_an_undrawable_chart(page: Page, url: str) -> str:
+    """The page at url with one more chart container, whose figure is not JSON, just ahead of chart-power-flow's in the Power Flow tab."""
+    served = page.request.get(url)
+    assert served.status == 200, f"GET {url} answered {served.status}"
+    html = served.text()
+    anchors = html.count(_POWER_FLOW_CONTAINER)
+    assert anchors == 1, (
+        f"expected {_POWER_FLOW_CONTAINER!r} once on the page, as the anchor for the undrawable chart; found {anchors}"
+    )
+    return html.replace(
+        _POWER_FLOW_CONTAINER,
+        f'<div id="{_UNDRAWABLE_CHART_ID}" class="w-full" data-chart-figure="not a figure"></div>'
+        + _POWER_FLOW_CONTAINER,
+    )
 
 
 def _errors_naming(page_errors: list[str], element_id: str) -> list[str]:
-    """The entries of page_errors that contain element_id, so an unrelated entry, such as a Plotly CDN failure, cannot change a verdict about renderChart."""
+    """The entries of page_errors that contain element_id, so an unrelated entry, such as a Plotly CDN failure, cannot change a verdict about the chart."""
     return [error for error in page_errors if element_id in error]
 
 
-def test_render_chart_logs_an_error_naming_a_target_id_no_element_carries(
+def test_a_chart_whose_figure_cannot_be_drawn_logs_one_error_naming_its_id_and_its_tabs_other_chart_still_draws(
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
     page_errors: list[str],
 ) -> None:
-    """Given a figure to draw and an id no element carries, renderChart logs one console error naming the id.
-
-    A page writes each chart's id twice, on its container and in its renderChart call, so the two can drift apart.
-    """
+    """Showing the Power Flow tab draws its charts together, the undrawable one first, so its failure must not stop chart-power-flow."""
     run_id, _ = seeded_home_run
-    page.goto(live_server + f"/results/home/{run_id}")
-    expect(page.locator(f"#{_ID_NO_ELEMENT_CARRIES}")).to_have_count(0)
+    url = live_server + f"/results/home/{run_id}"
+    html = _with_an_undrawable_chart(page, url)
+    page.route(
+        url,
+        lambda route: route.fulfill(
+            status=200, content_type="text/html; charset=utf-8", body=html
+        ),
+    )
+    page.goto(url)
+    expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
 
-    _render_chart(page, _ID_NO_ELEMENT_CARRIES, _FIGURE_TO_DRAW)
+    with page.expect_console_message(lambda message: _UNDRAWABLE_CHART_ID in message.text):
+        page.get_by_role("tab", name="Power Flow", exact=True).click()
 
-    errors_naming_the_id = _errors_naming(page_errors, _ID_NO_ELEMENT_CARRIES)
-    assert len(errors_naming_the_id) == 1, (
-        f"expected one console error naming {_ID_NO_ELEMENT_CARRIES!r}, but the page logged: {page_errors}"
+    expect(page.locator("#chart-power-flow.js-plotly-plot")).to_be_visible()
+    errors_naming_the_chart = _errors_naming(page_errors, _UNDRAWABLE_CHART_ID)
+    assert len(errors_naming_the_chart) == 1, (
+        f"expected one error naming {_UNDRAWABLE_CHART_ID!r}, but the page logged: {page_errors}"
     )
 
 
-@pytest.mark.parametrize("empty_figure", ["{}", None], ids=["empty-object", "null"])
-def test_render_chart_logs_nothing_for_an_empty_figure_even_when_no_element_carries_its_id(
+# -- A hidden tab's chart is drawn once its tab is shown -------------------
+
+
+def test_a_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown(
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
-    page_errors: list[str],
-    empty_figure: str | None,
 ) -> None:
-    """An empty figure is nothing to draw, so renderChart logs nothing, whether or not an element carries the id.
-
-    sankey_diagram returns '{}' for a run with no energy flow, and results/home.html then still
-    calls renderChart('chart-sankey', '{}') with that chart's container left out.
-    """
+    """Power Flow's chart, in a tab hidden on load, is not drawn until its tab is shown (AC3)."""
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
-    expect(page.locator(f"#{_ID_NO_ELEMENT_CARRIES}")).to_have_count(0)
+    expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
+    expect(page.locator("#chart-power-flow.js-plotly-plot")).to_have_count(0)
 
-    _render_chart(page, _ID_NO_ELEMENT_CARRIES, empty_figure)
+    page.get_by_role("tab", name="Power Flow", exact=True).click()
 
-    assert _errors_naming(page_errors, _ID_NO_ELEMENT_CARRIES) == [], (
-        f"renderChart({_ID_NO_ELEMENT_CARRIES!r}, {empty_figure!r}) has nothing to draw, but the page logged: {page_errors}"
-    )
+    expect(page.locator("#chart-power-flow.js-plotly-plot")).to_be_visible()
 
 
 # -- Download CSV returns 200 ----------------------------------------------
