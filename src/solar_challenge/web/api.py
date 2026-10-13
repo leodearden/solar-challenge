@@ -11,6 +11,7 @@ import logging
 import time
 from collections.abc import Mapping
 from dataclasses import asdict
+from types import MappingProxyType
 from typing import Any, Generator, assert_never
 
 import yaml as _yaml
@@ -22,7 +23,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
-from solar_challenge.web.database import PresetType, get_db
+from solar_challenge.web.database import JobStatus, PresetType, get_db
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
     FLEET_FORM_REFUSALS,
@@ -31,7 +32,7 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
-from solar_challenge.web.jobs import JobEvent
+from solar_challenge.web.jobs import JobEvent, JobEventType
 from solar_challenge.web.presets import (
     PresetNameTaken,
     home_preset_named,
@@ -180,6 +181,12 @@ def _job_event_frame(event: JobEvent) -> str:
     return f"event: {event.type}\ndata: {json.dumps(_job_event_payload(event))}\n\n"
 
 
+_FINAL_EVENT_TYPE_BY_STATUS: Mapping[JobStatus, JobEventType] = MappingProxyType({
+    "completed": "complete",
+    "failed": "error",
+})
+
+
 @api_bp.route("/jobs/<job_id>/progress", methods=["GET"])
 def get_job_progress(job_id: str) -> Response:
     """SSE endpoint for streaming job progress events.
@@ -214,16 +221,10 @@ def get_job_progress(job_id: str) -> Response:
                 if event.type == "complete" or event.type == "error":
                     return
 
-            # Check if job is in a terminal state (might have finished
-            # before we started listening)
-            if state.status == "completed":
-                yield (
-                    f"event: complete\n"
-                    f"data: {json.dumps({'status': state.status, 'run_id': state.run_id})}\n\n"
-                )
-                return
-            if state.status == "failed":
-                yield _job_event_frame(JobEvent("error", state))
+            # The job finished and another stream drained its events
+            final_event_type = _FINAL_EVENT_TYPE_BY_STATUS.get(state.status)
+            if final_event_type is not None:
+                yield _job_event_frame(JobEvent(final_event_type, state))
                 return
 
             # Send heartbeat
