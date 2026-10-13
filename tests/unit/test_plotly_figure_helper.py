@@ -29,6 +29,11 @@ def _figure(*traces: dict[str, Any]) -> str:
     return json.dumps({"data": list(traces), "layout": {"title": {"text": "Energy Flow"}}})
 
 
+def _annotated(*annotations: dict[str, Any]) -> str:
+    """A figure of one bar and *annotations*, written as JSON as Figure.to_json writes it."""
+    return json.dumps({"data": [_BAR], "layout": {"annotations": list(annotations)}})
+
+
 def _sankey(
     labels: list[str], node_colours: list[str], links: list[tuple[int, int, float, str]]
 ) -> dict[str, Any]:
@@ -129,17 +134,10 @@ def test_a_trace_without_a_name_raises_rather_than_being_left_out() -> None:
 
 def test_annotation_texts_lists_each_annotations_text_in_the_order_the_figure_draws_them() -> None:
     """The annotations are written as make_subplots writes its subplot titles, in an order neither sorted nor reverse-sorted."""
-    figure = json.dumps(
-        {
-            "data": [_BAR],
-            "layout": {
-                "annotations": [
-                    {"showarrow": False, "text": "Generation (kWh)", "x": 0.14, "xref": "paper", "y": 1.0},
-                    {"showarrow": False, "text": "Self-Consumption Ratio", "x": 0.5, "xref": "paper", "y": 1.0},
-                    {"showarrow": False, "text": "Grid Dependency Ratio", "x": 0.86, "xref": "paper", "y": 1.0},
-                ]
-            },
-        }
+    figure = _annotated(
+        {"showarrow": False, "text": "Generation (kWh)", "x": 0.14, "xref": "paper", "y": 1.0},
+        {"showarrow": False, "text": "Self-Consumption Ratio", "x": 0.5, "xref": "paper", "y": 1.0},
+        {"showarrow": False, "text": "Grid Dependency Ratio", "x": 0.86, "xref": "paper", "y": 1.0},
     )
 
     assert annotation_texts(figure) == ["Generation (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"]
@@ -158,6 +156,18 @@ def test_a_figure_with_no_annotations_has_no_annotation_texts(figure: str) -> No
     The first figure's title has a text, which is not an annotation's.
     """
     assert annotation_texts(figure) == []
+
+
+def test_an_annotation_without_a_text_raises_rather_than_being_left_out() -> None:
+    """Figure.to_json writes no text for an annotation drawn without one, as an arrow alone is."""
+    figure = _annotated(
+        {"text": "Min SOC", "y": 0.72},
+        {"showarrow": True, "x": 1, "y": 2},
+        {"text": "Max SOC", "y": 6.84},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("[{'showarrow': True, 'x': 1, 'y': 2}]") + "$"):
+        annotation_texts(figure)
 
 
 def test_sankey_link_values_keys_each_links_value_by_its_source_and_target_labels() -> None:
