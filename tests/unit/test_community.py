@@ -679,7 +679,7 @@ class TestCommunityBillingSavings:
         )
 
     @pytest.fixture
-    def billing_cfg(self) -> "CommunityConfig":
+    def billing_cfg(self) -> CommunityConfig:
         billing = CommunityBillingConfig(
             tariff=FlatRateTariff(0.30),
             seg_rate_pence_per_kwh=4.1,
@@ -687,28 +687,28 @@ class TestCommunityBillingSavings:
         return CommunityConfig(sharing_mode="p2p", billing=billing)
 
     def test_baseline_net_cost(
-        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+        self, billing_fleet: FleetResults, billing_cfg: CommunityConfig
     ) -> None:
         """baseline_net_cost_gbp matches formula: import_cost - export_revenue."""
         cr = simulate_community(billing_fleet, billing_cfg)
         assert cr.baseline_net_cost_gbp == pytest.approx(0.954, abs=1e-6)
 
     def test_community_net_cost(
-        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+        self, billing_fleet: FleetResults, billing_cfg: CommunityConfig
     ) -> None:
         """community_net_cost_gbp matches formula: p2p import 0 - export 0.082."""
         cr = simulate_community(billing_fleet, billing_cfg)
         assert cr.community_net_cost_gbp == pytest.approx(-0.082, abs=1e-6)
 
     def test_community_savings(
-        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+        self, billing_fleet: FleetResults, billing_cfg: CommunityConfig
     ) -> None:
         """community_savings_gbp == approx(1.036) == baseline - community."""
         cr = simulate_community(billing_fleet, billing_cfg)
         assert cr.community_savings_gbp == pytest.approx(1.036, abs=1e-6)
 
     def test_savings_equals_baseline_minus_community(
-        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+        self, billing_fleet: FleetResults, billing_cfg: CommunityConfig
     ) -> None:
         """community_savings_gbp == baseline_net - community_net exactly."""
         cr = simulate_community(billing_fleet, billing_cfg)
@@ -717,7 +717,7 @@ class TestCommunityBillingSavings:
         )
 
     def test_savings_non_negative(
-        self, billing_fleet: FleetResults, billing_cfg: "CommunityConfig"
+        self, billing_fleet: FleetResults, billing_cfg: CommunityConfig
     ) -> None:
         """community_savings_gbp >= 0 (p2p netting strictly benefits when R >> SEG)."""
         cr = simulate_community(billing_fleet, billing_cfg)

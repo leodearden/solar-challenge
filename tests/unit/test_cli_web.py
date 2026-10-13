@@ -68,7 +68,7 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
-def _server(tmp_path: Path, script: str, *args: str) -> Iterator["subprocess.Popen[bytes]"]:
+def _server(tmp_path: Path, script: str, *args: str) -> Iterator[subprocess.Popen[bytes]]:
     """Run script with args in a child process working in tmp_path, also its HOME, that writes its stdout to stdout.log and its stderr to stderr.log there; kill it on exit."""
     stdout_log, stderr_log = tmp_path / "stdout.log", tmp_path / "stderr.log"
     with stdout_log.open("wb") as stdout, stderr_log.open("wb") as stderr:
@@ -88,7 +88,7 @@ def _server(tmp_path: Path, script: str, *args: str) -> Iterator["subprocess.Pop
             print(stderr_log.read_text(), file=sys.stderr)
 
 
-def _wait_until(server: "subprocess.Popen[bytes]", condition: Callable[[], bool], what: str) -> None:
+def _wait_until(server: subprocess.Popen[bytes], condition: Callable[[], bool], what: str) -> None:
     deadline = time.monotonic() + 60
     while not condition():
         if server.poll() is not None:

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 class TestYearPoint:
     """YearPoint frozen dataclass construction and validation."""
 
-    def _make_valid(self) -> "YearPoint":
+    def _make_valid(self) -> YearPoint:
         return YearPoint(
             year=5,
             pv_soh=0.975,
@@ -169,7 +169,7 @@ class TestYearPoint:
 class TestMultiYearCurve:
     """MultiYearCurve frozen dataclass construction and validation."""
 
-    def _make_point(self, year: int, val: float = 1.0) -> "YearPoint":
+    def _make_point(self, year: int, val: float = 1.0) -> YearPoint:
         return YearPoint(
             year=year,
             pv_soh=max(0.0, 1.0 - year * 0.005),
@@ -180,7 +180,7 @@ class TestMultiYearCurve:
             fleet_revenue_gbp=val * 0.1,
         )
 
-    def _make_valid(self) -> "MultiYearCurve":
+    def _make_valid(self) -> MultiYearCurve:
         points = tuple(self._make_point(y) for y in range(25))
         return MultiYearCurve(
             points=points,
