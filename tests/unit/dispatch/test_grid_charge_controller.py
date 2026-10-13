@@ -17,7 +17,7 @@ from solar_challenge.dispatch import (
 class TestGridChargeContext:
     """Test GridChargeContext frozen dataclass."""
 
-    def _make_ctx(self, **overrides):  # type: ignore[no-untyped-def]
+    def _make_ctx(self, **overrides: float | bool) -> GridChargeContext:
         """Build a default GridChargeContext, applying keyword overrides."""
         defaults = dict(
             current_rate=0.10,
@@ -423,7 +423,7 @@ class TestDecideActionAcceptsGridChargeCtx:
         """SelfConsumption: passing grid_charge_ctx positionally raises TypeError."""
         s = SelfConsumptionStrategy()
         with pytest.raises(TypeError):
-            s.decide_action(  # type: ignore[call-arg]
+            s.decide_action(  # type: ignore[misc]
                 self._TS, 1.0, 3.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
             )
 
@@ -454,7 +454,7 @@ class TestDecideActionAcceptsGridChargeCtx:
         """TOUOptimized: passing grid_charge_ctx positionally raises TypeError."""
         s = TOUOptimizedStrategy(peak_hours=[(17, 20)])
         with pytest.raises(TypeError):
-            s.decide_action(  # type: ignore[call-arg]
+            s.decide_action(  # type: ignore[misc]
                 self._TS, 3.0, 1.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
             )
 
@@ -480,6 +480,6 @@ class TestDecideActionAcceptsGridChargeCtx:
         """PeakShaving: passing grid_charge_ctx positionally raises TypeError."""
         s = PeakShavingStrategy(import_limit_kw=2.0)
         with pytest.raises(TypeError):
-            s.decide_action(  # type: ignore[call-arg]
+            s.decide_action(  # type: ignore[misc]
                 self._TS, 0.0, 5.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
             )

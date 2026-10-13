@@ -27,7 +27,7 @@ from solar_challenge.config import (
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
 
 
-def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple:  # type: ignore[return]
+def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple:
     """Build (scenario, finance_loaded) from the board YAML.
 
     Mirrors the canonical consumer path in cli/finance.py::

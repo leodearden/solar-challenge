@@ -103,7 +103,7 @@ def _constant_simulate(fr: "FleetResults") -> "Callable":  # type: ignore[name-d
     return lambda fc, s, e: fr
 
 
-def _board_econ_scenario() -> tuple:  # type: ignore[return]
+def _board_econ_scenario() -> tuple:
     """Build (scenario, finance_loaded) from the board YAML.
 
     Delegates to ``tests.integration._helpers.board_econ_scenario`` — the
@@ -330,7 +330,7 @@ def _age_nonlinear_simulate(homes: list) -> "Callable":  # type: ignore[name-def
         )
         fc_homes = list(getattr(fc, "homes", []))
         per_home = [sim_r for _ in fc_homes]
-        return FleetResults(per_home_results=per_home, home_configs=fc_homes)  # type: ignore[call-arg]
+        return FleetResults(per_home_results=per_home, home_configs=fc_homes)
 
     return _sim
 

@@ -658,7 +658,7 @@ class TestCommunityBillingReport:
     def test_no_billing_section_when_fields_none(self, cr_no_billing: object) -> None:
         """Report does NOT contain billing section when savings fields are None."""
         assert isinstance(cr_no_billing, CommunityResults)
-        assert cr_no_billing.community_savings_gbp is None  # type: ignore[attr-defined]
+        assert cr_no_billing.community_savings_gbp is None
         report = generate_community_report(cr_no_billing)
         assert "Community Billing" not in report
         assert "Savings" not in report
@@ -709,7 +709,7 @@ class TestCommunityBillingAB:
     def test_p2p_savings_equals_baseline_minus_community(self, synth_fleet: FleetResults) -> None:
         """P2P: savings == baseline_net - community_net exactly."""
         cr = simulate_community(synth_fleet, self._billing_cfg("p2p"))
-        assert cr.community_savings_gbp == pytest.approx(  # type: ignore[operator]
+        assert cr.community_savings_gbp == pytest.approx(
             cr.baseline_net_cost_gbp - cr.community_net_cost_gbp, abs=1e-10  # type: ignore[operator]
         )
 
@@ -852,10 +852,11 @@ class TestComputeCommunityMetricsSharingMode:
         The old heuristic (battery_charge.abs().sum() > 0 → 'community_battery') would
         wrongly report 'community_battery' here.  The authoritative field must win.
         """
+        assert isinstance(cr_p2p, CommunityResults)
         # Inject a non-zero battery_charge series to fool the heuristic.
         non_zero_charge = pd.Series(
             [1.0, 0.5, 0.5, 0.0],
-            index=cr_p2p.grid_import.index,  # type: ignore[union-attr]
+            index=cr_p2p.grid_import.index,
             dtype=float,
         )
         mislabeled = dataclasses.replace(cr_p2p, battery_charge=non_zero_charge)
@@ -872,10 +873,11 @@ class TestComputeCommunityMetricsSharingMode:
         'p2p' for a community_battery run whose battery never cycled during the window.
         The authoritative field must win.
         """
+        assert isinstance(cr_batt, CommunityResults)
         # Inject an all-zero battery_charge series to fool the heuristic in the other direction.
         zero_charge = pd.Series(
             [0.0, 0.0, 0.0, 0.0],
-            index=cr_batt.grid_import.index,  # type: ignore[union-attr]
+            index=cr_batt.grid_import.index,
             dtype=float,
         )
         mislabeled = dataclasses.replace(cr_batt, battery_charge=zero_charge)
