@@ -256,7 +256,7 @@ class TestCalculateSummaryGridChargeCost:
     """calculate_summary_statistics aggregates SummaryStatistics.total_grid_charge_cost_gbp."""
 
     def _make_results(
-        self, grid_charge_cost: "pd.Series | None" = None
+        self, grid_charge_cost: pd.Series | None = None
     ) -> SimulationResults:
         idx = pd.date_range("2024-01-01", periods=3, freq="1min")
         return SimulationResults(
@@ -292,7 +292,7 @@ class TestCalculateSummaryGridChargeCost:
 class TestCalculateSummaryGridCharge:
     """calculate_summary totals the energy the battery stored from the grid as SummaryStatistics.total_grid_charge_kwh."""
 
-    def _make_results(self, grid_charge: "pd.Series | None" = None) -> SimulationResults:
+    def _make_results(self, grid_charge: pd.Series | None = None) -> SimulationResults:
         """Three minutes in which the battery charges only from the grid, so its charge and the grid import each carry grid_charge."""
         idx = pd.date_range("2024-01-01", periods=3, freq="1min")
         charged_from_grid = grid_charge if grid_charge is not None else pd.Series([0.0, 0.0, 0.0], index=idx)

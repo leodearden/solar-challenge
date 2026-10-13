@@ -213,7 +213,7 @@ def _stream_manager(text_chunks: list[str], final_message: SimpleNamespace) -> M
 
 
 def seed_run(
-    db_path: "str | Path",
+    db_path: str | Path,
     *,
     run_id: str,
     name: str,
