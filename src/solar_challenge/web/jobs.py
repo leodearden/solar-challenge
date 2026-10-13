@@ -600,8 +600,10 @@ class JobManager:
         conn.execute("PRAGMA foreign_keys=ON")
         try:
             self._update_progress(job_id, 5.0, "Starting", "Initializing...", conn)
-            conn.execute("UPDATE jobs SET status=?, started_at=? WHERE id=?",
-                         (_RUNNING_JOB_STATUS, datetime.now(timezone.utc).isoformat(), job_id))
+            conn.execute(
+                "UPDATE jobs SET started_at = :started_at WHERE id = :job_id",
+                {"started_at": datetime.now(timezone.utc).isoformat(), "job_id": job_id},
+            )
             conn.commit()
 
             def progress(pct: float, step: str, msg: str) -> None:
