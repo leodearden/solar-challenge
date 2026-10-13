@@ -52,7 +52,7 @@ _Value = TypeVar("_Value")
 
 
 def traces(figure: str) -> list[dict[str, Any]]:
-    """Each trace of *figure*, as written, in the order it draws them; [] when it has none."""
+    """The traces of *figure*, as written, in the order it draws them; [] when it has none."""
     drawn: list[dict[str, Any]] = json.loads(figure).get("data", [])
     return drawn
 
