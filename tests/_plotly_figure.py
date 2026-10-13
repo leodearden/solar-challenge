@@ -1,14 +1,30 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to the Plotly figure JSON a solar_challenge.web.charts builder returns:
-the nodes and links of a Sankey figure, keyed by node label, and the colours a figure writes,
-read as red, green and blue.
+its traces, in drawing order or keyed by name, and the texts of its layout annotations; the
+nodes and links of a Sankey figure, keyed by node label; and the colours a figure writes, read
+as red, green and blue.
 
 A colour is written #rrggbb, rgb() or rgba(), in any case and with any whitespace inside the
 parentheses; an alpha is never read.
 
 Usage::
 
-    from tests._plotly_figure import colour_literals, opaque, sankey_link_colours, sankey_link_values, sankey_node_colours
+    from tests._plotly_figure import (
+        annotation_texts,
+        colour_literals,
+        opaque,
+        sankey_link_colours,
+        sankey_link_values,
+        sankey_node_colours,
+        traces,
+        traces_by_name,
+    )
+
+    assert traces(charts.fleet_heatmap(summaries))[0]["y"] == ["Home 1", "Home 2"]
+    assert traces_by_name(charts.financial_breakdown(results))["Daily Cost"]["y"] == [2.88, 2.88]
+    assert annotation_texts(charts.financial_breakdown(unpriced_results)) == [
+        "No tariff configured — cost and revenue tracking unavailable"
+    ]
 
     figure = charts.sankey_diagram(summary)
     assert sankey_link_values(figure)[("Grid", "Battery")] == 2.0
@@ -33,6 +49,31 @@ _COLOUR_LITERAL = re.compile(
 
 _Key = TypeVar("_Key", bound=Hashable)
 _Value = TypeVar("_Value")
+
+
+def traces(figure: str) -> list[dict[str, Any]]:
+    """The traces of *figure*, as written, in the order it draws them; [] when it has none."""
+    drawn: list[dict[str, Any]] = json.loads(figure).get("data", [])
+    return drawn
+
+
+def traces_by_name(figure: str) -> dict[str, dict[str, Any]]:
+    """Each trace of *figure*, as written, keyed by its name.
+
+    Raises ValueError, rather than leave it out, when a trace has no name; and rather than keep
+    one, when two traces share a name.
+    """
+    drawn = traces(figure)
+    unnamed = [trace.get("type") for trace in drawn if "name" not in trace]
+    if unnamed:
+        raise ValueError(f"Expected each trace to have a name; got unnamed traces of the types {unnamed}")
+    return _keyed([trace["name"] for trace in drawn], drawn, expected="one trace per name")
+
+
+def annotation_texts(figure: str) -> list[str]:
+    """The texts of *figure*'s layout annotations, in the order it draws them; [] when it has none."""
+    annotations: list[dict[str, Any]] = json.loads(figure).get("layout", {}).get("annotations", [])
+    return [annotation["text"] for annotation in annotations]
 
 
 def sankey_link_values(figure: str) -> dict[tuple[str, str], float]:
@@ -94,11 +135,11 @@ def _rgb(match: re.Match[str]) -> Rgb:
 
 
 def _sankey_trace(figure: str) -> dict[str, Any]:
-    traces: list[dict[str, Any]] = json.loads(figure).get("data", [])
-    types = [trace.get("type") for trace in traces]
+    drawn = traces(figure)
+    types = [trace.get("type") for trace in drawn]
     if types != ["sankey"]:
         raise ValueError(f"Expected a figure of one trace, a Sankey; got traces of the types {types}")
-    return traces[0]
+    return drawn[0]
 
 
 def _by_link(figure: str, attribute: str) -> dict[tuple[str, str], Any]:

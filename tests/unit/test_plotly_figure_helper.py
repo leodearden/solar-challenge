@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a Sankey's nodes and links, and the colours a figure writes.
+"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a figure's traces, in drawing order or keyed by name, and the texts of its annotations; a Sankey's nodes and links; and the colours a figure writes.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a chart test that uses it pass vacuously.
@@ -13,11 +13,14 @@ from typing import Any
 import pytest
 
 from tests._plotly_figure import (
+    annotation_texts,
     colour_literals,
     opaque,
     sankey_link_colours,
     sankey_link_values,
     sankey_node_colours,
+    traces,
+    traces_by_name,
 )
 
 
@@ -58,6 +61,95 @@ _LINK_READERS = [
     pytest.param(sankey_link_colours, id="sankey_link_colours"),
 ]
 _READERS = [*_LINK_READERS, pytest.param(sankey_node_colours, id="sankey_node_colours")]
+
+
+def test_traces_lists_each_trace_as_written_in_the_order_the_figure_draws_them() -> None:
+    """The heatmap has no name, which traces, unlike traces_by_name, does not need."""
+    generation = {"type": "box", "name": "Generation", "y": [72.0, 8.0]}
+    heatmap = {"type": "heatmap", "x": ["Generation"], "y": ["Home 1", "Home 2"], "z": [[72.0], [8.0]]}
+    demand = {"type": "box", "name": "Demand", "y": [45.0, 46.0]}
+
+    assert traces(_figure(generation, heatmap, demand)) == [generation, heatmap, demand]
+
+
+def test_a_figure_with_no_data_has_no_traces() -> None:
+    """sankey_diagram returns "{}" when it draws no flow."""
+    assert traces("{}") == []
+
+
+def test_traces_by_name_keys_each_trace_as_written_by_its_name() -> None:
+    cost = {"type": "bar", "name": "Daily Cost", "x": ["2024-06-01"], "y": [2.88]}
+    revenue = {"type": "bar", "name": "Daily Revenue", "x": ["2024-06-01"], "y": [1.44]}
+    savings = {
+        "type": "scatter",
+        "name": "Cumulative Net Savings",
+        "mode": "lines",
+        "x": ["2024-06-01"],
+        "y": [-1.44],
+        "yaxis": "y2",
+    }
+
+    assert traces_by_name(_figure(cost, revenue, savings)) == {
+        "Daily Cost": cost,
+        "Daily Revenue": revenue,
+        "Cumulative Net Savings": savings,
+    }
+
+
+def test_two_traces_sharing_a_name_raise_rather_than_keeping_one() -> None:
+    figure = _figure(
+        {"type": "scatter", "name": "Grid Import", "y": [1.2, 0.0]},
+        {"type": "scatter", "name": "Grid Export", "y": [0.0, 0.8]},
+        {"type": "scatter", "name": "Grid Import", "y": [0.4, 0.0]},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("['Grid Import']") + "$"):
+        traces_by_name(figure)
+
+
+def test_a_trace_without_a_name_raises_rather_than_being_left_out() -> None:
+    """Figure.to_json writes no name for a trace drawn without one."""
+    figure = _figure(
+        {"type": "scatter", "name": "Grid Import", "y": [1.2, 0.0]},
+        {"type": "heatmap", "z": [[1.2, 0.0]]},
+        {"type": "scatter", "name": "Grid Export", "y": [0.0, 0.8]},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("['heatmap']") + "$"):
+        traces_by_name(figure)
+
+
+def test_annotation_texts_lists_each_annotations_text_in_the_order_the_figure_draws_them() -> None:
+    """The annotations are written as make_subplots writes its subplot titles, in an order neither sorted nor reverse-sorted."""
+    figure = json.dumps(
+        {
+            "data": [_BAR],
+            "layout": {
+                "annotations": [
+                    {"showarrow": False, "text": "Generation (kWh)", "x": 0.14, "xref": "paper", "y": 1.0},
+                    {"showarrow": False, "text": "Self-Consumption Ratio", "x": 0.5, "xref": "paper", "y": 1.0},
+                    {"showarrow": False, "text": "Grid Dependency Ratio", "x": 0.86, "xref": "paper", "y": 1.0},
+                ]
+            },
+        }
+    )
+
+    assert annotation_texts(figure) == ["Generation (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"]
+
+
+@pytest.mark.parametrize(
+    "figure",
+    [
+        pytest.param(_figure(_BAR), id="layout-without-annotations"),
+        pytest.param("{}", id="no-layout"),
+    ],
+)
+def test_a_figure_with_no_annotations_has_no_annotation_texts(figure: str) -> None:
+    """Figure.to_json writes no annotations key for a figure without any, and sankey_diagram returns "{}" when it draws no flow.
+
+    The first figure's title has a text, which is not an annotation's.
+    """
+    assert annotation_texts(figure) == []
 
 
 def test_sankey_link_values_keys_each_links_value_by_its_source_and_target_labels() -> None:

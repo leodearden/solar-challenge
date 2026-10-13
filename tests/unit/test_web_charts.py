@@ -27,7 +27,7 @@ from solar_challenge.web.charts import (
 from solar_challenge.web.simulation_params import parse_home_config
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
-from tests._plotly_figure import sankey_link_values
+from tests._plotly_figure import annotation_texts, sankey_link_values, traces_by_name
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
@@ -69,11 +69,6 @@ def _steady_run(
 def _one_day_summary(**totals: float) -> SummaryStatistics:
     """A one-day run's summary with the totals given, so a test writes every total the Sankey reads."""
     return dataclasses.replace(calculate_summary(make_sim_results(days=1)), **totals)
-
-
-def _annotation_texts(figure: str) -> list[str]:
-    """The texts of *figure*'s layout annotations, in the order it draws them; [] when it has none."""
-    return [annotation["text"] for annotation in json.loads(figure)["layout"].get("annotations", [])]
 
 
 def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResults:
@@ -292,11 +287,9 @@ class TestChartTotals:
         assert pie["values"] == [36.0, 60.0]
 
     def test_financial_bars_are_each_days_pounds(self) -> None:
-        figure = json.loads(
+        traces = traces_by_name(
             financial_breakdown(_steady_run(2, import_cost_gbp=0.002, export_revenue_gbp=0.001))
         )
-
-        traces = {trace["name"]: trace for trace in figure["data"]}
 
         # £0.002 and £0.001 a minute, for 1440 minutes a day.
         assert traces["Daily Cost"]["x"] == ["2024-06-01", "2024-06-02"]
@@ -314,9 +307,7 @@ class TestFinancialBreakdownPricing:
             days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
         )
 
-        figure = json.loads(financial_breakdown(results))
-
-        traces = {trace["name"]: trace for trace in figure["data"]}
+        traces = traces_by_name(financial_breakdown(results))
 
         assert traces["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
         assert traces["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
@@ -328,9 +319,7 @@ class TestFinancialBreakdownPricing:
         assert peak_import_kw > 0
         assert peak_export_kw > 0
 
-        figure = json.loads(financial_breakdown(results))
-
-        traces = {trace["name"]: trace for trace in figure["data"]}
+        traces = traces_by_name(financial_breakdown(results))
 
         assert traces["Daily Cost"]["y"] == [0.0, 0.0]
         assert traces["Daily Revenue"]["y"] == [0.0, 0.0]
@@ -343,7 +332,7 @@ class TestFinancialBreakdownNoTariffAnnotation:
     """
 
     @pytest.mark.parametrize(
-        ("import_rate", "export_rate", "annotation_texts"),
+        ("import_rate", "export_rate", "notes"),
         [
             pytest.param(
                 0.0,
@@ -362,13 +351,13 @@ class TestFinancialBreakdownNoTariffAnnotation:
         ],
     )
     def test_is_drawn_exactly_when_import_is_not_priced_and_names_revenue_too_when_export_is_not_either(
-        self, import_rate: float, export_rate: float, annotation_texts: list[str]
+        self, import_rate: float, export_rate: float, notes: list[str]
     ) -> None:
         results = make_sinusoidal_sim_results(
             days=2, import_rate_gbp_per_kwh=import_rate, export_rate_gbp_per_kwh=export_rate
         )
 
-        assert _annotation_texts(financial_breakdown(results)) == annotation_texts
+        assert annotation_texts(financial_breakdown(results)) == notes
 
     @pytest.mark.parametrize(
         "export_rate",
@@ -385,7 +374,7 @@ class TestFinancialBreakdownNoTariffAnnotation:
         )
         assert results.grid_import.max() == 0
 
-        assert _annotation_texts(financial_breakdown(results)) == []
+        assert annotation_texts(financial_breakdown(results)) == []
 
     def test_a_simulated_run_with_an_seg_rate_and_no_tariff_notes_that_no_import_tariff_is_configured(
         self,
@@ -395,7 +384,7 @@ class TestFinancialBreakdownNoTariffAnnotation:
 
         assert results.grid_import.sum() > 0
         assert results.export_revenue.sum() > 0
-        assert _annotation_texts(financial_breakdown(results)) == [
+        assert annotation_texts(financial_breakdown(results)) == [
             "No import tariff configured — cost tracking unavailable"
         ]
 
@@ -411,6 +400,6 @@ class TestFinancialBreakdownNoTariffAnnotation:
 
         assert results.grid_import.sum() > 0
         assert results.grid_export.sum() == 0
-        assert _annotation_texts(financial_breakdown(results)) == [
+        assert annotation_texts(financial_breakdown(results)) == [
             "No tariff configured — cost and revenue tracking unavailable"
         ]

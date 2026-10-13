@@ -5,9 +5,7 @@ results page agree. A chart that colours by flow draws each flow in its own pale
 """
 
 import dataclasses
-import json
 from collections.abc import Callable
-from typing import Any
 
 import pytest
 
@@ -17,7 +15,7 @@ from solar_challenge.home import SimulationResults, SummaryStatistics, calculate
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE
 from tests._finance_builders import make_fleet_results_of, make_sim_results
-from tests._plotly_figure import opaque, sankey_link_colours, sankey_node_colours
+from tests._plotly_figure import annotation_texts, opaque, sankey_link_colours, sankey_node_colours, traces
 
 # Each flow's label and palette role, in the order every chart draws the flows.
 _FLOW_ROLES = {
@@ -51,21 +49,20 @@ def _summary() -> SummaryStatistics:
     return calculate_summary(make_sim_results(days=1))
 
 
-def _traces(figure: str | None) -> list[dict[str, Any]]:
-    """The traces of *figure*, a chart builder's Plotly JSON."""
+def _drawn(figure: str | None) -> str:
+    """*figure*, from a builder that returns None for a run too short to chart, asserted to be drawn."""
     assert figure is not None
-    traces: list[dict[str, Any]] = json.loads(figure)["data"]
-    return traces
+    return figure
 
 
-def _lines(figure: str | None) -> list[tuple[str, str]]:
+def _lines(figure: str) -> list[tuple[str, str]]:
     """Each trace of *figure* as its name and its line's colour."""
-    return [(trace["name"], trace["line"]["color"]) for trace in _traces(figure)]
+    return [(trace["name"], trace["line"]["color"]) for trace in traces(figure)]
 
 
-def _markers(figure: str | None) -> list[tuple[str, str]]:
+def _markers(figure: str) -> list[tuple[str, str]]:
     """Each trace of *figure* as its name and its markers' colour."""
-    return [(trace["name"], trace["marker"]["color"]) for trace in _traces(figure)]
+    return [(trace["name"], trace["marker"]["color"]) for trace in traces(figure)]
 
 
 _COLOURED_BY_FLOW: dict[str, tuple[Callable[[], list[tuple[str, str]]], tuple[str, ...]]] = {
@@ -73,7 +70,7 @@ _COLOURED_BY_FLOW: dict[str, tuple[Callable[[], list[tuple[str, str]]], tuple[st
     "fleet_aggregate_timeline": (lambda: _lines(charts.fleet_aggregate_timeline(_fleet())), _FIVE_FLOWS),
     "daily_energy_balance": (lambda: _markers(charts.daily_energy_balance(make_sim_results(days=2))), _FIVE_FLOWS),
     "monthly_summary": (
-        lambda: _markers(charts.monthly_summary(_year())),
+        lambda: _markers(_drawn(charts.monthly_summary(_year()))),
         ("Self-Consumption", "Grid Import", "Grid Export"),
     ),
     "fleet_box_plots": (lambda: _markers(charts.fleet_box_plots([_summary()] * 2)), _FIVE_FLOWS),
@@ -94,26 +91,23 @@ def test_a_chart_coloured_by_flow_draws_each_flow_under_its_label_in_its_roles_c
 
 
 _NAMED: dict[str, tuple[Callable[[], list[str]], list[str]]] = {
-    "fleet_heatmap": (lambda: _traces(charts.fleet_heatmap([_summary()] * 2))[0]["x"], list(_FIVE_FLOWS)),
+    "fleet_heatmap": (lambda: traces(charts.fleet_heatmap([_summary()] * 2))[0]["x"], list(_FIVE_FLOWS)),
     "comparison_bar_chart": (
-        lambda: _traces(charts.comparison_bar_chart([dataclasses.asdict(_summary())], ["Run A"]))[0]["x"],
+        lambda: traces(charts.comparison_bar_chart([dataclasses.asdict(_summary())], ["Run A"]))[0]["x"],
         list(_FIVE_FLOWS),
     ),
     "seasonal_comparison": (
-        lambda: [category for trace in _traces(charts.seasonal_comparison(_year())) for category in trace["x"]],
+        lambda: [category for trace in traces(_drawn(charts.seasonal_comparison(_year()))) for category in trace["x"]],
         # The winter bars' categories, then the summer bars'.
         ["Generation (kWh)", "Demand (kWh)", "Self-Consumption (kWh)"] * 2,
     ),
     "overlaid_power_flows": (
-        lambda: [trace["name"] for trace in _traces(charts.overlaid_power_flows([_year()], ["Run A"]))],
+        lambda: [trace["name"] for trace in traces(charts.overlaid_power_flows([_year()], ["Run A"]))],
         ["Run A - Generation", "Run A - Demand"],
     ),
     "fleet_distribution_histograms_subplot_title": (
         # make_subplots writes the subplot titles as layout annotations, in subplot order.
-        lambda: [
-            annotation["text"]
-            for annotation in json.loads(charts.fleet_distribution_histograms([_summary()] * 2))["layout"]["annotations"]
-        ][:1],
+        lambda: annotation_texts(charts.fleet_distribution_histograms([_summary()] * 2))[:1],
         ["Generation (kWh)"],
     ),
 }
