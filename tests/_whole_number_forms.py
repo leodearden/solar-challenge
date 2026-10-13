@@ -18,11 +18,7 @@ Usage::
     def test_days_in_another_form_runs_the_window_of_its_int(days: object) -> None:
         assert parse_date_range({"days": days}) == parse_date_range({"days": WHOLE_NUMBER})
 
-    @pytest.mark.parametrize("n_homes", whole_number_forms(MAX_FLEET_HOMES + 1))
-    def test_one_home_above_the_limit_in_another_form_is_refused(n_homes: object) -> None:
-        assert builder_form_errors({**_ACCEPTED_FORM, "n_homes": n_homes}) == [
-            f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."
-        ]
+    @pytest.mark.parametrize("n_homes", whole_number_forms(LIMIT + 1))
 """
 
 import pytest

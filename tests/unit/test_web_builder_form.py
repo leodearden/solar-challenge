@@ -241,7 +241,7 @@ class TestBuilderFormErrors:
     def test_a_number_of_homes_above_the_limit_that_is_a_whole_number_in_another_form_is_refused_naming_the_limit(
         self, value: object
     ) -> None:
-        """The dashboard's limit on the number of homes reads a whole float or a numeric string as the number it equals, as the scenario does, so one home above the limit sent in either form has the limit's refusal as its one reason."""
+        """The dashboard's limit on the number of homes reads a whole float or a numeric string as the number it equals, as the scenario does, so one home above the limit sent in any of those forms has the limit's refusal as its one reason."""
         assert builder_form_errors({**_ACCEPTED_FORM, "n_homes": value}) == [
             f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."
         ]
