@@ -51,9 +51,13 @@ _Value = TypeVar("_Value")
 def traces_by_name(figure: str) -> dict[str, dict[str, Any]]:
     """Each trace of *figure*, as written, keyed by its name.
 
-    Raises ValueError, rather than keep one, when two traces share a name.
+    Raises ValueError, rather than leave it out, when a trace has no name; and rather than keep
+    one, when two traces share a name.
     """
     traces = _traces(figure)
+    unnamed = [trace.get("type") for trace in traces if "name" not in trace]
+    if unnamed:
+        raise ValueError(f"Expected each trace to have a name; got unnamed traces of the types {unnamed}")
     return _keyed([trace["name"] for trace in traces], traces, expected="one trace per name")
 
 
