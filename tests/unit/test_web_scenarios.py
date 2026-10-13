@@ -22,7 +22,9 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.web.charts import sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._html_page import element_attributes, element_count, texts, texts_after
@@ -313,8 +315,6 @@ class TestScenarioAPI:
         self, client: FlaskClient
     ) -> None:
         """The builder accepts a fleet of exactly the dashboard's fleet limit, and refuses one home more, naming the limit."""
-        from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
-
         at_limit = client.post(
             "/api/scenarios/validate",
             json={**TestBuilderScenarioYaml._DEFAULT_FORM, "n_homes": MAX_FLEET_HOMES},
@@ -667,8 +667,6 @@ class TestSweepChart:
 
     def test_sweep_parameter_chart_returns_json(self) -> None:
         """Test sweep_parameter_chart returns valid Plotly JSON."""
-        from solar_challenge.web.charts import sweep_parameter_chart
-
         result = sweep_parameter_chart(
             [2.0, 4.0, 6.0, 8.0],
             [50.5, 65.3, 72.1, 78.4],
@@ -681,8 +679,6 @@ class TestSweepChart:
 
     def test_sweep_parameter_chart_has_traces(self) -> None:
         """Test sweep_parameter_chart includes main, optimal, and trend traces."""
-        from solar_challenge.web.charts import sweep_parameter_chart
-
         result = sweep_parameter_chart(
             [1.0, 2.0, 3.0, 4.0, 5.0],
             [10.0, 25.0, 40.0, 55.0, 70.0],
@@ -695,15 +691,11 @@ class TestSweepChart:
 
     def test_sweep_parameter_chart_empty_returns_empty(self) -> None:
         """Test sweep_parameter_chart returns '{}' with empty inputs."""
-        from solar_challenge.web.charts import sweep_parameter_chart
-
         result = sweep_parameter_chart([], [], "X", "Y")
         assert result == "{}"
 
     def test_sweep_parameter_chart_two_points(self) -> None:
         """Test sweep_parameter_chart works with just two data points."""
-        from solar_challenge.web.charts import sweep_parameter_chart
-
         result = sweep_parameter_chart(
             [1.0, 10.0],
             [20.0, 80.0],

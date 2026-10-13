@@ -13,8 +13,27 @@ import math
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
 import pytest
+import yaml
+from typer.testing import CliRunner
 
+from solar_challenge.cli.main import app
+from solar_challenge.finance import CostRecoverySolution
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
+from solar_challenge.optimize import (
+    ConfigPoint,
+    ConfigResult,
+    RankedSweep,
+    SensitivityAxis,
+    SensitivityPanel,
+)
+from solar_challenge.output import generate_config_ranking_report
+from solar_challenge.pv import PVConfig
+from tests._cli_fleet_simulator import invoke_cli
 from tests._factories import make_bill_breakdown, make_bill_distribution
 
 
@@ -46,10 +65,8 @@ def _make_solution(
     feasible: bool = True,
     binding: str = "floor",
     outlay: "Optional[BillDistribution]" = None,  # type: ignore[name-defined]
-) -> "CostRecoverySolution":  # type: ignore[name-defined]
+) -> "CostRecoverySolution":
     """Build a minimal CostRecoverySolution for fixture use."""
-    from solar_challenge.finance import CostRecoverySolution
-
     dist = outlay if outlay is not None else _make_bill_distribution()
     return CostRecoverySolution(
         own_use_rate_pence_per_kwh=own_use_rate,
@@ -81,10 +98,8 @@ def _make_config_result(
     outlay_mean: float = 355.0,
     outlay_median: float = 360.0,
     outlay_max: float = 410.0,
-) -> "ConfigResult":  # type: ignore[name-defined]
+) -> "ConfigResult":
     """Build a ConfigResult with distinct numeric values for each field."""
-    from solar_challenge.optimize import ConfigPoint, ConfigResult
-
     point = ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw)
     dist = _make_bill_distribution(
         min_gbp=outlay_min,
@@ -121,10 +136,8 @@ def _make_ranked_sweep(
     infeasible: "tuple[ConfigPoint, ...]" = (),
     pareto: "tuple[ConfigPoint, ...]" = (),
     floor: float = 27.0,
-) -> "RankedSweep":  # type: ignore[name-defined]
+) -> "RankedSweep":
     """Assemble a RankedSweep honouring cheapest_feasible == results[0].config invariant."""
-    from solar_challenge.optimize import RankedSweep
-
     cheapest = results[0].config if results else None
     return RankedSweep(
         results=results,
@@ -136,13 +149,11 @@ def _make_ranked_sweep(
 
 
 def _make_sensitivity_panel(
-    axes: "tuple[SensitivityAxis, ...]",  # type: ignore[name-defined]
-    baseline_top: "ConfigPoint",  # type: ignore[name-defined]
+    axes: "tuple[SensitivityAxis, ...]",
+    baseline_top: "ConfigPoint",
     rank_stability: float = 0.8,
-) -> "SensitivityPanel":  # type: ignore[name-defined]
+) -> "SensitivityPanel":
     """Build a SensitivityPanel for fixture use."""
-    from solar_challenge.optimize import SensitivityPanel
-
     return SensitivityPanel(
         axes=axes,
         baseline_top=baseline_top,
@@ -153,11 +164,9 @@ def _make_sensitivity_panel(
 def _make_sensitivity_axis(
     name: str = "grid_services_income_per_kw_per_year_gbp",
     values: "tuple[float, ...]" = (1.5, 12.0, 48.0),
-    top_config: "ConfigPoint | None" = None,  # type: ignore[name-defined]
-) -> "SensitivityAxis":  # type: ignore[name-defined]
+    top_config: "ConfigPoint | None" = None,
+) -> "SensitivityAxis":
     """Build a SensitivityAxis for fixture use."""
-    from solar_challenge.optimize import ConfigPoint, SensitivityAxis
-
     if top_config is None:
         top_config = ConfigPoint(pv_kwp=4.0, battery_kwh=5.0, inverter_kw=5.0)
     rankings: tuple[tuple[ConfigPoint, ...], ...] = tuple(
@@ -177,9 +186,7 @@ def _make_sensitivity_axis(
 # ---------------------------------------------------------------------------
 
 
-def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
-    from solar_challenge.pv import PVConfig
-
+def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":
     return PVConfig(
         capacity_kw=4.0,
         azimuth=180.0,
@@ -189,16 +196,11 @@ def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignor
     )
 
 
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
-    from solar_challenge.load import LoadConfig
-
+def _make_load_config() -> "LoadConfig":
     return LoadConfig(annual_consumption_kwh=3500.0)
 
 
-def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
-
+def _make_home_config() -> "HomeConfig":
     return HomeConfig(
         pv_config=_make_pv_config(),
         load_config=_make_load_config(),
@@ -211,11 +213,8 @@ def _make_sim_results(
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
     n_minutes: int = 525600,
-) -> "SimulationResults":  # type: ignore[name-defined]
+) -> "SimulationResults":
     """Build a 365-day SimulationResults for constant-sim fixture use."""
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
     exp_kw = export_kwh / (n_minutes / 60.0)
@@ -239,14 +238,12 @@ def _make_sim_results(
     )
 
 
-def _make_fleet_results(n_homes: int = 5) -> "FleetResults":  # type: ignore[name-defined]
+def _make_fleet_results(n_homes: int = 5) -> "FleetResults":
     """Build a FleetResults yielding binding='floor', feasible=True when solved.
 
     Uses full-year 525600-minute Series (365 × 24 × 60) so no annualisation
     is triggered by the CLI's default full-year window.
     """
-    from solar_challenge.fleet import FleetResults
-
     homes = [_make_home_config() for _ in range(n_homes)]
     per_home = [
         _make_sim_results(
@@ -262,8 +259,6 @@ def _make_fleet_results(n_homes: int = 5) -> "FleetResults":  # type: ignore[nam
 
 def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
     """Write a minimal feasible-regime scenario YAML to tmp_path."""
-    import yaml
-
     scenario = {
         "name": "W3 Optimize CLI Test",
         "location": {
@@ -305,10 +300,8 @@ def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
 class TestGenerateConfigRankingReportTable1:
     """generate_config_ranking_report renders the COST-RECOVERY RANK table."""
 
-    def _make_sweep_two_feasible(self) -> "RankedSweep":  # type: ignore[name-defined]
+    def _make_sweep_two_feasible(self) -> "RankedSweep":
         """Build a RankedSweep with two feasible configs and one infeasible."""
-        from solar_challenge.optimize import ConfigPoint
-
         # Config 1 (cheapest, RECOMMENDATION): 4 kWp, no battery, solved @ 12.5p
         r1 = _make_config_result(
             pv_kwp=4.0,
@@ -360,8 +353,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_cost_recovery_rank_heading_present(self) -> None:
         """Report must contain a cost-recovery rank heading."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -371,8 +362,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_solved_own_use_rate_formatted(self) -> None:
         """Each config's solved own-use rate must appear as 'XX.XX p/kWh'."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -383,8 +372,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_outlay_distribution_values(self) -> None:
         """Report must show min/mean/median/max outlay for each config."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -396,8 +383,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_cbs_surplus_rendered(self) -> None:
         """Report must show the CBS surplus at the solved rate for each config."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -411,8 +396,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_feasibility_binding_label_present(self) -> None:
         """Report must show the human-readable binding/feasibility label."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -423,8 +406,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_total_capex_rendered(self) -> None:
         """Report must show total_capex_gbp for each feasible config."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -434,8 +415,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_min_dscr_inf_shown_as_infinity_symbol(self) -> None:
         """min_dscr=inf must be rendered as '∞'."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -443,8 +422,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_equity_irr_formatted_as_percent(self) -> None:
         """equity_irr must be rendered as a percentage (e.g. '9.0%' or '7.0%')."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -457,10 +434,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_payback_none_shown_as_dash(self) -> None:
         """payback_years=None must render as '—'."""
-        from solar_challenge.output import generate_config_ranking_report
-
-        from solar_challenge.optimize import ConfigPoint
-
         # Build a config with payback=None
         r_no_payback = _make_config_result(
             pv_kwp=3.0, battery_kwh=0.0, inverter_kw=5.0,
@@ -474,8 +447,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_nan_irr_shown_as_na(self) -> None:
         """equity_irr=NaN must render as 'n/a'."""
-        from solar_challenge.output import generate_config_ranking_report
-
         r_nan_irr = _make_config_result(
             pv_kwp=3.0, battery_kwh=0.0, inverter_kw=5.0,
             equity_irr=float("nan"),
@@ -488,8 +459,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_recommendation_marker_on_cheapest(self) -> None:
         """The cheapest feasible config (results[0]) must be flagged as RECOMMENDATION."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -499,8 +468,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_infeasible_section_lists_config_dims(self) -> None:
         """Infeasible ConfigPoints must appear in a separate section by their dims."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
@@ -514,8 +481,6 @@ class TestGenerateConfigRankingReportTable1:
 
     def test_empty_infeasible_no_infeasible_section(self) -> None:
         """When there are no infeasible configs, the infeasible section is omitted."""
-        from solar_challenge.output import generate_config_ranking_report
-
         r = _make_config_result()
         sweep = _make_ranked_sweep(results=(r,), infeasible=())
         report = generate_config_ranking_report(sweep)
@@ -532,10 +497,8 @@ class TestGenerateConfigRankingReportTable1:
 class TestGenerateConfigRankingReportTable2:
     """generate_config_ranking_report renders the FIXED-15p TRADE-OFF table."""
 
-    def _make_sweep_with_pareto(self) -> "RankedSweep":  # type: ignore[name-defined]
+    def _make_sweep_with_pareto(self) -> "RankedSweep":
         """Build a RankedSweep where some (not all) feasible configs are on the Pareto front."""
-        from solar_challenge.optimize import ConfigPoint
-
         # Config A (cheapest, on Pareto): 4 kWp / 0 kWh — low outlay, low surplus
         r_a = _make_config_result(
             pv_kwp=4.0,
@@ -583,8 +546,6 @@ class TestGenerateConfigRankingReportTable2:
 
     def test_fixed15p_table_heading_present(self) -> None:
         """Report must contain a fixed-15p trade-off table heading."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
@@ -594,8 +555,6 @@ class TestGenerateConfigRankingReportTable2:
 
     def test_baseline_outlay_values_present(self) -> None:
         """Report must show baseline_outlay_gbp for each feasible config."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
@@ -605,8 +564,6 @@ class TestGenerateConfigRankingReportTable2:
 
     def test_baseline_surplus_values_present(self) -> None:
         """Report must show baseline_surplus_per_home_gbp for each feasible config."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
@@ -616,8 +573,6 @@ class TestGenerateConfigRankingReportTable2:
 
     def test_pareto_flag_set_for_pareto_configs(self) -> None:
         """Table 2 must have exactly 2 '✔ Pareto' tokens (A+B) and exactly 1 '—' marker (C)."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
@@ -642,8 +597,6 @@ class TestGenerateConfigRankingReportTable2:
 
     def test_pareto_flag_non_trivial(self) -> None:
         """The Pareto flag must distinguish A+B (on front) from C (not on front)."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
@@ -681,9 +634,6 @@ class TestGenerateConfigRankingReportTable2:
 
     def test_infeasible_absent_from_table2(self) -> None:
         """Infeasible ConfigPoints must NOT appear in Table 2 (no baseline economics)."""
-        from solar_challenge.optimize import ConfigPoint
-        from solar_challenge.output import generate_config_ranking_report
-
         r = _make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
         infeasible_pt = ConfigPoint(pv_kwp=9.9, battery_kwh=15.0, inverter_kw=5.0)
         sweep = _make_ranked_sweep(
@@ -699,8 +649,6 @@ class TestGenerateConfigRankingReportTable2:
 
     def test_two_tables_both_present(self) -> None:
         """Both Table 1 and Table 2 headings must appear in the same report."""
-        from solar_challenge.output import generate_config_ranking_report
-
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
@@ -716,15 +664,13 @@ class TestGenerateConfigRankingReportTable2:
 class TestGenerateConfigRankingReportSensitivity:
     """generate_config_ranking_report renders SENSITIVITY section only when panel provided."""
 
-    def _make_sweep_one(self) -> "RankedSweep":  # type: ignore[name-defined]
+    def _make_sweep_one(self) -> "RankedSweep":
         """A minimal single-config RankedSweep."""
         r = _make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
         return _make_ranked_sweep(results=(r,), pareto=(r.config,))
 
-    def _make_panel(self, sweep: "RankedSweep") -> "SensitivityPanel":  # type: ignore[name-defined]
+    def _make_panel(self, sweep: "RankedSweep") -> "SensitivityPanel":
         """Build a SensitivityPanel with two axes at rank_stability=0.75."""
-        from solar_challenge.optimize import ConfigPoint
-
         top = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
 
         axis_gs = _make_sensitivity_axis(
@@ -745,8 +691,6 @@ class TestGenerateConfigRankingReportSensitivity:
 
     def test_sensitivity_heading_present_when_panel_provided(self) -> None:
         """Report must contain a sensitivity heading when panel is not None."""
-        from solar_challenge.output import generate_config_ranking_report
-
         sweep = self._make_sweep_one()
         panel = self._make_panel(sweep)
         report = generate_config_ranking_report(sweep, panel)
@@ -757,8 +701,6 @@ class TestGenerateConfigRankingReportSensitivity:
 
     def test_axis_name_appears_in_sensitivity_section(self) -> None:
         """Each SensitivityAxis.name must appear in the sensitivity section."""
-        from solar_challenge.output import generate_config_ranking_report
-
         sweep = self._make_sweep_one()
         panel = self._make_panel(sweep)
         report = generate_config_ranking_report(sweep, panel)
@@ -772,8 +714,6 @@ class TestGenerateConfigRankingReportSensitivity:
 
     def test_per_value_top_config_shown(self) -> None:
         """At least one per-value top config must appear in the sensitivity section."""
-        from solar_challenge.output import generate_config_ranking_report
-
         sweep = self._make_sweep_one()
         panel = self._make_panel(sweep)
         report = generate_config_ranking_report(sweep, panel)
@@ -785,8 +725,6 @@ class TestGenerateConfigRankingReportSensitivity:
 
     def test_rank_stability_rendered(self) -> None:
         """rank_stability (0.75) must appear in the report as a percentage or fraction."""
-        from solar_challenge.output import generate_config_ranking_report
-
         sweep = self._make_sweep_one()
         panel = self._make_panel(sweep)
         report = generate_config_ranking_report(sweep, panel)
@@ -798,8 +736,6 @@ class TestGenerateConfigRankingReportSensitivity:
 
     def test_no_sensitivity_heading_when_panel_none(self) -> None:
         """Report must NOT contain a sensitivity heading when panel=None."""
-        from solar_challenge.output import generate_config_ranking_report
-
         sweep = self._make_sweep_one()
         report_no_panel = generate_config_ranking_report(sweep)
 
@@ -809,8 +745,6 @@ class TestGenerateConfigRankingReportSensitivity:
 
     def test_panel_omitted_vs_none_bit_identical(self) -> None:
         """generate_config_ranking_report(ranked) == generate_config_ranking_report(ranked, None)."""
-        from solar_challenge.output import generate_config_ranking_report
-
         sweep = self._make_sweep_one()
         report_omitted = generate_config_ranking_report(sweep)
         report_none = generate_config_ranking_report(sweep, panel=None)
@@ -821,9 +755,6 @@ class TestGenerateConfigRankingReportSensitivity:
 
     def test_none_tops_rendered_as_dash(self) -> None:
         """SensitivityAxis tops that are None must be rendered as '—'."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
-        from solar_challenge.output import generate_config_ranking_report
-
         # An axis where one value has no feasible top (top_config_per_value=None)
         axis_with_none = SensitivityAxis(
             name="grid_services_income_per_kw_per_year_gbp",
@@ -855,9 +786,6 @@ class TestOptimizeCLIHelp:
 
     def test_optimize_help_shows_configs_command(self) -> None:
         """`optimize --help` must list the 'configs' subcommand."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["optimize", "--help"])
         assert result.exit_code == 0, (
@@ -869,9 +797,6 @@ class TestOptimizeCLIHelp:
 
     def test_optimize_configs_help_exits_zero(self) -> None:
         """`optimize configs --help` must exit 0."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["optimize", "configs", "--help"])
         assert result.exit_code == 0, (
@@ -880,9 +805,6 @@ class TestOptimizeCLIHelp:
 
     def test_pv_flag_in_help(self) -> None:
         """`optimize configs --help` must show --pv flag."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["optimize", "configs", "--help"])
         assert "--pv" in result.output, (
@@ -891,9 +813,6 @@ class TestOptimizeCLIHelp:
 
     def test_battery_flag_in_help(self) -> None:
         """`optimize configs --help` must show --battery flag."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["optimize", "configs", "--help"])
         assert "--battery" in result.output, (
@@ -902,9 +821,6 @@ class TestOptimizeCLIHelp:
 
     def test_inverter_flag_in_help(self) -> None:
         """`optimize configs --help` must show --inverter flag."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["optimize", "configs", "--help"])
         assert "--inverter" in result.output, (
@@ -913,9 +829,6 @@ class TestOptimizeCLIHelp:
 
     def test_retained_floor_flag_in_help(self) -> None:
         """`optimize configs --help` must show --retained-floor flag."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["optimize", "configs", "--help"])
         assert "--retained-floor" in result.output, (
@@ -924,9 +837,6 @@ class TestOptimizeCLIHelp:
 
     def test_grid_services_kw_flag_in_help(self) -> None:
         """`optimize configs --help` must show --grid-services-kw flag."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["optimize", "configs", "--help"])
         assert "--grid-services-kw" in result.output, (
@@ -935,9 +845,6 @@ class TestOptimizeCLIHelp:
 
     def test_sensitivity_flag_in_help(self) -> None:
         """`optimize configs --help` must show --sensitivity flag."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["optimize", "configs", "--help"])
         assert "--sensitivity" in result.output, (
@@ -951,7 +858,7 @@ class TestOptimizeCLIHelp:
 
 
 @pytest.fixture(scope="module")
-def optimize_fleet_results() -> "FleetResults":  # type: ignore[name-defined]
+def optimize_fleet_results() -> "FleetResults":
     """Module-scoped fixture: build constant feasible FleetResults once per module.
 
     Building once avoids reconstructing ~9 MB of per-minute Series for each
@@ -971,7 +878,7 @@ class TestOptimizeCLIE2EFast:
     @staticmethod
     def _invoke_configs(
         tmp_path: "Path",
-        fleet_results: "FleetResults",  # type: ignore[name-defined]
+        fleet_results: "FleetResults",
         options: "list[str]",
     ) -> "tuple[object, list[object]]":
         """Run `optimize configs` on a fresh scenario with *options*, answering every fleet simulation with *fleet_results*.
@@ -979,8 +886,6 @@ class TestOptimizeCLIE2EFast:
         Returns the CliRunner result and the fleet configs the injected simulator
         was asked to simulate.
         """
-        from tests._cli_fleet_simulator import invoke_cli
-
         simulated_fleets: "list[object]" = []
 
         def simulate(fleet_config, start, end):
@@ -994,7 +899,7 @@ class TestOptimizeCLIE2EFast:
     def test_optimize_configs_standard_sweep_output(
         self,
         tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
+        optimize_fleet_results: "FleetResults",
     ) -> None:
         """Standard sweep must exit 0 and produce all expected report tokens.
 
@@ -1047,7 +952,7 @@ class TestOptimizeCLIE2EFast:
     def test_parse_robustness_single_pv_value_works(
         self,
         tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
+        optimize_fleet_results: "FleetResults",
     ) -> None:
         """Single value `--pv 4` (no comma) must parse correctly and succeed.
 
@@ -1075,9 +980,6 @@ class TestOptimizeCLIE2EFast:
         tmp_path: "Path",
     ) -> None:
         """An unknown `--sensitivity` alias must exit 1 with a clear error message."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_file = _write_optimize_scenario(tmp_path)
 
         runner = CliRunner()
@@ -1128,9 +1030,6 @@ class TestOptimizeCLISlowE2E:
         """`optimize configs bristol-phase1-flex.yaml --start 2024-01-01 --end 2024-01-03` exits 0 with board report."""
         if not _FLEX_SCENARIO.exists():
             pytest.skip(f"Scenario file not found: {_FLEX_SCENARIO}")
-
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
 
         runner = CliRunner()
         result = runner.invoke(

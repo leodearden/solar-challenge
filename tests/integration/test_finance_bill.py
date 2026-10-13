@@ -12,12 +12,25 @@ added to test_marker_registration.py's INTEGRATION_FILES list.
 """
 import dataclasses
 import warnings
+from pathlib import Path
 from typing import Optional
 
+import pandas as pd
 import pytest
+import yaml
+from typer.testing import CliRunner
 
-from solar_challenge.finance import FinanceConfig
+from solar_challenge.cli.main import app
+from solar_challenge.finance import (
+    BillBreakdown,
+    FinanceConfig,
+    _cbs_own_use_kwh,
+    bill,
+    bill_distribution,
+    householder_bill,
+)
 from solar_challenge.home import SummaryStatistics
+from solar_challenge.output import generate_finance_report
 from tests._factories import make_bill_breakdown, make_bill_distribution
 
 
@@ -107,73 +120,69 @@ class TestHouseholderBillPhysics:
         Removed fields (CBS owns assets): gross_bill_gbp, seg_export_income_gbp,
         net_annual_bill_gbp.
         """
-        from solar_challenge.finance import BillBreakdown, householder_bill
-
         summary = _make_summary()
         finance = _make_finance()  # own_use_rate=15.0 p/kWh
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
             simulation_days=summary.simulation_days,
         )
 
-        assert isinstance(bill, BillBreakdown)
+        assert isinstance(breakdown, BillBreakdown)
 
         # --- Removed W2 fields must NOT exist on BillBreakdown ---
-        assert not hasattr(bill, "gross_bill_gbp"), "gross_bill_gbp must be removed in CR3"
-        assert not hasattr(bill, "seg_export_income_gbp"), "seg_export_income_gbp must be removed in CR3"
-        assert not hasattr(bill, "net_annual_bill_gbp"), "net_annual_bill_gbp must be removed in CR3"
+        assert not hasattr(breakdown, "gross_bill_gbp"), "gross_bill_gbp must be removed in CR3"
+        assert not hasattr(breakdown, "seg_export_income_gbp"), "seg_export_income_gbp must be removed in CR3"
+        assert not hasattr(breakdown, "net_annual_bill_gbp"), "net_annual_bill_gbp must be removed in CR3"
 
         # --- import_cost from summary (unchanged) ---
-        assert bill.import_cost_gbp == pytest.approx(summary.total_import_cost_gbp)
+        assert breakdown.import_cost_gbp == pytest.approx(summary.total_import_cost_gbp)
 
         # --- Standing charge (unchanged) ---
         expected_standing = finance.standing_charge_pence_per_day * 365 / 100
-        assert bill.standing_charge_gbp == pytest.approx(expected_standing)
+        assert breakdown.standing_charge_gbp == pytest.approx(expected_standing)
 
         # --- Own-use payment (NEW): own_use_rate × sc_kwh / 100 ---
         sc_kwh = summary.total_self_consumption_kwh
         own_use_rate = finance.own_use_rate_pence_per_kwh
         expected_own_use = own_use_rate * sc_kwh / 100.0
-        assert bill.own_use_payment_gbp == pytest.approx(expected_own_use)
+        assert breakdown.own_use_payment_gbp == pytest.approx(expected_own_use)
 
         # --- VAT invariant (REDEFINED): vat_rate × (import + standing + own_use_payment) ---
         expected_vat = finance.vat_rate * (
-            bill.import_cost_gbp + bill.standing_charge_gbp + bill.own_use_payment_gbp
+            breakdown.import_cost_gbp + breakdown.standing_charge_gbp + breakdown.own_use_payment_gbp
         )
-        assert bill.vat_gbp == pytest.approx(expected_vat)
+        assert breakdown.vat_gbp == pytest.approx(expected_vat)
 
         # --- Total outlay (NEW HEADLINE): (import + standing + own_use_payment) × (1+vat) ---
         expected_outlay = (
-            bill.import_cost_gbp + bill.standing_charge_gbp + bill.own_use_payment_gbp
+            breakdown.import_cost_gbp + breakdown.standing_charge_gbp + breakdown.own_use_payment_gbp
         ) * (1.0 + finance.vat_rate)
-        assert bill.total_outlay_gbp == pytest.approx(expected_outlay)
+        assert breakdown.total_outlay_gbp == pytest.approx(expected_outlay)
 
         # --- CBS-collectable slice: own-use VAT, and the amount due that sums it ---
-        assert bill.own_use_vat_gbp == pytest.approx(
-            finance.vat_rate * bill.own_use_payment_gbp
+        assert breakdown.own_use_vat_gbp == pytest.approx(
+            finance.vat_rate * breakdown.own_use_payment_gbp
         )
-        assert bill.cbs_amount_due_gbp == pytest.approx(
-            bill.own_use_payment_gbp + bill.own_use_vat_gbp
+        assert breakdown.cbs_amount_due_gbp == pytest.approx(
+            breakdown.own_use_payment_gbp + breakdown.own_use_vat_gbp
         )
 
         # --- Self-consumption saving (REDEFINED): sc × (retail − own_use) × (1+vat)/100 ---
         retail = finance.retail_baseline_rate_pence_per_kwh
         expected_sc_saving = sc_kwh * (retail - own_use_rate) * (1.0 + finance.vat_rate) / 100.0
-        assert bill.self_consumption_saving_gbp == pytest.approx(expected_sc_saving)
+        assert breakdown.self_consumption_saving_gbp == pytest.approx(expected_sc_saving)
 
         # --- Self-consumption fraction (unchanged formula) ---
         expected_sc_fraction = sc_kwh / summary.total_generation_kwh
-        assert bill.self_consumption_fraction == pytest.approx(expected_sc_fraction)
+        assert breakdown.self_consumption_fraction == pytest.approx(expected_sc_fraction)
 
     def test_saving_fields(self) -> None:
         """Saving fields must be derived from baseline and total_outlay."""
-        from solar_challenge.finance import BillBreakdown, householder_bill
-
         summary = _make_summary()
         finance = _make_finance()
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
@@ -181,13 +190,13 @@ class TestHouseholderBillPhysics:
         )
 
         # saving_vs_baseline = baseline - total_outlay (CR3 redefinition)
-        expected_saving = bill.baseline_bill_gbp - bill.total_outlay_gbp
-        assert bill.saving_vs_baseline_gbp == pytest.approx(expected_saving)
+        expected_saving = breakdown.baseline_bill_gbp - breakdown.total_outlay_gbp
+        assert breakdown.saving_vs_baseline_gbp == pytest.approx(expected_saving)
 
         # saving_pct = saving / baseline × 100 (formula unchanged)
-        if bill.baseline_bill_gbp != 0:
-            expected_pct = (bill.saving_vs_baseline_gbp / bill.baseline_bill_gbp) * 100
-            assert bill.saving_pct == pytest.approx(expected_pct)
+        if breakdown.baseline_bill_gbp != 0:
+            expected_pct = (breakdown.saving_vs_baseline_gbp / breakdown.baseline_bill_gbp) * 100
+            assert breakdown.saving_pct == pytest.approx(expected_pct)
 
     def test_h3_board_identity(self) -> None:
         """H3 board identity: saving_vs_baseline == sc × (retail − own_use) × (1+vat).
@@ -199,11 +208,9 @@ class TestHouseholderBillPhysics:
         total_outlay=(276+219+330)×1.05=£866.25; saving=£184.80
         == 2200×(23−15)×1.05/100=£184.80 ✓
         """
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary()
         finance = _make_finance(own_use_rate_pence_per_kwh=15.0)
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
@@ -217,7 +224,7 @@ class TestHouseholderBillPhysics:
 
         # H3 identity: saving == sc × (retail − own_use) × (1+vat) / 100
         expected = sc_kwh * (retail - own_use) * (1.0 + vat) / 100.0
-        assert bill.saving_vs_baseline_gbp == pytest.approx(expected, rel=1e-9)
+        assert breakdown.saving_vs_baseline_gbp == pytest.approx(expected, rel=1e-9)
 
         # Edge case: own_use == retail → saving == 0 and self_consumption_saving == 0
         finance_parity = _make_finance(own_use_rate_pence_per_kwh=retail)
@@ -238,8 +245,6 @@ class TestHouseholderBillPhysics:
         imported.  householder_bill must price that imported energy at the
         retail baseline rate (and warn) rather than silently emit a £0 import.
         """
-        from solar_challenge.finance import householder_bill
-
         # 1200 kWh imported but tariff absent => physics import cost reported £0
         summary = _make_summary(
             total_import_cost_gbp=0.0,
@@ -250,7 +255,7 @@ class TestHouseholderBillPhysics:
         finance = _make_finance(retail_baseline_rate_pence_per_kwh=23.0)
 
         with pytest.warns(UserWarning, match="no tariff configured"):
-            bill = householder_bill(
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
@@ -259,16 +264,12 @@ class TestHouseholderBillPhysics:
 
         # import priced at retail baseline rate: 1200 kWh × 23 p/kWh = £276
         expected_import = summary.total_grid_import_kwh * 23.0 / 100.0
-        assert bill.import_cost_gbp == pytest.approx(expected_import)
+        assert breakdown.import_cost_gbp == pytest.approx(expected_import)
         # the headline bill must now exceed just standing + VAT
-        assert bill.import_cost_gbp > 0.0
+        assert breakdown.import_cost_gbp > 0.0
 
     def test_physics_no_import_no_fallback(self) -> None:
         """When import kWh is genuinely zero, no fallback and no warning fire."""
-        import warnings as _warnings
-
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary(
             total_grid_import_kwh=0.0,
             total_import_cost_gbp=0.0,
@@ -276,16 +277,16 @@ class TestHouseholderBillPhysics:
         )
         finance = _make_finance()
 
-        with _warnings.catch_warnings():
-            _warnings.simplefilter("error")
-            bill = householder_bill(
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
                 simulation_days=summary.simulation_days,
             )
 
-        assert bill.import_cost_gbp == pytest.approx(0.0)
+        assert breakdown.import_cost_gbp == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -298,19 +299,17 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
     def test_override_self_consumption_fraction(self) -> None:
         """With self_consumption_override=0.70, fraction must equal 0.70."""
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary()
         finance = _make_finance(self_consumption_override=0.70)
 
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
             simulation_days=summary.simulation_days,
         )
 
-        assert bill.self_consumption_fraction == pytest.approx(0.70)
+        assert breakdown.self_consumption_fraction == pytest.approx(0.70)
 
     def test_override_implied_self_consumption(self) -> None:
         """Implied self_consumption == override × total_generation.
@@ -318,12 +317,10 @@ class TestHouseholderBillOverrideAndAnnualisation:
         CR3: self_consumption_saving = sc × (retail − own_use) × (1+vat)/100
         So back-calc: sc_kwh = saving / ((retail − own_use) × (1+vat) / 100)
         """
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary()
         finance = _make_finance(self_consumption_override=0.70)
 
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary,
             annual_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
@@ -336,13 +333,11 @@ class TestHouseholderBillOverrideAndAnnualisation:
         retail = finance.retail_baseline_rate_pence_per_kwh
         own_use = finance.own_use_rate_pence_per_kwh
         vat = finance.vat_rate
-        implied_sc = bill.self_consumption_saving_gbp / ((retail - own_use) * (1 + vat) / 100.0)
+        implied_sc = breakdown.self_consumption_saving_gbp / ((retail - own_use) * (1 + vat) / 100.0)
         assert implied_sc == pytest.approx(expected_sc, rel=1e-6)
 
     def test_override_differs_from_physics(self) -> None:
         """Override bill differs from physics on import_cost, own_use_payment, and total_outlay."""
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary()
         physics_fraction = summary.total_self_consumption_kwh / summary.total_generation_kwh
         # Use an override that is distinctly different from the physics fraction
@@ -379,8 +374,6 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
     def test_short_period_triggers_warning(self) -> None:
         """simulation_days=30 must emit a UserWarning."""
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary(
             simulation_days=30,
             # Scale down the financials to be consistent with 30-day period
@@ -397,7 +390,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
         finance = _make_finance()
 
         with pytest.warns(UserWarning, match="30 days"):
-            bill = householder_bill(
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
@@ -406,18 +399,16 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
         # After annualisation to 365 days, standing charge must be the full annual value
         expected_standing = finance.standing_charge_pence_per_day * 365 / 100
-        assert bill.standing_charge_gbp == pytest.approx(expected_standing)
+        assert breakdown.standing_charge_gbp == pytest.approx(expected_standing)
 
     def test_full_year_no_warning(self) -> None:
         """simulation_days=365 must not emit any warning."""
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary(simulation_days=365)
         finance = _make_finance()
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            bill = householder_bill(
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
@@ -425,12 +416,10 @@ class TestHouseholderBillOverrideAndAnnualisation:
             )
 
         # No exception means no warning was emitted
-        assert bill.total_outlay_gbp > 0
+        assert breakdown.total_outlay_gbp > 0
 
     def test_annualisation_scales_energy_quantities(self) -> None:
         """Short-period bill's net cost must be approximately (365/30)× the 30-day sim values."""
-        from solar_challenge.finance import householder_bill
-
         # 30-day summary: energy quantities are 30/365 of typical annual
         scale_factor = 365 / 30
         gen_30 = 4000.0 / scale_factor
@@ -507,10 +496,8 @@ class TestOverrideExactValues:
     """
 
     @staticmethod
-    def _fin_override_bill() -> "BillBreakdown":  # type: ignore[name-defined]
+    def _fin_override_bill() -> "BillBreakdown":
         """householder_bill for the [FIN] home at override 0.70; the cap must warn."""
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary(total_generation_kwh=5775.0, total_grid_export_kwh=3575.0)
         with pytest.warns(UserWarning, match="capped at demand"):
             return householder_bill(
@@ -521,10 +508,8 @@ class TestOverrideExactValues:
             )
 
     @staticmethod
-    def _untariffed_override_bill(override: float = 0.70) -> "BillBreakdown":  # type: ignore[name-defined]
+    def _untariffed_override_bill(override: float = 0.70) -> "BillBreakdown":
         """householder_bill at *override* for a home with no tariff; the retail fallback must warn."""
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary(
             total_import_cost_gbp=0.0,
             total_export_revenue_gbp=0.0,
@@ -541,71 +526,67 @@ class TestOverrideExactValues:
 
     def test_override_own_use_capped_at_demand(self) -> None:
         """Own-use is billed on the 3,400 kWh demand, not the implied 4,042.5 kWh (£606.375)."""
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.own_use_payment_gbp == pytest.approx(510.0)
-        assert bill.cbs_amount_due_gbp == pytest.approx(535.5)
+        assert breakdown.own_use_payment_gbp == pytest.approx(510.0)
+        assert breakdown.cbs_amount_due_gbp == pytest.approx(535.5)
 
     def test_override_exact_import_cost(self) -> None:
         """The capped own-use meets the whole demand, so nothing is imported."""
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
+        assert breakdown.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
 
     def test_override_exact_total_outlay(self) -> None:
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.vat_gbp == pytest.approx(36.45)
-        assert bill.total_outlay_gbp == pytest.approx(765.45)
+        assert breakdown.vat_gbp == pytest.approx(36.45)
+        assert breakdown.total_outlay_gbp == pytest.approx(765.45)
 
     def test_override_cap_reports_effective_fraction(self) -> None:
         """The fraction reports billed own-use over generation, below the 0.70 override."""
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.self_consumption_fraction == pytest.approx(3400.0 / 5775.0)
+        assert breakdown.self_consumption_fraction == pytest.approx(3400.0 / 5775.0)
 
     def test_override_cap_keeps_h3_identity(self) -> None:
         """saving_vs_baseline == own-use × (retail − own-use rate) × (1 + VAT) / 100, exactly."""
-        bill = self._fin_override_bill()
+        breakdown = self._fin_override_bill()
 
-        assert bill.baseline_bill_gbp == pytest.approx(1051.05)
-        assert bill.saving_vs_baseline_gbp == pytest.approx(3400.0 * (23.0 - 15.0) * 1.05 / 100.0)
+        assert breakdown.baseline_bill_gbp == pytest.approx(1051.05)
+        assert breakdown.saving_vs_baseline_gbp == pytest.approx(3400.0 * (23.0 - 15.0) * 1.05 / 100.0)
 
     def test_override_within_demand_does_not_warn(self) -> None:
         """0.70 × 4,000 = 2,800 kWh fits the 3,400 kWh demand, so it is billed as implied, silently."""
-        from solar_challenge.finance import householder_bill
-
         summary = _make_summary()
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            bill = householder_bill(
+            breakdown = householder_bill(
                 summary=summary,
                 annual_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=_make_finance(self_consumption_override=0.70),
                 simulation_days=365,
             )
 
-        assert bill.own_use_payment_gbp == pytest.approx(420.0)
-        assert bill.import_cost_gbp == pytest.approx(138.0)  # 600 kWh × 23 p
+        assert breakdown.own_use_payment_gbp == pytest.approx(420.0)
+        assert breakdown.import_cost_gbp == pytest.approx(138.0)  # 600 kWh × 23 p
 
     def test_override_untariffed_import_priced_at_retail(self) -> None:
         """With no tariff, the override's 600 kWh import is priced at the 23 p retail rate, not £0."""
-        bill = self._untariffed_override_bill()
+        breakdown = self._untariffed_override_bill()
 
-        assert bill.import_cost_gbp == pytest.approx(138.0)
+        assert breakdown.import_cost_gbp == pytest.approx(138.0)
 
     def test_override_untariffed_exact_total_outlay(self) -> None:
         """The retail-priced import carries into VAT and outlay, and the H3 saving holds exactly."""
-        bill = self._untariffed_override_bill()
+        breakdown = self._untariffed_override_bill()
 
-        assert bill.vat_gbp == pytest.approx(38.85)
-        assert bill.total_outlay_gbp == pytest.approx(815.85)
-        assert bill.saving_vs_baseline_gbp == pytest.approx(2800.0 * (23.0 - 15.0) * 1.05 / 100.0)
+        assert breakdown.vat_gbp == pytest.approx(38.85)
+        assert breakdown.total_outlay_gbp == pytest.approx(815.85)
+        assert breakdown.saving_vs_baseline_gbp == pytest.approx(2800.0 * (23.0 - 15.0) * 1.05 / 100.0)
 
     def test_override_untariffed_bills_like_a_retail_tariffed_home(self) -> None:
         """A missing tariff bills every field as the same home on a 23 p (retail) tariff does."""
-        from solar_challenge.finance import householder_bill
-
         tariffed_summary = _make_summary()  # its 1,200 kWh import cost £276, i.e. 23 p
         tariffed = householder_bill(
             summary=tariffed_summary,
@@ -621,14 +602,12 @@ class TestOverrideExactValues:
     def test_override_untariffed_capped_home_bills_no_import_yet_warns_twice(self) -> None:
         """At 0.90 own-use is capped at the 3,400 kWh demand, so no import is billed, yet both warnings fire."""
         with pytest.warns(UserWarning, match="capped at demand"):
-            bill = self._untariffed_override_bill(override=0.90)
+            breakdown = self._untariffed_override_bill(override=0.90)
 
-        assert bill.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
+        assert breakdown.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
 
     def test_override_zero_import_kwh_fallback(self) -> None:
         """When total_grid_import_kwh==0, effective import rate falls back to retail_baseline_rate."""
-        from solar_challenge.finance import householder_bill
-
         # Summary where physics import is zero (all demand met by solar/battery)
         summary_no_import = _make_summary(
             total_grid_import_kwh=0.0,
@@ -639,7 +618,7 @@ class TestOverrideExactValues:
         )
         finance = _make_finance(self_consumption_override=0.50)  # will need some import
 
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary_no_import,
             annual_self_consumption_kwh=summary_no_import.total_self_consumption_kwh,
             finance=finance,
@@ -648,7 +627,7 @@ class TestOverrideExactValues:
         # With override=0.50: sc=2000kWh, import=max(3400-2000,0)=1400kWh
         # fallback import rate = retail_baseline_rate = 23.0 p/kWh
         expected_import_cost = 1400.0 * 23.0 / 100.0
-        assert bill.import_cost_gbp == pytest.approx(expected_import_cost, rel=1e-5)
+        assert breakdown.import_cost_gbp == pytest.approx(expected_import_cost, rel=1e-5)
 
     def test_override_zero_export_kwh_fallback(self) -> None:
         """Override path with zero physics export: total_outlay must still be positive.
@@ -658,8 +637,6 @@ class TestOverrideExactValues:
         for CBS-revenue use).  Assert the bill computes without error and yields
         a sensible total_outlay.
         """
-        from solar_challenge.finance import householder_bill
-
         # Summary where physics export is zero (no surplus)
         summary_no_export = _make_summary(
             total_grid_export_kwh=0.0,
@@ -670,15 +647,15 @@ class TestOverrideExactValues:
         )
         finance = _make_finance(self_consumption_override=0.30)  # leaves surplus
 
-        bill = householder_bill(
+        breakdown = householder_bill(
             summary=summary_no_export,
             annual_self_consumption_kwh=summary_no_export.total_self_consumption_kwh,
             finance=finance,
             simulation_days=365,
         )
         # CR3: no seg_export_income_gbp on the bill; total_outlay must be positive
-        assert bill.total_outlay_gbp > 0.0
-        assert not hasattr(bill, "seg_export_income_gbp")
+        assert breakdown.total_outlay_gbp > 0.0
+        assert not hasattr(breakdown, "seg_export_income_gbp")
 
 
 # ---------------------------------------------------------------------------
@@ -711,8 +688,6 @@ class TestBillDistribution:
 
     def test_distribution_length(self) -> None:
         """per_home_net_bill_gbp must have length == n_homes."""
-        from solar_challenge.finance import bill_distribution
-
         summaries = self._make_fleet()
         finance = _make_finance()
         dist = bill_distribution(summaries, finance, 365)
@@ -729,8 +704,6 @@ class TestBillDistribution:
         import) as annual_self_consumption_kwh.  The expected bill must use the
         same basis so the assertion reflects the actual contract.
         """
-        from solar_challenge.finance import _cbs_own_use_kwh, bill_distribution, householder_bill
-
         summaries = self._make_fleet()
         finance = _make_finance()
         dist = bill_distribution(summaries, finance, 365)
@@ -747,9 +720,6 @@ class TestBillDistribution:
 
     def test_stats_match_total_outlay(self) -> None:
         """min/mean/median/max must match pd.Series stats of per-home total_outlay values."""
-        import pandas as pd
-        from solar_challenge.finance import bill_distribution
-
         summaries = self._make_fleet()
         finance = _make_finance()
         dist = bill_distribution(summaries, finance, 365)
@@ -763,14 +733,11 @@ class TestBillDistribution:
 
     def test_representative_is_median_outlay_home(self) -> None:
         """representative must be the BillBreakdown of the median-total_outlay home (CR3)."""
-        from solar_challenge.finance import bill_distribution, householder_bill
-
         summaries = self._make_fleet()
         finance = _make_finance()
         dist = bill_distribution(summaries, finance, 365)
 
         # Find the median-total_outlay home index manually
-        import pandas as pd
         outlay_vals = list(dist.per_home_net_bill_gbp)  # now holds total_outlay_gbp
         series = pd.Series(outlay_vals)
         median_val = float(series.median())
@@ -789,8 +756,6 @@ class TestBillDistribution:
 
     def test_single_home_fleet(self) -> None:
         """Single-home fleet: representative equals that home, min==mean==median==max."""
-        from solar_challenge.finance import bill_distribution
-
         summary = _make_summary()
         finance = _make_finance()
         dist = bill_distribution([summary], finance, 365)
@@ -806,8 +771,6 @@ class TestBillDistribution:
 
     def test_per_home_net_bill_is_tuple(self) -> None:
         """per_home_net_bill_gbp must be a tuple (immutable)."""
-        from solar_challenge.finance import bill_distribution
-
         summaries = self._make_fleet()
         dist = bill_distribution(summaries, _make_finance(), 365)
 
@@ -815,8 +778,6 @@ class TestBillDistribution:
 
     def test_empty_summaries_raises_value_error(self) -> None:
         """bill_distribution must raise ValueError for an empty summaries sequence."""
-        from solar_challenge.finance import bill_distribution
-
         with pytest.raises(ValueError, match="at least one summary"):
             bill_distribution([], _make_finance(), 365)
 
@@ -860,16 +821,12 @@ class TestGenerateFinanceReport:
 
     def test_returns_string(self) -> None:
         """generate_finance_report must return a str."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         report = generate_finance_report(dist)
         assert isinstance(report, str)
 
     def test_physics_bill_block_present(self) -> None:
         """Report must contain the CR3 householder-bill block headings (no Gross Bill / SEG)."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         report = generate_finance_report(dist)
 
@@ -887,8 +844,6 @@ class TestGenerateFinanceReport:
 
     def test_distribution_table_present(self) -> None:
         """Report must contain a per-home total-outlay distribution table."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         report = generate_finance_report(dist)
 
@@ -901,8 +856,6 @@ class TestGenerateFinanceReport:
 
     def test_representative_values_in_report(self) -> None:
         """Report must include representative total_outlay_gbp value."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         report = generate_finance_report(dist)
 
@@ -912,8 +865,6 @@ class TestGenerateFinanceReport:
 
     def test_scenario_name_in_report(self) -> None:
         """When scenario_name is provided it must appear in the report."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         report = generate_finance_report(dist, scenario_name="Bristol Phase 1")
 
@@ -921,8 +872,6 @@ class TestGenerateFinanceReport:
 
     def test_both_assumptions_side_by_side(self) -> None:
         """With physics AND spreadsheet BillDistributions, both labels must appear."""
-        from solar_challenge.output import generate_finance_report
-
         dist_physics = _make_bill_distribution(multiplier=1.0)
         dist_spreadsheet = _make_bill_distribution(multiplier=1.2)
 
@@ -937,8 +886,6 @@ class TestGenerateFinanceReport:
 
     def test_physics_only_no_spreadsheet_label(self) -> None:
         """With only physics BillDistribution, 'Spreadsheet' label must NOT appear."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         report = generate_finance_report(dist)
 
@@ -955,18 +902,12 @@ class TestFinanceCLI:
 
     def test_help_exits_zero(self) -> None:
         """`finance run --help` must exit 0."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--help"])
         assert result.exit_code == 0, result.output
 
     def test_help_shows_run_command(self) -> None:
         """`finance --help` must list the `run` command."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "--help"])
         assert result.exit_code == 0, result.output
@@ -974,9 +915,6 @@ class TestFinanceCLI:
 
     def test_help_shows_assumptions_option(self) -> None:
         """`finance run --help` must show `--assumptions` with physics|spreadsheet|both."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--help"])
         assert result.exit_code == 0, result.output
@@ -988,10 +926,6 @@ class TestFinanceCLI:
 
     def test_missing_finance_block_exits_nonzero(self, tmp_path: "Path") -> None:
         """Invoking `finance run` on a scenario without `finance:` must exit non-zero."""
-        import yaml
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # Minimal scenario without finance:
         scenario = {
             "name": "No Finance Test",
@@ -1017,10 +951,6 @@ class TestFinanceCLI:
 
     def test_missing_finance_block_error_message(self, tmp_path: "Path") -> None:
         """Error message must mention 'finance' when finance: block is missing."""
-        import yaml
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario = {
             "name": "No Finance Test",
             "location": {
@@ -1066,8 +996,6 @@ class TestHouseholderBillWrapperEquivalence:
         Pre-refactor: fails by ≤1 ULP on self_consumption_saving_gbp.
         Post-refactor (step-4): passes because the wrapper IS that call.
         """
-        from solar_challenge.finance import bill, householder_bill
-
         summary = _make_summary()   # 365-day, import_cost=276>0
         finance = _make_finance()
 
@@ -1095,8 +1023,6 @@ class TestHouseholderBillWrapperEquivalence:
 
     def test_wrapper_equals_bill_annual_override(self) -> None:
         """householder_bill(365-day, override=0.90) == bill(period_days=365, ...) with hand-computed capped inputs."""
-        from solar_challenge.finance import bill, householder_bill
-
         summary = _make_summary()   # import_rate = 23.0 p/kWh, gen=4000, demand=3400
         finance = _make_finance(self_consumption_override=0.90)
 
@@ -1129,8 +1055,6 @@ class TestHouseholderBillWrapperEquivalence:
         The wrapper always calls bill(period_days=365, ...) regardless of simulation_days,
         so the standing charge stays at the full annual value even for a 30-day sim.
         """
-        from solar_challenge.finance import householder_bill
-
         finance = _make_finance(standing_charge_pence_per_day=60.0)
         summary = _make_summary(
             simulation_days=30,
@@ -1168,8 +1092,6 @@ class TestHouseholderBillWrapperEquivalence:
           gen=4000, demand=3000, sc=2400, import=600 kWh, import_cost=£138
           standing=60 p/day, own_use=15 p/kWh, VAT=5%, retail=23 p/kWh
         """
-        from solar_challenge.finance import householder_bill
-
         finance = _make_finance(
             standing_charge_pence_per_day=60.0,
             own_use_rate_pence_per_kwh=15.0,
@@ -1233,8 +1155,6 @@ class TestBillCore:
 
         Must NOT annualise to 365 days — that is the wrapper's responsibility.
         """
-        from solar_challenge.finance import bill
-
         finance = _make_finance(standing_charge_pence_per_day=60.0)
         b = bill(
             period_days=30,
@@ -1261,8 +1181,6 @@ class TestBillCore:
         TestHouseholderBillPhysics::test_bill_definitional_invariants), not in a
         class of its own.
         """
-        from solar_challenge.finance import bill
-
         own_use_rate = 15.0  # p/kWh
         vat_rate = 0.05
         finance = _make_finance(
@@ -1329,8 +1247,6 @@ class TestBillCore:
         An arbitrary import_cost_gbp=99.99 (unrelated to import_kwh) must appear
         in the output unmodified and flow through to vat and total_outlay.
         """
-        from solar_challenge.finance import bill
-
         finance = _make_finance()
         b = bill(
             period_days=30,
@@ -1357,8 +1273,6 @@ class TestBillCore:
         finance.retail = 23 p/kWh
         saving must use eff_rate=30, NOT retail=23.
         """
-        from solar_challenge.finance import bill
-
         finance = _make_finance(
             retail_baseline_rate_pence_per_kwh=23.0,
             own_use_rate_pence_per_kwh=15.0,
@@ -1396,8 +1310,6 @@ class TestBillCore:
         (a) demand=0, sc=0: self_consumption_saving == 0.
         (b) demand=0, sc>0: eff_rate falls back to retail_baseline_rate.
         """
-        from solar_challenge.finance import bill
-
         finance = _make_finance(
             retail_baseline_rate_pence_per_kwh=23.0,
             own_use_rate_pence_per_kwh=15.0,
@@ -1456,10 +1368,8 @@ class TestCbsAmountDue:
     """
 
     @staticmethod
-    def _u1_bill() -> "tuple[BillBreakdown, FinanceConfig]":  # type: ignore[name-defined]
+    def _u1_bill() -> "tuple[BillBreakdown, FinanceConfig]":
         """The PRD U1 scenario: 12 p/kWh own-use, 558 kWh self-consumed, 5% VAT."""
-        from solar_challenge.finance import bill
-
         finance = _make_finance(
             own_use_rate_pence_per_kwh=12.0,
             vat_rate=0.05,
@@ -1519,8 +1429,6 @@ class TestCbsAmountDue:
         float sum 66.96 + 3.348 — close enough to look right, and exactly the
         kind of hand-transcribed literal the guard exists to catch.
         """
-        from solar_challenge.finance import BillBreakdown
-
         with pytest.raises(ValueError, match="cbs_amount_due_gbp"):
             BillBreakdown(
                 standing_charge_gbp=219.0,
@@ -1561,10 +1469,6 @@ class TestFinanceCLIEndToEnd:
 
     def test_finance_run_bristol_short_window(self) -> None:
         """E2E: `finance run scenarios/bristol-phase1.yaml` exits 0 with report headings."""
-        from pathlib import Path
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario = Path("scenarios/bristol-phase1.yaml")
         if not scenario.exists():
             pytest.skip("bristol-phase1.yaml not found")

@@ -12,6 +12,14 @@ from typing import Optional
 
 import pytest
 
+from solar_challenge.finance import (
+    BillDistribution,
+    CostRecoverySolution,
+    FinanceConfig,
+    project_economics,
+    project_multi_year,
+    solve_cost_recovery_rate,
+)
 from tests._factories import make_bill_distribution
 from tests._finance_builders import make_fleet_results, make_scenario
 
@@ -24,9 +32,7 @@ from tests._finance_builders import make_fleet_results, make_scenario
 class TestCostRecoverySolution:
     """CostRecoverySolution frozen dataclass construction and validation."""
 
-    def _make_valid(self) -> "CostRecoverySolution":  # type: ignore[name-defined]
-        from solar_challenge.finance import CostRecoverySolution
-
+    def _make_valid(self) -> "CostRecoverySolution":
         outlay = make_bill_distribution()
         return CostRecoverySolution(
             own_use_rate_pence_per_kwh=15.0,
@@ -52,8 +58,6 @@ class TestCostRecoverySolution:
 
     def test_construction_valid_rate_clamped_zero(self) -> None:
         """binding='rate_clamped_zero' constructs without errors."""
-        from solar_challenge.finance import CostRecoverySolution
-
         outlay = make_bill_distribution()
         sol = CostRecoverySolution(
             own_use_rate_pence_per_kwh=0.0,
@@ -70,8 +74,6 @@ class TestCostRecoverySolution:
 
     def test_construction_valid_infeasible_above_retail(self) -> None:
         """binding='infeasible_above_retail' constructs without errors."""
-        from solar_challenge.finance import CostRecoverySolution
-
         outlay = make_bill_distribution()
         sol = CostRecoverySolution(
             own_use_rate_pence_per_kwh=30.0,
@@ -94,8 +96,6 @@ class TestCostRecoverySolution:
 
     def test_invalid_binding_raises_value_error(self) -> None:
         """__post_init__ rejects an out-of-whitelist binding with ValueError."""
-        from solar_challenge.finance import CostRecoverySolution
-
         outlay = make_bill_distribution()
         with pytest.raises(ValueError, match="binding"):
             CostRecoverySolution(
@@ -111,8 +111,6 @@ class TestCostRecoverySolution:
 
     def test_negative_own_use_rate_raises_value_error(self) -> None:
         """__post_init__ rejects a negative own_use_rate_pence_per_kwh with ValueError."""
-        from solar_challenge.finance import CostRecoverySolution
-
         outlay = make_bill_distribution()
         with pytest.raises(ValueError, match="own_use_rate"):
             CostRecoverySolution(
@@ -129,8 +127,6 @@ class TestCostRecoverySolution:
     @pytest.mark.parametrize("bad_rate", [float("nan"), float("inf"), float("-inf")])
     def test_non_finite_own_use_rate_raises_value_error(self, bad_rate: float) -> None:
         """__post_init__ rejects NaN, +inf and -inf own_use_rate_pence_per_kwh."""
-        from solar_challenge.finance import CostRecoverySolution
-
         outlay = make_bill_distribution()
         with pytest.raises(ValueError, match="own_use_rate.*finite"):
             CostRecoverySolution(
@@ -146,8 +142,6 @@ class TestCostRecoverySolution:
 
     def test_all_fields_read_back(self) -> None:
         """All 8 fields read back correctly after construction."""
-        from solar_challenge.finance import CostRecoverySolution
-
         outlay = make_bill_distribution()
         sol = CostRecoverySolution(
             own_use_rate_pence_per_kwh=12.5,
@@ -187,9 +181,7 @@ def _make_finance(
     retail_baseline_rate: float = 30.0,
     asset_life_years: int = 25,
     n_homes: int = 5,
-) -> "FinanceConfig":  # type: ignore[name-defined]
-    from solar_challenge.finance import FinanceConfig
-
+) -> "FinanceConfig":
     return FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life_years,
@@ -245,8 +237,6 @@ class TestSolveCostRecoveryRateInterior:
 
     def test_h1_binding_floor_surplus_equals_floor(self) -> None:
         """H1: interior regime → feasible=True, binding='floor', surplus≈floor."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._setup_interior()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -258,8 +248,6 @@ class TestSolveCostRecoveryRateInterior:
 
     def test_outlay_is_bill_distribution(self) -> None:
         """outlay is a BillDistribution instance."""
-        from solar_challenge.finance import BillDistribution, solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._setup_interior()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -267,8 +255,6 @@ class TestSolveCostRecoveryRateInterior:
 
     def test_representative_outlay_matches_bill_distribution(self) -> None:
         """representative_outlay_gbp == outlay.representative.total_outlay_gbp."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._setup_interior()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -278,8 +264,6 @@ class TestSolveCostRecoveryRateInterior:
 
     def test_saving_fields_match_representative(self) -> None:
         """saving_vs_baseline_gbp and saving_pct match outlay.representative's fields."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._setup_interior()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -292,8 +276,6 @@ class TestSolveCostRecoveryRateInterior:
 
     def test_own_use_rate_in_valid_range(self) -> None:
         """Interior solve: 0 < own_use_rate <= retail_baseline_rate."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._setup_interior()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -302,12 +284,6 @@ class TestSolveCostRecoveryRateInterior:
 
     def test_h1_cross_check_re_sim_matches_solve(self) -> None:
         """H1 cross-check: re-sim at solved rate gives same net_surplus (flat fleet ⇒ analytic==re-sim)."""
-        from solar_challenge.finance import (
-            project_economics,
-            project_multi_year,
-            solve_cost_recovery_rate,
-        )
-
         scenario, finance, fr, simulate = self._setup_interior()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -325,8 +301,6 @@ class TestSolveCostRecoveryRateInterior:
 
     def test_determinism(self) -> None:
         """Two identical calls produce equal field values."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._setup_interior()
         sol1 = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
         sol2 = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
@@ -340,8 +314,6 @@ class TestSolveCostRecoveryRateInterior:
 
     def test_h2_higher_capex_yields_higher_rate_and_higher_outlay(self) -> None:
         """H2: higher capex → strictly higher own_use_rate AND representative_outlay_gbp."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, _, fr, _ = self._setup_interior()
 
         # Low capex (stays interior with low rate)
@@ -376,8 +348,6 @@ class TestSolveCostRecoveryRateInterior:
         finance (at r0).  A bug passing original finance would give own_use_payment_gbp
         proportional to r0 = 15p instead of the solved r*.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         scenario, finance, fr, simulate = self._setup_interior()
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
@@ -403,12 +373,6 @@ class TestSolveCostRecoveryRateInterior:
         the base curve) so surplus_at(r*) must equal an independent
         project_multi_year re-sim at the solved rate to float epsilon.
         """
-        from solar_challenge.finance import (
-            project_economics,
-            project_multi_year,
-            solve_cost_recovery_rate,
-        )
-
         n_homes = 5
         scenario = _make_scenario(n_homes=n_homes)
         finance = _make_finance(
@@ -472,8 +436,6 @@ class TestSolveCostRecoveryRateClamps:
         ensures fleet_revenue(r=0) = SEG > fleet_opex + floor×n_homes, so surplus(r=0) > floor
         without needing any own-use payment.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         n_homes = 5
         # fleet_opex = 131 × 5 = 655 GBP/yr; floor×n_homes = 10 × 5 = 50 GBP/yr
         # Need SEG > 705 GBP/yr → set export_revenue_gbp=200/home → 1000/fleet >> 705
@@ -505,8 +467,6 @@ class TestSolveCostRecoveryRateClamps:
 
     def test_under_feasible_binding_infeasible_above_retail(self) -> None:
         """Under-feasible: surplus(retail) < floor → feasible=False, rate==retail, infeasible."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         n_homes = 5
         scenario = _make_scenario(n_homes=n_homes)
         # Extremely high capex, no grant, very high floor → impossible
@@ -543,8 +503,6 @@ class TestSolveCostRecoveryRateClamps:
         passed the original finance (at r0=15p) the own_use_payment_gbp would be
         halved relative to the correct value at retail=30p.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         n_homes = 5
         scenario = _make_scenario(n_homes=n_homes)
         finance = _make_finance(
@@ -601,8 +559,6 @@ class TestSolveCostRecoveryRateDegenerate:
         (no debt service).  Since s0 > 0 = floor, the degenerate branch returns
         rate_clamped_zero.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         n_homes = 5
         # self_kwh=0.0 → fleet_sc=0 → slope=0 exactly
         fr = make_fleet_results(
@@ -643,8 +599,6 @@ class TestSolveCostRecoveryRateDegenerate:
         across all rates.  No SEG income, high capex, positive floor → surplus
         is deeply negative at every rate → infeasible_above_retail.
         """
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         n_homes = 5
         # self_kwh=0.0 → slope=0; export_kwh=0 so SEG revenue is also zero
         fr = make_fleet_results(
@@ -694,8 +648,6 @@ class TestSolveCostRecoveryRateShortWindow:
 
     def test_short_window_solves_like_the_equivalent_full_year(self) -> None:
         """Rate, surplus, outlay, binding and feasibility all match the full-year solve."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-
         n_homes = 5
         window_days = 3
         scenario = _make_scenario(n_homes=n_homes)

@@ -23,7 +23,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.weather import WeatherCache
+from solar_challenge.weather import WeatherCache, get_tmy_data
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -51,8 +51,6 @@ class TestFleetConfigBasics:
 
     def test_validates_consistent_timezones(self):
         """All homes must have same timezone."""
-        from solar_challenge.home import HomeConfig
-
         home1 = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(),
@@ -534,8 +532,6 @@ class TestSimulateHomeWeatherData:
 
     def test_accepts_weather_data_parameter(self):
         """simulate_home accepts pre-fetched weather data."""
-        from solar_challenge.weather import get_tmy_data
-
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3400.0),

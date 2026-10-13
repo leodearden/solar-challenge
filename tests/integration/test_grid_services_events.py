@@ -17,9 +17,32 @@ Covers, after the shared helpers:
 from __future__ import annotations
 
 import dataclasses
+import math
+import re
 from pathlib import Path
 
+import pandas as pd
 import pytest
+
+import solar_challenge.gridservices as gs_module
+from solar_challenge.config import ConfigurationError, load_config, parse_finance_config
+from solar_challenge.finance import (
+    FinanceConfig,
+    bill_distribution,
+    project_economics,
+    project_multi_year,
+    solve_cost_recovery_rate,
+)
+from solar_challenge.fleet import FleetResults
+from solar_challenge.flex import resolve_flex_band
+from solar_challenge.gridservices import (
+    GridServicesEventsConfig,
+    compute_grid_services_at_events,
+)
+from solar_challenge.home import SimulationResults, SummaryStatistics
+from solar_challenge.output import generate_finance_report
+from tests._cli_fleet_simulator import invoke_finance_run
+from tests.integration._helpers import board_econ_scenario
 
 pytestmark = pytest.mark.integration
 
@@ -31,7 +54,7 @@ SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-f
 # ---------------------------------------------------------------------------
 
 
-def _make_in_window_sim_results(n_steps: int = 8760) -> "SimulationResults":  # type: ignore[name-defined]
+def _make_in_window_sim_results(n_steps: int = 8760) -> "SimulationResults":
     """Build a SimulationResults with constant battery_soc above min_soc_kwh and
     battery_discharge below max_discharge_kw, on a full-year hourly tz-aware index.
 
@@ -40,9 +63,6 @@ def _make_in_window_sim_results(n_steps: int = 8760) -> "SimulationResults":  # 
     (winter-weekday-16-18h) selects real in-window steps and
     compute_fleet_spare_capacity_kw yields a positive event figure.
     """
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
     # NOTE: gen/demand/self-consumption magnitudes are arbitrary.  They cancel
     # in the flat-rate-0 delta isolation and do not feed the grid-services
@@ -72,10 +92,8 @@ def _make_in_window_sim_results(n_steps: int = 8760) -> "SimulationResults":  # 
     )
 
 
-def _synthetic_fleet_results_in_window(homes: list) -> "FleetResults":  # type: ignore[name-defined]
+def _synthetic_fleet_results_in_window(homes: list) -> "FleetResults":
     """Build FleetResults with in-window battery_soc/discharge per home."""
-    from solar_challenge.fleet import FleetResults
-
     per_home = [_make_in_window_sim_results() for _ in homes]
     return FleetResults(per_home_results=per_home, home_configs=homes)
 
@@ -92,28 +110,24 @@ def _board_econ_scenario() -> tuple:  # type: ignore[return]
     canonical shared implementation — to avoid duplication with
     ``test_flex_grid_services._board_econ_scenario``.
     """
-    from tests.integration._helpers import board_econ_scenario
-
     return board_econ_scenario("Board-EventsGridServices-Test")
 
 
 def _rev_at(
     scenario: "ScenarioConfig",  # type: ignore[name-defined]
-    finance: "FinanceConfig",  # type: ignore[name-defined]
+    finance: "FinanceConfig",
     simulate: "Callable",  # type: ignore[name-defined]
     year: int = 0,
 ) -> float:
     """Return fleet_revenue_gbp at a given year from project_multi_year."""
-    from solar_challenge.finance import project_multi_year
-
     curve = project_multi_year(scenario, finance, simulate=simulate)
     return curve.points[year].fleet_revenue_gbp
 
 
 def _isolate_gs_component(
     scenario: "ScenarioConfig",  # type: ignore[name-defined]
-    finance_events: "FinanceConfig",  # type: ignore[name-defined]
-    finance_flat0: "FinanceConfig",  # type: ignore[name-defined]
+    finance_events: "FinanceConfig",
+    finance_flat0: "FinanceConfig",
     simulate: "Callable",  # type: ignore[name-defined]
     year: int = 0,
 ) -> float:
@@ -144,11 +158,6 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     computed, the isolated delta would equal the flat increment (0, since flat
     rate=0) while the event-derived figure is positive.
     """
-    from solar_challenge.gridservices import (
-        GridServicesEventsConfig,
-        compute_grid_services_at_events,
-    )
-
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
@@ -208,8 +217,6 @@ def test_guard_capacity_at_events_with_events_none_raises_configuration_error() 
 
     An explicit ConfigurationError guard, not a bare assert, rejects the missing events.
     """
-    from solar_challenge.config import ConfigurationError  # type: ignore[attr-defined]
-
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
@@ -220,8 +227,6 @@ def test_guard_capacity_at_events_with_events_none_raises_configuration_error() 
         grid_services_model="capacity_at_events",
         grid_services_events=None,
     )
-
-    from solar_challenge.finance import project_multi_year
 
     with pytest.raises(ConfigurationError):
         project_multi_year(scenario, finance_none, simulate=simulate)
@@ -246,12 +251,7 @@ def test_compute_once_event_figure_reused_across_ages(monkeypatch: pytest.Monkey
     First-call memoization keeps the count at 1; a per-age implementation would
     call the function for every _simulate_age invocation (count ≥ 3).
     """
-    import solar_challenge.gridservices as gs_module
-    from solar_challenge.gridservices import (
-        GridServicesEventsConfig,
-        compute_grid_services_at_events as original_fn,
-    )
-
+    original_fn = gs_module.compute_grid_services_at_events
     call_count: dict[str, int] = {"n": 0}
 
     def counting_wrapper(fleet_results, cfg):  # type: ignore[no-untyped-def]
@@ -272,8 +272,6 @@ def test_compute_once_event_figure_reused_across_ages(monkeypatch: pytest.Monkey
         grid_services_events=events_cfg,
         grid_services_income_per_kw_per_year_gbp=0.0,
     )
-
-    from solar_challenge.finance import project_multi_year
 
     project_multi_year(scenario, finance_events, simulate=simulate)
 
@@ -302,14 +300,8 @@ def _age_nonlinear_simulate(homes: list) -> "Callable":  # type: ignore[name-def
     the test cares only that the event function is called exactly once (memo
     reuse), not that the figure changes with age.
     """
-    import re as _re
-
-    def _sim(fc: object, start_ts: object, end_ts: object) -> "FleetResults":  # type: ignore[name-defined]
-        import pandas as pd
-        from solar_challenge.fleet import FleetResults
-        from solar_challenge.home import SimulationResults
-
-        m = _re.search(r"proj-age-(\d+)", str(getattr(fc, "name", "")))
+    def _sim(fc: object, start_ts: object, end_ts: object) -> "FleetResults":
+        m = re.search(r"proj-age-(\d+)", str(getattr(fc, "name", "")))
         age = int(m.group(1)) if m else 0
 
         # Quadratic decay: revenue at age=0 is 4× revenue at age=24 → PCHIP
@@ -357,12 +349,7 @@ def test_compute_once_memo_reused_on_bisection_path(monkeypatch: pytest.MonkeyPa
     _constant_simulate, which never triggers bisection, leaving the bisection
     code path unexercised.
     """
-    import solar_challenge.gridservices as gs_module
-    from solar_challenge.gridservices import (
-        GridServicesEventsConfig,
-        compute_grid_services_at_events as original_fn,
-    )
-
+    original_fn = gs_module.compute_grid_services_at_events
     call_count: dict[str, int] = {"n": 0}
 
     def counting_wrapper(fleet_results, cfg):  # type: ignore[no-untyped-def]
@@ -383,8 +370,6 @@ def test_compute_once_memo_reused_on_bisection_path(monkeypatch: pytest.MonkeyPa
     )
 
     simulate = _age_nonlinear_simulate(homes)
-
-    from solar_challenge.finance import project_multi_year
 
     curve = project_multi_year(scenario, finance_events, simulate=simulate)
 
@@ -419,9 +404,6 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
     The single conditional on the model preserves the flat path char-for-char and
     ignores grid_services_events when model is "flat".
     """
-    from solar_challenge.finance import FinanceConfig, project_multi_year
-    from solar_challenge.gridservices import GridServicesEventsConfig
-
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
@@ -490,15 +472,6 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
     (own_use_rate never enters physical dispatch or gridservices computation),
     so the existing affine reconstruction (finance.py:1789-1802) remains exact.
     """
-    import math
-
-    from solar_challenge.finance import (
-        project_economics,
-        project_multi_year,
-        solve_cost_recovery_rate,
-    )
-    from solar_challenge.gridservices import GridServicesEventsConfig
-
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
@@ -578,15 +551,6 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
     The Optional[GridServicesAtEvents] param renders the line inside the existing
     flex-value block.
     """
-    from solar_challenge.finance import FinanceConfig, bill_distribution
-    from solar_challenge.flex import resolve_flex_band
-    from solar_challenge.gridservices import (
-        GridServicesEventsConfig,
-        compute_grid_services_at_events,
-    )
-    from solar_challenge.home import SummaryStatistics
-    from solar_challenge.output import generate_finance_report
-
     # Build a minimal synthetic BillDistribution (mirrors test_flex_timeshift pattern)
     sc_ratio = 2200.0 / 4000.0
     gd_ratio = 1200.0 / 3400.0
@@ -672,14 +636,6 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     The board YAML selects capacity_at_events and the CLI passes the computed
     grid_services_at_events to generate_finance_report.
     """
-    from pathlib import Path
-
-    import pytest
-
-    from solar_challenge.config import load_config, parse_finance_config
-    from solar_challenge.gridservices import compute_grid_services_at_events
-    from tests._cli_fleet_simulator import invoke_finance_run
-
     scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
 
     # In-window FleetResults from the board homes

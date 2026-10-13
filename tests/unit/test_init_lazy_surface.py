@@ -8,10 +8,13 @@ import ast
 import pathlib
 import subprocess
 import sys
+from importlib import import_module
 
 import pytest
 
 import solar_challenge
+import solar_challenge.dispatch as _dispatch
+import solar_challenge.tariff as _tariff
 
 
 # ---------------------------------------------------------------------------
@@ -46,8 +49,6 @@ def test_all_is_complete_frozen_surface() -> None:
 
 def test_every_name_resolves_and_caches() -> None:
     """Each name resolves to the correct origin-module object and is cached on second access."""
-    from importlib import import_module
-
     for name, mod_name in solar_challenge._SYMBOL_MODULE.items():  # type: ignore[attr-defined]
         source_name = solar_challenge._SOURCE_NAME.get(name, name)  # type: ignore[attr-defined]
         origin_obj = getattr(import_module(f"solar_challenge.{mod_name}"), source_name)
@@ -73,9 +74,6 @@ def test_unknown_attribute_raises() -> None:
 def test_tariffperiod_collision_resolved() -> None:
     """dispatch.TariffPeriod (Enum) and tariff.TariffPeriod (dataclass) are distinct objects;
     the alias DispatchTariffPeriod resolves to the dispatch Enum."""
-    import solar_challenge.dispatch as _dispatch
-    import solar_challenge.tariff as _tariff
-
     assert solar_challenge.DispatchTariffPeriod is _dispatch.TariffPeriod
     assert solar_challenge.TariffPeriod is _tariff.TariffPeriod
     assert solar_challenge.DispatchTariffPeriod is not solar_challenge.TariffPeriod

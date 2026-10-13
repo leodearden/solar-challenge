@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 pytest.importorskip("flask")
@@ -18,11 +19,16 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import DispatchStrategyConfig, GridChargeConfig, load_fleet_config
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
-from solar_challenge.home import HomeConfig, calculate_summary
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.web.charts import (
+    comparison_bar_chart,
+    comparison_radar,
+    overlaid_power_flows,
+)
 from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.storage import RunStorage
@@ -737,8 +743,6 @@ class TestComparisonCharts:
 
     def test_comparison_bar_chart_returns_json(self) -> None:
         """Test comparison_bar_chart returns a non-empty JSON string."""
-        from solar_challenge.web.charts import comparison_bar_chart
-
         summaries = [
             {
                 "total_generation_kwh": 100,
@@ -762,8 +766,6 @@ class TestComparisonCharts:
 
     def test_comparison_radar_returns_json(self) -> None:
         """Test comparison_radar returns a non-empty JSON string."""
-        from solar_challenge.web.charts import comparison_radar
-
         summaries = [
             {
                 "self_consumption_ratio": 0.6,
@@ -787,16 +789,12 @@ class TestComparisonCharts:
 
     def test_comparison_bar_chart_handles_missing_keys(self) -> None:
         """Test comparison_bar_chart handles summaries with missing keys."""
-        from solar_challenge.web.charts import comparison_bar_chart
-
         summaries = [{"total_generation_kwh": 50}, {}]
         result = comparison_bar_chart(summaries, ["A", "B"])
         assert result and result != "{}"
 
     def test_comparison_radar_handles_zero_generation(self) -> None:
         """Test comparison_radar handles zero generation gracefully."""
-        from solar_challenge.web.charts import comparison_radar
-
         summaries = [
             {
                 "self_consumption_ratio": 0,
@@ -811,11 +809,6 @@ class TestComparisonCharts:
 
     def test_overlaid_power_flows_returns_json(self) -> None:
         """Test overlaid_power_flows returns a non-empty JSON string."""
-        import numpy as np
-
-        from solar_challenge.home import SimulationResults
-        from solar_challenge.web.charts import overlaid_power_flows
-
         index = pd.date_range("2024-06-01", periods=60, freq="min")
         gen = pd.Series(np.sin(np.arange(60) * 0.1) * 2, index=index)
         dem = pd.Series(np.ones(60) * 0.5, index=index)
@@ -883,11 +876,6 @@ class TestFleetCSVExport:
 
         Each home gets different generation/demand to verify aggregation.
         """
-        from solar_challenge.fleet import FleetResults, calculate_fleet_summary
-        from solar_challenge.home import HomeConfig, calculate_summary, SummaryStatistics
-        from solar_challenge.pv import PVConfig
-        from solar_challenge.load import LoadConfig
-
         per_home_results = []
         home_configs = []
         per_home_summaries = []
@@ -984,10 +972,6 @@ class TestContentDispositionHeader:
         run_id = str(uuid.uuid4())
 
         # Save a simple home run for export
-        from solar_challenge.home import HomeConfig, calculate_summary
-        from solar_challenge.pv import PVConfig
-        from solar_challenge.load import LoadConfig
-
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3500),

@@ -12,8 +12,33 @@ import dataclasses
 import math
 from typing import Optional
 
+import pandas as pd
 import pytest
 
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.finance import (
+    CostRecoverySolution,
+    FinanceConfig,
+    bill_distribution,
+    project_economics,
+    project_multi_year,
+    solve_cost_recovery_rate,
+)
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
+from solar_challenge.optimize import (
+    ConfigPoint,
+    ConfigResult,
+    RankedSweep,
+    _pareto_baseline,
+    _rank_feasible,
+    _split_infeasible,
+    enumerate_configs,
+    run_sweep,
+)
+from solar_challenge.pv import PVConfig
 from tests._factories import make_bill_breakdown, make_bill_distribution
 
 
@@ -22,9 +47,7 @@ from tests._factories import make_bill_breakdown, make_bill_distribution
 # ---------------------------------------------------------------------------
 
 
-def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
-    from solar_challenge.pv import PVConfig
-
+def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":
     return PVConfig(
         capacity_kw=4.0,
         azimuth=180.0,
@@ -34,20 +57,14 @@ def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignor
     )
 
 
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
-    from solar_challenge.load import LoadConfig
-
+def _make_load_config() -> "LoadConfig":
     return LoadConfig(annual_consumption_kwh=3500.0)
 
 
 def _make_home_config(
     capacity_kw: float = 4.0,
     system_age_years: float = 0.0,
-) -> "HomeConfig":  # type: ignore[name-defined]
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
-    from solar_challenge.pv import PVConfig
-
+) -> "HomeConfig":
     pv = PVConfig(
         capacity_kw=capacity_kw,
         azimuth=180.0,
@@ -68,10 +85,7 @@ def _make_sim_results(
     import_kwh: float = 1200.0,
     export_revenue_gbp_per_year: float = 0.0,
     n_minutes: int = 525600,  # 365 days
-) -> "SimulationResults":  # type: ignore[name-defined]
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
+) -> "SimulationResults":
     idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
     exp_kw = export_kwh / (n_minutes / 60.0)
@@ -106,9 +120,7 @@ def _make_fleet_results(
     import_kwh: float = 1200.0,
     export_revenue_gbp_per_year: float = 0.0,
     capacity_kw: float = 4.0,
-) -> "FleetResults":  # type: ignore[name-defined]
-    from solar_challenge.fleet import FleetResults
-
+) -> "FleetResults":
     homes = [_make_home_config(capacity_kw=capacity_kw) for _ in range(n_homes)]
     per_home = [
         _make_sim_results(self_kwh, export_kwh, import_kwh,
@@ -128,9 +140,7 @@ def _make_finance(
     retained_cash_floor: float = 50.0,
     retail_baseline_rate: float = 30.0,
     asset_life_years: int = 25,
-) -> "FinanceConfig":  # type: ignore[name-defined]
-    from solar_challenge.finance import FinanceConfig
-
+) -> "FinanceConfig":
     return FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life_years,
@@ -149,10 +159,8 @@ def _make_scenario(
     start: str = "2020-01-01",
     end: str = "2020-12-31",
     seg_tariff_pence: float = 5.0,
-    finance: "Optional[FinanceConfig]" = None,  # type: ignore[name-defined]
-) -> "ScenarioConfig":  # type: ignore[name-defined]
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
+    finance: "Optional[FinanceConfig]" = None,
+) -> "ScenarioConfig":
     homes = [_make_home_config() for _ in range(n_homes)]
     return ScenarioConfig(
         name="sweep-test",
@@ -164,7 +172,7 @@ def _make_scenario(
     )
 
 
-def _interior_finance(n_homes: int = 5) -> "FinanceConfig":  # type: ignore[name-defined]
+def _interior_finance(n_homes: int = 5) -> "FinanceConfig":
     """Finance params that produce an interior 'floor' solve."""
     return _make_finance(
         pv_cost_per_kwp_gbp=2000.0,
@@ -181,9 +189,7 @@ def _make_cost_recovery_solution(
     binding: str = "floor",
     outlay_gbp: float = 400.0,
     surplus: float = 100.0,
-) -> "CostRecoverySolution":  # type: ignore[name-defined]
-    from solar_challenge.finance import CostRecoverySolution
-
+) -> "CostRecoverySolution":
     rep = make_bill_breakdown(
         total_outlay_gbp=outlay_gbp,
         saving_vs_baseline_gbp=100.0,
@@ -223,10 +229,8 @@ def _make_config_result(
     payback_years: Optional[float] = 12.0,
     baseline_outlay_gbp: float = 450.0,
     baseline_surplus_per_home_gbp: float = 80.0,
-) -> "ConfigResult":  # type: ignore[name-defined]
+) -> "ConfigResult":
     """Synthetic ConfigResult builder for pure helper tests (no simulation needed)."""
-    from solar_challenge.optimize import ConfigPoint, ConfigResult
-
     config = ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw)
     solution = _make_cost_recovery_solution(
         own_use_rate=solved_own_use_rate_pence_per_kwh,
@@ -262,8 +266,6 @@ class TestConfigResult:
 
     def test_all_fields_read_back(self) -> None:
         """All fields read back correctly after construction."""
-        from solar_challenge.optimize import ConfigPoint, ConfigResult
-
         config = ConfigPoint(pv_kwp=4.0, battery_kwh=6.0, inverter_kw=3.6)
         solution = _make_cost_recovery_solution(
             own_use_rate=15.0,
@@ -333,7 +335,6 @@ class TestConfigResult:
     def test_solution_field_accessible(self) -> None:
         """solution.own_use_rate_pence_per_kwh is readable through the ConfigResult."""
         sol = _make_cost_recovery_solution(own_use_rate=18.5, feasible=True, binding="floor")
-        from solar_challenge.optimize import ConfigPoint, ConfigResult
 
         cr = ConfigResult(
             config=ConfigPoint(pv_kwp=4.0, battery_kwh=6.0, inverter_kw=3.6),
@@ -361,7 +362,7 @@ class TestConfigResult:
 class TestRankedSweep:
     """RankedSweep frozen dataclass construction and validation."""
 
-    def _make_one_feasible(self) -> "ConfigResult":  # type: ignore[name-defined]
+    def _make_one_feasible(self) -> "ConfigResult":
         return _make_config_result(
             pv_kwp=4.0,
             representative_outlay_gbp=400.0,
@@ -370,8 +371,6 @@ class TestRankedSweep:
 
     def test_fields_read_back(self) -> None:
         """All fields read back after construction."""
-        from solar_challenge.optimize import ConfigPoint, RankedSweep
-
         cr = self._make_one_feasible()
         infeasible_pt = ConfigPoint(pv_kwp=8.0, battery_kwh=10.0, inverter_kw=5.0)
         pareto_pt = cr.config
@@ -392,8 +391,6 @@ class TestRankedSweep:
 
     def test_cheapest_feasible_equals_results_0_config(self) -> None:
         """When results non-empty, cheapest_feasible must equal results[0].config."""
-        from solar_challenge.optimize import RankedSweep
-
         cr = self._make_one_feasible()
         rs = RankedSweep(
             results=(cr,),
@@ -406,8 +403,6 @@ class TestRankedSweep:
 
     def test_cheapest_feasible_none_when_results_empty(self) -> None:
         """When results is empty, cheapest_feasible must be None."""
-        from solar_challenge.optimize import RankedSweep
-
         rs = RankedSweep(
             results=(),
             infeasible=(),
@@ -419,8 +414,6 @@ class TestRankedSweep:
 
     def test_cheapest_feasible_mismatch_raises_value_error(self) -> None:
         """cheapest_feasible != results[0].config raises ValueError."""
-        from solar_challenge.optimize import ConfigPoint, RankedSweep
-
         cr = self._make_one_feasible()
         wrong = ConfigPoint(pv_kwp=99.0, battery_kwh=0.0, inverter_kw=99.0)
         with pytest.raises(ValueError):
@@ -434,8 +427,6 @@ class TestRankedSweep:
 
     def test_frozen_raises_on_assignment(self) -> None:
         """Assigning any field raises dataclasses.FrozenInstanceError."""
-        from solar_challenge.optimize import RankedSweep
-
         cr = self._make_one_feasible()
         rs = RankedSweep(
             results=(cr,),
@@ -463,7 +454,6 @@ class TestRunSweepSingleConfig:
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
         fr = _make_fleet_results(n_homes=n_homes)
         simulate = lambda fc, s, e: fr  # noqa: E731
-        from solar_challenge.optimize import enumerate_configs
 
         configs = enumerate_configs(
             scenario,
@@ -475,9 +465,6 @@ class TestRunSweepSingleConfig:
 
     def test_solve_fields_match_direct_w2(self) -> None:
         """representative_outlay / solved_rate / surplus / feasible / binding == sol.*"""
-        from solar_challenge.finance import solve_cost_recovery_rate
-        from solar_challenge.optimize import run_sweep
-
         scenario, finance, fr, simulate, configs = self._setup()
 
         ranked = run_sweep(configs, simulate=simulate)
@@ -502,18 +489,12 @@ class TestRunSweepSingleConfig:
 
     def test_solution_field_is_cost_recovery_solution(self) -> None:
         """result.solution is a CostRecoverySolution."""
-        from solar_challenge.finance import CostRecoverySolution
-        from solar_challenge.optimize import run_sweep
-
         _, _, _, simulate, configs = self._setup()
         ranked = run_sweep(configs, simulate=simulate)
         assert isinstance(ranked.results[0].solution, CostRecoverySolution)
 
     def test_baseline_econ_fields_match_direct_w2(self) -> None:
         """total_capex / min_dscr / equity_irr / payback_years match project_economics."""
-        from solar_challenge.finance import project_economics, project_multi_year
-        from solar_challenge.optimize import run_sweep
-
         scenario, finance, fr, simulate, configs = self._setup()
         ranked = run_sweep(configs, simulate=simulate)
         cr = ranked.results[0]
@@ -542,10 +523,6 @@ class TestRunSweepSingleConfig:
     def test_baseline_outlay_matches_age0_bill_distribution(self) -> None:
         """baseline_outlay_gbp equals bill_distribution(...).representative.total_outlay_gbp
         from an age-0 simulation at own_use_rate=15p."""
-        from solar_challenge.finance import bill_distribution
-        from solar_challenge.home import calculate_summary
-        from solar_challenge.optimize import run_sweep
-
         scenario, finance, fr, simulate, configs = self._setup()
         ranked = run_sweep(configs, simulate=simulate)
         cr = ranked.results[0]
@@ -567,8 +544,6 @@ class TestRunSweepSingleConfig:
 
     def test_cheapest_feasible_matches_config_point(self) -> None:
         """With one config, cheapest_feasible == that config's ConfigPoint."""
-        from solar_challenge.optimize import run_sweep
-
         _, _, _, simulate, configs = self._setup()
         ranked = run_sweep(configs, simulate=simulate)
         assert ranked.cheapest_feasible is ranked.results[0].config
@@ -601,7 +576,7 @@ class TestRunSweepMultiConfig:
 
         return simulate
 
-    def _make_infeasible_finance(self) -> "FinanceConfig":  # type: ignore[name-defined]
+    def _make_infeasible_finance(self) -> "FinanceConfig":
         """Finance params that produce infeasible_above_retail."""
         return _make_finance(
             pv_cost_per_kwp_gbp=20000.0,
@@ -617,8 +592,6 @@ class TestRunSweepMultiConfig:
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
         simulate = self._make_pv_varying_simulate(n_homes)
-
-        from solar_challenge.optimize import enumerate_configs, run_sweep
 
         configs = enumerate_configs(
             scenario,
@@ -638,8 +611,6 @@ class TestRunSweepMultiConfig:
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
         simulate = self._make_pv_varying_simulate(n_homes)
 
-        from solar_challenge.optimize import enumerate_configs, run_sweep
-
         configs = enumerate_configs(
             scenario, pv_kwp=[3.0, 5.0], battery_kwh=[6.0], inverter_kw=[3.6]
         )
@@ -655,8 +626,6 @@ class TestRunSweepMultiConfig:
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
         simulate = self._make_pv_varying_simulate(n_homes)
-
-        from solar_challenge.optimize import enumerate_configs, run_sweep
 
         configs = enumerate_configs(
             scenario, pv_kwp=[3.0, 5.0], battery_kwh=[6.0], inverter_kw=[3.6]
@@ -676,8 +645,6 @@ class TestRunSweepMultiConfig:
         # Build two scenarios: one feasible, one infeasible
         feasible_scenario = _make_scenario(n_homes=n_homes, finance=feasible_finance)
         infeasible_scenario = _make_scenario(n_homes=n_homes, finance=infeasible_finance)
-
-        from solar_challenge.optimize import ConfigPoint, enumerate_configs, run_sweep
 
         feasible_configs = enumerate_configs(
             feasible_scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
@@ -708,8 +675,6 @@ class TestRankFeasible:
 
     def test_primary_sort_by_outlay_ascending(self) -> None:
         """Primary sort is by representative_outlay_gbp ascending."""
-        from solar_challenge.optimize import _rank_feasible
-
         low = _make_config_result(representative_outlay_gbp=300.0, pv_kwp=4.0)
         high = _make_config_result(representative_outlay_gbp=500.0, pv_kwp=5.0)
         result = _rank_feasible([high, low])
@@ -718,8 +683,6 @@ class TestRankFeasible:
 
     def test_tie_break_surplus_descending(self) -> None:
         """On equal outlay, higher surplus comes first (descending)."""
-        from solar_challenge.optimize import _rank_feasible
-
         a = _make_config_result(
             representative_outlay_gbp=400.0,
             surplus_at_solved_gbp=200.0,
@@ -736,8 +699,6 @@ class TestRankFeasible:
 
     def test_tie_break_pv_ascending(self) -> None:
         """On equal outlay and surplus, smaller pv_kwp comes first (ascending)."""
-        from solar_challenge.optimize import _rank_feasible
-
         small = _make_config_result(
             representative_outlay_gbp=400.0,
             surplus_at_solved_gbp=100.0,
@@ -754,8 +715,6 @@ class TestRankFeasible:
 
     def test_tie_break_battery_ascending(self) -> None:
         """On equal outlay/surplus/pv, smaller battery_kwh comes first."""
-        from solar_challenge.optimize import _rank_feasible
-
         small = _make_config_result(
             representative_outlay_gbp=400.0,
             surplus_at_solved_gbp=100.0,
@@ -774,8 +733,6 @@ class TestRankFeasible:
 
     def test_tie_break_inverter_ascending(self) -> None:
         """On equal outlay/surplus/pv/battery, smaller inverter_kw comes first."""
-        from solar_challenge.optimize import _rank_feasible
-
         small = _make_config_result(
             representative_outlay_gbp=400.0,
             surplus_at_solved_gbp=100.0,
@@ -796,8 +753,6 @@ class TestRankFeasible:
 
     def test_stable_reproducible_across_repeated_calls(self) -> None:
         """Same input always produces same output ordering."""
-        from solar_challenge.optimize import _rank_feasible
-
         items = [
             _make_config_result(representative_outlay_gbp=400.0, surplus_at_solved_gbp=150.0, pv_kwp=5.0),
             _make_config_result(representative_outlay_gbp=300.0, surplus_at_solved_gbp=100.0, pv_kwp=4.0),
@@ -818,8 +773,6 @@ class TestParetoBaseline:
 
     def test_dominated_point_excluded(self) -> None:
         """A strictly dominated point is not in the Pareto set."""
-        from solar_challenge.optimize import _pareto_baseline
-
         # A dominates B: A has lower outlay AND higher surplus
         a = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=4.0)
         b = _make_config_result(baseline_outlay_gbp=400.0, baseline_surplus_per_home_gbp=100.0, pv_kwp=5.0)
@@ -837,8 +790,6 @@ class TestParetoBaseline:
 
     def test_non_dominated_all_included(self) -> None:
         """All non-dominated points are included."""
-        from solar_challenge.optimize import _pareto_baseline
-
         # Three points forming a Pareto front: outlay↓, surplus↑
         a = _make_config_result(baseline_outlay_gbp=100.0, baseline_surplus_per_home_gbp=400.0, pv_kwp=4.0)
         b = _make_config_result(baseline_outlay_gbp=200.0, baseline_surplus_per_home_gbp=600.0, pv_kwp=5.0)
@@ -849,8 +800,6 @@ class TestParetoBaseline:
 
     def test_ordered_by_baseline_outlay_ascending(self) -> None:
         """Returned tuple is sorted by baseline_outlay ascending (deterministic)."""
-        from solar_challenge.optimize import _pareto_baseline
-
         a = _make_config_result(baseline_outlay_gbp=400.0, baseline_surplus_per_home_gbp=100.0, pv_kwp=4.0)
         b = _make_config_result(baseline_outlay_gbp=200.0, baseline_surplus_per_home_gbp=300.0, pv_kwp=5.0)
         c = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=6.0)
@@ -866,8 +815,6 @@ class TestParetoBaseline:
     def test_includes_infeasible_configs_when_non_dominated(self) -> None:
         """Infeasible configs (binding='infeasible_above_retail') appear in pareto when
         their (baseline_outlay, baseline_surplus) pair is non-dominated."""
-        from solar_challenge.optimize import _pareto_baseline
-
         feasible = _make_config_result(
             baseline_outlay_gbp=400.0,
             baseline_surplus_per_home_gbp=100.0,
@@ -890,8 +837,6 @@ class TestParetoBaseline:
     def test_integration_ranked_pareto_consistent(self) -> None:
         """run_sweep populates pareto_baseline consistently with _pareto_baseline
         over all evaluated configs (results + infeasible)."""
-        from solar_challenge.optimize import _pareto_baseline, enumerate_configs, run_sweep
-
         n_homes = 3
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
@@ -922,7 +867,6 @@ class TestRetainedCashFloorOverride:
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
         fr = _make_fleet_results(n_homes=n_homes)
         simulate = lambda fc, s, e: fr  # noqa: E731
-        from solar_challenge.optimize import enumerate_configs
 
         configs = enumerate_configs(
             scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
@@ -931,8 +875,6 @@ class TestRetainedCashFloorOverride:
 
     def test_floor_override_echoed_in_retained_cash_floor_gbp(self) -> None:
         """ranked.retained_cash_floor_gbp == the overriding value F."""
-        from solar_challenge.optimize import run_sweep
-
         scenario, finance, fr, simulate, configs = self._setup()
         F = finance.retained_cash_floor_per_home_per_year_gbp + 20.0
         ranked = run_sweep(configs, retained_cash_floor_gbp=F, simulate=simulate)
@@ -940,9 +882,6 @@ class TestRetainedCashFloorOverride:
 
     def test_floor_override_matches_direct_solve_with_overridden_finance(self) -> None:
         """Result surplus equals direct solve_cost_recovery_rate with finance override."""
-        from solar_challenge.finance import solve_cost_recovery_rate
-        from solar_challenge.optimize import run_sweep
-
         scenario, finance, fr, simulate, configs = self._setup()
         F = finance.retained_cash_floor_per_home_per_year_gbp + 20.0
         ranked = run_sweep(configs, retained_cash_floor_gbp=F, simulate=simulate)
@@ -965,8 +904,6 @@ class TestRetainedCashFloorOverride:
 
     def test_no_floor_override_uses_scenario_finance_floor(self) -> None:
         """retained_cash_floor_gbp=None uses scenario.finance's own floor."""
-        from solar_challenge.optimize import run_sweep
-
         scenario, finance, fr, simulate, configs = self._setup()
         ranked = run_sweep(configs, simulate=simulate)  # no floor override
         assert ranked.retained_cash_floor_gbp == pytest.approx(
@@ -975,13 +912,9 @@ class TestRetainedCashFloorOverride:
 
     def test_floor_override_does_not_change_baseline_outlay(self) -> None:
         """baseline_outlay_gbp is unchanged by floor override (own_use_rate fixed at 15p)."""
-        from solar_challenge.optimize import run_sweep
-
         scenario, finance, fr, simulate, configs = self._setup()
         F_low = finance.retained_cash_floor_per_home_per_year_gbp
         F_high = F_low + 30.0
-
-        from solar_challenge.optimize import enumerate_configs
 
         configs_low = enumerate_configs(
             scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
@@ -1008,15 +941,11 @@ class TestRunSweepGuards:
 
     def test_raises_value_error_on_empty_configs(self) -> None:
         """run_sweep raises ValueError when configs list is empty."""
-        from solar_challenge.optimize import run_sweep
-
         with pytest.raises(ValueError, match="(?i)empty|no config"):
             run_sweep([])
 
     def test_raises_value_error_when_finance_is_none(self) -> None:
         """run_sweep raises ValueError when any scenario.finance is None."""
-        from solar_challenge.optimize import ConfigPoint, enumerate_configs, run_sweep
-
         n_homes = 3
         # Scenario with no finance block
         scenario_no_finance = _make_scenario(n_homes=n_homes, finance=None)
@@ -1041,8 +970,6 @@ class TestSplitInfeasibleRateClamped:
     def test_rate_clamped_zero_goes_to_feasible(self) -> None:
         """A ConfigResult with binding='rate_clamped_zero' and feasible=True is
         placed in the feasible list, not infeasible."""
-        from solar_challenge.optimize import _split_infeasible
-
         clamped = _make_config_result(
             feasible=True,
             binding="rate_clamped_zero",
@@ -1056,8 +983,6 @@ class TestSplitInfeasibleRateClamped:
     def test_infeasible_above_retail_goes_to_infeasible(self) -> None:
         """A ConfigResult with binding='infeasible_above_retail' and feasible=False
         is placed in infeasible (sanity check for the bool-based split)."""
-        from solar_challenge.optimize import _split_infeasible
-
         inf = _make_config_result(
             feasible=False,
             binding="infeasible_above_retail",
@@ -1076,8 +1001,6 @@ class TestSplitInfeasibleRateClamped:
         through run_sweep correctly by using a config that naturally produces a
         feasible (floor or rate_clamped_zero) solve.
         """
-        from solar_challenge.optimize import enumerate_configs, run_sweep
-
         n_homes = 3
         # Use interior_finance which produces a feasible (floor-binding) solve —
         # the test_all_results_feasible test already covers this path; what matters
@@ -1101,8 +1024,6 @@ class TestHeterogeneousFloorEcho:
     def test_heterogeneous_floor_echoes_first_config(self) -> None:
         """When retained_cash_floor_gbp=None and configs have differing finance floors,
         ranked.retained_cash_floor_gbp equals the FIRST config's floor."""
-        from solar_challenge.optimize import ConfigPoint, enumerate_configs, run_sweep
-
         n_homes = 3
         floor_a = 80.0
         floor_b = 120.0
@@ -1143,8 +1064,6 @@ class TestParetoBaselineIdenticalPairs:
         """Two configs with exactly equal (baseline_outlay, baseline_surplus) are
         both non-dominated — neither satisfies the 'at least one strict' criterion
         against the other, so both survive."""
-        from solar_challenge.optimize import _pareto_baseline
-
         a = _make_config_result(
             baseline_outlay_gbp=300.0,
             baseline_surplus_per_home_gbp=200.0,
@@ -1163,8 +1082,6 @@ class TestParetoBaselineIdenticalPairs:
 
     def test_identical_pair_dominated_by_third(self) -> None:
         """If a third config dominates both identical-pair configs, both are excluded."""
-        from solar_challenge.optimize import _pareto_baseline
-
         a = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=4.0)
         b = _make_config_result(baseline_outlay_gbp=300.0, baseline_surplus_per_home_gbp=200.0, pv_kwp=5.0)
         # c dominates a and b: lower outlay AND higher surplus

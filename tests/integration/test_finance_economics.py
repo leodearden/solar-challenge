@@ -13,21 +13,43 @@ added to test_marker_registration.py's INTEGRATION_FILES list.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
+from pathlib import Path
 from typing import Optional
 
 import pytest
+import yaml
+from typer.testing import CliRunner
 
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.cli.main import app
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.finance import (
+    FinanceConfig,
+    MultiYearCurve,
+    ProjectEconomics,
+    YearPoint,
+    _annuity_payment,
+    _irr_bisection,
+    _npv,
+    project_economics,
+)
+from solar_challenge.home import HomeConfig
+from solar_challenge.load import LoadConfig
+from solar_challenge.output import generate_finance_report
+from solar_challenge.pv import PVConfig
+from tests._cli_fleet_simulator import invoke_finance_run
 from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._finance_builders import make_fleet_results
 
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
 
-def _make_point(year: int, revenue: float) -> "YearPoint":  # type: ignore[name-defined]
+def _make_point(year: int, revenue: float) -> "YearPoint":
     """Build a synthetic YearPoint with given year and fleet_revenue_gbp."""
-    from solar_challenge.finance import YearPoint
     return YearPoint(
         year=year,
         pv_soh=1.0,
@@ -39,9 +61,8 @@ def _make_point(year: int, revenue: float) -> "YearPoint":  # type: ignore[name-
     )
 
 
-def _make_curve(revenues: list[float]) -> "MultiYearCurve":  # type: ignore[name-defined]
+def _make_curve(revenues: list[float]) -> "MultiYearCurve":
     """Build a synthetic MultiYearCurve with given per-year revenues."""
-    from solar_challenge.finance import MultiYearCurve
     points = tuple(_make_point(y, rev) for y, rev in enumerate(revenues))
     return MultiYearCurve(
         points=points,
@@ -54,13 +75,8 @@ def _make_home_config(
     pv_kwp: float,
     battery_kwh: Optional[float] = None,
     inverter_kw: Optional[float] = None,
-) -> "HomeConfig":  # type: ignore[name-defined]
+) -> "HomeConfig":
     """Build a minimal HomeConfig for economics tests."""
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.pv import PVConfig
-    from solar_challenge.load import LoadConfig
-    from solar_challenge.battery import BatteryConfig
-
     pv = PVConfig(capacity_kw=pv_kwp, inverter_capacity_kw=inverter_kw)
     load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
     batt = BatteryConfig(capacity_kwh=battery_kwh) if battery_kwh is not None else None
@@ -69,9 +85,8 @@ def _make_home_config(
 
 def _make_scenario(
     homes: Optional[list] = None,
-) -> "ScenarioConfig":  # type: ignore[name-defined]
+) -> "ScenarioConfig":
     """Build a minimal ScenarioConfig for economics tests."""
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
     period = SimulationPeriod(
         start_date="2024-01-01",
         end_date="2024-12-31",
@@ -97,9 +112,8 @@ def _make_finance(
     loan_rate: float = 0.07,
     opex_per_home_per_year_gbp: float = 131.0,
     asset_life_years: int = 25,
-) -> "FinanceConfig":  # type: ignore[name-defined]
+) -> "FinanceConfig":
     """Build a FinanceConfig for economics tests."""
-    from solar_challenge.finance import FinanceConfig
     return FinanceConfig(
         standing_charge_pence_per_day=60.0,
         pv_cost_per_kwp_gbp=pv_cost_per_kwp_gbp,
@@ -128,9 +142,8 @@ class TestProjectEconomicsDataclass:
         *,
         per_year_surplus: tuple = (100.0, 200.0, 300.0),
         payback_years: Optional[float] = 5.0,
-    ) -> "ProjectEconomics":  # type: ignore[name-defined]
+    ) -> "ProjectEconomics":
         """Build a synthetic ProjectEconomics."""
-        from solar_challenge.finance import ProjectEconomics
         return ProjectEconomics(
             total_capex_gbp=50000.0,
             grant_gbp=10000.0,
@@ -166,7 +179,6 @@ class TestProjectEconomicsDataclass:
 
     def test_frozen_raises_on_assignment(self) -> None:
         """ProjectEconomics must be frozen (FrozenInstanceError on field assignment)."""
-        import dataclasses
         econ = self._make_economics()
         with pytest.raises(dataclasses.FrozenInstanceError):
             econ.total_capex_gbp = 99999.0  # type: ignore[misc]
@@ -178,7 +190,6 @@ class TestProjectEconomicsDataclass:
 
     def test_empty_per_year_surplus_raises(self) -> None:
         """Empty per_year_surplus_gbp must raise ValueError in __post_init__."""
-        from solar_challenge.finance import ProjectEconomics
         with pytest.raises(ValueError):
             ProjectEconomics(
                 total_capex_gbp=50000.0,
@@ -197,7 +208,6 @@ class TestProjectEconomicsDataclass:
 
     def test_negative_payback_years_raises(self) -> None:
         """Negative payback_years must raise ValueError in __post_init__."""
-        from solar_challenge.finance import ProjectEconomics
         with pytest.raises(ValueError):
             ProjectEconomics(
                 total_capex_gbp=50000.0,
@@ -216,7 +226,6 @@ class TestProjectEconomicsDataclass:
 
     def test_fleet_opex_gbp_dataclass_field(self) -> None:
         """fleet_opex_gbp must be a constructable, readable field on ProjectEconomics."""
-        from solar_challenge.finance import ProjectEconomics
         econ = ProjectEconomics(
             total_capex_gbp=50000.0,
             grant_gbp=10000.0,
@@ -252,8 +261,6 @@ class TestProjectEconomicsCapex:
                        = (4000 + 1000 + 1250) + (3000 + 1000 + 0)
                        = 6250 + 4000 = 10250
         """
-        from solar_challenge.finance import project_economics
-
         home_a = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
         home_b = _make_home_config(pv_kwp=3.0, battery_kwh=None)
         scenario = _make_scenario(homes=[home_a, home_b])
@@ -274,8 +281,6 @@ class TestProjectEconomicsCapex:
 
     def test_grant_passthrough(self) -> None:
         """grant_gbp in ProjectEconomics must equal FinanceConfig.grant_gbp."""
-        from solar_challenge.finance import project_economics
-
         home = _make_home_config(pv_kwp=4.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(grant_gbp=5000.0)
@@ -287,8 +292,6 @@ class TestProjectEconomicsCapex:
 
     def test_equity_debt_split(self) -> None:
         """equity_gbp + debt_gbp must equal (capex - grant); equity fraction correct."""
-        from solar_challenge.finance import project_economics
-
         home = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(
@@ -312,8 +315,6 @@ class TestProjectEconomicsCapex:
 
     def test_grant_exceeds_capex_clamps_to_zero(self) -> None:
         """When grant >= capex, financed=0, equity=0, debt=0."""
-        from solar_challenge.finance import project_economics
-
         home = _make_home_config(pv_kwp=2.0)
         scenario = _make_scenario(homes=[home])
         # capex = 2*1000 + 1000 + 0 = 3000; grant=50000 >> capex
@@ -327,8 +328,6 @@ class TestProjectEconomicsCapex:
 
     def test_empty_homes_raises_value_error(self) -> None:
         """project_economics must raise ValueError when scenario has no homes."""
-        from solar_challenge.finance import project_economics
-
         # ScenarioConfig.__post_init__ requires homes OR home — use one then clear
         # We need to bypass: directly pass homes=[] would fail ScenarioConfig validation.
         # Use a single home scenario but call project_economics on a zero-home one
@@ -341,8 +340,6 @@ class TestProjectEconomicsCapex:
         # constructing a valid 1-home scenario and monkeypatching (not possible
         # without object.__setattr__).
         # Instead: test project_economics with a patched scenario-like object.
-        import dataclasses
-
         valid_scenario = _make_scenario(homes=[_make_home_config(4.0)])
         finance = _make_finance()
         curve = _make_curve([8000.0] * 25)
@@ -367,8 +364,6 @@ class TestProjectEconomicsDebtService:
 
     def test_annuity_formula_positive_rate(self) -> None:
         """annual_debt_service_gbp == debt*r/(1-(1+r)^-n) for known parameters."""
-        from solar_challenge.finance import _annuity_payment, project_economics
-
         # Known debt, rate, term
         # capex = 1*1000 + 1000 + 0 = 2000; grant=0; equity_frac=0.5
         # financed=2000; equity=1000; debt=1000
@@ -397,8 +392,6 @@ class TestProjectEconomicsDebtService:
 
     def test_annuity_zero_rate(self) -> None:
         """loan_rate==0 → annual_debt_service == debt / loan_term_years."""
-        from solar_challenge.finance import _annuity_payment, project_economics
-
         home = _make_home_config(pv_kwp=2.0, battery_kwh=None)
         scenario = _make_scenario(homes=[home])
         # capex = 2*800+1000=2600; grant=0; debt=2600*0.5=1300
@@ -423,8 +416,6 @@ class TestProjectEconomicsDebtService:
 
     def test_annuity_zero_debt(self) -> None:
         """When debt==0 (grant covers all), annual_debt_service_gbp==0."""
-        from solar_challenge.finance import project_economics
-
         home = _make_home_config(pv_kwp=2.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(grant_gbp=999999.0)  # grant >> capex
@@ -436,8 +427,6 @@ class TestProjectEconomicsDebtService:
 
     def test_annuity_helper_direct(self) -> None:
         """_annuity_payment helper: closed-form check at known values."""
-        from solar_challenge.finance import _annuity_payment
-
         # 1000 @ 10% for 10 years: payment = 1000 * 0.1 / (1 - 1.1^-10)
         principal = 1000.0
         rate = 0.10
@@ -448,8 +437,6 @@ class TestProjectEconomicsDebtService:
 
     def test_annuity_helper_zero_rate(self) -> None:
         """_annuity_payment: zero rate falls back to principal/n."""
-        from solar_challenge.finance import _annuity_payment
-
         result = _annuity_payment(1000.0, 0.0, 8)
         assert result == pytest.approx(125.0, rel=1e-9)
 
@@ -477,8 +464,6 @@ class TestProjectEconomicsSurplusDSCR:
         per_year_surplus[y<15] = 5000 - 400 - debt_service
         per_year_surplus[y>=15] = 5000 - 400 = 4600
         """
-        from solar_challenge.finance import _annuity_payment
-
         homes = [
             _make_home_config(pv_kwp=4.0, battery_kwh=5.0),
             _make_home_config(pv_kwp=3.0, battery_kwh=None),
@@ -506,8 +491,6 @@ class TestProjectEconomicsSurplusDSCR:
 
     def test_surplus_length_equals_asset_life(self) -> None:
         """len(per_year_surplus_gbp) must equal finance.asset_life_years."""
-        from solar_challenge.finance import project_economics
-
         scenario, finance, curve, _, _ = self._setup()
         econ = project_economics(curve, scenario, finance)
 
@@ -515,8 +498,6 @@ class TestProjectEconomicsSurplusDSCR:
 
     def test_surplus_loan_years_include_debt_service(self) -> None:
         """Surplus for loan years must deduct both opex and debt service."""
-        from solar_challenge.finance import project_economics
-
         scenario, finance, curve, fleet_opex, annual_ds = self._setup()
         econ = project_economics(curve, scenario, finance)
 
@@ -529,8 +510,6 @@ class TestProjectEconomicsSurplusDSCR:
 
     def test_surplus_post_loan_years_no_debt_service(self) -> None:
         """Surplus for post-loan years must deduct only opex (no debt service)."""
-        from solar_challenge.finance import project_economics
-
         scenario, finance, curve, fleet_opex, _ = self._setup()
         econ = project_economics(curve, scenario, finance)
 
@@ -548,8 +527,6 @@ class TestProjectEconomicsSurplusDSCR:
         but DSCR should ignore it.  All loan-year revenues are equal here,
         so min_dscr = (5000 - fleet_opex) / annual_ds.
         """
-        from solar_challenge.finance import project_economics
-
         # Revenues: loan years have 5000, post-loan years have 1000 (very low)
         # Post-loan year 15..24 → (1000-400)/annual_ds which would be low
         # But min_dscr must only look at y<15
@@ -573,7 +550,6 @@ class TestProjectEconomicsSurplusDSCR:
         curve = _make_curve(revenues)
         scenario = _make_scenario(homes=homes)
 
-        from solar_challenge.finance import _annuity_payment
         capex = 10250.0
         debt = capex * 0.25
         annual_ds = _annuity_payment(debt, 0.07, 15)
@@ -592,8 +568,6 @@ class TestProjectEconomicsSurplusDSCR:
 
     def test_min_dscr_zero_debt_service_is_inf(self) -> None:
         """When annual_debt_service_gbp==0, min_dscr must be float('inf')."""
-        from solar_challenge.finance import project_economics
-
         home = _make_home_config(pv_kwp=2.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(grant_gbp=999999.0)  # no debt
@@ -605,8 +579,6 @@ class TestProjectEconomicsSurplusDSCR:
 
     def test_net_surplus_per_home_per_year(self) -> None:
         """net_surplus_per_home_per_year_gbp == mean(per_year_surplus)/n_homes."""
-        from solar_challenge.finance import project_economics
-
         scenario, finance, curve, _, _ = self._setup()
         econ = project_economics(curve, scenario, finance)
 
@@ -620,8 +592,6 @@ class TestProjectEconomicsSurplusDSCR:
         Step-15 RED: ProjectEconomics currently has no fleet_opex_gbp field,
         so this raises AttributeError until step-16 adds it.
         """
-        from solar_challenge.finance import project_economics
-
         scenario, finance, curve, fleet_opex, _ = self._setup()
         econ = project_economics(curve, scenario, finance)
 
@@ -640,22 +610,16 @@ class TestProjectEconomicsIRRPayback:
 
     def test_irr_bisection_simple_cashflow(self) -> None:
         """_irr_bisection: [-100, 110] → IRR = 0.10."""
-        from solar_challenge.finance import _irr_bisection
-
         result = _irr_bisection([-100.0, 110.0])
         assert result == pytest.approx(0.10, rel=1e-6)
 
     def test_irr_bisection_two_period(self) -> None:
         """_irr_bisection: [-100, 0, 121] → IRR = 0.10."""
-        from solar_challenge.finance import _irr_bisection
-
         result = _irr_bisection([-100.0, 0.0, 121.0])
         assert result == pytest.approx(0.10, rel=1e-6)
 
     def test_irr_npv_consistency(self) -> None:
         """NPV of cashflows at equity_irr must be approximately zero."""
-        from solar_challenge.finance import _npv, project_economics
-
         # Profitable project: flat 8000 revenue, small equity investment
         home = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
         scenario = _make_scenario(homes=[home])
@@ -682,8 +646,6 @@ class TestProjectEconomicsIRRPayback:
 
     def test_payback_years_hand_computed(self) -> None:
         """payback_years equals the hand-computed first 1-based cumulative crossing."""
-        from solar_challenge.finance import project_economics
-
         # Set up so payback is at a known year.
         # Use equity_fraction=1.0 (no debt) for simplicity.
         # capex = 1*1000+1000+0=2000; grant=0; equity=2000; debt=0; debt_service=0
@@ -714,8 +676,6 @@ class TestProjectEconomicsIRRPayback:
 
     def test_never_profitable_payback_is_none(self) -> None:
         """Never-profitable project → payback_years is None."""
-        from solar_challenge.finance import project_economics
-
         home = _make_home_config(pv_kwp=4.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(
@@ -735,8 +695,6 @@ class TestProjectEconomicsIRRPayback:
 
     def test_never_profitable_irr_is_nan(self) -> None:
         """Never-profitable project → equity_irr is NaN."""
-        from solar_challenge.finance import project_economics
-
         home = _make_home_config(pv_kwp=4.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance(
@@ -755,8 +713,6 @@ class TestProjectEconomicsIRRPayback:
 
     def test_determinism(self) -> None:
         """Two project_economics calls with same inputs return bit-identical results."""
-        from solar_challenge.finance import project_economics
-
         home = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
         scenario = _make_scenario(homes=[home])
         finance = _make_finance()
@@ -808,10 +764,8 @@ def _make_project_economics(
     payback_years: Optional[float] = 10.0,
     equity_irr: float = 0.08,
     fleet_opex_gbp: float = 12000.0,
-) -> "ProjectEconomics":  # type: ignore[name-defined]
+) -> "ProjectEconomics":
     """Build a synthetic ProjectEconomics for report tests."""
-    from solar_challenge.finance import ProjectEconomics
-
     return ProjectEconomics(
         total_capex_gbp=250000.0,
         grant_gbp=50000.0,
@@ -833,8 +787,6 @@ class TestGenerateFinanceReportEconomics:
 
     def test_economics_section_present(self) -> None:
         """Report with economics= must contain a Project Economics section."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         econ = _make_project_economics()
         report = generate_finance_report(dist, economics=econ)
@@ -843,8 +795,6 @@ class TestGenerateFinanceReportEconomics:
 
     def test_economics_capex_in_report(self) -> None:
         """Economics block must include total capex value."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         econ = _make_project_economics()
         report = generate_finance_report(dist, economics=econ)
@@ -854,8 +804,6 @@ class TestGenerateFinanceReportEconomics:
 
     def test_economics_dscr_in_report(self) -> None:
         """Economics block must include min DSCR label."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         econ = _make_project_economics()
         report = generate_finance_report(dist, economics=econ)
@@ -864,8 +812,6 @@ class TestGenerateFinanceReportEconomics:
 
     def test_economics_irr_in_report(self) -> None:
         """Economics block must include IRR label."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         econ = _make_project_economics()
         report = generate_finance_report(dist, economics=econ)
@@ -874,8 +820,6 @@ class TestGenerateFinanceReportEconomics:
 
     def test_economics_payback_in_report(self) -> None:
         """Economics block must include payback label."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         econ = _make_project_economics()
         report = generate_finance_report(dist, economics=econ)
@@ -884,8 +828,6 @@ class TestGenerateFinanceReportEconomics:
 
     def test_economics_none_payback_no_crash(self) -> None:
         """economics with payback_years=None must not crash and must render gracefully."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         econ = _make_project_economics(payback_years=None)
         # Should not raise
@@ -896,8 +838,6 @@ class TestGenerateFinanceReportEconomics:
 
     def test_economics_nan_irr_no_crash(self) -> None:
         """economics with equity_irr=nan must not crash."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         econ = _make_project_economics(equity_irr=float("nan"))
         report = generate_finance_report(dist, economics=econ)
@@ -905,8 +845,6 @@ class TestGenerateFinanceReportEconomics:
 
     def test_backward_compat_economics_none(self) -> None:
         """generate_finance_report() with no economics kwarg must return same as before."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         # Call without economics kwarg
         report_no_econ = generate_finance_report(dist)
@@ -917,8 +855,6 @@ class TestGenerateFinanceReportEconomics:
 
     def test_backward_compat_no_economics_section(self) -> None:
         """Report without economics kwarg must not contain Project Economics section."""
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         report = generate_finance_report(dist)
 
@@ -931,8 +867,6 @@ class TestGenerateFinanceReportEconomics:
         fleet_opex_gbp (12000) must appear in the Fleet OpEx row, not the per-home
         surplus (80).  A separate, correctly-labeled per-home row must also show 80.
         """
-        from solar_challenge.output import generate_finance_report
-
         dist = _make_bill_distribution()
         # fleet_opex_gbp=12000 is clearly distinct from net_surplus_per_home=80
         econ = _make_project_economics(fleet_opex_gbp=12000.0)
@@ -975,9 +909,6 @@ class TestFinanceProjectCLI:
 
     def test_help_shows_project_flag(self) -> None:
         """`finance run --help` must show --project flag."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--help"])
         assert result.exit_code == 0, result.output
@@ -985,10 +916,6 @@ class TestFinanceProjectCLI:
 
     def test_project_without_finance_block_exits_nonzero(self, tmp_path: "Path") -> None:
         """Invoking `finance run --project` on a scenario WITHOUT a finance: block exits non-zero."""
-        import yaml
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         # Minimal scenario without finance:
         scenario = {
             "name": "No Finance Test",
@@ -1016,10 +943,6 @@ class TestFinanceProjectCLI:
         self, tmp_path: "Path"
     ) -> None:
         """`finance run --project` must render the Project Economics block."""
-        import yaml
-        from tests._cli_fleet_simulator import invoke_finance_run
-        from tests._finance_builders import make_fleet_results
-
         scenario = {
             "name": "Project CLI Test",
             "location": {
@@ -1054,10 +977,6 @@ class TestFinanceProjectCLIEndToEnd:
 
     def test_finance_run_project_bristol(self) -> None:
         """E2E: `finance run --project scenarios/bristol-phase1.yaml` exits 0 with economics block."""
-        from pathlib import Path
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario = Path("scenarios/bristol-phase1.yaml")
         if not scenario.exists():
             pytest.skip("bristol-phase1.yaml not found")
@@ -1102,8 +1021,6 @@ class TestProjectEconomicsInverterCapex:
         The 4th term is eff_inv*0.0 == 0.0 and S+0.0 == S in IEEE-754, so
         the result is bit-identical to the pre-#49 accumulation.
         """
-        from solar_challenge.finance import project_economics
-
         home_a = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
         home_b = _make_home_config(pv_kwp=3.0, battery_kwh=None)
         scenario = _make_scenario(homes=[home_a, home_b])
@@ -1134,8 +1051,6 @@ class TestProjectEconomicsInverterCapex:
 
     def test_nonzero_inverter_cost_raises_capex_by_sigma(self) -> None:
         """With inverter_cost=200.0, capex rises by sum(eff_inv_kw * 200.0)."""
-        from solar_challenge.finance import project_economics
-
         home_a = _make_home_config(pv_kwp=4.0, battery_kwh=5.0)
         home_b = _make_home_config(pv_kwp=3.0, battery_kwh=None)
         homes = [home_a, home_b]
@@ -1163,8 +1078,6 @@ class TestProjectEconomicsInverterCapex:
         array) ensures the 4th term uses effective_inverter_capacity_kw (2.5),
         not capacity_kw (4.0).
         """
-        from solar_challenge.finance import project_economics
-
         # Home with explicit AC inverter cap smaller than DC rating
         home_clipped = _make_home_config(pv_kwp=4.0, inverter_kw=2.5)
         # Home using default (effective == DC)
@@ -1199,8 +1112,6 @@ class TestProjectEconomicsInverterCapex:
         capacity_kw (4.0) instead of effective_inverter_capacity_kw (2.5)
         would produce 4.0*cost and fail this assertion directly.
         """
-        from solar_challenge.finance import project_economics
-
         home_clipped = _make_home_config(pv_kwp=4.0, inverter_kw=2.5)
         scenario = _make_scenario(homes=[home_clipped])
         curve = _make_curve([10000.0] * 25)

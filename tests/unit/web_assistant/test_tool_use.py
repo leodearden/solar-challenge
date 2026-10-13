@@ -17,6 +17,18 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.web.assistant import (
+    MAX_TOOL_ITERATIONS,
+    METRIC_TABLE,
+    TOOLS,
+    dispatch_tool,
+    explain_metric,
+    get_run_results,
+    list_recent_runs,
+    run_fleet_simulation,
+    run_home_simulation,
+    suggest_config,
+)
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
 
@@ -61,8 +73,6 @@ class TestToolSurface:
 
     def test_tools_fixed_order_for_cache_stability(self) -> None:
         """TOOLS names its tools in one fixed order, which keeps the cached prompt prefix stable."""
-        from solar_challenge.web.assistant import TOOLS
-
         names = [t["name"] for t in TOOLS]
         assert names == [
             "explain_metric",
@@ -77,8 +87,6 @@ class TestToolSurface:
 
     def test_every_tool_entry_has_required_keys(self) -> None:
         """Every entry in TOOLS has 'name', 'description', and 'input_schema'."""
-        from solar_challenge.web.assistant import TOOLS
-
         for tool in TOOLS:
             assert "name" in tool, f"Missing 'name' in tool: {tool}"
             assert "description" in tool, f"Missing 'description' in tool: {tool}"
@@ -86,8 +94,6 @@ class TestToolSurface:
 
     def test_every_tool_input_schema_is_object_with_required(self) -> None:
         """Every input_schema has type=='object' and a non-empty 'required' list."""
-        from solar_challenge.web.assistant import TOOLS
-
         for tool in TOOLS:
             schema = tool["input_schema"]
             assert isinstance(schema, dict), f"input_schema must be dict for {tool['name']!r}"
@@ -101,8 +107,6 @@ class TestToolSurface:
 
     def test_dispatch_explain_metric(self, tmp_path: Path) -> None:
         """dispatch_tool('explain_metric', {...}) returns the same dict as explain_metric()."""
-        from solar_challenge.web.assistant import dispatch_tool, explain_metric
-
         result = dispatch_tool(
             "explain_metric",
             {"metric": "self_consumption_ratio"},
@@ -115,8 +119,6 @@ class TestToolSurface:
 
     def test_dispatch_suggest_config(self, tmp_path: Path) -> None:
         """dispatch_tool('suggest_config', {...}) returns the same dict as suggest_config()."""
-        from solar_challenge.web.assistant import dispatch_tool, suggest_config
-
         result = dispatch_tool(
             "suggest_config",
             {"annual_consumption_kwh": 3100, "goal": "self_sufficiency"},
@@ -129,8 +131,6 @@ class TestToolSurface:
 
     def test_dispatch_unknown_returns_error_dict(self, tmp_path: Path) -> None:
         """dispatch_tool with unknown name returns a dict with 'error' key, does NOT raise."""
-        from solar_challenge.web.assistant import dispatch_tool
-
         try:
             result = dispatch_tool(
                 "nonexistent_tool",
@@ -178,7 +178,6 @@ class TestToolUseLoop:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """stream() called twice; 2nd call's messages[-1] contains the canonical band string."""
-        from solar_challenge.web.assistant import METRIC_TABLE
         TOOL_ID = "toolu_explain_002"
         CANONICAL_BAND = METRIC_TABLE["self_consumption_ratio"]["uk_benchmark_band"]
 
@@ -229,8 +228,6 @@ class TestToolUseLoop:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """stream() receives TOOLS as its 'tools' kwarg; TestToolSurface pins TOOLS' order."""
-        from solar_challenge.web.assistant import TOOLS
-
         anthropic_api.set_streams([
             make_end_turn_stream(["reply"]),
         ])
@@ -272,8 +269,6 @@ class TestToolUseLoop:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """A model that always returns tool_use is bounded by MAX_TOOL_ITERATIONS."""
-        from solar_challenge.web.assistant import MAX_TOOL_ITERATIONS
-
         # Build an infinite sequence of tool_use streams
         TOOL_ID_PREFIX = "toolu_inf_"
         infinite_streams = [
@@ -431,8 +426,6 @@ class TestRunLookupToolSurface:
 
     def test_run_lookup_tools_required_fields(self) -> None:
         """get_run_results requires 'run_id_or_name' and list_recent_runs requires 'limit'."""
-        from solar_challenge.web.assistant import TOOLS
-
         run_lookup_tools = {t["name"]: t for t in TOOLS if t["name"] in ("get_run_results", "list_recent_runs")}
         assert "get_run_results" in run_lookup_tools, "get_run_results missing from TOOLS"
         assert "list_recent_runs" in run_lookup_tools, "list_recent_runs missing from TOOLS"
@@ -448,8 +441,6 @@ class TestRunLookupToolSurface:
 
     def test_dispatch_get_run_results_with_db_path(self, tmp_path: Path) -> None:
         """dispatch_tool('get_run_results', {...}, db_path) returns same dict as handler."""
-        from solar_challenge.web.assistant import dispatch_tool, get_run_results
-
         db_path = tmp_path / "disp_grr_test.db"
         seed_run(
             db_path,
@@ -471,8 +462,6 @@ class TestRunLookupToolSurface:
 
     def test_dispatch_list_recent_runs_with_db_path(self, tmp_path: Path) -> None:
         """dispatch_tool('list_recent_runs', {'limit': 5}, db_path) returns same dict as handler."""
-        from solar_challenge.web.assistant import dispatch_tool, list_recent_runs
-
         db_path = tmp_path / "disp_lrr_test.db"
         seed_run(
             db_path,
@@ -560,8 +549,6 @@ class TestSimulationToolSurface:
 
     def test_run_home_simulation_requires_pv_kw(self) -> None:
         """run_home_simulation's input_schema requires 'pv_kw'."""
-        from solar_challenge.web.assistant import TOOLS
-
         tool = next((t for t in TOOLS if t["name"] == "run_home_simulation"), None)
         assert tool is not None, "run_home_simulation missing from TOOLS"
         schema = tool["input_schema"]
@@ -572,8 +559,6 @@ class TestSimulationToolSurface:
 
     def test_run_fleet_simulation_requires_n_homes(self) -> None:
         """run_fleet_simulation's input_schema requires 'n_homes'."""
-        from solar_challenge.web.assistant import TOOLS
-
         tool = next((t for t in TOOLS if t["name"] == "run_fleet_simulation"), None)
         assert tool is not None, "run_fleet_simulation missing from TOOLS"
         schema = tool["input_schema"]
@@ -585,8 +570,6 @@ class TestSimulationToolSurface:
     @pytest.mark.parametrize("tool_name", ["run_home_simulation", "run_fleet_simulation"])
     def test_trigger_tool_offers_start_and_end_as_optional_iso_dates(self, tool_name: str) -> None:
         """A trigger tool lists start and end as ISO 8601 date strings and requires no window field, so a call that sends none keeps the default window."""
-        from solar_challenge.web.assistant import TOOLS
-
         tool = next((t for t in TOOLS if t["name"] == tool_name), None)
         assert tool is not None, f"{tool_name} missing from TOOLS"
         schema = tool["input_schema"]
@@ -605,8 +588,6 @@ class TestSimulationToolSurface:
 
     def test_trigger_tools_list_their_window_identically(self) -> None:
         """Both trigger tools read their window with the same parse_date_range, so the model must be told one window grammar."""
-        from solar_challenge.web.assistant import TOOLS
-
         props = {t["name"]: t["input_schema"]["properties"] for t in TOOLS}
         window_fields = ("days", "start", "end")
         assert [props["run_home_simulation"][f] for f in window_fields] == [
@@ -615,8 +596,6 @@ class TestSimulationToolSurface:
 
     def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
         """dispatch_tool('run_home_simulation', {...}, job_manager=mock) returns handler result."""
-        from solar_challenge.web.assistant import dispatch_tool, run_home_simulation
-
         jm = MagicMock()
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
@@ -639,8 +618,6 @@ class TestSimulationToolSurface:
 
     def test_dispatch_run_fleet_simulation(self, tmp_path: Path) -> None:
         """dispatch_tool('run_fleet_simulation', {...}, job_manager=mock) returns handler result."""
-        from solar_challenge.web.assistant import dispatch_tool, run_fleet_simulation
-
         params = {"n_homes": 2, "pv_kw": 4, "location": "bristol", "days": 7}
 
         jm = MagicMock()

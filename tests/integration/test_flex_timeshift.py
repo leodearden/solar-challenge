@@ -22,6 +22,11 @@ from typing import Optional
 import pandas as pd
 import pytest
 
+from solar_challenge.config import load_config, load_fleet_config
+from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
+from solar_challenge.flex import resolve_flex_band
+from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.output import generate_finance_report
 from tests._synthetic_weather import sunless_weather
 
 pytestmark = pytest.mark.integration
@@ -43,8 +48,6 @@ def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
     grid_charging:` → every battery home; `fleet_distribution.dispatch_strategy:` →
     every home.
     """
-    from solar_challenge.config import load_fleet_config
-
     fleet = load_fleet_config(SCENARIO)
     battery_homes = [h for h in fleet.homes if h.battery_config is not None]
     assert battery_homes, "Expected at least some homes with a battery in the flex scenario"
@@ -103,10 +106,6 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     - import_cost_gbp(ON) < import_cost_gbp(OFF)
     - annualised delta ∈ [£100, £330]  (PRD §9.1 Seam 3 / §11 PASS gate)
     """
-    from solar_challenge.config import load_config, load_fleet_config
-    from solar_challenge.finance import FinanceConfig, householder_bill
-    from solar_challenge.home import calculate_summary, simulate_home
-
     fleet = load_fleet_config(SCENARIO)
 
     # Pick the first battery home deterministically
@@ -185,11 +184,6 @@ def test_finance_report_renders_flex_value_block() -> None:
 
     Additive: default None → output bit-identical (no flex block).
     """
-    from solar_challenge.finance import FinanceConfig, bill_distribution
-    from solar_challenge.flex import resolve_flex_band
-    from solar_challenge.home import SummaryStatistics
-    from solar_challenge.output import generate_finance_report
-
     # Build a minimal synthetic summary (mirrors _make_summary in test_finance_bill.py)
     sc_ratio = 2200.0 / 4000.0
     gd_ratio = 1200.0 / 3400.0

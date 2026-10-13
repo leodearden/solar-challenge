@@ -13,7 +13,27 @@ from __future__ import annotations
 import dataclasses
 from typing import Optional
 
+import pandas as pd
 import pytest
+
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
+from solar_challenge.optimize import (
+    ConfigPoint,
+    SensitivityAxis,
+    SensitivityPanel,
+    _build_axis_configs,
+    enumerate_configs,
+    run_sweep,
+    sensitivity_panel,
+)
+from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 
 
 # ---------------------------------------------------------------------------
@@ -23,9 +43,7 @@ import pytest
 _N_HOMES = 5  # default fleet size for all sensitivity tests
 
 
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
-    from solar_challenge.load import LoadConfig
-
+def _make_load_config() -> "LoadConfig":
     return LoadConfig(annual_consumption_kwh=3500.0)
 
 
@@ -33,13 +51,8 @@ def _make_home_config(
     capacity_kw: float = 4.0,
     system_age_years: float = 0.0,
     with_battery: bool = False,
-) -> "HomeConfig":  # type: ignore[name-defined]
+) -> "HomeConfig":
     """Build a HomeConfig; pass with_battery=True to include a BatteryConfig."""
-    from solar_challenge.battery import BatteryConfig
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
-    from solar_challenge.pv import PVConfig
-
     pv = PVConfig(
         capacity_kw=capacity_kw,
         azimuth=180.0,
@@ -62,10 +75,7 @@ def _make_sim_results(
     import_kwh: float = 1200.0,
     export_revenue_gbp_per_year: float = 0.0,
     n_minutes: int = 525600,  # 365 days
-) -> "SimulationResults":  # type: ignore[name-defined]
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
+) -> "SimulationResults":
     idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
     exp_kw = export_kwh / (n_minutes / 60.0)
@@ -97,9 +107,7 @@ def _make_fleet_results(
     self_kwh: float = 2000.0,
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
-) -> "FleetResults":  # type: ignore[name-defined]
-    from solar_challenge.fleet import FleetResults
-
+) -> "FleetResults":
     homes = [_make_home_config() for _ in range(n_homes)]
     per_home = [
         _make_sim_results(self_kwh, export_kwh, import_kwh)
@@ -117,9 +125,7 @@ def _make_finance(
     battery_cost_per_kwh_gbp: float = 250.0,
     grid_services_income: float = 0.0,
     asset_life_years: int = 25,
-) -> "FinanceConfig":  # type: ignore[name-defined]
-    from solar_challenge.finance import FinanceConfig
-
+) -> "FinanceConfig":
     return FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life_years,
@@ -140,11 +146,9 @@ def _make_scenario(
     start: str = "2020-01-01",
     end: str = "2020-12-31",
     seg_tariff_pence: float = 5.0,
-    finance: "Optional[FinanceConfig]" = None,  # type: ignore[name-defined]
+    finance: "Optional[FinanceConfig]" = None,
     with_battery: bool = False,
-) -> "ScenarioConfig":  # type: ignore[name-defined]
-    from solar_challenge.config import ScenarioConfig, SimulationPeriod
-
+) -> "ScenarioConfig":
     homes = [_make_home_config(with_battery=with_battery) for _ in range(n_homes)]
     return ScenarioConfig(
         name="sensitivity-test",
@@ -156,7 +160,7 @@ def _make_scenario(
     )
 
 
-def _interior_finance() -> "FinanceConfig":  # type: ignore[name-defined]
+def _interior_finance() -> "FinanceConfig":
     """Finance params that produce an interior 'floor' solve (no grid_services)."""
     return _make_finance(
         pv_cost_per_kwp_gbp=1200.0,
@@ -177,7 +181,7 @@ def _interior_finance() -> "FinanceConfig":  # type: ignore[name-defined]
 # hardcodes minutes_to_hours=1/60 and derives sim_days from the index span,
 # so coarsening resolution would silently scale every kWh total by 60× and
 # break the tuned W-H4 coupling constants.
-_CONST_FLEET_RESULTS: "FleetResults" = _make_fleet_results(n_homes=_N_HOMES)  # type: ignore[name-defined]
+_CONST_FLEET_RESULTS: "FleetResults" = _make_fleet_results(n_homes=_N_HOMES)
 
 
 def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
@@ -200,10 +204,8 @@ def _home_seg_rates(homes) -> "list[Optional[float]]":  # type: ignore[no-untype
     ]
 
 
-def _make_seg_priced_scenario(seg_rate: float, finance) -> "ScenarioConfig":  # type: ignore[no-untyped-def,name-defined]
+def _make_seg_priced_scenario(seg_rate: float, finance) -> "ScenarioConfig":  # type: ignore[no-untyped-def]
     """Build the fleet shape `optimize configs` produces: the seg: rate on the scenario AND on every home."""
-    from solar_challenge.seg import SEGTariff
-
     scenario = _make_scenario(n_homes=_N_HOMES, seg_tariff_pence=seg_rate, finance=finance)
     tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
     return dataclasses.replace(
@@ -223,11 +225,9 @@ class _SegPricingSimulate:
 
     def __init__(self) -> None:
         self.rates_per_call: list[frozenset[Optional[float]]] = []
-        self._results_by_rate: dict[Optional[float], "SimulationResults"] = {}  # type: ignore[name-defined]
+        self._results_by_rate: dict[Optional[float], "SimulationResults"] = {}
 
     def __call__(self, fleet_config, start, end):  # type: ignore[no-untyped-def]
-        from solar_challenge.fleet import FleetResults
-
         rates = _home_seg_rates(fleet_config.homes)
         self.rates_per_call.append(frozenset(rates))
         return FleetResults(
@@ -235,7 +235,7 @@ class _SegPricingSimulate:
             home_configs=list(fleet_config.homes),
         )
 
-    def _results_at(self, rate: Optional[float]) -> "SimulationResults":  # type: ignore[name-defined]
+    def _results_at(self, rate: Optional[float]) -> "SimulationResults":
         if rate not in self._results_by_rate:
             self._results_by_rate[rate] = _make_sim_results(
                 export_kwh=self._EXPORT_KWH,
@@ -256,8 +256,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_axis_fields_read_back(self) -> None:
         """All fields read back after valid construction."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
-
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         axis = SensitivityAxis(
             name="battery_cost_per_kwh_gbp",
@@ -272,8 +270,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_axis_none_in_top_config_per_value(self) -> None:
         """top_config_per_value may contain None entries (no feasible config)."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
-
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         axis = SensitivityAxis(
             name="retained_cash_floor_per_home_per_year_gbp",
@@ -286,8 +282,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_axis_frozen(self) -> None:
         """Assigning any field raises FrozenInstanceError."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
-
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         axis = SensitivityAxis(
             name="x",
@@ -300,8 +294,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_axis_empty_values_raises(self) -> None:
         """Empty values tuple raises ValueError."""
-        from solar_challenge.optimize import SensitivityAxis
-
         with pytest.raises(ValueError, match="values must not be empty"):
             SensitivityAxis(
                 name="x",
@@ -312,8 +304,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_axis_length_mismatch_rankings(self) -> None:
         """len(values) != len(rankings) raises ValueError."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
-
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         with pytest.raises(ValueError):
             SensitivityAxis(
@@ -325,8 +315,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_axis_length_mismatch_tops(self) -> None:
         """len(values) != len(top_config_per_value) raises ValueError."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityAxis
-
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         with pytest.raises(ValueError):
             SensitivityAxis(
@@ -340,8 +328,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_panel_fields_read_back(self) -> None:
         """All fields read back after valid construction."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityAxis, SensitivityPanel
-
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         axis = SensitivityAxis(
             name="x",
@@ -360,8 +346,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_panel_frozen(self) -> None:
         """Assigning any field raises FrozenInstanceError."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityAxis, SensitivityPanel
-
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         axis = SensitivityAxis(
             name="x",
@@ -375,8 +359,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_panel_rank_stability_out_of_range_raises(self) -> None:
         """rank_stability outside [0, 1] raises ValueError."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityAxis, SensitivityPanel
-
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         axis = SensitivityAxis(
             name="x",
@@ -391,8 +373,6 @@ class TestSensitivityDataclasses:
 
     def test_sensitivity_panel_empty_axes_raises(self) -> None:
         """Empty axes tuple raises ValueError."""
-        from solar_challenge.optimize import ConfigPoint, SensitivityPanel
-
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
         with pytest.raises(ValueError, match="axes"):
             SensitivityPanel(axes=(), baseline_top=pt, rank_stability=1.0)
@@ -408,15 +388,11 @@ class TestBuildAxisConfigs:
 
     def _base_configs(self, finance: "Optional[FinanceConfig]" = None):  # type: ignore[no-untyped-def]
         """Return a minimal base_configs list: one (ConfigPoint, ScenarioConfig) pair."""
-        from solar_challenge.optimize import ConfigPoint, enumerate_configs
-
         scenario = _make_scenario(n_homes=2, finance=finance or _interior_finance())
         return enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6])
 
     def test_finance_field_battery_cost_replaced(self) -> None:
         """battery_cost_per_kwh_gbp is replaced on every pair's scenario.finance."""
-        from solar_challenge.optimize import _build_axis_configs
-
         base = self._base_configs()
         result = _build_axis_configs(base, "battery_cost_per_kwh_gbp", 999.0)
 
@@ -432,8 +408,6 @@ class TestBuildAxisConfigs:
 
     def test_finance_field_grid_services_replaced(self) -> None:
         """grid_services_income_per_kw_per_year_gbp is replaced on every pair."""
-        from solar_challenge.optimize import _build_axis_configs
-
         base = self._base_configs()
         result = _build_axis_configs(base, "grid_services_income_per_kw_per_year_gbp", 42.0)
 
@@ -443,8 +417,6 @@ class TestBuildAxisConfigs:
 
     def test_seg_alias_replaced(self) -> None:
         """'seg' alias re-prices the scenario's SEG rate and every home's SEG tariff."""
-        from solar_challenge.optimize import _build_axis_configs
-
         base = self._base_configs()
         result = _build_axis_configs(base, "seg", 7.5)
 
@@ -456,8 +428,6 @@ class TestBuildAxisConfigs:
 
     def test_seg_tariff_full_name_replaced(self) -> None:
         """'seg_tariff_pence_per_kwh' re-prices the scenario's SEG rate and every home's SEG tariff."""
-        from solar_challenge.optimize import _build_axis_configs
-
         base = self._base_configs()
         result = _build_axis_configs(base, "seg_tariff_pence_per_kwh", 9.0)
 
@@ -467,9 +437,6 @@ class TestBuildAxisConfigs:
 
     def test_seg_replaces_whatever_tariff_each_home_carried(self) -> None:
         """A preset, no tariff and another rate all end on the swept rate, as an unnamed tariff."""
-        from solar_challenge.optimize import _build_axis_configs, enumerate_configs
-        from solar_challenge.seg import SEGTariff, resolve_seg_tariff
-
         carried = [
             resolve_seg_tariff("Octopus"),
             None,
@@ -496,8 +463,6 @@ class TestBuildAxisConfigs:
 
     def test_degradation_alias_replaced(self) -> None:
         """'degradation' alias replaces degradation_rate_per_year on every home."""
-        from solar_challenge.optimize import _build_axis_configs
-
         base = self._base_configs()
         result = _build_axis_configs(base, "degradation", 0.01)
 
@@ -507,8 +472,6 @@ class TestBuildAxisConfigs:
 
     def test_degradation_full_name_replaced(self) -> None:
         """'degradation_rate_per_year' replaces degradation on every home."""
-        from solar_challenge.optimize import _build_axis_configs
-
         base = self._base_configs()
         result = _build_axis_configs(base, "degradation_rate_per_year", 0.02)
 
@@ -518,22 +481,17 @@ class TestBuildAxisConfigs:
 
     def test_unknown_knob_raises_value_error(self) -> None:
         """An unrecognised knob name raises ValueError."""
-        from solar_challenge.optimize import _build_axis_configs
-
         base = self._base_configs()
         with pytest.raises(ValueError, match="Unknown sensitivity knob"):
             _build_axis_configs(base, "nonexistent_knob_xyz", 1.0)
 
     def test_none_finance_raises_for_finance_knob(self) -> None:
         """scenario.finance is None raises ValueError for a FinanceConfig knob."""
-        from solar_challenge.optimize import _build_axis_configs
-
         # Build base_configs where the scenario has NO finance block
         base = self._base_configs(finance=None)
         # Manually clear finance on the scenarios
-        import dataclasses as dc
         cleared = [
-            (pt, dc.replace(sc, finance=None))
+            (pt, dataclasses.replace(sc, finance=None))
             for pt, sc in base
         ]
         with pytest.raises(ValueError, match="finance"):
@@ -550,8 +508,6 @@ class TestSensitivityPanelStructure:
 
     def _setup(self):  # type: ignore[no-untyped-def]
         """Return (base_configs, simulate) for a 2-config grid."""
-        from solar_challenge.optimize import enumerate_configs
-
         finance = _interior_finance()  # grid_services=0, baseline Config A on top
         scenario = _make_scenario(n_homes=_N_HOMES, finance=finance)
         base_configs = enumerate_configs(
@@ -564,8 +520,6 @@ class TestSensitivityPanelStructure:
 
     def test_one_axis_length(self) -> None:
         """Panel has exactly one SensitivityAxis when one axis is swept."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs, simulate = self._setup()
         panel = sensitivity_panel(
             base_configs,
@@ -576,8 +530,6 @@ class TestSensitivityPanelStructure:
 
     def test_axis_values_preserved(self) -> None:
         """SensitivityAxis.values equals the input sequence as a float tuple."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs, simulate = self._setup()
         panel = sensitivity_panel(
             base_configs,
@@ -588,8 +540,6 @@ class TestSensitivityPanelStructure:
 
     def test_rankings_and_tops_have_correct_length(self) -> None:
         """rankings and top_config_per_value both have length == len(values)."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs, simulate = self._setup()
         n_values = 3
         panel = sensitivity_panel(
@@ -603,8 +553,6 @@ class TestSensitivityPanelStructure:
 
     def test_baseline_top_equals_run_sweep_cheapest_feasible(self) -> None:
         """panel.baseline_top == run_sweep(base_configs, simulate=...).cheapest_feasible."""
-        from solar_challenge.optimize import run_sweep, sensitivity_panel
-
         base_configs, simulate = self._setup()
         panel = sensitivity_panel(
             base_configs,
@@ -616,8 +564,6 @@ class TestSensitivityPanelStructure:
 
     def test_rank_stability_in_range(self) -> None:
         """panel.rank_stability is in [0.0, 1.0]."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs, simulate = self._setup()
         panel = sensitivity_panel(
             base_configs,
@@ -651,8 +597,6 @@ class TestWH4Coupling:
 
     def _setup(self):  # type: ignore[no-untyped-def]
         """Return (base_configs, pt_A, pt_B) for the W-H4 coupling test."""
-        from solar_challenge.optimize import ConfigPoint, enumerate_configs
-
         # Finance with grid_services=100 makes B cheaper at baseline
         finance = _make_finance(
             pv_cost_per_kwp_gbp=1200.0,
@@ -675,8 +619,6 @@ class TestWH4Coupling:
 
     def test_baseline_top_is_battery_config(self) -> None:
         """With grid_services=100, Config B (battery) is cheaper → baseline_top==B."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs, pt_a, pt_b = self._setup()
         panel = sensitivity_panel(
             base_configs,
@@ -689,8 +631,6 @@ class TestWH4Coupling:
 
     def test_battery_cost_high_makes_battery_infeasible(self) -> None:
         """At high battery_cost, B is infeasible: absent from rankings and top flips to A."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs, pt_a, pt_b = self._setup()
         panel = sensitivity_panel(
             base_configs,
@@ -714,8 +654,6 @@ class TestWH4Coupling:
 
     def test_grid_services_flip(self) -> None:
         """At grid_services=0 A is on top; at grid_services=200 B is on top."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs, pt_a, pt_b = self._setup()
         panel = sensitivity_panel(
             base_configs,
@@ -737,8 +675,6 @@ class TestWH4Coupling:
 
     def test_rank_stability_less_than_one_with_flips(self) -> None:
         """Both axes together produce rank_stability < 1 due to flips."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs, pt_a, pt_b = self._setup()
         panel = sensitivity_panel(
             base_configs,
@@ -767,8 +703,6 @@ class TestRetainedFloorAxis:
 
     def _setup(self):  # type: ignore[no-untyped-def]
         """Return base_configs for a 2-config no-battery / with-battery grid."""
-        from solar_challenge.optimize import enumerate_configs
-
         finance = _make_finance(
             retained_cash_floor=50.0,
             grid_services_income=0.0,
@@ -784,8 +718,6 @@ class TestRetainedFloorAxis:
 
     def test_floor_axis_per_value_matches_run_sweep(self) -> None:
         """Per-value rankings/tops match run_sweep called with the same floor override."""
-        from solar_challenge.optimize import run_sweep, sensitivity_panel
-
         base_configs = self._setup()
         floor_low = 50.0
         floor_high = 500.0  # feasible at this level but different from baseline
@@ -813,8 +745,6 @@ class TestRetainedFloorAxis:
 
     def test_floor_axis_very_high_yields_none_top(self) -> None:
         """A sufficiently high floor makes all configs infeasible → None top, no crash."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs = self._setup()
         # 9,999,999 GBP floor is far above any solved rate — all infeasible
         panel = sensitivity_panel(
@@ -831,8 +761,6 @@ class TestRetainedFloorAxis:
 
     def test_none_top_counts_as_unstable(self) -> None:
         """A None top at a swept value counts as unstable in rank_stability."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs = self._setup()
         panel = sensitivity_panel(
             base_configs,
@@ -849,8 +777,6 @@ class TestRetainedFloorAxis:
 
     def test_floor_axis_does_not_mutate_finance_in_base_configs(self) -> None:
         """After sensitivity_panel, base_configs scenarios still have original finance."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs = self._setup()
         original_floors = [
             sc.finance.retained_cash_floor_per_home_per_year_gbp  # type: ignore[union-attr]
@@ -889,9 +815,6 @@ class TestSegAxisOnSegPricedHomes:
         the simulated export revenue instead of tripping the per-home vs scenario SEG
         consistency check.
         """
-        from solar_challenge.optimize import enumerate_configs, sensitivity_panel
-        from solar_challenge.seg import SEGTariff
-
         scenario = _make_seg_priced_scenario(self._BASE_RATE, finance=_interior_finance())
         assert scenario.seg_tariff_pence_per_kwh == self._BASE_RATE
         assert all(
@@ -926,8 +849,6 @@ class TestSensitivityPanelGuards:
 
     def _base_configs(self):  # type: ignore[no-untyped-def]
         """Return a valid minimal base_configs list (one no-battery config)."""
-        from solar_challenge.optimize import enumerate_configs
-
         scenario = _make_scenario(n_homes=_N_HOMES, finance=_interior_finance())
         return enumerate_configs(
             scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6]
@@ -935,8 +856,6 @@ class TestSensitivityPanelGuards:
 
     def test_empty_base_configs_raises(self) -> None:
         """Empty base_configs raises ValueError."""
-        from solar_challenge.optimize import sensitivity_panel
-
         with pytest.raises(ValueError, match="base_configs"):
             sensitivity_panel(
                 [],
@@ -946,8 +865,6 @@ class TestSensitivityPanelGuards:
 
     def test_empty_axes_raises(self) -> None:
         """Empty axes mapping raises ValueError."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs = self._base_configs()
         with pytest.raises(ValueError, match="axes"):
             sensitivity_panel(
@@ -958,8 +875,6 @@ class TestSensitivityPanelGuards:
 
     def test_empty_axis_values_raises(self) -> None:
         """An axis with an empty values sequence raises ValueError."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs = self._base_configs()
         with pytest.raises(ValueError):
             sensitivity_panel(
@@ -970,8 +885,6 @@ class TestSensitivityPanelGuards:
 
     def test_all_infeasible_baseline_raises(self) -> None:
         """A baseline with no feasible config raises ValueError (cheapest_feasible is None)."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs = self._base_configs()
         # Use a floor so high that no config is feasible at baseline
         with pytest.raises(ValueError, match="baseline"):
@@ -984,8 +897,6 @@ class TestSensitivityPanelGuards:
 
     def test_unknown_knob_propagates_value_error(self) -> None:
         """Unknown knob name in axes raises ValueError (propagated from _build_axis_configs)."""
-        from solar_challenge.optimize import sensitivity_panel
-
         base_configs = self._base_configs()
         with pytest.raises(ValueError, match="Unknown sensitivity knob"):
             sensitivity_panel(
@@ -1027,8 +938,6 @@ class TestConstSimulateCaching:
 
     def test_singleton_is_fleet_results_with_correct_n_homes(self) -> None:
         """The singleton is a FleetResults and has exactly _N_HOMES per-home results."""
-        from solar_challenge.fleet import FleetResults
-
         result = _const_simulate(None, None, None)
         assert isinstance(result, FleetResults), (
             f"_const_simulate must return a FleetResults, got {type(result)}"

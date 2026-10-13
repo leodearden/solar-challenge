@@ -1280,7 +1280,6 @@ class TestDatabasePragmas:
         with get_db(db_path) as conn:
             cursor = conn.cursor()
             # Try to insert a job referencing a non-existent run
-            import pytest
             with pytest.raises(Exception):
                 cursor.execute(
                     "INSERT INTO jobs (id, run_id, status) VALUES (?, ?, ?)",
