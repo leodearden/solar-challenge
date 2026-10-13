@@ -658,7 +658,7 @@ class TestCommunityBillingReport:
     def test_no_billing_section_when_fields_none(self, cr_no_billing: object) -> None:
         """Report does NOT contain billing section when savings fields are None."""
         assert isinstance(cr_no_billing, CommunityResults)
-        assert cr_no_billing.community_savings_gbp is None  # type: ignore[attr-defined]
+        assert cr_no_billing.community_savings_gbp is None
         report = generate_community_report(cr_no_billing)
         assert "Community Billing" not in report
         assert "Savings" not in report
@@ -709,7 +709,7 @@ class TestCommunityBillingAB:
     def test_p2p_savings_equals_baseline_minus_community(self, synth_fleet: FleetResults) -> None:
         """P2P: savings == baseline_net - community_net exactly."""
         cr = simulate_community(synth_fleet, self._billing_cfg("p2p"))
-        assert cr.community_savings_gbp == pytest.approx(  # type: ignore[operator]
+        assert cr.community_savings_gbp == pytest.approx(
             cr.baseline_net_cost_gbp - cr.community_net_cost_gbp, abs=1e-10  # type: ignore[operator]
         )
 

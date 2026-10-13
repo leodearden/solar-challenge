@@ -557,10 +557,10 @@ class TestRunSweepSingleConfig:
 class TestRunSweepMultiConfig:
     """Multi-config ranking: sorted by outlay, feasible/infeasible split, cheapest."""
 
-    def _make_pv_varying_simulate(self, n_homes: int = 5):  # type: ignore[return]
+    def _make_pv_varying_simulate(self, n_homes: int = 5):
         """Return a simulate that scales self_kwh/export with fc.homes[0].pv_config.capacity_kw."""
 
-        def simulate(fc, s, e):  # type: ignore[return]
+        def simulate(fc, s, e):
             cap = fc.homes[0].pv_config.capacity_kw
             # Larger PV → more self-consumption and export → lower cost-recovery rate
             # → lower outlay (but we want variance for ordering tests)

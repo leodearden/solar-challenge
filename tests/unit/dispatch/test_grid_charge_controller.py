@@ -65,7 +65,7 @@ class TestGridChargeContext:
         """GridChargeContext is immutable (frozen dataclass)."""
         ctx = self._make_ctx()
         with pytest.raises(Exception):  # FrozenInstanceError
-            ctx.current_rate = 0.20  # type: ignore[misc]
+            ctx.current_rate = 0.20
 
     def test_zero_round_trip_efficiency_raises(self):
         """round_trip_efficiency=0 raises ValueError (would cause ZeroDivisionError)."""
@@ -423,7 +423,7 @@ class TestDecideActionAcceptsGridChargeCtx:
         """SelfConsumption: passing grid_charge_ctx positionally raises TypeError."""
         s = SelfConsumptionStrategy()
         with pytest.raises(TypeError):
-            s.decide_action(  # type: ignore[call-arg]
+            s.decide_action(
                 self._TS, 1.0, 3.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
             )
 
@@ -454,7 +454,7 @@ class TestDecideActionAcceptsGridChargeCtx:
         """TOUOptimized: passing grid_charge_ctx positionally raises TypeError."""
         s = TOUOptimizedStrategy(peak_hours=[(17, 20)])
         with pytest.raises(TypeError):
-            s.decide_action(  # type: ignore[call-arg]
+            s.decide_action(
                 self._TS, 3.0, 1.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
             )
 
@@ -480,6 +480,6 @@ class TestDecideActionAcceptsGridChargeCtx:
         """PeakShaving: passing grid_charge_ctx positionally raises TypeError."""
         s = PeakShavingStrategy(import_limit_kw=2.0)
         with pytest.raises(TypeError):
-            s.decide_action(  # type: ignore[call-arg]
+            s.decide_action(
                 self._TS, 0.0, 5.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
             )

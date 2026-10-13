@@ -167,7 +167,7 @@ class TestSpreadsheetRevenueCurve:
             asset_life_years=25,
         )
         defaults.update(kwargs)
-        return spreadsheet_revenue_curve(**defaults)  # type: ignore[return-value]
+        return spreadsheet_revenue_curve(**defaults)
 
     def test_import(self) -> None:
         """spreadsheet_revenue_curve must be importable from solar_challenge.finance."""

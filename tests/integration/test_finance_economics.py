@@ -596,8 +596,8 @@ class TestProjectEconomicsSurplusDSCR:
         econ = project_economics(curve, scenario, finance)
 
         # 2 homes, opex_per_home=200 → fleet_opex_gbp = 400
-        assert econ.fleet_opex_gbp == finance.opex_per_home_per_year_gbp * 2  # type: ignore[attr-defined]
-        assert econ.fleet_opex_gbp == pytest.approx(fleet_opex)  # type: ignore[attr-defined]
+        assert econ.fleet_opex_gbp == finance.opex_per_home_per_year_gbp * 2
+        assert econ.fleet_opex_gbp == pytest.approx(fleet_opex)
 
 
 # ---------------------------------------------------------------------------

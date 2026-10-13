@@ -49,8 +49,8 @@ def test_all_is_complete_frozen_surface() -> None:
 
 def test_every_name_resolves_and_caches() -> None:
     """Each name resolves to the correct origin-module object and is cached on second access."""
-    for name, mod_name in solar_challenge._SYMBOL_MODULE.items():  # type: ignore[attr-defined]
-        source_name = solar_challenge._SOURCE_NAME.get(name, name)  # type: ignore[attr-defined]
+    for name, mod_name in solar_challenge._SYMBOL_MODULE.items():
+        source_name = solar_challenge._SOURCE_NAME.get(name, name)
         origin_obj = getattr(import_module(f"solar_challenge.{mod_name}"), source_name)
         # Resolve via lazy __getattr__ (or return already-cached value)
         resolved = getattr(solar_challenge, name)
@@ -68,7 +68,7 @@ def test_every_name_resolves_and_caches() -> None:
 def test_unknown_attribute_raises() -> None:
     """Accessing an undefined attribute raises AttributeError."""
     with pytest.raises(AttributeError):
-        _ = solar_challenge.does_not_exist  # type: ignore[attr-defined]
+        _ = solar_challenge.does_not_exist
 
 
 def test_tariffperiod_collision_resolved() -> None:
