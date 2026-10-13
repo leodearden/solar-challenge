@@ -28,6 +28,7 @@ from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.shared import LOCATION_PRESETS
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._html_page import element_attributes, element_count, texts, texts_after
+from tests._plotly_figure import traces
 from tests._web_app import build_test_app
 
 
@@ -685,9 +686,8 @@ class TestSweepChart:
             "Battery (kWh)",
             "Grid Import (kWh)",
         )
-        parsed = json.loads(result)
         # Should have at least the main trace, optimal marker, and trend line
-        assert len(parsed["data"]) >= 2
+        assert len(traces(result)) >= 2
 
     def test_sweep_parameter_chart_empty_returns_empty(self) -> None:
         """Test sweep_parameter_chart returns '{}' with empty inputs."""
