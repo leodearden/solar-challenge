@@ -17,7 +17,6 @@ from __future__ import annotations
 import dataclasses
 import warnings
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 import pytest
@@ -25,7 +24,7 @@ import pytest
 from solar_challenge.config import load_config, load_fleet_config
 from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
 from solar_challenge.flex import resolve_flex_band
-from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.output import generate_finance_report
 from tests._synthetic_weather import sunless_weather
 
@@ -109,17 +108,18 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     fleet = load_fleet_config(SCENARIO)
 
     # Pick the first battery home deterministically
-    home_on: Optional[HomeConfig] = None
-    for h in fleet.homes:
-        if h.battery_config is not None:
-            home_on = h
-            break
-    assert home_on is not None, "Expected at least one battery home in the flex scenario"
+    first_battery_home = next(
+        ((h, h.battery_config) for h in fleet.homes if h.battery_config is not None),
+        None,
+    )
+    assert first_battery_home is not None, (
+        "Expected at least one battery home in the flex scenario"
+    )
+    home_on, battery_on = first_battery_home
 
     # Derive OFF variant — same as ON but with grid_charging removed
-    assert home_on.battery_config is not None
-    off_batt = dataclasses.replace(home_on.battery_config, grid_charging=None)
-    home_off = dataclasses.replace(home_on, battery_config=off_batt)
+    battery_off = dataclasses.replace(battery_on, grid_charging=None)
+    home_off = dataclasses.replace(home_on, battery_config=battery_off)
 
     start = end = pd.Timestamp("2024-01-15")
     weather = sunless_weather("2024-01-15", temp_air=8.0)
