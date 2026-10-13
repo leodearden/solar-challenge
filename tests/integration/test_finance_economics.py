@@ -914,7 +914,7 @@ class TestFinanceProjectCLI:
         assert result.exit_code == 0, result.output
         assert "--project" in result.output
 
-    def test_project_without_finance_block_exits_nonzero(self, tmp_path: "Path") -> None:
+    def test_project_without_finance_block_exits_nonzero(self, tmp_path: Path) -> None:
         """Invoking `finance run --project` on a scenario WITHOUT a finance: block exits non-zero."""
         # Minimal scenario without finance:
         scenario = {
@@ -940,7 +940,7 @@ class TestFinanceProjectCLI:
         assert result.exit_code != 0
 
     def test_project_renders_the_economics_block_from_the_injected_fleet_simulator(
-        self, tmp_path: "Path"
+        self, tmp_path: Path
     ) -> None:
         """`finance run --project` must render the Project Economics block."""
         scenario = {

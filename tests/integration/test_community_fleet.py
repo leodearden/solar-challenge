@@ -600,7 +600,7 @@ class TestCommunityBillingReport:
         )
 
     @pytest.fixture
-    def cr_with_billing(self, billing_fleet: FleetResults) -> "object":
+    def cr_with_billing(self, billing_fleet: FleetResults) -> object:
         """CommunityResults with billing fields set (p2p, flat 0.30, SEG 4.1)."""
         cfg = CommunityConfig(
             sharing_mode="p2p",
@@ -612,7 +612,7 @@ class TestCommunityBillingReport:
         return simulate_community(billing_fleet, cfg)
 
     @pytest.fixture
-    def cr_no_billing(self, billing_fleet: FleetResults) -> "object":
+    def cr_no_billing(self, billing_fleet: FleetResults) -> object:
         """CommunityResults with no billing config (fields are None)."""
         cfg = CommunityConfig(sharing_mode="p2p")
         return simulate_community(billing_fleet, cfg)

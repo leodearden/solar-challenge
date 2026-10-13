@@ -80,7 +80,7 @@ def _write_scenario(
     tmp_path: Path,
     *,
     name: str = "Flex CLI Test",
-    flex_band: "str | None" = None,
+    flex_band: str | None = None,
     n_homes: int = 5,
 ) -> Path:
     """Write a minimal fleet scenario YAML to tmp_path.

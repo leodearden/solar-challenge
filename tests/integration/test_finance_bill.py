@@ -924,7 +924,7 @@ class TestFinanceCLI:
         assert "spreadsheet" in output
         assert "both" in output
 
-    def test_missing_finance_block_exits_nonzero(self, tmp_path: "Path") -> None:
+    def test_missing_finance_block_exits_nonzero(self, tmp_path: Path) -> None:
         """Invoking `finance run` on a scenario without `finance:` must exit non-zero."""
         # Minimal scenario without finance:
         scenario = {
@@ -949,7 +949,7 @@ class TestFinanceCLI:
         result = runner.invoke(app, ["finance", "run", str(scenario_file)])
         assert result.exit_code != 0
 
-    def test_missing_finance_block_error_message(self, tmp_path: "Path") -> None:
+    def test_missing_finance_block_error_message(self, tmp_path: Path) -> None:
         """Error message must mention 'finance' when finance: block is missing."""
         scenario = {
             "name": "No Finance Test",

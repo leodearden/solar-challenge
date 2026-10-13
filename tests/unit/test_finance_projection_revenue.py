@@ -190,10 +190,10 @@ def _make_grid_charging_sim_results(
     """
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
 
-    def constant_kw(kwh: float) -> "pd.Series":
+    def constant_kw(kwh: float) -> pd.Series:
         return pd.Series(kwh / (n_steps / 60.0), index=idx)
 
-    def constant_gbp(pence: float) -> "pd.Series":
+    def constant_gbp(pence: float) -> pd.Series:
         return pd.Series(pence / 100.0 / n_steps, index=idx)
 
     zeros = pd.Series(0.0, index=idx)
@@ -353,7 +353,7 @@ class TestSegExportIncomeGbp:
 
     def _make_finance_seg(
         self,
-        self_consumption_override: "float | None" = None,
+        self_consumption_override: float | None = None,
     ) -> FinanceConfig:
         return FinanceConfig(
             standing_charge_pence_per_day=28.0,

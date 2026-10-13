@@ -78,7 +78,7 @@ class TestProjectMultiYearAnnualisesShortWindow:
         ],
     )
     def test_short_window_projects_the_equivalent_full_year_curve(
-        self, self_consumption_override: "float | None"
+        self, self_consumption_override: float | None
     ) -> None:
         """Every YearPoint field, energy, revenue and SOH alike, matches the full-year curve."""
         scenario, finance, battery_config, fleet_full_year, fleet_short = (

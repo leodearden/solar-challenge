@@ -196,7 +196,7 @@ def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
     return _CONST_FLEET_RESULTS
 
 
-def _home_seg_rates(homes) -> "list[Optional[float]]":  # type: ignore[no-untyped-def]
+def _home_seg_rates(homes) -> list[Optional[float]]:  # type: ignore[no-untyped-def]
     """Each home's own SEG export rate in p/kWh; None for a home without a tariff."""
     return [
         None if home.seg_tariff is None else home.seg_tariff.rate_pence_per_kwh
@@ -386,7 +386,7 @@ class TestSensitivityDataclasses:
 class TestBuildAxisConfigs:
     """Unit tests for _build_axis_configs: pure routing, no run_sweep calls."""
 
-    def _base_configs(self, finance: "Optional[FinanceConfig]" = None):  # type: ignore[no-untyped-def]
+    def _base_configs(self, finance: Optional[FinanceConfig] = None):  # type: ignore[no-untyped-def]
         """Return a minimal base_configs list: one (ConfigPoint, ScenarioConfig) pair."""
         scenario = _make_scenario(n_homes=2, finance=finance or _interior_finance())
         return enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6])

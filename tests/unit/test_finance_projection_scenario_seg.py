@@ -120,7 +120,7 @@ def _seg_aware_fleet_results_factory(
             # Price export_revenue from seg_tariff if set (mirrors Task-85 zeroing in home.py)
             if home.seg_tariff is not None:
                 rev_per_min = exp_kw / 60.0 * home.seg_tariff.rate_pence_per_kwh / 100.0
-                export_rev: "pd.Series" = pd.Series(rev_per_min, index=idx)
+                export_rev: pd.Series = pd.Series(rev_per_min, index=idx)
             else:
                 export_rev = zeros.copy()
 

@@ -132,9 +132,9 @@ def _make_config_result(
 
 
 def _make_ranked_sweep(
-    results: "tuple[ConfigResult, ...]",
-    infeasible: "tuple[ConfigPoint, ...]" = (),
-    pareto: "tuple[ConfigPoint, ...]" = (),
+    results: tuple[ConfigResult, ...],
+    infeasible: tuple[ConfigPoint, ...] = (),
+    pareto: tuple[ConfigPoint, ...] = (),
     floor: float = 27.0,
 ) -> RankedSweep:
     """Assemble a RankedSweep honouring cheapest_feasible == results[0].config invariant."""
@@ -163,7 +163,7 @@ def _make_sensitivity_panel(
 
 def _make_sensitivity_axis(
     name: str = "grid_services_income_per_kw_per_year_gbp",
-    values: "tuple[float, ...]" = (1.5, 12.0, 48.0),
+    values: tuple[float, ...] = (1.5, 12.0, 48.0),
     top_config: ConfigPoint | None = None,
 ) -> SensitivityAxis:
     """Build a SensitivityAxis for fixture use."""
@@ -877,16 +877,16 @@ class TestOptimizeCLIE2EFast:
 
     @staticmethod
     def _invoke_configs(
-        tmp_path: "Path",
+        tmp_path: Path,
         fleet_results: FleetResults,
-        options: "list[str]",
-    ) -> "tuple[object, list[object]]":
+        options: list[str],
+    ) -> tuple[object, list[object]]:
         """Run `optimize configs` on a fresh scenario with *options*, answering every fleet simulation with *fleet_results*.
 
         Returns the CliRunner result and the fleet configs the injected simulator
         was asked to simulate.
         """
-        simulated_fleets: "list[object]" = []
+        simulated_fleets: list[object] = []
 
         def simulate(fleet_config, start, end):
             simulated_fleets.append(fleet_config)
@@ -898,7 +898,7 @@ class TestOptimizeCLIE2EFast:
 
     def test_optimize_configs_standard_sweep_output(
         self,
-        tmp_path: "Path",
+        tmp_path: Path,
         optimize_fleet_results: FleetResults,
     ) -> None:
         """Standard sweep must exit 0 and produce all expected report tokens.
@@ -951,7 +951,7 @@ class TestOptimizeCLIE2EFast:
 
     def test_parse_robustness_single_pv_value_works(
         self,
-        tmp_path: "Path",
+        tmp_path: Path,
         optimize_fleet_results: FleetResults,
     ) -> None:
         """Single value `--pv 4` (no comma) must parse correctly and succeed.
@@ -977,7 +977,7 @@ class TestOptimizeCLIE2EFast:
 
     def test_unknown_sensitivity_alias_exits_one(
         self,
-        tmp_path: "Path",
+        tmp_path: Path,
     ) -> None:
         """An unknown `--sensitivity` alias must exit 1 with a clear error message."""
         scenario_file = _write_optimize_scenario(tmp_path)

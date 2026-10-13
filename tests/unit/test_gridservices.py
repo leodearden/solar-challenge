@@ -407,8 +407,8 @@ class TestGridServicesEventsConfigValidation:
 
 
 def _make_gs_sim_results(
-    battery_soc: "list[float]",
-    battery_discharge: "list[float]",
+    battery_soc: list[float],
+    battery_discharge: list[float],
     index: pd.DatetimeIndex,
 ) -> SimulationResults:
     """Build a minimal SimulationResults with hand-set battery_soc and battery_discharge.
@@ -433,7 +433,7 @@ def _make_gs_sim_results(
 
 
 def _make_gs_fleet_results(
-    homes_data: "list[tuple]",
+    homes_data: list[tuple],
 ) -> FleetResults:
     """Build a FleetResults from per-home (SimulationResults, HomeConfig) pairs."""
     per_home = [sim for sim, _ in homes_data]
