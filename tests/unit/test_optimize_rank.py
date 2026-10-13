@@ -11,7 +11,15 @@ from typing import Optional
 
 import pytest
 
-from solar_challenge.optimize import cheapest_feasible, feasible_split, pareto_baseline, rank
+from solar_challenge.finance import CostRecoverySolution
+from solar_challenge.optimize import (
+    ConfigPoint,
+    ConfigResult,
+    cheapest_feasible,
+    feasible_split,
+    pareto_baseline,
+    rank,
+)
 from tests._factories import make_bill_breakdown, make_bill_distribution
 
 
@@ -27,8 +35,6 @@ def _make_cost_recovery_solution(
     outlay_gbp: float = 400.0,
     surplus: float = 100.0,
 ) -> object:
-    from solar_challenge.finance import CostRecoverySolution
-
     rep = make_bill_breakdown(
         total_outlay_gbp=outlay_gbp,
         saving_vs_baseline_gbp=100.0,
@@ -69,8 +75,6 @@ def _make_config_result(
     baseline_outlay_gbp: float = 450.0,
     baseline_surplus_per_home_gbp: float = 80.0,
 ) -> object:
-    from solar_challenge.optimize import ConfigPoint, ConfigResult
-
     config = ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw)
     solution = _make_cost_recovery_solution(
         own_use_rate=solved_own_use_rate_pence_per_kwh,

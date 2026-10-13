@@ -19,13 +19,12 @@ import numpy as np
 import pytest
 from scipy.interpolate import CubicSpline, PchipInterpolator  # type: ignore[import-untyped]
 
-from solar_challenge.finance import project_multi_year
+from solar_challenge.finance import MultiYearCurve, YearPoint, project_multi_year
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
 if TYPE_CHECKING:
     import pandas as pd
 
-    from solar_challenge.finance import MultiYearCurve, YearPoint
     from solar_challenge.fleet import FleetConfig, FleetResults
 
 
@@ -33,8 +32,6 @@ class TestYearPoint:
     """YearPoint frozen dataclass construction and validation."""
 
     def _make_valid(self) -> "YearPoint":
-        from solar_challenge.finance import YearPoint
-
         return YearPoint(
             year=5,
             pv_soh=0.975,
@@ -47,8 +44,6 @@ class TestYearPoint:
 
     def test_construction_valid(self) -> None:
         """Valid YearPoint constructs without errors."""
-        from solar_challenge.finance import YearPoint
-
         yp = self._make_valid()
         assert yp.year == 5
         assert yp.pv_soh == pytest.approx(0.975)
@@ -60,16 +55,12 @@ class TestYearPoint:
 
     def test_frozen(self) -> None:
         """Assigning a field raises FrozenInstanceError."""
-        from solar_challenge.finance import YearPoint
-
         yp = self._make_valid()
         with pytest.raises(dataclasses.FrozenInstanceError):
             yp.year = 99  # type: ignore[misc]
 
     def test_pv_soh_out_of_range_low(self) -> None:
         """pv_soh < 0 raises ValueError."""
-        from solar_challenge.finance import YearPoint
-
         with pytest.raises(ValueError, match="pv_soh"):
             YearPoint(
                 year=0,
@@ -83,8 +74,6 @@ class TestYearPoint:
 
     def test_pv_soh_out_of_range_high(self) -> None:
         """pv_soh > 1 raises ValueError."""
-        from solar_challenge.finance import YearPoint
-
         with pytest.raises(ValueError, match="pv_soh"):
             YearPoint(
                 year=0,
@@ -98,8 +87,6 @@ class TestYearPoint:
 
     def test_battery_soh_out_of_range(self) -> None:
         """battery_soh outside [0,1] raises ValueError."""
-        from solar_challenge.finance import YearPoint
-
         with pytest.raises(ValueError, match="battery_soh"):
             YearPoint(
                 year=0,
@@ -156,8 +143,6 @@ class TestYearPoint:
 
     def test_boundary_soh_values_valid(self) -> None:
         """SOH == 0 or 1 is valid (exact boundary)."""
-        from solar_challenge.finance import YearPoint
-
         # Should not raise
         yp0 = YearPoint(
             year=0,
@@ -185,8 +170,6 @@ class TestMultiYearCurve:
     """MultiYearCurve frozen dataclass construction and validation."""
 
     def _make_point(self, year: int, val: float = 1.0) -> "YearPoint":
-        from solar_challenge.finance import YearPoint
-
         return YearPoint(
             year=year,
             pv_soh=max(0.0, 1.0 - year * 0.005),
@@ -198,8 +181,6 @@ class TestMultiYearCurve:
         )
 
     def _make_valid(self) -> "MultiYearCurve":
-        from solar_challenge.finance import MultiYearCurve
-
         points = tuple(self._make_point(y) for y in range(25))
         return MultiYearCurve(
             points=points,
@@ -209,8 +190,6 @@ class TestMultiYearCurve:
 
     def test_construction_valid(self) -> None:
         """Valid MultiYearCurve constructs and exposes all §3.1 fields."""
-        from solar_challenge.finance import MultiYearCurve
-
         mc = self._make_valid()
         assert len(mc.points) == 25
         assert mc.sampled_ages == (0, 12, 24)
@@ -228,16 +207,12 @@ class TestMultiYearCurve:
 
     def test_frozen(self) -> None:
         """Assigning a field raises FrozenInstanceError."""
-        from solar_challenge.finance import MultiYearCurve
-
         mc = self._make_valid()
         with pytest.raises(dataclasses.FrozenInstanceError):
             mc.interp_error_estimate = 99.0  # type: ignore[misc]
 
     def test_empty_points_raises(self) -> None:
         """Empty points tuple raises ValueError."""
-        from solar_challenge.finance import MultiYearCurve
-
         with pytest.raises(ValueError, match="points"):
             MultiYearCurve(
                 points=(),
@@ -257,8 +232,6 @@ class TestMultiYearCurve:
 
     def test_empty_sampled_ages_raises(self) -> None:
         """Empty sampled_ages raises ValueError."""
-        from solar_challenge.finance import MultiYearCurve
-
         points = tuple(self._make_point(y) for y in range(25))
         with pytest.raises(ValueError, match="sampled_ages"):
             MultiYearCurve(

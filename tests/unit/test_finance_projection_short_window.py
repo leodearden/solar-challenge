@@ -8,9 +8,15 @@ with or without the self-consumption override, and the projection warns once.
 from __future__ import annotations
 
 import dataclasses
+import re
+import warnings
 
 import pytest
 
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.finance import householder_bill, project_multi_year
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import calculate_summary
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
 
@@ -25,9 +31,6 @@ def _make_full_year_and_short_window_fleets() -> tuple:
     the annual ones × _SHORT_WINDOW_DAYS / 365.  Inject either fleet with
     ``simulate=lambda fc, s, e: fleet``.
     """
-    from solar_challenge.battery import BatteryConfig
-    from solar_challenge.fleet import FleetResults
-
     battery_config = BatteryConfig(
         capacity_kwh=10.0,
         max_charge_kw=3.5,
@@ -78,9 +81,6 @@ class TestProjectMultiYearAnnualisesShortWindow:
         self, self_consumption_override: "float | None"
     ) -> None:
         """Every YearPoint field, energy, revenue and SOH alike, matches the full-year curve."""
-        from solar_challenge.finance import project_multi_year
-        from solar_challenge.home import calculate_summary
-
         scenario, finance, battery_config, fleet_full_year, fleet_short = (
             _make_full_year_and_short_window_fleets()
         )
@@ -114,11 +114,6 @@ class TestProjectMultiYearAnnualisesShortWindow:
         min(override × 4,000, 2,700) kWh a year.  The projection and householder_bill both
         start from the 3-day window's summary, so both must annualise it.
         """
-        import warnings
-
-        from solar_challenge.finance import householder_bill, project_multi_year
-        from solar_challenge.home import calculate_summary
-
         scenario, finance, _, fleet_full_year, fleet_short = _make_full_year_and_short_window_fleets()
         finance = dataclasses.replace(finance, self_consumption_override=self_consumption_override)
         annual = calculate_summary(fleet_full_year.per_home_results[0])
@@ -148,10 +143,6 @@ class TestProjectMultiYearAnnualisesShortWindow:
 
     def test_short_window_warns_once_naming_the_window(self) -> None:
         """Annualising a short window raises one UserWarning per projection, naming its days."""
-        import re
-
-        from solar_challenge.finance import project_multi_year
-
         scenario, finance, _, _, fleet_short = _make_full_year_and_short_window_fleets()
         names_the_window = re.compile(rf"\b{_SHORT_WINDOW_DAYS} days\b")
 
@@ -167,10 +158,6 @@ class TestProjectMultiYearAnnualisesShortWindow:
 
     def test_full_year_window_does_not_warn(self) -> None:
         """A full-year window is not annualised, so a board run stays warning-free."""
-        import warnings
-
-        from solar_challenge.finance import project_multi_year
-
         scenario, finance, _, fleet_full_year, _ = _make_full_year_and_short_window_fleets()
 
         with warnings.catch_warnings(record=True) as record:
