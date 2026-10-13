@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a figure's traces, in drawing order or keyed by name, and the texts of its annotations; a Sankey's nodes and links; and the colours a figure writes.
+"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a figure's traces, in drawing order or keyed by name, and the texts of its annotations or the annotations keyed by text; a Sankey's nodes and links; and the colours a figure writes.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a chart test that uses it pass vacuously.
@@ -14,6 +14,7 @@ import pytest
 
 from tests._plotly_figure import (
     annotation_texts,
+    annotations_by_text,
     colour_literals,
     opaque,
     sankey_link_colours,
@@ -66,6 +67,10 @@ _LINK_READERS = [
     pytest.param(sankey_link_colours, id="sankey_link_colours"),
 ]
 _READERS = [*_LINK_READERS, pytest.param(sankey_node_colours, id="sankey_node_colours")]
+_ANNOTATION_READERS = [
+    pytest.param(annotation_texts, id="annotation_texts"),
+    pytest.param(annotations_by_text, id="annotations_by_text"),
+]
 
 
 def test_traces_lists_each_trace_as_written_in_the_order_the_figure_draws_them() -> None:
@@ -144,21 +149,64 @@ def test_annotation_texts_lists_each_annotations_text_in_the_order_the_figure_dr
 
 
 @pytest.mark.parametrize(
+    ("reader", "nothing"),
+    [
+        pytest.param(annotation_texts, [], id="annotation_texts"),
+        pytest.param(annotations_by_text, {}, id="annotations_by_text"),
+    ],
+)
+@pytest.mark.parametrize(
     "figure",
     [
         pytest.param(_figure(_BAR), id="layout-without-annotations"),
         pytest.param("{}", id="no-layout"),
     ],
 )
-def test_a_figure_with_no_annotations_has_no_annotation_texts(figure: str) -> None:
+def test_a_figure_with_no_annotations_reads_as_empty(
+    reader: Callable[[str], object], nothing: object, figure: str
+) -> None:
     """Figure.to_json writes no annotations key for a figure without any, and sankey_diagram returns "{}" when it draws no flow.
 
     The first figure's title has a text, which is not an annotation's.
     """
-    assert annotation_texts(figure) == []
+    assert reader(figure) == nothing
 
 
-def test_an_annotation_without_a_text_raises_rather_than_being_left_out() -> None:
+def test_annotations_by_text_keys_each_annotation_as_written_by_its_text() -> None:
+    """The annotations are written as add_hline writes battery_soc_chart's SOC-limit labels."""
+    min_soc = {
+        "showarrow": False,
+        "text": "Min SOC",
+        "x": 1,
+        "xanchor": "right",
+        "xref": "x domain",
+        "y": 0.72,
+        "yanchor": "top",
+        "yref": "y",
+    }
+    max_soc = {
+        "showarrow": False,
+        "text": "Max SOC",
+        "x": 1,
+        "xanchor": "right",
+        "xref": "x domain",
+        "y": 6.84,
+        "yanchor": "bottom",
+        "yref": "y",
+    }
+
+    assert annotations_by_text(_annotated(min_soc, max_soc)) == {"Min SOC": min_soc, "Max SOC": max_soc}
+
+
+def test_two_annotations_sharing_a_text_raise_rather_than_keeping_one() -> None:
+    figure = _annotated({"text": "Min SOC", "y": 0.72}, {"text": "Max SOC", "y": 6.84}, {"text": "Min SOC", "y": 1.0})
+
+    with pytest.raises(ValueError, match=re.escape("['Min SOC']") + "$"):
+        annotations_by_text(figure)
+
+
+@pytest.mark.parametrize("reader", _ANNOTATION_READERS)
+def test_an_annotation_without_a_text_raises_rather_than_being_left_out(reader: Callable[[str], object]) -> None:
     """Figure.to_json writes no text for an annotation drawn without one, as an arrow alone is."""
     figure = _annotated(
         {"text": "Min SOC", "y": 0.72},
@@ -167,7 +215,7 @@ def test_an_annotation_without_a_text_raises_rather_than_being_left_out() -> Non
     )
 
     with pytest.raises(ValueError, match=re.escape("[{'showarrow': True, 'x': 1, 'y': 2}]") + "$"):
-        annotation_texts(figure)
+        reader(figure)
 
 
 def test_sankey_link_values_keys_each_links_value_by_its_source_and_target_labels() -> None:
