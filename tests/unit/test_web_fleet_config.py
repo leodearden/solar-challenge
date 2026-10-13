@@ -514,6 +514,16 @@ class TestFleetConfigHelpers:
             form_to_fleet_distribution_config({**valid_distribution_form(), key: 2.5})
         assert str(exc_info.value) == f"{key} must be a whole number, got 2.5"
 
+    @pytest.mark.parametrize("value", WHOLE_NUMBER_FORMS)
+    @pytest.mark.parametrize("key", ["n_homes", "seed"])
+    def test_form_to_fleet_distribution_config_reads_an_n_homes_or_seed_that_is_a_whole_number_in_another_form_as_the_int_it_equals(
+        self, key: str, value: object
+    ) -> None:
+        """An n_homes or seed that is a whole number sent as a float or a numeric string converts to the int it equals, not to a float or a string."""
+        config = form_to_fleet_distribution_config({**valid_distribution_form(), key: value})
+
+        assert (type(config[key]), config[key]) == (int, WHOLE_NUMBER)
+
     @pytest.mark.parametrize(
         "n_homes",
         [

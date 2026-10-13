@@ -12,6 +12,7 @@ from solar_challenge.web.builder_form import builder_form_errors, scenario_from_
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
 from solar_challenge.web.shared import NotAJsonObject
 from tests._unusable_numbers import UNUSABLE_NUMBERS
+from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
 
 _FORMS_THAT_ARE_NOT_JSON_OBJECTS = [
     pytest.param([1], "list", id="array"),
@@ -134,6 +135,30 @@ class TestScenarioFromBuilderForm:
             scenario_from_builder_form({**_ACCEPTED_FORM, **changes})
         assert str(exc_info.value) == f"{field} must be a whole number, got 2.5"
 
+    @pytest.mark.parametrize("value", WHOLE_NUMBER_FORMS)
+    def test_a_number_of_homes_that_is_a_whole_number_in_another_form_is_the_int_it_equals(
+        self, value: object
+    ) -> None:
+        """The number of homes sent as a whole float or a numeric string is the int it equals in the fleet block, not a float or a string."""
+        block = scenario_from_builder_form({**_ACCEPTED_FORM, "n_homes": value})["fleet_distribution"]
+
+        assert (type(block["n_homes"]), block["n_homes"]) == (int, WHOLE_NUMBER)
+
+    @pytest.mark.parametrize("count", WHOLE_NUMBER_FORMS)
+    def test_a_shuffled_pool_row_count_that_is_a_whole_number_in_another_form_is_the_int_it_equals(
+        self, count: object
+    ) -> None:
+        """A shuffled pool row's count sent as a whole float or a numeric string is the int it equals in the pool's counts, not a float or a string."""
+        form = {
+            **_ACCEPTED_FORM,
+            "pv_distribution_type": "shuffled_pool",
+            "pv_sp_entries": [{"value": 3, "count": 2}, {"value": 4, "count": count}],
+        }
+        pv_block = scenario_from_builder_form(form)["fleet_distribution"]["pv"]
+
+        counts = pv_block["capacity_kw"]["counts"]
+        assert [(type(read), read) for read in counts] == [(int, 2), (int, WHOLE_NUMBER)]
+
 
 class TestBuilderFormErrors:
     """Every reason builder_form_errors gives for refusing a builder form."""
@@ -203,3 +228,10 @@ class TestBuilderFormErrors:
     ) -> None:
         value = component.fixed_range[0] if end == "low" else component.fixed_range[1]
         assert builder_form_errors({**_ACCEPTED_FORM, component.fixed_field: value}) == []
+
+    @pytest.mark.parametrize("value", WHOLE_NUMBER_FORMS)
+    def test_a_number_of_homes_that_is_a_whole_number_in_another_form_is_accepted(
+        self, value: object
+    ) -> None:
+        """The dashboard's limit on the number of homes reads a whole float or a numeric string as the number it equals, as the scenario does, so a form sending one within the limit has no reason to be refused."""
+        assert builder_form_errors({**_ACCEPTED_FORM, "n_homes": value}) == []
