@@ -141,22 +141,34 @@ def test_results_daily_balance_bars_add_up_to_the_stat_cards(
 # -- A chart whose figure cannot be drawn is reported ----------------------
 
 _UNDRAWABLE_CHART_ID = "chart-undrawable"
-_POWER_FLOW_CONTAINER = '<div id="chart-power-flow"'
+_POWER_FLOW_CHART_ID = "chart-power-flow"
+_POWER_FLOW_CONTAINER = f'<div id="{_POWER_FLOW_CHART_ID}"'
+_CHART_RENDERER_SCRIPT = '<script src="/static/js/chart-renderer.js"'
+_FAILED_DRAWING = "the drawing failed after Plotly.newPlot returned"
+_PLOTLY_REJECTS_THE_POWER_FLOW_DRAWING = (
+    "<script>(function () {"
+    " var newPlot = Plotly.newPlot;"
+    " Plotly.newPlot = function (container) {"
+    f" if (container.id === '{_POWER_FLOW_CHART_ID}') return Promise.reject(new Error('{_FAILED_DRAWING}'));"
+    " return newPlot.apply(this, arguments);"
+    " };"
+    "}());</script>"
+)
 
 
-def _with_an_undrawable_chart(page: Page, url: str) -> str:
-    """The page at url with one more chart container, whose figure is not JSON, just ahead of chart-power-flow's in the Power Flow tab."""
+def _serve_with(page: Page, url: str, insertion: str, anchor: str) -> None:
+    """Answer page's requests for url with the page served there, insertion just ahead of anchor, which it must hold once."""
     served = page.request.get(url)
     assert served.status == 200, f"GET {url} answered {served.status}"
     html = served.text()
-    anchors = html.count(_POWER_FLOW_CONTAINER)
-    assert anchors == 1, (
-        f"expected {_POWER_FLOW_CONTAINER!r} once on the page, as the anchor for the undrawable chart; found {anchors}"
-    )
-    return html.replace(
-        _POWER_FLOW_CONTAINER,
-        f'<div id="{_UNDRAWABLE_CHART_ID}" class="w-full" data-chart-figure="not a figure"></div>'
-        + _POWER_FLOW_CONTAINER,
+    anchors = html.count(anchor)
+    assert anchors == 1, f"expected {anchor!r} once on the page, as the anchor for {insertion!r}; found {anchors}"
+    modified = html.replace(anchor, insertion + anchor)
+    page.route(
+        url,
+        lambda route: route.fulfill(
+            status=200, content_type="text/html; charset=utf-8", body=modified
+        ),
     )
 
 
@@ -174,12 +186,11 @@ def test_a_chart_whose_figure_cannot_be_drawn_logs_one_error_naming_its_id_and_i
     """Showing the Power Flow tab draws its charts together, the undrawable one first, so its failure must not stop chart-power-flow."""
     run_id, _ = seeded_home_run
     url = live_server + f"/results/home/{run_id}"
-    html = _with_an_undrawable_chart(page, url)
-    page.route(
+    _serve_with(
+        page,
         url,
-        lambda route: route.fulfill(
-            status=200, content_type="text/html; charset=utf-8", body=html
-        ),
+        f'<div id="{_UNDRAWABLE_CHART_ID}" class="w-full" data-chart-figure="not a figure"></div>',
+        _POWER_FLOW_CONTAINER,
     )
     page.goto(url)
     expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
@@ -191,6 +202,31 @@ def test_a_chart_whose_figure_cannot_be_drawn_logs_one_error_naming_its_id_and_i
     errors_naming_the_chart = _errors_naming(page_errors, _UNDRAWABLE_CHART_ID)
     assert len(errors_naming_the_chart) == 1, (
         f"expected one error naming {_UNDRAWABLE_CHART_ID!r}, but the page logged: {page_errors}"
+    )
+
+
+def test_a_chart_whose_drawing_fails_after_plotly_newplot_returns_logs_one_error_naming_its_id(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Plotly.newPlot returns a promise, which rejects when a draw fails after its synchronous part; that failure is one error naming the chart, not an uncaught rejection."""
+    run_id, _ = seeded_home_run
+    url = live_server + f"/results/home/{run_id}"
+    _serve_with(page, url, _PLOTLY_REJECTS_THE_POWER_FLOW_DRAWING, _CHART_RENDERER_SCRIPT)
+    page.goto(url)
+    expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
+
+    with page.expect_console_message(lambda message: _POWER_FLOW_CHART_ID in message.text):
+        page.get_by_role("tab", name="Power Flow", exact=True).click()
+
+    errors_naming_the_chart = _errors_naming(page_errors, _POWER_FLOW_CHART_ID)
+    uncaught_failures = [
+        error for error in page_errors if _FAILED_DRAWING in error and _POWER_FLOW_CHART_ID not in error
+    ]
+    assert (len(errors_naming_the_chart), uncaught_failures) == (1, []), (
+        f"expected one error naming {_POWER_FLOW_CHART_ID!r} and no other carrying {_FAILED_DRAWING!r}, but the page logged: {page_errors}"
     )
 
 

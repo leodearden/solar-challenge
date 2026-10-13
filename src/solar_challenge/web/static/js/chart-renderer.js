@@ -3,9 +3,11 @@
  * (data-chart-figure, written by components/macros.html's chart_panel), once
  * the container is shown, so a hidden tab's chart waits for its tab (AC3).
  *
- * Charts are drawn in the theme's colours (AC9) and recoloured on
- * theme-changed (AC10). A figure that cannot be drawn logs a console error
- * naming its container's id, and the page's other charts still draw.
+ * Charts are drawn in the theme's colours (AC9), and each drawn chart that is
+ * shown is recoloured on theme-changed (AC10). A chart that cannot be drawn,
+ * whether its drawing fails at once or after Plotly.newPlot returns, logs a
+ * console error naming its container's id, and the page's other charts still
+ * draw.
  *
  * Plotly must load first.
  */
@@ -63,15 +65,20 @@
         return layout;
     }
 
+    /**
+     * Draws the chart of container's figure. A throw, or a rejection of the
+     * promise Plotly.newPlot returns, logs one console error naming container.
+     */
     function _draw(container) {
-        try {
+        new Promise(function (resolve) {
             var fig = JSON.parse(container.dataset.chartFigure);
             var overrides = _isDark() ? _darkOverrides() : _lightOverrides();
-            Plotly.newPlot(container, fig.data, _applyOverrides(fig.layout || {}, overrides), SOLAR_CHART_CONFIG);
+            resolve(Plotly.newPlot(container, fig.data, _applyOverrides(fig.layout || {}, overrides), SOLAR_CHART_CONFIG));
+        }).then(function () {
             _drawn.push(container);
-        } catch (e) {
+        }, function (e) {
             console.error('chart-renderer.js: failed to draw the figure of #' + container.id, e);
-        }
+        });
     }
 
     /** Draws each observed container the first time it has a width (AC3). */
