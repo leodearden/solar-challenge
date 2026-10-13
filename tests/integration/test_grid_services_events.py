@@ -54,7 +54,7 @@ SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-f
 # ---------------------------------------------------------------------------
 
 
-def _make_in_window_sim_results(n_steps: int = 8760) -> "SimulationResults":  # type: ignore[name-defined]
+def _make_in_window_sim_results(n_steps: int = 8760) -> "SimulationResults":
     """Build a SimulationResults with constant battery_soc above min_soc_kwh and
     battery_discharge below max_discharge_kw, on a full-year hourly tz-aware index.
 
@@ -92,7 +92,7 @@ def _make_in_window_sim_results(n_steps: int = 8760) -> "SimulationResults":  # 
     )
 
 
-def _synthetic_fleet_results_in_window(homes: list) -> "FleetResults":  # type: ignore[name-defined]
+def _synthetic_fleet_results_in_window(homes: list) -> "FleetResults":
     """Build FleetResults with in-window battery_soc/discharge per home."""
     per_home = [_make_in_window_sim_results() for _ in homes]
     return FleetResults(per_home_results=per_home, home_configs=homes)
@@ -115,7 +115,7 @@ def _board_econ_scenario() -> tuple:  # type: ignore[return]
 
 def _rev_at(
     scenario: "ScenarioConfig",  # type: ignore[name-defined]
-    finance: "FinanceConfig",  # type: ignore[name-defined]
+    finance: "FinanceConfig",
     simulate: "Callable",  # type: ignore[name-defined]
     year: int = 0,
 ) -> float:
@@ -126,8 +126,8 @@ def _rev_at(
 
 def _isolate_gs_component(
     scenario: "ScenarioConfig",  # type: ignore[name-defined]
-    finance_events: "FinanceConfig",  # type: ignore[name-defined]
-    finance_flat0: "FinanceConfig",  # type: ignore[name-defined]
+    finance_events: "FinanceConfig",
+    finance_flat0: "FinanceConfig",
     simulate: "Callable",  # type: ignore[name-defined]
     year: int = 0,
 ) -> float:
@@ -300,7 +300,7 @@ def _age_nonlinear_simulate(homes: list) -> "Callable":  # type: ignore[name-def
     the test cares only that the event function is called exactly once (memo
     reuse), not that the figure changes with age.
     """
-    def _sim(fc: object, start_ts: object, end_ts: object) -> "FleetResults":  # type: ignore[name-defined]
+    def _sim(fc: object, start_ts: object, end_ts: object) -> "FleetResults":
         m = re.search(r"proj-age-(\d+)", str(getattr(fc, "name", "")))
         age = int(m.group(1)) if m else 0
 

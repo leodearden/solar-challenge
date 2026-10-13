@@ -56,7 +56,7 @@ def _make_solution(
     feasible: bool = True,
     binding: str = "floor",
     outlay: "BillDistribution | None" = None,  # type: ignore[name-defined]
-) -> "CostRecoverySolution":  # type: ignore[name-defined]
+) -> "CostRecoverySolution":
     """Build a minimal CostRecoverySolution.
 
     When *outlay* is ``None`` (default) the distribution from
@@ -331,7 +331,7 @@ class TestFinanceCLICostRecoveryHelp:
 # ---------------------------------------------------------------------------
 
 
-def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
+def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":
     return PVConfig(
         capacity_kw=4.0,
         azimuth=180.0,
@@ -341,11 +341,11 @@ def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignor
     )
 
 
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
+def _make_load_config() -> "LoadConfig":
     return LoadConfig(annual_consumption_kwh=3500.0)
 
 
-def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
+def _make_home_config() -> "HomeConfig":
     return HomeConfig(
         pv_config=_make_pv_config(),
         load_config=_make_load_config(),
@@ -358,7 +358,7 @@ def _make_sim_results(
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
     n_minutes: int = 525600,
-) -> "SimulationResults":  # type: ignore[name-defined]
+) -> "SimulationResults":
     idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
     exp_kw = export_kwh / (n_minutes / 60.0)
@@ -382,7 +382,7 @@ def _make_sim_results(
     )
 
 
-def _make_fleet_results_interior(n_homes: int = 5) -> "FleetResults":  # type: ignore[name-defined]
+def _make_fleet_results_interior(n_homes: int = 5) -> "FleetResults":
     """Build a FleetResults that yields binding='floor', feasible=True when solved.
 
     Uses the interior-regime shape from test_cost_recovery_solve.py:
@@ -409,7 +409,7 @@ def _make_fleet_results_interior(n_homes: int = 5) -> "FleetResults":  # type: i
     return FleetResults(per_home_results=per_home, home_configs=homes)
 
 
-def _write_interior_scenario(tmp_path: "Path", n_homes: int = 5) -> "Path":  # type: ignore[name-defined]
+def _write_interior_scenario(tmp_path: "Path", n_homes: int = 5) -> "Path":
     """Write a minimal interior-regime scenario YAML to tmp_path."""
     scenario = {
         "name": "CR5 CLI Test",
@@ -448,7 +448,7 @@ def _write_interior_scenario(tmp_path: "Path", n_homes: int = 5) -> "Path":  # t
 
 
 @pytest.fixture(scope="module")
-def interior_fleet_results() -> "FleetResults":  # type: ignore[name-defined]
+def interior_fleet_results() -> "FleetResults":
     """Module-scoped fixture: build interior-regime FleetResults once per module.
 
     Building once avoids reconstructing ~9 MB of per-minute Series four times
@@ -461,7 +461,7 @@ class TestFinanceCLICostRecoveryE2EFast:
     """Fast end-to-end tests for --cost-recovery flag wiring."""
 
     def test_cost_recovery_flag_renders_block(
-        self, tmp_path: "Path", interior_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: "Path", interior_fleet_results: "FleetResults"
     ) -> None:
         """--cost-recovery must render the cost-recovery block in the output."""
         scenario_file = _write_interior_scenario(tmp_path)
@@ -475,7 +475,7 @@ class TestFinanceCLICostRecoveryE2EFast:
         )
 
     def test_cost_recovery_flag_shows_solved_rate(
-        self, tmp_path: "Path", interior_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: "Path", interior_fleet_results: "FleetResults"
     ) -> None:
         """--cost-recovery output must contain the solved own-use rate."""
         scenario_file = _write_interior_scenario(tmp_path)
@@ -489,7 +489,7 @@ class TestFinanceCLICostRecoveryE2EFast:
         )
 
     def test_cost_recovery_flag_shows_feasible(
-        self, tmp_path: "Path", interior_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: "Path", interior_fleet_results: "FleetResults"
     ) -> None:
         """--cost-recovery output must contain feasibility indicator for interior regime."""
         scenario_file = _write_interior_scenario(tmp_path)
@@ -504,7 +504,7 @@ class TestFinanceCLICostRecoveryE2EFast:
         )
 
     def test_no_cost_recovery_omits_block(
-        self, tmp_path: "Path", interior_fleet_results: "FleetResults"  # type: ignore[name-defined]
+        self, tmp_path: "Path", interior_fleet_results: "FleetResults"
     ) -> None:
         """--no-cost-recovery (default) must NOT render the cost-recovery block."""
         scenario_file = _write_interior_scenario(tmp_path)

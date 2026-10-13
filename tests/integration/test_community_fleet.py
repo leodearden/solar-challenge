@@ -180,11 +180,11 @@ class TestGenerateCommunityReport:
         )
 
     @pytest.fixture
-    def cr_p2p(self, small_fleet: FleetResults) -> "CommunityResults":  # type: ignore[name-defined]
+    def cr_p2p(self, small_fleet: FleetResults) -> "CommunityResults":
         return simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
 
     @pytest.fixture
-    def cr_batt(self, small_fleet: FleetResults) -> "CommunityResults":  # type: ignore[name-defined]
+    def cr_batt(self, small_fleet: FleetResults) -> "CommunityResults":
         return simulate_community(
             small_fleet,
             CommunityConfig(

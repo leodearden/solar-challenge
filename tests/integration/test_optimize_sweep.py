@@ -47,7 +47,7 @@ from tests._factories import make_bill_breakdown, make_bill_distribution
 # ---------------------------------------------------------------------------
 
 
-def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
+def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":
     return PVConfig(
         capacity_kw=4.0,
         azimuth=180.0,
@@ -57,14 +57,14 @@ def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignor
     )
 
 
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
+def _make_load_config() -> "LoadConfig":
     return LoadConfig(annual_consumption_kwh=3500.0)
 
 
 def _make_home_config(
     capacity_kw: float = 4.0,
     system_age_years: float = 0.0,
-) -> "HomeConfig":  # type: ignore[name-defined]
+) -> "HomeConfig":
     pv = PVConfig(
         capacity_kw=capacity_kw,
         azimuth=180.0,
@@ -85,7 +85,7 @@ def _make_sim_results(
     import_kwh: float = 1200.0,
     export_revenue_gbp_per_year: float = 0.0,
     n_minutes: int = 525600,  # 365 days
-) -> "SimulationResults":  # type: ignore[name-defined]
+) -> "SimulationResults":
     idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
     exp_kw = export_kwh / (n_minutes / 60.0)
@@ -120,7 +120,7 @@ def _make_fleet_results(
     import_kwh: float = 1200.0,
     export_revenue_gbp_per_year: float = 0.0,
     capacity_kw: float = 4.0,
-) -> "FleetResults":  # type: ignore[name-defined]
+) -> "FleetResults":
     homes = [_make_home_config(capacity_kw=capacity_kw) for _ in range(n_homes)]
     per_home = [
         _make_sim_results(self_kwh, export_kwh, import_kwh,
@@ -140,7 +140,7 @@ def _make_finance(
     retained_cash_floor: float = 50.0,
     retail_baseline_rate: float = 30.0,
     asset_life_years: int = 25,
-) -> "FinanceConfig":  # type: ignore[name-defined]
+) -> "FinanceConfig":
     return FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life_years,
@@ -159,8 +159,8 @@ def _make_scenario(
     start: str = "2020-01-01",
     end: str = "2020-12-31",
     seg_tariff_pence: float = 5.0,
-    finance: "Optional[FinanceConfig]" = None,  # type: ignore[name-defined]
-) -> "ScenarioConfig":  # type: ignore[name-defined]
+    finance: "Optional[FinanceConfig]" = None,
+) -> "ScenarioConfig":
     homes = [_make_home_config() for _ in range(n_homes)]
     return ScenarioConfig(
         name="sweep-test",
@@ -172,7 +172,7 @@ def _make_scenario(
     )
 
 
-def _interior_finance(n_homes: int = 5) -> "FinanceConfig":  # type: ignore[name-defined]
+def _interior_finance(n_homes: int = 5) -> "FinanceConfig":
     """Finance params that produce an interior 'floor' solve."""
     return _make_finance(
         pv_cost_per_kwp_gbp=2000.0,
@@ -189,7 +189,7 @@ def _make_cost_recovery_solution(
     binding: str = "floor",
     outlay_gbp: float = 400.0,
     surplus: float = 100.0,
-) -> "CostRecoverySolution":  # type: ignore[name-defined]
+) -> "CostRecoverySolution":
     rep = make_bill_breakdown(
         total_outlay_gbp=outlay_gbp,
         saving_vs_baseline_gbp=100.0,
@@ -229,7 +229,7 @@ def _make_config_result(
     payback_years: Optional[float] = 12.0,
     baseline_outlay_gbp: float = 450.0,
     baseline_surplus_per_home_gbp: float = 80.0,
-) -> "ConfigResult":  # type: ignore[name-defined]
+) -> "ConfigResult":
     """Synthetic ConfigResult builder for pure helper tests (no simulation needed)."""
     config = ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw)
     solution = _make_cost_recovery_solution(
@@ -362,7 +362,7 @@ class TestConfigResult:
 class TestRankedSweep:
     """RankedSweep frozen dataclass construction and validation."""
 
-    def _make_one_feasible(self) -> "ConfigResult":  # type: ignore[name-defined]
+    def _make_one_feasible(self) -> "ConfigResult":
         return _make_config_result(
             pv_kwp=4.0,
             representative_outlay_gbp=400.0,
@@ -576,7 +576,7 @@ class TestRunSweepMultiConfig:
 
         return simulate
 
-    def _make_infeasible_finance(self) -> "FinanceConfig":  # type: ignore[name-defined]
+    def _make_infeasible_finance(self) -> "FinanceConfig":
         """Finance params that produce infeasible_above_retail."""
         return _make_finance(
             pv_cost_per_kwp_gbp=20000.0,

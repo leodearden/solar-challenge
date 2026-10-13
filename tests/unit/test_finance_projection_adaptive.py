@@ -16,7 +16,7 @@ from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
 from tests._finance_builders import make_fleet_results, make_home_config
 
 
-def _make_curved_simulate(curvature: float = 0.35) -> "Callable":  # type: ignore[name-defined]
+def _make_curved_simulate(curvature: float = 0.35) -> "Callable":
     """Return a synthetic simulate with strongly non-linear (exponential) decline.
 
     fleet_self_consumption_kwh declines as base * exp(-curvature * age).

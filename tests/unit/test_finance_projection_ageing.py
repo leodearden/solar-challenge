@@ -27,7 +27,7 @@ def _make_degrading_simulate(
     base_export: float = 2000.0,
     base_import: float = 1000.0,
     degradation_rate: float = 0.005,
-) -> "Callable":  # type: ignore[name-defined]
+) -> "Callable":
     """Return a synthetic simulate that scales self-consumption by PV SOH.
 
     The injected simulate reads pv_config.system_age_years from each home in
@@ -160,7 +160,7 @@ class TestCycleFadeEngagement:
     def _make_simulate_with_discharge(
         self,
         discharge_kwh: float,
-    ) -> "Callable":  # type: ignore[name-defined]
+    ) -> "Callable":
         """Synthetic simulate that returns a fixed per-home discharge amount."""
         def _simulate(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
             return make_fleet_results(
@@ -213,7 +213,7 @@ _ANNUAL_DISCHARGE_KWH = 800.0
 
 def _make_battery_ageing_simulate(
     discharge_kwh: "Callable[[HomeConfig], float]",  # type: ignore[name-defined]
-) -> "Callable":  # type: ignore[name-defined]
+) -> "Callable":
     """A simulate whose own-use decays with PV age and whose battery discharges discharge_kwh(home) a year.
 
     ``home`` is the aged HomeConfig the projection simulates, so a profile can

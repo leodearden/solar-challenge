@@ -65,7 +65,7 @@ def _make_solution(
     feasible: bool = True,
     binding: str = "floor",
     outlay: "Optional[BillDistribution]" = None,  # type: ignore[name-defined]
-) -> "CostRecoverySolution":  # type: ignore[name-defined]
+) -> "CostRecoverySolution":
     """Build a minimal CostRecoverySolution for fixture use."""
     dist = outlay if outlay is not None else _make_bill_distribution()
     return CostRecoverySolution(
@@ -98,7 +98,7 @@ def _make_config_result(
     outlay_mean: float = 355.0,
     outlay_median: float = 360.0,
     outlay_max: float = 410.0,
-) -> "ConfigResult":  # type: ignore[name-defined]
+) -> "ConfigResult":
     """Build a ConfigResult with distinct numeric values for each field."""
     point = ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw)
     dist = _make_bill_distribution(
@@ -136,7 +136,7 @@ def _make_ranked_sweep(
     infeasible: "tuple[ConfigPoint, ...]" = (),
     pareto: "tuple[ConfigPoint, ...]" = (),
     floor: float = 27.0,
-) -> "RankedSweep":  # type: ignore[name-defined]
+) -> "RankedSweep":
     """Assemble a RankedSweep honouring cheapest_feasible == results[0].config invariant."""
     cheapest = results[0].config if results else None
     return RankedSweep(
@@ -149,10 +149,10 @@ def _make_ranked_sweep(
 
 
 def _make_sensitivity_panel(
-    axes: "tuple[SensitivityAxis, ...]",  # type: ignore[name-defined]
-    baseline_top: "ConfigPoint",  # type: ignore[name-defined]
+    axes: "tuple[SensitivityAxis, ...]",
+    baseline_top: "ConfigPoint",
     rank_stability: float = 0.8,
-) -> "SensitivityPanel":  # type: ignore[name-defined]
+) -> "SensitivityPanel":
     """Build a SensitivityPanel for fixture use."""
     return SensitivityPanel(
         axes=axes,
@@ -164,8 +164,8 @@ def _make_sensitivity_panel(
 def _make_sensitivity_axis(
     name: str = "grid_services_income_per_kw_per_year_gbp",
     values: "tuple[float, ...]" = (1.5, 12.0, 48.0),
-    top_config: "ConfigPoint | None" = None,  # type: ignore[name-defined]
-) -> "SensitivityAxis":  # type: ignore[name-defined]
+    top_config: "ConfigPoint | None" = None,
+) -> "SensitivityAxis":
     """Build a SensitivityAxis for fixture use."""
     if top_config is None:
         top_config = ConfigPoint(pv_kwp=4.0, battery_kwh=5.0, inverter_kw=5.0)
@@ -186,7 +186,7 @@ def _make_sensitivity_axis(
 # ---------------------------------------------------------------------------
 
 
-def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
+def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":
     return PVConfig(
         capacity_kw=4.0,
         azimuth=180.0,
@@ -196,11 +196,11 @@ def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignor
     )
 
 
-def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
+def _make_load_config() -> "LoadConfig":
     return LoadConfig(annual_consumption_kwh=3500.0)
 
 
-def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
+def _make_home_config() -> "HomeConfig":
     return HomeConfig(
         pv_config=_make_pv_config(),
         load_config=_make_load_config(),
@@ -213,7 +213,7 @@ def _make_sim_results(
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
     n_minutes: int = 525600,
-) -> "SimulationResults":  # type: ignore[name-defined]
+) -> "SimulationResults":
     """Build a 365-day SimulationResults for constant-sim fixture use."""
     idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
@@ -238,7 +238,7 @@ def _make_sim_results(
     )
 
 
-def _make_fleet_results(n_homes: int = 5) -> "FleetResults":  # type: ignore[name-defined]
+def _make_fleet_results(n_homes: int = 5) -> "FleetResults":
     """Build a FleetResults yielding binding='floor', feasible=True when solved.
 
     Uses full-year 525600-minute Series (365 × 24 × 60) so no annualisation
@@ -300,7 +300,7 @@ def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
 class TestGenerateConfigRankingReportTable1:
     """generate_config_ranking_report renders the COST-RECOVERY RANK table."""
 
-    def _make_sweep_two_feasible(self) -> "RankedSweep":  # type: ignore[name-defined]
+    def _make_sweep_two_feasible(self) -> "RankedSweep":
         """Build a RankedSweep with two feasible configs and one infeasible."""
         # Config 1 (cheapest, RECOMMENDATION): 4 kWp, no battery, solved @ 12.5p
         r1 = _make_config_result(
@@ -497,7 +497,7 @@ class TestGenerateConfigRankingReportTable1:
 class TestGenerateConfigRankingReportTable2:
     """generate_config_ranking_report renders the FIXED-15p TRADE-OFF table."""
 
-    def _make_sweep_with_pareto(self) -> "RankedSweep":  # type: ignore[name-defined]
+    def _make_sweep_with_pareto(self) -> "RankedSweep":
         """Build a RankedSweep where some (not all) feasible configs are on the Pareto front."""
         # Config A (cheapest, on Pareto): 4 kWp / 0 kWh — low outlay, low surplus
         r_a = _make_config_result(
@@ -664,12 +664,12 @@ class TestGenerateConfigRankingReportTable2:
 class TestGenerateConfigRankingReportSensitivity:
     """generate_config_ranking_report renders SENSITIVITY section only when panel provided."""
 
-    def _make_sweep_one(self) -> "RankedSweep":  # type: ignore[name-defined]
+    def _make_sweep_one(self) -> "RankedSweep":
         """A minimal single-config RankedSweep."""
         r = _make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
         return _make_ranked_sweep(results=(r,), pareto=(r.config,))
 
-    def _make_panel(self, sweep: "RankedSweep") -> "SensitivityPanel":  # type: ignore[name-defined]
+    def _make_panel(self, sweep: "RankedSweep") -> "SensitivityPanel":
         """Build a SensitivityPanel with two axes at rank_stability=0.75."""
         top = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
 
@@ -858,7 +858,7 @@ class TestOptimizeCLIHelp:
 
 
 @pytest.fixture(scope="module")
-def optimize_fleet_results() -> "FleetResults":  # type: ignore[name-defined]
+def optimize_fleet_results() -> "FleetResults":
     """Module-scoped fixture: build constant feasible FleetResults once per module.
 
     Building once avoids reconstructing ~9 MB of per-minute Series for each
@@ -878,7 +878,7 @@ class TestOptimizeCLIE2EFast:
     @staticmethod
     def _invoke_configs(
         tmp_path: "Path",
-        fleet_results: "FleetResults",  # type: ignore[name-defined]
+        fleet_results: "FleetResults",
         options: "list[str]",
     ) -> "tuple[object, list[object]]":
         """Run `optimize configs` on a fresh scenario with *options*, answering every fleet simulation with *fleet_results*.
@@ -899,7 +899,7 @@ class TestOptimizeCLIE2EFast:
     def test_optimize_configs_standard_sweep_output(
         self,
         tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
+        optimize_fleet_results: "FleetResults",
     ) -> None:
         """Standard sweep must exit 0 and produce all expected report tokens.
 
@@ -952,7 +952,7 @@ class TestOptimizeCLIE2EFast:
     def test_parse_robustness_single_pv_value_works(
         self,
         tmp_path: "Path",
-        optimize_fleet_results: "FleetResults",  # type: ignore[name-defined]
+        optimize_fleet_results: "FleetResults",
     ) -> None:
         """Single value `--pv 4` (no comma) must parse correctly and succeed.
 

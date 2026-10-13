@@ -72,7 +72,7 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_synthetic_sim_results(n_steps: int = 8760) -> "SimulationResults":  # type: ignore[name-defined]
+def _make_synthetic_sim_results(n_steps: int = 8760) -> "SimulationResults":
     """Build a single deterministic, age-independent SimulationResults.
 
     Uses hourly resolution (n_steps=8760) — energy = sum*(1/60) still correct.
@@ -102,7 +102,7 @@ def _make_synthetic_sim_results(n_steps: int = 8760) -> "SimulationResults":  # 
     )
 
 
-def _synthetic_fleet_results(homes: list) -> "FleetResults":  # type: ignore[name-defined]
+def _synthetic_fleet_results(homes: list) -> "FleetResults":
     """Build a deterministic FleetResults with one SimulationResults per home."""
     per_home = [_make_synthetic_sim_results() for _ in homes]
     return FleetResults(per_home_results=per_home, home_configs=homes)
@@ -136,8 +136,8 @@ def _board_econ_scenario() -> tuple:  # type: ignore[return]
 
 
 def _surplus_at(
-    scenario: "ScenarioConfig",  # type: ignore[name-defined]
-    finance: "FinanceConfig",  # type: ignore[name-defined]
+    scenario: "ScenarioConfig",
+    finance: "FinanceConfig",
     simulate: "Callable",  # type: ignore[name-defined]
 ) -> float:
     """Return mean_fleet_surplus_per_year_gbp from project_economics."""

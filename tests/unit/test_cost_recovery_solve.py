@@ -32,7 +32,7 @@ from tests._finance_builders import make_fleet_results, make_scenario
 class TestCostRecoverySolution:
     """CostRecoverySolution frozen dataclass construction and validation."""
 
-    def _make_valid(self) -> "CostRecoverySolution":  # type: ignore[name-defined]
+    def _make_valid(self) -> "CostRecoverySolution":
         outlay = make_bill_distribution()
         return CostRecoverySolution(
             own_use_rate_pence_per_kwh=15.0,
@@ -181,7 +181,7 @@ def _make_finance(
     retail_baseline_rate: float = 30.0,
     asset_life_years: int = 25,
     n_homes: int = 5,
-) -> "FinanceConfig":  # type: ignore[name-defined]
+) -> "FinanceConfig":
     return FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life_years,
