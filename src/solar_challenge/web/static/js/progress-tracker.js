@@ -19,11 +19,13 @@ document.addEventListener('alpine:init', () => {
                 this.elapsed = Math.floor((Date.now() - startTime) / 1000);
             }, 1000);
             this._stream = new EventSource('/api/jobs/' + jobId + '/progress');
-            this._stream.addEventListener('open', () => { this.reconnecting = false; });
             this._stream.addEventListener('progress', (e) => this._onProgress(e.data));
             this._stream.addEventListener('complete', (e) => this._onComplete(e.data));
-            // An error event is the job's failure, sent as JSON, or, with no data, the stream breaking
-            this._stream.addEventListener('error', (e) => e.data ? this._onFailed(e.data) : this._onDisconnected(e.target.readyState));
+            onJobProgressStreamErrors(this._stream, {
+                failed: (eventData) => this._onFailed(eventData),
+                reconnecting: (reconnecting) => { this.reconnecting = reconnecting; },
+                lost: () => this._onLost(),
+            });
         },
 
         destroy() {
@@ -62,12 +64,7 @@ document.addEventListener('alpine:init', () => {
             this.error = data.message || data.error || 'An unexpected error occurred';
         },
 
-        // The browser reopens a broken stream itself (readyState CONNECTING) unless it gave up on it, as after an HTTP error
-        _onDisconnected(readyState) {
-            if (readyState === EventSource.CONNECTING) {
-                this.reconnecting = true;
-                return;
-            }
+        _onLost() {
             this._stop();
             this.status = 'failed';
             this.error = 'Lost connection to server';

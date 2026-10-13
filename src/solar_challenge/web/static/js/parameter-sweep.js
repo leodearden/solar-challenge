@@ -132,7 +132,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         // Follow one sweep point's job via SSE, writing its status and results into that point's row;
-        // resolves once the job ends, the browser gives its stream up, or signal aborts
+        // resolves once the job ends, the page loses its stream, or signal aborts
         _followPoint(row, signal) {
             return new Promise(resolve => {
                 const es = new EventSource('/api/jobs/' + row.job_id + '/progress');
@@ -162,14 +162,12 @@ document.addEventListener('alpine:init', () => {
                     this._checkAllDone();
                 });
 
-                // An error event is the job's failure, sent as JSON, or, with no data, the stream breaking;
-                // the browser reopens a broken stream itself (readyState CONNECTING), and the reopened stream reports the job
-                es.addEventListener('error', (e) => {
-                    if (!e.data && es.readyState === EventSource.CONNECTING) return;
+                const fail = () => {
                     row.status = 'failed';
                     end();
                     this._checkAllDone();
-                });
+                };
+                onJobProgressStreamErrors(es, { failed: fail, lost: fail });
             });
         },
 

@@ -13,6 +13,8 @@
 
     {% block head %}{% endblock %}
 
+    <!-- onJobProgressStreamErrors, which each script that follows a job's progress stream calls (must load before Alpine core) -->
+    <script defer src="{{ url_for('static', filename='js/job-progress-stream.js') }}"></script>
     <!-- progressTracker, the component templates/simulate/partials/progress-tracker.html opens (must load before Alpine core) -->
     <script defer src="{{ url_for('static', filename='js/progress-tracker.js') }}"></script>
 
