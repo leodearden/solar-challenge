@@ -741,8 +741,6 @@ class TestToolCallNumbersItCannotUse:
         self, tmp_path: Path, tool_name: str, tool_input: dict[str, Any], message: str
     ) -> None:
         """dispatch_tool answers with an error result alone, naming the field and the value sent, and never calls the job manager."""
-        from solar_challenge.web.assistant import dispatch_tool
-
         dependencies = dispatch_dependencies(tmp_path)
         result = dispatch_tool(tool_name, tool_input, **dependencies)
 
@@ -762,7 +760,7 @@ class TestToolCallNumbersItCannotUse:
     ) -> None:
         """The model gets the refusal as its tool_result error, and the turn goes on to its reply
         instead of ending in a streaming error; nothing is submitted."""
-        jm = MagicMock()
+        jm = autospecced_job_manager()
         app.extensions["job_manager"] = jm
 
         anthropic_api.set_streams([

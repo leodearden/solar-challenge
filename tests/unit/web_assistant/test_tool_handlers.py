@@ -827,8 +827,6 @@ class TestRunFleetSimulation:
         self, tmp_path: Path, n_homes: object, message: str
     ) -> None:
         """An n_homes that is not a whole number is refused naming n_homes and the value sent, never read as 1 or truncated; nothing is submitted."""
-        from solar_challenge.web.assistant import run_fleet_simulation
-
         jm = self._make_jm()
         result = run_fleet_simulation(
             {"n_homes": n_homes, "pv_kw": 4, "location": "bristol", "days": 7},
