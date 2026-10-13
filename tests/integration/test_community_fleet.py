@@ -22,6 +22,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.community import (
     CommunityBillingConfig,
     CommunityConfig,
+    CommunityResults,
     simulate_community,
     validate_community_balance,
 )
@@ -180,12 +181,10 @@ class TestGenerateCommunityReport:
 
     @pytest.fixture
     def cr_p2p(self, small_fleet: FleetResults) -> "CommunityResults":  # type: ignore[name-defined]
-        from solar_challenge.community import CommunityResults
         return simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
 
     @pytest.fixture
     def cr_batt(self, small_fleet: FleetResults) -> "CommunityResults":  # type: ignore[name-defined]
-        from solar_challenge.community import CommunityResults
         return simulate_community(
             small_fleet,
             CommunityConfig(
@@ -342,7 +341,6 @@ class TestFleetRunCommunityCLI:
         report_text = tmp_report.read_text()
         # Parse the Grid Import row from the markdown table
         # | Grid Import | <unshared> | <community> | <reduction> |
-        import re
         import_match = re.search(
             r"\|\s*Grid Import\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|", report_text
         )
@@ -621,28 +619,24 @@ class TestCommunityBillingReport:
 
     def test_report_contains_billing_section_header(self, cr_with_billing: object) -> None:
         """Report contains a billing section heading when savings are populated."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
         assert "Community Billing" in report
 
     def test_report_contains_baseline_line(self, cr_with_billing: object) -> None:
         """Report contains a 'Baseline' net cost line."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
         assert "Baseline" in report
 
     def test_report_contains_community_net_line(self, cr_with_billing: object) -> None:
         """Report contains a 'Community Net Cost' row in the billing table."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
         assert "Community Net Cost" in report
 
     def test_report_contains_savings_line(self, cr_with_billing: object) -> None:
         """Report contains a 'Community Savings' row with the exact formatted value."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_with_billing, CommunityResults)
         report = generate_community_report(cr_with_billing)
         assert "Savings" in report
@@ -663,7 +657,6 @@ class TestCommunityBillingReport:
 
     def test_no_billing_section_when_fields_none(self, cr_no_billing: object) -> None:
         """Report does NOT contain billing section when savings fields are None."""
-        from solar_challenge.community import CommunityResults
         assert isinstance(cr_no_billing, CommunityResults)
         assert cr_no_billing.community_savings_gbp is None  # type: ignore[attr-defined]
         report = generate_community_report(cr_no_billing)

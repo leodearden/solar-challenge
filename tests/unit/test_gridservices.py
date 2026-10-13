@@ -7,6 +7,25 @@ import pickle
 import pandas as pd
 import pytest
 
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import ConfigurationError
+from solar_challenge.fleet import FleetResults
+from solar_challenge.gridservices import (
+    DEFAULT_EVENT_WINDOWS,
+    GRID_SERVICES_RATE_BANDS,
+    EventWindow,
+    GridServicesAtEvents,
+    GridServicesEventsConfig,
+    GridServicesRateBand,
+    compute_fleet_spare_capacity_kw,
+    compute_grid_services_at_events,
+    resolve_grid_services_rate_band,
+)
+from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
+from solar_challenge.pv import PVConfig
+
 
 # ---------------------------------------------------------------------------
 # Step-1: EventWindow mask
@@ -18,8 +37,6 @@ class TestEventWindowMask:
 
     def test_event_window_mask_selects_winter_weekday_evening(self) -> None:
         """mask() returns True exactly for winter weekday 16/17/18:xx hours."""
-        from solar_challenge.gridservices import EventWindow  # type: ignore[import]
-
         # Build a tz-aware DatetimeIndex with hand-verifiable points.
         # Dec 2024: Dec 2 = Monday, Dec 7 = Saturday.
         # Jul 2024: Jul 1 = Monday.
@@ -74,8 +91,6 @@ class TestEventWindowMask:
 
     def test_event_window_mask_tz_naive(self) -> None:
         """mask() works on tz-naive DatetimeIndex as well as tz-aware."""
-        from solar_challenge.gridservices import EventWindow
-
         # tz-naive index with same hand-verifiable points
         idx = pd.DatetimeIndex(
             [
@@ -110,33 +125,21 @@ class TestEventWindowValidation:
 
     def test_empty_months_raises(self) -> None:
         """Empty months tuple raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=1.0)
 
     def test_empty_weekdays_raises(self) -> None:
         """Empty weekdays tuple raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(), hours=(16,), events_per_year=1, event_hours=1.0)
 
     def test_empty_hours_raises(self) -> None:
         """Empty hours tuple raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(0,), hours=(), events_per_year=1, event_hours=1.0)
 
     def test_month_out_of_range_raises(self) -> None:
         """Month value outside 1..12 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(0,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=1.0)
         with pytest.raises(ConfigurationError):
@@ -144,9 +147,6 @@ class TestEventWindowValidation:
 
     def test_weekday_out_of_range_raises(self) -> None:
         """Weekday value outside 0..6 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(-1,), hours=(16,), events_per_year=1, event_hours=1.0)
         with pytest.raises(ConfigurationError):
@@ -154,9 +154,6 @@ class TestEventWindowValidation:
 
     def test_hour_out_of_range_raises(self) -> None:
         """Hour value outside 0..23 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(0,), hours=(-1,), events_per_year=1, event_hours=1.0)
         with pytest.raises(ConfigurationError):
@@ -164,48 +161,32 @@ class TestEventWindowValidation:
 
     def test_events_per_year_zero_raises(self) -> None:
         """events_per_year == 0 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=0, event_hours=1.0)
 
     def test_events_per_year_negative_raises(self) -> None:
         """events_per_year < 0 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=-1, event_hours=1.0)
 
     def test_event_hours_zero_raises(self) -> None:
         """event_hours == 0 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=0.0)
 
     def test_event_hours_negative_raises(self) -> None:
         """event_hours < 0 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import EventWindow
-
         with pytest.raises(ConfigurationError):
             EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=-1.0)
 
     def test_valid_event_window_is_frozen(self) -> None:
         """Valid EventWindow is frozen — attribute assignment raises FrozenInstanceError."""
-        from solar_challenge.gridservices import EventWindow
-
         ew = EventWindow(months=(12,), weekdays=(0,), hours=(16,), events_per_year=1, event_hours=1.0)
         with pytest.raises(dataclasses.FrozenInstanceError):
             ew.months = (11,)  # type: ignore[misc]
 
     def test_valid_event_window_is_picklable(self) -> None:
         """Valid EventWindow survives a pickle round-trip equal to the original."""
-        from solar_challenge.gridservices import EventWindow
-
         ew = EventWindow(
             months=(11, 12, 1, 2),
             weekdays=(0, 1, 2, 3, 4),
@@ -226,20 +207,12 @@ class TestGridServicesRateBands:
 
     def test_module_constant_has_three_bands(self) -> None:
         """GRID_SERVICES_RATE_BANDS has resolvable low/central/high bands."""
-        from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
-
         for band_name in ("low", "central", "high"):
             band = GRID_SERVICES_RATE_BANDS.resolve(band_name)
             assert band is not None
 
     def test_resolve_helper_and_constant_agree(self) -> None:
         """resolve_grid_services_rate_band('central') equals GRID_SERVICES_RATE_BANDS.resolve('central')."""
-        from solar_challenge.gridservices import (
-            GRID_SERVICES_RATE_BANDS,
-            GridServicesRateBand,
-            resolve_grid_services_rate_band,
-        )
-
         central_via_helper = resolve_grid_services_rate_band("central")
         central_via_constant = GRID_SERVICES_RATE_BANDS.resolve("central")
         assert central_via_helper == central_via_constant
@@ -247,16 +220,12 @@ class TestGridServicesRateBands:
 
     def test_central_rates_are_positive(self) -> None:
         """Central band availability and utilisation rates are > 0."""
-        from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
-
         central = GRID_SERVICES_RATE_BANDS.resolve("central")
         assert central.availability_gbp_per_kw_per_event > 0
         assert central.utilisation_gbp_per_mwh > 0
 
     def test_low_le_central_le_high_availability(self) -> None:
         """Low <= Central <= High for availability_gbp_per_kw_per_event."""
-        from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
-
         low = GRID_SERVICES_RATE_BANDS.resolve("low")
         central = GRID_SERVICES_RATE_BANDS.resolve("central")
         high = GRID_SERVICES_RATE_BANDS.resolve("high")
@@ -265,8 +234,6 @@ class TestGridServicesRateBands:
 
     def test_low_le_central_le_high_utilisation(self) -> None:
         """Low <= Central <= High for utilisation_gbp_per_mwh."""
-        from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
-
         low = GRID_SERVICES_RATE_BANDS.resolve("low")
         central = GRID_SERVICES_RATE_BANDS.resolve("central")
         high = GRID_SERVICES_RATE_BANDS.resolve("high")
@@ -275,29 +242,21 @@ class TestGridServicesRateBands:
 
     def test_unknown_band_raises_value_error(self) -> None:
         """resolve of an unknown band raises ValueError."""
-        from solar_challenge.gridservices import resolve_grid_services_rate_band
-
         with pytest.raises(ValueError):
             resolve_grid_services_rate_band("extreme")
 
     def test_rate_band_rejects_negative_availability(self) -> None:
         """GridServicesRateBand raises ValueError for negative availability."""
-        from solar_challenge.gridservices import GridServicesRateBand
-
         with pytest.raises(ValueError):
             GridServicesRateBand(availability_gbp_per_kw_per_event=-1.0, utilisation_gbp_per_mwh=5.0)
 
     def test_rate_band_rejects_negative_utilisation(self) -> None:
         """GridServicesRateBand raises ValueError for negative utilisation."""
-        from solar_challenge.gridservices import GridServicesRateBand
-
         with pytest.raises(ValueError):
             GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=-5.0)
 
     def test_rate_band_is_frozen(self) -> None:
         """GridServicesRateBand is frozen — attribute assignment raises FrozenInstanceError."""
-        from solar_challenge.gridservices import GridServicesRateBand
-
         band = GridServicesRateBand(availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=5.0)
         with pytest.raises(dataclasses.FrozenInstanceError):
             band.availability_gbp_per_kw_per_event = 2.0  # type: ignore[misc]
@@ -313,8 +272,6 @@ class TestGridServicesEventsConfigDefaults:
 
     def test_default_event_windows_structure(self) -> None:
         """DEFAULT_EVENT_WINDOWS is a non-empty tuple of EventWindow with the winter schedule."""
-        from solar_challenge.gridservices import DEFAULT_EVENT_WINDOWS, EventWindow
-
         assert isinstance(DEFAULT_EVENT_WINDOWS, tuple)
         assert len(DEFAULT_EVENT_WINDOWS) >= 1
         assert all(isinstance(ew, EventWindow) for ew in DEFAULT_EVENT_WINDOWS)
@@ -328,8 +285,6 @@ class TestGridServicesEventsConfigDefaults:
 
     def test_default_construction(self) -> None:
         """GridServicesEventsConfig() uses all expected defaults."""
-        from solar_challenge.gridservices import DEFAULT_EVENT_WINDOWS, GridServicesEventsConfig
-
         cfg = GridServicesEventsConfig()
         assert cfg.band == "central"
         assert cfg.event_windows == DEFAULT_EVENT_WINDOWS
@@ -340,8 +295,6 @@ class TestGridServicesEventsConfigDefaults:
 
     def test_fully_specified_config_round_trips(self) -> None:
         """All fields survive round-trip when explicitly set."""
-        from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
-
         ews = (EventWindow(months=(12,), weekdays=(0,), hours=(17,), events_per_year=6, event_hours=2.0),)
         cfg = GridServicesEventsConfig(
             band="high",
@@ -360,16 +313,12 @@ class TestGridServicesEventsConfigDefaults:
 
     def test_is_frozen(self) -> None:
         """GridServicesEventsConfig is frozen — assignment raises FrozenInstanceError."""
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         cfg = GridServicesEventsConfig()
         with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.band = "low"  # type: ignore[misc]
 
     def test_is_picklable(self) -> None:
         """GridServicesEventsConfig survives a pickle round-trip equal to the original."""
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         cfg = GridServicesEventsConfig()
         assert pickle.loads(pickle.dumps(cfg)) == cfg
 
@@ -384,101 +333,66 @@ class TestGridServicesEventsConfigValidation:
 
     def test_negative_availability_override_raises(self) -> None:
         """Negative availability_gbp_per_kw_per_event raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(availability_gbp_per_kw_per_event=-0.01)
 
     def test_negative_utilisation_override_raises(self) -> None:
         """Negative utilisation_gbp_per_mwh raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(utilisation_gbp_per_mwh=-1.0)
 
     def test_aggregator_share_negative_raises(self) -> None:
         """aggregator_share < 0 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(aggregator_share=-0.01)
 
     def test_aggregator_share_exactly_one_raises(self) -> None:
         """aggregator_share == 1.0 raises ConfigurationError ([0, 1) bound)."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(aggregator_share=1.0)
 
     def test_aggregator_share_greater_than_one_raises(self) -> None:
         """aggregator_share > 1 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(aggregator_share=1.1)
 
     def test_utilisation_factor_negative_raises(self) -> None:
         """utilisation_factor < 0 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(utilisation_factor=-0.01)
 
     def test_utilisation_factor_greater_than_one_raises(self) -> None:
         """utilisation_factor > 1 raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(utilisation_factor=1.01)
 
     def test_empty_event_windows_raises(self) -> None:
         """Empty event_windows tuple raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(event_windows=())
 
     def test_unknown_band_raises(self) -> None:
         """Unknown band name raises ConfigurationError."""
-        from solar_challenge.config import ConfigurationError
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(band="mid")
 
     def test_aggregator_share_zero_ok(self) -> None:
         """aggregator_share == 0.0 is valid."""
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         cfg = GridServicesEventsConfig(aggregator_share=0.0)
         assert cfg.aggregator_share == 0.0
 
     def test_utilisation_factor_zero_ok(self) -> None:
         """utilisation_factor == 0.0 is valid."""
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         cfg = GridServicesEventsConfig(utilisation_factor=0.0)
         assert cfg.utilisation_factor == 0.0
 
     def test_utilisation_factor_one_ok(self) -> None:
         """utilisation_factor == 1.0 is valid."""
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         cfg = GridServicesEventsConfig(utilisation_factor=1.0)
         assert cfg.utilisation_factor == 1.0
 
     def test_override_rates_zero_ok(self) -> None:
         """Override rates set to 0.0 (non-negative) are accepted."""
-        from solar_challenge.gridservices import GridServicesEventsConfig
-
         cfg = GridServicesEventsConfig(
             availability_gbp_per_kw_per_event=0.0,
             utilisation_gbp_per_mwh=0.0,
@@ -502,8 +416,6 @@ def _make_gs_sim_results(
     All other series are set to zero.  Use this helper for grid-services spare-capacity
     tests that only read battery_soc / battery_discharge.
     """
-    from solar_challenge.home import SimulationResults
-
     zeros = pd.Series(0.0, index=index)
     return SimulationResults(
         generation=zeros.copy(),
@@ -524,8 +436,6 @@ def _make_gs_fleet_results(
     homes_data: "list[tuple]",
 ) -> "FleetResults":  # type: ignore[name-defined]
     """Build a FleetResults from per-home (SimulationResults, HomeConfig) pairs."""
-    from solar_challenge.fleet import FleetResults
-
     per_home = [sim for sim, _ in homes_data]
     configs = [cfg for _, cfg in homes_data]
     return FleetResults(per_home_results=per_home, home_configs=configs)
@@ -535,11 +445,6 @@ def _make_gs_home_config(
     battery_config: "BatteryConfig",  # type: ignore[name-defined]
 ) -> "HomeConfig":  # type: ignore[name-defined]
     """Build a minimal HomeConfig with the given BatteryConfig."""
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.load import LoadConfig
-    from solar_challenge.location import Location
-    from solar_challenge.pv import PVConfig
-
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
         load_config=LoadConfig(annual_consumption_kwh=3500.0),
@@ -574,9 +479,6 @@ class TestComputeFleetSpareCapacityKw:
 
         Total = 2/3
         """
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
-
         # Dec 2 2024 = Monday (weekday=0), December (month=12) — confirmed in existing tests
         idx = pd.DatetimeIndex(
             [
@@ -642,9 +544,6 @@ class TestComputeFleetSpareCapacityKw:
         This exercises the I2 clamping — the clamped min(P_spare, ...) expression
         already handles this; no special-case code is needed.
         """
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
-
         idx = pd.DatetimeIndex(
             ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
             tz="Europe/London",
@@ -680,13 +579,6 @@ class TestComputeFleetSpareCapacityKw:
             soc=[4.0, 3.5, 3.0], discharge=[1.0, 1.5, 0.5]
             P_spare = 1.5, E_spare = 2.0, avail = 2/3
         """
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
-        from solar_challenge.home import HomeConfig
-        from solar_challenge.load import LoadConfig
-        from solar_challenge.location import Location
-        from solar_challenge.pv import PVConfig
-
         idx = pd.DatetimeIndex(
             ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
             tz="Europe/London",
@@ -740,9 +632,6 @@ class TestComputeFleetSpareCapacityKw:
 
         For w2 (empty mask): no timesteps → contributes 0.
         """
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
-
         idx = pd.DatetimeIndex(
             ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
             tz="Europe/London",
@@ -798,9 +687,6 @@ class TestComputeFleetSpareCapacityKw:
             E_spare = min(2.0, 1.5, 1.0) = 1.0
             avail   = min(2.5, 1/3) ≈ 0.333  (different — detectable)
         """
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
-
         idx = pd.DatetimeIndex(
             ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
             tz="Europe/London",
@@ -845,9 +731,6 @@ class TestComputeFleetSpareCapacityKw:
             E_spare = min(2.0-1.0, 0.8-1.0, 2.0-1.0) = min(1.0, -0.2, 1.0) = -0.2
             avail   = max(0.0, min(2.5, -0.2/3.0)) = max(0.0, negative) = 0.0
         """
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import EventWindow, compute_fleet_spare_capacity_kw
-
         idx = pd.DatetimeIndex(
             ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
             tz="Europe/London",
@@ -887,12 +770,10 @@ class TestGridServicesAtEvents:
 
     def test_import(self) -> None:
         """GridServicesAtEvents imports from solar_challenge.gridservices."""
-        from solar_challenge.gridservices import GridServicesAtEvents  # noqa: F401
+        assert GridServicesAtEvents.__module__ == "solar_challenge.gridservices"
 
     def test_fields_round_trip(self) -> None:
         """All three fields survive construction and read back equal to inputs."""
-        from solar_challenge.gridservices import GridServicesAtEvents
-
         obj = GridServicesAtEvents(
             annual_income_gbp=150.0,
             per_window_avail_kw=(1.0, 2.0),
@@ -904,8 +785,6 @@ class TestGridServicesAtEvents:
 
     def test_single_window_fields(self) -> None:
         """Single-window construction works and fields have correct types."""
-        from solar_challenge.gridservices import GridServicesAtEvents
-
         obj = GridServicesAtEvents(
             annual_income_gbp=9.972,
             per_window_avail_kw=(1.0,),
@@ -919,8 +798,6 @@ class TestGridServicesAtEvents:
 
     def test_is_frozen(self) -> None:
         """GridServicesAtEvents is frozen — attribute assignment raises FrozenInstanceError."""
-        from solar_challenge.gridservices import GridServicesAtEvents
-
         obj = GridServicesAtEvents(
             annual_income_gbp=10.0,
             per_window_avail_kw=(1.0,),
@@ -931,8 +808,6 @@ class TestGridServicesAtEvents:
 
     def test_is_picklable(self) -> None:
         """GridServicesAtEvents survives a pickle round-trip equal to the original."""
-        from solar_challenge.gridservices import GridServicesAtEvents
-
         obj = GridServicesAtEvents(
             annual_income_gbp=150.0,
             per_window_avail_kw=(1.5, 2.5),
@@ -955,9 +830,6 @@ class TestComputeGridServicesAtEvents:
 
     def _make_fixture(self):
         """Build a single-home fleet with hand-derived avail_kW=1.0."""
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import EventWindow
-
         idx = pd.DatetimeIndex(
             ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
             tz="Europe/London",
@@ -992,12 +864,6 @@ class TestComputeGridServicesAtEvents:
             gross        = 13.296
             net          = 13.296 * 0.75 = 9.972
         """
-        from solar_challenge.gridservices import (
-            GRID_SERVICES_RATE_BANDS,
-            GridServicesEventsConfig,
-            compute_grid_services_at_events,
-        )
-
         fleet, w = self._make_fixture()
         cfg = GridServicesEventsConfig(band="central", event_windows=(w,))
 
@@ -1019,12 +885,6 @@ class TestComputeGridServicesAtEvents:
 
     def test_per_window_avail_kw_matches_beta(self) -> None:
         """per_window_avail_kw == approx((1.0,)) and matches compute_fleet_spare_capacity_kw."""
-        from solar_challenge.gridservices import (
-            GridServicesEventsConfig,
-            compute_fleet_spare_capacity_kw,
-            compute_grid_services_at_events,
-        )
-
         fleet, w = self._make_fixture()
         cfg = GridServicesEventsConfig(band="central", event_windows=(w,))
 
@@ -1036,11 +896,6 @@ class TestComputeGridServicesAtEvents:
 
     def test_per_window_income_sums_to_annual(self) -> None:
         """len(per_window_income_gbp)==1 and sum(per_window_income_gbp)==annual_income_gbp."""
-        from solar_challenge.gridservices import (
-            GridServicesEventsConfig,
-            compute_grid_services_at_events,
-        )
-
         fleet, w = self._make_fixture()
         cfg = GridServicesEventsConfig(band="central", event_windows=(w,))
 
@@ -1057,13 +912,6 @@ class TestComputeGridServicesAtEvents:
             w2 (N=6,  h=2.0): avail_income=6.0,  util=0.432, gross=6.432,  net=4.824
             annual = 9.972 + 4.824 = 14.796
         """
-        from solar_challenge.gridservices import (
-            GRID_SERVICES_RATE_BANDS,
-            EventWindow,
-            GridServicesEventsConfig,
-            compute_grid_services_at_events,
-        )
-
         fleet, w1 = self._make_fixture()
         w2 = EventWindow(
             months=(12,), weekdays=(0,), hours=(16, 17, 18),
@@ -1097,13 +945,6 @@ class TestComputeGridServicesAtEvents:
 
     def test_zero_spare_fleet_income_is_zero(self) -> None:
         """Floor-pinned home: all income is 0.0 and all per-window entries are 0.0."""
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import (
-            EventWindow,
-            GridServicesEventsConfig,
-            compute_grid_services_at_events,
-        )
-
         idx = pd.DatetimeIndex(
             ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
             tz="Europe/London",
@@ -1133,11 +974,6 @@ class TestComputeGridServicesAtEvents:
 
     def test_aggregator_multiplier(self) -> None:
         """agg=0.0 → full gross income; agg=0.5 → exactly half of agg=0.0 annual."""
-        from solar_challenge.gridservices import (
-            GridServicesEventsConfig,
-            compute_grid_services_at_events,
-        )
-
         fleet, w = self._make_fixture()
 
         cfg_full = GridServicesEventsConfig(
@@ -1168,12 +1004,6 @@ class TestComputeGridServicesAtEvents:
             net          = (24.0 + 3.6) * 1.0 = 27.6
         Central-band-only would give: 1.0*1.0*12 + 1.0*1.0*3.0*(60/1000)*12 = 14.16 (different).
         """
-        from solar_challenge.gridservices import (
-            GRID_SERVICES_RATE_BANDS,
-            GridServicesEventsConfig,
-            compute_grid_services_at_events,
-        )
-
         fleet, w = self._make_fixture()
         cfg = GridServicesEventsConfig(
             band="central",
@@ -1211,12 +1041,6 @@ class TestComputeGridServicesAtEvents:
             util_income  = 1.0 * 1.0 * 3.0 * (60/1000) * 12 = 2.16  (central band)
             net          = 26.16
         """
-        from solar_challenge.gridservices import (
-            GRID_SERVICES_RATE_BANDS,
-            GridServicesEventsConfig,
-            compute_grid_services_at_events,
-        )
-
         fleet, w = self._make_fixture()
         cfg = GridServicesEventsConfig(
             band="central",
@@ -1246,12 +1070,6 @@ class TestComputeGridServicesAtEvents:
             util_income  = 1.0 * 1.0 * 3.0 * (100/1000) * 12 = 3.6  (override)
             net          = 15.6
         """
-        from solar_challenge.gridservices import (
-            GRID_SERVICES_RATE_BANDS,
-            GridServicesEventsConfig,
-            compute_grid_services_at_events,
-        )
-
         fleet, w = self._make_fixture()
         cfg = GridServicesEventsConfig(
             band="central",
@@ -1286,12 +1104,6 @@ class TestComputeGridServicesAtEvents:
         This catches a mis-routing regression (e.g. always using 'central' rates)
         for 'low' and 'high' bands, which the existing single-band tests cannot.
         """
-        from solar_challenge.gridservices import (
-            GRID_SERVICES_RATE_BANDS,
-            GridServicesEventsConfig,
-            compute_grid_services_at_events,
-        )
-
         fleet, w = self._make_fixture()
         cfg = GridServicesEventsConfig(band=band_name, event_windows=(w,))
 
@@ -1334,15 +1146,6 @@ class TestComputeGridServicesAtEvents:
         GRID_SERVICES_RATE_BANDS.resolve('central') — not by calling the SUT —
         so this is a non-tautological assertion that income scales with summed avail.
         """
-        from solar_challenge.battery import BatteryConfig
-        from solar_challenge.gridservices import (
-            GRID_SERVICES_RATE_BANDS,
-            EventWindow,
-            GridServicesEventsConfig,
-            compute_fleet_spare_capacity_kw,
-            compute_grid_services_at_events,
-        )
-
         idx = pd.DatetimeIndex(
             ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
             tz="Europe/London",
