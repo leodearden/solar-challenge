@@ -10,9 +10,10 @@ pytest.importorskip("flask")
 
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
 from solar_challenge.web.shared import NotAJsonObject
 from tests._unusable_numbers import UNUSABLE_NUMBERS
-from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
+from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS, whole_number_forms
 
 _FORMS_THAT_ARE_NOT_JSON_OBJECTS = [
     pytest.param([1], "list", id="array"),
@@ -235,3 +236,12 @@ class TestBuilderFormErrors:
     ) -> None:
         """The dashboard's limit on the number of homes reads a whole float or a numeric string as the number it equals, as the scenario does, so a form sending one within the limit has no reason to be refused."""
         assert builder_form_errors({**_ACCEPTED_FORM, "n_homes": value}) == []
+
+    @pytest.mark.parametrize("value", whole_number_forms(MAX_FLEET_HOMES + 1))
+    def test_a_number_of_homes_above_the_limit_that_is_a_whole_number_in_another_form_is_refused_naming_the_limit(
+        self, value: object
+    ) -> None:
+        """The dashboard's limit on the number of homes reads a whole float or a numeric string as the number it equals, as the scenario does, so one home above the limit sent in any of those forms has the limit's refusal as its one reason."""
+        assert builder_form_errors({**_ACCEPTED_FORM, "n_homes": value}) == [
+            f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."
+        ]
