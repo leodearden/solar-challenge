@@ -30,7 +30,7 @@ from tests._cli_fleet_simulator import invoke_finance_run
 # ---------------------------------------------------------------------------
 
 
-def _make_home_config() -> "HomeConfig":
+def _make_home_config() -> HomeConfig:
     """Build a minimal HomeConfig for fixture use."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
@@ -44,7 +44,7 @@ def _make_sim_results(
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
     n_minutes: int = 525600,
-) -> "SimulationResults":
+) -> SimulationResults:
     """Build a minimal SimulationResults series."""
     idx = pd.date_range("2024-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
@@ -69,7 +69,7 @@ def _make_sim_results(
     )
 
 
-def _make_fleet_results(n_homes: int = 5) -> "FleetResults":
+def _make_fleet_results(n_homes: int = 5) -> FleetResults:
     """Build a minimal FleetResults for offline testing."""
     homes = [_make_home_config() for _ in range(n_homes)]
     per_home = [_make_sim_results() for _ in range(n_homes)]
@@ -77,12 +77,12 @@ def _make_fleet_results(n_homes: int = 5) -> "FleetResults":
 
 
 def _write_scenario(
-    tmp_path: "Path",
+    tmp_path: Path,
     *,
     name: str = "Flex CLI Test",
-    flex_band: "str | None" = None,
+    flex_band: str | None = None,
     n_homes: int = 5,
-) -> "Path":
+) -> Path:
     """Write a minimal fleet scenario YAML to tmp_path.
 
     When flex_band is not None, the top-level ``flex_band`` key is written so
@@ -121,7 +121,7 @@ def _write_scenario(
 
 
 @pytest.fixture(scope="module")
-def flex_fleet_results() -> "FleetResults":
+def flex_fleet_results() -> FleetResults:
     """Module-scoped: build FleetResults once per module."""
     return _make_fleet_results()
 
@@ -156,7 +156,7 @@ class TestFinanceFlexCLIBehaviour:
     """CLI-level behaviour tests for --flex-band wiring (offline, injected fleet simulator)."""
 
     def test_flex_band_central_renders_block(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """--flex-band central must render the Flexibility Value block with central figures.
 
@@ -182,7 +182,7 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_flex_band_cli_flag_overrides_scenario_key(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """CLI --flex-band flag must take precedence over scenario-level flex_band key.
 
@@ -207,7 +207,7 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_no_flex_band_omits_block(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """Default (no --flex-band, no scenario flex_band key) must omit the flex block.
 
@@ -227,7 +227,7 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_invalid_flex_band_exits_nonzero(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """--flex-band bogus must exit with a non-zero code.
 
@@ -246,7 +246,7 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_invalid_scenario_flex_band_exits_nonzero(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """A scenario-level flex_band with an unknown value must exit non-zero.
 
@@ -266,7 +266,7 @@ class TestFinanceFlexCLIBehaviour:
         )
 
     def test_scenario_flex_band_case_insensitive(
-        self, tmp_path: "Path", flex_fleet_results: "FleetResults"
+        self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """Scenario-level flex_band with mixed case (e.g. 'Central') must work.
 
@@ -305,7 +305,7 @@ class TestFinanceFlexNamedScenario:
     """
 
     def test_bristol_flex_scenario_renders_central_block(
-        self, tmp_path: "Path"
+        self, tmp_path: Path
     ) -> None:
         """finance run scenarios/bristol-phase1-flex.yaml → Flexibility Value block with 'central'."""
         scenario_path = Path("scenarios/bristol-phase1-flex.yaml")

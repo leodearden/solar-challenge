@@ -30,7 +30,7 @@ from solar_challenge.config import ConfigurationError
 
 def test_finance_config_defined_in_finance_module() -> None:
     """FinanceConfig.__module__ must be 'solar_challenge.finance' (not config)."""
-    fc_cls = finance.FinanceConfig  # AttributeError pre-move => RED
+    fc_cls = finance.FinanceConfig
     assert fc_cls.__module__ == "solar_challenge.finance", (
         f"Expected __module__=='solar_challenge.finance', got '{fc_cls.__module__}'"
     )

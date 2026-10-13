@@ -44,7 +44,7 @@ def _make_full_year_and_short_window_fleets() -> tuple:
     )
     finance = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=10.0)
 
-    def fleet_over(window_days: int) -> "FleetResults":
+    def fleet_over(window_days: int) -> FleetResults:
         share_of_year = window_days / 365
         return make_fleet_results(
             homes=scenario.homes,
@@ -78,7 +78,7 @@ class TestProjectMultiYearAnnualisesShortWindow:
         ],
     )
     def test_short_window_projects_the_equivalent_full_year_curve(
-        self, self_consumption_override: "float | None"
+        self, self_consumption_override: float | None
     ) -> None:
         """Every YearPoint field, energy, revenue and SOH alike, matches the full-year curve."""
         scenario, finance, battery_config, fleet_full_year, fleet_short = (

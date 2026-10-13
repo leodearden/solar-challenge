@@ -102,7 +102,7 @@ _FIN_SCF = 0.70
 def _make_home_config_fin(
     pv_kwp: float = 5.5,
     battery_kwh: float = 5.0,
-) -> "HomeConfig":
+) -> HomeConfig:
     """Build a [FIN]-aligned HomeConfig (5.5 kWp + 5.0 kWh, Bristol defaults)."""
     pv = PVConfig(capacity_kw=pv_kwp, azimuth=180, tilt=35)
     load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
@@ -114,7 +114,7 @@ def _make_scenario_fin(
     n_homes: int = 100,
     pv_kwp: float = 5.5,
     battery_kwh: float = 5.0,
-) -> "ScenarioConfig":
+) -> ScenarioConfig:
     """Build a homogeneous [FIN]-aligned ScenarioConfig for calibration tests."""
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
     homes = [_make_home_config_fin(pv_kwp=pv_kwp, battery_kwh=battery_kwh)
@@ -125,7 +125,7 @@ def _make_scenario_fin(
 def _make_finance_fin(
     *,
     self_consumption_override: float = _FIN_SCF,
-) -> "FinanceConfig":
+) -> FinanceConfig:
     """Build the [FIN]-aligned FinanceConfig with named-cell defaults."""
     return FinanceConfig(
         standing_charge_pence_per_day=60.0,
@@ -155,7 +155,7 @@ class TestSpreadsheetRevenueCurve:
     MultiYearCurve without running the physics simulator.
     """
 
-    def _call(self, **kwargs: object) -> "MultiYearCurve":
+    def _call(self, **kwargs: object) -> MultiYearCurve:
         """Call spreadsheet_revenue_curve with default [FIN] params unless overridden."""
         defaults: dict = dict(
             n_homes=100,
@@ -287,7 +287,7 @@ class TestFinCalibrationScenarioParses:
 
     _SCENARIO_PATH = "scenarios/bristol-fin-calibration.yaml"
 
-    def _load_finance(self) -> "FinanceConfig":
+    def _load_finance(self) -> FinanceConfig:
         """Parse the finance block from the calibration scenario YAML."""
         path = Path(self._SCENARIO_PATH)
         if not path.exists():
@@ -409,7 +409,7 @@ class TestCalibrationCapexMethodAgreement:
     - Delta = £125,000 = 100 × 5 kWh × £250 (pure battery-size, §2.3)
     """
 
-    def _make_spreadsheet_curve(self, asset_life_years: int = 25) -> "MultiYearCurve":
+    def _make_spreadsheet_curve(self, asset_life_years: int = 25) -> MultiYearCurve:
         """Build the [FIN]-assumption spreadsheet revenue curve."""
         return spreadsheet_revenue_curve(
             n_homes=100,
@@ -531,7 +531,7 @@ class TestCalibrationDscrIrrMethodAgreement:
     See docs/finance-spreadsheet-reconciliation.md for full rationale.
     """
 
-    def _build_econ(self) -> "ProjectEconomics":
+    def _build_econ(self) -> ProjectEconomics:
         """Build [FIN]-assumption ProjectEconomics for DSCR/IRR tests."""
         curve = spreadsheet_revenue_curve(
             n_homes=100,
@@ -597,7 +597,7 @@ class TestCalibrationG6Guards:
     (3) No assertion compares physics results to the named spreadsheet cells.
     """
 
-    def _build_spreadsheet_econ(self) -> "ProjectEconomics":
+    def _build_spreadsheet_econ(self) -> ProjectEconomics:
         """Build spreadsheet-input ProjectEconomics."""
         curve = spreadsheet_revenue_curve(
             n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,

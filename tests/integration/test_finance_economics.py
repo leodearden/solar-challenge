@@ -48,7 +48,7 @@ from tests._finance_builders import make_fleet_results
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
 
-def _make_point(year: int, revenue: float) -> "YearPoint":
+def _make_point(year: int, revenue: float) -> YearPoint:
     """Build a synthetic YearPoint with given year and fleet_revenue_gbp."""
     return YearPoint(
         year=year,
@@ -61,7 +61,7 @@ def _make_point(year: int, revenue: float) -> "YearPoint":
     )
 
 
-def _make_curve(revenues: list[float]) -> "MultiYearCurve":
+def _make_curve(revenues: list[float]) -> MultiYearCurve:
     """Build a synthetic MultiYearCurve with given per-year revenues."""
     points = tuple(_make_point(y, rev) for y, rev in enumerate(revenues))
     return MultiYearCurve(
@@ -75,7 +75,7 @@ def _make_home_config(
     pv_kwp: float,
     battery_kwh: Optional[float] = None,
     inverter_kw: Optional[float] = None,
-) -> "HomeConfig":
+) -> HomeConfig:
     """Build a minimal HomeConfig for economics tests."""
     pv = PVConfig(capacity_kw=pv_kwp, inverter_capacity_kw=inverter_kw)
     load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
@@ -85,7 +85,7 @@ def _make_home_config(
 
 def _make_scenario(
     homes: Optional[list] = None,
-) -> "ScenarioConfig":
+) -> ScenarioConfig:
     """Build a minimal ScenarioConfig for economics tests."""
     period = SimulationPeriod(
         start_date="2024-01-01",
@@ -112,7 +112,7 @@ def _make_finance(
     loan_rate: float = 0.07,
     opex_per_home_per_year_gbp: float = 131.0,
     asset_life_years: int = 25,
-) -> "FinanceConfig":
+) -> FinanceConfig:
     """Build a FinanceConfig for economics tests."""
     return FinanceConfig(
         standing_charge_pence_per_day=60.0,
@@ -142,7 +142,7 @@ class TestProjectEconomicsDataclass:
         *,
         per_year_surplus: tuple = (100.0, 200.0, 300.0),
         payback_years: Optional[float] = 5.0,
-    ) -> "ProjectEconomics":
+    ) -> ProjectEconomics:
         """Build a synthetic ProjectEconomics."""
         return ProjectEconomics(
             total_capex_gbp=50000.0,
@@ -764,7 +764,7 @@ def _make_project_economics(
     payback_years: Optional[float] = 10.0,
     equity_irr: float = 0.08,
     fleet_opex_gbp: float = 12000.0,
-) -> "ProjectEconomics":
+) -> ProjectEconomics:
     """Build a synthetic ProjectEconomics for report tests."""
     return ProjectEconomics(
         total_capex_gbp=250000.0,
@@ -914,7 +914,7 @@ class TestFinanceProjectCLI:
         assert result.exit_code == 0, result.output
         assert "--project" in result.output
 
-    def test_project_without_finance_block_exits_nonzero(self, tmp_path: "Path") -> None:
+    def test_project_without_finance_block_exits_nonzero(self, tmp_path: Path) -> None:
         """Invoking `finance run --project` on a scenario WITHOUT a finance: block exits non-zero."""
         # Minimal scenario without finance:
         scenario = {
@@ -940,7 +940,7 @@ class TestFinanceProjectCLI:
         assert result.exit_code != 0
 
     def test_project_renders_the_economics_block_from_the_injected_fleet_simulator(
-        self, tmp_path: "Path"
+        self, tmp_path: Path
     ) -> None:
         """`finance run --project` must render the Project Economics block."""
         scenario = {

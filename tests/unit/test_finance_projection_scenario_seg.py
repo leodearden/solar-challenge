@@ -94,7 +94,7 @@ def _seg_aware_fleet_results_factory(
     export_kwh: float = 5.0,
     import_kwh: float = 3.0,
     n_minutes: int = 1440,
-) -> "Callable":
+) -> Callable:
     """Return a simulate closure that prices export_revenue from each home's seg_tariff.
 
     Mirrors home.py:336-349 (Task-85 zeroing): export_revenue is non-zero only
@@ -104,9 +104,9 @@ def _seg_aware_fleet_results_factory(
     """
     def _simulate(
         fleet_config: "FleetConfig",  # type: ignore[name-defined]
-        start: "pd.Timestamp",
-        end: "pd.Timestamp",
-    ) -> "FleetResults":
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+    ) -> FleetResults:
         idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
         sc_kw = self_kwh / (n_minutes / 60.0)
         exp_kw = export_kwh / (n_minutes / 60.0)
@@ -120,7 +120,7 @@ def _seg_aware_fleet_results_factory(
             # Price export_revenue from seg_tariff if set (mirrors Task-85 zeroing in home.py)
             if home.seg_tariff is not None:
                 rev_per_min = exp_kw / 60.0 * home.seg_tariff.rate_pence_per_kwh / 100.0
-                export_rev: "pd.Series" = pd.Series(rev_per_min, index=idx)
+                export_rev: pd.Series = pd.Series(rev_per_min, index=idx)
             else:
                 export_rev = zeros.copy()
 
