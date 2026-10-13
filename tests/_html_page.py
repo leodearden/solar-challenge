@@ -2,8 +2,8 @@
 """Structured read access to a rendered HTML page: the document type it declares, its
 elements with the attributes and ids they carry, the texts it shows, its headings, the
 text of its scripts and the ids its renderChart calls draw into, in document order, the
-figure the call drawing into an id passes, and how many times each of some given texts
-occurs among them.
+figure the call drawing into an id passes, the figure each of its chart containers
+carries, and how many times each of some given texts occurs among them.
 
 A text is one run of character data between two tags, outside script and style elements,
 with character references decoded and whitespace collapsed. Blank runs are dropped, and an
@@ -14,8 +14,9 @@ repeats an attribute carries only its first value, as HTML reads it.
 Usage::
 
     from tests._html_page import (
-        counts_of, doctype, element_attributes, element_count, element_ids, headings,
-        render_chart_figure, render_chart_targets, script_texts, texts, texts_after,
+        chart_figures, counts_of, doctype, element_attributes, element_count, element_ids,
+        headings, render_chart_figure, render_chart_targets, script_texts, texts,
+        texts_after,
     )
 
     page = response.get_data(as_text=True)
@@ -29,6 +30,7 @@ Usage::
     subjects = ("PV Capacity", "Battery Capacity")
     assert counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
     inline_scripts = [text for text in script_texts(page) if text]
+    figure = chart_figures(page)["chart-battery-soc"]
     assert "chart-sankey" in render_chart_targets(page)
     figure = render_chart_figure(page, "chart-battery-soc")
 """
@@ -192,6 +194,34 @@ def counts_of(items: Sequence[str], keys: tuple[str, ...]) -> dict[str, int]:
 def script_texts(page: str) -> list[str]:
     """The text of each script element of *page*, in document order; an external script's text is ''."""
     return _read(page).script_texts
+
+
+def chart_figures(page: str) -> dict[str, str]:
+    """The figure each chart container of *page* carries, keyed by the container's id.
+
+    A chart container is an element with a data-chart-figure attribute, which
+    static/js/chart-renderer.js draws; its value, with character references decoded,
+    is the figure's JSON text. An element inside script text does not count. Raises
+    ValueError, rather than drop or overwrite a container, when one carries no id, a
+    valueless data-chart-figure, or an id another container carries.
+    """
+    figures: dict[str, str] = {}
+    for _, carried in _read(page).elements:
+        if "data-chart-figure" not in carried:
+            continue
+        chart_id, figure = carried.get("id"), carried["data-chart-figure"]
+        if chart_id is None:
+            raise ValueError("Expected each chart container to carry an id; one carries no id")
+        if figure is None:
+            raise ValueError(
+                f"Expected chart container {chart_id!r} to carry a figure; its data-chart-figure is valueless"
+            )
+        if chart_id in figures:
+            raise ValueError(
+                f"Expected each chart container's id on only one container; {chart_id!r} is on more than one"
+            )
+        figures[chart_id] = figure
+    return figures
 
 
 def render_chart_targets(page: str) -> list[str]:
