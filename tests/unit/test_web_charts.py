@@ -27,7 +27,7 @@ from solar_challenge.web.charts import (
 from solar_challenge.web.simulation_params import parse_home_config
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
-from tests._plotly_figure import annotation_texts, sankey_link_values, traces_by_name
+from tests._plotly_figure import annotation_texts, sankey_link_values, traces, traces_by_name
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
@@ -280,22 +280,22 @@ class TestChartTotals:
         charts = heat_pump_analysis(_steady_run(1, heat_pump_kw=1.5, demand_kw=4.0))
         assert charts is not None
 
-        pie = json.loads(charts.load_share_chart)["data"][0]
+        pie = traces(charts.load_share_chart)[0]
 
         # 1.5 kW × 24 h of heat pump, and 4 kW × 24 h of demand less that.
         assert pie["labels"] == ["Heat Pump", "Other Demand"]
         assert pie["values"] == [36.0, 60.0]
 
     def test_financial_bars_are_each_days_pounds(self) -> None:
-        traces = traces_by_name(
+        by_name = traces_by_name(
             financial_breakdown(_steady_run(2, import_cost_gbp=0.002, export_revenue_gbp=0.001))
         )
 
         # £0.002 and £0.001 a minute, for 1440 minutes a day.
-        assert traces["Daily Cost"]["x"] == ["2024-06-01", "2024-06-02"]
-        assert traces["Daily Cost"]["y"] == [2.88, 2.88]
-        assert traces["Daily Revenue"]["y"] == [1.44, 1.44]
-        assert traces["Cumulative Net Savings"]["y"] == [-1.44, -2.88]
+        assert by_name["Daily Cost"]["x"] == ["2024-06-01", "2024-06-02"]
+        assert by_name["Daily Cost"]["y"] == [2.88, 2.88]
+        assert by_name["Daily Revenue"]["y"] == [1.44, 1.44]
+        assert by_name["Cumulative Net Savings"]["y"] == [-1.44, -2.88]
 
 
 class TestFinancialBreakdownPricing:
@@ -307,10 +307,10 @@ class TestFinancialBreakdownPricing:
             days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
         )
 
-        traces = traces_by_name(financial_breakdown(results))
+        by_name = traces_by_name(financial_breakdown(results))
 
-        assert traces["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
-        assert traces["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
+        assert by_name["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
+        assert by_name["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
 
     def test_an_unpriced_run_is_drawn_at_zero_pounds_though_it_imports_and_exports(self) -> None:
         results = make_sinusoidal_sim_results(days=2)
@@ -319,10 +319,10 @@ class TestFinancialBreakdownPricing:
         assert peak_import_kw > 0
         assert peak_export_kw > 0
 
-        traces = traces_by_name(financial_breakdown(results))
+        by_name = traces_by_name(financial_breakdown(results))
 
-        assert traces["Daily Cost"]["y"] == [0.0, 0.0]
-        assert traces["Daily Revenue"]["y"] == [0.0, 0.0]
+        assert by_name["Daily Cost"]["y"] == [0.0, 0.0]
+        assert by_name["Daily Revenue"]["y"] == [0.0, 0.0]
 
 
 class TestFinancialBreakdownNoTariffAnnotation:

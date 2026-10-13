@@ -5,7 +5,6 @@ instants, because one rule picks the windows.
 """
 
 import dataclasses
-import json
 from typing import Any
 
 import numpy as np
@@ -24,6 +23,7 @@ from solar_challenge.web.charts import (
     power_flow_timeline,
 )
 from tests._finance_builders import make_fleet_results_of, make_sim_results
+from tests._plotly_figure import traces
 
 _TEN_KWH_BATTERY = BatteryConfig(capacity_kwh=10.0)
 
@@ -41,7 +41,7 @@ def _with_rising_soc(results: SimulationResults) -> SimulationResults:
 
 def _soc_trace(results: SimulationResults) -> dict[str, Any]:
     """The battery SOC trace that battery_soc_chart draws for *results*."""
-    return json.loads(battery_soc_chart(results, battery_config=_TEN_KWH_BATTERY))["data"][0]
+    return traces(battery_soc_chart(results, battery_config=_TEN_KWH_BATTERY))[0]
 
 
 @pytest.mark.parametrize("steps", [48, 2000])
@@ -87,7 +87,7 @@ def test_every_chart_of_a_runs_time_series_draws_it_at_the_same_instants() -> No
         "fleet_grid_impact": fleet_grid_impact(fleet),
     }
     instants = {
-        name: {tuple(trace["x"]) for trace in json.loads(figure)["data"]}
+        name: {tuple(trace["x"]) for trace in traces(figure)}
         for name, figure in figures.items()
     }
 
