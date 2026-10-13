@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a figure's traces, keyed by name, and the texts of its annotations; a Sankey's nodes and links; and the colours a figure writes.
+"""Unit tests for tests/_plotly_figure.py, the reader of a chart builder's Plotly figure JSON: a figure's traces, in drawing order or keyed by name, and the texts of its annotations; a Sankey's nodes and links; and the colours a figure writes.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a chart test that uses it pass vacuously.
@@ -19,6 +19,7 @@ from tests._plotly_figure import (
     sankey_link_colours,
     sankey_link_values,
     sankey_node_colours,
+    traces,
     traces_by_name,
 )
 
@@ -60,6 +61,20 @@ _LINK_READERS = [
     pytest.param(sankey_link_colours, id="sankey_link_colours"),
 ]
 _READERS = [*_LINK_READERS, pytest.param(sankey_node_colours, id="sankey_node_colours")]
+
+
+def test_traces_lists_each_trace_as_written_in_the_order_the_figure_draws_them() -> None:
+    """The heatmap has no name, which traces, unlike traces_by_name, does not need."""
+    generation = {"type": "box", "name": "Generation", "y": [72.0, 8.0]}
+    heatmap = {"type": "heatmap", "x": ["Generation"], "y": ["Home 1", "Home 2"], "z": [[72.0], [8.0]]}
+    demand = {"type": "box", "name": "Demand", "y": [45.0, 46.0]}
+
+    assert traces(_figure(generation, heatmap, demand)) == [generation, heatmap, demand]
+
+
+def test_a_figure_with_no_data_has_no_traces() -> None:
+    """sankey_diagram returns "{}" when it draws no flow."""
+    assert traces("{}") == []
 
 
 def test_traces_by_name_keys_each_trace_as_written_by_its_name() -> None:
