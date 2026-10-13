@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable, Mapping
 from urllib.parse import urlsplit
 
-from playwright.sync_api import Request, Route
+from playwright.sync_api import Error, Request, Route
 
 _JOB_REQUEST_PATH = re.compile(r"/api/jobs/(?P<job_id>[^/]+)/[^/]+")
 
@@ -24,10 +24,15 @@ def is_job_request(job_id: str, endpoint: str) -> Callable[[Request], bool]:
 
 
 def _wait_until_received_or_dropped(request: Request) -> None:
-    """Return once the page has received the whole answer to request, or at once if it dropped the request unanswered."""
+    """Return once the page has received the whole answer to request, or once it has dropped the request, before the answer or while receiving it."""
     response = request.response()
-    if response is not None:
+    if response is None:
+        return
+    try:
         response.body()
+    except Error:
+        if request.failure is None:
+            raise
 
 
 def _job_id_of(request: Request) -> str:
