@@ -13,7 +13,23 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import pandas as pd
 import pytest
+
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import (
+    ScenarioConfig,
+    SimulationPeriod,
+    load_config,
+    load_fleet_config,
+    parse_finance_config,
+)
+from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
+from solar_challenge.fleet import FleetResults
+from solar_challenge.flex import resolve_grid_services_band
+from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
 
 pytestmark = pytest.mark.integration
 
@@ -34,9 +50,6 @@ def test_board_scenario_grid_services_filled_from_central_band() -> None:
     Also asserts the scenario's flex_band key lowers to "central" to document
     provenance: the value derives from this band.
     """
-    from solar_challenge.config import load_config, parse_finance_config
-    from solar_challenge.flex import resolve_grid_services_band
-
     cfg = load_config(SCENARIO)
 
     # Provenance: the YAML's flex_band must be "central"
@@ -65,9 +78,6 @@ def _make_synthetic_sim_results(n_steps: int = 8760) -> "SimulationResults":  # 
     Uses hourly resolution (n_steps=8760) — energy = sum*(1/60) still correct.
     All arrays are constant scalars; no PVGIS, no stochastic load.
     """
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
     sc_kw = 2000.0 / (n_steps / 60.0)
     exp_kw = 800.0 / (n_steps / 60.0)
@@ -94,8 +104,6 @@ def _make_synthetic_sim_results(n_steps: int = 8760) -> "SimulationResults":  # 
 
 def _synthetic_fleet_results(homes: list) -> "FleetResults":  # type: ignore[name-defined]
     """Build a deterministic FleetResults with one SimulationResults per home."""
-    from solar_challenge.fleet import FleetResults
-
     per_home = [_make_synthetic_sim_results() for _ in homes]
     return FleetResults(per_home_results=per_home, home_configs=homes)
 
@@ -111,14 +119,6 @@ def _board_econ_scenario() -> tuple:  # type: ignore[return]
     Mirrors the canonical consumer path in cli/finance.py:
       load_config → parse_finance_config → load_fleet_config → ScenarioConfig
     """
-    from solar_challenge.config import (
-        ScenarioConfig,
-        SimulationPeriod,
-        load_config,
-        load_fleet_config,
-        parse_finance_config,
-    )
-
     cfg = load_config(SCENARIO)
     finance = parse_finance_config(cfg.get("finance"))
     # The board YAML ships capacity_at_events after task-76 ε flip; pin flat
@@ -141,8 +141,6 @@ def _surplus_at(
     simulate: "Callable",  # type: ignore[name-defined]
 ) -> float:
     """Return mean_fleet_surplus_per_year_gbp from project_economics."""
-    from solar_challenge.finance import project_economics, project_multi_year
-
     curve = project_multi_year(scenario, finance, simulate=simulate)
     return project_economics(curve, scenario, finance).mean_fleet_surplus_per_year_gbp
 
@@ -159,8 +157,6 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
     Uses constant simulate (PVGIS-free, age-independent) → exact delta to rel=1e-9.
     The board fleet has 100 homes × 2.5 kW battery → Σ = 250 kW.
     """
-    from solar_challenge.flex import resolve_grid_services_band
-
     scenario, finance_loaded = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
@@ -203,8 +199,6 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
     Additionally asserts strict monotonicity: surplus(low) < surplus(central) < surplus(high).
     """
-    from solar_challenge.flex import resolve_grid_services_band
-
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
@@ -266,9 +260,6 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     from 0.0, or that has the parser supply its own value for an omitted key,
     would be caught here.
     """
-    from solar_challenge.config import load_config, parse_finance_config
-    from solar_challenge.finance import FinanceConfig
-
     scenario, finance_base = _board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
@@ -341,16 +332,6 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     With central grid_services: surplus − surplus(0.0) == central × 2.5 == £30.
     Proves only the battery home contributes to Σ max_discharge_kw.
     """
-    from solar_challenge.battery import BatteryConfig  # type: ignore[attr-defined]
-    from solar_challenge.config import (  # type: ignore[attr-defined]
-        ScenarioConfig,
-        SimulationPeriod,
-    )
-    from solar_challenge.flex import resolve_grid_services_band
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.load import LoadConfig
-    from solar_challenge.pv import PVConfig
-
     # Build a 2-home scenario: home_a has battery, home_b does not
     pv = PVConfig(capacity_kw=5.0, azimuth=180, tilt=35)
     load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
@@ -372,7 +353,6 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     simulate = _constant_simulate(fr)
 
     # Finance config: board-like but with controllable grid_services
-    from solar_challenge.config import load_config, parse_finance_config
     cfg = load_config(SCENARIO)
     finance_base = parse_finance_config(cfg.get("finance"))
     assert finance_base is not None

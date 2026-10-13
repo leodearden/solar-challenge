@@ -9,8 +9,21 @@ in the offline verify loop.
 """
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
+import pandas as pd
+import pytest
+import yaml
+from typer.testing import CliRunner
+
+from solar_challenge.cli.main import app
+from solar_challenge.finance import CostRecoverySolution
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
+from solar_challenge.output import generate_finance_report
+from solar_challenge.pv import PVConfig
 from tests._cli_fleet_simulator import invoke_finance_run
 from tests._factories import make_bill_breakdown, make_bill_distribution
 
@@ -50,8 +63,6 @@ def _make_solution(
     :func:`_make_bill_distribution` is used.  Pass a custom distribution to
     test with values distinct from the main-bill fixture.
     """
-    from solar_challenge.finance import CostRecoverySolution
-
     dist = outlay if outlay is not None else _make_bill_distribution()
     return CostRecoverySolution(
         own_use_rate_pence_per_kwh=own_use_rate,
@@ -75,8 +86,6 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 
     def test_cost_recovery_section_heading_present(self) -> None:
         """Report must contain a Cost-Recovery section heading when cost_recovery is provided."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
 
@@ -88,8 +97,6 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 
     def test_cost_recovery_solved_rate_rendered(self) -> None:
         """Report must show the solved own-use rate."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=18.75, net_surplus=27.0, feasible=True, binding="floor")
 
@@ -101,8 +108,6 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 
     def test_cost_recovery_net_surplus_rendered(self) -> None:
         """Report must show the CBS net surplus per home per year."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
 
@@ -118,8 +123,6 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 
     def test_cost_recovery_feasible_indicator_present(self) -> None:
         """Report must contain a feasibility indicator."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
 
@@ -132,8 +135,6 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 
     def test_cost_recovery_none_produces_identical_report(self) -> None:
         """generate_finance_report(bill) without cost_recovery must match cost_recovery=None."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
 
         report_default = generate_finance_report(bill)
@@ -146,8 +147,6 @@ class TestGenerateFinanceReportCostRecoveryBasic:
 
     def test_cost_recovery_none_omits_section_heading(self) -> None:
         """generate_finance_report without cost_recovery must NOT contain a Cost-Recovery heading."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
 
         report = generate_finance_report(bill)
@@ -167,8 +166,6 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_outlay_distribution_renders(self) -> None:
         """Cost-recovery block must render the per-home total-outlay distribution at solved rate."""
-        from solar_challenge.output import generate_finance_report
-
         # Use distinct cr_outlay values from the main-bill defaults (min=300, mean=367.5,
         # median=367.5, max=420) so each assertion is unambiguously pinned to the CR section.
         cr_outlay = _make_bill_distribution(
@@ -193,8 +190,6 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_representative_outlay_renders(self) -> None:
         """Cost-recovery block must render the representative_outlay_gbp."""
-        from solar_challenge.output import generate_finance_report
-
         # Use a distinct mean_gbp (342.0) so the CR section's £342.00 cannot be
         # confused with the main-bill section's £367.50 (default mean).
         cr_outlay = _make_bill_distribution(mean_gbp=342.0)
@@ -214,8 +209,6 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_saving_vs_baseline_renders(self) -> None:
         """Cost-recovery block must render saving_vs_baseline_gbp."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
         # make_bill_breakdown default: saving_vs_baseline_gbp=132.5 → renders as £132.50
@@ -230,8 +223,6 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_saving_pct_renders(self) -> None:
         """Cost-recovery block must render saving_pct."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
         # make_bill_breakdown default: saving_pct=26.5 → renders as "26.5%" in CR section
@@ -246,8 +237,6 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_binding_floor_label_distinct(self) -> None:
         """binding='floor' must render a 'surplus meets floor' label."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
 
@@ -260,8 +249,6 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_binding_rate_clamped_zero_label_distinct(self) -> None:
         """binding='rate_clamped_zero' must render an over-feasible label."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=0.0, net_surplus=500.0, feasible=True, binding="rate_clamped_zero")
 
@@ -274,8 +261,6 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_binding_infeasible_above_retail_shows_warning(self) -> None:
         """binding='infeasible_above_retail' must render an explicit infeasible warning."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
         sol = _make_solution(own_use_rate=30.0, net_surplus=-50.0, feasible=False, binding="infeasible_above_retail")
 
@@ -289,8 +274,6 @@ class TestGenerateFinanceReportCostRecoveryFull:
 
     def test_three_binding_states_produce_distinct_labels(self) -> None:
         """The three binding states must each produce a distinct human-readable label."""
-        from solar_challenge.output import generate_finance_report
-
         bill = _make_bill_distribution()
 
         sol_floor = _make_solution(own_use_rate=15.0, net_surplus=27.0, feasible=True, binding="floor")
@@ -317,18 +300,12 @@ class TestFinanceCLICostRecoveryHelp:
 
     def test_help_exits_zero(self) -> None:
         """`finance run --help` must exit 0."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--help"])
         assert result.exit_code == 0, result.output
 
     def test_help_shows_cost_recovery_flag(self) -> None:
         """`finance run --help` must show --cost-recovery / --no-cost-recovery."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--help"])
         assert result.exit_code == 0, result.output
@@ -339,9 +316,6 @@ class TestFinanceCLICostRecoveryHelp:
 
     def test_help_cost_recovery_mentions_solved_rate(self) -> None:
         """`finance run --help` cost-recovery flag must mention solved rate or cost-recovery."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--help"])
         assert result.exit_code == 0, result.output
@@ -358,7 +332,6 @@ class TestFinanceCLICostRecoveryHelp:
 
 
 def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignore[name-defined]
-    from solar_challenge.pv import PVConfig
     return PVConfig(
         capacity_kw=4.0,
         azimuth=180.0,
@@ -369,13 +342,10 @@ def _make_pv_config(system_age_years: float = 0.0) -> "PVConfig":  # type: ignor
 
 
 def _make_load_config() -> "LoadConfig":  # type: ignore[name-defined]
-    from solar_challenge.load import LoadConfig
     return LoadConfig(annual_consumption_kwh=3500.0)
 
 
 def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.location import Location
     return HomeConfig(
         pv_config=_make_pv_config(),
         load_config=_make_load_config(),
@@ -389,9 +359,6 @@ def _make_sim_results(
     import_kwh: float = 1200.0,
     n_minutes: int = 525600,
 ) -> "SimulationResults":  # type: ignore[name-defined]
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
     exp_kw = export_kwh / (n_minutes / 60.0)
@@ -429,8 +396,6 @@ def _make_fleet_results_interior(n_homes: int = 5) -> "FleetResults":  # type: i
     solve yields binding='floor', feasible=True, net_surplus == floor (£100/home/yr),
     solved rate ≈ 18.96 p/kWh.
     """
-    from solar_challenge.fleet import FleetResults
-
     homes = [_make_home_config() for _ in range(n_homes)]
     per_home = [
         _make_sim_results(
@@ -446,7 +411,6 @@ def _make_fleet_results_interior(n_homes: int = 5) -> "FleetResults":  # type: i
 
 def _write_interior_scenario(tmp_path: "Path", n_homes: int = 5) -> "Path":  # type: ignore[name-defined]
     """Write a minimal interior-regime scenario YAML to tmp_path."""
-    import yaml
     scenario = {
         "name": "CR5 CLI Test",
         "location": {
@@ -560,10 +524,6 @@ class TestFinanceCLICostRecoverySlowE2E:
 
     def test_cost_recovery_bristol_short_window(self) -> None:
         """E2E: `finance run --cost-recovery scenarios/bristol-phase1.yaml` exits 0 with CR block."""
-        from pathlib import Path
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario = Path("scenarios/bristol-phase1.yaml")
         if not scenario.exists():
             pytest.skip("bristol-phase1.yaml not found")

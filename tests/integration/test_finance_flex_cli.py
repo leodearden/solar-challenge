@@ -9,8 +9,19 @@ INTEGRATION_FILES allow-list.
 """
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
+import pandas as pd
+import pytest
+import yaml
+from typer.testing import CliRunner
+
+from solar_challenge.cli.main import app
+from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
+from solar_challenge.pv import PVConfig
 from tests._cli_fleet_simulator import invoke_finance_run
 
 
@@ -21,11 +32,6 @@ from tests._cli_fleet_simulator import invoke_finance_run
 
 def _make_home_config() -> "HomeConfig":  # type: ignore[name-defined]
     """Build a minimal HomeConfig for fixture use."""
-    from solar_challenge.home import HomeConfig
-    from solar_challenge.load import LoadConfig
-    from solar_challenge.location import Location
-    from solar_challenge.pv import PVConfig
-
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
         load_config=LoadConfig(annual_consumption_kwh=3500.0),
@@ -40,9 +46,6 @@ def _make_sim_results(
     n_minutes: int = 525600,
 ) -> "SimulationResults":  # type: ignore[name-defined]
     """Build a minimal SimulationResults series."""
-    import pandas as pd
-    from solar_challenge.home import SimulationResults
-
     idx = pd.date_range("2024-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
     exp_kw = export_kwh / (n_minutes / 60.0)
@@ -68,8 +71,6 @@ def _make_sim_results(
 
 def _make_fleet_results(n_homes: int = 5) -> "FleetResults":  # type: ignore[name-defined]
     """Build a minimal FleetResults for offline testing."""
-    from solar_challenge.fleet import FleetResults
-
     homes = [_make_home_config() for _ in range(n_homes)]
     per_home = [_make_sim_results() for _ in range(n_homes)]
     return FleetResults(per_home_results=per_home, home_configs=homes)
@@ -87,8 +88,6 @@ def _write_scenario(
     When flex_band is not None, the top-level ``flex_band`` key is written so
     the CLI can pick it up as the scenario-level default.
     """
-    import yaml
-
     scenario: dict = {  # type: ignore[type-arg]
         "name": name,
         "location": {
@@ -137,9 +136,6 @@ class TestFinanceFlexCLIHelp:
 
     def test_help_lists_flex_band_option(self) -> None:
         """finance run --help must mention --flex-band."""
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         runner = CliRunner()
         result = runner.invoke(app, ["finance", "run", "--help"])
 
@@ -237,9 +233,6 @@ class TestFinanceFlexCLIBehaviour:
 
         (d) FlexBand enum gives typer-native rejection; CliRunner must report exit != 0.
         """
-        from typer.testing import CliRunner
-        from solar_challenge.cli.main import app
-
         scenario_file = _write_scenario(tmp_path / "d")
 
         runner = CliRunner()
@@ -315,8 +308,6 @@ class TestFinanceFlexNamedScenario:
         self, tmp_path: "Path"  # type: ignore[name-defined]
     ) -> None:
         """finance run scenarios/bristol-phase1-flex.yaml → Flexibility Value block with 'central'."""
-        from pathlib import Path
-
         scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
         fr = _make_fleet_results()
 
