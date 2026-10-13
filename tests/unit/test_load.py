@@ -6,6 +6,8 @@ import re
 import numpy as np
 import pandas as pd
 import pytest
+import richardsonpy.classes.appliance as _app_mod
+import solar_challenge.load as load_module
 from solar_challenge.load import (
     LoadConfig,
     OFGEM_TDCV_BY_OCCUPANTS,
@@ -392,8 +394,6 @@ class TestWindowedStochasticGeneration:
         365 times regardless of the requested window. The windowed implementation
         must call it exactly window_days times.
         """
-        import richardsonpy.classes.appliance as _app_mod
-
         call_count = [0]
         _original = _app_mod.run_application_simulation
 
@@ -421,8 +421,6 @@ class TestWindowedStochasticGeneration:
         to a constant (365 or otherwise).  Also checks structural invariants on
         the returned Series.
         """
-        import richardsonpy.classes.appliance as _app_mod
-
         call_count = [0]
         _original = _app_mod.run_application_simulation
 
@@ -506,8 +504,6 @@ class TestWindowedStochasticGeneration:
         (the off-by-one bug).  Calendar-date arithmetic gives
         (Apr 1 − Mar 30).days + 1 = 3, which is correct.
         """
-        import richardsonpy.classes.appliance as _app_mod
-
         call_count = [0]
         _original = _app_mod.run_application_simulation
 
@@ -545,8 +541,6 @@ class TestWindowedStochasticGeneration:
 
         The returned profile must still be a valid 1-minute Series (Elexon shape).
         """
-        import solar_challenge.load as load_module
-
         def _always_raise(*args, **kwargs):
             raise RuntimeError("Simulated richardsonpy internal failure")
 

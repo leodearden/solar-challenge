@@ -43,6 +43,8 @@ import types
 from collections.abc import Mapping
 
 import solar_challenge
+import solar_challenge.dispatch as _dispatch
+import solar_challenge.tariff as _tariff
 from tests._surface_forms import (
     member_forms,
     signature_closure,
@@ -648,9 +650,6 @@ def test_tariffperiod_collision_resolved() -> None:
     tariff.TariffPeriod (dataclass) is exposed as TariffPeriod.
     They must be distinct — otherwise one silently shadows the other.
     """
-    import solar_challenge.dispatch as _dispatch
-    import solar_challenge.tariff as _tariff
-
     assert solar_challenge.DispatchTariffPeriod is _dispatch.TariffPeriod, (
         "solar_challenge.DispatchTariffPeriod must be dispatch.TariffPeriod"
     )

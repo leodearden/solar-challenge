@@ -19,6 +19,9 @@ import sys
 
 import pytest
 
+from solar_challenge import finance
+from solar_challenge.config import ConfigurationError
+
 
 # ---------------------------------------------------------------------------
 # 1. FinanceConfig is DEFINED in finance module
@@ -27,9 +30,7 @@ import pytest
 
 def test_finance_config_defined_in_finance_module() -> None:
     """FinanceConfig.__module__ must be 'solar_challenge.finance' (not config)."""
-    import solar_challenge.finance as f  # type: ignore[attr-defined]
-
-    fc_cls = f.FinanceConfig  # AttributeError pre-move => RED
+    fc_cls = finance.FinanceConfig  # AttributeError pre-move => RED
     assert fc_cls.__module__ == "solar_challenge.finance", (
         f"Expected __module__=='solar_challenge.finance', got '{fc_cls.__module__}'"
     )
@@ -83,14 +84,11 @@ def test_both_import_orders_acyclic(prog: str, label: str) -> None:
 
 def test_validation_preserved() -> None:
     """FinanceConfig reachable from finance module; bad vat_rate raises ConfigurationError."""
-    from solar_challenge.config import ConfigurationError
-    import solar_challenge.finance as f  # type: ignore[attr-defined]
-
     # Valid construction — check key defaults
-    fc = f.FinanceConfig(standing_charge_pence_per_day=50.0)
+    fc = finance.FinanceConfig(standing_charge_pence_per_day=50.0)
     assert fc.vat_rate == 0.05
     assert fc.own_use_rate_pence_per_kwh == 15.0
 
     # Validation preserved: vat_rate > 1 must raise ConfigurationError
     with pytest.raises(ConfigurationError):
-        f.FinanceConfig(standing_charge_pence_per_day=50.0, vat_rate=2.0)
+        finance.FinanceConfig(standing_charge_pence_per_day=50.0, vat_rate=2.0)
