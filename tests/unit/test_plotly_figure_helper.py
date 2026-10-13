@@ -92,6 +92,18 @@ def test_two_traces_sharing_a_name_raise_rather_than_keeping_one() -> None:
         traces_by_name(figure)
 
 
+def test_a_trace_without_a_name_raises_rather_than_being_left_out() -> None:
+    """Figure.to_json writes no name for a trace drawn without one."""
+    figure = _figure(
+        {"type": "scatter", "name": "Grid Import", "y": [1.2, 0.0]},
+        {"type": "heatmap", "z": [[1.2, 0.0]]},
+        {"type": "scatter", "name": "Grid Export", "y": [0.0, 0.8]},
+    )
+
+    with pytest.raises(ValueError, match=re.escape("['heatmap']") + "$"):
+        traces_by_name(figure)
+
+
 def test_annotation_texts_lists_each_annotations_text_in_the_order_the_figure_draws_them() -> None:
     """The annotations are written as make_subplots writes its subplot titles, in an order neither sorted nor reverse-sorted."""
     figure = json.dumps(
