@@ -6,7 +6,8 @@ earlier run's progress stream, so the earlier run's end, completed or failed,
 does not show. A run started after a completed one starts its tracker afresh.
 A run whose progress stream disconnects shows it is reconnecting until the
 reopened stream reports the run's end, and a reopened stream the server
-refuses fails the run.
+refuses fails the run, as does a stream that stays broken past the page's
+reconnect limit.
 """
 
 import itertools
@@ -20,6 +21,7 @@ from playwright.sync_api import Page, Route, expect
 from tests.e2e._job_requests import (
     DISCONNECTED_REQUEST_CONSOLE_ERROR,
     HeldJobRequests,
+    fast_forward_by_the_reconnect_limit,
     is_job_request,
     sse_event,
 )
@@ -218,3 +220,33 @@ def test_a_run_whose_reopened_progress_stream_is_refused_is_shown_failed(
     expect(page.get_by_text("Simulation Failed", exact=True)).to_be_visible()
     expect(page.get_by_text("Lost connection to server", exact=True)).to_be_visible()
     expect(reconnecting).to_be_hidden()
+
+
+def test_a_run_whose_progress_stream_stays_broken_past_the_reconnect_limit_is_shown_failed(
+    page: Page,
+    live_server: str,
+    simulate_page: _SimulatePage,
+    running_jobs: HeldJobRequests,
+    page_errors: list[str],
+) -> None:
+    """Run, disconnect job-1's progress stream, and leave the stream the browser reopens unanswered: once the page's reconnect limit has passed, the page drops the stream, and the tracker shows 'Simulation Failed' with 'Lost connection to server', and no longer 'Reconnecting to server...'."""
+    page.clock.install()
+    page.goto(live_server + simulate_page.path)
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        page.get_by_role("button", name=simulate_page.run_button, exact=True).click()
+    reconnecting = page.get_by_text("Reconnecting to server...", exact=True)
+    # The browser reopens the stream it lost
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        running_jobs.disconnect("job-1")
+        expect(reconnecting).to_be_visible()
+
+    with page.expect_event(
+        "requestfailed", predicate=is_job_request("job-1", "progress")
+    ):
+        fast_forward_by_the_reconnect_limit(page)
+    expect(page.get_by_text("Simulation Failed", exact=True)).to_be_visible()
+    expect(page.get_by_text("Lost connection to server", exact=True)).to_be_visible()
+    expect(reconnecting).to_be_hidden()
+    assert page_errors == [DISCONNECTED_REQUEST_CONSOLE_ERROR], (
+        f"Errors on {simulate_page.path}: {page_errors}"
+    )

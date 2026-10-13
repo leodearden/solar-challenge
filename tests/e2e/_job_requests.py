@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Hold the requests a page makes about a background job, /api/jobs/<job_id>/<endpoint>, until the test answers that job or disconnects its requests."""
+"""Hold the requests a page makes about a background job, /api/jobs/<job_id>/<endpoint>, until the test answers that job or disconnects its requests.
+
+Also fast-forwards a page past the time it waits for a disconnected progress stream to reconnect.
+"""
 
 import json
 import re
 from collections.abc import Callable, Mapping
 from urllib.parse import urlsplit
 
-from playwright.sync_api import Error, Request, Route
+from playwright.sync_api import Error, Page, Request, Route
 
 _JOB_REQUEST_PATH = re.compile(r"/api/jobs/(?P<job_id>[^/]+)/[^/]+")
 
@@ -27,6 +30,11 @@ def is_job_request(job_id: str, endpoint: str) -> Callable[[Request], bool]:
     return lambda request: (
         urlsplit(request.url).path == f"/api/jobs/{job_id}/{endpoint}"
     )
+
+
+def fast_forward_by_the_reconnect_limit(page: Page) -> None:
+    """Fast-forward the page's clock, which the test installed before the page loaded, by the time the page waits for a broken progress stream to reconnect before it gives the stream up."""
+    page.clock.fast_forward(page.evaluate("JOB_PROGRESS_RECONNECT_LIMIT_MS"))
 
 
 def _wait_until_received_or_dropped(request: Request) -> None:

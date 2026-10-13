@@ -16,7 +16,8 @@ sweep's results, arriving after a later sweep's rows show, fill none of them,
 and that the page says why when it loses track of a sweep. A point whose
 progress stream disconnects keeps its status, and the page follows it alone
 while the browser reopens the stream; its job's completion on the reopened
-stream fills its row, and a reopened stream the server refuses fails it.
+stream fills its row, and a reopened stream the server refuses fails it, as
+does a stream that stays broken past the page's reconnect limit.
 
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results.
@@ -35,6 +36,7 @@ from tests._server_drawn_badges import server_drawn_classes
 from tests.e2e._job_requests import (
     DISCONNECTED_REQUEST_CONSOLE_ERROR,
     HeldJobRequests,
+    fast_forward_by_the_reconnect_limit,
     is_job_request,
     sse_event,
 )
@@ -454,6 +456,28 @@ def test_a_sweep_point_whose_reopened_progress_stream_is_refused_shows_failed(
         sweep_jobs.progress.answer("sweep-1-point-1", "", status=503)
     expect(_result_rows(page).nth(0).get_by_role("cell")).to_have_text(
         ["1", "-", "-", "-", "failed"]
+    )
+
+
+def test_a_sweep_point_whose_progress_stream_stays_broken_past_the_reconnect_limit_shows_failed(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
+) -> None:
+    """Run a sweep, disconnect its first point's progress stream, and leave the stream the browser reopens unanswered: once the page's reconnect limit has passed, the row shows failed and the page goes on to follow the second point."""
+    page.clock.install()
+    page.goto(live_server + "/scenarios/sweep")
+    with page.expect_request("**/api/jobs/sweep-1-point-1/progress"):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    # The browser reopens the stream it lost
+    with page.expect_request("**/api/jobs/sweep-1-point-1/progress"):
+        sweep_jobs.progress.disconnect("sweep-1-point-1")
+
+    with page.expect_request("**/api/jobs/sweep-1-point-2/progress"):
+        fast_forward_by_the_reconnect_limit(page)
+    expect(_result_rows(page).nth(0).get_by_role("cell")).to_have_text(
+        ["1", "-", "-", "-", "failed"]
+    )
+    assert page_errors == [DISCONNECTED_REQUEST_CONSOLE_ERROR], (
+        f"Errors on /scenarios/sweep: {page_errors}"
     )
 
 
