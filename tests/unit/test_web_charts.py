@@ -27,7 +27,7 @@ from solar_challenge.web.charts import (
 from solar_challenge.web.simulation_params import parse_home_config
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
-from tests._plotly_figure import annotation_texts, sankey_link_values, traces, traces_by_name
+from tests._plotly_figure import annotation_texts, annotations_by_text, sankey_link_values, traces, traces_by_name
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather
 
@@ -199,13 +199,14 @@ class TestBatterySocChartLimitLines:
         self, battery_config: BatteryConfig, limits_kwh: dict[str, float]
     ) -> None:
         """Five years of calendar fade at the default 2% a year leave the last battery at 90% SoH, as the override sets the second's."""
-        layout = json.loads(battery_soc_chart(make_sinusoidal_sim_results(days=1), battery_config))["layout"]
+        figure = battery_soc_chart(make_sinusoidal_sim_results(days=1), battery_config)
+        shapes = json.loads(figure)["layout"]["shapes"]
 
-        assert {annotation["text"]: annotation["y"] for annotation in layout["annotations"]} == pytest.approx(
+        assert {text: annotation["y"] for text, annotation in annotations_by_text(figure).items()} == pytest.approx(
             limits_kwh
         )
-        assert sorted(shape["y0"] for shape in layout["shapes"]) == pytest.approx(sorted(limits_kwh.values()))
-        assert sorted(shape["y1"] for shape in layout["shapes"]) == pytest.approx(sorted(limits_kwh.values()))
+        assert sorted(shape["y0"] for shape in shapes) == pytest.approx(sorted(limits_kwh.values()))
+        assert sorted(shape["y1"] for shape in shapes) == pytest.approx(sorted(limits_kwh.values()))
 
 
 class TestSankeyBatteryCharge:
