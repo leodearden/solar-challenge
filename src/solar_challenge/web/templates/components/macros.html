@@ -87,9 +87,11 @@
 {% endmacro %}
 
 
-{# The titled card of the chart static/js/chart-renderer.js draws from figure; a figure with nothing to draw (none or '{}') gets the card of empty_message instead, or no card #}
+{# The titled card of the chart static/js/chart-renderer.js draws from figure; a figure with nothing to draw (none or '{}') gets the card of empty_message instead, or no card, and an undefined figure, read under a name the page's route never set, fails the render, naming that name #}
 {% macro chart_panel(id, title, figure, min_height, empty_message='') %}
-{% if figure and figure != '{}' %}
+{% if figure is undefined %}
+{{ figure() }}{# calling an undefined raises the UndefinedError that names it #}
+{% elif figure and figure != '{}' %}
 {{ chart_container(id, title, min_height, figure) }}
 {% elif empty_message %}
 {% call card() %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ empty_message }}</p>{% endcall %}
