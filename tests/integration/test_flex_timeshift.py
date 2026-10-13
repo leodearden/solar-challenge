@@ -25,7 +25,7 @@ import pytest
 from solar_challenge.config import load_config, load_fleet_config
 from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
 from solar_challenge.flex import resolve_flex_band
-from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.output import generate_finance_report
 from tests._synthetic_weather import sunless_weather
 
@@ -109,7 +109,7 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     fleet = load_fleet_config(SCENARIO)
 
     # Pick the first battery home deterministically
-    home_on: Optional[object] = None
+    home_on: Optional[HomeConfig] = None
     for h in fleet.homes:
         if h.battery_config is not None:
             home_on = h
@@ -117,13 +117,14 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     assert home_on is not None, "Expected at least one battery home in the flex scenario"
 
     # Derive OFF variant — same as ON but with grid_charging removed
-    off_batt = dataclasses.replace(home_on.battery_config, grid_charging=None)  # type: ignore[union-attr]
+    assert home_on.battery_config is not None
+    off_batt = dataclasses.replace(home_on.battery_config, grid_charging=None)
     home_off = dataclasses.replace(home_on, battery_config=off_batt)
 
     start = end = pd.Timestamp("2024-01-15")
     weather = sunless_weather("2024-01-15", temp_air=8.0)
 
-    res_on = simulate_home(home_on, start, end, weather_data=weather, validate_balance=True)  # type: ignore[arg-type]
+    res_on = simulate_home(home_on, start, end, weather_data=weather, validate_balance=True)
     res_off = simulate_home(home_off, start, end, weather_data=weather, validate_balance=True)
 
     # ---- Corroborating assertions (mechanism must fire) -----------------------
