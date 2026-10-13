@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to the Plotly figure JSON a solar_challenge.web.charts builder returns:
-its traces, keyed by name, and the texts of its layout annotations; the nodes and links of a
-Sankey figure, keyed by node label; and the colours a figure writes, read as red, green and blue.
+its traces, in drawing order or keyed by name, and the texts of its layout annotations; the
+nodes and links of a Sankey figure, keyed by node label; and the colours a figure writes, read
+as red, green and blue.
 
 A colour is written #rrggbb, rgb() or rgba(), in any case and with any whitespace inside the
 parentheses; an alpha is never read.
@@ -15,9 +16,11 @@ Usage::
         sankey_link_colours,
         sankey_link_values,
         sankey_node_colours,
+        traces,
         traces_by_name,
     )
 
+    assert traces(charts.fleet_heatmap(summaries))[0]["y"] == ["Home 1", "Home 2"]
     assert traces_by_name(charts.financial_breakdown(results))["Daily Cost"]["y"] == [2.88, 2.88]
     assert annotation_texts(charts.financial_breakdown(unpriced_results)) == [
         "No tariff configured — cost and revenue tracking unavailable"
@@ -48,17 +51,23 @@ _Key = TypeVar("_Key", bound=Hashable)
 _Value = TypeVar("_Value")
 
 
+def traces(figure: str) -> list[dict[str, Any]]:
+    """Each trace of *figure*, as written, in the order it draws them; [] when it has none."""
+    drawn: list[dict[str, Any]] = json.loads(figure).get("data", [])
+    return drawn
+
+
 def traces_by_name(figure: str) -> dict[str, dict[str, Any]]:
     """Each trace of *figure*, as written, keyed by its name.
 
     Raises ValueError, rather than leave it out, when a trace has no name; and rather than keep
     one, when two traces share a name.
     """
-    traces = _traces(figure)
-    unnamed = [trace.get("type") for trace in traces if "name" not in trace]
+    drawn = traces(figure)
+    unnamed = [trace.get("type") for trace in drawn if "name" not in trace]
     if unnamed:
         raise ValueError(f"Expected each trace to have a name; got unnamed traces of the types {unnamed}")
-    return _keyed([trace["name"] for trace in traces], traces, expected="one trace per name")
+    return _keyed([trace["name"] for trace in drawn], drawn, expected="one trace per name")
 
 
 def annotation_texts(figure: str) -> list[str]:
@@ -125,17 +134,12 @@ def _rgb(match: re.Match[str]) -> Rgb:
     return red, green, blue
 
 
-def _traces(figure: str) -> list[dict[str, Any]]:
-    traces: list[dict[str, Any]] = json.loads(figure).get("data", [])
-    return traces
-
-
 def _sankey_trace(figure: str) -> dict[str, Any]:
-    traces = _traces(figure)
-    types = [trace.get("type") for trace in traces]
+    drawn = traces(figure)
+    types = [trace.get("type") for trace in drawn]
     if types != ["sankey"]:
         raise ValueError(f"Expected a figure of one trace, a Sankey; got traces of the types {types}")
-    return traces[0]
+    return drawn[0]
 
 
 def _by_link(figure: str, attribute: str) -> dict[tuple[str, str], Any]:
