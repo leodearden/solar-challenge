@@ -43,7 +43,7 @@ from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 _N_HOMES = 5  # default fleet size for all sensitivity tests
 
 
-def _make_load_config() -> "LoadConfig":
+def _make_load_config() -> LoadConfig:
     return LoadConfig(annual_consumption_kwh=3500.0)
 
 
@@ -51,7 +51,7 @@ def _make_home_config(
     capacity_kw: float = 4.0,
     system_age_years: float = 0.0,
     with_battery: bool = False,
-) -> "HomeConfig":
+) -> HomeConfig:
     """Build a HomeConfig; pass with_battery=True to include a BatteryConfig."""
     pv = PVConfig(
         capacity_kw=capacity_kw,
@@ -75,7 +75,7 @@ def _make_sim_results(
     import_kwh: float = 1200.0,
     export_revenue_gbp_per_year: float = 0.0,
     n_minutes: int = 525600,  # 365 days
-) -> "SimulationResults":
+) -> SimulationResults:
     idx = pd.date_range("2020-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
     sc_kw = self_kwh / (n_minutes / 60.0)
     exp_kw = export_kwh / (n_minutes / 60.0)
@@ -107,7 +107,7 @@ def _make_fleet_results(
     self_kwh: float = 2000.0,
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
-) -> "FleetResults":
+) -> FleetResults:
     homes = [_make_home_config() for _ in range(n_homes)]
     per_home = [
         _make_sim_results(self_kwh, export_kwh, import_kwh)
@@ -125,7 +125,7 @@ def _make_finance(
     battery_cost_per_kwh_gbp: float = 250.0,
     grid_services_income: float = 0.0,
     asset_life_years: int = 25,
-) -> "FinanceConfig":
+) -> FinanceConfig:
     return FinanceConfig(
         standing_charge_pence_per_day=28.0,
         asset_life_years=asset_life_years,
@@ -146,9 +146,9 @@ def _make_scenario(
     start: str = "2020-01-01",
     end: str = "2020-12-31",
     seg_tariff_pence: float = 5.0,
-    finance: "Optional[FinanceConfig]" = None,
+    finance: Optional[FinanceConfig] = None,
     with_battery: bool = False,
-) -> "ScenarioConfig":
+) -> ScenarioConfig:
     homes = [_make_home_config(with_battery=with_battery) for _ in range(n_homes)]
     return ScenarioConfig(
         name="sensitivity-test",
@@ -160,7 +160,7 @@ def _make_scenario(
     )
 
 
-def _interior_finance() -> "FinanceConfig":
+def _interior_finance() -> FinanceConfig:
     """Finance params that produce an interior 'floor' solve (no grid_services)."""
     return _make_finance(
         pv_cost_per_kwp_gbp=1200.0,
@@ -181,7 +181,7 @@ def _interior_finance() -> "FinanceConfig":
 # hardcodes minutes_to_hours=1/60 and derives sim_days from the index span,
 # so coarsening resolution would silently scale every kWh total by 60× and
 # break the tuned W-H4 coupling constants.
-_CONST_FLEET_RESULTS: "FleetResults" = _make_fleet_results(n_homes=_N_HOMES)
+_CONST_FLEET_RESULTS: FleetResults = _make_fleet_results(n_homes=_N_HOMES)
 
 
 def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
@@ -204,7 +204,7 @@ def _home_seg_rates(homes) -> "list[Optional[float]]":  # type: ignore[no-untype
     ]
 
 
-def _make_seg_priced_scenario(seg_rate: float, finance) -> "ScenarioConfig":  # type: ignore[no-untyped-def]
+def _make_seg_priced_scenario(seg_rate: float, finance) -> ScenarioConfig:  # type: ignore[no-untyped-def]
     """Build the fleet shape `optimize configs` produces: the seg: rate on the scenario AND on every home."""
     scenario = _make_scenario(n_homes=_N_HOMES, seg_tariff_pence=seg_rate, finance=finance)
     tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
@@ -225,7 +225,7 @@ class _SegPricingSimulate:
 
     def __init__(self) -> None:
         self.rates_per_call: list[frozenset[Optional[float]]] = []
-        self._results_by_rate: dict[Optional[float], "SimulationResults"] = {}
+        self._results_by_rate: dict[Optional[float], SimulationResults] = {}
 
     def __call__(self, fleet_config, start, end):  # type: ignore[no-untyped-def]
         rates = _home_seg_rates(fleet_config.homes)
@@ -235,7 +235,7 @@ class _SegPricingSimulate:
             home_configs=list(fleet_config.homes),
         )
 
-    def _results_at(self, rate: Optional[float]) -> "SimulationResults":
+    def _results_at(self, rate: Optional[float]) -> SimulationResults:
         if rate not in self._results_by_rate:
             self._results_by_rate[rate] = _make_sim_results(
                 export_kwh=self._EXPORT_KWH,

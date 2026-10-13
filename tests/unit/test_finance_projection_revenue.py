@@ -175,7 +175,7 @@ def _make_grid_charging_sim_results(
     peak_pence: float = 30.0,
     off_peak_pence: float = 9.0,
     n_steps: int = 8760,
-) -> "SimulationResults":
+) -> SimulationResults:
     """Full-year TOU home whose battery grid-charges off-peak through the grid meter.
 
     Grid charge is metered import: grid_import = import_to_load + grid_charge, with
@@ -225,11 +225,11 @@ class TestGridChargeEnergyPaidOnce:
 
     N_HOMES = 2
 
-    def _fleet(self) -> "FleetResults":
+    def _fleet(self) -> FleetResults:
         return make_fleet_results_of([_make_grid_charging_sim_results() for _ in range(self.N_HOMES)])
 
     @staticmethod
-    def _without_grid_charge_cost_series(fleet: "FleetResults") -> "FleetResults":
+    def _without_grid_charge_cost_series(fleet: FleetResults) -> FleetResults:
         return FleetResults(
             per_home_results=[
                 dataclasses.replace(r, grid_charge_cost=None) for r in fleet.per_home_results
@@ -239,8 +239,8 @@ class TestGridChargeEnergyPaidOnce:
 
     @staticmethod
     def _householder_import_cost_gbp(
-        summary: "SummaryStatistics",
-        finance: "FinanceConfig",
+        summary: SummaryStatistics,
+        finance: FinanceConfig,
     ) -> float:
         basis_c_own_use_kwh = summary.total_demand_kwh - summary.total_grid_import_kwh
         return householder_bill(
@@ -249,9 +249,9 @@ class TestGridChargeEnergyPaidOnce:
 
     @staticmethod
     def _cbs_revenue_at_age_0(
-        fleet: "FleetResults",
-        scenario: "ScenarioConfig",
-        finance: "FinanceConfig",
+        fleet: FleetResults,
+        scenario: ScenarioConfig,
+        finance: FinanceConfig,
     ) -> float:
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet)
         return curve.points[0].fleet_revenue_gbp
@@ -319,7 +319,7 @@ def _make_seg_summary(
     total_generation_kwh: float = 4000.0,
     total_grid_export_kwh: float = 800.0,
     total_export_revenue_gbp: float = 24.0,
-) -> "SummaryStatistics":
+) -> SummaryStatistics:
     """Minimal SummaryStatistics for testing _seg_export_income_gbp."""
     sc_kwh = total_generation_kwh - total_grid_export_kwh
     return SummaryStatistics(
@@ -354,7 +354,7 @@ class TestSegExportIncomeGbp:
     def _make_finance_seg(
         self,
         self_consumption_override: "float | None" = None,
-    ) -> "FinanceConfig":
+    ) -> FinanceConfig:
         return FinanceConfig(
             standing_charge_pence_per_day=28.0,
             asset_life_years=5,

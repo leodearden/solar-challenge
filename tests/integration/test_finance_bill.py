@@ -496,7 +496,7 @@ class TestOverrideExactValues:
     """
 
     @staticmethod
-    def _fin_override_bill() -> "BillBreakdown":
+    def _fin_override_bill() -> BillBreakdown:
         """householder_bill for the [FIN] home at override 0.70; the cap must warn."""
         summary = _make_summary(total_generation_kwh=5775.0, total_grid_export_kwh=3575.0)
         with pytest.warns(UserWarning, match="capped at demand"):
@@ -508,7 +508,7 @@ class TestOverrideExactValues:
             )
 
     @staticmethod
-    def _untariffed_override_bill(override: float = 0.70) -> "BillBreakdown":
+    def _untariffed_override_bill(override: float = 0.70) -> BillBreakdown:
         """householder_bill at *override* for a home with no tariff; the retail fallback must warn."""
         summary = _make_summary(
             total_import_cost_gbp=0.0,
@@ -1368,7 +1368,7 @@ class TestCbsAmountDue:
     """
 
     @staticmethod
-    def _u1_bill() -> "tuple[BillBreakdown, FinanceConfig]":
+    def _u1_bill() -> tuple[BillBreakdown, FinanceConfig]:
         """The PRD U1 scenario: 12 p/kWh own-use, 558 kWh self-consumed, 5% VAT."""
         finance = _make_finance(
             own_use_rate_pence_per_kwh=12.0,

@@ -44,7 +44,7 @@ def _make_full_year_and_short_window_fleets() -> tuple:
     )
     finance = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=10.0)
 
-    def fleet_over(window_days: int) -> "FleetResults":
+    def fleet_over(window_days: int) -> FleetResults:
         share_of_year = window_days / 365
         return make_fleet_results(
             homes=scenario.homes,

@@ -79,7 +79,7 @@ def _make_sim_results_cr6(
     export_kwh: float,
     import_kwh: float,
     n_steps: int = 8760,  # hourly resolution; energy = sum*(1/60) still correct
-) -> "SimulationResults":
+) -> SimulationResults:
     """Build a synthetic SimulationResults.
 
     Hourly resolution (n_steps=8760 ≈ 1 yr) keeps memory ~60× lower than the
@@ -120,7 +120,7 @@ def _make_fleet_results_fin_cr6(
     self_kwh: float = 2000.0,
     export_kwh: float = 3775.0,
     import_kwh: float = 1400.0,
-) -> "FleetResults":
+) -> FleetResults:
     """Build a [FIN]-aligned synthetic FleetResults.
 
     With _make_finance_fin_cr6 defaults the solve lands in the interior 'floor'
@@ -150,7 +150,7 @@ def _make_fleet_results_fin_cr6(
 def _make_home_config_fin_cr6(
     pv_kwp: float = 5.5,
     battery_kwh: float = 5.0,
-) -> "HomeConfig":
+) -> HomeConfig:
     """Build a [FIN]-aligned HomeConfig for CR6 tests (Bristol defaults)."""
     pv = PVConfig(capacity_kw=pv_kwp, azimuth=180, tilt=35)
     load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
@@ -162,7 +162,7 @@ def _make_scenario_fin_cr6(
     n_homes: int = 100,
     pv_kwp: float = 5.5,
     battery_kwh: float = 5.0,
-) -> "ScenarioConfig":
+) -> ScenarioConfig:
     """Build a homogeneous [FIN]-aligned ScenarioConfig (100 homes, 2024 full year)."""
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
     homes = [_make_home_config_fin_cr6(pv_kwp=pv_kwp, battery_kwh=battery_kwh)
@@ -181,7 +181,7 @@ def _make_finance_cr6(
     equity_fraction: float = 0.75,
     loan_term_years: int = 15,
     loan_rate: float = 0.07,
-) -> "FinanceConfig":
+) -> FinanceConfig:
     """Unified FinanceConfig factory for CR6 tests.
 
     All three former builders (_make_finance_fin_cr6 / _make_finance_interior_cr6 /
@@ -218,7 +218,7 @@ def _make_finance_fin_cr6(
     retained_cash_floor: float = 27.0,
     own_use_rate: float = 15.0,
     retail_rate: float = 23.0,
-) -> "FinanceConfig":
+) -> FinanceConfig:
     """[FIN]-aligned FinanceConfig (capex=£775k, grant=£250k, retail=23p, floor=£27).
 
     Capex = 100 × (5.5×£1000 + £1000 + 5kWh×£250) = £775,000
@@ -240,10 +240,10 @@ def _make_finance_fin_cr6(
 
 
 def _surplus_the_bills_fund_cr6(
-    sol: "CostRecoverySolution",
-    scenario: "ScenarioConfig",
-    finance: "FinanceConfig",
-    fleet: "FleetResults",
+    sol: CostRecoverySolution,
+    scenario: ScenarioConfig,
+    finance: FinanceConfig,
+    fleet: FleetResults,
 ) -> float:
     """Net surplus per home per year that the solve's own bills fund.
 
@@ -431,14 +431,14 @@ class TestOverrideOwnUseCappedAtDemand:
     """
 
     @staticmethod
-    def _scenario_and_finance() -> "tuple[ScenarioConfig, FinanceConfig]":
+    def _scenario_and_finance() -> tuple[ScenarioConfig, FinanceConfig]:
         """The 100-home [FIN] anchor and its finance under the spreadsheet's 0.70 override."""
         finance = dataclasses.replace(_make_finance_fin_cr6(), self_consumption_override=_FIN_SCF)
         return _make_scenario_fin_cr6(), finance
 
     @pytest.fixture(scope="class")
     @classmethod
-    def fleets(cls) -> "tuple[FleetResults, FleetResults]":
+    def fleets(cls) -> tuple[FleetResults, FleetResults]:
         """The anchor fleets with 5,775 and 5,000 kWh of generation per home."""
         high_gen, low_gen = (
             _make_fleet_results_fin_cr6(self_kwh=2000.0, export_kwh=export_kwh, import_kwh=1400.0)
@@ -449,12 +449,12 @@ class TestOverrideOwnUseCappedAtDemand:
     @pytest.fixture(scope="class")
     @classmethod
     def solutions(
-        cls, fleets: "tuple[FleetResults, FleetResults]"
-    ) -> "tuple[CostRecoverySolution, CostRecoverySolution]":
+        cls, fleets: tuple[FleetResults, FleetResults]
+    ) -> tuple[CostRecoverySolution, CostRecoverySolution]:
         """(5,775 kWh, 5,000 kWh generation) solves; each must warn that the cap binds."""
         scenario, finance = cls._scenario_and_finance()
 
-        def solve(fleet: "FleetResults") -> "CostRecoverySolution":
+        def solve(fleet: FleetResults) -> CostRecoverySolution:
             with pytest.warns(UserWarning, match="capped at demand"):
                 return solve_cost_recovery_rate(scenario, finance, simulate=lambda fc, s, e: fleet)
 
@@ -463,8 +463,8 @@ class TestOverrideOwnUseCappedAtDemand:
 
     def test_surplus_is_what_the_bills_fund(
         self,
-        fleets: "tuple[FleetResults, FleetResults]",
-        solutions: "tuple[CostRecoverySolution, CostRecoverySolution]",
+        fleets: tuple[FleetResults, FleetResults],
+        solutions: tuple[CostRecoverySolution, CostRecoverySolution],
     ) -> None:
         """On both fleets the bills at the solved rate fund the surplus the solve reports, the floor."""
         scenario, finance = self._scenario_and_finance()
@@ -481,7 +481,7 @@ class TestOverrideOwnUseCappedAtDemand:
             )
 
     def test_solved_rate_does_not_depend_on_generation(
-        self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"
+        self, solutions: tuple[CostRecoverySolution, CostRecoverySolution]
     ) -> None:
         """Premise: both fleets solve to the same floor-binding rate."""
         high_gen, low_gen = solutions
@@ -492,7 +492,7 @@ class TestOverrideOwnUseCappedAtDemand:
         )
 
     def test_representative_own_use_is_billed_at_demand(
-        self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"
+        self, solutions: tuple[CostRecoverySolution, CostRecoverySolution]
     ) -> None:
         for sol in solutions:
             assert sol.outlay.representative.own_use_payment_gbp == pytest.approx(
@@ -500,7 +500,7 @@ class TestOverrideOwnUseCappedAtDemand:
             )
 
     def test_saving_does_not_rise_as_generation_falls(
-        self, solutions: "tuple[CostRecoverySolution, CostRecoverySolution]"
+        self, solutions: tuple[CostRecoverySolution, CostRecoverySolution]
     ) -> None:
         high_gen, low_gen = solutions
 
@@ -522,7 +522,7 @@ def _make_finance_flex_cr6(
     pv_cost_per_kwp: float = 2000.0,
     grant_gbp: float = 0.0,
     retail_rate: float = 30.0,
-) -> "FinanceConfig":
+) -> FinanceConfig:
     """Interior FinanceConfig with optional flex (grid_services) — thin wrapper."""
     return _make_finance_cr6(
         grid_services=grid_services,
@@ -538,7 +538,7 @@ def _make_arbitrage_fleet_cr6(
     self_kwh: float = 2400.0,    # elevated sc vs flat-rate 2000 kWh
     export_kwh: float = 400.0,
     import_kwh: float = 800.0,
-) -> "FleetResults":
+) -> FleetResults:
     """Build an 'arbitrage-on' synthetic FleetResults representing W1 TOU time-shift.
 
     Arbitrage on: higher basis-C own-use than the flat-rate fleet (2400 vs 2000
@@ -564,7 +564,7 @@ def _make_interior_fleet_cr6(
     self_kwh: float = 2000.0,
     export_kwh: float = 800.0,
     import_kwh: float = 1200.0,
-) -> "FleetResults":
+) -> FleetResults:
     """Build a small synthetic FleetResults tuned to the interior 'floor' regime.
 
     Interior guarantee (with _make_finance_interior_cr6 defaults):
@@ -597,7 +597,7 @@ def _make_finance_interior_cr6(
     pv_cost_per_kwp: float = 2000.0,
     grant_gbp: float = 0.0,
     retail_rate: float = 30.0,
-) -> "FinanceConfig":
+) -> FinanceConfig:
     """Interior-regime FinanceConfig for H1/H2 structural invariant tests — thin wrapper.
 
     Interior regime guaranteed by: high capex (no grant) + moderate floor →
@@ -832,8 +832,8 @@ class TestFlexLowersSolvedRate:
 
 
 def _spreadsheet_economics_cr6(
-    scenario: "ScenarioConfig",
-    finance: "FinanceConfig",
+    scenario: ScenarioConfig,
+    finance: FinanceConfig,
 ) -> "ProjectEconomics":  # type: ignore[name-defined]
     """[FIN]-assumption ProjectEconomics for ``scenario``: spreadsheet_revenue_curve → project_economics.
 
@@ -900,7 +900,7 @@ def _make_grid_charge_sim_results_cr6(
     import_to_load_kwh: float,
     grid_charge_kwh: float,
     n_steps: int = 8760,
-) -> "SimulationResults":
+) -> SimulationResults:
     """Build a synthetic SimulationResults for grid-charging (arbitrage) homes.
 
     Energy accounting:
@@ -946,7 +946,7 @@ def _make_grid_charge_fleet_cr6(
     export_kwh: float = 400.0,
     import_to_load_kwh: float = 800.0,
     grid_charge_kwh: float = 200.0,
-) -> "FleetResults":
+) -> FleetResults:
     """Build a grid-charging FleetResults for basis-C reconciliation tests.
 
     With defaults:
@@ -1260,7 +1260,7 @@ class TestCbsOwnUseKwhHelper:
         assert result == pytest.approx(0.0, abs=1e-9)
 
 
-def _make_physics_column_scenario_cr6() -> "ScenarioConfig":
+def _make_physics_column_scenario_cr6() -> ScenarioConfig:
     """The scenario TestPhysicsReconciliationColumn simulates: 2 homes × 5.5 kWp + 5 kWh, 3 days."""
     homes = [_make_home_config_fin_cr6(pv_kwp=5.5, battery_kwh=5.0)] * 2
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
