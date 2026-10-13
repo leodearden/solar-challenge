@@ -9,6 +9,7 @@ document.addEventListener('alpine:init', () => {
         elapsed: 0,
         error: '',
         completedRunId: '',
+        reconnecting: false,
         _stream: null,
         _timer: null,
 
@@ -18,9 +19,11 @@ document.addEventListener('alpine:init', () => {
                 this.elapsed = Math.floor((Date.now() - startTime) / 1000);
             }, 1000);
             this._stream = new EventSource('/api/jobs/' + jobId + '/progress');
+            this._stream.addEventListener('open', () => { this.reconnecting = false; });
             this._stream.addEventListener('progress', (e) => this._onProgress(e.data));
             this._stream.addEventListener('complete', (e) => this._onComplete(e.data));
-            this._stream.addEventListener('error', (e) => this._onError(e.data));
+            // An error event is the job's failure, sent as JSON, or, with no data, the stream breaking
+            this._stream.addEventListener('error', (e) => e.data ? this._onFailed(e.data) : this._onDisconnected(e.target.readyState));
         },
 
         destroy() {
@@ -52,20 +55,26 @@ document.addEventListener('alpine:init', () => {
             if (data.run_id) this.completedRunId = data.run_id;
         },
 
-        // An error event carries the job's failure as JSON, or no data when the stream itself broke
-        _onError(eventData) {
+        _onFailed(eventData) {
             this._stop();
-            if (eventData) {
-                const data = JSON.parse(eventData);
-                this.status = 'failed';
-                this.error = data.message || data.error || 'An unexpected error occurred';
-            } else if (this.status !== 'completed') {
-                this.status = 'failed';
-                this.error = 'Lost connection to server';
+            const data = JSON.parse(eventData);
+            this.status = 'failed';
+            this.error = data.message || data.error || 'An unexpected error occurred';
+        },
+
+        // The browser reopens a broken stream itself (readyState CONNECTING) unless it gave up on it, as after an HTTP error
+        _onDisconnected(readyState) {
+            if (readyState === EventSource.CONNECTING) {
+                this.reconnecting = true;
+                return;
             }
+            this._stop();
+            this.status = 'failed';
+            this.error = 'Lost connection to server';
         },
 
         _stop() {
+            this.reconnecting = false;
             if (this._stream) {
                 this._stream.close();
                 this._stream = null;
