@@ -72,6 +72,14 @@ def test_traces_lists_each_trace_as_written_in_the_order_the_figure_draws_them()
     assert traces(_figure(generation, heatmap, demand)) == [generation, heatmap, demand]
 
 
+def test_traces_lists_each_of_two_traces_sharing_a_name() -> None:
+    """Two traces may validly share a name, which traces, unlike traces_by_name, lists once for each."""
+    first = {"type": "scatter", "name": "Grid Import", "y": [1.2, 0.0]}
+    second = {"type": "scatter", "name": "Grid Import", "y": [0.4, 0.0]}
+
+    assert traces(_figure(first, second)) == [first, second]
+
+
 def test_a_figure_with_no_data_has_no_traces() -> None:
     """sankey_diagram returns "{}" when it draws no flow."""
     assert traces("{}") == []
