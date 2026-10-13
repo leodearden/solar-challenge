@@ -289,7 +289,7 @@ def test_each_sweep_rows_status_badge_takes_the_classes_the_server_draws_for_its
 ) -> None:
     """Run a sweep whose first point completes while its second is pending, then fail the second: each row's status badge carries exactly the classes run_status_badge draws on the server for its status.
 
-    'running' cannot be held on this page: a fulfilled progress stream closes, and the page then marks its row failed. The Run History badge test covers 'running' through the same macro.
+    The Run History badge test covers 'running' through the same macro.
     """
     sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
     page.goto(live_server + "/scenarios/sweep")
