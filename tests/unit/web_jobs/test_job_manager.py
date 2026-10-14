@@ -59,7 +59,7 @@ class _ManualClock:
 
 
 class TestJobManagerDirect:
-    """Unit tests for JobManager exercised directly without Flask."""
+    """Tests for the events a JobManager queues for its jobs, read with get_events."""
 
     def test_thread_safety_concurrent_access(self, blocking_simulation: BlockingSimulation, tmp_path: Path) -> None:
         """Test that concurrent job_state and get_events calls are thread-safe."""

@@ -491,8 +491,8 @@ class TestSimulateFleetEndpoint:
         assert response.status_code == 400
 
 
-class TestJobManagerIntegration:
-    """Tests for JobManager class directly."""
+class TestAppJobManager:
+    """Tests for the JobManager create_app registers as the app's job_manager extension."""
 
     def test_job_manager_exists_on_app(self, app: Flask) -> None:
         """Test that JobManager is registered as an app extension."""

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Fixtures both web_jobs test modules request: the Flask test app, and a BlockingSimulation released at teardown.
+"""Fixtures shared by the web_jobs test modules: the Flask test app, and a BlockingSimulation released at teardown.
 
 Nothing here imports Flask, the optional web extra, when the module loads: without
 it, each test module's ``pytest.importorskip("flask")`` skips that module, whereas
