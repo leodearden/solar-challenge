@@ -200,12 +200,12 @@ def quick(
         ),
     ] = 7,
     consumption_kwh: Annotated[
-        float,
+        Optional[float],
         typer.Option(
             "--consumption-kwh", "-c",
-            help="Annual consumption in kWh",
+            help="Annual consumption in kWh (default: Ofgem TDCV for the household)",
         ),
-    ] = 3400.0,
+    ] = None,
     output: Annotated[
         Optional[Path],
         typer.Option(
@@ -216,7 +216,8 @@ def quick(
 ) -> None:
     """Quick simulation with minimal arguments.
 
-    Uses Bristol location and sensible defaults. Great for quick testing.
+    Uses Bristol location and sensible defaults, simulating from 1 June 2024.
+    Great for quick testing.
 
     Example:
         solar-challenge home quick 4 5 --days 7
@@ -239,7 +240,6 @@ def quick(
         name="Quick Simulation",
     )
 
-    # Default to starting today
     start_date = pd.Timestamp("2024-06-01", tz=loc.timezone)
     end_date = start_date + pd.Timedelta(days=days - 1)
 
