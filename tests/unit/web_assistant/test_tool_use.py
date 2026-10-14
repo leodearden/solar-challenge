@@ -19,6 +19,7 @@ from flask.testing import FlaskClient
 from solar_challenge.web.assistant import (
     MAX_TOOL_ITERATIONS,
     METRIC_TABLE,
+    TOOL_CALL_LIMIT_NOTICE,
     TOOLS,
     dispatch_tool,
     explain_metric,
@@ -267,8 +268,11 @@ class TestToolUseLoop:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """A model that always returns tool_use is bounded by MAX_TOOL_ITERATIONS."""
-        # Build an infinite sequence of tool_use streams
+        """A model that calls a tool on every reply is called MAX_TOOL_ITERATIONS times.
+        The turn then streams TOOL_CALL_LIMIT_NOTICE as its whole reply, stores it as
+        the reply and ends with a done frame."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "tool-cap-sid"
         TOOL_ID_PREFIX = "toolu_inf_"
         infinite_streams = [
             make_tool_use_stream(
@@ -284,19 +288,22 @@ class TestToolUseLoop:
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
-        # stream() should be called exactly MAX_TOOL_ITERATIONS times
         call_count = len(anthropic_api.calls)
         assert call_count == MAX_TOOL_ITERATIONS, (
             f"Expected exactly {MAX_TOOL_ITERATIONS} stream() calls (loop cap), "
             f"got {call_count}"
         )
 
-        # Stream must still terminate cleanly (done or error frame, no hang)
         events = parse_sse_events(body)
-        event_types = [e.event for e in events]
-        assert "done" in event_types or "error" in event_types, (
-            f"Expected stream to terminate with done or error frame; got: {event_types}"
+        assert [e.data["text"] for e in events if e.event == "delta"] == [TOOL_CALL_LIMIT_NOTICE], (
+            f"Expected the notice to be the reply's only text; events: {events}"
         )
+        assert events[-1].event == "done", f"Expected the stream to end with 'done'; events: {events}"
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert [(m["role"], m["content"]) for m in messages] == [
+            ("user", "explain forever"),
+            ("assistant", TOOL_CALL_LIMIT_NOTICE),
+        ]
 
     def test_final_message_without_stop_reason_streams_reply(
         self,
