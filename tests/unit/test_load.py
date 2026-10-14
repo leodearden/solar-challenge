@@ -11,7 +11,7 @@ import solar_challenge.load as load_module
 from solar_challenge.load import (
     LoadConfig,
     OFGEM_TDCV_BY_OCCUPANTS,
-    calculate_annual_consumption,
+    energy_kwh,
     generate_load_profile,
     scale_profile_to_annual,
 )
@@ -197,7 +197,7 @@ class TestGenerateLoadProfile:
         profile = generate_load_profile(config, start, end)
 
         # Calculate consumption for this week
-        weekly_kwh = calculate_annual_consumption(profile)
+        weekly_kwh = energy_kwh(profile)
 
         # Should be approximately 3400 / 52 ≈ 65 kWh per week
         # Allow some variation due to seasonal factors (June is lower)
@@ -249,23 +249,23 @@ class TestElexonProfileShape:
         assert winter_total > summer_total
 
 
-class TestCalculateAnnualConsumption:
-    """Test annual consumption calculation."""
+class TestEnergyKwh:
+    """energy_kwh integrates a 1-minute kW profile to its energy in kWh."""
 
     def test_calculates_from_minute_profile(self):
-        """Correctly calculates total consumption."""
+        """A day at a constant 1 kW is 24 kWh: the window's own energy."""
         # Create 1 day profile at constant 1 kW
         index = pd.date_range("2024-01-01", periods=1440, freq="1min")
         profile = pd.Series([1.0] * 1440, index=index)
 
         # 1 kW for 1440 minutes = 1440/60 = 24 kWh
-        total = calculate_annual_consumption(profile)
+        total = energy_kwh(profile)
         assert total == pytest.approx(24.0, rel=0.001)
 
     def test_empty_profile_returns_zero(self):
-        """Empty profile returns zero consumption."""
+        """An empty profile has zero energy."""
         profile = pd.Series([], dtype=float)
-        assert calculate_annual_consumption(profile) == 0.0
+        assert energy_kwh(profile) == 0.0
 
 
 class TestScaleProfileToAnnual:
@@ -278,7 +278,7 @@ class TestScaleProfileToAnnual:
         profile = pd.Series([1.0] * 1440, index=index)  # 24 kWh
 
         scaled = scale_profile_to_annual(profile, target_annual_kwh=48.0)
-        total = calculate_annual_consumption(scaled)
+        total = energy_kwh(scaled)
 
         assert total == pytest.approx(48.0, rel=0.001)
 
@@ -338,8 +338,8 @@ class TestHouseholdSizeParameter:
         profile_small = generate_load_profile(config_small, start, end)
         profile_large = generate_load_profile(config_large, start, end)
 
-        total_small = calculate_annual_consumption(profile_small)
-        total_large = calculate_annual_consumption(profile_large)
+        total_small = energy_kwh(profile_small)
+        total_large = energy_kwh(profile_large)
 
         # Larger household should use more energy
         assert total_large > total_small
@@ -477,8 +477,8 @@ class TestWindowedStochasticGeneration:
         profile_stochastic = generate_load_profile(config_stochastic, start, end)
         profile_elexon = generate_load_profile(config_elexon, start, end)
 
-        stochastic_kwh = calculate_annual_consumption(profile_stochastic)
-        elexon_kwh = calculate_annual_consumption(profile_elexon)
+        stochastic_kwh = energy_kwh(profile_stochastic)
+        elexon_kwh = energy_kwh(profile_elexon)
 
         # Both should be in a sane daily band
         assert 2.0 <= stochastic_kwh <= 30.0, (
