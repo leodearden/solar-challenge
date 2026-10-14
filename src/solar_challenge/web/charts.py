@@ -29,7 +29,7 @@ from plotly.subplots import make_subplots
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, SummaryStatistics
-from solar_challenge.output import aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
+from solar_challenge.output import SeasonSummary, aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
 
 _AMBER = "#f5a623"
 _RED = "#d0021b"
@@ -500,9 +500,13 @@ def financial_breakdown(results: SimulationResults) -> str:
     return str(fig.to_json())
 
 
-def _season_bar(name: str, colour_role: str, kwh: Mapping[_EnergyFlow, float]) -> Any:
-    """A bar trace, named *name* in *colour_role*'s colour, of one season's kWh of each flow in *kwh*."""
-    flows = _in_flow_order(kwh)
+def _season_bar(name: str, colour_role: str, season: SeasonSummary) -> Any:
+    """A bar trace, named *name* in *colour_role*'s colour, of *season*'s kWh of generation, demand and self-consumption."""
+    flows = _in_flow_order({
+        _EnergyFlow.GENERATION: season.generation_kwh,
+        _EnergyFlow.DEMAND: season.demand_kwh,
+        _EnergyFlow.SELF_CONSUMPTION: season.self_consumption_kwh,
+    })
     return go.Bar(
         name=name,
         x=[f"{flow.label} (kWh)" for flow, _ in flows],
@@ -527,19 +531,11 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
     if sim_days < 180:
         return None
 
-    metrics = calculate_seasonal_metrics(results)
+    seasons = calculate_seasonal_metrics(results)
 
     fig = go.Figure(data=[
-        _season_bar("Winter (Dec-Feb)", "winter", {
-            _EnergyFlow.GENERATION: metrics["winter_generation_kwh"],
-            _EnergyFlow.DEMAND: metrics["winter_demand_kwh"],
-            _EnergyFlow.SELF_CONSUMPTION: metrics["winter_self_consumption_kwh"],
-        }),
-        _season_bar("Summer (Jun-Aug)", "summer", {
-            _EnergyFlow.GENERATION: metrics["summer_generation_kwh"],
-            _EnergyFlow.DEMAND: metrics["summer_demand_kwh"],
-            _EnergyFlow.SELF_CONSUMPTION: metrics["summer_self_consumption_kwh"],
-        }),
+        _season_bar("Winter (Dec-Feb)", "winter", seasons.winter),
+        _season_bar("Summer (Jun-Aug)", "summer", seasons.summer),
     ])
 
     fig.update_layout(

@@ -4,7 +4,7 @@
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
 
 import pandas as pd
 
@@ -21,6 +21,13 @@ if TYPE_CHECKING:
 
 _WINTER_MONTHS = (12, 1, 2)
 _SUMMER_MONTHS = (6, 7, 8)
+
+_TimeIndexed = TypeVar("_TimeIndexed", pd.Series, pd.DataFrame)
+
+
+def _in_months(rows: _TimeIndexed, months: tuple[int, ...]) -> _TimeIndexed:
+    """The rows of *rows* whose timestamps fall in *months*."""
+    return rows[rows.index.month.isin(months)]
 
 
 def export_to_csv(
@@ -239,45 +246,53 @@ def _share(part: float, whole: float) -> float:
     return float(part / whole) if whole > 0 else 0.0
 
 
-def calculate_seasonal_metrics(results: SimulationResults) -> dict[str, float]:
+@dataclass(frozen=True, kw_only=True)
+class SeasonSummary:
+    """One season of a run: its energy totals in kWh, and calculate_summary's two ratios of them.
+
+    self_consumption_ratio is self-consumption / generation and grid_dependency_ratio is grid
+    import / demand, each 0.0 when its denominator is not positive.
+    """
+
+    generation_kwh: float
+    demand_kwh: float
+    self_consumption_kwh: float
+    self_consumption_ratio: float
+    grid_dependency_ratio: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class SeasonalMetrics:
+    """A run's winter (Dec-Feb) and summer (Jun-Aug) summaries."""
+
+    winter: SeasonSummary
+    summer: SeasonSummary
+
+
+def _season_summary(amounts: pd.DataFrame, months: tuple[int, ...]) -> SeasonSummary:
+    """The summary of the rows in *months* of *amounts*, a run's per_minute_amounts()."""
+    totals = _in_months(amounts, months).sum()
+    return SeasonSummary(
+        generation_kwh=float(totals["generation_kwh"]),
+        demand_kwh=float(totals["demand_kwh"]),
+        self_consumption_kwh=float(totals["self_consumption_kwh"]),
+        self_consumption_ratio=_share(totals["self_consumption_kwh"], totals["generation_kwh"]),
+        grid_dependency_ratio=_share(totals["grid_import_kwh"], totals["demand_kwh"]),
+    )
+
+
+def calculate_seasonal_metrics(results: SimulationResults) -> SeasonalMetrics:
     """The run's winter (Dec-Feb) and summer (Jun-Aug) totals and ratios.
 
     Each total is the season's sum of the run's own per-minute amounts, so self-consumption
     counts battery discharge as calculate_summary's does. The ratios are calculate_summary's,
-    of the season's totals.
-
-    Args:
-        results: Simulation results
-
-    Returns:
-        Dictionary of the seasonal metrics:
-        - winter_generation_kwh: Total winter generation
-        - winter_demand_kwh: Total winter demand
-        - winter_self_consumption_kwh: Total winter self-consumption
-        - winter_self_consumption_ratio: Winter self-consumption / generation
-        - winter_grid_dependency_ratio: Winter grid import / demand
-        - summer_generation_kwh: Total summer generation
-        - summer_demand_kwh: Total summer demand
-        - summer_self_consumption_kwh: Total summer self-consumption
-        - summer_self_consumption_ratio: Summer self-consumption / generation
-        - summer_grid_dependency_ratio: Summer grid import / demand
+    of the season's totals. A season with none of the run's rows has 0.0 for every figure.
     """
     amounts = results.per_minute_amounts()
-    months = amounts.index.month
-    winter = amounts[months.isin(_WINTER_MONTHS)].sum()
-    summer = amounts[months.isin(_SUMMER_MONTHS)].sum()
-    return {
-        "winter_generation_kwh": float(winter["generation_kwh"]),
-        "winter_demand_kwh": float(winter["demand_kwh"]),
-        "winter_self_consumption_kwh": float(winter["self_consumption_kwh"]),
-        "winter_self_consumption_ratio": _share(winter["self_consumption_kwh"], winter["generation_kwh"]),
-        "winter_grid_dependency_ratio": _share(winter["grid_import_kwh"], winter["demand_kwh"]),
-        "summer_generation_kwh": float(summer["generation_kwh"]),
-        "summer_demand_kwh": float(summer["demand_kwh"]),
-        "summer_self_consumption_kwh": float(summer["self_consumption_kwh"]),
-        "summer_self_consumption_ratio": _share(summer["self_consumption_kwh"], summer["generation_kwh"]),
-        "summer_grid_dependency_ratio": _share(summer["grid_import_kwh"], summer["demand_kwh"]),
-    }
+    return SeasonalMetrics(
+        winter=_season_summary(amounts, _WINTER_MONTHS),
+        summer=_season_summary(amounts, _SUMMER_MONTHS),
+    )
 
 
 def _aggregate_by_period(results: SimulationResults, freq: str) -> pd.DataFrame:

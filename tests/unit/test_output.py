@@ -1,7 +1,7 @@
 """Tests for output and reporting functions."""
 
 import tempfile
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +10,7 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
 from solar_challenge.output import (
+    SeasonSummary,
     aggregate_annual,
     aggregate_daily,
     aggregate_monthly,
@@ -192,21 +193,27 @@ class TestSeasonalBreakdowns:
         assert "| Daily Average | 48.0 kWh/day | 6.0 kWh/day | 8.0x |" in lines
 
     def test_seasonal_metrics_total_each_seasons_own_flows_and_leave_out_the_rest(self):
+        seasons = calculate_seasonal_metrics(_seasonal_run())
+
         # Winter self-consumption: 5 kW × 24 h plus the battery's 1 kW × 24 h = 144 kWh, where
         # min(generation, demand) would give 120. Winter import: 4 kW × 24 h = 96 kWh of 240.
         # April's rows count in neither season.
-        assert calculate_seasonal_metrics(_seasonal_run()) == pytest.approx(
+        assert asdict(seasons.winter) == pytest.approx(
             {
-                "winter_generation_kwh": 192.0,
-                "winter_demand_kwh": 240.0,
-                "winter_self_consumption_kwh": 144.0,
-                "winter_self_consumption_ratio": 0.75,
-                "winter_grid_dependency_ratio": 0.4,
-                "summer_generation_kwh": 48.0,
-                "summer_demand_kwh": 12.0,
-                "summer_self_consumption_kwh": 12.0,
-                "summer_self_consumption_ratio": 0.25,
-                "summer_grid_dependency_ratio": 0.0,
+                "generation_kwh": 192.0,
+                "demand_kwh": 240.0,
+                "self_consumption_kwh": 144.0,
+                "self_consumption_ratio": 0.75,
+                "grid_dependency_ratio": 0.4,
+            }
+        )
+        assert asdict(seasons.summer) == pytest.approx(
+            {
+                "generation_kwh": 48.0,
+                "demand_kwh": 12.0,
+                "self_consumption_kwh": 12.0,
+                "self_consumption_ratio": 0.25,
+                "grid_dependency_ratio": 0.0,
             }
         )
 
@@ -222,18 +229,22 @@ class TestSeasonalBreakdowns:
         # The battery discharges, so min(generation, demand) would differ from the summary.
         assert summary.total_battery_discharge_kwh > 0
 
-        assert calculate_seasonal_metrics(run) == pytest.approx(
+        seasons = calculate_seasonal_metrics(run)
+
+        assert seasons.winter == SeasonSummary(
+            generation_kwh=0.0,
+            demand_kwh=0.0,
+            self_consumption_kwh=0.0,
+            self_consumption_ratio=0.0,
+            grid_dependency_ratio=0.0,
+        )
+        assert asdict(seasons.summer) == pytest.approx(
             {
-                "winter_generation_kwh": 0.0,
-                "winter_demand_kwh": 0.0,
-                "winter_self_consumption_kwh": 0.0,
-                "winter_self_consumption_ratio": 0.0,
-                "winter_grid_dependency_ratio": 0.0,
-                "summer_generation_kwh": summary.total_generation_kwh,
-                "summer_demand_kwh": summary.total_demand_kwh,
-                "summer_self_consumption_kwh": summary.total_self_consumption_kwh,
-                "summer_self_consumption_ratio": summary.self_consumption_ratio,
-                "summer_grid_dependency_ratio": summary.grid_dependency_ratio,
+                "generation_kwh": summary.total_generation_kwh,
+                "demand_kwh": summary.total_demand_kwh,
+                "self_consumption_kwh": summary.total_self_consumption_kwh,
+                "self_consumption_ratio": summary.self_consumption_ratio,
+                "grid_dependency_ratio": summary.grid_dependency_ratio,
             }
         )
 
