@@ -939,24 +939,6 @@ def _age0_baseline_outlay(
     return dist.representative.total_outlay_gbp
 
 
-def _split_infeasible(
-    results: List[ConfigResult],
-) -> tuple[List[ConfigResult], List[ConfigPoint]]:
-    """Delegate to public :func:`feasible_split`; return ConfigPoints for infeasible side."""
-    feas, infeas = feasible_split(results)
-    return feas, [r.config for r in infeas]
-
-
-def _rank_feasible(feasible: List[ConfigResult]) -> List[ConfigResult]:
-    """Delegate to public :func:`rank` (single source of truth)."""
-    return rank(feasible)
-
-
-def _pareto_baseline(results: List[ConfigResult]) -> tuple[ConfigPoint, ...]:
-    """Delegate to public :func:`pareto_baseline` (single source of truth)."""
-    return pareto_baseline(results)
-
-
 def _evaluate_config(
     point: ConfigPoint,
     scenario: ScenarioConfig,
@@ -1045,10 +1027,10 @@ def run_sweep(
        ``finance.own_use_rate`` (15 p/kWh) → baseline surplus + economics.
     3. Runs an independent age-0 fleet simulation → baseline outlay.
 
-    The feasible configs (``binding != 'infeasible_above_retail'``) are sorted
-    ascending by ``representative_outlay_gbp`` with a deterministic 5-key
-    tie-break (see :func:`_rank_feasible`).  Infeasible configs are collected as
-    :class:`ConfigPoint` objects preserving input order.
+    The feasible configs (``binding != 'infeasible_above_retail'``, split off by
+    :func:`feasible_split`) are sorted ascending by ``representative_outlay_gbp``
+    with a deterministic 5-key tie-break (see :func:`rank`).  Infeasible configs
+    are collected as :class:`ConfigPoint` objects preserving input order.
 
     Args:
         configs: List of ``(ConfigPoint, ScenarioConfig)`` pairs, typically from
