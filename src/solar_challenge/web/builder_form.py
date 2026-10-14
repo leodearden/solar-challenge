@@ -10,7 +10,7 @@ a scenario with no tariff, or no SEG.
 """
 
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,11 +22,14 @@ from solar_challenge.config import (
 )
 from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, read_pool_counts
 from solar_challenge.web.number_fields import as_finite_float, as_whole_number
 from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
 
 _BUILDER_FORM = "Builder form"
+
+#: Reads a column of distribution rows, given as (field, value sent) cells, as its numbers.
+_ColumnReader = Callable[[list[tuple[str, Any]]], Sequence[float]]
 
 
 def _prefixed(prefix: str, *keys: str) -> dict[str, str]:
@@ -75,7 +78,9 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
     Raises:
         ValueError: naming the form field at fault, for a form that is not an object, a
             key the builder does not send, a value that is not the number it should be,
-            an unknown location preset or distribution type, or a malformed distribution row.
+            an unknown location preset or distribution type, a malformed distribution row,
+            or a shuffled pool too large for a dashboard fleet: a count outside 0 to
+            MAX_FLEET_HOMES, or counts totalling more.
     """
     form = require_json_object(form, _BUILDER_FORM)
     _refuse_unrecognised_keys(form)
@@ -274,11 +279,16 @@ def _distribution_spec(fields: Mapping[str, Any], form_keys: Mapping[str, str]) 
         parameters = _present_numbers(fields, {key: form_keys[key] for key in ("min", "max")})
     elif distribution_type == "weighted_discrete":
         parameters = _row_lists(
-            fields, form_keys["wd_values"], "weight", "weights", as_finite_float
+            fields, form_keys["wd_values"], "weight", "weights", _finite_floats
         )
     elif distribution_type == "shuffled_pool":
+        entries_field = form_keys["sp_entries"]
         parameters = _row_lists(
-            fields, form_keys["sp_entries"], "count", "counts", as_whole_number
+            fields,
+            entries_field,
+            "count",
+            "counts",
+            lambda counts: read_pool_counts(counts, entries_field),
         )
     else:
         raise ValueError(
@@ -307,16 +317,18 @@ def _row_lists(
     rows_field: str,
     column: str,
     grammar_key: str,
-    as_number: Callable[[Any, str], float],
+    read_column: _ColumnReader,
 ) -> dict[str, list[float]]:
     """The values, and the *grammar_key* list of each row's *column*, of the form's *rows_field* rows.
 
     Each row is an object holding a value and its *column*.  A form without the rows
-    gives neither list.
+    gives neither list.  Each value is read by as_finite_float.  The column is read whole,
+    by *read_column*, from each row's cell with its field, ``rows_field[index].column``,
+    so its rule may bound each cell or the column's total.
 
     Raises:
         ValueError: naming *rows_field*, and the row's index, when the rows are not a list
-            of such objects or hold something other than finite numbers.
+            of such objects or a value is not a finite number; or *read_column*'s refusal.
     """
     if rows_field not in fields:
         return {}
@@ -324,12 +336,17 @@ def _row_lists(
     if not isinstance(rows, list):
         raise ValueError(f"{rows_field} must be a list of rows, got {rows!r}")
     values: list[float] = []
-    column_values: list[float] = []
+    cells: list[tuple[str, Any]] = []
     for index, row in enumerate(rows):
         if not isinstance(row, Mapping) or not {"value", column} <= row.keys():
             raise ValueError(
                 f"{rows_field}[{index}] must be an object with 'value' and {column!r}, got {row!r}"
             )
         values.append(as_finite_float(row["value"], f"{rows_field}[{index}].value"))
-        column_values.append(as_number(row[column], f"{rows_field}[{index}].{column}"))
-    return {"values": values, grammar_key: column_values}
+        cells.append((f"{rows_field}[{index}].{column}", row[column]))
+    return {"values": values, grammar_key: list(read_column(cells))}
+
+
+def _finite_floats(cells: list[tuple[str, Any]]) -> list[float]:
+    """Each of *cells*, a row's cell with its field, read by as_finite_float under that field."""
+    return [as_finite_float(value, field) for field, value in cells]
