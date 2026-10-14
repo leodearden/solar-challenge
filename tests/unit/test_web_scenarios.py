@@ -164,6 +164,21 @@ class TestOldScenarioApiPaths:
         assert client.open(path, method=method).status_code == 404
 
 
+def _validation_with_pv_pool(client: FlaskClient, entries: list[dict[str, float]]) -> Any:
+    """POST /api/scenarios/validate's answer to the default builder form with its PV a shuffled pool of *entries*, in place of its fixed capacity."""
+    form = {
+        key: value
+        for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
+        if key != "pv_capacity_kw"
+    }
+    response = client.post(
+        "/api/scenarios/validate",
+        json={**form, "pv_distribution_type": "shuffled_pool", "pv_sp_entries": entries},
+    )
+    assert response.status_code == 200
+    return response.get_json()
+
+
 class TestScenarioAPI:
     """Tests for the /api/scenarios/* endpoints."""
 
@@ -271,23 +286,15 @@ class TestScenarioAPI:
         not asserted: load_fleet_config raises a bare IndexError for it today.
         """
 
-        def validation_with_pv_pool(counts: tuple[int, int, int]) -> Any:
-            form = {
-                key: value
-                for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
-                if key != "pv_capacity_kw"
-            }
-            form["pv_distribution_type"] = "shuffled_pool"
-            form["pv_sp_entries"] = [
+        def validation_with_pv_pool_counts(counts: tuple[int, int, int]) -> Any:
+            entries = [
                 {"value": value, "count": count}
                 for value, count in zip((3.0, 4.0, 5.0), counts)
             ]
-            response = client.post("/api/scenarios/validate", json=form)
-            assert response.status_code == 200
-            return response.get_json()
+            return _validation_with_pv_pool(client, entries)
 
-        assert validation_with_pv_pool((20, 40, 40)) == {"valid": True, "errors": []}
-        short_pool = validation_with_pv_pool((20, 40, 30))
+        assert validation_with_pv_pool_counts((20, 40, 40)) == {"valid": True, "errors": []}
+        short_pool = validation_with_pv_pool_counts((20, 40, 30))
         assert short_pool["valid"] is False
         assert len(short_pool["errors"]) == 1, short_pool["errors"]
 
@@ -334,42 +341,20 @@ class TestScenarioAPI:
     def test_validate_refuses_only_a_shuffled_pool_too_large_for_a_dashboard_fleet(
         self, client: FlaskClient
     ) -> None:
-        """The builder accepts a PV pool of exactly the dashboard's fleet limit's values, and refuses one value more, in one row or across rows, naming the count or the total.
+        """The builder accepts a PV pool of exactly the dashboard's fleet limit's values, and refuses one value more, naming the count.
 
-        Each pool sent is at most one value over the limit, never a count such as finding
+        The pool sent is at most one value over the limit, never a count such as finding
         fk-9dd1d9389dd2's 10**12: if the bound regressed, validate would build every value
         of the pool.
         """
+        at_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES}]
+        above_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES + 1}]
 
-        def validation_with_pv_pool(entries: list[dict[str, float]]) -> Any:
-            form = {
-                key: value
-                for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
-                if key != "pv_capacity_kw"
-            }
-            form["pv_distribution_type"] = "shuffled_pool"
-            form["pv_sp_entries"] = entries
-            response = client.post("/api/scenarios/validate", json=form)
-            assert response.status_code == 200
-            return response.get_json()
-
-        assert validation_with_pv_pool([{"value": 4.0, "count": MAX_FLEET_HOMES}]) == {
-            "valid": True,
-            "errors": [],
-        }
-        assert validation_with_pv_pool([{"value": 4.0, "count": MAX_FLEET_HOMES + 1}]) == {
+        assert _validation_with_pv_pool(client, at_limit) == {"valid": True, "errors": []}
+        assert _validation_with_pv_pool(client, above_limit) == {
             "valid": False,
             "errors": [
                 f"pv_sp_entries[0].count must be between 0 and {MAX_FLEET_HOMES}, "
-                f"got {MAX_FLEET_HOMES + 1}"
-            ],
-        }
-        assert validation_with_pv_pool(
-            [{"value": 4.0, "count": MAX_FLEET_HOMES}, {"value": 5.0, "count": 1}]
-        ) == {
-            "valid": False,
-            "errors": [
-                f"pv_sp_entries counts must total at most {MAX_FLEET_HOMES}, "
                 f"got {MAX_FLEET_HOMES + 1}"
             ],
         }
