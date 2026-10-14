@@ -47,8 +47,6 @@ if "site-packages" not in pkg_file:
 
 # ---------------------------------------------------------------------------
 # 3. Resolve every name in __all__ and classify it.
-#    Pattern adapted from tests/unit/test_init_lazy_surface.py:47-64,
-#    but running in the isolated subprocess against the installed wheel.
 # ---------------------------------------------------------------------------
 failures: list[str] = []
 
