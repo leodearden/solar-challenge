@@ -15,6 +15,7 @@ pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.web.charts import (
+    COLOUR_PALETTE,
     battery_soc_chart,
     daily_energy_balance,
     financial_breakdown,
@@ -295,7 +296,29 @@ class TestChartTotals:
         assert by_name["Daily Cost"]["x"] == ["2024-06-01", "2024-06-02"]
         assert by_name["Daily Cost"]["y"] == [2.88, 2.88]
         assert by_name["Daily Revenue"]["y"] == [1.44, 1.44]
-        assert by_name["Cumulative Net Savings"]["y"] == [-1.44, -2.88]
+
+
+class TestFinancialBreakdownNetCostLine:
+    """financial_breakdown's line is the run's net cost to date: its import cost less its export revenue, summed day by day."""
+
+    def test_is_the_running_total_of_each_days_import_cost_less_its_export_revenue(self) -> None:
+        line = traces_by_name(
+            financial_breakdown(_steady_run(2, import_cost_gbp=0.002, export_revenue_gbp=0.001))
+        )["Cumulative Net Cost"]
+
+        # £2.88 of import cost less £1.44 of export revenue each day.
+        assert line["y"] == [1.44, 2.88]
+
+    def test_is_drawn_against_the_secondary_axis_titled_for_it_in_the_net_cost_colour(self) -> None:
+        figure = financial_breakdown(
+            make_sinusoidal_sim_results(days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05)
+        )
+
+        line = traces_by_name(figure)["Cumulative Net Cost"]
+
+        assert line["yaxis"] == "y2"
+        assert json.loads(figure)["layout"]["yaxis2"]["title"]["text"] == "Cumulative Net Cost (GBP)"
+        assert line["line"]["color"] == COLOUR_PALETTE["net_cost"]
 
 
 class TestFinancialBreakdownPricing:
