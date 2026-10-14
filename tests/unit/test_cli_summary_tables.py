@@ -1,12 +1,25 @@
 """Tests of the summary tables `home run`, `home quick` and `fleet run` print: the (metric, value) rows cli.utils builds from a home's SummaryStatistics and from a fleet's FleetSummary."""
 
 import dataclasses
+from pathlib import Path
 
 import pytest
+import yaml
+from typer.testing import CliRunner
 
+from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import fleet_summary_rows, home_summary_rows
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
+from solar_challenge.location import Location
+from solar_challenge.weather import WeatherCache
+from tests._synthetic_weather import synthetic_june_weather
+
+_HOME = {
+    "pv": {"capacity_kw": 4.0},
+    "battery": {"capacity_kwh": 5.0},
+    "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+}
 
 _FLEET_MONEY_FIELDS_AND_METRICS = [
     ("total_import_cost_gbp", "Grid Import Cost"),
@@ -80,6 +93,20 @@ def _fleet_summary(**changes: float | None) -> FleetSummary:
     return dataclasses.replace(every_field_set, **changes)
 
 
+@pytest.fixture
+def clear_june_in_tmp_path(
+    weather_cache: WeatherCache, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Serve a clear 21 June as the TMY of Bristol, where a config with no location simulates, and work in tmp_path, where each test writes its config."""
+    weather_cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+    monkeypatch.chdir(tmp_path)
+
+
+def _printed_metrics(stdout: str) -> list[str]:
+    """The metric cell of each body row of the Rich table on stdout, in order; only body rows open with "│", since the header opens with "┃" and the borders with "┏", "┡" and "└"."""
+    return [line.split("│")[1].strip() for line in stdout.splitlines() if line.startswith("│")]
+
+
 class TestHomeSummaryRows:
     """Tests of home_summary_rows, the rows `home run` and `home quick` print."""
 
@@ -150,3 +177,71 @@ class TestFleetSummaryRows:
 
         money_metrics = {metric for _field, metric in _FLEET_MONEY_FIELDS_AND_METRICS}
         assert [metric for metric, _value in rows if metric in money_metrics] == []
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestPrintedSummaryTables:
+    """Tests of the metrics each simulate command's summary table prints on stdout, read row by row."""
+
+    def test_fleet_run_prints_the_fleets_ratios_and_net_cost(self) -> None:
+        """`fleet run` prints the fleet's own ratios and net cost among its totals, then, after a blank row, its homes' spread, each row once.
+
+        It prints no SEG Revenue row, since `fleet run` gives the fleet's summary no SEG rate.
+        """
+        Path("scenario.yaml").write_text(yaml.safe_dump({"name": "Bristol", "homes": [_HOME]}))
+
+        result = CliRunner().invoke(
+            app,
+            ["fleet", "run", "scenario.yaml", "--start", "2024-06-21", "--end", "2024-06-21", "--sequential"],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert _printed_metrics(result.stdout) == [
+            "Total Generation",
+            "Total Demand",
+            "Self-Consumption",
+            "Grid Import",
+            "Grid Export",
+            "Self-Consumption Ratio",
+            "Grid Dependency",
+            "Number of Homes",
+            "Simulation Days",
+            "Grid Import Cost",
+            "Grid Export Revenue",
+            "Net Cost",
+            "",
+            "Per-Home Generation (min/max)",
+            "Per-Home Generation (mean)",
+            "Self-Consumption Ratio (min/max)",
+            "Self-Consumption Ratio (mean)",
+        ]
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["home", "run", "home.yaml", "--start", "2024-06-21", "--end", "2024-06-21"],
+            ["home", "quick", "4", "5", "--days", "1"],
+        ],
+        ids=["home-run", "home-quick"],
+    )
+    def test_home_commands_print_the_homes_rows(self, argv: list[str]) -> None:
+        """`home run`, which reads home.yaml, and `home quick` print the home's energy totals, ratios, days and money figures."""
+        Path("home.yaml").write_text(yaml.safe_dump({"home": {"name": "Bristol", **_HOME}}))
+
+        result = CliRunner().invoke(app, argv, catch_exceptions=False)
+
+        assert result.exit_code == 0
+        assert _printed_metrics(result.stdout) == [
+            "Total Generation",
+            "Total Demand",
+            "Self-Consumption",
+            "Grid Import",
+            "Grid Export",
+            "Self-Consumption Ratio",
+            "Grid Dependency",
+            "Simulation Days",
+            "Grid Import Cost",
+            "Grid Export Revenue",
+            "Net Cost",
+        ]
