@@ -169,3 +169,26 @@ def test_without_economics_flags_the_fleet_is_simulated_once(
 
     assert result.exit_code == 0, result.output
     assert len(simulator.requests) == 1
+
+
+def test_the_simulator_receives_the_fleet_paid_the_scenarios_seg_rate_over_the_window(
+    tmp_path: Path, fleet_results: FleetResults
+) -> None:
+    """finance run simulates the scenario's homes, each paid the scenario's SEG rate, over the --start to --end window in the scenario's timezone."""
+    simulator = _RecordingSimulator(fleet_results)
+    scenario = _write_scenario(tmp_path, seg_rate=5.5)
+
+    result = invoke_cli(
+        ["finance", "run", str(scenario), "--start", "2024-06-01", "--end", "2024-06-07"],
+        simulator,
+    )
+
+    assert result.exit_code == 0, result.output
+    fleet_config, start, end = simulator.requests[0]
+    assert [
+        home.seg_tariff.rate_pence_per_kwh if home.seg_tariff is not None else None
+        for home in fleet_config.homes
+    ] == [5.5, 5.5]
+    assert start == pd.Timestamp("2024-06-01", tz="Europe/London")
+    assert end == pd.Timestamp("2024-06-07", tz="Europe/London")
+    assert "Simulating fleet of 2 homes for 7 days…" in " ".join(result.stderr.split())
