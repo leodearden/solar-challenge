@@ -2,6 +2,7 @@
 """Tests for POST /api/simulate/home and POST /api/simulate/fleet, and for how the simulate endpoints parse and refuse a home config."""
 
 import math
+from collections.abc import Callable
 from unittest.mock import NonCallableMagicMock
 
 import pytest
@@ -589,33 +590,54 @@ class TestParseHomeConfigErrorPaths:
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
+        "location",
+        [
+            pytest.param("Paris", id="unknown-place"),
+            pytest.param("95,0", id="latitude-out-of-range"),
+        ],
+    )
+    @pytest.mark.parametrize(
         ("url", "body"),
         [
             pytest.param(
-                "/api/simulate/home", {**VALID_HOME_PAYLOAD, "location": "Paris"}, id="home"
+                "/api/simulate/home",
+                lambda location: {**VALID_HOME_PAYLOAD, "location": location},
+                id="home",
             ),
             pytest.param(
                 "/api/simulate/fleet",
-                {"homes": [VALID_HOME_PAYLOAD, {**VALID_HOME_PAYLOAD, "location": "Paris"}]},
+                lambda location: {
+                    "homes": [VALID_HOME_PAYLOAD, {**VALID_HOME_PAYLOAD, "location": location}]
+                },
                 id="fleet-later-home",
             ),
             pytest.param(
                 "/api/simulate/sweep",
-                {"min": 1, "max": 5, "steps": 2, "base_config": {"location": "Paris"}},
+                lambda location: {
+                    "min": 1,
+                    "max": 5,
+                    "steps": 2,
+                    "base_config": {"location": location},
+                },
                 id="sweep",
             ),
         ],
     )
     def test_location_it_cannot_resolve_returns_400_carrying_the_refusal_and_submits_nothing(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, url: str, body: dict
+        self,
+        client: FlaskClient,
+        mock_job_manager: NonCallableMagicMock,
+        url: str,
+        body: Callable[[str], dict[str, object]],
+        location: str,
     ) -> None:
         """A location resolve_location refuses is a 400 carrying its refusal, never a run at Bristol; nothing is submitted."""
-        resp = client.post(url, json=body)
+        resp = client.post(url, json=body(location))
         assert resp.status_code == 400
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
         with pytest.raises(ValueError) as refusal:
-            resolve_location("Paris")
+            resolve_location(location)
         assert str(refusal.value) in resp.get_json()["error"]
 
 
