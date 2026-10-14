@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Finance CLI commands for householder bill and distribution analysis (δ surface)."""
+"""Finance CLI commands for householder bill and distribution analysis."""
 
 import dataclasses
 import enum
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import pandas as pd
 import typer
@@ -31,8 +32,9 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.flex import FlexibilityValueBand, resolve_flex_band
-from solar_challenge.fleet import FleetResults
+from solar_challenge.flex import resolve_flex_band
+from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.gridservices import GridServicesAtEvents, compute_grid_services_at_events
 from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEGTariff
@@ -54,6 +56,46 @@ class FlexBand(str, enum.Enum):
     low = "low"
     central = "central"
     high = "high"
+
+
+def _required_finance_block(raw: Mapping[str, Any]) -> FinanceConfig:
+    """The scenario's parsed finance: block, raising ConfigurationError when it has none."""
+    finance = parse_finance_config(raw.get("finance"))
+    if finance is None:
+        raise ConfigurationError(
+            "No 'finance:' block found in the scenario file. "
+            "Add a finance: block with at least standing_charge_pence_per_day."
+        )
+    return finance
+
+
+def _flex_band_name(flag: Optional[FlexBand], scenario_value: object) -> Optional[str]:
+    """The flexibility band to report: the --flex-band flag's, else the scenario's flex_band key lower-cased to match the flag's case-insensitive values, else None."""
+    if flag is not None:
+        return flag.value
+    if isinstance(scenario_value, str):
+        return scenario_value.lower()
+    return None
+
+
+def _with_seg_tariff(fleet_config: FleetConfig, seg_rate: Optional[float]) -> FleetConfig:
+    """*fleet_config* with *seg_rate* pence/kWh as every home's SEG export tariff (load_fleet_config sets none), or *fleet_config* itself when *seg_rate* is None."""
+    if seg_rate is None:
+        return fleet_config
+    seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
+    return dataclasses.replace(
+        fleet_config,
+        homes=[dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet_config.homes],
+    )
+
+
+def _grid_services_at_events(
+    fleet_results: FleetResults, finance: FinanceConfig
+) -> Optional[GridServicesAtEvents]:
+    """The capacity-at-events grid-services income of *fleet_results* when *finance* prices grid services that way, else None."""
+    if finance.grid_services_model != "capacity_at_events" or finance.grid_services_events is None:
+        return None
+    return compute_grid_services_at_events(fleet_results, finance.grid_services_events)
 
 
 def _bill_finances(
@@ -181,72 +223,26 @@ def run(
         solar-challenge finance run scenarios/bristol-phase1.yaml \\
             --assumptions both --start 2024-06-01 --end 2024-08-31
     """
-    # ---- Load raw config + finance block ------------------------------------
     raw = load_config(scenario)
-    finance = parse_finance_config(raw.get("finance"))
+    finance = _required_finance_block(raw)
+    band_name = _flex_band_name(flex_band, raw.get("flex_band"))
+    resolved_flex_band = resolve_flex_band(band_name) if band_name else None
 
-    # ---- Resolve flexibility band (CLI flag > scenario key > None) ----------
-    # Scenario-level values are normalised to lowercase to match the CLI's
-    # case-insensitive FlexBand enum behaviour (e.g. "Central" → "central").
-    _raw_band = raw.get("flex_band")
-    band_name: Optional[str] = (
-        flex_band.value
-        if flex_band is not None
-        else (_raw_band.lower() if isinstance(_raw_band, str) else None)
-    )
-    resolved_flex_band: Optional[FlexibilityValueBand] = (
-        resolve_flex_band(band_name) if band_name else None
-    )
-    if finance is None:
-        raise ConfigurationError(
-            "No 'finance:' block found in the scenario file. "
-            "Add a finance: block with at least standing_charge_pence_per_day."
-        )
-
-    # ---- Load fleet config --------------------------------------------------
     fleet_config = load_fleet_config(scenario)
-
-    # Thread SEG tariff onto each home (load_fleet_config does not do this)
     seg_rate = parse_seg_rate(raw.get("seg"))
-    if seg_rate is not None:
-        seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
-        homes_with_seg = [
-            dataclasses.replace(home, seg_tariff=seg_tariff)
-            for home in fleet_config.homes
-        ]
-        fleet_config = dataclasses.replace(fleet_config, homes=homes_with_seg)
+    fleet_config = _with_seg_tariff(fleet_config, seg_rate)
 
-    # ---- Parse dates --------------------------------------------------------
     loc = fleet_config.homes[0].location
     start_date = pd.Timestamp(start, tz=loc.timezone)
     end_date = pd.Timestamp(end, tz=loc.timezone)
     days = (end_date - start_date).days + 1
 
-    n_homes = len(fleet_config.homes)
-    print_info(f"Simulating fleet of {n_homes} homes for {days} days…")
-
-    # ---- Simulate fleet -----------------------------------------------------
+    print_info(f"Simulating fleet of {len(fleet_config.homes)} homes for {days} days…")
     simulator = ctx.ensure_object(CliFleetSimulator)
-    fleet_results: FleetResults = simulator.simulate(fleet_config, start_date, end_date)
+    fleet_results = simulator.simulate(fleet_config, start_date, end_date)
+    grid_services_at_events = _grid_services_at_events(fleet_results, finance)
 
-    # ---- Capacity-at-events grid-services figure (ε / task-76) -------------
-    # Computed once from the already-available fleet_results; None for flat model.
-    from solar_challenge.gridservices import GridServicesAtEvents as _GSAtEvents
-    from solar_challenge.gridservices import compute_grid_services_at_events as _cgs
-
-    _grid_services_at_events: Optional[_GSAtEvents] = (
-        _cgs(fleet_results, finance.grid_services_events)
-        if finance.grid_services_model == "capacity_at_events"
-        and finance.grid_services_events is not None
-        else None
-    )
-
-    # ---- Per-home summaries -------------------------------------------------
-    summaries = [
-        calculate_summary(r) for r in fleet_results.per_home_results
-    ]
-
-    # ---- Build bill distributions -------------------------------------------
+    summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
     primary_finance, spreadsheet_finance = _bill_finances(assumptions, finance)
     primary_bill = bill_distribution(summaries, primary_finance, days)
     spreadsheet_bill: Optional[BillDistribution] = (
@@ -267,7 +263,6 @@ def run(
         scenario_config, finance, simulator, project=project, cost_recovery=cost_recovery
     )
 
-    # ---- Render report ------------------------------------------------------
     report = generate_finance_report(
         primary_bill,
         spreadsheet_bill,
@@ -276,7 +271,6 @@ def run(
         cost_recovery=cost_recovery_result,
         flex_band=resolved_flex_band,
         flex_band_name=band_name or "",
-        grid_services_at_events=_grid_services_at_events,
+        grid_services_at_events=grid_services_at_events,
     )
-
     print_report(report)
