@@ -347,25 +347,27 @@ def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
         raise ValueError(f"Unknown strategy type: {strategy_type}")
 
 
-_Timestep = Callable[[pd.Timestamp, float, float], EnergyFlowResult]
-"""One minute of a run's dispatch: that minute's timestamp, generation in kW and demand in kW, to its flows."""
+_Timestep = Callable[[Optional[Battery], pd.Timestamp, float, float], EnergyFlowResult]
+"""One minute of a run's dispatch, which charges and discharges the run's battery, if it has one.
+
+From that battery and the minute's timestamp, generation in kW and demand in kW, to the minute's flows.
+"""
 
 
 @dataclass(frozen=True)
 class _DispatchPath:
-    """How a run dispatches each minute, and the strategy name its results record.
-
-    The timestep charges and discharges the run's own battery.
-    """
+    """How a run dispatches each minute, and the strategy name its results record."""
 
     strategy_name: str
     timestep: _Timestep
 
 
-def _tariff_tou_timestep(battery: Optional[Battery], tariff: TariffConfig) -> _Timestep:
+def _tariff_tou_timestep(tariff: TariffConfig) -> _Timestep:
     """Each minute dispatched at the tariff's rates by simulate_timestep_tou."""
 
-    def timestep(timestamp: pd.Timestamp, generation_kw: float, demand_kw: float) -> EnergyFlowResult:
+    def timestep(
+        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
+    ) -> EnergyFlowResult:
         return simulate_timestep_tou(
             generation_kw=generation_kw,
             demand_kw=demand_kw,
@@ -378,14 +380,12 @@ def _tariff_tou_timestep(battery: Optional[Battery], tariff: TariffConfig) -> _T
     return timestep
 
 
-def _strategy_timestep(
-    battery: Optional[Battery],
-    strategy: DispatchStrategy,
-    tariff: Optional[TariffConfig],
-) -> _Timestep:
+def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig]) -> _Timestep:
     """Each minute dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates."""
 
-    def timestep(timestamp: pd.Timestamp, generation_kw: float, demand_kw: float) -> EnergyFlowResult:
+    def timestep(
+        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
+    ) -> EnergyFlowResult:
         return simulate_timestep(
             generation_kw=generation_kw,
             demand_kw=demand_kw,
@@ -406,29 +406,31 @@ def _dispatch_path(config: HomeConfig) -> _DispatchPath:
     battery names no strategy of its own; otherwise its battery's strategy, self-consumption
     by default.
     """
-    battery = None if config.battery_config is None else Battery(config.battery_config)
     tariff = config.tariff_config
     battery_names_a_strategy = config.battery_config is not None and config.battery_config.dispatch_strategy is not None
     if config.dispatch_strategy == "tou_optimized" and tariff is not None and not battery_names_a_strategy:
-        return _DispatchPath("tou_optimized", _tariff_tou_timestep(battery, tariff))
+        return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff))
     strategy = _create_dispatch_strategy(config)
-    return _DispatchPath(strategy.name, _strategy_timestep(battery, strategy, tariff))
+    return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff))
 
 
 def _minute_flows(
     timestep: _Timestep,
+    battery_config: Optional[BatteryConfig],
     generation_kw: pd.Series,
     demand_kw: pd.Series,
     validate_balance: bool,
 ) -> list[EnergyFlowResult]:
     """Each minute's flows, in order, from timestep run on that minute's generation and demand.
 
-    With validate_balance, each minute's flows are checked for energy balance before the next
-    minute runs, so an imbalance stops the run at the minute it occurs.
+    The run's battery, built from battery_config when it is set, carries its state of charge
+    from each minute to the next. With validate_balance, each minute's flows are checked for
+    energy balance before the next minute runs, so an imbalance stops the run at the minute it occurs.
     """
+    battery = None if battery_config is None else Battery(battery_config)
     flows: list[EnergyFlowResult] = []
     for timestamp, generation, demand in zip(demand_kw.index, generation_kw, demand_kw, strict=True):
-        flow = timestep(timestamp, float(generation), float(demand))
+        flow = timestep(battery, timestamp, float(generation), float(demand))
         if validate_balance:
             validate_energy_balance(flow)
         flows.append(flow)
@@ -555,7 +557,7 @@ def simulate_home(
     minutes = demand.total_kw.index
     generation_kw = align_tmy_to_index(minute_generation, minutes)
     dispatch = _dispatch_path(config)
-    flows = _minute_flows(dispatch.timestep, generation_kw, demand.total_kw, validate_balance)
+    flows = _minute_flows(dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, validate_balance)
     import_pricing = _price_imports(config.tariff_config, flows, minutes)
     export_revenue = _export_revenue(config.seg_tariff, flows, minutes)
     if config.tariff_config is not None and config.seg_tariff is None:
