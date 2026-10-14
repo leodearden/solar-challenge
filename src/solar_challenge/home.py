@@ -2,7 +2,7 @@
 """Single home simulation combining PV, battery, and load."""
 
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
@@ -259,6 +259,64 @@ class SummaryStatistics:
             )
 
 
+def _hourly_weather(config: HomeConfig, weather_data: pd.DataFrame | None) -> pd.DataFrame:
+    """The hourly weather a run uses: weather_data, or config.location's TMY year from get_tmy_data when it is None.
+
+    Raises:
+        ValueError: If the home has a heat pump and the weather is not one year of hourly rows.
+    """
+    weather = get_tmy_data(config.location) if weather_data is None else weather_data
+    if config.heat_pump_config is not None and len(weather) not in _YEAR_LENGTHS_IN_HOURS:
+        raise ValueError(
+            f"weather_data has {len(weather):,} rows, not one year of hourly rows "
+            f"({_YEAR_LENGTHS_IN_HOURS.start:,} to {_YEAR_LENGTHS_IN_HOURS[-1]:,}): a heat pump's "
+            "annual_heat_demand_kwh is shared out over the heating degree-minutes of this whole year, "
+            "so pass one TMY year of hourly weather, as get_tmy_data returns."
+        )
+    return weather
+
+
+@dataclass(frozen=True)
+class _Demand:
+    """A run's demand in kW on its minutes: the household's load, EV charging included, plus any heat pump's load.
+
+    heat_pump_kw is None without a heat pump.
+    """
+
+    total_kw: pd.Series
+    heat_pump_kw: Optional[pd.Series]
+
+
+def _heat_pump_load(
+    heat_pump: HeatPumpConfig,
+    hourly_temperature_c: pd.Series,
+    minutes: pd.DatetimeIndex,
+) -> pd.Series:
+    """The heat pump's electrical load in kW on minutes.
+
+    Its annual heat demand is shared out over the whole TMY year's air temperature.
+    """
+    minute_temperature = interpolate_to_minute_resolution(hourly_temperature_c)
+    return generate_heat_pump_load(
+        heat_pump, align_tmy_to_index(minute_temperature, minutes), annual_temperature_c=minute_temperature
+    )
+
+
+def _demand(config: HomeConfig, weather: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Timestamp) -> _Demand:
+    """The home's demand from start_date to end_date, on its location's clock, with any heat pump run on weather."""
+    household_kw = generate_load_profile(
+        config.load_config,
+        start_date,
+        end_date,
+        timezone=config.location.timezone,
+        ev_config=config.ev_config,
+    )
+    if config.heat_pump_config is None:
+        return _Demand(household_kw, None)
+    heat_pump_kw = _heat_pump_load(config.heat_pump_config, weather["temp_air"], household_kw.index)
+    return _Demand(household_kw + heat_pump_kw, heat_pump_kw)
+
+
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
     """Create dispatch strategy from battery config.
 
@@ -289,6 +347,182 @@ def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
         raise ValueError(f"Unknown strategy type: {strategy_type}")
 
 
+_Timestep = Callable[[Optional[Battery], pd.Timestamp, float, float], EnergyFlowResult]
+"""One minute of a run's dispatch, which charges and discharges the run's battery, if it has one.
+
+From that battery and the minute's timestamp, generation in kW and demand in kW, to the minute's flows.
+"""
+
+
+@dataclass(frozen=True)
+class _DispatchPath:
+    """How a run dispatches each minute, and the strategy name its results record."""
+
+    strategy_name: str
+    timestep: _Timestep
+
+
+def _tariff_tou_timestep(tariff: TariffConfig) -> _Timestep:
+    """Each minute dispatched at the tariff's rates by simulate_timestep_tou."""
+
+    def timestep(
+        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
+    ) -> EnergyFlowResult:
+        return simulate_timestep_tou(
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery=battery,
+            timestamp=timestamp,
+            tariff=tariff,
+            timestep_minutes=1.0,
+        )
+
+    return timestep
+
+
+def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig]) -> _Timestep:
+    """Each minute dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates."""
+
+    def timestep(
+        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
+    ) -> EnergyFlowResult:
+        return simulate_timestep(
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery=battery,
+            timestep_minutes=1.0,
+            timestamp=timestamp.to_pydatetime(),
+            strategy=strategy,
+            tariff=tariff,
+        )
+
+    return timestep
+
+
+def _dispatch_path(config: HomeConfig) -> _DispatchPath:
+    """How the home dispatches each minute.
+
+    It takes the tariff-rate TOU path when it asks for tou_optimized, has a tariff and its
+    battery names no strategy of its own; otherwise its battery's strategy, self-consumption
+    by default.
+    """
+    tariff = config.tariff_config
+    battery_names_a_strategy = config.battery_config is not None and config.battery_config.dispatch_strategy is not None
+    if config.dispatch_strategy == "tou_optimized" and tariff is not None and not battery_names_a_strategy:
+        return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff))
+    strategy = _create_dispatch_strategy(config)
+    return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff))
+
+
+def _minute_flows(
+    timestep: _Timestep,
+    battery_config: Optional[BatteryConfig],
+    generation_kw: pd.Series,
+    demand_kw: pd.Series,
+    validate_balance: bool,
+) -> list[EnergyFlowResult]:
+    """Each minute's flows, in order, from timestep run on that minute's generation and demand.
+
+    The run's battery, built from battery_config when it is set, carries its state of charge
+    from each minute to the next. With validate_balance, each minute's flows are checked for
+    energy balance before the next minute runs, so an imbalance stops the run at the minute it occurs.
+    """
+    battery = None if battery_config is None else Battery(battery_config)
+    flows: list[EnergyFlowResult] = []
+    for timestamp, generation, demand in zip(demand_kw.index, generation_kw, demand_kw, strict=True):
+        flow = timestep(battery, timestamp, float(generation), float(demand))
+        if validate_balance:
+            validate_energy_balance(flow)
+        flows.append(flow)
+    return flows
+
+
+@dataclass(frozen=True)
+class _ImportPricing:
+    """Each minute's tariff rate in £/kWh, import cost in £ and grid-charging cost in £, None on an untariffed run."""
+
+    tariff_rate: pd.Series
+    import_cost: pd.Series
+    grid_charge_cost: Optional[pd.Series]
+
+
+def _price_imports(
+    tariff: Optional[TariffConfig],
+    flows: Sequence[EnergyFlowResult],
+    minutes: pd.DatetimeIndex,
+) -> _ImportPricing:
+    """Each minute's import priced at the tariff's rate for that minute.
+
+    An untariffed run's rates and costs are 0.0, and it prices no grid charging.
+    """
+    if tariff is None:
+        return _ImportPricing(
+            tariff_rate=pd.Series([0.0] * len(flows), index=minutes),
+            import_cost=pd.Series([0.0] * len(flows), index=minutes),
+            grid_charge_cost=None,
+        )
+    rates = [tariff.get_rate(minute) for minute in minutes]
+    return _ImportPricing(
+        tariff_rate=pd.Series(rates, index=minutes),
+        import_cost=pd.Series(
+            [flow.grid_import * rate for flow, rate in zip(flows, rates, strict=True)], index=minutes
+        ),
+        grid_charge_cost=pd.Series(
+            [flow.grid_charge * rate for flow, rate in zip(flows, rates, strict=True)], index=minutes
+        ),
+    )
+
+
+def _export_revenue(
+    seg_tariff: Optional[SEGTariff],
+    flows: Sequence[EnergyFlowResult],
+    minutes: pd.DatetimeIndex,
+) -> pd.Series:
+    """Each minute's export valued at the SEG rate, never the import rate, or at nothing without an SEG."""
+    if seg_tariff is None:
+        return pd.Series([0.0] * len(flows), index=minutes)
+    return pd.Series([calculate_seg_revenue(flow.grid_export, seg_tariff) for flow in flows], index=minutes)
+
+
+_MINUTE_KWH_TO_KW = 1 / HOURS_PER_MINUTE
+
+
+def _results(
+    flows: Sequence[EnergyFlowResult],
+    minutes: pd.DatetimeIndex,
+    *,
+    import_pricing: _ImportPricing,
+    export_revenue: pd.Series,
+    heat_pump_load: Optional[pd.Series],
+    strategy_name: str,
+) -> SimulationResults:
+    """The run's results on its minutes.
+
+    Each flow's power in kW, the battery's state of charge in kWh, and the run's prices.
+    """
+
+    def power_kw(minute_kwh: Callable[[EnergyFlowResult], float]) -> pd.Series:
+        return pd.Series([minute_kwh(flow) * _MINUTE_KWH_TO_KW for flow in flows], index=minutes)
+
+    return SimulationResults(
+        strategy_name=strategy_name,
+        generation=power_kw(lambda flow: flow.generation),
+        demand=power_kw(lambda flow: flow.demand),
+        self_consumption=power_kw(lambda flow: flow.self_consumption),
+        battery_charge=power_kw(lambda flow: flow.battery_charge),
+        battery_discharge=power_kw(lambda flow: flow.battery_discharge),
+        battery_soc=pd.Series([flow.battery_soc for flow in flows], index=minutes),
+        grid_import=power_kw(lambda flow: flow.grid_import),
+        grid_export=power_kw(lambda flow: flow.grid_export),
+        import_cost=import_pricing.import_cost,
+        export_revenue=export_revenue,
+        tariff_rate=import_pricing.tariff_rate,
+        heat_pump_load=heat_pump_load,
+        grid_charge_cost=import_pricing.grid_charge_cost,
+        grid_charge=None if import_pricing.grid_charge_cost is None else power_kw(lambda flow: flow.grid_charge),
+    )
+
+
 def simulate_home(
     config: HomeConfig,
     start_date: pd.Timestamp,
@@ -317,158 +551,29 @@ def simulate_home(
         ValueError: If a heat pump is configured and weather_data is not one
             year of hourly rows.
     """
-    # Get weather data (TMY for now)
-    if weather_data is None:
-        weather_data = get_tmy_data(config.location)
-    if config.heat_pump_config is not None and len(weather_data) not in _YEAR_LENGTHS_IN_HOURS:
-        raise ValueError(
-            f"weather_data has {len(weather_data):,} rows, not one year of hourly rows "
-            f"({_YEAR_LENGTHS_IN_HOURS.start:,} to {_YEAR_LENGTHS_IN_HOURS[-1]:,}): a heat pump's "
-            "annual_heat_demand_kwh is shared out over the heating degree-minutes of this whole year, "
-            "so pass one TMY year of hourly weather, as get_tmy_data returns."
+    weather = _hourly_weather(config, weather_data)
+    minute_generation = interpolate_to_minute_resolution(simulate_pv_output(config.pv_config, config.location, weather))
+    demand = _demand(config, weather, start_date, end_date)
+    minutes = demand.total_kw.index
+    generation_kw = align_tmy_to_index(minute_generation, minutes)
+    dispatch = _dispatch_path(config)
+    flows = _minute_flows(dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, validate_balance)
+    import_pricing = _price_imports(config.tariff_config, flows, minutes)
+    export_revenue = _export_revenue(config.seg_tariff, flows, minutes)
+    if config.tariff_config is not None and config.seg_tariff is None:
+        warnings.warn(
+            "tariff_config is set but seg_tariff is None: export_revenue will be 0.0. "
+            "Configure HomeConfig.seg_tariff to value grid exports at the SEG/export rate.",
+            UserWarning,
+            stacklevel=2,
         )
-
-    # Generate PV output at hourly resolution
-    hourly_generation = simulate_pv_output(
-        config.pv_config,
-        config.location,
-        weather_data,
-    )
-
-    # Interpolate to 1-minute resolution
-    minute_generation = interpolate_to_minute_resolution(hourly_generation)
-
-    # Generate load profile at 1-minute resolution
-    minute_demand = generate_load_profile(
-        config.load_config,
-        start_date,
-        end_date,
-        timezone=config.location.timezone,
-        ev_config=config.ev_config,
-    )
-
-    # Generate and add heat pump load if configured
-    heat_pump_load_series: Optional[pd.Series] = None
-    if config.heat_pump_config is not None:
-        hourly_temperature = weather_data["temp_air"]
-        minute_temperature = interpolate_to_minute_resolution(hourly_temperature)
-        aligned_temperature = align_tmy_to_index(minute_temperature, minute_demand.index)
-        heat_pump_load_series = generate_heat_pump_load(
-            config.heat_pump_config,
-            aligned_temperature,
-            annual_temperature_c=minute_temperature,
-        )
-        minute_demand = minute_demand + heat_pump_load_series
-
-    aligned_generation = align_tmy_to_index(minute_generation, minute_demand.index)
-
-    # Create battery if configured
-    battery: Optional[Battery] = None
-    if config.battery_config is not None:
-        battery = Battery(config.battery_config)
-
-    # Determine dispatch approach:
-    # 1. BatteryConfig.dispatch_strategy (Strategy pattern from dispatch.py)
-    # 2. HomeConfig.dispatch_strategy == "tou_optimized" with tariff (tariff-based TOU)
-    # 3. Default: SelfConsumptionStrategy
-    use_tariff_tou = (
-        config.dispatch_strategy == "tou_optimized"
-        and config.tariff_config is not None
-        and (config.battery_config is None or config.battery_config.dispatch_strategy is None)
-    )
-
-    strategy: Optional[DispatchStrategy] = None
-    strategy_name = "self_consumption"
-    if not use_tariff_tou:
-        strategy = _create_dispatch_strategy(config)
-        strategy_name = strategy.name
-    else:
-        strategy_name = "tou_optimized"
-
-    # Run timestep simulation
-    results_list: list[EnergyFlowResult] = []
-
-    # Get index for timestamp lookup
-    index = minute_demand.index
-
-    for timestamp, (gen_kw, dem_kw) in zip(
-        index, zip(aligned_generation, minute_demand, strict=True), strict=True
-    ):
-        if use_tariff_tou:
-            result = simulate_timestep_tou(
-                generation_kw=float(gen_kw),
-                demand_kw=float(dem_kw),
-                battery=battery,
-                timestamp=timestamp,
-                tariff=config.tariff_config,  # type: ignore[arg-type]
-                timestep_minutes=1.0,
-            )
-        else:
-            result = simulate_timestep(
-                generation_kw=float(gen_kw),
-                demand_kw=float(dem_kw),
-                battery=battery,
-                timestep_minutes=1.0,
-                timestamp=timestamp.to_pydatetime(),
-                strategy=strategy,
-                tariff=config.tariff_config,
-            )
-
-        if validate_balance:
-            validate_energy_balance(result)
-
-        results_list.append(result)
-
-    minute_kwh_to_kw = 1 / HOURS_PER_MINUTE
-
-    # Calculate tariff costs if tariff is configured; only a tariffed run has grid-charge series
-    grid_charge_series: Optional[pd.Series] = None
-    grid_charge_cost_series: Optional[pd.Series] = None
-    if config.tariff_config is not None:
-        tariff_rates = [config.tariff_config.get_rate(ts) for ts in index]
-        import_costs = [r.grid_import * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
-        grid_charge_series = pd.Series([r.grid_charge * minute_kwh_to_kw for r in results_list], index=index)
-        grid_charge_cost_series = pd.Series(
-            [r.grid_charge * rate for r, rate in zip(results_list, tariff_rates, strict=True)], index=index
-        )
-    else:
-        tariff_rates = [0.0 for _ in results_list]
-        import_costs = [0.0 for _ in results_list]
-
-    # Calculate export revenue.
-    # Grid export is valued at the export/SEG rate, never the import tariff rate.
-    # Without a seg_tariff there is no export revenue (zero is the economically correct value).
-    if config.seg_tariff is not None:
-        export_revenues = [
-            calculate_seg_revenue(r.grid_export, config.seg_tariff)
-            for r in results_list
-        ]
-    else:
-        if config.tariff_config is not None:
-            warnings.warn(
-                "tariff_config is set but seg_tariff is None: export_revenue will be 0.0. "
-                "Configure HomeConfig.seg_tariff to value grid exports at the SEG/export rate.",
-                UserWarning,
-                stacklevel=2,
-            )
-        export_revenues = [0.0 for _ in results_list]
-
-    return SimulationResults(
-        strategy_name=strategy_name,
-        generation=pd.Series([r.generation * minute_kwh_to_kw for r in results_list], index=index),
-        demand=pd.Series([r.demand * minute_kwh_to_kw for r in results_list], index=index),
-        self_consumption=pd.Series([r.self_consumption * minute_kwh_to_kw for r in results_list], index=index),
-        battery_charge=pd.Series([r.battery_charge * minute_kwh_to_kw for r in results_list], index=index),
-        battery_discharge=pd.Series([r.battery_discharge * minute_kwh_to_kw for r in results_list], index=index),
-        battery_soc=pd.Series([r.battery_soc for r in results_list], index=index),
-        grid_import=pd.Series([r.grid_import * minute_kwh_to_kw for r in results_list], index=index),
-        grid_export=pd.Series([r.grid_export * minute_kwh_to_kw for r in results_list], index=index),
-        import_cost=pd.Series(import_costs, index=index),
-        export_revenue=pd.Series(export_revenues, index=index),
-        tariff_rate=pd.Series(tariff_rates, index=index),
-        heat_pump_load=heat_pump_load_series,
-        grid_charge_cost=grid_charge_cost_series,
-        grid_charge=grid_charge_series,
+    return _results(
+        flows,
+        minutes,
+        import_pricing=import_pricing,
+        export_revenue=export_revenue,
+        heat_pump_load=demand.heat_pump_kw,
+        strategy_name=dispatch.strategy_name,
     )
 
 

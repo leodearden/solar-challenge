@@ -1,7 +1,8 @@
-"""Tests for HomeConfig, SimulationResults, calculate_summary and SEG export pricing in simulate_home."""
+"""Tests for HomeConfig, SimulationResults, calculate_summary and simulate_home's tariff and SEG pricing."""
 
 import dataclasses
 import typing
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.timebase import HOURS_PER_MINUTE
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -333,6 +335,41 @@ class TestPerMinuteAmounts:
         assert results.total_amounts() == pytest.approx(results.per_minute_amounts().sum().to_dict())
 
 
+class TestSimulateHomeImportPricing:
+    """simulate_home prices each minute's import at that minute's tariff rate, and an untariffed run's at nothing."""
+
+    def test_a_tariffed_run_prices_each_minutes_import_at_that_minutes_rate(self, june21_weather_data):
+        """A PV-only home on Economy 7 imports overnight at both of its rates, each minute at its own."""
+        tariff = TariffConfig.economy_7()
+        home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            tariff_config=tariff,
+            seg_tariff=SEG_PRESETS["Octopus"],
+        )
+        day = pd.Timestamp("2024-06-21")
+
+        results = simulate_home(home, day, day, weather_data=june21_weather_data)
+
+        assert results.tariff_rate.tolist() == [tariff.get_rate(minute) for minute in results.tariff_rate.index]
+        assert results.import_cost.sum() > 0
+        assert results.tariff_rate[results.grid_import > 0].nunique() > 1
+        np.testing.assert_allclose(
+            results.import_cost, results.grid_import * HOURS_PER_MINUTE * results.tariff_rate, rtol=1e-12, atol=0.0
+        )
+
+    def test_an_untariffed_run_has_no_import_rate_or_cost(self, june21_weather_data):
+        """A home with no tariff imports, but at a rate of 0.0 and for nothing."""
+        home = HomeConfig(PVConfig(capacity_kw=4.0), LoadConfig(annual_consumption_kwh=3000.0, seed=42))
+        day = pd.Timestamp("2024-06-21")
+
+        results = simulate_home(home, day, day, weather_data=june21_weather_data)
+
+        assert results.grid_import.sum() > 0
+        assert (results.tariff_rate == 0.0).all()
+        assert (results.import_cost == 0.0).all()
+
+
 class TestSimulateHomeSEGPricing:
     """Test that simulate_home prices export at SEG rate when seg_tariff is set."""
 
@@ -451,6 +488,17 @@ class TestSimulateHomeSEGNonRegression:
         assert (results.export_revenue == 0).all(), "export_revenue must be zero when seg_tariff is None"
         assert calculate_summary(results).total_export_revenue_gbp == 0
 
+    def test_the_missing_seg_tariff_warning_is_raised_once_naming_the_code_that_called_simulate_home(
+        self, no_seg_config, june21_weather_data
+    ):
+        """The run warns once, not once a minute, and the warning's file is the caller's, not home.py."""
+        day = pd.Timestamp("2024-06-21")
+
+        with pytest.warns(UserWarning, match="seg_tariff") as caught:
+            simulate_home(no_seg_config, day, day, weather_data=june21_weather_data)
+
+        assert [warning.filename for warning in caught if "seg_tariff" in str(warning.message)] == [__file__]
+
     def test_named_preset_end_to_end(self, june21_weather_data):
         """resolve_seg_tariff('Octopus') wired into HomeConfig prices export at 4.1 p/kWh."""
         flat_period = TariffPeriod(
@@ -477,6 +525,42 @@ class TestSimulateHomeSEGNonRegression:
         total_export_kwh = results.grid_export.sum() / 60.0
         expected_revenue = calculate_seg_revenue(total_export_kwh, SEG_PRESETS["Octopus"])
         assert summary.total_export_revenue_gbp == pytest.approx(expected_revenue, rel=1e-3)
+
+
+class TestSimulateHomeExportValuationWithoutATariff:
+    """An untariffed home's export is valued at its SEG rate alone, and it warns of nothing."""
+
+    @pytest.mark.parametrize(
+        "seg_tariff",
+        [
+            pytest.param(None, id="no-seg"),
+            pytest.param(SEG_PRESETS["Octopus"], id="octopus-seg"),
+        ],
+    )
+    def test_an_untariffed_run_values_export_at_its_seg_rate_alone_and_warns_of_nothing(
+        self, seg_tariff, june21_weather_data
+    ):
+        """Each minute's export earns its SEG revenue, or nothing without an SEG, and no tariff means no warning."""
+        home = HomeConfig(
+            PVConfig(capacity_kw=4.0), LoadConfig(annual_consumption_kwh=3000.0, seed=42), seg_tariff=seg_tariff
+        )
+        day = pd.Timestamp("2024-06-21")
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = simulate_home(home, day, day, weather_data=june21_weather_data)
+
+        assert results.grid_export.sum() > 0
+        np.testing.assert_allclose(
+            results.export_revenue,
+            [
+                0.0 if seg_tariff is None else calculate_seg_revenue(kw * HOURS_PER_MINUTE, seg_tariff)
+                for kw in results.grid_export
+            ],
+            rtol=1e-12,
+            atol=0.0,
+        )
+        assert not [warning for warning in caught if "seg_tariff" in str(warning.message)]
 
 
 class TestCalculateSummary:
