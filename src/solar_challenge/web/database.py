@@ -47,6 +47,19 @@ def _check_one_of(column: str, values: tuple[str, ...]) -> str:
     return f"CHECK({column} IN ({', '.join(_sql_string_literal(value) for value in values)}))"
 
 
+def connect(db_path: str | Path) -> sqlite3.Connection:
+    """Open the dashboard database at *db_path* under the policy every dashboard connection applies.
+
+    Rows are read by column name and the schema's foreign keys are enforced. Opening reads
+    nothing from the file, so an unreadable database raises at the first statement. The
+    caller closes the connection.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
 def init_db(db_path: str | Path) -> None:
     """Initialize the SQLite database with the required schema.
 
@@ -60,9 +73,8 @@ def init_db(db_path: str | Path) -> None:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.row_factory = sqlite3.Row  # Enable dict-like row access
 
     cursor = conn.cursor()
 
@@ -221,17 +233,16 @@ def get_chat_history(
 
 @contextmanager
 def get_db(db_path: str | Path) -> Generator[sqlite3.Connection, None, None]:
-    """Get a database connection as a context manager.
+    """Open a connection through connect() for one block of work.
 
-    Provides a connection with row_factory set to sqlite3.Row for
-    dict-like access. Automatically commits on success and closes
-    the connection when the context exits.
+    Commits when the block succeeds, rolls back when the block raises, and
+    closes the connection either way.
 
     Args:
         db_path: Path to the SQLite database file.
 
     Yields:
-        sqlite3.Connection: Database connection with Row factory enabled.
+        sqlite3.Connection: A connection from connect().
 
     Example:
         with get_db("/path/to/db.sqlite") as conn:
@@ -239,10 +250,7 @@ def get_db(db_path: str | Path) -> Generator[sqlite3.Connection, None, None]:
             cursor.execute("SELECT * FROM runs")
             rows = cursor.fetchall()
     """
-    db_path = Path(db_path)
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn = connect(db_path)
 
     try:
         yield conn
