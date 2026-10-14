@@ -372,10 +372,7 @@ def _try_richardsonpy_profile(
             )
             for j in range(window_days)
         )
-        # calculate_annual_consumption integrates whatever Series is passed;
-        # here it measures the raw *window* energy in kWh — not a full-year
-        # figure — to compute the scale factor to the seasonal target.
-        raw_kwh = calculate_annual_consumption(profile)
+        raw_kwh = energy_kwh(profile)
         if raw_kwh > 0.0:
             profile = profile * (target_window_kwh / raw_kwh)
 
@@ -518,13 +515,8 @@ def _generate_elexon_profile(
     return pd.Series(power_values, index=minute_index, name="demand_kw")
 
 
-def calculate_annual_consumption(profile: pd.Series) -> float:
+def energy_kwh(profile: pd.Series) -> float:
     """Integrate a 1-minute power Series to total energy in kWh.
-
-    Despite the name (kept for backward compatibility), this function simply
-    integrates whatever Series is passed — it is NOT limited to full-year
-    profiles.  For a window shorter than a year the result is the window's
-    total energy, not an annualised figure.
 
     Args:
         profile: Power series in kW with 1-minute resolution
@@ -548,7 +540,7 @@ def scale_profile_to_annual(
     Returns:
         Scaled power series in kW
     """
-    current_annual = calculate_annual_consumption(profile)
+    current_annual = energy_kwh(profile)
     if current_annual == 0:
         raise ValueError("Cannot scale profile with zero consumption")
 
