@@ -11,7 +11,6 @@ import pytest
 import yaml
 
 from solar_challenge.config import (
-    ConfigurationError,
     DispatchStrategyConfig,
     GridChargeConfig,
     SweepSpec,
@@ -20,6 +19,7 @@ from solar_challenge.config import (
     parse_fleet_config,
     parse_sweep_fleet_configs,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.pv import calculate_degradation_factor
 from solar_challenge.tariff import TariffConfig

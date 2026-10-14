@@ -10,13 +10,13 @@ import pytest
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
-    ConfigurationError,
     DispatchStrategyConfig,
     GridChargeConfig,
     load_home_config,
     parse_dispatch_strategy_config,
     parse_home_block,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig

@@ -15,7 +15,6 @@ from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_T
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
     BatteryDistributionConfig,
-    ConfigurationError,
     DispatchStrategyConfig,
     EVDistributionConfig,
     FleetDistributionConfig,
@@ -45,6 +44,7 @@ from solar_challenge.config import (
     parse_sweep_fleet_configs,
     parse_tariff_config,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig

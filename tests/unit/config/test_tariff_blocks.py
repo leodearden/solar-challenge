@@ -8,12 +8,12 @@ import pytest
 import yaml
 
 from solar_challenge.config import (
-    ConfigurationError,
     load_community_config,
     load_scenarios,
     parse_seg_rate,
     parse_tariff_config,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 

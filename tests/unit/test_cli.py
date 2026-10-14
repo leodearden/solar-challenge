@@ -38,7 +38,7 @@ from solar_challenge.cli.utils import (
     print_warning,
     status_console,
 )
-from solar_challenge.config import ConfigurationError
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig, SummaryStatistics
 from solar_challenge.location import Location
 from solar_challenge.seg import SEG_PRESETS

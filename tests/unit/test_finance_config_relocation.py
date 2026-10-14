@@ -20,7 +20,7 @@ import sys
 import pytest
 
 from solar_challenge import finance
-from solar_challenge.config import ConfigurationError
+from solar_challenge.errors import ConfigurationError
 
 
 # ---------------------------------------------------------------------------

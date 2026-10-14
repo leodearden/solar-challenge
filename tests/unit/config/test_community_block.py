@@ -11,7 +11,8 @@ import pytest
 import yaml
 
 from solar_challenge.community import CommunityConfig
-from solar_challenge.config import ConfigurationError, load_community_config
+from solar_challenge.config import load_community_config
+from solar_challenge.errors import ConfigurationError
 
 
 LoadCommunityBlock: TypeAlias = Callable[[dict[str, Any]], CommunityConfig | None]

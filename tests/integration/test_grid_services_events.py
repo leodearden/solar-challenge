@@ -25,7 +25,8 @@ import pandas as pd
 import pytest
 
 import solar_challenge.gridservices as gs_module
-from solar_challenge.config import ConfigurationError, load_config, parse_finance_config
+from solar_challenge.config import load_config, parse_finance_config
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
     FinanceConfig,
     bill_distribution,

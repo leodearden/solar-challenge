@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("flask")
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import ConfigurationError
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
