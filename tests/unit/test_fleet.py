@@ -437,7 +437,6 @@ class TestFleetSummary:
         assert summary.total_export_revenue_gbp is None
 
 
-@pytest.mark.slow
 class TestSimulateFleetIter:
     """Test simulate_fleet_iter iterator function."""
 
@@ -501,7 +500,6 @@ class TestSimulateFleetIter:
         assert results[0][0] == 0
 
 
-@pytest.mark.slow
 class TestParallelMatchesSequential:
     """Test that parallel and sequential produce same results."""
 
@@ -526,7 +524,6 @@ class TestParallelMatchesSequential:
             pd.testing.assert_series_equal(seq_gen, par_gen)
 
 
-@pytest.mark.slow
 class TestSimulateHomeWeatherData:
     """Test optional weather_data parameter in simulate_home."""
 
@@ -564,7 +561,6 @@ class TestSimulateHomeWeatherData:
         assert len(result.generation) == 1440
 
 
-@pytest.mark.slow
 class TestMultiSweepIter:
     """Test simulate_multi_sweep_iter for cross-sweep parallelism."""
 
@@ -644,7 +640,6 @@ class TestMultiSweepIter:
         assert len(sweep_1_results) == 3
 
 
-@pytest.mark.slow
 class TestCollectMultiSweepResults:
     """Test collect_multi_sweep_results for organizing results."""
 
