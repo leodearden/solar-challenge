@@ -4,17 +4,28 @@ Verifies, on each page, that the tracker follows the latest run. A run started
 while an earlier one still runs is the run it follows: the page drops the
 earlier run's progress stream, so the earlier run's end, completed or failed,
 does not show. A run started after a completed one starts its tracker afresh.
+A run whose progress stream disconnects shows it is reconnecting until the
+stream the browser reopens reaches the server, which goes on to report the
+run's progress and end. A reopened stream the server refuses fails the run,
+as does a stream that stays broken past the page's reconnect limit.
 """
 
 import itertools
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
 from playwright.sync_api import Page, Route, expect
 
-from tests.e2e._job_requests import HeldJobRequests, is_job_request, sse_event
+from tests.e2e._job_requests import (
+    DISCONNECTED_REQUEST_CONSOLE_ERROR,
+    HeldJobRequests,
+    disconnect_request,
+    fast_forward_by_the_reconnect_limit,
+    is_job_request,
+    sse_event,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -158,3 +169,113 @@ def test_a_run_after_a_completed_run_starts_its_tracker_afresh(
     expect(page.get_by_text("Waiting to start...", exact=True)).to_be_visible()
     expect(results_link).to_have_count(0)
     assert page_errors == [], f"Errors on {simulate_page.path}: {page_errors}"
+
+
+def test_a_run_whose_progress_stream_disconnects_shows_it_reconnecting_then_completes(
+    page: Page,
+    live_server: str,
+    simulate_page: _SimulatePage,
+    running_jobs: HeldJobRequests,
+    page_errors: list[str],
+) -> None:
+    """Run, then disconnect job-1's progress stream while it runs: the tracker shows 'Reconnecting to server...', not 'Simulation Failed', and job-1's completion on the stream the browser reopens shows run-1's results link."""
+    page.goto(live_server + simulate_page.path)
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        page.get_by_role("button", name=simulate_page.run_button, exact=True).click()
+    reconnecting = page.get_by_text("Reconnecting to server...", exact=True)
+    # The browser reopens the stream it lost
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        running_jobs.disconnect("job-1")
+        expect(reconnecting).to_be_visible()
+        expect(page.get_by_text("Simulation Failed", exact=True)).to_have_count(0)
+
+    running_jobs.answer(
+        "job-1", sse_event("complete", {"status": "completed", "run_id": "run-1"})
+    )
+    expect(page.get_by_role("link", name="View Results", exact=True)).to_have_attribute(
+        "href", simulate_page.results + "run-1"
+    )
+    expect(reconnecting).to_be_hidden()
+    assert page_errors == [DISCONNECTED_REQUEST_CONSOLE_ERROR], (
+        f"Errors on {simulate_page.path}: {page_errors}"
+    )
+
+
+def test_a_run_whose_reopened_progress_stream_reaches_the_server_no_longer_shows_it_reconnecting(
+    page: Page,
+    live_server: str,
+    release_held_simulations: Callable[[], None],
+    page_errors: list[str],
+) -> None:
+    """Run on /simulate/home while the live server holds the job running, its first progress stream disconnected: once the stream the browser reopens reaches the server, the tracker shows the job's progress and no longer 'Reconnecting to server...', and it still follows the job past the page's reconnect limit, so the job's completion, once released, shows the results link."""
+    page.clock.install()
+    page.route("**/api/jobs/*/progress", disconnect_request, times=1)
+    page.goto(live_server + "/simulate/home")
+    with page.expect_request("**/api/jobs/*/progress"):
+        page.get_by_role("button", name="Run Simulation", exact=True).click()
+    reconnecting = page.get_by_text("Reconnecting to server...", exact=True)
+    # The browser reopens the stream it lost, and the server answers it
+    with page.expect_response("**/api/jobs/*/progress"):
+        expect(reconnecting).to_be_visible()
+
+    expect(page.get_by_text("Running home simulation...", exact=True)).to_be_visible()
+    expect(reconnecting).to_be_hidden()
+    fast_forward_by_the_reconnect_limit(page)
+
+    release_held_simulations()
+    expect(page.get_by_role("link", name="View Results", exact=True)).to_be_visible()
+    assert page_errors == [DISCONNECTED_REQUEST_CONSOLE_ERROR], (
+        f"Errors on /simulate/home: {page_errors}"
+    )
+
+
+def test_a_run_whose_reopened_progress_stream_is_refused_is_shown_failed(
+    page: Page,
+    live_server: str,
+    simulate_page: _SimulatePage,
+    running_jobs: HeldJobRequests,
+) -> None:
+    """Run, disconnect job-1's progress stream, and answer the stream the browser reopens with HTTP 503: the browser gives the stream up, so the tracker shows 'Simulation Failed' with 'Lost connection to server', and no longer 'Reconnecting to server...'."""
+    page.goto(live_server + simulate_page.path)
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        page.get_by_role("button", name=simulate_page.run_button, exact=True).click()
+    reconnecting = page.get_by_text("Reconnecting to server...", exact=True)
+    # The browser reopens the stream it lost
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        running_jobs.disconnect("job-1")
+        expect(reconnecting).to_be_visible()
+
+    running_jobs.answer("job-1", "", status=503)
+    expect(page.get_by_text("Simulation Failed", exact=True)).to_be_visible()
+    expect(page.get_by_text("Lost connection to server", exact=True)).to_be_visible()
+    expect(reconnecting).to_be_hidden()
+
+
+def test_a_run_whose_progress_stream_stays_broken_past_the_reconnect_limit_is_shown_failed(
+    page: Page,
+    live_server: str,
+    simulate_page: _SimulatePage,
+    running_jobs: HeldJobRequests,
+    page_errors: list[str],
+) -> None:
+    """Run, disconnect job-1's progress stream, and leave the stream the browser reopens unanswered: once the page's reconnect limit has passed, the page drops the stream, and the tracker shows 'Simulation Failed' with 'Lost connection to server', and no longer 'Reconnecting to server...'."""
+    page.clock.install()
+    page.goto(live_server + simulate_page.path)
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        page.get_by_role("button", name=simulate_page.run_button, exact=True).click()
+    reconnecting = page.get_by_text("Reconnecting to server...", exact=True)
+    # The browser reopens the stream it lost
+    with page.expect_request("**/api/jobs/job-1/progress"):
+        running_jobs.disconnect("job-1")
+        expect(reconnecting).to_be_visible()
+
+    with page.expect_event(
+        "requestfailed", predicate=is_job_request("job-1", "progress")
+    ):
+        fast_forward_by_the_reconnect_limit(page)
+    expect(page.get_by_text("Simulation Failed", exact=True)).to_be_visible()
+    expect(page.get_by_text("Lost connection to server", exact=True)).to_be_visible()
+    expect(reconnecting).to_be_hidden()
+    assert page_errors == [DISCONNECTED_REQUEST_CONSOLE_ERROR], (
+        f"Errors on {simulate_page.path}: {page_errors}"
+    )

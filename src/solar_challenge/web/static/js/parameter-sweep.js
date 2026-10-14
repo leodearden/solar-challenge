@@ -132,7 +132,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         // Follow one sweep point's job via SSE, writing its status and results into that point's row;
-        // resolves once the job ends or signal aborts
+        // resolves once the job ends, the page loses its stream, or signal aborts
         _followPoint(row, signal) {
             return new Promise(resolve => {
                 const es = new EventSource('/api/jobs/' + row.job_id + '/progress');
@@ -162,18 +162,12 @@ document.addEventListener('alpine:init', () => {
                     this._checkAllDone();
                 });
 
-                es.addEventListener('error', (e) => {
-                    try {
-                        const data = JSON.parse(e.data);
-                        row.status = 'failed';
-                    } catch(err) {
-                        if (row.status !== 'completed') {
-                            row.status = 'failed';
-                        }
-                    }
+                const fail = () => {
+                    row.status = 'failed';
                     end();
                     this._checkAllDone();
-                });
+                };
+                onJobProgressStreamErrors(es, { failed: fail, lost: fail });
             });
         },
 

@@ -9,6 +9,7 @@ document.addEventListener('alpine:init', () => {
         elapsed: 0,
         error: '',
         completedRunId: '',
+        reconnecting: false,
         _stream: null,
         _timer: null,
 
@@ -20,7 +21,11 @@ document.addEventListener('alpine:init', () => {
             this._stream = new EventSource('/api/jobs/' + jobId + '/progress');
             this._stream.addEventListener('progress', (e) => this._onProgress(e.data));
             this._stream.addEventListener('complete', (e) => this._onComplete(e.data));
-            this._stream.addEventListener('error', (e) => this._onError(e.data));
+            onJobProgressStreamErrors(this._stream, {
+                failed: (eventData) => this._onFailed(eventData),
+                reconnecting: (reconnecting) => { this.reconnecting = reconnecting; },
+                lost: () => this._onLost(),
+            });
         },
 
         destroy() {
@@ -52,20 +57,21 @@ document.addEventListener('alpine:init', () => {
             if (data.run_id) this.completedRunId = data.run_id;
         },
 
-        // An error event carries the job's failure as JSON, or no data when the stream itself broke
-        _onError(eventData) {
+        _onFailed(eventData) {
             this._stop();
-            if (eventData) {
-                const data = JSON.parse(eventData);
-                this.status = 'failed';
-                this.error = data.message || data.error || 'An unexpected error occurred';
-            } else if (this.status !== 'completed') {
-                this.status = 'failed';
-                this.error = 'Lost connection to server';
-            }
+            const data = JSON.parse(eventData);
+            this.status = 'failed';
+            this.error = data.message || data.error || 'An unexpected error occurred';
+        },
+
+        _onLost() {
+            this._stop();
+            this.status = 'failed';
+            this.error = 'Lost connection to server';
         },
 
         _stop() {
+            this.reconnecting = false;
             if (this._stream) {
                 this._stream.close();
                 this._stream = null;
