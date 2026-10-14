@@ -150,6 +150,9 @@ class BatteryConfig:
             (≥ 0; default 0.02/yr ≈ 70 % SOH at 15-yr warranty horizon).
         cycle_fade_per_equivalent_full_cycle: SOH fade per equivalent full
             cycle (≥ 0; default 5e-5/EFC ≈ 30 % fade over ~6 000 EFC).
+            ``Battery`` computes calendar fade only (throughput 0); cycle
+            fade takes effect only through an ``soh`` computed by
+            :func:`compute_soh` from accrued throughput.
         soh_floor: Minimum allowed SOH after clamping (0 < soh_floor ≤ 1;
             default 0.5, reflecting end-of-useful-life convention).
         soh: Optional direct SOH override (0 < soh ≤ 1).  When set, the
@@ -303,14 +306,6 @@ class Battery:
         )
 
         # Resolve SOH once: override wins; else calendar-only (throughput=0).
-        # NOTE: cumulative_throughput_kwh is hard-coded to 0.0 here — this is
-        # the correct single-run approximation (calendar fade only).  The cycle
-        # term in compute_soh is structurally complete and directly unit-tested;
-        # real multi-year cumulative throughput is injected by task ζ
-        # (project_multi_year), which calls compute_soh with the accrued
-        # discharge total.  Users setting cycle_fade_per_equivalent_full_cycle
-        # in YAML will see its effect in ζ multi-year projections; single-run
-        # simulations capture calendar fade only.
         if config.soh is not None:
             self._soh: float = config.soh
         else:

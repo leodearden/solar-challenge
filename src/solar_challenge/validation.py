@@ -134,7 +134,7 @@ def validate_pv_generation(
 ) -> list[ValidationResult]:
     """Validate PV generation values for sanity.
 
-    Checks (VAL-001):
+    Checks:
     - Generation is never negative
     - Generation is zero at night (approximately)
     - Peak generation within 10% over the DC the PV model wires (pv.wired_dc_capacity_kw)
@@ -224,12 +224,6 @@ def validate_consumption(
 
     Returns:
         List of ValidationResult objects
-
-    VAL-002 acceptance criteria:
-        - Consumption never negative
-        - Consumption never unrealistically high (e.g., > 50 kW for domestic)
-        - Annual total within reasonable range of target
-        - Baseload present (consumption > 0 most times)
     """
     results: list[ValidationResult] = []
 
@@ -349,12 +343,6 @@ def validate_self_consumption_pv_only(
 
     Returns:
         ValidationResult indicating if within benchmark range
-
-    VAL-003 acceptance criteria:
-        - PV-only home achieves ~25-35% self-consumption (UK benchmark)
-        - Test with typical 4 kW system and 3,400 kWh/year consumption
-        - Document assumptions if outside range
-        - Test passes if within expected range or documented exception
     """
     summary = calculate_summary(results)
 
@@ -427,12 +415,6 @@ def validate_self_consumption_with_battery(
 
     Returns:
         ValidationResult indicating if within benchmark range
-
-    VAL-004 acceptance criteria:
-        - Home with PV + battery achieves ~60-80% self-consumption (UK benchmark)
-        - Test with typical 4 kW PV, 5 kWh battery, 3,400 kWh/year
-        - Battery significantly increases self-consumption over PV-only
-        - Document assumptions if outside range
     """
     summary = calculate_summary(results)
 

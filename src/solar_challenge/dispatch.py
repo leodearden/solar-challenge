@@ -81,9 +81,8 @@ class GridChargeContext:
             cheap enough to warrant grid charging
         target_soc_fraction: Target state-of-charge as a fraction of
             capacity (0.0–1.0) to fill up to during cheap periods
-        max_charge_kw: Maximum battery-side charge power in kW (hardware
-            C-rate limit of the battery/inverter). This is a battery-side
-            value; the controller uses it to bound grid draw conservatively.
+        max_charge_kw: Maximum charge power in kW (hardware C-rate limit of
+            the battery/inverter), shared by PV and grid charging
         round_trip_efficiency: Round-trip charge/discharge efficiency in
             (0, 1], used in the spread gate calculation
         charge_efficiency: One-way charge efficiency in (0, 1], used to
@@ -123,20 +122,9 @@ def compute_grid_charge_power_kw(
 ) -> float:
     """Compute the grid-to-battery charging power for the current timestep.
 
-    Implements the rate-aware dispatch controller described in PRD §3.2.
+    Implements the rate-aware dispatch controller of
+    docs/prds/tou-grid-charging-battery-arbitrage.md §3.2.
     All inputs are floats/bool (no tariff symbols imported here).
-
-    **Frame note (PRD §3.2):** ``gap_power_kw`` is a *grid-side* quantity
-    (battery gap divided by charge efficiency, so it exceeds the energy
-    actually stored).  ``residual_kw`` is a *battery-side* quantity
-    (max battery charge rate minus PV already absorbed by the battery).
-    The final ``min()`` conservatively clamps the returned grid draw to the
-    battery-side residual headroom: when residual limits, the function
-    returns ``residual_kw`` directly rather than ``residual_kw /
-    charge_efficiency``.  This is intentional per PRD §3.2 — it avoids
-    over-committing grid import above the battery's acceptance capacity.
-    The existing ``test_residual_clamp_wins`` and
-    ``test_residual_clamp_is_battery_side`` tests pin this behaviour.
 
     Args:
         ctx: Tariff and battery context for this timestep.
@@ -145,13 +133,14 @@ def compute_grid_charge_power_kw(
         battery_soc_kwh: Current battery state of charge in kWh.
         capacity_kwh: Total battery capacity in kWh.
         pv_charge_power_kw: PV charging power already being consumed by the
-            battery in this timestep (kW, battery-side). Reduces the
-            residual charging headroom available for grid charging.
+            battery in this timestep (kW). Reduces the residual charging
+            headroom available for grid charging.
         timestep_minutes: Duration of the timestep in minutes. Must be
             positive (raises ``ValueError`` if not).
 
     Returns:
-        Recommended grid-to-battery charge power in kW (>= 0.0).
+        Recommended grid-to-battery charge power in kW: at least 0.0 and at
+        most ``max(0.0, ctx.max_charge_kw - pv_charge_power_kw)``.
         Returns 0.0 when:
         - it is not a cheap period (ctx.is_cheap_period is False), or
         - the spread gate fails (peak saving does not cover round-trip losses),
@@ -186,9 +175,7 @@ def compute_grid_charge_power_kw(
     dt_h = timestep_minutes * HOURS_PER_MINUTE
     gap_power_kw = gap_kwh / ctx.charge_efficiency / dt_h
 
-    # Residual battery-side charging headroom after PV already occupies some.
-    # Conservative clamp: grid draw is bounded by battery residual directly
-    # (see frame note in the docstring).
+    # The max_charge_kw headroom PV charging leaves.
     residual_kw = max(0.0, ctx.max_charge_kw - pv_charge_power_kw)
 
     return min(gap_power_kw, residual_kw)
@@ -256,7 +243,7 @@ class SelfConsumptionStrategy(DispatchStrategy):
     - Discharging battery to meet shortfall (demand > generation)
     - Minimizing grid import/export
 
-    This is the default strategy and replicates the original flow.py logic.
+    This is the default strategy.
     """
 
     @property
@@ -424,9 +411,12 @@ class TOUOptimizedStrategy(DispatchStrategy):
                 supplied and ``grid_charge_ctx.is_cheap_period`` is ``True``,
                 the strategy will grid-charge the battery (via
                 ``compute_grid_charge_power_kw``) provided the battery is not
-                already being discharged.  The context's own Gate 1/Gate 2/
-                Gate 3 checks give defence-in-depth.  ``None`` (default)
-                means no grid charging: ``grid_charge_kw`` is always 0.
+                already being discharged, inside ``peak_hours`` too: whether
+                a period is cheap is the caller's classification, which both
+                dispatch paths share, never ``peak_hours``
+                (docs/prds/tou-grid-charging-battery-arbitrage.md §4).
+                ``None`` (default) means no grid charging: ``grid_charge_kw``
+                is always 0.
 
         Returns:
             DispatchDecision optimized for TOU tariffs:
@@ -465,9 +455,6 @@ class TOUOptimizedStrategy(DispatchStrategy):
         excess_kw = max(0.0, generation_kw - demand_kw)
         shortfall_kw = max(0.0, demand_kw - generation_kw)
 
-        # Compute (charge_kw, discharge_kw) using the existing branch logic.
-        # Off-peak: shortfall/balanced both yield excess_kw=0 → both collapse
-        # to charge_kw=0, discharge_kw=0 without needing explicit branches.
         if tariff_period == TariffPeriod.OFF_PEAK:
             # Off-peak: charge from excess PV; preserve battery on shortfall
             # (let cheap off-peak grid handle demand directly).
@@ -488,23 +475,9 @@ class TOUOptimizedStrategy(DispatchStrategy):
                 charge_kw = 0.0
                 discharge_kw = 0.0
 
-        # Grid-charge gate: delegate to the shared controller when a cheap
-        # context is supplied and the battery is not already discharging.
-        # The "discharge_kw == 0.0" guard ensures we never return
-        # grid_charge_kw > 0 alongside discharge_kw > 0, which
-        # DispatchDecision forbids.  Passing charge_kw (the PV charge already
-        # computed above) as pv_charge_power_kw lets the controller's residual
-        # clamp share the max_charge_kw inverter budget between PV and grid.
-        #
-        # Seam note: ctx.is_cheap_period (caller-computed) is the SOLE authority
-        # on whether grid-charging is cheap.  The strategy's own peak_hours /
-        # _get_tariff_period() governs only battery charge_kw / discharge_kw
-        # above; it does NOT gate grid charging.  If the caller supplies
-        # is_cheap_period=True even during a configured peak hour (e.g. because
-        # a TOU schedule varies by season), grid charging proceeds.  This is
-        # intentional — the context is the single source of truth for grid-import
-        # economics, keeping the two dispatch paths (γ function path + strategy
-        # path) consistent without re-deriving cheapness from hour windows.
+        # Grid-charge only while not discharging: DispatchDecision forbids
+        # grid_charge_kw > 0 with discharge_kw > 0.  Passing charge_kw as
+        # pv_charge_power_kw shares max_charge_kw between PV and grid.
         grid_charge_kw = 0.0
         if (
             grid_charge_ctx is not None
@@ -583,23 +556,17 @@ class PeakShavingStrategy(DispatchStrategy):
                 supplied and ``grid_charge_ctx.is_cheap_period`` is ``True``,
                 the strategy will grid-charge the battery (via
                 ``compute_grid_charge_power_kw``) provided the battery is not
-                already being discharged to shave a peak.  The context's own
-                Gate 1/Gate 2/Gate 3 checks give defence-in-depth.  ``None``
-                (default) means no grid charging: ``grid_charge_kw`` is
-                always 0.
+                already being discharged to shave a peak.  ``None`` (default)
+                means no grid charging: ``grid_charge_kw`` is always 0.
 
         Returns:
             DispatchDecision with:
             - charge_kw if excess PV available
             - discharge_kw to reduce grid import below threshold
             - grid_charge_kw when a cheap period is active and the battery is
-              not currently shaving a peak (PRD §11 OQ3: peak-shaving discharge
-              takes precedence; grid-charging fires only in the non-shaving
-              branches — excess PV, below-threshold shortfall, balanced).
-              pv_charge_power_kw=charge_kw lets the controller's residual
-              clamp limit the grid draw to the remaining max_charge_kw
-              headroom after PV.  The strategy itself does not enforce a
-              total-charge ceiling; the battery layer clamps downstream.
+              not shaving a peak: shaving takes precedence, so grid charging
+              happens only on excess PV, a below-threshold shortfall or
+              balanced load.
 
         Raises:
             ValueError: If inputs are invalid (negative values, etc.)
@@ -628,7 +595,6 @@ class PeakShavingStrategy(DispatchStrategy):
         excess_kw = max(0.0, generation_kw - demand_kw)
         shortfall_kw = max(0.0, demand_kw - generation_kw)
 
-        # Compute (charge_kw, discharge_kw) using the existing branch logic.
         if excess_kw > 0:
             # Charge from excess PV
             charge_kw = excess_kw
@@ -648,15 +614,10 @@ class PeakShavingStrategy(DispatchStrategy):
             charge_kw = 0.0
             discharge_kw = 0.0
 
-        # Grid-charge gate: delegate to the shared controller when a cheap
-        # context is supplied and the battery is not already discharging to
-        # shave a peak.  The "discharge_kw == 0.0" guard ensures we never
-        # return grid_charge_kw > 0 alongside discharge_kw > 0, which
-        # DispatchDecision forbids (PRD §11 OQ3 — peak-shaving takes
-        # precedence over cheap-window grid-charging).  Passing charge_kw
-        # (the PV charge already computed above) as pv_charge_power_kw lets
-        # the controller's residual clamp share the max_charge_kw inverter
-        # budget between PV and grid (PRD §3.2).
+        # Grid-charge only while not shaving a peak, which takes precedence:
+        # DispatchDecision forbids grid_charge_kw > 0 with discharge_kw > 0.
+        # Passing charge_kw as pv_charge_power_kw shares max_charge_kw
+        # between PV and grid.
         grid_charge_kw = 0.0
         if (
             grid_charge_ctx is not None
