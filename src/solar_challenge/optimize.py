@@ -19,6 +19,7 @@ cheapest_feasible     — ConfigPoint with lowest outlay among feasible results,
 SensitivityAxis       — one OAT axis: name, swept values, per-value rankings + top configs
 SensitivityPanel      — aggregated OAT output (axes, baseline_top, rank_stability scalar)
 sensitivity_panel     — OAT assumption sensitivity over the W3 cost-recovery rank
+SENSITIVITY_BANDS     — board-facing swept values per sensitivity knob (grid services from flex)
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass, fields as dc_fields, replace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
 
 from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
@@ -39,6 +41,7 @@ from solar_challenge.finance import (
     solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, simulate_fleet
+from solar_challenge.flex import resolve_grid_services_band
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.seg import SEGTariff
 
@@ -341,6 +344,7 @@ __all__ = [
     "SensitivityAxis",
     "SensitivityPanel",
     "sensitivity_panel",
+    "SENSITIVITY_BANDS",
 ]
 
 
@@ -416,6 +420,24 @@ class SensitivityPanel:
                 f"SensitivityPanel.rank_stability must be in [0, 1], "
                 f"got {self.rank_stability}"
             )
+
+
+# ---------------------------------------------------------------------------
+# OAT sensitivity bands
+# ---------------------------------------------------------------------------
+
+# Board-facing values to sweep per sensitivity_panel knob, headline axes first; pass the mapping,
+# or a subset, as the panel's axes. Grid services sweeps the flex value model's per-kW rates;
+# the other spans are provisional: docs/prds/discrete-install-config-sweep.md §12, questions 2-3.
+SENSITIVITY_BANDS: Mapping[str, tuple[float, ...]] = MappingProxyType({
+    "retained_cash_floor_per_home_per_year_gbp": (15.0, 27.0, 40.0),
+    "grid_services_income_per_kw_per_year_gbp": tuple(
+        resolve_grid_services_band(band) for band in ("low", "central", "high")
+    ),
+    "battery_cost_per_kwh_gbp": (200.0, 300.0, 450.0),
+    "pv_cost_per_kwp_gbp": (800.0, 1200.0, 1800.0),
+    "inverter_cost_per_kw_gbp": (100.0, 200.0, 350.0),
+})
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +551,7 @@ def sensitivity_panel(
             Supported names: any :class:`~solar_challenge.finance.FinanceConfig`
             field, ``'seg'`` / ``'seg_tariff_pence_per_kwh'``,
             ``'degradation'`` / ``'degradation_rate_per_year'``.
+            :data:`SENSITIVITY_BANDS`, or a subset of it, holds the board-facing values.
         retained_cash_floor_gbp: Optional panel-level floor override passed to
             every ``run_sweep`` call (baseline and non-floor axes).
         simulate: Injected fleet simulator; if ``None`` the real fleet
