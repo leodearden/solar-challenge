@@ -389,6 +389,30 @@ class TestChatDegradation:
             f"Expected the error message to name ANTHROPIC_API_KEY; got: {error_data['message']!r}"
         )
 
+    @pytest.mark.parametrize(
+        "body",
+        [{"message": ""}, {"message": " \n"}, {}],
+        ids=["empty", "whitespace", "absent"],
+    )
+    def test_a_message_without_text_returns_error_frame_and_saves_no_turn(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        body: dict[str, str],
+    ) -> None:
+        """A message without text gets a lone error frame saying so; the model is not called and no chat turn is saved."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "empty-message-sid"
+
+        resp = client.post("/assistant/chat", json=body)
+
+        assert resp.status_code == 200
+        assert parse_sse_events(resp.get_data(as_text=True)) == [
+            SseFrame(event="error", data={"message": "Message cannot be empty."})
+        ]
+        assert anthropic_api.calls == []
+        assert client.get("/assistant/history").get_json() == {"messages": []}
+
     def test_client_construction_failure_returns_error_frame_and_saves_no_turn(
         self,
         client: FlaskClient,
