@@ -88,19 +88,19 @@ def test_a_figure_with_no_data_has_no_traces() -> None:
 def test_traces_by_name_keys_each_trace_as_written_by_its_name() -> None:
     cost = {"type": "bar", "name": "Daily Cost", "x": ["2024-06-01"], "y": [2.88]}
     revenue = {"type": "bar", "name": "Daily Revenue", "x": ["2024-06-01"], "y": [1.44]}
-    savings = {
+    net_cost = {
         "type": "scatter",
-        "name": "Cumulative Net Savings",
+        "name": "Cumulative Net Cost",
         "mode": "lines",
         "x": ["2024-06-01"],
-        "y": [-1.44],
+        "y": [1.44],
         "yaxis": "y2",
     }
 
-    assert traces_by_name(_figure(cost, revenue, savings)) == {
+    assert traces_by_name(_figure(cost, revenue, net_cost)) == {
         "Daily Cost": cost,
         "Daily Revenue": revenue,
-        "Cumulative Net Savings": savings,
+        "Cumulative Net Cost": net_cost,
     }
 
 

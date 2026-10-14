@@ -49,7 +49,7 @@ COLOUR_PALETTE = {
     "revenue": _GREEN,
     "soc_low_threshold": _RED,
     "soc_high_threshold": _GREEN,
-    "net_savings": _BLUE,
+    "net_cost": _BLUE,
     "winter": _BLUE,
     "summer": _AMBER,
     "comparison_run_1": _AMBER,
@@ -408,17 +408,22 @@ def _unpriced_import_note(results: SimulationResults) -> str | None:
 
 
 def financial_breakdown(results: SimulationResults) -> str:
-    """Dual-axis chart with daily cost bars and a cumulative savings line.
+    """Dual-axis chart of the run's daily cost and revenue bars and its cumulative net cost line.
 
     Daily cost and revenue are :func:`~solar_challenge.output.aggregate_daily`'s
     ``import_cost_gbp`` and ``export_revenue_gbp``: the day totals of the
     engine-priced series ``results.import_cost`` and ``results.export_revenue``,
     which already reflect the tariff and SEG rate set at simulation time.
 
+    The line is the running total of each day's import cost less its export
+    revenue: the run's net cost to date, SummaryStatistics.net_cost_gbp's
+    quantity. It is a cost, not the finance layer's saving against a no-solar
+    baseline (finance.BillBreakdown.saving_vs_baseline_gbp).
+
     The chart carries a note exactly when the run's import is not priced: its
     tariff rate is zero throughout, as for a run simulated without a tariff.
     Its £0 cost bars would otherwise read as free import, and its Cumulative
-    Net Savings would count revenue only. The note does not depend on the bars
+    Net Cost would count revenue only. The note does not depend on the bars
     totalling £0, so a priced run that imports nothing carries none.
 
     - "No import tariff configured — cost tracking unavailable" when the run
@@ -440,8 +445,8 @@ def financial_breakdown(results: SimulationResults) -> str:
     daily = aggregate_daily(results)
     daily_cost = daily["import_cost_gbp"].round(2)
     daily_revenue = daily["export_revenue_gbp"].round(2)
-    daily_net = (daily_cost - daily_revenue).round(2)
-    cumulative_savings = (-daily_net).cumsum().round(2)
+    cumulative_net_cost = (daily_cost - daily_revenue).round(2).cumsum().round(2)
+    net_cost_label = "Cumulative Net Cost"
     dates = [d.strftime("%Y-%m-%d") for d in daily.index]
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -466,11 +471,11 @@ def financial_breakdown(results: SimulationResults) -> str:
     )
     fig.add_trace(
         go.Scatter(
-            name="Cumulative Net Savings",
+            name=net_cost_label,
             x=dates,
-            y=cumulative_savings.tolist(),
+            y=cumulative_net_cost.tolist(),
             mode="lines",
-            line=dict(color=COLOUR_PALETTE["net_savings"], width=2),
+            line=dict(color=COLOUR_PALETTE["net_cost"], width=2),
         ),
         secondary_y=True,
     )
@@ -483,7 +488,7 @@ def financial_breakdown(results: SimulationResults) -> str:
         height=420,
     )
     fig.update_yaxes(title_text="Daily (GBP)", secondary_y=False)
-    fig.update_yaxes(title_text="Cumulative Net Savings (GBP)", secondary_y=True)
+    fig.update_yaxes(title_text=f"{net_cost_label} (GBP)", secondary_y=True)
 
     note = _unpriced_import_note(results)
     if note is not None:
