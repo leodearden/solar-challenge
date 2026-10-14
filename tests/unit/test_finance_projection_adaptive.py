@@ -19,7 +19,7 @@ from tests._finance_builders import make_fleet_results, make_home_config
 def _make_curved_simulate(curvature: float = 0.35) -> Callable:
     """Return a synthetic simulate with strongly non-linear (exponential) decline.
 
-    fleet_self_consumption_kwh declines as base * exp(-curvature * age).
+    fleet_billed_own_use_kwh declines as base * exp(-curvature * age).
     With only 3 seed nodes, PCHIP will have large midpoint errors for high
     curvature values (the function is far from piecewise-cubic on wide intervals).
     """
@@ -138,10 +138,10 @@ class TestProjectMultiYearAdaptive:
         sim = _make_curved_simulate(curvature=0.4)
         curve = project_multi_year(scenario, finance, error_target_pct=1.0, simulate=sim)
         for i in range(1, len(curve.points)):
-            assert curve.points[i].fleet_self_consumption_kwh <= (
-                curve.points[i - 1].fleet_self_consumption_kwh + 1e-6
+            assert curve.points[i].fleet_billed_own_use_kwh <= (
+                curve.points[i - 1].fleet_billed_own_use_kwh + 1e-6
             ), (
-                f"fleet_self_consumption not monotone at year {i}: "
-                f"{curve.points[i].fleet_self_consumption_kwh:.3f} > "
-                f"{curve.points[i-1].fleet_self_consumption_kwh:.3f}"
+                f"fleet_billed_own_use_kwh not monotone at year {i}: "
+                f"{curve.points[i].fleet_billed_own_use_kwh:.3f} > "
+                f"{curve.points[i-1].fleet_billed_own_use_kwh:.3f}"
             )

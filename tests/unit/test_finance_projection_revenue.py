@@ -130,9 +130,9 @@ class TestProjectMultiYearRevenue:
         physics = year_0(self_consumption_override=None)
         override = year_0(self_consumption_override=0.50)
 
-        assert physics.fleet_self_consumption_kwh == pytest.approx(4000.0)
+        assert physics.fleet_billed_own_use_kwh == pytest.approx(4000.0)
         assert physics.fleet_revenue_gbp == pytest.approx(600.0)
-        assert override.fleet_self_consumption_kwh == pytest.approx(2500.0)
+        assert override.fleet_billed_own_use_kwh == pytest.approx(2500.0)
         assert override.fleet_revenue_gbp == pytest.approx(375.0)
 
     def test_override_bills_own_use_up_to_demand_and_exports_the_rest(self) -> None:
@@ -152,7 +152,7 @@ class TestProjectMultiYearRevenue:
 
         year_0 = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet).points[0]
 
-        assert year_0.fleet_self_consumption_kwh == pytest.approx(n_homes * 2800.0)
+        assert year_0.fleet_billed_own_use_kwh == pytest.approx(n_homes * 2800.0)
         assert year_0.fleet_revenue_gbp == pytest.approx(
             n_homes * (15.0 * 2800.0 / 100.0 + 1200.0 * 3.0 / 100.0)
         )

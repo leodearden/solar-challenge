@@ -54,7 +54,7 @@ def _make_point(year: int, revenue: float) -> YearPoint:
         year=year,
         pv_soh=1.0,
         battery_soh=1.0,
-        fleet_self_consumption_kwh=5000.0,
+        fleet_billed_own_use_kwh=5000.0,
         fleet_export_kwh=2000.0,
         fleet_import_kwh=1000.0,
         fleet_revenue_gbp=revenue,

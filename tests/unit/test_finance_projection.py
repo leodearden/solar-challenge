@@ -72,24 +72,21 @@ class TestProjectMultiYearShape:
         assert 0 in curve.sampled_ages
         assert 4 in curve.sampled_ages  # asset_life-1
 
-    def test_fleet_self_consumption_at_sampled_age(self) -> None:
-        """fleet_self_consumption_kwh at a sampled age equals sum of per-home totals."""
+    def test_fleet_billed_own_use_at_sampled_age(self) -> None:
+        """fleet_billed_own_use_kwh at a sampled age is the fleet's basis-C own-use, the sum of demand - import."""
         n_homes = 2
         sc_per_home = 1000.0
         scenario, finance = make_scenario_and_finance(n_homes=n_homes, asset_life_years=5)
         fr = make_fleet_results(n_homes=n_homes, self_kwh=sc_per_home)
 
-        # Compute expected total from calculate_summary
-        expected_sc = sum(
-            calculate_summary(r).total_self_consumption_kwh
-            for r in fr.per_home_results
-        )
+        summaries = [calculate_summary(r) for r in fr.per_home_results]
+        expected_own_use = sum(s.total_demand_kwh - s.total_grid_import_kwh for s in summaries)
 
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
 
         # At age 0 (a seed point), the value should match the injected summary
-        assert curve.points[0].fleet_self_consumption_kwh == pytest.approx(
-            expected_sc, rel=1e-4
+        assert curve.points[0].fleet_billed_own_use_kwh == pytest.approx(
+            expected_own_use, rel=1e-4
         )
 
     def test_fleet_export_at_sampled_age(self) -> None:
