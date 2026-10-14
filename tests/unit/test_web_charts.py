@@ -297,6 +297,18 @@ class TestChartTotals:
         assert by_name["Daily Revenue"]["y"] == [1.44, 1.44]
         assert by_name["Cumulative Net Savings"]["y"] == [-1.44, -2.88]
 
+    def test_seasonal_bars_are_each_seasons_kwh_of_the_runs_own_flows(self) -> None:
+        figure = seasonal_comparison(make_sim_results(self_kwh=876.0, export_kwh=1752.0, import_kwh=438.0, days=365))
+        assert figure is not None
+
+        bars = {name: dict(zip(trace["x"], trace["y"])) for name, trace in traces_by_name(figure).items()}
+
+        # 0.3, 0.15 and 0.1 kWh a row of generation, demand and self-consumption, over 2,160 winter rows (Jan, Feb and Dec 1-30 of 2020) and 2,208 summer rows.
+        assert bars == {
+            "Winter (Dec-Feb)": {"Generation (kWh)": 648.0, "Demand (kWh)": 324.0, "Self-Consumption (kWh)": 216.0},
+            "Summer (Jun-Aug)": {"Generation (kWh)": 662.4, "Demand (kWh)": 331.2, "Self-Consumption (kWh)": 220.8},
+        }
+
 
 class TestFinancialBreakdownPricing:
     """Tests that financial_breakdown uses engine-priced series, not hardcoded rates."""

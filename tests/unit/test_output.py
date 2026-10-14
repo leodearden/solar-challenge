@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
 from solar_challenge.output import (
     aggregate_annual,
     aggregate_daily,
@@ -19,6 +20,8 @@ from solar_challenge.output import (
     export_to_csv,
     generate_summary_report,
 )
+from tests._finance_builders import make_home_config
+from tests._synthetic_weather import synthetic_june_weather
 
 
 @pytest.fixture
@@ -72,30 +75,36 @@ def _run_with_distinct_rising_series(
 
 
 def _seasonal_run() -> SimulationResults:
-    """Two January days, one April day and half a July day, each span steady at its own levels."""
+    """Two January days, one April day and half a July day, each day steady at its own levels.
+
+    January's battery stores the first day's PV surplus and meets part of the sunless second
+    day's demand. Every minute balances as a simulated one does.
+    """
     spans = [
         pd.date_range(start, periods=rows, freq="1min", tz="Europe/London")
-        for start, rows in [("2024-01-01", 2 * 1440), ("2024-04-01", 1440), ("2024-07-01", 720)]
+        for start, rows in [("2024-01-01", 1440), ("2024-01-02", 1440), ("2024-04-01", 1440), ("2024-07-01", 720)]
     ]
     index = spans[0].append(spans[1:])
 
-    def steady(*, january: float, april: float, july: float) -> pd.Series:
-        return pd.Series(np.repeat([january, april, july], [len(span) for span in spans]), index=index)
+    def steady(*, january_1: float, january_2: float, april: float, july: float) -> pd.Series:
+        return pd.Series(
+            np.repeat([january_1, january_2, april, july], [len(span) for span in spans]), index=index
+        )
 
     zeros = pd.Series(0.0, index=index)
     return SimulationResults(
-        generation=steady(january=1.0, april=9.0, july=4.0),
-        demand=steady(january=5.0, april=10.0, july=1.0),
-        self_consumption=zeros,
-        battery_charge=zeros,
-        battery_discharge=zeros,
+        generation=steady(january_1=8.0, january_2=0.0, april=9.0, july=4.0),
+        demand=steady(january_1=5.0, january_2=5.0, april=10.0, july=1.0),
+        self_consumption=steady(january_1=5.0, january_2=1.0, april=9.0, july=1.0),
+        battery_charge=steady(january_1=1.0, january_2=0.0, april=0.0, july=2.0),
+        battery_discharge=steady(january_1=0.0, january_2=1.0, april=0.0, july=0.0),
         battery_soc=zeros,
-        grid_import=zeros,
-        grid_export=zeros,
+        grid_import=steady(january_1=0.0, january_2=4.0, april=1.0, july=0.0),
+        grid_export=steady(january_1=2.0, january_2=0.0, april=0.0, july=1.0),
         import_cost=zeros,
         export_revenue=zeros,
         tariff_rate=zeros,
-        heat_pump_load=steady(january=2.0, april=9.0, july=0.25),
+        heat_pump_load=steady(january_1=2.0, january_2=2.0, april=9.0, july=0.25),
     )
 
 
@@ -182,22 +191,49 @@ class TestSeasonalBreakdowns:
         assert "| HP % of Demand | 40.0% | 25.0% | - |" in lines
         assert "| Daily Average | 48.0 kWh/day | 6.0 kWh/day | 8.0x |" in lines
 
-    def test_seasonal_metrics_total_each_season_and_leave_out_the_rest(self):
-        run = _seasonal_run()
-
-        # Self-consumption is each minute's min(generation, demand): generation in winter, demand in summer.
-        assert calculate_seasonal_metrics(run.demand, run.generation) == pytest.approx(
+    def test_seasonal_metrics_total_each_seasons_own_flows_and_leave_out_the_rest(self):
+        # Winter self-consumption: 5 kW × 24 h plus the battery's 1 kW × 24 h = 144 kWh, where
+        # min(generation, demand) would give 120. Winter import: 4 kW × 24 h = 96 kWh of 240.
+        # April's rows count in neither season.
+        assert calculate_seasonal_metrics(_seasonal_run()) == pytest.approx(
             {
-                "winter_generation_kwh": 48.0,
+                "winter_generation_kwh": 192.0,
                 "winter_demand_kwh": 240.0,
-                "winter_self_consumption_kwh": 48.0,
-                "winter_self_consumption_ratio": 1.0,
-                "winter_grid_dependency_ratio": 0.8,
+                "winter_self_consumption_kwh": 144.0,
+                "winter_self_consumption_ratio": 0.75,
+                "winter_grid_dependency_ratio": 0.4,
                 "summer_generation_kwh": 48.0,
                 "summer_demand_kwh": 12.0,
                 "summer_self_consumption_kwh": 12.0,
                 "summer_self_consumption_ratio": 0.25,
                 "summer_grid_dependency_ratio": 0.0,
+            }
+        )
+
+    def test_a_battery_homes_summer_day_has_its_summarys_figures(self):
+        day = pd.Timestamp("2024-06-21")
+        run = simulate_home(
+            make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)),
+            day,
+            day,
+            weather_data=synthetic_june_weather(day),
+        )
+        summary = calculate_summary(run)
+        # The battery discharges, so min(generation, demand) would differ from the summary.
+        assert summary.total_battery_discharge_kwh > 0
+
+        assert calculate_seasonal_metrics(run) == pytest.approx(
+            {
+                "winter_generation_kwh": 0.0,
+                "winter_demand_kwh": 0.0,
+                "winter_self_consumption_kwh": 0.0,
+                "winter_self_consumption_ratio": 0.0,
+                "winter_grid_dependency_ratio": 0.0,
+                "summer_generation_kwh": summary.total_generation_kwh,
+                "summer_demand_kwh": summary.total_demand_kwh,
+                "summer_self_consumption_kwh": summary.total_self_consumption_kwh,
+                "summer_self_consumption_ratio": summary.self_consumption_ratio,
+                "summer_grid_dependency_ratio": summary.grid_dependency_ratio,
             }
         )
 
