@@ -107,20 +107,16 @@ def generate_summary_report(
 
         # Add seasonal breakdown if we have heat pump load data
         if results.heat_pump_load is not None:
-            # Calculate seasonal heat pump metrics
-            months = results.heat_pump_load.index.month
-            winter_mask = months.isin(_WINTER_MONTHS)
-            summer_mask = months.isin(_SUMMER_MONTHS)
+            amounts = results.per_minute_amounts()
+            winter_totals = _in_months(amounts, _WINTER_MONTHS).sum()
+            summer_totals = _in_months(amounts, _SUMMER_MONTHS).sum()
+            winter_hp_load = _in_months(results.heat_pump_load, _WINTER_MONTHS)
+            summer_hp_load = _in_months(results.heat_pump_load, _SUMMER_MONTHS)
 
-            winter_hp_load = results.heat_pump_load[winter_mask]
-            summer_hp_load = results.heat_pump_load[summer_mask]
-            winter_demand = results.demand[winter_mask]
-            summer_demand = results.demand[summer_mask]
-
-            winter_hp_kwh = float(winter_hp_load.sum() * HOURS_PER_MINUTE) if len(winter_hp_load) > 0 else 0.0
-            summer_hp_kwh = float(summer_hp_load.sum() * HOURS_PER_MINUTE) if len(summer_hp_load) > 0 else 0.0
-            winter_demand_kwh = float(winter_demand.sum() * HOURS_PER_MINUTE) if len(winter_demand) > 0 else 0.0
-            summer_demand_kwh = float(summer_demand.sum() * HOURS_PER_MINUTE) if len(summer_demand) > 0 else 0.0
+            winter_hp_kwh = float(winter_totals["heat_pump_load_kwh"])
+            summer_hp_kwh = float(summer_totals["heat_pump_load_kwh"])
+            winter_demand_kwh = float(winter_totals["demand_kwh"])
+            summer_demand_kwh = float(summer_totals["demand_kwh"])
 
             winter_peak_hp_kw = float(winter_hp_load.max()) if len(winter_hp_load) > 0 else 0.0
             summer_peak_hp_kw = float(summer_hp_load.max()) if len(summer_hp_load) > 0 else 0.0
