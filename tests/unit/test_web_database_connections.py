@@ -10,9 +10,14 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, closing
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
+from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
 from solar_challenge.web.database import connect, get_db, init_db
+from solar_challenge.web.jobs import JobManager
 
 
 def _connected(db_path: Path) -> AbstractContextManager[sqlite3.Connection]:
@@ -73,3 +78,40 @@ def test_a_dashboard_connection_opens_a_file_that_is_not_a_database_and_its_firs
     with open_connection(not_a_database) as conn:
         with pytest.raises(sqlite3.DatabaseError, match="file is not a database"):
             conn.execute("SELECT id FROM runs")
+
+
+def _a_simulation_the_job_must_not_reach(
+    config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
+) -> SimulationResults:
+    raise RuntimeError("the job reached its simulation")
+
+
+def test_a_running_jobs_connection_refuses_a_write_that_would_leave_a_job_of_no_run(
+    dashboard_db: Path, tmp_path: Path
+) -> None:
+    """A job's own connection enforces the schema's foreign keys too.
+
+    A job whose start would insert a job of no run fails with the refusal, and leaves no such row.
+    """
+    with get_db(dashboard_db) as conn:
+        conn.execute(
+            "CREATE TRIGGER insert_a_job_of_no_run_when_a_job_starts_running AFTER UPDATE OF status ON jobs "
+            "WHEN OLD.status = 'queued' AND NEW.status = 'running' "
+            "BEGIN INSERT INTO jobs (id, run_id) VALUES ('job-of-no-run', 'no-such-run'); END"
+        )
+    manager = JobManager(max_workers=1, simulate_home=_a_simulation_the_job_must_not_reach)
+
+    job_id, _ = manager.submit_home_job(
+        config=HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500)),
+        start_date=pd.Timestamp("2024-06-01", tz="UTC"),
+        end_date=pd.Timestamp("2024-06-02", tz="UTC"),
+        db_path=str(dashboard_db),
+        data_dir=str(tmp_path / "data"),
+    )
+    assert manager.wait_until_idle(timeout=30)
+
+    state = manager.job_state(job_id)
+    assert state is not None
+    assert (state.status, state.message) == ("failed", "FOREIGN KEY constraint failed")
+    with get_db(dashboard_db) as conn:
+        assert [row["id"] for row in conn.execute("SELECT id FROM jobs")] == [job_id]
