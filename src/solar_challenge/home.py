@@ -259,6 +259,23 @@ class SummaryStatistics:
             )
 
 
+def _hourly_weather(config: HomeConfig, weather_data: pd.DataFrame | None) -> pd.DataFrame:
+    """The hourly weather a run uses: weather_data, or config.location's TMY year from get_tmy_data when it is None.
+
+    Raises:
+        ValueError: If the home has a heat pump and the weather is not one year of hourly rows.
+    """
+    weather = get_tmy_data(config.location) if weather_data is None else weather_data
+    if config.heat_pump_config is not None and len(weather) not in _YEAR_LENGTHS_IN_HOURS:
+        raise ValueError(
+            f"weather_data has {len(weather):,} rows, not one year of hourly rows "
+            f"({_YEAR_LENGTHS_IN_HOURS.start:,} to {_YEAR_LENGTHS_IN_HOURS[-1]:,}): a heat pump's "
+            "annual_heat_demand_kwh is shared out over the heating degree-minutes of this whole year, "
+            "so pass one TMY year of hourly weather, as get_tmy_data returns."
+        )
+    return weather
+
+
 @dataclass(frozen=True)
 class _Demand:
     """A run's demand in kW on its minutes: the household's load, EV charging included, plus any heat pump's load.
@@ -445,7 +462,9 @@ def _price_imports(
     rates = [tariff.get_rate(minute) for minute in minutes]
     return _ImportPricing(
         tariff_rate=pd.Series(rates, index=minutes),
-        import_cost=pd.Series([flow.grid_import * rate for flow, rate in zip(flows, rates, strict=True)], index=minutes),
+        import_cost=pd.Series(
+            [flow.grid_import * rate for flow, rate in zip(flows, rates, strict=True)], index=minutes
+        ),
         grid_charge_cost=pd.Series(
             [flow.grid_charge * rate for flow, rate in zip(flows, rates, strict=True)], index=minutes
         ),
@@ -469,6 +488,45 @@ def _export_revenue(config: HomeConfig, flows: Sequence[EnergyFlowResult], minut
             stacklevel=3,
         )
     return pd.Series([0.0] * len(flows), index=minutes)
+
+
+_MINUTE_KWH_TO_KW = 1 / HOURS_PER_MINUTE
+
+
+def _results(
+    flows: Sequence[EnergyFlowResult],
+    minutes: pd.DatetimeIndex,
+    *,
+    import_pricing: _ImportPricing,
+    export_revenue: pd.Series,
+    heat_pump_load: Optional[pd.Series],
+    strategy_name: str,
+) -> SimulationResults:
+    """The run's results on its minutes.
+
+    Each flow's power in kW, the battery's state of charge in kWh, and the run's prices.
+    """
+
+    def power_kw(minute_kwh: Callable[[EnergyFlowResult], float]) -> pd.Series:
+        return pd.Series([minute_kwh(flow) * _MINUTE_KWH_TO_KW for flow in flows], index=minutes)
+
+    return SimulationResults(
+        strategy_name=strategy_name,
+        generation=power_kw(lambda flow: flow.generation),
+        demand=power_kw(lambda flow: flow.demand),
+        self_consumption=power_kw(lambda flow: flow.self_consumption),
+        battery_charge=power_kw(lambda flow: flow.battery_charge),
+        battery_discharge=power_kw(lambda flow: flow.battery_discharge),
+        battery_soc=pd.Series([flow.battery_soc for flow in flows], index=minutes),
+        grid_import=power_kw(lambda flow: flow.grid_import),
+        grid_export=power_kw(lambda flow: flow.grid_export),
+        import_cost=import_pricing.import_cost,
+        export_revenue=export_revenue,
+        tariff_rate=import_pricing.tariff_rate,
+        heat_pump_load=heat_pump_load,
+        grid_charge_cost=import_pricing.grid_charge_cost,
+        grid_charge=None if import_pricing.grid_charge_cost is None else power_kw(lambda flow: flow.grid_charge),
+    )
 
 
 def simulate_home(
@@ -499,61 +557,22 @@ def simulate_home(
         ValueError: If a heat pump is configured and weather_data is not one
             year of hourly rows.
     """
-    # Get weather data (TMY for now)
-    if weather_data is None:
-        weather_data = get_tmy_data(config.location)
-    if config.heat_pump_config is not None and len(weather_data) not in _YEAR_LENGTHS_IN_HOURS:
-        raise ValueError(
-            f"weather_data has {len(weather_data):,} rows, not one year of hourly rows "
-            f"({_YEAR_LENGTHS_IN_HOURS.start:,} to {_YEAR_LENGTHS_IN_HOURS[-1]:,}): a heat pump's "
-            "annual_heat_demand_kwh is shared out over the heating degree-minutes of this whole year, "
-            "so pass one TMY year of hourly weather, as get_tmy_data returns."
-        )
-
-    # Generate PV output at hourly resolution
-    hourly_generation = simulate_pv_output(
-        config.pv_config,
-        config.location,
-        weather_data,
-    )
-
-    # Interpolate to 1-minute resolution
-    minute_generation = interpolate_to_minute_resolution(hourly_generation)
-
-    demand = _demand(config, weather_data, start_date, end_date)
-
-    aligned_generation = align_tmy_to_index(minute_generation, demand.total_kw.index)
-
+    weather = _hourly_weather(config, weather_data)
+    minute_generation = interpolate_to_minute_resolution(simulate_pv_output(config.pv_config, config.location, weather))
+    demand = _demand(config, weather, start_date, end_date)
+    minutes = demand.total_kw.index
+    generation_kw = align_tmy_to_index(minute_generation, minutes)
     dispatch = _dispatch_path(config)
-    flows = _minute_flows(dispatch.timestep, aligned_generation, demand.total_kw, validate_balance)
-
-    index = demand.total_kw.index
-    minute_kwh_to_kw = 1 / HOURS_PER_MINUTE
-
-    import_pricing = _price_imports(config.tariff_config, flows, index)
-    export_revenue = _export_revenue(config, flows, index)
-    grid_charge_series = (
-        None
-        if import_pricing.grid_charge_cost is None
-        else pd.Series([r.grid_charge * minute_kwh_to_kw for r in flows], index=index)
-    )
-
-    return SimulationResults(
-        strategy_name=dispatch.strategy_name,
-        generation=pd.Series([r.generation * minute_kwh_to_kw for r in flows], index=index),
-        demand=pd.Series([r.demand * minute_kwh_to_kw for r in flows], index=index),
-        self_consumption=pd.Series([r.self_consumption * minute_kwh_to_kw for r in flows], index=index),
-        battery_charge=pd.Series([r.battery_charge * minute_kwh_to_kw for r in flows], index=index),
-        battery_discharge=pd.Series([r.battery_discharge * minute_kwh_to_kw for r in flows], index=index),
-        battery_soc=pd.Series([r.battery_soc for r in flows], index=index),
-        grid_import=pd.Series([r.grid_import * minute_kwh_to_kw for r in flows], index=index),
-        grid_export=pd.Series([r.grid_export * minute_kwh_to_kw for r in flows], index=index),
-        import_cost=import_pricing.import_cost,
+    flows = _minute_flows(dispatch.timestep, generation_kw, demand.total_kw, validate_balance)
+    import_pricing = _price_imports(config.tariff_config, flows, minutes)
+    export_revenue = _export_revenue(config, flows, minutes)
+    return _results(
+        flows,
+        minutes,
+        import_pricing=import_pricing,
         export_revenue=export_revenue,
-        tariff_rate=import_pricing.tariff_rate,
         heat_pump_load=demand.heat_pump_kw,
-        grid_charge_cost=import_pricing.grid_charge_cost,
-        grid_charge=grid_charge_series,
+        strategy_name=dispatch.strategy_name,
     )
 
 
