@@ -17,6 +17,7 @@ gives the reason.
 import json
 import os
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Generator
@@ -821,6 +822,61 @@ def _event_stream(frames: Iterable[str]) -> Response:
     )
 
 
+def _has_text(content: str) -> bool:
+    """Whether *content* holds text a Messages API message may carry: something besides whitespace."""
+    return bool(content.strip())
+
+
+def _replay_window(turns: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Return the messages that replay the stored *turns* to the model.
+
+    A turn without text is left out, because the API refuses an empty message
+    anywhere but last. At most MAX_HISTORY_TURNS turns are kept, and the window
+    starts on a user turn, because the API needs one first; the API combines the
+    consecutive user turns a left-out reply leaves behind.
+    """
+    window = [
+        {"role": turn["role"], "content": turn["content"]}
+        for turn in turns
+        if _has_text(turn["content"])
+    ][-MAX_HISTORY_TURNS:]
+    first_user = next((i for i, m in enumerate(window) if m["role"] == "user"), len(window))
+    return window[first_user:]
+
+
+_DONE_FRAME = "event: done\ndata: {}\n\n"
+_NO_REPLY_TEXT = "[No reply text was received.]"
+
+
+@dataclass(frozen=True)
+class _TurnEnding:
+    """How an assistant turn ended.
+
+    *final_frame* ends the client's stream, and is empty once the client has
+    left; *stand_in* is stored as the reply when no text streamed; *metadata*
+    joins the stored reply's metadata.
+    """
+
+    final_frame: str
+    stand_in: str
+    metadata: Mapping[str, Any]
+
+
+_FINISHED = _TurnEnding(_DONE_FRAME, _NO_REPLY_TEXT, MappingProxyType({}))
+_CUT_SHORT = _TurnEnding("", _NO_REPLY_TEXT, MappingProxyType({"truncated": True}))
+
+
+def _failed(error: Exception) -> _TurnEnding:
+    """The ending of a turn that *error* stopped.
+
+    The notice it shows the user stands in for the reply when no text streamed.
+    """
+    notice = f"Streaming error: {error}"
+    return _TurnEnding(
+        _error_frame(notice), notice, MappingProxyType({"error": str(error), "truncated": True})
+    )
+
+
 @bp.route("/chat", methods=["POST"])
 def chat() -> Response:
     """Stream an AI assistant reply as Server-Sent Events.
@@ -870,23 +926,8 @@ def chat() -> Response:
             yield _error_frame(f"Could not initialise Anthropic client: {exc}")
             return
 
-        # Persist the user turn
-        database.save_chat_message(db_path, sid, "user", user_message)
-
-        # Build conversation history for the API.  The just-saved user turn is
-        # intentionally included as the final message in the request.
-        # Cap to MAX_HISTORY_TURNS to prevent unbounded context growth.
-        all_turns = database.get_chat_history(db_path, sid)
-        messages: list[dict[str, Any]] = [
-            {"role": row["role"], "content": row["content"]}
-            for row in all_turns[-MAX_HISTORY_TURNS:]
-        ]
-        # API invariant: the first message must be role=user and roles must
-        # strictly alternate.  After the even-width tail-slice, the window can
-        # start on an assistant row once the history exceeds MAX_HISTORY_TURNS.
-        # Drop any leading non-user turns to restore the invariant.
-        while messages and messages[0]["role"] != "user":
-            messages.pop(0)
+        history = database.get_chat_history(db_path, sid)
+        messages = _replay_window([*history, {"role": "user", "content": user_message}])
 
         # Run-context injection: when the request carries a run_id,
         # prepend a compact preamble to the final (user) message in-memory ONLY.
@@ -922,10 +963,13 @@ def chat() -> Response:
             "tools": TOOLS,
         }
 
+        database.save_chat_message(db_path, sid, "user", user_message)
         accumulated = ""
         cache_usage: dict[str, int] = {}
         invoked_tools: list[str] = []
-
+        ending = _CUT_SHORT
+        # Every exit stores one reply with text:
+        # tests/unit/web_assistant/test_chat.py::TestEveryTurnStoresAReplyWithText
         try:
             # Manual agentic loop — bounded by MAX_TOOL_ITERATIONS so a
             # runaway model cannot hang the single Flask worker or the test suite.
@@ -1008,27 +1052,22 @@ def chat() -> Response:
                     f"event: delta\n"
                     f"data: {json.dumps({'text': _cap_notice})}\n\n"
                 )
+            ending = _FINISHED
 
         except Exception as exc:
-            # Persist whatever was accumulated so history stays consistent with
-            # what the user already saw, and role alternation is preserved for
-            # future turns (a dangling user-only row causes consecutive
-            # user-role messages which the Anthropic API rejects with a 400).
+            ending = _failed(exc)
+        finally:
+            metadata: dict[str, Any] = {**cache_usage, "model": model} if cache_usage else {}
+            if invoked_tools:
+                metadata["invoked_tools"] = invoked_tools
             database.save_chat_message(
-                db_path, sid, "assistant", accumulated,
-                metadata={"error": str(exc), "truncated": True},
+                db_path,
+                sid,
+                "assistant",
+                accumulated if _has_text(accumulated) else ending.stand_in,
+                metadata={**metadata, **ending.metadata} or None,
             )
-            yield _error_frame(f"Streaming error: {exc}")
-            return
 
-        # Persist assistant turn on success; record any invoked tool names.
-        final_meta: dict[str, Any] = {**cache_usage, "model": model} if cache_usage else {}
-        if invoked_tools:
-            final_meta["invoked_tools"] = invoked_tools
-        database.save_chat_message(
-            db_path, sid, "assistant", accumulated, metadata=final_meta or None
-        )
-
-        yield "event: done\ndata: {}\n\n"
+        yield ending.final_frame
 
     return _event_stream(stream_with_context(generate()))
