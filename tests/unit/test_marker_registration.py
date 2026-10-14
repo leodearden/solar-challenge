@@ -160,11 +160,18 @@ class TestNetworkedUnitClassesExcludedButPureKept:
     # Network-touching classes in the unit suite — must be deselected.
     NETWORKED_UNIT_CLASSES = ["TestHeatPumpIntegration"]
 
-    # Pure-logic classes — must remain selected (guard against over-marking).
+    # Classes that run offline, as pure logic or from a seeded weather cache — must remain
+    # selected (guard against over-marking).
     PURE_UNIT_CLASSES = [
         "TestCalculateSummary",  # test_home.py
         "TestHeatPumpConfig",    # test_home_heat_pump.py — pure config construction, no network
         "TestFleetSummary",      # test_fleet.py
+        # test_fleet.py — these simulate from the Bristol TMY that bristol_june_tmy seeds, no network
+        "TestSimulateFleetIter",
+        "TestParallelMatchesSequential",
+        "TestSimulateHomeWeatherData",
+        "TestMultiSweepIter",
+        "TestCollectMultiSweepResults",
     ]
 
     def _collected_classes(self, *pytest_args: str) -> set[str]:
@@ -196,7 +203,7 @@ class TestNetworkedUnitClassesExcludedButPureKept:
         return set(re.findall(r"<Class (\w+)>", result.stdout))
 
     def test_networked_unit_classes_excluded_but_pure_kept(self):
-        """Networked unit classes deselected; pure-logic classes still collected."""
+        """Networked unit classes deselected; offline classes still collected."""
         # Positive control: collect WITHOUT the filter, so a listed class that moved out
         # of UNIT_TEST_FILES or was renamed fails here instead of passing vacuously below.
         collected = self._collected_classes()
@@ -217,9 +224,9 @@ class TestNetworkedUnitClassesExcludedButPureKept:
                 "``-m 'not slow'`` — add ``@pytest.mark.slow`` to that class."
             )
 
-        # Pure-logic classes must still be COLLECTED.
+        # Offline classes must still be COLLECTED.
         for class_name in self.PURE_UNIT_CLASSES:
             assert class_name in not_slow, (
-                f"Pure unit class {class_name!r} was NOT collected under "
+                f"Offline unit class {class_name!r} was NOT collected under "
                 "``-m 'not slow'`` — do NOT mark it slow."
             )
