@@ -57,6 +57,26 @@ def read_fleet_seed(value: Any, field: str) -> int:
     return as_whole_number_within(value, field, -MAX_FLEET_SEED, MAX_FLEET_SEED)
 
 
+def read_pool_counts(counts: Iterable[tuple[str, Any]], entries_field: str) -> list[int]:
+    """Read *counts*, each count of the *entries_field* shuffled pool with its field, as a dashboard fleet's pool counts: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most :data:`MAX_FLEET_HOMES`.
+
+    Raises:
+        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
+            naming a count's field and the value sent; or, when the counts total more than
+            MAX_FLEET_HOMES, more values than a dashboard fleet has homes to take, naming
+            *entries_field* and the total.
+    """
+    read_counts = [
+        as_whole_number_within(value, field, 0, MAX_FLEET_HOMES) for field, value in counts
+    ]
+    total = sum(read_counts)
+    if total > MAX_FLEET_HOMES:
+        raise ValueError(
+            f"{entries_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
+        )
+    return read_counts
+
+
 def apply_fleet_overlay(
     configs: list[HomeConfig],
     *,
@@ -416,7 +436,7 @@ def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:
     Raises:
         ValueError: If a weighted_discrete/shuffled_pool row list or row is malformed
             (see :func:`_named_rows`), a shuffled_pool count is refused (see
-            :func:`_pool_counts`), or a number is one
+            :func:`read_pool_counts`), or a number is one
             :func:`~solar_challenge.web.number_fields.as_finite_float` refuses; the error
             names its field under *path*.
     """
@@ -443,7 +463,9 @@ def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:
     elif dist_type == "shuffled_pool":
         rows = _named_rows(data, "entries", path)
         result["values"] = [_spec_number(row, "value", 0, field) for field, row in rows]
-        result["counts"] = _pool_counts(rows, f"{path}.entries")
+        result["counts"] = read_pool_counts(
+            [(f"{field}.count", row.get("count", 1)) for field, row in rows], f"{path}.entries"
+        )
 
     return result
 
@@ -521,25 +543,3 @@ def _form_number_list(numbers: Iterable[Any], path: str) -> list[float]:
 def _form_count_list(counts: Iterable[Any], path: str) -> list[int]:
     """Each of *counts*, the *path* list of shuffled_pool counts, read by :func:`~solar_challenge.web.number_fields.as_whole_number`."""
     return [as_whole_number(count, f"{path}[{index}]") for index, count in enumerate(counts)]
-
-
-def _pool_counts(rows: list[tuple[str, dict[str, Any]]], entries_field: str) -> list[int]:
-    """Return the count of each shuffled_pool row in *rows*, the (field, row) pairs of the *entries_field* list, an absent count reading as 1.
-
-    Raises:
-        ValueError: If a count is not a whole number from 0 to MAX_FLEET_HOMES (see
-            :func:`~solar_challenge.web.number_fields.as_whole_number_within`; the count is
-            named under its row's field), or the counts total more than MAX_FLEET_HOMES,
-            more values than a dashboard fleet has homes to take; that error names
-            *entries_field* and the total.
-    """
-    counts = [
-        as_whole_number_within(row.get("count", 1), f"{field}.count", 0, MAX_FLEET_HOMES)
-        for field, row in rows
-    ]
-    total = sum(counts)
-    if total > MAX_FLEET_HOMES:
-        raise ValueError(
-            f"{entries_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
-        )
-    return counts
