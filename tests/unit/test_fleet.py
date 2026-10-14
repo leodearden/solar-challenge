@@ -522,27 +522,7 @@ class TestSimulateFleetIter:
 
 @pytest.mark.usefixtures("bristol_june_tmy")
 class TestParallelMatchesSequential:
-    """Test that parallel and sequential produce same results."""
-
-    def test_results_match(self):
-        """Parallel and sequential simulations produce identical results."""
-        config = FleetConfig.create_uniform(
-            n_homes=3,
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0),
-        )
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
-
-        sequential_results = simulate_fleet(config, start, end, parallel=False)
-        parallel_results = simulate_fleet(config, start, end, parallel=True, max_workers=2)
-
-        assert len(sequential_results) == len(parallel_results)
-
-        for i in range(len(sequential_results)):
-            seq_gen = sequential_results[i].generation
-            par_gen = parallel_results[i].generation
-            pd.testing.assert_series_equal(seq_gen, par_gen)
+    """A seeded fleet's parallel run gives each home exactly the results its sequential run gives it, whichever worker draws its stochastic demand."""
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
     def test_seeded_stochastic_homes_get_their_sequential_results_from_parallel_workers(
