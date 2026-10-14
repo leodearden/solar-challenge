@@ -20,6 +20,8 @@ from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
     make_end_turn_stream,
+    make_failing_stream,
+    make_tool_use_stream,
     make_tool_use_stream_from_blocks,
     seed_run,
     tool_use_block,
@@ -672,6 +674,103 @@ class TestEveryTurnStoresAReplyWithText:
             {"role": "user", "content": "hello"},
             {"role": "user", "content": "again"},
         ]
+
+    def test_an_api_error_before_the_first_token_is_stored_as_the_notice_the_user_was_shown(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A turn whose request fails stores the error notice it sent as its reply, which the next turn replays."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "api-error-sid"
+        anthropic_api.set_streams(
+            [
+                make_failing_stream(RuntimeError("overloaded_error: Overloaded")),
+                make_end_turn_stream(["Hello again."]),
+            ]
+        )
+
+        failed = parse_sse_events(
+            client.post("/assistant/chat", json={"message": "hello"}).get_data(as_text=True)
+        )
+        client.post("/assistant/chat", json={"message": "again"}).get_data(as_text=True)
+
+        assert [f.event for f in failed] == ["error"]
+        notice = failed[0].data["message"]
+        assert anthropic_api.calls[1]["messages"] == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": notice},
+            {"role": "user", "content": "again"},
+        ]
+        stored_reply = client.get("/assistant/history").get_json()["messages"][1]
+        assert stored_reply["metadata"] == {"error": "overloaded_error: Overloaded", "truncated": True}
+
+    def test_a_reply_the_model_ends_without_text_is_stored_with_text(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A reply the model ends without any text is stored with text, so the next turn replays it."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "no-text-sid"
+        anthropic_api.set_streams([make_end_turn_stream([]), make_end_turn_stream(["ok"])])
+
+        client.post("/assistant/chat", json={"message": "hello"}).get_data(as_text=True)
+        client.post("/assistant/chat", json={"message": "again"}).get_data(as_text=True)
+
+        replayed = anthropic_api.calls[1]["messages"]
+        assert [m["role"] for m in replayed] == ["user", "assistant", "user"]
+        assert all(m["content"].strip() for m in replayed), replayed
+
+    def test_a_disconnect_after_the_first_frame_stores_the_text_streamed_so_far(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A client that leaves after the first delta frame leaves that text stored as a truncated reply."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "disconnect-sid"
+        anthropic_api.set_streams([make_end_turn_stream(["Hello", " world"])])
+
+        response = client.post("/assistant/chat", json={"message": "hi"}, buffered=False)
+        first = next(iter(response.response))
+        response.close()
+
+        assert parse_sse_events(first.decode()) == [SseFrame(event="delta", data={"text": "Hello"})]
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert [(m["role"], m["content"]) for m in messages] == [("user", "hi"), ("assistant", "Hello")]
+        assert messages[1]["metadata"] == {"truncated": True}
+
+    def test_a_disconnect_after_a_tool_call_keeps_the_tools_the_turn_ran(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A client that leaves after a tool call leaves a truncated reply that names the tools the turn ran."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "disconnect-tool-sid"
+        anthropic_api.set_streams(
+            [
+                make_tool_use_stream("toolu_cut_1", "explain_metric", {"metric": "self_sufficiency"}),
+                make_end_turn_stream(["Self-sufficiency is", " the share of demand met on site."]),
+            ]
+        )
+
+        response = client.post(
+            "/assistant/chat", json={"message": "what is self-sufficiency?"}, buffered=False
+        )
+        frames = iter(response.response)
+        read = [next(frames), next(frames)]
+        response.close()
+
+        assert [f.event for f in parse_sse_events(b"".join(read).decode())] == ["tool", "delta"]
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert [(m["role"], m["content"]) for m in messages] == [
+            ("user", "what is self-sufficiency?"),
+            ("assistant", "Self-sufficiency is"),
+        ]
+        assert messages[1]["metadata"]["invoked_tools"] == ["explain_metric"]
+        assert messages[1]["metadata"]["truncated"] is True
 
 
 def test_assistant_page_renders_chat_shell(client: FlaskClient) -> None:
