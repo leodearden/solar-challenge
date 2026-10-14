@@ -709,15 +709,22 @@ class TestEveryTurnStoresAReplyWithText:
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """A client that leaves after the first delta frame leaves that text stored as a truncated reply."""
+        """A client that leaves after the first delta frame leaves that text stored as a truncated reply.
+
+        The disconnect also closes the model's stream, which was still open when
+        that frame was sent, so no connection to the model outlives the turn.
+        """
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "disconnect-sid"
-        anthropic_api.set_streams([make_end_turn_stream(["Hello", " world"])])
+        model_stream = make_end_turn_stream(["Hello", " world"])
+        anthropic_api.set_streams([model_stream])
 
         response = client.post("/assistant/chat", json={"message": "hi"}, buffered=False)
         first = next(iter(response.response))
+        model_stream.__exit__.assert_not_called()
         response.close()
 
+        model_stream.__exit__.assert_called_once()
         assert parse_sse_events(first.decode()) == [SseFrame(event="delta", data={"text": "Hello"})]
         messages = client.get("/assistant/history").get_json()["messages"]
         assert [(m["role"], m["content"]) for m in messages] == [("user", "hi"), ("assistant", "Hello")]
