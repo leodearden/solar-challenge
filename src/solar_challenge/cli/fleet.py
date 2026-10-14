@@ -23,7 +23,6 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
-    ConfigurationError,
     SweepSpec,
     detect_fleet_sweep_spec,
     load_community_config,
@@ -34,6 +33,7 @@ from solar_challenge.config import (
     parse_sweep_fleet_configs,
     substitute_config_variables,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,

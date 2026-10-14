@@ -10,11 +10,11 @@ import pandas as pd
 
 from solar_challenge.battery import BatteryConfig, has_battery, require_valid_power_limit
 from solar_challenge.config import (
-    ConfigurationError,
     parse_dispatch_strategy_config,
     parse_seg_rate,
     parse_tariff_config,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig

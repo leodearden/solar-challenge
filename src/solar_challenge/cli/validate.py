@@ -19,7 +19,6 @@ from solar_challenge.cli.utils import (
     verbatim_table_title,
 )
 from solar_challenge.config import (
-    ConfigurationError,
     ScenarioConfig,
     detect_fleet_sweep_spec,
     load_config,
@@ -28,6 +27,7 @@ from solar_challenge.config import (
     parse_fleet_config,
     parse_sweep_fleet_configs,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.validation import (

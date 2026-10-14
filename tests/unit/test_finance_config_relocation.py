@@ -4,8 +4,7 @@
 These tests pin:
   1. FinanceConfig is DEFINED in solar_challenge.finance (not merely aliased there).
   2. Importing solar_challenge.config and solar_challenge.finance in either order
-     produces no circular-import error, and constructing an instance (which
-     triggers __post_init__ => lazy ConfigurationError import) works in both.
+     produces no circular-import error, and constructing an instance works in both.
   3. Validation is preserved: the defaults hold, and a bad vat_rate raises
      ConfigurationError.
 
