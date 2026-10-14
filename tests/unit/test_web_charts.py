@@ -309,6 +309,21 @@ class TestFinancialBreakdownNetCostLine:
         # £2.88 of import cost less £1.44 of export revenue each day.
         assert line["y"] == [1.44, 2.88]
 
+    def test_ends_at_the_runs_net_cost_to_the_penny(self) -> None:
+        """An ordinary priced home: its import cost exceeds its export revenue, so its line ends above zero, at the run's net cost.
+
+        Its day totals are not whole pennies, so summing them rounded day by day would leave the line pennies off.
+        """
+        results = make_sinusoidal_sim_results(
+            days=3, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
+        )
+        net_cost = calculate_summary(results).net_cost_gbp
+        assert net_cost > 0
+
+        line = traces_by_name(financial_breakdown(results))["Cumulative Net Cost"]
+
+        assert line["y"][-1] == pytest.approx(net_cost, abs=0.005)
+
     def test_is_drawn_against_the_secondary_axis_titled_for_it_in_the_net_cost_colour(self) -> None:
         figure = financial_breakdown(
             make_sinusoidal_sim_results(days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05)
