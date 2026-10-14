@@ -71,6 +71,26 @@
     }
 
     /**
+     * The leaves of the nested overrides, each keyed by its Plotly attribute
+     * path, such as 'font.color'. Given a nested object, Plotly.relayout
+     * replaces that whole container, axis titles and all, while a path sets
+     * only its leaf.
+     */
+    function _attributePaths(overrides, prefix) {
+        var paths = {};
+        Object.keys(overrides).forEach(function (key) {
+            var path = prefix ? prefix + '.' + key : key;
+            var value = overrides[key];
+            if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+                Object.assign(paths, _attributePaths(value, path));
+            } else {
+                paths[path] = value;
+            }
+        });
+        return paths;
+    }
+
+    /**
      * Draws the chart of container's figure. A throw, or a rejection of the
      * promise Plotly.newPlot returns, logs one console error naming container.
      */
@@ -86,9 +106,9 @@
         });
     }
 
-    /** Applies the active theme's overrides to the chart of container, which is drawn. */
+    /** Applies the active theme's overrides to the chart of container, which is drawn, and changes nothing else of it. */
     function _recolour(container) {
-        Plotly.relayout(container, _themeOverrides());
+        Plotly.relayout(container, _attributePaths(_themeOverrides()));
     }
 
     /**
