@@ -331,6 +331,49 @@ class TestScenarioAPI:
             "errors": [f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."],
         }
 
+    def test_validate_refuses_only_a_shuffled_pool_too_large_for_a_dashboard_fleet(
+        self, client: FlaskClient
+    ) -> None:
+        """The builder accepts a PV pool of exactly the dashboard's fleet limit's values, and refuses one value more, in one row or across rows, naming the count or the total.
+
+        Each pool sent is at most one value over the limit, never a count such as finding
+        fk-9dd1d9389dd2's 10**12: if the bound regressed, validate would build every value
+        of the pool.
+        """
+
+        def validation_with_pv_pool(entries: list[dict[str, float]]) -> Any:
+            form = {
+                key: value
+                for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
+                if key != "pv_capacity_kw"
+            }
+            form["pv_distribution_type"] = "shuffled_pool"
+            form["pv_sp_entries"] = entries
+            response = client.post("/api/scenarios/validate", json=form)
+            assert response.status_code == 200
+            return response.get_json()
+
+        assert validation_with_pv_pool([{"value": 4.0, "count": MAX_FLEET_HOMES}]) == {
+            "valid": True,
+            "errors": [],
+        }
+        assert validation_with_pv_pool([{"value": 4.0, "count": MAX_FLEET_HOMES + 1}]) == {
+            "valid": False,
+            "errors": [
+                f"pv_sp_entries[0].count must be between 0 and {MAX_FLEET_HOMES}, "
+                f"got {MAX_FLEET_HOMES + 1}"
+            ],
+        }
+        assert validation_with_pv_pool(
+            [{"value": 4.0, "count": MAX_FLEET_HOMES}, {"value": 5.0, "count": 1}]
+        ) == {
+            "valid": False,
+            "errors": [
+                f"pv_sp_entries counts must total at most {MAX_FLEET_HOMES}, "
+                f"got {MAX_FLEET_HOMES + 1}"
+            ],
+        }
+
     def test_validate_accepts_each_fixed_value_the_builder_page_allows_and_refuses_one_beyond_it(
         self, client: FlaskClient
     ) -> None:
