@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's signature_closure, one per test.
 
-The annotations below are evaluated, as in the modules they stand in for, so this module
-does not import annotations from __future__. Feeder, Tap and Tally are defined at module
-level, where their forward references to each other resolve in this module's namespace.
+Feeder, Tap and Tally are defined at module level, where their forward references to
+each other resolve in this module's namespace.
 """
 
 import pathlib

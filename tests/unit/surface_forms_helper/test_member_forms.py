@@ -1,9 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The rules of tests/_surface_forms.py's member_forms, one per test.
-
-The annotations below are evaluated, as in the modules they stand in for, so this module
-does not import annotations from __future__.
-"""
+"""The rules of tests/_surface_forms.py's member_forms, one per test."""
 
 import abc
 import enum
