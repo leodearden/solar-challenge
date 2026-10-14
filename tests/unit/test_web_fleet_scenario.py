@@ -17,6 +17,7 @@ from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
     fleet_form_from_scenario,
+    parse_fleet_form,
     scenario_from_fleet_form,
 )
 from solar_challenge.web.shared import resolve_location
@@ -311,6 +312,26 @@ class TestFleetFormFromScenario:
             "fleet_distribution.pv.tilt",
             "finance",
         )
+
+    @pytest.mark.parametrize(
+        "capacity_kwh",
+        [
+            pytest.param(None, id="null"),
+            pytest.param({"type": "fixed", "value": None}, id="fixed-null"),
+        ],
+    )
+    def test_a_null_battery_capacity_loads_as_0_kwh(self, capacity_kwh: object) -> None:
+        """A battery capacity of null, written as the capacity or as a fixed distribution's value, loads as the fixed value 0 kWh, as a null among a pool's values does: the form runs no battery, as the scenario does."""
+        battery = _FLEET_SCENARIO["fleet_distribution"]["battery"]
+
+        imported = fleet_form_from_scenario(
+            _with_fleet_distribution(battery={**battery, "capacity_kwh": capacity_kwh})
+        )
+
+        assert imported == ImportedFleetForm(
+            form={**_FLEET_FORM, "battery": {"capacity_kwh": 0.0}}, not_loaded=()
+        )
+        assert all(home.battery_config is None for home in parse_fleet_form(imported.form).homes)
 
     def test_a_location_other_than_bristol_is_not_loaded(self) -> None:
         """The fleet page has no location control and runs its fleet at Bristol, so a London scenario loads the rest and names its location."""
