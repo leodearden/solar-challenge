@@ -65,24 +65,6 @@ def test_all_is_complete_frozen_surface() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_every_name_resolves_and_caches() -> None:
-    """Each name resolves to the correct origin-module object and is cached on second access."""
-    for name, mod_name in solar_challenge._SYMBOL_MODULE.items():
-        source_name = solar_challenge._SOURCE_NAME.get(name, name)
-        origin_obj = getattr(import_module(f"solar_challenge.{mod_name}"), source_name)
-        # Resolve via lazy __getattr__ (or return already-cached value)
-        resolved = getattr(solar_challenge, name)
-        assert resolved is origin_obj, (
-            f"solar_challenge.{name} resolved to wrong object; "
-            f"expected solar_challenge.{mod_name}.{source_name}"
-        )
-        # After first access the resolved object is cached in the module namespace
-        assert name in vars(solar_challenge), f"{name!r} not in vars() after first access"
-        # Repeat access returns the identical (cached) object
-        obj2 = getattr(solar_challenge, name)
-        assert resolved is obj2, f"Cached and fresh {name!r} differ"
-
-
 def test_every_name_resolves_to_its_type_checking_import() -> None:
     """Each __all__ name, on a first and on a repeat access, is the object the
     package's `if TYPE_CHECKING:` block imports under that name.
@@ -173,23 +155,12 @@ def test_dir_returns_sorted_all() -> None:
 def test_type_checking_block_names_match_all() -> None:
     """Names bound in the TYPE_CHECKING block must equal set(__all__) plus 'Typer'.
 
-    Parses __init__.py with ast to extract the names bound in the TYPE_CHECKING
-    block and verifies they stay in sync with __all__. Adding a name to __all__
-    and _SYMBOL_MODULE but forgetting the TYPE_CHECKING re-export would otherwise
+    Reads the names the block binds through _type_checking_imports() and verifies
+    they stay in sync with __all__. Adding a name to __all__ and to the lazy
+    loader's map but forgetting its TYPE_CHECKING re-export would otherwise
     silently break mypy --strict for consumers without failing this package's own checks.
     """
-    src = pathlib.Path(solar_challenge.__file__).read_text()
-    tree = ast.parse(src)
-
-    tc_names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.If):
-            if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
-                for stmt in node.body:
-                    if isinstance(stmt, ast.ImportFrom):
-                        for alias in stmt.names:
-                            # asname is the local binding; fall back to the imported name
-                            tc_names.add(alias.asname if alias.asname else alias.name)
+    tc_names = set(_type_checking_imports())
 
     # TYPE_CHECKING block includes "Typer" for get_cli_app()'s return annotation;
     # Typer is NOT in __all__ — CLI is shipped but unfrozen.
