@@ -28,9 +28,8 @@ from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require
 
 _BUILDER_FORM = "Builder form"
 
-#: Reads a column of distribution rows as its numbers, from each row's cell with its field
-#: and from the field of the rows.
-_ColumnReader = Callable[[list[tuple[str, Any]], str], Sequence[float]]
+#: Reads a column of distribution rows, given as (field, value sent) cells, as its numbers.
+_ColumnReader = Callable[[list[tuple[str, Any]]], Sequence[float]]
 
 
 def _prefixed(prefix: str, *keys: str) -> dict[str, str]:
@@ -283,8 +282,13 @@ def _distribution_spec(fields: Mapping[str, Any], form_keys: Mapping[str, str]) 
             fields, form_keys["wd_values"], "weight", "weights", _finite_floats
         )
     elif distribution_type == "shuffled_pool":
+        entries_field = form_keys["sp_entries"]
         parameters = _row_lists(
-            fields, form_keys["sp_entries"], "count", "counts", read_pool_counts
+            fields,
+            entries_field,
+            "count",
+            "counts",
+            lambda counts: read_pool_counts(counts, entries_field),
         )
     else:
         raise ValueError(
@@ -320,12 +324,11 @@ def _row_lists(
     Each row is an object holding a value and its *column*.  A form without the rows
     gives neither list.  Each value is read by as_finite_float.  The column is read whole,
     by *read_column*, from each row's cell with its field, ``rows_field[index].column``,
-    and from *rows_field*, so its rule may bound each cell or the column's total.
+    so its rule may bound each cell or the column's total.
 
     Raises:
         ValueError: naming *rows_field*, and the row's index, when the rows are not a list
-            of such objects or a value is not a finite number; or *read_column*'s refusal,
-            which names the cell at fault or the rows.
+            of such objects or a value is not a finite number; or *read_column*'s refusal.
     """
     if rows_field not in fields:
         return {}
@@ -341,12 +344,9 @@ def _row_lists(
             )
         values.append(as_finite_float(row["value"], f"{rows_field}[{index}].value"))
         cells.append((f"{rows_field}[{index}].{column}", row[column]))
-    return {"values": values, grammar_key: list(read_column(cells, rows_field))}
+    return {"values": values, grammar_key: list(read_column(cells))}
 
 
-def _finite_floats(cells: list[tuple[str, Any]], rows_field: str) -> list[float]:
-    """Each of *cells*, a row's cell with its field, read by as_finite_float under that field.
-
-    A weight has no rule over its whole column, so *rows_field* goes unread.
-    """
+def _finite_floats(cells: list[tuple[str, Any]]) -> list[float]:
+    """Each of *cells*, a row's cell with its field, read by as_finite_float under that field."""
     return [as_finite_float(value, field) for field, value in cells]

@@ -492,9 +492,11 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
     *spec* is one the grammar accepts.  The form's distribution is the editor's: a fixed
     value, which the grammar spells as a number or as a fixed distribution, and which the
     form holds as its number; a normal with both clamps; a uniform; or weighted_discrete
-    or shuffled_pool rows.  Every number is read as the form's conversion reads it: a
-    shuffled_pool count by :func:`~solar_challenge.web.number_fields.as_whole_number`, and
-    any other number by :func:`~solar_challenge.web.number_fields.as_finite_float`.
+    or shuffled_pool rows.  A shuffled_pool count is read by
+    :func:`~solar_challenge.web.number_fields.as_whole_number`, and any other number by
+    :func:`~solar_challenge.web.number_fields.as_finite_float`, as the form's conversion
+    reads them, except that only the conversion bounds the counts: it refuses a pool too
+    large for a dashboard fleet (see :func:`read_pool_counts`).
 
     Raises:
         ValueError: For a *spec* the editor cannot hold, naming *path*: an absent
