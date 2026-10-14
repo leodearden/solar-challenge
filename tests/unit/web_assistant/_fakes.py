@@ -188,6 +188,26 @@ def make_failing_stream(error: Exception) -> MagicMock:
     return manager
 
 
+def make_failing_stream_after(text_chunks: list[str], error: Exception) -> MagicMock:
+    """Build a context-manager mock for a stream that sends *text_chunks*, then fails with *error*.
+
+    The SDK raises an ``error`` event the API sends mid-reply, such as an overload,
+    from ``text_stream``, after the text that streamed before it.
+    """
+
+    def text_then_error() -> Iterator[str]:
+        yield from text_chunks
+        raise error
+
+    stream = MagicMock()
+    stream.text_stream = text_then_error()
+
+    manager = MagicMock()
+    manager.__enter__.return_value = stream
+    manager.__exit__.return_value = False
+    return manager
+
+
 def thinking_block(thinking: str, signature: str) -> SimpleNamespace:
     """A content block shaped like the SDK's ``ThinkingBlock``."""
     return SimpleNamespace(type="thinking", thinking=thinking, signature=signature)

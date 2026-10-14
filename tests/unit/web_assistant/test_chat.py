@@ -21,6 +21,7 @@ from tests.unit.web_assistant._fakes import (
     install_fake_anthropic,
     make_end_turn_stream,
     make_failing_stream,
+    make_failing_stream_after,
     make_tool_use_stream,
     make_tool_use_stream_from_blocks,
     seed_run,
@@ -638,8 +639,8 @@ class TestEveryTurnStoresAReplyWithText:
     unanswered does not.
 
     Every turn that reaches the model therefore stores one reply with text,
-    however it ends: finished; failed, i.e. an API error before any text
-    (overload, rate limit after retries, bad key or model, network); or cut
+    however it ends: finished; failed, i.e. an API error before or during the
+    reply (overload, rate limit after retries, bad key or model, network); or cut
     short, i.e. a client disconnect closes the response and raises GeneratorExit
     at a yield, which ``except Exception`` does not catch.
 
@@ -704,6 +705,27 @@ class TestEveryTurnStoresAReplyWithText:
         ]
         stored_reply = client.get("/assistant/history").get_json()["messages"][1]
         assert stored_reply["metadata"] == {"error": "overloaded_error: Overloaded", "truncated": True}
+
+    def test_an_api_error_after_the_first_token_stores_the_text_streamed_before_it(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A turn that fails mid-reply stores the text it streamed, not the notice, and marks the error."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "mid-reply-error-sid"
+        anthropic_api.set_streams(
+            [make_failing_stream_after(["Hello"], RuntimeError("overloaded_error: Overloaded"))]
+        )
+
+        frames = parse_sse_events(
+            client.post("/assistant/chat", json={"message": "hi"}).get_data(as_text=True)
+        )
+
+        assert [f.event for f in frames] == ["delta", "error"]
+        messages = client.get("/assistant/history").get_json()["messages"]
+        assert [(m["role"], m["content"]) for m in messages] == [("user", "hi"), ("assistant", "Hello")]
+        assert messages[1]["metadata"] == {"error": "overloaded_error: Overloaded", "truncated": True}
 
     def test_a_reply_the_model_ends_without_text_is_stored_with_text(
         self,
