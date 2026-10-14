@@ -25,6 +25,7 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.optimize import (
+    SENSITIVITY_BANDS,
     ConfigPoint,
     ConfigResult,
     RankedSweep,
@@ -867,6 +868,36 @@ def optimize_fleet_results() -> FleetResults:
     return _make_fleet_results(n_homes=5)
 
 
+@pytest.fixture(scope="module")
+def one_home_fleet_results() -> FleetResults:
+    """Module-scoped fixture: constant feasible FleetResults for a one-home scenario, built once per module."""
+    return _make_fleet_results(n_homes=1)
+
+
+# Each --sensitivity alias the CLI documents → the knob whose axis section it adds to the report.
+_SENSITIVITY_ALIAS_KNOBS: dict[str, str] = {
+    "retained_floor": "retained_cash_floor_per_home_per_year_gbp",
+    "grid_services": "grid_services_income_per_kw_per_year_gbp",
+    "battery_cost": "battery_cost_per_kwh_gbp",
+    "pv_cost": "pv_cost_per_kwp_gbp",
+    "inverter_cost": "inverter_cost_per_kw_gbp",
+}
+
+
+def _swept_values_by_axis(report: str) -> dict[str, list[float]]:
+    """Return, for each '### Axis: <knob>' section of a config-ranking report, the values its table rows sweep."""
+    swept: dict[str, list[float]] = {}
+    axis_values: list[float] | None = None
+    for line in report.splitlines():
+        if line.startswith("### Axis: "):
+            axis_values = swept.setdefault(line.removeprefix("### Axis: "), [])
+        elif line.startswith("#"):
+            axis_values = None
+        elif axis_values is not None and line.startswith("| ") and not line.startswith("| Value"):
+            axis_values.append(float(line.split("|")[1]))
+    return swept
+
+
 class TestOptimizeCLIE2EFast:
     """Fast injected-simulator end-to-end tests for `optimize configs` wiring (G2/W-H6 signal).
 
@@ -880,8 +911,10 @@ class TestOptimizeCLIE2EFast:
         tmp_path: Path,
         fleet_results: FleetResults,
         options: list[str],
+        *,
+        n_homes: int = 5,
     ) -> tuple[object, list[object]]:
-        """Run `optimize configs` on a fresh scenario with *options*, answering every fleet simulation with *fleet_results*.
+        """Run `optimize configs` on a fresh *n_homes*-home scenario with *options*, answering every fleet simulation with *fleet_results*.
 
         Returns the CliRunner result and the fleet configs the injected simulator
         was asked to simulate.
@@ -892,7 +925,7 @@ class TestOptimizeCLIE2EFast:
             simulated_fleets.append(fleet_config)
             return fleet_results
 
-        scenario_file = _write_optimize_scenario(tmp_path)
+        scenario_file = _write_optimize_scenario(tmp_path, n_homes=n_homes)
         result = invoke_cli(["optimize", "configs", str(scenario_file), *options], simulate)
         return result, simulated_fleets
 
@@ -948,6 +981,41 @@ class TestOptimizeCLIE2EFast:
         assert "p/kWh" in result.output, (
             f"Expected 'p/kWh' solved-rate token in output:\n{result.output}"
         )
+
+    def test_every_sensitivity_alias_sweeps_its_knobs_library_band(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """Each alias's axis sweeps exactly its knob's optimize.SENSITIVITY_BANDS values."""
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            [
+                "--pv", "4",
+                "--battery", "0",
+                "--inverter", "5",
+                "--sensitivity", ",".join(_SENSITIVITY_ALIAS_KNOBS),
+            ],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 from 'optimize configs'; got {result.exit_code}.\n"
+            f"Output:\n{result.output}"
+        )
+        assert set(_SENSITIVITY_ALIAS_KNOBS.values()) == set(SENSITIVITY_BANDS), (
+            "Every library band must be reachable from a CLI alias."
+        )
+        swept = _swept_values_by_axis(result.stdout)
+        assert set(swept) == set(_SENSITIVITY_ALIAS_KNOBS.values()), (
+            f"Expected one axis section per alias's knob in the report:\n{result.output}"
+        )
+        for knob in _SENSITIVITY_ALIAS_KNOBS.values():
+            assert swept[knob] == pytest.approx(SENSITIVITY_BANDS[knob], abs=0.005), (
+                f"Axis {knob} swept {swept[knob]}, not its SENSITIVITY_BANDS values.\n"
+                f"Output:\n{result.output}"
+            )
 
     def test_parse_robustness_single_pv_value_works(
         self,
