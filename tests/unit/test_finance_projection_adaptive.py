@@ -8,8 +8,12 @@ injected synthetic simulate.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
+import warnings
 from typing import Callable
+
+import pytest
 
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
@@ -35,6 +39,27 @@ def _make_curved_simulate(curvature: float = 0.35) -> Callable:
             self_kwh=max(0.1, BASE_SC * factor),
             export_kwh=max(0.1, BASE_EXP * factor),
             import_kwh=500.0,
+        )
+
+    return _simulate
+
+
+def _make_seg_income_simulate(seg_income_at_age_0_gbp: float) -> Callable:
+    """Return a synthetic simulate whose homes earn SEG income seg_income_at_age_0_gbp × exp(-0.05 × age).
+
+    Every home's energy is the same at every age, so revenue is the only metric
+    that varies with age.
+    """
+
+    def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        homes = fleet_config.homes
+        mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
+        return make_fleet_results(
+            homes=homes,
+            self_kwh=100.0,
+            export_kwh=800.0,
+            import_kwh=300.0,
+            export_revenue_gbp=seg_income_at_age_0_gbp * math.exp(-0.05 * mean_age),
         )
 
     return _simulate
@@ -131,6 +156,30 @@ class TestProjectMultiYearAdaptive:
         assert curve.interp_error_estimate <= 50.0, (
             f"interp_error_estimate {curve.interp_error_estimate:.4f} > target 50.0"
         )
+
+    def test_a_negative_revenue_converges_as_its_positive_mirror_does(self) -> None:
+        """Revenue error is a percentage of the age-0 revenue's magnitude, whatever its sign.
+
+        Over a 25-year life, one fleet earns SEG income of £50 × exp(-0.05 × age)
+        and its mirror loses that much; at an own-use rate of 0 p neither earns
+        anything else, so their revenues differ only in sign.  A caller's simulate
+        may report such a loss.  The losing fleet's projection samples the ages
+        the earning fleet's does, with the same error estimate, within the default
+        1 % target and without the MAX_NODES warning.
+        """
+        scenario, finance = _make_adaptive_scenario(asset_life=25)
+        finance = dataclasses.replace(finance, own_use_rate_pence_per_kwh=0.0)
+
+        earning = project_multi_year(scenario, finance, simulate=_make_seg_income_simulate(50.0))
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            losing = project_multi_year(scenario, finance, simulate=_make_seg_income_simulate(-50.0))
+
+        assert losing.points[0].fleet_revenue_gbp == pytest.approx(-50.0), "premise: the fleet loses £50 at age 0"
+        assert [str(w.message) for w in record if issubclass(w.category, UserWarning)] == []
+        assert losing.sampled_ages == earning.sampled_ages
+        assert losing.interp_error_estimate == pytest.approx(earning.interp_error_estimate)
+        assert losing.interp_error_estimate <= 1.0
 
     def test_per_year_curves_monotone_after_adaptive(self) -> None:
         """Per-year curves remain monotone non-increasing after adaptive refinement."""
