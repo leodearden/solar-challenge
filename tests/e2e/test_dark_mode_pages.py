@@ -2,10 +2,11 @@
 
 Verifies that setting localStorage theme=dark and reloading causes
 <html class="dark"> on every main page.
+The module also toggles the theme live on a results page, to check what the toggle does to the page's charts.
 """
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Locator, Page, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -44,6 +45,32 @@ def _plotly_background_colors(page: Page) -> list[str]:
         return colors;
     }""")
     return colors
+
+
+# The paper colour chart-renderer.js paints a chart in each theme: the computed
+# background-color of the chart's first .main-svg, as _plotly_background_colors reads it.
+_PAPER_COLOURS = {"light": "rgb(255, 255, 255)", "dark": "rgb(30, 41, 59)"}
+
+
+def _open_in_theme(page: Page, url: str, theme: str) -> None:
+    """Open url in theme: base.html's inline script reads localStorage before first paint."""
+    page.add_init_script(f"localStorage.setItem('theme', '{theme}')")
+    page.goto(url)
+
+
+def _show_tab(page: Page, name: str) -> None:
+    """Click the tab named name."""
+    page.get_by_role("tab", name=name, exact=True).click()
+
+
+def _toggle_theme(page: Page) -> None:
+    """Click the theme toggle. The mobile sidebar's copy is display:none, so only the desktop sidebar's matches."""
+    page.get_by_role("button", name="Toggle dark mode").click()
+
+
+def _paper(page: Page, chart_id: str) -> Locator:
+    """The element whose background-color is the paper colour of the chart in the container chart_id."""
+    return page.locator(f"#{chart_id} .main-svg").first
 
 
 # -- Dark mode on /simulate/home -------------------------------------------
@@ -107,3 +134,38 @@ def test_dark_mode_results_page_charts(
         f"Plotly chart background is white in dark mode: {backgrounds}. "
         f"Charts should use a dark background color when dark mode is active."
     )
+
+
+# -- Toggling the theme live on a results page -----------------------------
+
+
+@pytest.mark.parametrize(
+    ("starting_theme", "toggled_theme"),
+    [("light", "dark"), ("dark", "light")],
+    ids=["light-to-dark", "dark-to-light"],
+)
+def test_toggling_the_theme_recolours_a_chart_whose_tab_is_hidden_once_its_tab_is_shown(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    starting_theme: str,
+    toggled_theme: str,
+) -> None:
+    """chart-power-flow, drawn and then hidden with its tab, takes the toggled theme's colours once its tab is shown again.
+
+    The shown tab's chart-daily-balance takes them at the toggle.
+    """
+    run_id, _ = seeded_home_run
+    _open_in_theme(page, live_server + f"/results/home/{run_id}", starting_theme)
+
+    _show_tab(page, "Power Flow")
+    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS[starting_theme])
+
+    _show_tab(page, "Overview")
+    expect(page.locator("#chart-power-flow")).to_be_hidden()
+
+    _toggle_theme(page)
+    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS[toggled_theme])
+
+    _show_tab(page, "Power Flow")
+    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS[toggled_theme])
