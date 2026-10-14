@@ -12,6 +12,7 @@
 **Unreleased on main** (task 307): on a home with no tariff configured, the override path prices its grid import at the retail baseline rate, with the physics path's `UserWarning` (§3); the 0.5.0 tag prices that import at £0.
 **Unreleased on main** (task 308): with `self_consumption_override` set, `project_multi_year`'s own-use revenue, and so the cost-recovery solve's rate base, is each home's capped override own-use, the own-use its bill charges (§2, §4, §5); the 0.5.0 tag keeps both on basis C.
 **Unreleased on main** (task 656): `project_multi_year`, and so `solve_cost_recovery_rate`, raises `ValueError` when a simulated age, seed or bisection trial, gives a NaN or infinite value for any aggregate §4 requires to be finite, naming the age and each such aggregate with its value; the 0.5.0 tag projects a NaN own-use or revenue on a one-year asset life as 0 kWh and £0 and passes an infinity through, drops a bisection trial whose aggregate is NaN, accepts a non-finite battery discharge, and stops on a non-finite seed of a longer life in scipy's PCHIP with "`y` must contain only finite values", which names no age.
+**Unreleased on main** (task 702): `YearPoint.fleet_self_consumption_kwh`, the fleet's billed own-use (§4) and the cost-recovery solve's rate base (§5), is renamed `fleet_billed_own_use_kwh`; the 0.5.0 tag has the old name.
 
 ---
 
@@ -395,11 +396,11 @@ Source: `finance.py:solve_cost_recovery_rate()`.
 The CBS net surplus per home is **exactly affine** in the own-use rate `r`:
 
 ```
-net_surplus(r) = [Σ_years (r × sc_y/100 + C_y − opex − debt_y)] / (N_years × N_homes)
+net_surplus(r) = [Σ_years (r × own_use_y/100 + C_y − opex − debt_y)] / (N_years × N_homes)
 ```
 
-where `sc_y` is the fleet own-use the bills charge at year `y`
-(`YearPoint.fleet_self_consumption_kwh`, §4's `fleet_sc_kwh` = Σ_homes `_billed_energy`
+where `own_use_y` is the fleet own-use the bills charge at year `y`
+(`YearPoint.fleet_billed_own_use_kwh`, §4's `fleet_sc_kwh` = Σ_homes `_billed_energy`
 own-use: basis C, or the capped override own-use; annualised as in §4, after degradation
 interpolation), and `C_y` is rate-independent (SEG + grid-services, fixed by physics).
 `opex` is the fleet opex (`opex_per_home_per_year_gbp × N_homes`).  `debt_y` is
@@ -424,7 +425,7 @@ The solver uses this affine structure to avoid re-simulating for each trial rate
 | `r* < 0` — project over-delivers at r = 0 | 0 | `rate_clamped_zero` | True |
 | `0 ≤ r* ≤ retail` — interior solve | `r*` | `floor` | True |
 | `r* > retail` — impossible to meet floor | `retail` | `infeasible_above_retail` | False |
-| Degenerate (no self-consumption) | 0 or retail | one of the above | as above |
+| Degenerate (no billed own-use) | 0 or retail | one of the above | as above |
 
 After the solve, a separate age-0 fleet simulation provides per-home granularity
 for the `BillDistribution` (representative median-outlay home, min/mean/median/max).
