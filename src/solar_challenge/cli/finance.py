@@ -77,6 +77,30 @@ def _bill_finances(
     return pairs[assumptions]
 
 
+def _economics_and_cost_recovery(
+    scenario_config: ScenarioConfig,
+    finance: FinanceConfig,
+    simulator: CliFleetSimulator,
+    *,
+    project: bool,
+    cost_recovery: bool,
+) -> tuple[Optional[ProjectEconomics], Optional[CostRecoverySolution]]:
+    """The project economics --project asks for and the cost-recovery solution --cost-recovery asks for, each None without its flag."""
+    economics_result: Optional[ProjectEconomics] = None
+    if project:
+        print_info("Computing project-level economics (DSCR/IRR/payback)…")
+        curve = project_multi_year(scenario_config, finance, simulate=simulator.simulate)
+        economics_result = project_economics(curve, scenario_config, finance)
+
+    cost_recovery_result: Optional[CostRecoverySolution] = None
+    if cost_recovery:
+        print_info("Solving cost-recovery own-use rate…")
+        cost_recovery_result = solve_cost_recovery_rate(
+            scenario_config, finance, simulate=simulator.simulate
+        )
+    return economics_result, cost_recovery_result
+
+
 @app.command()
 @handle_errors
 def run(
@@ -202,8 +226,8 @@ def run(
     print_info(f"Simulating fleet of {n_homes} homes for {days} days…")
 
     # ---- Simulate fleet -----------------------------------------------------
-    simulate = ctx.ensure_object(CliFleetSimulator).simulate
-    fleet_results: FleetResults = simulate(fleet_config, start_date, end_date)
+    simulator = ctx.ensure_object(CliFleetSimulator)
+    fleet_results: FleetResults = simulator.simulate(fleet_config, start_date, end_date)
 
     # ---- Capacity-at-events grid-services figure (ε / task-76) -------------
     # Computed once from the already-available fleet_results; None for flat model.
@@ -231,47 +255,23 @@ def run(
         else None
     )
 
-    # ---- Build shared ScenarioConfig (used by --project and/or --cost-recovery) ---
-    econ_scenario: Optional[ScenarioConfig] = None
-    if project or cost_recovery:
-        _base = ScenarioConfig(
-            name=raw.get("name", str(scenario)),
-            period=SimulationPeriod(
-                start_date=start,
-                end_date=end,
-            ),
-            homes=list(fleet_config.homes),
-            location=loc,
-            finance=finance,
-        )
-        if cost_recovery and seg_rate is not None:
-            # Thread seg_tariff_pence_per_kwh only when --cost-recovery is active so that
-            # --project-only output is unchanged from pre-CR5 behaviour (avoids silently
-            # changing project_multi_year SEG revenue for existing --project callers).
-            econ_scenario = dataclasses.replace(_base, seg_tariff_pence_per_kwh=seg_rate)
-        else:
-            econ_scenario = _base
-
-    # ---- Project economics (optional) ---------------------------------------
-    economics_result: Optional[ProjectEconomics] = None
-    if project:
-        assert econ_scenario is not None
-        print_info("Computing project-level economics (DSCR/IRR/payback)…")
-        curve = project_multi_year(econ_scenario, finance, simulate=simulate)
-        economics_result = project_economics(curve, econ_scenario, finance)
-
-    # ---- Cost-recovery solve (optional) ------------------------------------
-    cost_recovery_result: Optional[CostRecoverySolution] = None
-    if cost_recovery:
-        assert econ_scenario is not None
-        print_info("Solving cost-recovery own-use rate…")
-        cost_recovery_result = solve_cost_recovery_rate(econ_scenario, finance, simulate=simulate)
+    scenario_config = ScenarioConfig(
+        name=raw.get("name", str(scenario)),
+        period=SimulationPeriod(start_date=start, end_date=end),
+        homes=list(fleet_config.homes),
+        location=loc,
+        finance=finance,
+        seg_tariff_pence_per_kwh=seg_rate if cost_recovery else None,
+    )
+    economics_result, cost_recovery_result = _economics_and_cost_recovery(
+        scenario_config, finance, simulator, project=project, cost_recovery=cost_recovery
+    )
 
     # ---- Render report ------------------------------------------------------
     report = generate_finance_report(
         primary_bill,
         spreadsheet_bill,
-        scenario_name=raw.get("name", str(scenario)),
+        scenario_name=scenario_config.name,
         economics=economics_result,
         cost_recovery=cost_recovery_result,
         flex_band=resolved_flex_band,
