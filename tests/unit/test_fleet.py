@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import parse_fleet_config
 from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,
@@ -437,7 +438,25 @@ class TestFleetSummary:
         assert summary.total_export_revenue_gbp is None
 
 
-@pytest.mark.slow
+_JUNE_DAY = pd.Timestamp("2024-06-21", tz="Europe/London")
+
+
+@pytest.fixture
+def bristol_june_tmy(weather_cache: WeatherCache) -> None:
+    """Serve a clear 21 June as Bristol's TMY, the location of every home these tests simulate."""
+    weather_cache.put(synthetic_june_weather(_JUNE_DAY), "tmy", Location.bristol())
+
+
+@pytest.fixture
+def worker_start_method(request: pytest.FixtureRequest) -> Iterator[str]:
+    """Make request.param the start method of the default multiprocessing context, which the fleet's worker pool uses, until the test ends."""
+    previous = multiprocessing.get_start_method(allow_none=True)
+    multiprocessing.set_start_method(request.param, force=True)
+    yield request.param
+    multiprocessing.set_start_method(previous, force=True)
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestSimulateFleetIter:
     """Test simulate_fleet_iter iterator function."""
 
@@ -453,8 +472,8 @@ class TestSimulateFleetIter:
 
     def test_sequential_yields_in_order(self, small_fleet_config):
         """Sequential iteration yields results in order."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         indices = []
         results = []
@@ -468,10 +487,11 @@ class TestSimulateFleetIter:
         assert len(results) == 3
         assert all(isinstance(r, SimulationResults) for r in results)
 
-    def test_parallel_yields_all_results(self, small_fleet_config):
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_parallel_yields_all_results(self, small_fleet_config, worker_start_method):
         """Parallel iteration yields all results (order may vary)."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         indices = []
         results = []
@@ -492,8 +512,8 @@ class TestSimulateFleetIter:
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3400.0),
         )
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         results = list(simulate_fleet_iter(config, start, end, parallel=True))
 
@@ -501,32 +521,51 @@ class TestSimulateFleetIter:
         assert results[0][0] == 0
 
 
-@pytest.mark.slow
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestParallelMatchesSequential:
-    """Test that parallel and sequential produce same results."""
+    """A seeded stochastic fleet's parallel run gives each home exactly its sequential run's results, whichever worker draws its demand."""
 
-    def test_results_match(self):
-        """Parallel and sequential simulations produce identical results."""
-        config = FleetConfig.create_uniform(
-            n_homes=3,
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0),
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
+    def test_seeded_stochastic_homes_get_their_sequential_results_from_parallel_workers(
+        self, worker_start_method: str
+    ) -> None:
+        workers = 2
+        fleet = parse_fleet_config(
+            {
+                "fleet_distribution": {
+                    "n_homes": 4,
+                    "seed": 42,
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"annual_consumption_kwh": 3400.0, "use_stochastic": True},
+                }
+            }
         )
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        assert len(fleet.homes) > workers, (
+            f"premise: {len(fleet.homes)} homes over {workers} workers, so some worker draws "
+            "one home's demand after another's"
+        )
 
-        sequential_results = simulate_fleet(config, start, end, parallel=False)
-        parallel_results = simulate_fleet(config, start, end, parallel=True, max_workers=2)
+        in_sequence = simulate_fleet(fleet, _JUNE_DAY, _JUNE_DAY, parallel=False)
+        distinct_demands = {tuple(results.demand) for results in in_sequence.per_home_results}
+        assert len(distinct_demands) == len(fleet.homes), (
+            f"premise: the {len(fleet.homes)} homes, differing only in their seed, drew "
+            f"{len(distinct_demands)} distinct demand profiles; profiles drawn from their own seeds differ, "
+            "the deterministic Elexon fallback's do not"
+        )
 
-        assert len(sequential_results) == len(parallel_results)
+        in_parallel = simulate_fleet(fleet, _JUNE_DAY, _JUNE_DAY, parallel=True, max_workers=workers)
+        for home, from_workers, from_sequence in zip(
+            fleet.homes, in_parallel.per_home_results, in_sequence.per_home_results, strict=True
+        ):
+            pd.testing.assert_frame_equal(
+                from_workers.to_dataframe(),
+                from_sequence.to_dataframe(),
+                check_exact=True,
+                obj=f"{home.name}'s results from {worker_start_method} workers",
+            )
 
-        for i in range(len(sequential_results)):
-            seq_gen = sequential_results[i].generation
-            par_gen = parallel_results[i].generation
-            pd.testing.assert_series_equal(seq_gen, par_gen)
 
-
-@pytest.mark.slow
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestSimulateHomeWeatherData:
     """Test optional weather_data parameter in simulate_home."""
 
@@ -536,8 +575,8 @@ class TestSimulateHomeWeatherData:
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3400.0),
         )
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         # Pre-fetch weather data
         weather = get_tmy_data(config.location)
@@ -554,8 +593,8 @@ class TestSimulateHomeWeatherData:
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3400.0),
         )
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         # Should work without weather data
         result = simulate_home(config, start, end, weather_data=None)
@@ -564,7 +603,7 @@ class TestSimulateHomeWeatherData:
         assert len(result.generation) == 1440
 
 
-@pytest.mark.slow
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestMultiSweepIter:
     """Test simulate_multi_sweep_iter for cross-sweep parallelism."""
 
@@ -584,8 +623,8 @@ class TestMultiSweepIter:
 
     def test_sequential_yields_all_results(self, sweep_configs):
         """Sequential iteration yields all results from all sweeps."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         results = list(simulate_multi_sweep_iter(
             sweep_configs, start, end, parallel=False
@@ -602,10 +641,11 @@ class TestMultiSweepIter:
         # All results should be SimulationResults
         assert all(isinstance(r[2], SimulationResults) for r in results)
 
-    def test_parallel_yields_all_results(self, sweep_configs):
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_parallel_yields_all_results(self, sweep_configs, worker_start_method):
         """Parallel iteration yields all results from all sweeps."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         results = list(simulate_multi_sweep_iter(
             sweep_configs, start, end, parallel=True, max_workers=2
@@ -621,16 +661,16 @@ class TestMultiSweepIter:
 
     def test_empty_configs_returns_nothing(self):
         """Empty sweep configs yields nothing."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         results = list(simulate_multi_sweep_iter([], start, end))
         assert results == []
 
     def test_results_contain_correct_sweep_index(self, sweep_configs):
         """Results correctly identify which sweep they belong to."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         results = list(simulate_multi_sweep_iter(
             sweep_configs, start, end, parallel=False
@@ -644,7 +684,7 @@ class TestMultiSweepIter:
         assert len(sweep_1_results) == 3
 
 
-@pytest.mark.slow
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestCollectMultiSweepResults:
     """Test collect_multi_sweep_results for organizing results."""
 
@@ -664,8 +704,8 @@ class TestCollectMultiSweepResults:
 
     def test_organizes_results_by_sweep(self, sweep_configs):
         """Results are organized by sweep index."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         result_iter = simulate_multi_sweep_iter(
             sweep_configs, start, end, parallel=False
@@ -687,8 +727,8 @@ class TestCollectMultiSweepResults:
 
     def test_calls_callback_on_sweep_complete(self, sweep_configs):
         """Callback is called when each sweep completes."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         completed_sweeps = []
 
@@ -714,8 +754,8 @@ class TestCollectMultiSweepResults:
 
     def test_iter_results_in_order(self, sweep_configs):
         """iter_results yields results in sweep order."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         result_iter = simulate_multi_sweep_iter(
             sweep_configs, start, end, parallel=False
@@ -729,10 +769,11 @@ class TestCollectMultiSweepResults:
 
         assert values == [1.0, 2.0]
 
-    def test_home_results_in_correct_order(self, sweep_configs):
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_home_results_in_correct_order(self, sweep_configs, worker_start_method):
         """Home results within each sweep are in correct order."""
-        start = pd.Timestamp("2024-06-21", tz="Europe/London")
-        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+        start = _JUNE_DAY
+        end = _JUNE_DAY
 
         # Use parallel to get out-of-order results
         result_iter = simulate_multi_sweep_iter(
@@ -795,16 +836,7 @@ class TestParallelFleetWeather:
     """Parallel workers simulate each home from its location's TMY in the weather cache installed in this process, though forkserver (Linux's default from Python 3.14) and spawn (macOS's) pass the workers none of this process's globals."""
 
     _BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
-    _DAY = pd.Timestamp("2024-06-21", tz="Europe/London")
-    _LOAD = LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False)
-
-    @pytest.fixture
-    def worker_start_method(self, request: pytest.FixtureRequest) -> Iterator[str]:
-        """Make request.param the start method of the default multiprocessing context, which the fleet's worker pool uses, until the test ends."""
-        previous = multiprocessing.get_start_method(allow_none=True)
-        multiprocessing.set_start_method(request.param, force=True)
-        yield request.param
-        multiprocessing.set_start_method(previous, force=True)
+    _LOAD =LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False)
 
     @pytest.fixture(autouse=True)
     def bristol_and_bath_tmys(
@@ -816,8 +848,8 @@ class TestParallelFleetWeather:
         the default weather cache finds nothing there and writes nothing to the repository.
         """
         monkeypatch.chdir(tmp_path)
-        weather_cache.put(synthetic_june_weather(self._DAY), "tmy", Location.bristol())
-        weather_cache.put(synthetic_june_weather(self._DAY, irradiance_scale_per_day=(0.5,)), "tmy", self._BATH)
+        weather_cache.put(synthetic_june_weather(_JUNE_DAY), "tmy", Location.bristol())
+        weather_cache.put(synthetic_june_weather(_JUNE_DAY, irradiance_scale_per_day=(0.5,)), "tmy", self._BATH)
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
     def test_fleet_gives_each_home_the_results_simulate_home_gives_it_here(
@@ -835,13 +867,13 @@ class TestParallelFleetWeather:
                 for location in (Location.bristol(), self._BATH)
             ]
         )
-        alone = [simulate_home(home, self._DAY, self._DAY) for home in fleet.homes]
+        alone = [simulate_home(home, _JUNE_DAY, _JUNE_DAY) for home in fleet.homes]
         assert alone[1].total_amounts()["generation_kwh"] < alone[0].total_amounts()["generation_kwh"], (
             "premise: Bath's TMY is less sunny than Bristol's, so a home simulated from the other location's TMY is caught"
         )
 
         for parallel in (False, True):
-            fleet_results = simulate_fleet(fleet, self._DAY, self._DAY, parallel=parallel, max_workers=2)
+            fleet_results = simulate_fleet(fleet, _JUNE_DAY, _JUNE_DAY, parallel=parallel, max_workers=2)
             for home, in_fleet, expected in zip(fleet.homes, fleet_results.per_home_results, alone, strict=True):
                 pd.testing.assert_frame_equal(
                     in_fleet.to_dataframe(),
@@ -879,13 +911,13 @@ class TestParallelFleetWeather:
         for parallel in (False, True):
             collected = collect_multi_sweep_results(
                 sweeps,
-                simulate_multi_sweep_iter(sweeps, self._DAY, self._DAY, parallel=parallel, max_workers=2),
+                simulate_multi_sweep_iter(sweeps, _JUNE_DAY, _JUNE_DAY, parallel=parallel, max_workers=2),
             )
             for (pv_kw, fleet), (_, fleet_results) in zip(sweeps, collected.iter_results(), strict=True):
                 for home, in_sweep in zip(fleet.homes, fleet_results.per_home_results, strict=True):
                     pd.testing.assert_frame_equal(
                         in_sweep.to_dataframe(),
-                        simulate_home(home, self._DAY, self._DAY).to_dataframe(),
+                        simulate_home(home, _JUNE_DAY, _JUNE_DAY).to_dataframe(),
                         check_exact=True,
                         obj=f"{home.name} of the {pv_kw} kW sweep with parallel={parallel}",
                     )
