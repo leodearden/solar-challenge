@@ -53,17 +53,7 @@ class TestSimulateHomeEndpoint:
 
     def test_submit_home_job_returns_201(self, client: FlaskClient) -> None:
         """Test POST /api/simulate/home returns 201 with job_id and run_id."""
-        response = client.post(
-            "/api/simulate/home",
-            json={
-                "pv_kw": 4.0,
-                "battery_kwh": 0,
-                "occupants": 3,
-                "location": "bristol",
-                "days": 1,
-                "name": "Test Simulation",
-            },
-        )
+        response = client.post("/api/simulate/home", json={**A_HOME_JOB_REQUEST, "name": "Test Simulation"})
         assert response.status_code == 201
         data = response.get_json()
         assert "job_id" in data
@@ -73,32 +63,14 @@ class TestSimulateHomeEndpoint:
 
     def test_submit_home_job_invalid_pv_returns_400(self, client: FlaskClient) -> None:
         """Test POST /api/simulate/home with invalid PV returns 400."""
-        response = client.post(
-            "/api/simulate/home",
-            json={
-                "pv_kw": 0.1,
-                "battery_kwh": 0,
-                "occupants": 3,
-                "location": "bristol",
-                "days": 1,
-            },
-        )
+        response = client.post("/api/simulate/home", json={**A_HOME_JOB_REQUEST, "pv_kw": 0.1})
         assert response.status_code == 400
         data = response.get_json()
         assert "error" in data
 
     def test_submit_home_job_negative_battery_returns_400(self, client: FlaskClient) -> None:
         """Test POST /api/simulate/home with negative battery returns 400."""
-        response = client.post(
-            "/api/simulate/home",
-            json={
-                "pv_kw": 4.0,
-                "battery_kwh": -5.0,
-                "occupants": 3,
-                "location": "bristol",
-                "days": 1,
-            },
-        )
+        response = client.post("/api/simulate/home", json={**A_HOME_JOB_REQUEST, "battery_kwh": -5.0})
         assert response.status_code == 400
 
     def test_submit_home_job_no_json_returns_400(self, client: FlaskClient) -> None:
@@ -150,16 +122,7 @@ class TestGetJobStatusEndpoint:
     def test_get_job_status_returns_200(self, client: FlaskClient) -> None:
         """Test GET /api/jobs/<id> returns job status after submission."""
         # Submit a job first
-        submit_resp = client.post(
-            "/api/simulate/home",
-            json={
-                "pv_kw": 4.0,
-                "battery_kwh": 0,
-                "occupants": 3,
-                "location": "bristol",
-                "days": 1,
-            },
-        )
+        submit_resp = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST)
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
 
@@ -240,16 +203,7 @@ class TestJobProgressEndpoint:
     def test_progress_returns_event_stream(self, client: FlaskClient) -> None:
         """Test GET /api/jobs/<id>/progress returns text/event-stream content type."""
         # Submit a job first
-        submit_resp = client.post(
-            "/api/simulate/home",
-            json={
-                "pv_kw": 4.0,
-                "battery_kwh": 0,
-                "occupants": 3,
-                "location": "bristol",
-                "days": 1,
-            },
-        )
+        submit_resp = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST)
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
 
@@ -341,16 +295,7 @@ class TestJobResultsEndpoint:
         self, blocking_client: FlaskClient, blocking_simulation: BlockingSimulation
     ) -> None:
         """Test GET /api/jobs/<id>/results returns 409 while job is running."""
-        submit_resp = blocking_client.post(
-            "/api/simulate/home",
-            json={
-                "pv_kw": 4.0,
-                "battery_kwh": 0,
-                "occupants": 3,
-                "location": "bristol",
-                "days": 1,
-            },
-        )
+        submit_resp = blocking_client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST)
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
         blocking_simulation.wait_until_started()
@@ -380,17 +325,7 @@ class TestJobCompletion:
     def test_home_job_completes(self, real_simulation_client: FlaskClient) -> None:
         """Test that a submitted home job eventually completes with results."""
         # Submit a minimal 1-day simulation
-        submit_resp = real_simulation_client.post(
-            "/api/simulate/home",
-            json={
-                "pv_kw": 4.0,
-                "battery_kwh": 0,
-                "occupants": 3,
-                "location": "bristol",
-                "days": 1,
-                "name": "E2E Test",
-            },
-        )
+        submit_resp = real_simulation_client.post("/api/simulate/home", json={**A_HOME_JOB_REQUEST, "name": "E2E Test"})
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
         run_id = submit_resp.get_json()["run_id"]
@@ -421,14 +356,7 @@ class TestJobCompletion:
         """Test that a home job with battery completes successfully."""
         submit_resp = real_simulation_client.post(
             "/api/simulate/home",
-            json={
-                "pv_kw": 4.0,
-                "battery_kwh": 5.0,
-                "occupants": 2,
-                "location": "bristol",
-                "days": 1,
-                "name": "Battery Test",
-            },
+            json={**A_HOME_JOB_REQUEST, "battery_kwh": 5.0, "occupants": 2, "name": "Battery Test"},
         )
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
@@ -457,20 +385,8 @@ class TestSimulateFleetEndpoint:
             json={
                 "name": "Test Fleet",
                 "homes": [
-                    {
-                        "pv_kw": 4.0,
-                        "battery_kwh": 0,
-                        "occupants": 3,
-                        "location": "bristol",
-                        "days": 1,
-                    },
-                    {
-                        "pv_kw": 3.0,
-                        "battery_kwh": 5.0,
-                        "occupants": 2,
-                        "location": "london",
-                        "days": 1,
-                    },
+                    A_HOME_JOB_REQUEST,
+                    {**A_HOME_JOB_REQUEST, "pv_kw": 3.0, "battery_kwh": 5.0, "occupants": 2, "location": "london"},
                 ],
             },
         )
