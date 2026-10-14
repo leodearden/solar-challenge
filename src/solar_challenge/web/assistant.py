@@ -821,6 +821,28 @@ def _event_stream(frames: Iterable[str]) -> Response:
     )
 
 
+def _has_text(content: str) -> bool:
+    """Whether *content* holds text a Messages API message may carry: something besides whitespace."""
+    return bool(content.strip())
+
+
+def _replay_window(turns: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Return the messages that replay the stored *turns* to the model.
+
+    A turn without text is left out, because the API refuses an empty message
+    anywhere but last. At most MAX_HISTORY_TURNS turns are kept, and the window
+    starts on a user turn, because the API needs one first; the API combines the
+    consecutive user turns a left-out reply leaves behind.
+    """
+    window = [
+        {"role": turn["role"], "content": turn["content"]}
+        for turn in turns
+        if _has_text(turn["content"])
+    ][-MAX_HISTORY_TURNS:]
+    first_user = next((i for i, m in enumerate(window) if m["role"] == "user"), len(window))
+    return window[first_user:]
+
+
 @bp.route("/chat", methods=["POST"])
 def chat() -> Response:
     """Stream an AI assistant reply as Server-Sent Events.
@@ -873,20 +895,7 @@ def chat() -> Response:
         # Persist the user turn
         database.save_chat_message(db_path, sid, "user", user_message)
 
-        # Build conversation history for the API.  The just-saved user turn is
-        # intentionally included as the final message in the request.
-        # Cap to MAX_HISTORY_TURNS to prevent unbounded context growth.
-        all_turns = database.get_chat_history(db_path, sid)
-        messages: list[dict[str, Any]] = [
-            {"role": row["role"], "content": row["content"]}
-            for row in all_turns[-MAX_HISTORY_TURNS:]
-        ]
-        # API invariant: the first message must be role=user and roles must
-        # strictly alternate.  After the even-width tail-slice, the window can
-        # start on an assistant row once the history exceeds MAX_HISTORY_TURNS.
-        # Drop any leading non-user turns to restore the invariant.
-        while messages and messages[0]["role"] != "user":
-            messages.pop(0)
+        messages = _replay_window(database.get_chat_history(db_path, sid))
 
         # Run-context injection: when the request carries a run_id,
         # prepend a compact preamble to the final (user) message in-memory ONLY.
