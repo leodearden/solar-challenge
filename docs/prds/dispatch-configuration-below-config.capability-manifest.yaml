@@ -1,0 +1,247 @@
+# Machine-readable twin of dispatch-configuration-below-config.capability-manifest.md
+# (review-all stream S2). task_id values stay null until commit_planning stamps them.
+# Every grep/path check fails on main 1251be0 and passes once its leaf lands.
+prd: docs/prds/dispatch-configuration-below-config.md
+schema_version: 1
+tasks:
+  - label: "α"
+    task_id: null
+    title: "dispatch.py owns the dispatch-configuration types and the strategy factory"
+    capabilities:
+      - name: "strategy-config-variants-defined-in-dispatch"
+        binding: "built by α; dispatch.py imports only timebase today, tariff.py is a leaf (read at 1251be0)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class TOUOptimizedStrategyConfig"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "grid-charge-config-defined-in-dispatch"
+        binding: "built by α; config.GridChargeConfig moves (read at 1251be0)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class GridChargeConfig"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "strategy-factory-in-dispatch"
+        binding: "built by α; replaces home._create_dispatch_strategy (read at 1251be0)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def build_dispatch_strategy"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "home-factory-if-elif-deleted"
+        binding: "home._create_dispatch_strategy exists at 1251be0; α deletes it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def _create_dispatch_strategy"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "battery-no-longer-imports-config"
+        binding: "battery.py's TYPE_CHECKING import from config exists at 1251be0; α makes the import top-level from dispatch"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "from solar_challenge\\.config import"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: absent
+      - name: "storage-no-longer-reads-config-namespace"
+        binding: "web/storage imports solar_challenge.config and merges its vars at 1251be0 (task 209); α drops both"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "solar_challenge\\.config"
+          paths: ["src/solar_challenge/web/storage.py"]
+          expect: absent
+      - name: "mutable-dispatch-strategy-config-retired"
+        binding: "config.DispatchStrategyConfig is a plain @dataclass at 1251be0; α replaces it with the frozen union in dispatch.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class DispatchStrategyConfig"
+          paths: ["src/solar_challenge/config.py"]
+          expect: absent
+      - name: "s1-configuration-error-below-config"
+        binding: "producer: S1-beta (errors-leaf.md leaf beta, ConfigurationError(ValueError) in errors.py), upstream out-of-batch dependency (id from the lead)"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edge, not a grep in this batch"
+      - name: "unknown-tag-refused-with-key-path"
+        binding: "rejection-check: validate config on a tou_optimised copy of dispatch-comparison.yaml exits 1 today without a path; α's test observes the path in the message"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "message content is asserted by α's grammar test, not greppable"
+      - name: "stored-run-round-trip-and-pre-alpha-load"
+        binding: "RunStorage.save_home_run/load_home_run and the export endpoint exist and are driven by test_web_storage_roundtrip / test_web_history today"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "round-trip equality is a test property"
+  - label: "β"
+    task_id: null
+    title: "Refuse at construction what the dispatcher would ignore"
+    capabilities:
+      - name: "home-level-vocabulary-owned-by-home"
+        binding: "config._VALID_DISPATCH_STRATEGIES exists at 1251be0; β moves it to home.py as HOME_DISPATCH_STRATEGIES"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "HOME_DISPATCH_STRATEGIES"
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "config-vocabulary-copy-deleted"
+        binding: "config._VALID_DISPATCH_STRATEGIES exists at 1251be0"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "_VALID_DISPATCH_STRATEGIES"
+          paths: ["src/solar_challenge/config.py"]
+          expect: absent
+      - name: "fleet-fallback-warning-replaced-by-refusal"
+        binding: "config._read_fleet_distribution_file warns 'homes will fall back to self-consumption dispatch' at 1251be0"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "fall back to self-consumption"
+          paths: ["src/solar_challenge/config.py"]
+          expect: absent
+      - name: "invariant-10-test"
+        binding: "rejection-mechanism built by β; the test observes each refusal fire and the two honoured combinations (f44: 2.080, 2.000 kWh) stay > 0"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_grid_charge_refusals.py"]
+          expect: present
+      - name: "briefing-accept-and-ignore-decision-reversed"
+        binding: "review/briefing.yaml key_decision 'accepts-but-ignores' exists at 1251be0; D3 reverses it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "accepts-but-ignores"
+          paths: ["review/briefing.yaml"]
+          expect: absent
+      - name: "briefing-points-at-invariant-10-test"
+        binding: "D27: one conventions line per promoted invariant"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "test_grid_charge_refusals"
+          paths: ["review/briefing.yaml"]
+          expect: present
+  - label: "γ"
+    task_id: null
+    title: "The Battery answers the grid-charge target on its effective capacity"
+    capabilities:
+      - name: "battery-answers-grid-charge-target"
+        binding: "built by γ on Battery.effective_capacity_kwh and max_soc_fraction (read at 1251be0)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def grid_charge_target_kwh"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: present
+      - name: "context-carries-kwh-target"
+        binding: "GridChargeContext carries target_soc_fraction at 1251be0; no consumer constructs it (platform read)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "target_soc_kwh"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "flow-stops-reading-battery-config"
+        binding: "11 battery.config. reads in flow.py at 1251be0 (findings record, re-read)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "battery\\.config\\."
+          paths: ["src/solar_challenge/flow.py"]
+          expect: absent
+      - name: "invariant-9-test"
+        binding: "measured today: 0.714286 at SOH 0.7 on both paths; achievable to 1e-6 by the controller's last-step identity (manifest .md)"
+        verdict: PASS
+        delivered_check:
+          kind: path
+          paths: ["tests/unit/test_grid_charge_target_basis.py"]
+          expect: present
+      - name: "briefing-points-at-invariant-9-test"
+        binding: "D27: one conventions line per promoted invariant"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "test_grid_charge_target_basis"
+          paths: ["review/briefing.yaml"]
+          expect: present
+      - name: "aged-battery-end-of-window-soc"
+        binding: "measured today: bristol-arbitrage with soh 0.7, target 0.5 ends the 2024-01-15 cheap window at 2.5 kWh; fixed value 1.75 kWh"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a simulation result, asserted by γ's test"
+  - label: "δ"
+    task_id: null
+    title: "One owner of the SOH-derated SOC envelope"
+    capabilities:
+      - name: "soc-envelope-value"
+        binding: "built by δ from compute_soh and the SOC fractions (read at 1251be0)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "class SocEnvelope"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: present
+      - name: "config-answers-its-envelope"
+        binding: "built by δ"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "def soc_envelope"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: present
+      - name: "readers-stop-building-throwaway-batteries"
+        binding: "gridservices.compute_fleet_spare_capacity_kw and web/charts.battery_soc_chart build Battery(battery_config) at 1251be0"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "Battery\\(battery_config\\)"
+          paths: ["src/solar_challenge/gridservices.py", "src/solar_challenge/web/charts.py"]
+          expect: absent
+  - label: "ε"
+    task_id: null
+    title: "Retire the home- and fleet-level dispatch key at the bump"
+    note: "Held leaf: x_seam_wait {stream: S29, contract: surface bump window open}; also depends on S11's tariff-clock arm and S3's home-key routing."
+    capabilities:
+      - name: "home-level-dispatch-field-retired"
+        binding: "HomeConfig.dispatch_strategy: str = 'greedy' exists at 1251be0"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "dispatch_strategy: str"
+          paths: ["src/solar_challenge/home.py"]
+          expect: absent
+      - name: "fleet-level-dispatch-field-retired"
+        binding: "FleetDistributionConfig.dispatch_strategy: Optional[str] exists at 1251be0"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "dispatch_strategy: Optional\\[str\\]"
+          paths: ["src/solar_challenge/config.py"]
+          expect: absent
+      - name: "scenario-files-migrated"
+        binding: "bristol-arbitrage.yaml (home) and bristol-phase1-flex.yaml (fleet) carry a two-space-indented dispatch_strategy: tou_optimized at 1251be0"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^  dispatch_strategy: tou_optimized"
+          paths: ["scenarios/bristol-arbitrage.yaml", "scenarios/bristol-phase1-flex.yaml"]
+          expect: absent
+      - name: "tariff-clock-tou-arm"
+        binding: "producer: S11's tariff-clock arm leaf, upstream out-of-batch dependency"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "cross-stream producer; gated by the add_dependency edge"
