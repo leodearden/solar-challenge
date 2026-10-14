@@ -569,8 +569,8 @@ class TestChatLiveSmoke:
 class TestHistoryWindowAlternation:
     """The replayed messages window must always start with a user turn.
 
-    After 11 complete exchanges (22 DB rows) the handler adds a 23rd user
-    row, then slices all_turns[-MAX_HISTORY_TURNS:].  With MAX_HISTORY_TURNS=20
+    After 11 complete exchanges (22 DB rows) the handler adds the new user turn
+    as a 23rd, then keeps the last MAX_HISTORY_TURNS.  With MAX_HISTORY_TURNS=20
     the tail starts at DB-row index 3 which is an assistant row — violating the
     Anthropic Messages API's "first message must be role=user" invariant.
     """
@@ -595,7 +595,7 @@ class TestHistoryWindowAlternation:
 
         anthropic_api.set_chunks(["window reply"])
 
-        # Handler saves user row → 23 total; slices last 20 → starts on assistant row
+        # With the new user turn → 23 total; the last 20 start on an assistant row
         resp = client.post("/assistant/chat", json={"message": "latest"})
         assert resp.status_code == 200
         resp.get_data(as_text=True)  # consume the stream

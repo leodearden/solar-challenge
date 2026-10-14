@@ -17,6 +17,7 @@ gives the reason.
 import json
 import os
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Generator
@@ -843,6 +844,36 @@ def _replay_window(turns: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return window[first_user:]
 
 
+_DONE_FRAME = "event: done\ndata: {}\n\n"
+_NO_REPLY_TEXT = "[No reply text was received.]"
+
+
+@dataclass(frozen=True)
+class _TurnEnding:
+    """How an assistant turn ended.
+
+    *final_frame* tells the client; *stand_in* is stored as the reply when the
+    model sent no text; *metadata* joins the stored reply's metadata.
+    """
+
+    final_frame: str
+    stand_in: str
+    metadata: Mapping[str, Any]
+
+
+_FINISHED = _TurnEnding(_DONE_FRAME, _NO_REPLY_TEXT, MappingProxyType({}))
+# The client closed the stream, so its frame is never sent.
+_CUT_SHORT = _TurnEnding("", _NO_REPLY_TEXT, MappingProxyType({"truncated": True}))
+
+
+def _failed(error: Exception) -> _TurnEnding:
+    """The ending of a turn that *error* stopped: the notice the user is shown is also its stored reply."""
+    notice = f"Streaming error: {error}"
+    return _TurnEnding(
+        _error_frame(notice), notice, MappingProxyType({"error": str(error), "truncated": True})
+    )
+
+
 @bp.route("/chat", methods=["POST"])
 def chat() -> Response:
     """Stream an AI assistant reply as Server-Sent Events.
@@ -892,10 +923,8 @@ def chat() -> Response:
             yield _error_frame(f"Could not initialise Anthropic client: {exc}")
             return
 
-        # Persist the user turn
-        database.save_chat_message(db_path, sid, "user", user_message)
-
-        messages = _replay_window(database.get_chat_history(db_path, sid))
+        history = database.get_chat_history(db_path, sid)
+        messages = _replay_window([*history, {"role": "user", "content": user_message}])
 
         # Run-context injection: when the request carries a run_id,
         # prepend a compact preamble to the final (user) message in-memory ONLY.
@@ -931,10 +960,11 @@ def chat() -> Response:
             "tools": TOOLS,
         }
 
+        database.save_chat_message(db_path, sid, "user", user_message)
         accumulated = ""
         cache_usage: dict[str, int] = {}
         invoked_tools: list[str] = []
-
+        ending = _CUT_SHORT
         try:
             # Manual agentic loop — bounded by MAX_TOOL_ITERATIONS so a
             # runaway model cannot hang the single Flask worker or the test suite.
@@ -1017,27 +1047,23 @@ def chat() -> Response:
                     f"event: delta\n"
                     f"data: {json.dumps({'text': _cap_notice})}\n\n"
                 )
+            ending = _FINISHED
 
         except Exception as exc:
-            # Persist whatever was accumulated so history stays consistent with
-            # what the user already saw, and role alternation is preserved for
-            # future turns (a dangling user-only row causes consecutive
-            # user-role messages which the Anthropic API rejects with a 400).
+            ending = _failed(exc)
+        # Every exit stores one reply with text: tests/unit/web_assistant/test_chat.py::TestEveryTurnStoresAReplyWithText
+        finally:
+            metadata: dict[str, Any] = {**cache_usage, "model": model} if cache_usage else {}
+            if invoked_tools:
+                metadata["invoked_tools"] = invoked_tools
             database.save_chat_message(
-                db_path, sid, "assistant", accumulated,
-                metadata={"error": str(exc), "truncated": True},
+                db_path,
+                sid,
+                "assistant",
+                accumulated if _has_text(accumulated) else ending.stand_in,
+                metadata={**metadata, **ending.metadata} or None,
             )
-            yield _error_frame(f"Streaming error: {exc}")
-            return
 
-        # Persist assistant turn on success; record any invoked tool names.
-        final_meta: dict[str, Any] = {**cache_usage, "model": model} if cache_usage else {}
-        if invoked_tools:
-            final_meta["invoked_tools"] = invoked_tools
-        database.save_chat_message(
-            db_path, sid, "assistant", accumulated, metadata=final_meta or None
-        )
-
-        yield "event: done\ndata: {}\n\n"
+        yield ending.final_frame
 
     return _event_stream(stream_with_context(generate()))
