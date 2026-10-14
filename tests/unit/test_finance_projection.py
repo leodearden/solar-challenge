@@ -129,11 +129,15 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
     @pytest.mark.parametrize(
         ("totals", "refused"),
         [
-            pytest.param({"self_kwh": math.inf}, "fleet_sc=inf, fleet_revenue=inf", id="infinite-self-consumption"),
+            pytest.param(
+                {"self_kwh": math.inf},
+                "fleet_billed_own_use=inf, fleet_revenue=inf",
+                id="infinite-self-consumption",
+            ),
             pytest.param({"export_kwh": math.inf}, "fleet_exp=inf", id="infinite-export"),
             pytest.param(
                 {"import_kwh": math.inf},
-                "fleet_sc=nan, fleet_imp=inf, fleet_revenue=nan",
+                "fleet_billed_own_use=nan, fleet_imp=inf, fleet_revenue=nan",
                 id="infinite-import-makes-own-use-nan",
             ),
         ],
@@ -177,7 +181,7 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
 
         assert str(exc_info.value) == (
             "every aggregate of the fleet simulated at age 6 must be finite: "
-            "got fleet_sc=nan, fleet_imp=inf, fleet_revenue=nan"
+            "got fleet_billed_own_use=nan, fleet_imp=inf, fleet_revenue=nan"
         )
 
     @pytest.mark.parametrize("asset_life_years", [1, 25])
