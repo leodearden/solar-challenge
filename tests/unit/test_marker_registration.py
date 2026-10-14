@@ -142,8 +142,8 @@ class TestNetworkedUnitClassesExcludedButPureKept:
 
     NOTE — hand-maintained allowlists: UNIT_TEST_FILES, NETWORKED_UNIT_CLASSES and
     PURE_UNIT_CLASSES are enumerated here rather than derived dynamically because
-    test_home_heat_pump.py and test_fleet.py mix slow and fast classes in the same
-    file, so a whole-file "count must be zero" assertion is not possible.  The
+    test_home_heat_pump.py mixes slow and fast classes in the same file, so a
+    whole-file "count must be zero" assertion is not possible.  The
     trade-off is that a newly added network-touching class that lacks
     ``@pytest.mark.slow`` will NOT be detected unless someone also adds it to
     NETWORKED_UNIT_CLASSES.  Reviewers adding new simulation-driven test classes to
@@ -158,14 +158,7 @@ class TestNetworkedUnitClassesExcludedButPureKept:
     ]
 
     # Network-touching classes in the unit suite — must be deselected.
-    NETWORKED_UNIT_CLASSES = [
-        "TestHeatPumpIntegration",
-        "TestSimulateFleetIter",
-        "TestParallelMatchesSequential",
-        "TestSimulateHomeWeatherData",
-        "TestMultiSweepIter",
-        "TestCollectMultiSweepResults",
-    ]
+    NETWORKED_UNIT_CLASSES = ["TestHeatPumpIntegration"]
 
     # Pure-logic classes — must remain selected (guard against over-marking).
     PURE_UNIT_CLASSES = [

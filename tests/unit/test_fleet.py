@@ -437,6 +437,16 @@ class TestFleetSummary:
         assert summary.total_export_revenue_gbp is None
 
 
+_JUNE_DAY = pd.Timestamp("2024-06-21", tz="Europe/London")
+
+
+@pytest.fixture
+def bristol_june_tmy(weather_cache: WeatherCache) -> None:
+    """Serve a clear 21 June as Bristol's TMY, the location of every home these tests simulate."""
+    weather_cache.put(synthetic_june_weather(_JUNE_DAY), "tmy", Location.bristol())
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestSimulateFleetIter:
     """Test simulate_fleet_iter iterator function."""
 
@@ -500,6 +510,7 @@ class TestSimulateFleetIter:
         assert results[0][0] == 0
 
 
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestParallelMatchesSequential:
     """Test that parallel and sequential produce same results."""
 
@@ -524,6 +535,7 @@ class TestParallelMatchesSequential:
             pd.testing.assert_series_equal(seq_gen, par_gen)
 
 
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestSimulateHomeWeatherData:
     """Test optional weather_data parameter in simulate_home."""
 
@@ -561,6 +573,7 @@ class TestSimulateHomeWeatherData:
         assert len(result.generation) == 1440
 
 
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestMultiSweepIter:
     """Test simulate_multi_sweep_iter for cross-sweep parallelism."""
 
@@ -640,6 +653,7 @@ class TestMultiSweepIter:
         assert len(sweep_1_results) == 3
 
 
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestCollectMultiSweepResults:
     """Test collect_multi_sweep_results for organizing results."""
 
